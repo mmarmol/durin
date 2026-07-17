@@ -497,6 +497,8 @@ def extract_discovered_paths(messages: list[dict[str, Any]]) -> list[str]:
         role = message.get("role")
         if role == "assistant":
             for call in message.get("tool_calls") or []:
+                if not isinstance(call, dict):
+                    continue
                 function = call.get("function") or {}
                 if function.get("name") not in _PATH_DISCOVERY_TOOLS:
                     continue
@@ -920,27 +922,29 @@ class Consolidator:
             # history.jsonl (dream input) stays untouched. Mechanical,
             # appended after the LLM output so it can't be dropped or
             # hallucinated by the summarizer.
-            cited = extract_cited_memory_refs(messages)
-            if summary and cited:
-                summary = (
-                    f"{summary}\n"
-                    "Memory refs cited in this span "
-                    "(memory_drill for full bodies): "
-                    + "; ".join(cited)
-                )
-            discovered = extract_discovered_paths(messages)
-            if summary and discovered:
-                summary = (
-                    f"{summary}\n"
-                    "Files/paths examined in this span "
-                    "(read_file to reopen): " + "; ".join(discovered)
-                )
-                _t = current_telemetry()
-                if _t is not None:
-                    with suppress(Exception):
-                        _t.log("compaction.paths_preserved", {
-                            "count": len(discovered),
-                        })
+            with suppress(Exception):
+                cited = extract_cited_memory_refs(messages)
+                if summary and cited:
+                    summary = (
+                        f"{summary}\n"
+                        "Memory refs cited in this span "
+                        "(memory_drill for full bodies): "
+                        + "; ".join(cited)
+                    )
+            with suppress(Exception):
+                discovered = extract_discovered_paths(messages)
+                if summary and discovered:
+                    summary = (
+                        f"{summary}\n"
+                        "Files/paths examined in this span "
+                        "(read_file to reopen): " + "; ".join(discovered)
+                    )
+                    _t = current_telemetry()
+                    if _t is not None:
+                        with suppress(Exception):
+                            _t.log("compaction.paths_preserved", {
+                                "count": len(discovered),
+                            })
             return summary, tags
         except Exception:
             logger.warning("Consolidation LLM call failed, raw-dumping to history")

@@ -83,6 +83,14 @@ def test_dedups_caps_and_ignores_non_discovery_tools():
     assert "/should/not/appear.md" not in paths
 
 
+def test_malformed_tool_calls_do_not_break_extraction():
+    messages = [
+        {"role": "assistant", "content": "", "tool_calls": ["not-a-dict", None]},
+        _tool_call_msg("list_dir", {"path": "/ws/skills"}),
+    ]
+    assert extract_discovered_paths(messages) == ["/ws/skills"]
+
+
 @pytest.fixture
 def store(tmp_path):
     return MemoryStore(tmp_path)
