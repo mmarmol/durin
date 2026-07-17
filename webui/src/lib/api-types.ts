@@ -5607,6 +5607,11 @@ export interface components {
         };
         /** WebuiThreadQuery */
         WebuiThreadQuery: {
+            /**
+             * Before
+             * @default null
+             */
+            before: number | null;
             /** Key */
             key: string;
         };

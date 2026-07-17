@@ -6793,6 +6793,18 @@
       "WebuiThreadQuery": {
         "additionalProperties": false,
         "properties": {
+          "before": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Before"
+          },
           "key": {
             "title": "Key",
             "type": "string"

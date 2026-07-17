@@ -1653,6 +1653,8 @@
   },
   "thread": {
     "loadingConversation": "Chargement de la conversation…",
+    "loadingHistory": "Chargement des messages précédents…",
+    "historyStart": "Début de la conversation",
     "empty": {
       "greeting": "Que puis-je faire pour vous ?",
       "imageQuickActions": {

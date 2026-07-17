@@ -443,6 +443,12 @@ the durin logo/banner — no suggestion chips or canned prompts. A
 scroll-to-bottom control appears when the user has scrolled up from the latest
 message.
 
+**Lazy older history.** Opening a session loads only the newest page of its
+transcript; scrolling near the top fetches the previous page and prepends it
+without moving the visible content. A "Loading earlier messages…" indicator
+shows while a page is in flight, and once the start of history is reached the
+top of the thread renders a "Beginning of conversation" label instead.
+
 ### Key config keys
 
 **Channels**

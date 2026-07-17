@@ -1653,6 +1653,8 @@
   },
   "thread": {
     "loadingConversation": "正在載入對話…",
+    "loadingHistory": "正在載入較早的訊息…",
+    "historyStart": "對話開始",
     "empty": {
       "greeting": "我可以幫你做什麼？",
       "imageQuickActions": {

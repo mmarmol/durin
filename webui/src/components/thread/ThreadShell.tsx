@@ -100,6 +100,10 @@ export function ThreadShell({
     refresh: refreshHistory,
     version: historyVersion,
     persona: historicalPersona,
+    prevCursor,
+    loadingOlder,
+    loadOlder: loadOlderHistory,
+    adoptPrevCursor,
   } = useSessionHistory(historyKey);
   const { client, modelName, modelPreset, token } = useClient();
   const activeEffort = effortFromPreset(modelPreset);
@@ -111,7 +115,20 @@ export function ThreadShell({
   const [agentMode, setAgentMode] = useState("build");
   const modes = useModes();
   const pendingFirstRef = useRef<PendingFirstMessage | null>(null);
-  const messageCacheRef = useRef<Map<string, UIMessage[]>>(new Map());
+  /** Per-chat snapshot of the live thread PLUS its older-history cursor.
+   *  The cursor must travel with the rows: cached rows begin at the page
+   *  boundary that was current when they were fetched, and after the session
+   *  grows in the background a fresh refetch re-arms the hook's cursor at a
+   *  LATER boundary — fetching older pages from that fresh cursor would
+   *  overlap the cached rows by content under different ids. */
+  const messageCacheRef = useRef<
+    Map<string, { messages: UIMessage[]; prevCursor: number | null }>
+  >(new Map());
+  /** The live thread's older-history cursor for the CURRENT chat (kept in a
+   *  ref so cache writes during a session switch can still record the
+   *  outgoing chat's cursor). After a cache restore adopts the cached
+   *  cursor into the hook, the hook's prevCursor and this ref agree. */
+  const livePrevCursorRef = useRef<number | null>(null);
   /** Last chatId we associated with the in-memory thread (for cache-on-switch). */
   const prevChatIdForCacheRef = useRef<string | null>(null);
   /** Skip one message-cache write right after chatId changes (messages may not match yet). */
@@ -122,7 +139,7 @@ export function ThreadShell({
 
   const initial = useMemo(() => {
     if (!chatId) return historical;
-    return messageCacheRef.current.get(chatId) ?? historical;
+    return messageCacheRef.current.get(chatId)?.messages ?? historical;
   }, [chatId, historical]);
   const handleTurnEnd = useCallback(() => {
     onTurnEnd?.();
@@ -144,6 +161,48 @@ export function ThreadShell({
 
   const transcriptionStatus = useTranscriptionStatus();
 
+  // `historical` (from useSessionHistory) accumulates older pages as they're
+  // fetched, but the live thread state (`messages`, from useDurinStream) only
+  // seeds from `historical` at mount/chatId-change, so the loaded older rows
+  // must be spliced into the live state here. Crucially, the merged list is
+  // written to `messageCacheRef` inside the same updater: the
+  // historical-watching resync effect below re-fires on this very
+  // `historical` growth and — for a non-canonical change — restores the
+  // cached snapshot, so the cache must already hold the merged list or that
+  // restore would discard the page we just loaded. One merge, mirrored to
+  // both stores the effect reads, keeps its overwrite a content no-op.
+  const handleLoadOlder = useCallback(() => {
+    void loadOlderHistory().then(({ rows: older, prevCursor: pageCursor }) => {
+      if (older.length === 0) return;
+      livePrevCursorRef.current = pageCursor;
+      setMessages((prev) => {
+        // Idempotent splice: after a session round-trip the live thread is
+        // restored MERGED from the cache while the refetched history re-arms
+        // prevCursor at the same offset, so a later scroll re-fetches a page
+        // whose rows are already present — skip those instead of doubling them.
+        const prevIds = new Set(prev.map((m) => m.id));
+        const fresh = older.filter((m) => !prevIds.has(m.id));
+        if (fresh.length === 0) return prev;
+        const merged = [...fresh, ...prev];
+        if (chatId) {
+          messageCacheRef.current.set(chatId, {
+            messages: projectWebuiThreadMessages(merged),
+            prevCursor: pageCursor,
+          });
+        }
+        return merged;
+      });
+    });
+  }, [loadOlderHistory, setMessages, chatId]);
+
+  // Track the live thread's cursor while the hook's state is authoritative
+  // (fresh loads, canonical hydrates, older-page fetches). Declared BEFORE
+  // the resync effect below so cache restores — which overwrite this ref
+  // directly — see a fresh value on their own pass.
+  useEffect(() => {
+    if (!loading) livePrevCursorRef.current = prevCursor;
+  }, [loading, prevCursor]);
+
   useEffect(() => {
     if (chatId && historyKey) sessionKeyByChatIdRef.current.set(chatId, historyKey);
   }, [chatId, historyKey]);
@@ -158,6 +217,18 @@ export function ThreadShell({
     const appliedVersion = appliedHistoryVersionRef.current.get(chatId) ?? 0;
     const hasPendingCanonicalHydrate = pendingCanonicalHydrateRef.current.has(chatId);
     const hasNewCanonicalHistory = hasPendingCanonicalHydrate && historyVersion > appliedVersion;
+    // Restoring from cache restores the pagination cursor WITH the snapshot:
+    // the cached rows begin at the boundary that was current when they were
+    // fetched, and if the session grew in the background the fresh refetch's
+    // cursor points later — older pages must chain from the cached boundary
+    // so the next page ends exactly where the restored rows begin.
+    const willUseCanonical = hasNewCanonicalHistory && historical.length > 0;
+    const restoreEntry =
+      !willUseCanonical && cached && cached.messages.length > 0 ? cached : null;
+    if (restoreEntry) {
+      livePrevCursorRef.current = restoreEntry.prevCursor;
+      adoptPrevCursor(restoreEntry.prevCursor);
+    }
     // When the user switches away and back, keep the local in-memory thread
     // state (including not-yet-persisted messages) instead of replacing it with
     // whatever the history endpoint currently knows about. Once a fresh
@@ -205,14 +276,22 @@ export function ThreadShell({
           (m) => m.id.startsWith("msg-") && !canonicalIds.has(m.id),
         );
         const merged = [...normalized, ...liveOnly];
-        messageCacheRef.current.set(chatId, merged);
+        messageCacheRef.current.set(chatId, {
+          messages: merged,
+          prevCursor: livePrevCursorRef.current,
+        });
         return merged;
       }
-      if (cached && cached.length > 0) return projectWebuiThreadMessages(cached);
+      if (restoreEntry) return projectWebuiThreadMessages(restoreEntry.messages);
       if (historical.length === 0 && prev.length > 0) return projectWebuiThreadMessages(prev);
       appliedHistoryVersionRef.current.set(chatId, historyVersion);
       const next = projectWebuiThreadMessages(historical);
-      if (historical.length > 0) messageCacheRef.current.set(chatId, next);
+      if (historical.length > 0) {
+        messageCacheRef.current.set(chatId, {
+          messages: next,
+          prevCursor: livePrevCursorRef.current,
+        });
+      }
       return next;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -227,10 +306,14 @@ export function ThreadShell({
     });
   }, [chatId, client, refreshHistory]);
 
+  // Keyed on `historyVersion`, not `historical`: the version bumps only when
+  // a full (re)load completes, while an older-page prepend grows `historical`
+  // without touching it — re-arming the scroll-to-bottom signal for a prepend
+  // would yank the view away from the history the user just scrolled up to.
   useEffect(() => {
     if (!chatId || loading) return;
     setScrollToBottomSignal((value) => value + 1);
-  }, [chatId, loading, historical]);
+  }, [chatId, loading, historyVersion]);
 
   useEffect(() => {
     if (chatId) return;
@@ -238,19 +321,25 @@ export function ThreadShell({
   }, [chatId, historical, setMessages]);
 
   useLayoutEffect(() => {
+    // At this commit the hook already reset for the incoming key, so
+    // livePrevCursorRef still holds the OUTGOING chat's cursor — exactly
+    // what its snapshot must record.
     if (chatId) {
       const prev = prevChatIdForCacheRef.current;
       if (prev && prev !== chatId) {
-        messageCacheRef.current.set(prev, projectWebuiThreadMessages(messages));
+        messageCacheRef.current.set(prev, {
+          messages: projectWebuiThreadMessages(messages),
+          prevCursor: livePrevCursorRef.current,
+        });
         skipLayoutCacheRef.current = true;
       }
       prevChatIdForCacheRef.current = chatId;
     } else {
       if (prevChatIdForCacheRef.current) {
-        messageCacheRef.current.set(
-          prevChatIdForCacheRef.current,
-          projectWebuiThreadMessages(messages),
-        );
+        messageCacheRef.current.set(prevChatIdForCacheRef.current, {
+          messages: projectWebuiThreadMessages(messages),
+          prevCursor: livePrevCursorRef.current,
+        });
         skipLayoutCacheRef.current = true;
       }
       prevChatIdForCacheRef.current = null;
@@ -271,7 +360,10 @@ export function ThreadShell({
     if (loading) {
       return;
     }
-    messageCacheRef.current.set(chatId, projectWebuiThreadMessages(messages));
+    messageCacheRef.current.set(chatId, {
+      messages: projectWebuiThreadMessages(messages),
+      prevCursor: livePrevCursorRef.current,
+    });
   }, [chatId, loading, messages]);
 
   useEffect(() => {
@@ -546,6 +638,9 @@ export function ThreadShell({
             conversationKey={historyKey}
             onRetryLast={handleRetryLast}
             onEditLastUser={handleEditLastUser}
+            onLoadOlder={handleLoadOlder}
+            hasOlder={prevCursor != null}
+            loadingOlder={loadingOlder}
           />
         </div>
         <WorkPanel

@@ -146,13 +146,17 @@ export async function listBackgroundTasks(
   return body.tasks;
 }
 
-/** Disk-backed WebUI display thread snapshot (separate from agent session). */
+/** Disk-backed WebUI display thread snapshot (separate from agent session).
+ *  ``before`` requests the page ending just before that byte cursor (lazy
+ *  older-history loading); omitted, the server returns the newest page. */
 export async function fetchWebuiThread(
   token: string,
   key: string,
   base: string = "",
+  before?: number,
 ): Promise<WebuiThreadPersistedPayload | null> {
-  const url = `${base}/api/v1/sessions/${encodeURIComponent(key)}/webui-thread`;
+  const qs = before != null ? `?before=${before}` : "";
+  const url = `${base}/api/v1/sessions/${encodeURIComponent(key)}/webui-thread${qs}`;
   // Route through fetchWithReauth so an expired bootstrap token mints a fresh
   // one and retries, instead of surfacing an empty thread (the sidebar list
   // already reauths via request(); this read must match it).

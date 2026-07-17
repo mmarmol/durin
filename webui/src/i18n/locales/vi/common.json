@@ -1653,6 +1653,8 @@
   },
   "thread": {
     "loadingConversation": "Đang tải cuộc trò chuyện…",
+    "loadingHistory": "Đang tải các tin nhắn trước đó…",
+    "historyStart": "Bắt đầu cuộc trò chuyện",
     "empty": {
       "greeting": "Tôi có thể giúp gì cho bạn?",
       "imageQuickActions": {
