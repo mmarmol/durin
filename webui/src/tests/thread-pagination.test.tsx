@@ -305,13 +305,17 @@ describe("ThreadShell pagination integration", () => {
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
         if (url.includes("websocket%3Achat-pg/webui-thread")) {
+          // Ids shaped like the real (fixed) backend: fallback replay ids
+          // namespaced by the page's own byte offset (see
+          // replay_transcript_to_ui_messages / build_webui_thread_response in
+          // durin/utils/webui_transcript.py) so two pages never collide.
           if (url.includes("before=")) {
             return httpJson({
               schemaVersion: 4,
               prevCursor: null,
               messages: [
-                { id: "old-1", role: "user", content: "an older question", createdAt: 500 },
-                { id: "old-2", role: "assistant", content: "an older answer", createdAt: 501 },
+                { id: "p0-u-0", role: "user", content: "an older question", createdAt: 500 },
+                { id: "p0-as-1", role: "assistant", content: "an older answer", createdAt: 501 },
               ],
             });
           }
@@ -319,8 +323,8 @@ describe("ThreadShell pagination integration", () => {
             schemaVersion: 4,
             prevCursor: 4096,
             messages: [
-              { id: "new-1", role: "user", content: "latest question", createdAt: 1000 },
-              { id: "new-2", role: "assistant", content: "latest answer", createdAt: 1001 },
+              { id: "p4096-u-0", role: "user", content: "latest question", createdAt: 1000 },
+              { id: "p4096-as-1", role: "assistant", content: "latest answer", createdAt: 1001 },
             ],
           });
         }
@@ -402,13 +406,14 @@ describe("ThreadShell pagination integration", () => {
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
         if (url.includes("websocket%3Achat-rt/webui-thread")) {
+          // Same backend-shaped, page-namespaced ids as above.
           if (url.includes("before=")) {
             return httpJson({
               schemaVersion: 4,
               prevCursor: null,
               messages: [
-                { id: "old-1", role: "user", content: "an older question", createdAt: 500 },
-                { id: "old-2", role: "assistant", content: "an older answer", createdAt: 501 },
+                { id: "p0-u-0", role: "user", content: "an older question", createdAt: 500 },
+                { id: "p0-as-1", role: "assistant", content: "an older answer", createdAt: 501 },
               ],
             });
           }
@@ -416,8 +421,8 @@ describe("ThreadShell pagination integration", () => {
             schemaVersion: 4,
             prevCursor: 4096,
             messages: [
-              { id: "new-1", role: "user", content: "latest question", createdAt: 1000 },
-              { id: "new-2", role: "assistant", content: "latest answer", createdAt: 1001 },
+              { id: "p4096-u-0", role: "user", content: "latest question", createdAt: 1000 },
+              { id: "p4096-as-1", role: "assistant", content: "latest answer", createdAt: 1001 },
             ],
           });
         }
@@ -493,6 +498,100 @@ describe("ThreadShell pagination integration", () => {
       expect(screen.getAllByText("latest question")).toHaveLength(1);
       expect(screen.getAllByText("latest answer")).toHaveLength(1);
       // …and React never warned about duplicate keys.
+      const duplicateKeyWarnings = consoleErrorSpy.mock.calls.filter((call) =>
+        call.map(String).join(" ").includes("same key"),
+      );
+      expect(duplicateKeyWarnings).toHaveLength(0);
+    } finally {
+      HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
+  it("never renders duplicates when the backend sends colliding replay ids across pages", async () => {
+    // Regression pin for a misbehaving backend: a correct backend namespaces
+    // fallback replay ids by page offset (see the two tests above) so this
+    // can never legitimately happen, but if it ever did, the frontend's
+    // idempotent splice (dedupe by id in ThreadShell's handleLoadOlder) is
+    // the last line of defense. Colliding ids mean the older page reads as
+    // "already present" and gets silently skipped — content hidden is
+    // acceptable here, duplicate rendering is not.
+    const client = makeClient();
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = vi.fn();
+    const consoleErrorSpy = vi.spyOn(console, "error");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("websocket%3Achat-collision/webui-thread")) {
+          if (url.includes("before=")) {
+            return httpJson({
+              schemaVersion: 4,
+              prevCursor: null,
+              messages: [
+                { id: "u-0", role: "user", content: "an older question", createdAt: 500 },
+                { id: "as-1", role: "assistant", content: "an older answer", createdAt: 501 },
+              ],
+            });
+          }
+          return httpJson({
+            schemaVersion: 4,
+            prevCursor: 4096,
+            messages: [
+              { id: "u-0", role: "user", content: "latest question", createdAt: 1000 },
+              { id: "as-1", role: "assistant", content: "latest answer", createdAt: 1001 },
+            ],
+          });
+        }
+        return { ok: false, status: 404, json: async () => ({}) };
+      }),
+    );
+
+    try {
+      const { container } = render(
+        wrap(
+          client,
+          <ThreadShell
+            session={session("chat-collision")}
+            title="Chat chat-collision"
+            onToggleSidebar={() => {}}
+            onNewChat={() => {}}
+          />,
+        ),
+      );
+
+      await waitFor(() => expect(screen.getByText("latest answer")).toBeInTheDocument());
+
+      const scroller = Array.from(
+        container.querySelectorAll<HTMLElement>("div.overflow-y-auto"),
+      ).find((el) => el.textContent?.includes("latest answer"));
+      expect(scroller).toBeDefined();
+      Object.defineProperties(scroller as HTMLElement, {
+        scrollHeight: { configurable: true, value: 2000 },
+        clientHeight: { configurable: true, value: 600 },
+        scrollTop: { configurable: true, writable: true, value: 0 },
+      });
+
+      act(() => {
+        (scroller as HTMLElement).dispatchEvent(new Event("scroll"));
+      });
+      await waitFor(() => {
+        const beforeCalls = (fetch as ReturnType<typeof vi.fn>).mock.calls
+          .map((c) => String(c[0]))
+          .filter((u) => u.includes("before="));
+        expect(beforeCalls).toHaveLength(1);
+      });
+      await act(async () => {});
+      await act(async () => {});
+
+      // Colliding ids make the older rows indistinguishable from the already-
+      // present newest rows, so the idempotent splice skips them — the older
+      // page's text never appears. Documenting that cost, not asserting it as
+      // desirable: the invariant that matters is no duplicate rendering.
+      expect(screen.queryByText("an older question")).not.toBeInTheDocument();
+      expect(screen.getAllByText("latest question")).toHaveLength(1);
+      expect(screen.getAllByText("latest answer")).toHaveLength(1);
       const duplicateKeyWarnings = consoleErrorSpy.mock.calls.filter((call) =>
         call.map(String).join(" ").includes("same key"),
       );

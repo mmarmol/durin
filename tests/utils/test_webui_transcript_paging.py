@@ -12,6 +12,7 @@ kind "tool_hint"/"progress"), reasoning_delta, and turn_end.
 """
 from __future__ import annotations
 
+import functools
 import json
 from pathlib import Path
 
@@ -149,6 +150,60 @@ def test_build_response_carries_prev_cursor(tmp_path, monkeypatch):
         "websocket:pagetest", before=payload["prevCursor"]
     )
     assert older is not None and older["messages"]
+
+
+def test_replay_ids_unique_and_deterministic_across_pages(tmp_path, monkeypatch):
+    """Reproduces the live-verification bug: replay mints fallback ids
+    (``u-0``, ``as-1``, ...) per line index *within a page*, so two pages of
+    the same session independently produced the identical id sequence. The
+    webui's older-page splice dedupes by id, so that collision silently
+    dropped the entire older page ("Beginning of conversation" despite
+    unread history). ``build_webui_thread_response`` must namespace fallback
+    ids by the page's own byte offset so pages never collide, while a
+    refetch of the same page still yields identical ids (idempotent splice)."""
+    _write_transcript(tmp_path, monkeypatch, turns=300)
+    # Shrink the page-size default so this modest fixture spans several pages
+    # instead of requiring megabytes of test data (same technique as
+    # tests/api/test_webui_thread_endpoint.py).
+    monkeypatch.setattr(
+        wt, "read_transcript_page", functools.partial(wt.read_transcript_page, target_bytes=10_000)
+    )
+
+    page1 = wt.build_webui_thread_response("websocket:pagetest")
+    assert page1 is not None and page1["messages"]
+    assert page1["prevCursor"] is not None, "fixture must span multiple pages"
+
+    page2 = wt.build_webui_thread_response("websocket:pagetest", before=page1["prevCursor"])
+    assert page2 is not None and page2["messages"]
+
+    ids1 = {m["id"] for m in page1["messages"]}
+    ids2 = {m["id"] for m in page2["messages"]}
+    assert ids1 & ids2 == set(), "page1 and page2 must never share a replay id"
+
+    # Refetching page2 (same `before`) must be deterministic: a legitimate
+    # round-trip dedupe on the frontend still needs identical ids.
+    page2_again = wt.build_webui_thread_response("websocket:pagetest", before=page1["prevCursor"])
+    assert page2_again is not None
+    ids2_again = [m["id"] for m in page2_again["messages"]]
+    assert [m["id"] for m in page2["messages"]] == ids2_again
+
+
+def test_server_stamped_ids_bypass_page_namespacing(tmp_path, monkeypatch):
+    """A record carrying its own persisted ``id`` (server-stamped, e.g. a
+    command output) must survive replay byte-identical regardless of which
+    page it lands on — that id is also the id of the live-streamed frame,
+    and a later refetch must merge onto it rather than duplicate it."""
+    monkeypatch.setattr(wt, "get_webui_dir", lambda: tmp_path)
+    path = wt.webui_transcript_path("websocket:pagetest")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(_dump({"event": "user", "chat_id": "pagetest", "text": "hi"}) + "\n")
+        f.write(_dump({"event": "message", "chat_id": "pagetest", "id": "msg-stable", "text": "/status"}) + "\n")
+        f.write(_dump({"event": "turn_end", "chat_id": "pagetest"}) + "\n")
+
+    payload = wt.build_webui_thread_response("websocket:pagetest")
+    assert payload is not None
+    ids = [m["id"] for m in payload["messages"]]
+    assert "msg-stable" in ids
 
 
 def test_oversized_line_never_breaks_the_chain(tmp_path, monkeypatch):

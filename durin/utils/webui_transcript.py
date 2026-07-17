@@ -268,12 +268,22 @@ def replay_transcript_to_ui_messages(
     lines: list[dict[str, Any]],
     *,
     augment_user_media: Callable[[list[str]], list[dict[str, Any]]] | None = None,
+    page_start: int = 0,
 ) -> list[dict[str, Any]]:
     """Fold JSONL records into ``UIMessage``-shaped dicts for the WebUI.
 
     Mirrors the core fold in ``useDurinStream.ts`` (delta, reasoning,
     message+kind, turn_end). ``augment_user_media`` maps persisted filesystem
     paths to ``{url, name?}`` / attachment dicts the client expects.
+
+    ``page_start`` is the byte offset where the page being replayed begins
+    (0 for the oldest page). Fallback ids are minted per line *index within
+    this page*, so two pages of the same session independently produce the
+    identical ``u-0``/``as-1``/... sequence — the webui dedupes older-page
+    rows by id, so that collision silently discards the whole older page.
+    Namespacing fallback ids by ``page_start`` keeps them unique across pages
+    while staying deterministic (refetching the same page recomputes the same
+    ``page_start`` and therefore the same ids).
     """
     messages: list[dict[str, Any]] = []
     buffer_message_id: str | None = None
@@ -282,10 +292,18 @@ def replay_transcript_to_ui_messages(
     _ts_base = int(time.time() * 1000)
 
     def _new_id(prefix: str, idx: int) -> str:
-        # Deterministic per (prefix, line index): two replays of the same JSONL
-        # must mint identical ids, or every canonical refetch re-keys these rows
-        # and the webui remounts their DOM (iframes reload, open toggles reset).
-        # ``idx`` is unique per transcript line, so ids never collide in-thread.
+        # Deterministic per (page_start, prefix, line index): two replays of
+        # the same page must mint identical ids, or every canonical refetch
+        # re-keys these rows and the webui remounts their DOM (iframes reload,
+        # open toggles reset). ``idx`` is unique per transcript line *within
+        # this page*, so ids never collide in-page; ``page_start`` (this
+        # page's own byte offset, 0 for the oldest page) disambiguates across
+        # pages of the same session. Server-stamped ids (``rec["id"]``) bypass
+        # this helper entirely and are left untouched — they must stay
+        # byte-identical to the live-streamed frame so a refetch merges the
+        # row instead of duplicating it.
+        if page_start:
+            return f"p{page_start}-{prefix}-{idx}"
         return f"{prefix}-{idx}"
 
     def attach_reasoning_chunk(prev: list[dict[str, Any]], chunk: str, idx: int) -> None:
@@ -820,7 +838,13 @@ def build_webui_thread_response(
     if not path.is_file():
         return None
     lines, prev_cursor = read_transcript_page(session_key, before=before)
-    msgs = replay_transcript_to_ui_messages(lines, augment_user_media=augment_user_media)
+    # ``prev_cursor`` is this page's own start offset (None only means the
+    # page starts at 0) — reuse it to namespace fallback replay ids so pages
+    # never mint colliding ids (see replay_transcript_to_ui_messages).
+    page_start = prev_cursor if prev_cursor is not None else 0
+    msgs = replay_transcript_to_ui_messages(
+        lines, augment_user_media=augment_user_media, page_start=page_start
+    )
     return {
         "schemaVersion": WEBUI_TRANSCRIPT_SCHEMA_VERSION,
         "sessionKey": session_key,
