@@ -521,6 +521,7 @@ async def test_microcompact_keeps_recovery_path_when_result_already_spilled(tmp_
     assert str(spill_path) in content        # recovery path preserved
     assert "read_file" in content            # recovery hint present
     assert preview not in content            # 1200-char preview dropped (actually compacted)
+    assert "began:" not in content           # no head snippet for already-spilled content
 
 
 @pytest.mark.asyncio
