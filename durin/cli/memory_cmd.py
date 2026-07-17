@@ -966,6 +966,12 @@ def cmd_dream_worker(
         "cron", help="Trigger label recorded in logs/telemetry (cron, "
         "post_compaction, session_close, manual)."
     ),
+    workspace_opt: str = typer.Option(
+        "", "--workspace", "-w",
+        help="Workspace to consolidate. Defaults to the configured workspace; "
+        "the gateway passes its own resolved workspace so a runtime "
+        "override reaches the worker."
+    ),
 ) -> None:
     """Run one dream in THIS process, speaking JSONL progress on stdout.
 
@@ -977,13 +983,18 @@ def cmd_dream_worker(
     """
     import json as _json
     import sys as _sys
+    from pathlib import Path as _Path
 
     from loguru import logger
 
     from durin.memory import dream_orchestrator as orch
 
     config = load_config()
-    workspace = config.workspace_path
+    # The gateway loads config in-memory (possibly with a runtime workspace
+    # override that was never persisted); the worker loads config fresh from
+    # disk and would otherwise resolve a different workspace. An explicit
+    # --workspace makes the worker consolidate exactly what the gateway meant.
+    workspace = _Path(workspace_opt) if workspace_opt else config.workspace_path
 
     def emit(payload: dict) -> None:
         _sys.stdout.write(_json.dumps(payload, ensure_ascii=False) + "\n")

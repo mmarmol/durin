@@ -53,10 +53,11 @@ def publish_threadsafe(publish: Callable[[Any], None], payload: dict) -> None:
     loop.call_soon_threadsafe(publish, payload)
 
 
-def _worker_argv(mode: str, trigger: str) -> list[str]:
+def _worker_argv(mode: str, trigger: str, workspace: Path) -> list[str]:
     return [
         sys.executable, "-m", "durin", "memory", "dream-worker",
         "--mode", mode, "--trigger", trigger,
+        "--workspace", str(workspace),
     ]
 
 
@@ -79,7 +80,7 @@ def run_dream_worker(
     """
     import time
 
-    argv = _worker_argv(mode, trigger)
+    argv = _worker_argv(mode, trigger, Path(workspace))
     t0 = time.perf_counter()
     proc = subprocess.Popen(
         argv,

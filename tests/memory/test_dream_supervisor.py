@@ -6,6 +6,7 @@ import sys
 import textwrap
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -24,7 +25,9 @@ def fake_worker(tmp_path, monkeypatch):
         script.write_text(textwrap.dedent(body), encoding="utf-8")
         monkeypatch.setattr(
             sup, "_worker_argv",
-            lambda mode, trigger: [sys.executable, str(script), mode, trigger],
+            lambda mode, trigger, workspace: [
+                sys.executable, str(script), mode, trigger, str(workspace)
+            ],
         )
         return script
 
@@ -112,6 +115,17 @@ def test_alias_cache_invalidated_after_run(fake_worker, no_invalidate, tmp_path)
         workspace=tmp_path, mode="full", trigger="cron", on_progress=lambda p: None
     )
     assert no_invalidate == [tmp_path / "memory"]
+
+
+def test_worker_argv_carries_workspace():
+    """The gateway's resolved workspace must reach the worker argv, so a
+    runtime -w override the worker can't see in on-disk config still applies."""
+    from durin.memory.dream_supervisor import _worker_argv
+
+    argv = _worker_argv("full", "cron", Path("/tmp/some/ws"))
+    assert "--workspace" in argv
+    assert argv[argv.index("--workspace") + 1] == "/tmp/some/ws"
+    assert argv[argv.index("--mode") + 1] == "full"
 
 
 def test_stop_terminates_running_worker(fake_worker, no_invalidate, tmp_path):
