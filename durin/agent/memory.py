@@ -759,27 +759,24 @@ class Consolidator:
             "topics": sorted(set(existing_topics) | set(new_topics)),
         }
 
-    def _persist_last_summary(self, session: Session, summary: str | None) -> None:
-        """Persist the session summary as the single source of truth.
+    def _persist_last_summary(
+        self, session: Session, summaries: list[str],
+    ) -> None:
+        """Append this call's span summaries to the session-summary projection.
 
-        A10 (2026-05-28): the summary lives as a markdown projection
-        under ``memory/session_summary/<sanitized_key>.md`` — NOT in
-        ``session.metadata["_last_summary"]`` anymore. The walker /
-        indexer pick it up automatically, and the search pipeline
-        can return it as a hit (`class_name=session_summary`, decay
-        120d per A9).
-
-        Backward-compat: if the session's metadata still carries a
-        legacy ``_last_summary`` dict (pre-A10 persistence), we drop
-        it here so the JSON and the markdown can't drift apart. The
-        markdown is the source of truth going forward.
+        One block per archived span; the store enforces the total char cap
+        (oldest blocks evicted first). The projection under
+        ``memory/session_summary/<key>.md`` remains the single source of
+        truth; legacy ``_last_summary`` metadata is still dropped on sight.
         """
-        if summary and summary != "(nothing)":
-            from durin.memory.session_summary_store import (
-                write_session_summary,
-            )
+        from durin.memory.session_summary_store import (
+            append_session_summary_block,
+        )
+        for summary in summaries:
+            if not summary or summary == "(nothing)":
+                continue
             try:
-                write_session_summary(
+                append_session_summary_block(
                     self.store.workspace,
                     session.key,
                     summary,
@@ -791,7 +788,7 @@ class Consolidator:
                 # if this write fails. Log loudly so the failure
                 # surfaces in operator review.
                 logger.warning(
-                    "session_summary: write for {} failed: {}",
+                    "session_summary: append for {} failed: {}",
                     session.key, exc,
                 )
         # Drop the legacy field from metadata if it was carrying a
@@ -1112,10 +1109,13 @@ class Consolidator:
             # by ``consolidation_ratio`` of the trigger).
             trigger = self._preemptive_trigger_tokens
             target = max(1, int(trigger * self.consolidation_ratio))
-            last_summary = await self._consolidate_replay_overflow(
+            new_summaries: list[str] = []
+            replay_summary = await self._consolidate_replay_overflow(
                 session,
                 replay_max_messages,
             )
+            if replay_summary:
+                new_summaries.append(replay_summary)
             try:
                 estimated, source = self.estimate_session_prompt_tokens(
                     session,
@@ -1143,7 +1143,7 @@ class Consolidator:
                         len(session.messages),
                         session.last_consolidated,
                     )
-                self._persist_last_summary(session, last_summary)
+                self._persist_last_summary(session, new_summaries)
                 return
             if estimated < trigger:
                 unconsolidated_count = len(session.messages) - session.last_consolidated
@@ -1156,7 +1156,7 @@ class Consolidator:
                     trigger,
                     unconsolidated_count,
                 )
-                self._persist_last_summary(session, last_summary)
+                self._persist_last_summary(session, new_summaries)
                 return
             # Emit a one-shot telemetry event when pre-emptive trigger fires
             # below the hard budget — visibility into how often the new
@@ -1209,7 +1209,7 @@ class Consolidator:
                 # a breadcrumb. Re-archiving the same chunk on the next call
                 # would just emit duplicate [RAW] entries.
                 if summary:
-                    last_summary = summary
+                    new_summaries.append(summary)
                 self._merge_session_tags(session, tags)
                 session.last_consolidated = end_idx
                 self.sessions.save(session)
@@ -1231,12 +1231,12 @@ class Consolidator:
             # Persist the last summary to session metadata so it can be injected
             # into the runtime context on the next prepare_session() call, aligning
             # the summary injection strategy with AutoCompact._archive().
-            self._persist_last_summary(session, last_summary)
+            self._persist_last_summary(session, new_summaries)
             # Tier 2 C2: arm the post-compaction loop guard if at least
             # one summary was produced this call. The next ``window_size``
             # tool calls on this session will be observed; identical
             # ``(name, args, result)`` triples trip the guard.
-            if last_summary:
+            if new_summaries:
                 self.post_compaction_guard.arm(session.key)
                 # Notify the post-compaction hook so
                 # the entity-centric dream can pick up freshly-archived
