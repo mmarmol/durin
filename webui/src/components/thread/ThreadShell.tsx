@@ -149,15 +149,26 @@ export function ThreadShell({
 
   // `historical` (from useSessionHistory) accumulates older pages as they're
   // fetched, but the live thread state (`messages`, from useDurinStream) only
-  // ever seeds from `historical` once, at mount/chatId-change — it never
-  // re-syncs on later `historical` growth. Splice the newly-fetched older
-  // rows into the live state directly so they render without disturbing any
-  // in-flight/streamed content already in `messages`.
+  // seeds from `historical` at mount/chatId-change, so the loaded older rows
+  // must be spliced into the live state here. Crucially, the merged list is
+  // written to `messageCacheRef` inside the same updater: the
+  // historical-watching resync effect below re-fires on this very
+  // `historical` growth and — for a non-canonical change — restores the
+  // cached snapshot, so the cache must already hold the merged list or that
+  // restore would discard the page we just loaded. One merge, mirrored to
+  // both stores the effect reads, keeps its overwrite a content no-op.
   const handleLoadOlder = useCallback(() => {
     void loadOlderHistory().then((older) => {
-      if (older.length > 0) setMessages((prev) => [...older, ...prev]);
+      if (older.length === 0) return;
+      setMessages((prev) => {
+        const merged = [...older, ...prev];
+        if (chatId) {
+          messageCacheRef.current.set(chatId, projectWebuiThreadMessages(merged));
+        }
+        return merged;
+      });
     });
-  }, [loadOlderHistory, setMessages]);
+  }, [loadOlderHistory, setMessages, chatId]);
 
   useEffect(() => {
     if (chatId && historyKey) sessionKeyByChatIdRef.current.set(chatId, historyKey);
@@ -242,10 +253,14 @@ export function ThreadShell({
     });
   }, [chatId, client, refreshHistory]);
 
+  // Keyed on `historyVersion`, not `historical`: the version bumps only when
+  // a full (re)load completes, while an older-page prepend grows `historical`
+  // without touching it — re-arming the scroll-to-bottom signal for a prepend
+  // would yank the view away from the history the user just scrolled up to.
   useEffect(() => {
     if (!chatId || loading) return;
     setScrollToBottomSignal((value) => value + 1);
-  }, [chatId, loading, historical]);
+  }, [chatId, loading, historyVersion]);
 
   useEffect(() => {
     if (chatId) return;

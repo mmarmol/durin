@@ -199,12 +199,12 @@ export function useSessionHistory(key: string | null): {
           return;
         }
         // The newest page is a singleton per session (there's exactly one
-        // "current" fetch with no `before`); a fixed prefix keeps its ids
-        // stable without colliding with any real older-page cursor (those
-        // are always concrete byte offsets from a `before` request).
+        // "current" fetch with no `before`); a non-numeric sentinel keeps its
+        // ids stable and can never collide with an older page's ids, which
+        // always embed the numeric byte cursor used to fetch them.
         const ui: UIMessage[] = body.messages.map((m, idx) => ({
           ...m,
-          id: m.id ?? `hist-0-${idx}`,
+          id: m.id ?? `hist-first-${idx}`,
           createdAt: typeof m.createdAt === "number" ? m.createdAt : Date.now(),
         }));
         const last = ui[ui.length - 1];
