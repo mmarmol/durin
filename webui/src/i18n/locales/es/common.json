@@ -1472,6 +1472,8 @@
   },
   "thread": {
     "loadingConversation": "Cargando conversación…",
+    "loadingHistory": "Cargando mensajes anteriores…",
+    "historyStart": "Inicio de la conversación",
     "empty": {
       "description": "Haz preguntas, continúa tu trabajo local o inicia un nuevo hilo.",
       "greeting": "¿Qué puedo hacer por ti?",

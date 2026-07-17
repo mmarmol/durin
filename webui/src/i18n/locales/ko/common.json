@@ -1653,6 +1653,8 @@
   },
   "thread": {
     "loadingConversation": "대화 불러오는 중…",
+    "loadingHistory": "이전 메시지 불러오는 중…",
+    "historyStart": "대화의 시작입니다",
     "empty": {
       "greeting": "무엇을 도와드릴까요?",
       "imageQuickActions": {

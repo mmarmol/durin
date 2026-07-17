@@ -20,8 +20,20 @@ interface ThreadMessagesProps {
 export type DisplayUnit =
   | { type: "cluster"; messages: UIMessage[] }
   | { type: "single"; message: UIMessage }
-  | { type: "toolBlock"; event: ToolProgressEvent; answered: boolean; key: string }
-  | { type: "toolChips"; events: ToolProgressEvent[]; key: string };
+  | { type: "toolBlock"; event: ToolProgressEvent; answered: boolean; key: string; msgId: string }
+  | { type: "toolChips"; events: ToolProgressEvent[]; key: string; msgId: string };
+
+/** Stable message identity for a rendered row (``data-message-id``): the
+ *  scroll-anchoring pin re-acquires its anchor by this id when re-rendering
+ *  swaps the row's DOM node. Clusters answer with their first member;
+ *  the full member list goes into ``data-message-ids`` so a cluster that
+ *  absorbed the pinned message under a different first member can still be
+ *  found. */
+function unitAnchorMessageId(unit: DisplayUnit): string | undefined {
+  if (unit.type === "cluster") return unit.messages[0]?.id;
+  if (unit.type === "single") return unit.message.id;
+  return unit.msgId;
+}
 
 /** True when this unit index is the last assistant text slice before the next user message (or end of thread). */
 export function isFinalAssistantSliceBeforeNextUser(
@@ -87,6 +99,7 @@ function buildDisplayUnits(messages: UIMessage[]): DisplayUnit[] {
           type: "toolChips",
           events: chips.map((c) => c.event),
           key: `chips-${chips[0].msgId}-${chips[0].event.call_id ?? "0"}`,
+          msgId: chips[0].msgId,
         });
       }
       // An interaction is answered once any later user message exists.
@@ -97,6 +110,7 @@ function buildDisplayUnits(messages: UIMessage[]): DisplayUnit[] {
           event: h.event,
           answered,
           key: `block-${h.msgId}-${h.event.call_id ?? "0"}`,
+          msgId: h.msgId,
         });
       }
       continue;
@@ -145,7 +159,16 @@ export function ThreadMessages({
           && next.message.role === "assistant";
 
         return (
-          <div key={unitKey(unit, index)} className={marginTop}>
+          <div
+            key={unitKey(unit, index)}
+            className={marginTop}
+            data-message-id={unitAnchorMessageId(unit)}
+            data-message-ids={
+              unit.type === "cluster"
+                ? unit.messages.map((m) => m.id).join(" ")
+                : undefined
+            }
+          >
             {unit.type === "cluster" ? (
               <AgentActivityCluster
                 messages={unit.messages}

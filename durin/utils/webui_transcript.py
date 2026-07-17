@@ -18,6 +18,12 @@ from durin.session.manager import SessionManager
 # so rich tool blocks survive reload instead of flattening to text lines.
 WEBUI_TRANSCRIPT_SCHEMA_VERSION = 4
 _MAX_TRANSCRIPT_FILE_BYTES = 8 * 1024 * 1024
+_PAGE_TARGET_BYTES = 1 * 1024 * 1024
+# Expanding to a user boundary scans backwards at most this far past the
+# target before giving up and cutting at a plain line boundary. A turn
+# larger than this is pathological; a mid-turn cut renders slightly
+# untidily but correctly.
+_BOUNDARY_SCAN_LIMIT = 4 * 1024 * 1024
 
 
 def webui_transcript_path(session_key: str) -> Path:
@@ -25,32 +31,103 @@ def webui_transcript_path(session_key: str) -> Path:
     return get_webui_dir() / f"{stem}.jsonl"
 
 
-def read_transcript_lines(session_key: str) -> list[dict[str, Any]]:
+def _is_user_line(raw: str) -> bool:
+    # Cheap prefilter before full JSON parse: user rows are the page
+    # boundary anchor. The writer persists user turns as compact JSON
+    # ({"event":"user","chat_id":...,"text":...}); the spaced form is
+    # tolerated defensively. Replay dispatches user rows on the "event"
+    # field only — "kind" values are message sub-types (tool_hint,
+    # progress, reasoning), never "user".
+    return '"event":"user"' in raw or '"event": "user"' in raw
+
+
+def read_transcript_page(
+    session_key: str,
+    *,
+    before: int | None = None,
+    target_bytes: int = _PAGE_TARGET_BYTES,
+) -> tuple[list[dict[str, Any]], int | None]:
+    """Read one page of the display transcript, newest window first.
+
+    A page is the byte window [start, end) where ``end`` is ``before`` (file
+    size when None) and ``start`` is ``end - target_bytes`` expanded backward
+    to the nearest USER-message line so a turn's trace/tool rows are never
+    orphaned from their user message. Returns ``(parsed_lines, prev_cursor)``
+    where ``prev_cursor`` is ``start`` (byte offset for the next older page)
+    or ``None`` when the page begins at offset 0. Pure read — never writes.
+
+    ``prev_cursor`` is an OPAQUE byte cursor, not guaranteed to be
+    line-aligned: a UTF-8 seek split can overshoot into the line this page
+    already returned, and the next older page's partial-line drop absorbs
+    the difference. Coverage across the chained pages remains exactly-once,
+    so do NOT "fix" the cursor's alignment in either direction — snapping it
+    to a line boundary would double or drop the boundary line.
+    """
     path = webui_transcript_path(session_key)
     if not path.is_file():
-        return []
+        return [], None
     size = path.stat().st_size
-    if size > _MAX_TRANSCRIPT_FILE_BYTES:
-        logger.warning("webui transcript too large, skipping: {}", path)
-        return []
+    end = size if before is None else max(0, min(before, size))
+    if end == 0:
+        return [], None
+
+    rough_start = max(0, end - target_bytes)
+    lookback = target_bytes + _BOUNDARY_SCAN_LIMIT
+    with open(path, "rb") as f:
+        while True:
+            scan_floor = max(0, end - lookback)
+            f.seek(scan_floor)
+            window = f.read(end - scan_floor)
+
+            # Split into lines, tracking each line's absolute start offset.
+            text = window.decode("utf-8", errors="replace")
+            offsets: list[tuple[int, str]] = []
+            pos = 0
+            for raw in text.splitlines(keepends=True):
+                offsets.append((scan_floor + pos, raw))
+                pos += len(raw.encode("utf-8"))
+
+            # Drop a leading partial line (we may have seeked mid-line) unless
+            # we started at offset 0, where the first line is always whole.
+            if scan_floor > 0 and offsets:
+                offsets = offsets[1:]
+
+            if offsets or scan_floor == 0:
+                break
+            # A single line larger than the whole window (the writer allows
+            # lines up to the file cap) left nothing complete after the
+            # partial-line drop. Widen the lookback and retry — the chain
+            # must never skip a line or falsely report history exhausted.
+            # Each attempt reads one window; the previous one is discarded,
+            # so memory stays bounded per attempt.
+            lookback *= 2
+
+    # Choose the page start: the latest user line at or before rough_start;
+    # if none exists in the scan window, fall back to the first whole line.
+    start_idx = 0
+    for i, (off, raw) in enumerate(offsets):
+        if off > rough_start:
+            break
+        if _is_user_line(raw):
+            start_idx = i
+    page = offsets[start_idx:]
+    if not page:
+        return [], None
+    page_start = page[0][0]
+
     lines_out: list[dict[str, Any]] = []
-    try:
-        with open(path, encoding="utf-8") as f:
-            for line_no, line in enumerate(f, start=1):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                except json.JSONDecodeError:
-                    logger.warning("bad jsonl at {} line {}", path, line_no)
-                    continue
-                if isinstance(obj, dict):
-                    lines_out.append(obj)
-    except OSError as e:
-        logger.warning("read transcript failed {}: {}", path, e)
-        return []
-    return lines_out
+    for _off, raw in page:
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            lines_out.append(obj)
+    prev_cursor = page_start if page_start > 0 else None
+    return lines_out, prev_cursor
 
 
 def append_transcript_object(session_key: str, obj: dict[str, Any]) -> None:
@@ -165,12 +242,22 @@ def replay_transcript_to_ui_messages(
     lines: list[dict[str, Any]],
     *,
     augment_user_media: Callable[[list[str]], list[dict[str, Any]]] | None = None,
+    page_start: int = 0,
 ) -> list[dict[str, Any]]:
     """Fold JSONL records into ``UIMessage``-shaped dicts for the WebUI.
 
     Mirrors the core fold in ``useDurinStream.ts`` (delta, reasoning,
     message+kind, turn_end). ``augment_user_media`` maps persisted filesystem
     paths to ``{url, name?}`` / attachment dicts the client expects.
+
+    ``page_start`` is the byte offset where the page being replayed begins
+    (0 for the oldest page). Fallback ids are minted per line *index within
+    this page*, so two pages of the same session independently produce the
+    identical ``u-0``/``as-1``/... sequence — the webui dedupes older-page
+    rows by id, so that collision silently discards the whole older page.
+    Namespacing fallback ids by ``page_start`` keeps them unique across pages
+    while staying deterministic (refetching the same page recomputes the same
+    ``page_start`` and therefore the same ids).
     """
     messages: list[dict[str, Any]] = []
     buffer_message_id: str | None = None
@@ -179,10 +266,18 @@ def replay_transcript_to_ui_messages(
     _ts_base = int(time.time() * 1000)
 
     def _new_id(prefix: str, idx: int) -> str:
-        # Deterministic per (prefix, line index): two replays of the same JSONL
-        # must mint identical ids, or every canonical refetch re-keys these rows
-        # and the webui remounts their DOM (iframes reload, open toggles reset).
-        # ``idx`` is unique per transcript line, so ids never collide in-thread.
+        # Deterministic per (page_start, prefix, line index): two replays of
+        # the same page must mint identical ids, or every canonical refetch
+        # re-keys these rows and the webui remounts their DOM (iframes reload,
+        # open toggles reset). ``idx`` is unique per transcript line *within
+        # this page*, so ids never collide in-page; ``page_start`` (this
+        # page's own byte offset, 0 for the oldest page) disambiguates across
+        # pages of the same session. Server-stamped ids (``rec["id"]``) bypass
+        # this helper entirely and are left untouched — they must stay
+        # byte-identical to the live-streamed frame so a refetch merges the
+        # row instead of duplicating it.
+        if page_start:
+            return f"p{page_start}-{prefix}-{idx}"
         return f"{prefix}-{idx}"
 
     def attach_reasoning_chunk(prev: list[dict[str, Any]], chunk: str, idx: int) -> None:
@@ -702,15 +797,31 @@ def session_messages_to_ui_messages(
 def build_webui_thread_response(
     session_key: str,
     *,
+    before: int | None = None,
     augment_user_media: Callable[[list[str]], list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any] | None:
-    """Return a payload compatible with ``WebuiThreadPersistedPayload``."""
-    lines = read_transcript_lines(session_key)
-    if not lines:
+    """Return a payload compatible with ``WebuiThreadPersistedPayload``.
+
+    Paged: reads only one byte-window of the transcript (newest when
+    ``before`` is None), so open cost is independent of session size.
+    ``prevCursor`` chains older pages; ``None`` means history start.
+    Returns None only when no transcript file exists (the caller falls
+    back to converting the agent session).
+    """
+    path = webui_transcript_path(session_key)
+    if not path.is_file():
         return None
-    msgs = replay_transcript_to_ui_messages(lines, augment_user_media=augment_user_media)
+    lines, prev_cursor = read_transcript_page(session_key, before=before)
+    # ``prev_cursor`` is this page's own start offset (None only means the
+    # page starts at 0) — reuse it to namespace fallback replay ids so pages
+    # never mint colliding ids (see replay_transcript_to_ui_messages).
+    page_start = prev_cursor if prev_cursor is not None else 0
+    msgs = replay_transcript_to_ui_messages(
+        lines, augment_user_media=augment_user_media, page_start=page_start
+    )
     return {
         "schemaVersion": WEBUI_TRANSCRIPT_SCHEMA_VERSION,
         "sessionKey": session_key,
         "messages": msgs,
+        "prevCursor": prev_cursor,
     }

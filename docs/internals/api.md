@@ -173,6 +173,20 @@ call `channel._augment_media_urls()` or `build_webui_thread_response()` to
 rewrite raw on-disk paths to HMAC-signed `/api/media/{sig}/{payload}` URLs. The
 service never touches media URLs.
 
+The webui-thread route also takes an optional `before` query parameter — a
+byte cursor into the display transcript — so the webui can page through long
+histories instead of loading the whole file. Each page is widened backward
+from the target window to the nearest user-message line, so a turn's
+trace/tool rows are never split from the user message that started it. The
+response's `data.prevCursor` carries the cursor for the next older page, or
+`null` once history is exhausted (the client chains pages by re-requesting
+with `before=prevCursor`). An invalid `before` (non-integer or negative) is
+rejected with a `validation_failed` problem response before the service is
+even called. When no display transcript exists (non-websocket sessions), the
+endpoint falls back to converting the raw session history instead — see
+[channels.md](channels.md) for that path — and that fallback payload always
+carries `prevCursor: null` since it is not byte-paged.
+
 ### Webhook trigger ingress
 
 `POST /api/v1/hooks/{hook}` is the other non-bearer route: rather than

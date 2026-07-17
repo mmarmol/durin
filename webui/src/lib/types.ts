@@ -480,6 +480,8 @@ export interface WebuiThreadPersistedPayload {
   readOnly?: boolean;
   /** Active persona slug for this session, if one was set via ``/persona``. */
   persona?: string | null;
+  /** Byte cursor for the next older page, or ``null`` at the start of history. */
+  prevCursor?: number | null;
 }
 
 export type Outbound =

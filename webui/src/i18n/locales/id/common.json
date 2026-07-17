@@ -1653,6 +1653,8 @@
   },
   "thread": {
     "loadingConversation": "Memuat percakapan…",
+    "loadingHistory": "Memuat pesan sebelumnya…",
+    "historyStart": "Awal percakapan",
     "empty": {
       "greeting": "Apa yang bisa saya bantu?",
       "imageQuickActions": {

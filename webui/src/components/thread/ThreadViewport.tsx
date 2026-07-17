@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 
 import { ThreadMessages } from "@/components/thread/ThreadMessages";
 import { Button } from "@/components/ui/button";
+import { PIN_SAFETY_TICK_MS, PrependPin } from "@/lib/prepend-pin";
 import { cn } from "@/lib/utils";
 import type { UIMessage } from "@/lib/types";
 
@@ -16,9 +17,17 @@ interface ThreadViewportProps {
   conversationKey?: string | null;
   onRetryLast?: () => void;
   onEditLastUser?: () => void;
+  /** Fetch and prepend the next older page of history. */
+  onLoadOlder?: () => void;
+  /** ``true`` while there is an older page left to fetch. */
+  hasOlder?: boolean;
+  /** ``true`` while an older-page fetch is in flight. */
+  loadingOlder?: boolean;
 }
 
 const NEAR_BOTTOM_PX = 48;
+/** Distance from the top that arms the lazy older-history fetch. */
+const NEAR_TOP_PX = 300;
 
 export function ThreadViewport({
   messages,
@@ -29,6 +38,9 @@ export function ThreadViewport({
   conversationKey = null,
   onRetryLast,
   onEditLastUser,
+  onLoadOlder,
+  hasOlder = false,
+  loadingOlder = false,
 }: ThreadViewportProps) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -39,8 +51,63 @@ export function ThreadViewport({
   const scrollFrameIdsRef = useRef<number[]>([]);
   /** User scrolled away from the bottom; do not auto-yank until they return or we reset (new chat / send). */
   const userReadingHistoryRef = useRef(false);
+  /** Wrapper around the rendered message list; its first row is the anchor
+   *  element pinned across an older-page prepend. */
+  const messagesRef = useRef<HTMLDivElement>(null);
+  /** Active prepend pin: keeps the pre-prepend first message at its recorded
+   *  viewport position across the prepend AND the progressive layout that
+   *  follows it (markdown/image reflow keeps growing the DOM after the first
+   *  restore frame, so a one-shot compensation lands the view off by the
+   *  post-snapshot growth). Non-null for the whole pinning window. */
+  const pinRef = useRef<PrependPin | null>(null);
+  /** Safety-tick interval id while a pin is active (see applyPinTick). */
+  const pinTimerRef = useRef<number | null>(null);
+  /** Self-reference so the interval callback always runs the latest tick fn. */
+  const applyPinTickRef = useRef<() => boolean>(() => false);
   const [atBottom, setAtBottom] = useState(true);
   const hasMessages = messages.length > 0;
+
+  const releasePin = useCallback(() => {
+    pinRef.current = null;
+    if (pinTimerRef.current !== null) {
+      window.clearInterval(pinTimerRef.current);
+      pinTimerRef.current = null;
+    }
+  }, []);
+
+  /** Run one pin-restore tick. Returns true when the tick belonged to the
+   *  pin (callers must then skip their own scroll behavior), releasing the
+   *  pin when it reports itself done. */
+  const applyPinTick = useCallback((): boolean => {
+    const pin = pinRef.current;
+    if (!pin) return false;
+    const el = scrollRef.current;
+    if (!el) {
+      releasePin();
+      return false;
+    }
+    if (!pin.apply(el, performance.now())) {
+      releasePin();
+      return true;
+    }
+    // Low-frequency safety tick, armed at the first restore: async late
+    // layout (image fallbacks after 404s, markdown settling) can land after
+    // the ResizeObserver has gone quiet, so the observer alone cannot be
+    // trusted to deliver a tick for it. The interval keeps applying until
+    // the pin releases itself — primarily via genuine quiet (enough executed
+    // no-adjustment ticks over a real time span since the last adjustment),
+    // immediately on user scroll or anchor loss, and at a generous
+    // pathological ceiling — which also bounds how long the interval lives;
+    // releasePin clears it.
+    if (pinTimerRef.current === null) {
+      pinTimerRef.current = window.setInterval(
+        () => applyPinTickRef.current(),
+        PIN_SAFETY_TICK_MS,
+      );
+    }
+    return true;
+  }, [releasePin]);
+  applyPinTickRef.current = applyPinTick;
 
   const cancelScheduledBottomScroll = useCallback(() => {
     for (const id of scrollFrameIdsRef.current) {
@@ -83,10 +150,68 @@ export function ThreadViewport({
 
   useEffect(() => {
     if (!atBottom) return;
+    // An active pin means these new `messages` are an older page landing
+    // above the viewport, not fresh content at the bottom — hydrating it
+    // must never yank the view down, for the WHOLE pinning window (the DOM
+    // keeps reflowing well past the first post-prepend frame).
+    if (pinRef.current) return;
     // Instant jump: CSS scroll-smooth + behavior "auto" still animates in some
     // browsers; session switches and history hydration should never slide from top.
     scrollToBottom(false);
   }, [messages, atBottom, scrollToBottom]);
+
+  // Arm the pin the moment an older-page fetch starts: record the first
+  // message row, its message id, and its viewport position, so every later
+  // layout tick can restore it there. The id is the durable identity: when
+  // the prepend swaps the row's DOM node (prepended rows re-clustering with
+  // the previously-first row is the common case), the pin re-acquires the
+  // element for the same message — by exact row id first, then by cluster
+  // membership (a merged cluster lists all members in data-message-ids).
+  useEffect(() => {
+    if (!loadingOlder) return;
+    const el = scrollRef.current;
+    const anchor = messagesRef.current?.querySelector("[data-message-id]");
+    if (!el || !anchor) return;
+    const anchorId = anchor.getAttribute("data-message-id");
+    const escaped = anchorId !== null && typeof CSS !== "undefined" && typeof CSS.escape === "function"
+      ? CSS.escape(anchorId)
+      : anchorId;
+    const reacquire = escaped
+      ? () => {
+          const root = messagesRef.current;
+          if (!root) return null;
+          return (
+            root.querySelector(`[data-message-id="${escaped}"]`)
+            ?? root.querySelector(`[data-message-ids~="${escaped}"]`)
+          );
+        }
+      : null;
+    releasePin();
+    pinRef.current = new PrependPin(
+      anchor,
+      anchor.getBoundingClientRect().top,
+      el.scrollTop,
+      reacquire,
+    );
+  }, [loadingOlder, releasePin]);
+
+  // First restore, synchronously with the prepend commit.
+  useLayoutEffect(() => {
+    if (!pinRef.current) return;
+    applyPinTick();
+  }, [messages, applyPinTick]);
+
+  // A fetch that ends without a prepend (failure / empty page) never runs a
+  // restore tick: drop its pin, or the auto-scroll guard would stay latched.
+  // On success this is a no-op — the prepend commits in the same batch that
+  // clears `loadingOlder`, and its layout effect (above) runs first.
+  useEffect(() => {
+    if (loadingOlder) return;
+    const pin = pinRef.current;
+    if (pin && !pin.started) releasePin();
+  }, [loadingOlder, releasePin]);
+
+  useEffect(() => releasePin, [releasePin]);
 
   useEffect(() => {
     if (scrollToBottomSignal <= 0) return;
@@ -99,8 +224,9 @@ export function ThreadViewport({
     lastConversationKeyRef.current = conversationKey;
     pendingConversationScrollRef.current = true;
     userReadingHistoryRef.current = false;
+    releasePin();
     setAtBottom(true);
-  }, [conversationKey]);
+  }, [conversationKey, releasePin]);
 
   useLayoutEffect(() => {
     if (!pendingConversationScrollRef.current) return;
@@ -120,28 +246,54 @@ export function ThreadViewport({
     const target = contentRef.current;
     if (!target || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => {
+      // While a prepend pin is active, every size change is post-prepend
+      // reflow (progressive markdown/image layout): the tick re-restores the
+      // anchor instead of driving the follow-the-bottom behavior.
+      if (applyPinTick()) return;
       if (userReadingHistoryRef.current) return;
       scrollToBottom(false, 4);
     });
     observer.observe(target);
     return () => observer.disconnect();
-  }, [hasMessages, scrollToBottom]);
+  }, [hasMessages, scrollToBottom, applyPinTick]);
 
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
 
-    const onScroll = () => {
+    const updateBottomState = () => {
       const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
       const near = distance < NEAR_BOTTOM_PX;
       setAtBottom(near);
       userReadingHistoryRef.current = !near;
     };
 
-    onScroll();
+    // Only a genuine `scroll` event may trigger the older-page load — the
+    // synchronous call below (used to seed `atBottom` at mount / whenever
+    // this effect re-registers) must never do so, since it can run after the
+    // conversation-open layout effect has already cleared the pending flag
+    // for an already-hydrated session, defeating that guard.
+    const onScroll = () => {
+      updateBottomState();
+      // A scroll position the active pin did not set itself is the user's
+      // own scrolling — their intent wins over any further pin restores.
+      const pin = pinRef.current;
+      if (pin && !pin.notifyScroll(el.scrollTop)) {
+        releasePin();
+      }
+      // Skip while the session-open bottom scroll hasn't run yet: the
+      // viewport briefly sits at scrollTop 0 before that scroll fires, which
+      // would otherwise misread as "user scrolled to top".
+      if (pendingConversationScrollRef.current) return;
+      if (el.scrollTop < NEAR_TOP_PX && hasOlder && !loadingOlder) {
+        onLoadOlder?.();
+      }
+    };
+
+    updateBottomState();
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => el.removeEventListener("scroll", onScroll);
-  }, []);
+  }, [hasOlder, loadingOlder, onLoadOlder, releasePin]);
 
   return (
     <div className="relative flex min-h-0 flex-1 overflow-hidden">
@@ -149,6 +301,10 @@ export function ThreadViewport({
         ref={scrollRef}
         className={cn(
           "absolute inset-0 overflow-y-auto scroll-auto scrollbar-thin",
+          /* The prepend pin is the single scroll-anchoring authority; the
+           * browser's native anchoring would double-compensate and its
+           * adjustments would register as user scrolls, breaking the pin. */
+          "[overflow-anchor:none]",
           "[&::-webkit-scrollbar]:w-1.5",
           "[&::-webkit-scrollbar-thumb]:rounded-full",
           "[&::-webkit-scrollbar-thumb]:bg-muted-foreground/30",
@@ -159,12 +315,23 @@ export function ThreadViewport({
           <div ref={contentRef} className="mx-auto flex min-h-full w-full max-w-[64rem] flex-col">
             <div className="flex-1 px-4 pb-20 pt-8">
               <div className="mx-auto w-full max-w-[49.5rem]">
-                <ThreadMessages
-                  messages={messages}
-                  isStreaming={isStreaming}
-                  onRetryLast={onRetryLast}
-                  onEditLastUser={onEditLastUser}
-                />
+                {hasOlder ? (
+                  <div className="flex justify-center py-3 text-xs text-muted-foreground">
+                    {loadingOlder ? t("thread.loadingHistory") : null}
+                  </div>
+                ) : (
+                  <div className="flex justify-center py-3 text-xs text-muted-foreground">
+                    {t("thread.historyStart")}
+                  </div>
+                )}
+                <div ref={messagesRef}>
+                  <ThreadMessages
+                    messages={messages}
+                    isStreaming={isStreaming}
+                    onRetryLast={onRetryLast}
+                    onEditLastUser={onEditLastUser}
+                  />
+                </div>
               </div>
             </div>
 
