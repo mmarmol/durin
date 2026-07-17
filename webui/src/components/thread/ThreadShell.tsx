@@ -100,6 +100,9 @@ export function ThreadShell({
     refresh: refreshHistory,
     version: historyVersion,
     persona: historicalPersona,
+    prevCursor,
+    loadingOlder,
+    loadOlder: loadOlderHistory,
   } = useSessionHistory(historyKey);
   const { client, modelName, modelPreset, token } = useClient();
   const activeEffort = effortFromPreset(modelPreset);
@@ -143,6 +146,18 @@ export function ThreadShell({
   } = useDurinStream(chatId, initial, hasPendingToolCalls, handleTurnEnd);
 
   const transcriptionStatus = useTranscriptionStatus();
+
+  // `historical` (from useSessionHistory) accumulates older pages as they're
+  // fetched, but the live thread state (`messages`, from useDurinStream) only
+  // ever seeds from `historical` once, at mount/chatId-change — it never
+  // re-syncs on later `historical` growth. Splice the newly-fetched older
+  // rows into the live state directly so they render without disturbing any
+  // in-flight/streamed content already in `messages`.
+  const handleLoadOlder = useCallback(() => {
+    void loadOlderHistory().then((older) => {
+      if (older.length > 0) setMessages((prev) => [...older, ...prev]);
+    });
+  }, [loadOlderHistory, setMessages]);
 
   useEffect(() => {
     if (chatId && historyKey) sessionKeyByChatIdRef.current.set(chatId, historyKey);
@@ -546,6 +561,9 @@ export function ThreadShell({
             conversationKey={historyKey}
             onRetryLast={handleRetryLast}
             onEditLastUser={handleEditLastUser}
+            onLoadOlder={handleLoadOlder}
+            hasOlder={prevCursor != null}
+            loadingOlder={loadingOlder}
           />
         </div>
         <WorkPanel

@@ -1653,6 +1653,8 @@
   },
   "thread": {
     "loadingConversation": "会話を読み込み中…",
+    "loadingHistory": "過去のメッセージを読み込み中…",
+    "historyStart": "会話の先頭です",
     "empty": {
       "greeting": "何をお手伝いしましょうか？",
       "imageQuickActions": {

@@ -16,9 +16,17 @@ interface ThreadViewportProps {
   conversationKey?: string | null;
   onRetryLast?: () => void;
   onEditLastUser?: () => void;
+  /** Fetch and prepend the next older page of history. */
+  onLoadOlder?: () => void;
+  /** ``true`` while there is an older page left to fetch. */
+  hasOlder?: boolean;
+  /** ``true`` while an older-page fetch is in flight. */
+  loadingOlder?: boolean;
 }
 
 const NEAR_BOTTOM_PX = 48;
+/** Distance from the top that arms the lazy older-history fetch. */
+const NEAR_TOP_PX = 300;
 
 export function ThreadViewport({
   messages,
@@ -29,6 +37,9 @@ export function ThreadViewport({
   conversationKey = null,
   onRetryLast,
   onEditLastUser,
+  onLoadOlder,
+  hasOlder = false,
+  loadingOlder = false,
 }: ThreadViewportProps) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -39,6 +50,11 @@ export function ThreadViewport({
   const scrollFrameIdsRef = useRef<number[]>([]);
   /** User scrolled away from the bottom; do not auto-yank until they return or we reset (new chat / send). */
   const userReadingHistoryRef = useRef(false);
+  /** Captured scrollHeight/scrollTop just before an older page is requested,
+   *  so the layout effect below can restore the visual scroll position once
+   *  the prepended rows land — without this, prepending content above the
+   *  viewport would otherwise yank the view downward. */
+  const prependAnchorRef = useRef<{ height: number; top: number } | null>(null);
   const [atBottom, setAtBottom] = useState(true);
   const hasMessages = messages.length > 0;
 
@@ -83,10 +99,33 @@ export function ThreadViewport({
 
   useEffect(() => {
     if (!atBottom) return;
+    // A pending prepend anchor means these new `messages` are an older page
+    // landing above the viewport, not fresh content at the bottom — hydrating
+    // it must never yank the view down.
+    if (prependAnchorRef.current) return;
     // Instant jump: CSS scroll-smooth + behavior "auto" still animates in some
     // browsers; session switches and history hydration should never slide from top.
     scrollToBottom(false);
   }, [messages, atBottom, scrollToBottom]);
+
+  // Capture the pre-prepend scroll geometry the moment an older-page fetch
+  // starts, so the layout effect below can restore the visual position once
+  // the fetched rows are prepended to `messages`.
+  useEffect(() => {
+    if (!loadingOlder) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    prependAnchorRef.current = { height: el.scrollHeight, top: el.scrollTop };
+  }, [loadingOlder]);
+
+  useLayoutEffect(() => {
+    const anchor = prependAnchorRef.current;
+    if (!anchor) return;
+    const el = scrollRef.current;
+    prependAnchorRef.current = null;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight - anchor.height + anchor.top;
+  }, [messages]);
 
   useEffect(() => {
     if (scrollToBottomSignal <= 0) return;
@@ -131,17 +170,33 @@ export function ThreadViewport({
     const el = scrollRef.current;
     if (!el) return;
 
-    const onScroll = () => {
+    const updateBottomState = () => {
       const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
       const near = distance < NEAR_BOTTOM_PX;
       setAtBottom(near);
       userReadingHistoryRef.current = !near;
     };
 
-    onScroll();
+    // Only a genuine `scroll` event may trigger the older-page load — the
+    // synchronous call below (used to seed `atBottom` at mount / whenever
+    // this effect re-registers) must never do so, since it can run after the
+    // conversation-open layout effect has already cleared the pending flag
+    // for an already-hydrated session, defeating that guard.
+    const onScroll = () => {
+      updateBottomState();
+      // Skip while the session-open bottom scroll hasn't run yet: the
+      // viewport briefly sits at scrollTop 0 before that scroll fires, which
+      // would otherwise misread as "user scrolled to top".
+      if (pendingConversationScrollRef.current) return;
+      if (el.scrollTop < NEAR_TOP_PX && hasOlder && !loadingOlder) {
+        onLoadOlder?.();
+      }
+    };
+
+    updateBottomState();
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => el.removeEventListener("scroll", onScroll);
-  }, []);
+  }, [hasOlder, loadingOlder, onLoadOlder]);
 
   return (
     <div className="relative flex min-h-0 flex-1 overflow-hidden">
@@ -159,6 +214,15 @@ export function ThreadViewport({
           <div ref={contentRef} className="mx-auto flex min-h-full w-full max-w-[64rem] flex-col">
             <div className="flex-1 px-4 pb-20 pt-8">
               <div className="mx-auto w-full max-w-[49.5rem]">
+                {hasOlder ? (
+                  <div className="flex justify-center py-3 text-xs text-muted-foreground">
+                    {loadingOlder ? t("thread.loadingHistory") : null}
+                  </div>
+                ) : (
+                  <div className="flex justify-center py-3 text-xs text-muted-foreground">
+                    {t("thread.historyStart")}
+                  </div>
+                )}
                 <ThreadMessages
                   messages={messages}
                   isStreaming={isStreaming}

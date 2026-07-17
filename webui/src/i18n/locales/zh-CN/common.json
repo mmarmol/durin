@@ -1653,6 +1653,8 @@
   },
   "thread": {
     "loadingConversation": "正在加载对话…",
+    "loadingHistory": "正在加载更早的消息…",
+    "historyStart": "对话开始",
     "empty": {
       "greeting": "我可以帮你做什么？",
       "imageQuickActions": {

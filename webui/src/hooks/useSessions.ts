@@ -110,6 +110,14 @@ export function useSessionHistory(key: string | null): {
   hasPendingToolCalls: boolean;
   /** Active persona slug for this session, or null if none is set. */
   persona: string | null;
+  /** Byte cursor for the next older page; ``null`` once history's start is reached. */
+  prevCursor: number | null;
+  /** ``true`` while an older page fetch (triggered by ``loadOlder``) is in flight. */
+  loadingOlder: boolean;
+  /** Fetch and prepend the next older page. No-op if already at the start of
+   *  history or a fetch is already in flight. Resolves with the prepended
+   *  rows so callers can splice them into any separately-tracked live thread. */
+  loadOlder: () => Promise<UIMessage[]>;
 } {
   const { token } = useClient();
   const [refreshSeq, setRefreshSeq] = useState(0);
@@ -124,6 +132,8 @@ export function useSessionHistory(key: string | null): {
     hasPendingToolCalls: boolean;
     version: number;
     persona: string | null;
+    prevCursor: number | null;
+    loadingOlder: boolean;
   }>({
     key: null,
     messages: [],
@@ -132,7 +142,12 @@ export function useSessionHistory(key: string | null): {
     hasPendingToolCalls: false,
     version: 0,
     persona: null,
+    prevCursor: null,
+    loadingOlder: false,
   });
+  const loadingOlderRef = useRef(false);
+  const stateRef = useRef(state);
+  stateRef.current = state;
 
   useEffect(() => {
     if (!key) {
@@ -144,6 +159,8 @@ export function useSessionHistory(key: string | null): {
         hasPendingToolCalls: false,
         version: 0,
         persona: null,
+        prevCursor: null,
+        loadingOlder: false,
       });
       return;
     }
@@ -160,6 +177,8 @@ export function useSessionHistory(key: string | null): {
           hasPendingToolCalls: false,
           version: 0,
           persona: null,
+          prevCursor: null,
+          loadingOlder: false,
         });
     (async () => {
       try {
@@ -174,12 +193,18 @@ export function useSessionHistory(key: string | null): {
             hasPendingToolCalls: false,
             version: prev.key === key ? prev.version + 1 : 1,
             persona: body?.persona ?? null,
+            prevCursor: body?.prevCursor ?? null,
+            loadingOlder: false,
           }));
           return;
         }
+        // The newest page is a singleton per session (there's exactly one
+        // "current" fetch with no `before`); a fixed prefix keeps its ids
+        // stable without colliding with any real older-page cursor (those
+        // are always concrete byte offsets from a `before` request).
         const ui: UIMessage[] = body.messages.map((m, idx) => ({
           ...m,
-          id: m.id ?? `hist-${idx}`,
+          id: m.id ?? `hist-0-${idx}`,
           createdAt: typeof m.createdAt === "number" ? m.createdAt : Date.now(),
         }));
         const last = ui[ui.length - 1];
@@ -192,6 +217,8 @@ export function useSessionHistory(key: string | null): {
           hasPendingToolCalls: hasPending,
           version: prev.key === key ? prev.version + 1 : 1,
           persona: body.persona ?? null,
+          prevCursor: body.prevCursor ?? null,
+          loadingOlder: false,
         }));
       } catch (e) {
         if (cancelled) return;
@@ -204,6 +231,8 @@ export function useSessionHistory(key: string | null): {
             hasPendingToolCalls: false,
             version: prev.key === key ? prev.version + 1 : 1,
             persona: null,
+            prevCursor: null,
+            loadingOlder: false,
           }));
         } else {
           setState((prev) => ({
@@ -214,6 +243,8 @@ export function useSessionHistory(key: string | null): {
             hasPendingToolCalls: false,
             version: prev.key === key ? prev.version : 0,
             persona: null,
+            prevCursor: null,
+            loadingOlder: false,
           }));
         }
       }
@@ -222,6 +253,41 @@ export function useSessionHistory(key: string | null): {
       cancelled = true;
     };
   }, [key, token, refreshSeq]);
+
+  const loadOlder = useCallback(async (): Promise<UIMessage[]> => {
+    const current = stateRef.current;
+    if (!key || current.key !== key || current.prevCursor == null || loadingOlderRef.current) {
+      return [];
+    }
+    const before = current.prevCursor;
+    loadingOlderRef.current = true;
+    setState((prev) => (prev.key === key ? { ...prev, loadingOlder: true } : prev));
+    try {
+      const body = await fetchWebuiThread(token, key, "", before);
+      if (stateRef.current.key !== key) return [];
+      const older: UIMessage[] = (body?.messages ?? []).map((m, idx) => ({
+        ...m,
+        id: m.id ?? `hist-${before}-${idx}`,
+        createdAt: typeof m.createdAt === "number" ? m.createdAt : Date.now(),
+      }));
+      setState((prev) =>
+        prev.key === key
+          ? {
+              ...prev,
+              messages: [...older, ...prev.messages],
+              prevCursor: body?.prevCursor ?? null,
+              loadingOlder: false,
+            }
+          : prev,
+      );
+      return older;
+    } catch {
+      setState((prev) => (prev.key === key ? { ...prev, loadingOlder: false } : prev));
+      return [];
+    } finally {
+      loadingOlderRef.current = false;
+    }
+  }, [key, token]);
 
   if (!key) {
     return {
@@ -232,6 +298,9 @@ export function useSessionHistory(key: string | null): {
       version: 0,
       hasPendingToolCalls: false,
       persona: null,
+      prevCursor: null,
+      loadingOlder: false,
+      loadOlder,
     };
   }
 
@@ -246,6 +315,9 @@ export function useSessionHistory(key: string | null): {
       version: 0,
       hasPendingToolCalls: false,
       persona: null,
+      prevCursor: null,
+      loadingOlder: false,
+      loadOlder,
     };
   }
 
@@ -257,6 +329,9 @@ export function useSessionHistory(key: string | null): {
     version: state.version,
     hasPendingToolCalls: state.hasPendingToolCalls,
     persona: state.persona,
+    prevCursor: state.prevCursor,
+    loadingOlder: state.loadingOlder,
+    loadOlder,
   };
 }
 
