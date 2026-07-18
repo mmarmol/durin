@@ -292,7 +292,15 @@ minimal allowlist (`PATH`, `HOME`, `USER`, `SHELL`, `LANG`, `LC_ALL`, `LC_CTYPE`
 ambient provider keys and other gateway-process secrets out of the subprocess. A node
 can opt into `env: "inherit"` to get the full gateway process environment
 (`dict(os.environ)`) instead — consistent with the same local-trust model, but a
-per-node choice rather than the default. Importing remote or third-party workflow
+per-node choice rather than the default. Neither mode carries **stored secrets** —
+those live in the secret store, never the gateway environment. A node that must
+authenticate declares the names it needs in `secrets`: each is injected only when
+the store entry's `scope` allows the `exec` consumer (the same grant `ExecTool`'s
+auto-injection honours), an unknown or scope-denied name aborts the run pre-flight,
+and the subprocess's stdout/stderr are redacted against the store before becoming
+edge text — so a script echoing a credential cannot persist it into sessions,
+manifests, or memory. The improve pass's pre-apply smoke run keeps the clean
+allowlist and never receives declared secrets. Importing remote or third-party workflow
 definitions (and the scripts they reference) is not supported in this scope.
 `PUT /api/v1/workflows/scripts/{name}` (`workflows:write`) lets the editor create
 or replace one of these script files over HTTP: the name is validated as a
