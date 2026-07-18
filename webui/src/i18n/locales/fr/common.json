@@ -2024,6 +2024,7 @@
     "backToFull": "Graphe complet",
     "isolate": "Isoler le voisinage",
     "isolateDepth": "Profondeur",
+    "fitView": "Ajuster la vue",
     "provFromSession": "depuis la session",
     "provTurn": "tour {{turn}}",
     "stats": "{{nodesLabel}} · {{edgesLabel}}",

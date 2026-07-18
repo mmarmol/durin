@@ -1843,6 +1843,7 @@
     "backToFull": "Grafo completo",
     "isolate": "Aislar vecindario",
     "isolateDepth": "Profundidad",
+    "fitView": "Encuadrar",
     "provFromSession": "de la sesión",
     "provTurn": "turno {{turn}}",
     "stats": "{{nodesLabel}} · {{edgesLabel}}",

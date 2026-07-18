@@ -12,6 +12,7 @@ import {
   Minimize2,
   Network,
   RefreshCw,
+  Scan,
   Search as SearchIcon,
   Table2,
   Trash2,
@@ -256,6 +257,32 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
   const rafRef = useRef<number | null>(null);
   const draggingRef = useRef<SimNode | null>(null);
   const hoverRef = useRef<SimNode | null>(null);
+  // Camera over the sim's world coordinates: screen = world * k + (tx, ty).
+  // Auto-fit continuously frames the visible nodes (smoothed each frame,
+  // zoom-in clamped) until the user takes manual control via wheel zoom or
+  // background pan; the floating fit button re-engages it. Refs drive the
+  // hot pointer/draw paths; `autoFit` state only mirrors the mode for UI.
+  const cameraRef = useRef({ k: 1, tx: 0, ty: 0 });
+  const autoFitRef = useRef(true);
+  const [autoFit, setAutoFit] = useState(true);
+  const panRef = useRef<{ lastX: number; lastY: number; moved: number } | null>(
+    null,
+  );
+  const disengageAutoFit = useCallback(() => {
+    if (autoFitRef.current) {
+      autoFitRef.current = false;
+      setAutoFit(false);
+    }
+  }, []);
+  const engageAutoFit = useCallback(() => {
+    autoFitRef.current = true;
+    setAutoFit(true);
+  }, []);
+  // Pointer (canvas CSS px) → sim world coordinates through the camera.
+  const toWorld = useCallback((sx: number, sy: number) => {
+    const c = cameraRef.current;
+    return { x: (sx - c.tx) / c.k, y: (sy - c.ty) / c.k };
+  }, []);
   // Caso 0: lets non-effect handlers (open/close panel) re-fit the canvas to
   // the space left by the content panel, and reheat the sim to re-centre.
   const resizeRef = useRef<() => void>(() => {});
@@ -540,6 +567,23 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
     const ro = new ResizeObserver(resize);
     ro.observe(wrap);
 
+    // Manual zoom (Obsidian: scroll wheel), anchored on the cursor. Native
+    // non-passive listener — a passive one cannot preventDefault page scroll.
+    function onWheel(e: WheelEvent) {
+      e.preventDefault();
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      const sx = e.clientX - rect.left;
+      const sy = e.clientY - rect.top;
+      const c = cameraRef.current;
+      const k2 = clamp(c.k * Math.exp(-e.deltaY * 0.0015), 0.25, 4);
+      c.tx = sx - ((sx - c.tx) / c.k) * k2;
+      c.ty = sy - ((sy - c.ty) / c.k) * k2;
+      c.k = k2;
+      disengageAutoFit();
+    }
+    canvas.addEventListener("wheel", onWheel, { passive: false });
+
     function isVisible(node: SimNode): boolean {
       // Type-toggle: legend chips hide whole categories at a time.
       // Phantom is treated as its own pseudo-type so the user can
@@ -577,7 +621,42 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
         alphaRef.current = alpha * 0.985;
       }
 
+      // Auto-fit: ease the camera toward framing the visible nodes' bounding
+      // box. Zoom-in is clamped so a lone filtered node stays node-sized
+      // instead of ballooning; zoom-out below 1 only happens for the margins
+      // (the sim walls keep content inside the canvas).
+      if (autoFitRef.current) {
+        let minX = Infinity;
+        let maxX = -Infinity;
+        let minY = Infinity;
+        let maxY = -Infinity;
+        for (const n of nodes) {
+          if (!isVisible(n)) continue;
+          const r = radiusForWeight(n.weight) + 18;
+          if (n.x - r < minX) minX = n.x - r;
+          if (n.x + r > maxX) maxX = n.x + r;
+          if (n.y - r < minY) minY = n.y - r;
+          if (n.y + r > maxY) maxY = n.y + r;
+        }
+        if (minX !== Infinity) {
+          const pad = 36;
+          const bw = Math.max(1, maxX - minX);
+          const bh = Math.max(1, maxY - minY);
+          const tk = Math.min(1.6, (w - pad * 2) / bw, (h - pad * 2) / bh);
+          const ttx = w / 2 - ((minX + maxX) / 2) * tk;
+          const tty = h / 2 - ((minY + maxY) / 2) * tk;
+          const cam = cameraRef.current;
+          cam.k += (tk - cam.k) * 0.08;
+          cam.tx += (ttx - cam.tx) * 0.08;
+          cam.ty += (tty - cam.ty) * 0.08;
+        }
+      }
+
+      const dpr = window.devicePixelRatio || 1;
+      const cam = cameraRef.current;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
+      ctx.setTransform(dpr * cam.k, 0, 0, dpr * cam.k, dpr * cam.tx, dpr * cam.ty);
 
       // Caso 2: recede the whole graph behind the search results — but only
       // while there are no matched nodes to highlight. Once searchMatchSet
@@ -674,8 +753,9 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
       stopped = true;
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
       ro.disconnect();
+      canvas.removeEventListener("wheel", onWheel);
     };
-  }, [_props.active, effectiveView, selected, isolatedRef, searchMatchSet, hiddenTypes, compact]);
+  }, [_props.active, effectiveView, selected, isolatedRef, searchMatchSet, hiddenTypes, compact, disengageAutoFit]);
 
   // Hit-test (for nodes AND edges). Skips nodes hidden by legend
   // toggles so the user can't accidentally select a node that's not
@@ -720,8 +800,9 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
   const onPointerDown = useCallback(
     (evt: React.PointerEvent<HTMLCanvasElement>) => {
       const rect = evt.currentTarget.getBoundingClientRect();
-      const x = evt.clientX - rect.left;
-      const y = evt.clientY - rect.top;
+      const sx = evt.clientX - rect.left;
+      const sy = evt.clientY - rect.top;
+      const { x, y } = toWorld(sx, sy);
       const hit = hitTestNode(x, y);
       if (hit) {
         hit.pinned = true;
@@ -742,9 +823,12 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
       }
       const edgeHit = hitTestEdge(x, y);
       if (edgeHit) {
-        // Open edge popup near the midpoint
-        const mx = (edgeHit.source.x + edgeHit.target.x) / 2;
-        const my = (edgeHit.source.y + edgeHit.target.y) / 2;
+        // Open edge popup near the midpoint. The popup is a DOM overlay in
+        // screen space, so project the sim-space midpoint through the camera
+        // at click time.
+        const cam = cameraRef.current;
+        const mx = ((edgeHit.source.x + edgeHit.target.x) / 2) * cam.k + cam.tx;
+        const my = ((edgeHit.source.y + edgeHit.target.y) / 2) * cam.k + cam.ty;
         setEdgePopup({ x: mx, y: my, detail: null, loading: true });
         setSelected(null);
         void (async () => {
@@ -768,17 +852,35 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
         })();
         return;
       }
-      setSelected(null);
-      setEdgePopup(null);
+      // Background press: start a pan (Obsidian: drag to move the view). If
+      // the pointer barely moves it's a click — selection clears on release.
+      panRef.current = { lastX: sx, lastY: sy, moved: 0 };
+      evt.currentTarget.setPointerCapture(evt.pointerId);
     },
-    [hitTestNode, hitTestEdge],
+    [hitTestNode, hitTestEdge, toWorld],
   );
 
   const onPointerMove = useCallback(
     (evt: React.PointerEvent<HTMLCanvasElement>) => {
       const rect = evt.currentTarget.getBoundingClientRect();
-      const x = evt.clientX - rect.left;
-      const y = evt.clientY - rect.top;
+      const sx = evt.clientX - rect.left;
+      const sy = evt.clientY - rect.top;
+      const pan = panRef.current;
+      if (pan) {
+        const dx = sx - pan.lastX;
+        const dy = sy - pan.lastY;
+        pan.moved += Math.abs(dx) + Math.abs(dy);
+        pan.lastX = sx;
+        pan.lastY = sy;
+        if (pan.moved > 4) {
+          const c = cameraRef.current;
+          c.tx += dx;
+          c.ty += dy;
+          disengageAutoFit();
+        }
+        return;
+      }
+      const { x, y } = toWorld(sx, sy);
       const drag = draggingRef.current;
       if (drag) {
         drag.x = x;
@@ -798,8 +900,9 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
           if (!hid || !node) {
             setHoverPreview(null);
           } else {
-            const px = x;
-            const py = y;
+            // Preview popover is positioned in screen space, not sim space.
+            const px = sx;
+            const py = sy;
             const hnode = node;
             hoverTimerRef.current = setTimeout(() => {
               const cached = hoverBodyCache.current.get(hid);
@@ -825,11 +928,23 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
         }
       }
     },
-    [hitTestNode, hitTestEdge],
+    [hitTestNode, hitTestEdge, toWorld, disengageAutoFit],
   );
 
   const onPointerUp = useCallback(
     (evt: React.PointerEvent<HTMLCanvasElement>) => {
+      const pan = panRef.current;
+      if (pan) {
+        panRef.current = null;
+        evt.currentTarget.releasePointerCapture(evt.pointerId);
+        // A press that never really moved is a background click: clear the
+        // selection/popup (the pre-pan behavior of empty-space clicks).
+        if (pan.moved <= 4) {
+          setSelected(null);
+          setEdgePopup(null);
+        }
+        return;
+      }
       const drag = draggingRef.current;
       if (drag) {
         drag.pinned = false;
@@ -1264,7 +1379,20 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
             }}
             className="block h-full w-full"
           />
-        ) : (
+        ) : null}
+        {/* Re-engage auto-framing after a manual zoom/pan (Obsidian leaves
+            the camera fully manual; we default back to auto on request). */}
+        {effectiveView === "graph" && !autoFit ? (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={engageAutoFit}
+            className="absolute bottom-3 left-3 z-10 h-7 gap-1 bg-background/85 text-[11px] backdrop-blur"
+          >
+            <Scan className="h-3 w-3" /> {t("memoryGraph.fitView")}
+          </Button>
+        ) : null}
+        {effectiveView !== "graph" ? (
           // Cards / table presentations. When the desktop compact detail
           // panel is open it reserves the same right-hand column the graph
           // canvas gives up, so the grid re-flows beside it instead of
@@ -1295,7 +1423,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
               />
             )}
           </div>
-        )}
+        ) : null}
 
         {/* Search results panel (left side, slides over) — graph view only;
             cards/table filter their grid from the query directly. */}

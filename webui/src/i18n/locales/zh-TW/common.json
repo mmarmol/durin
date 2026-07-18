@@ -2024,6 +2024,7 @@
     "backToFull": "完整圖譜",
     "isolate": "隔離鄰域",
     "isolateDepth": "深度",
+    "fitView": "適配視圖",
     "provFromSession": "來自會話",
     "provTurn": "第 {{turn}} 回合",
     "stats": "{{nodesLabel}} · {{edgesLabel}}",
