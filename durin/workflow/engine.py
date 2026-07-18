@@ -348,6 +348,29 @@ class WorkflowEngine:
                             status="aborted", runs=[], run_id=run_id,
                             final_output=(f"node {node.id!r}: script file not found: "
                                           f"{node.script} (expected under workflows/scripts/)"))
+        # Declared script-node secrets are the author's contract with the store:
+        # an unknown name or one whose scope does not allow the 'exec' consumer
+        # can never be injected, so abort now — before any node runs or a manifest
+        # exists — naming the node and every unresolvable name at once.
+        declared = [n for n in workflow.nodes.values()
+                    if isinstance(n, ScriptNode) and getattr(n, "secrets", ())]
+        if declared:
+            from durin.security.secrets import get_secret_store, scope_allows
+            entries = get_secret_store().all()
+            for node in declared:
+                missing = [s for s in node.secrets if s not in entries]
+                denied = [s for s in node.secrets
+                          if s in entries and not scope_allows(entries[s].scope, "exec")]
+                if missing or denied:
+                    parts = []
+                    if missing:
+                        parts.append(f"not in the secret store: {', '.join(missing)}")
+                    if denied:
+                        parts.append(f"missing the 'exec' scope: {', '.join(denied)}")
+                    return WorkflowResult(
+                        status="aborted", runs=[], run_id=run_id,
+                        final_output=(f"node {node.id!r} declares secrets that cannot "
+                                      f"be provided — {'; '.join(parts)}"))
         return None
 
     def _start_manifest(self, workflow, run_id, root_session_key, started_at, task=None,

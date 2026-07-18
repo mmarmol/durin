@@ -293,3 +293,28 @@ def test_build_specs_seed_gate_fails_clearly_when_components_json_is_missing(tmp
     assert resp.route_label == "FAIL" and resp.exit_code == 1
     assert "components.json" in resp.output
     assert "frame" in resp.output
+
+
+def test_preflight_rejects_unresolvable_secrets(monkeypatch, tmp_path):
+    """A run whose script nodes declare unknown/scope-denied secrets aborts before
+    any node runs (and before any manifest exists), naming the node and names."""
+    class _E:
+        def __init__(self, value, scope):
+            self.value, self.scope = value, scope
+
+    class _Store:
+        def all(self):
+            return {"DENIED_TOKEN": _E("v" * 12, ["skill:deploy"])}
+
+    monkeypatch.setattr("durin.security.secrets.get_secret_store", lambda **kw: _Store())
+    wf = parse_workflow({"name": "t", "start": "s", "nodes": [
+        {"id": "s", "kind": "script", "command": "true",
+         "secrets": ["NOPE_TOKEN", "DENIED_TOKEN"], "next": None},
+    ]})
+    eng = engine_for(tmp_path, [])
+    result = eng.run(wf, "task")
+    assert result.status == "aborted"
+    out = result.final_output or ""
+    assert "'s'" in out and "NOPE_TOKEN" in out and "DENIED_TOKEN" in out
+    assert result.runs == []
+    assert run_log.read_manifest(tmp_path, "t", result.run_id) is None
