@@ -292,7 +292,11 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
   // When navigating to a session from a provenance event, the timestamp of
   // that event — the messages tab scrolls to the nearest message (best-effort).
   const [sessionScrollTs, setSessionScrollTs] = useState<string | null>(null);
-  const [focusRef, setFocusRef] = useState<string | null>(null);
+  // Isolation (Obsidian's local graph): when set, the canvas shows only this
+  // node's ego-graph at `isolateHops` depth. Entered via the panel's isolate
+  // button or a search hit for an off-cap node; exited via "back to full".
+  const [isolatedRef, setIsolatedRef] = useState<string | null>(null);
+  const [isolateHops, setIsolateHops] = useState(1);
   const isSessionSelected = selected?.type === "session";
   // Wide-mode toggle for the right-hand detail panel. Sessions can
   // accumulate long tool outputs that get cramped in the default
@@ -345,33 +349,33 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
     [data],
   );
 
-  // Local-graph follows selection (Obsidian's local graph model): focusing
-  // the active node dims the global hairball to its 1-hop neighbourhood, so
-  // the graph recedes to a contextual map while the content takes the stage.
-  // The panel's focus button still lets you unfocus to see the whole graph.
-  useEffect(() => {
-    setFocusRef(selected ? selected.id : null);
-  }, [selected?.id]); // eslint-disable-line react-hooks/exhaustive-deps
-
   // Caso 0: re-fit the graph whenever the content panel opens/closes/resizes —
   // the canvas shrinks to the leftover width and the sim reheats to re-centre.
   useEffect(() => {
     refitGraph();
   }, [selected?.id, !!referenceDetail, panelExpanded]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Switch the canvas to a node's ego-graph (uncapped neighbourhood). Used by
-  // both graph clicks and search hits — so a searched node that the global
-  // cap dropped is still brought in, centred, with just its relations.
-  const focusOnNode = useCallback((ref: string) => {
+  // Switch the canvas to a node's ego-graph (uncapped neighbourhood) at the
+  // given depth. Entered from the panel's isolate button, the depth control,
+  // and search hits for nodes the global cap dropped; "back to full" exits.
+  const isolateNode = useCallback((ref: string, hops: number) => {
     if (!tokenRef.current) return;
     void (async () => {
       try {
-        const g = await fetchMemorySubgraph(tokenRef.current!, ref);
+        const g = await fetchMemorySubgraph(tokenRef.current!, ref, { hops });
         setFocusGraph(g);
+        setIsolatedRef(ref);
+        setIsolateHops(hops);
       } catch {
         /* ego fetch failed — stay on the current graph */
       }
     })();
+  }, []);
+
+  const exitIsolation = useCallback(() => {
+    setFocusGraph(null);
+    setIsolatedRef(null);
+    setIsolateHops(1);
   }, []);
 
   // Set of node types the user has toggled OFF in the legend. Default
@@ -476,17 +480,6 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
       .slice(0, 40);
   }, [searchResults]);
 
-  // Compute neighbour set for the active focus ref (1-hop)
-  const focusNeighbours = useMemo(() => {
-    if (!focusRef || !data) return null;
-    const set = new Set<string>([focusRef]);
-    for (const e of data.edges) {
-      if (e.source === focusRef) set.add(e.target);
-      else if (e.target === focusRef) set.add(e.source);
-    }
-    return set;
-  }, [focusRef, data]);
-
   // Compute matching ref set for search dimming
   const searchMatchSet = useMemo(() => {
     // Defensive: a malformed payload (e.g. backend returned `{error}` with
@@ -540,15 +533,6 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
     const ro = new ResizeObserver(resize);
     ro.observe(wrap);
 
-    function isHighlighted(id: string): boolean {
-      // A node is highlighted iff it passes BOTH active dimming layers.
-      // (focus and search compose multiplicatively — focus AND search
-      // hit both must be true.)
-      if (focusNeighbours && !focusNeighbours.has(id)) return false;
-      if (searchMatchSet && !searchMatchSet.has(id)) return false;
-      return true;
-    }
-
     function isVisible(node: SimNode): boolean {
       // Type-toggle: legend chips hide whole categories at a time.
       // Phantom is treated as its own pseudo-type so the user can
@@ -585,6 +569,27 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
       // a uniform veil on top would grey out the very nodes the search found.
       ctx.globalAlpha = recedeRef.current && !searchMatchSet ? 0.18 : 1;
 
+      // Hover highlight (Obsidian's graph hover): while the pointer rests on
+      // a node, that node + its direct connections light up and the rest
+      // fades. Transient by construction — computed per frame from hoverRef,
+      // no React state, gone the moment the pointer leaves.
+      const hovered = hoverRef.current;
+      let hoverSet: Set<string> | null = null;
+      if (hovered) {
+        hoverSet = new Set([hovered.id]);
+        for (const e of edges) {
+          if (e.source.id === hovered.id) hoverSet.add(e.target.id);
+          else if (e.target.id === hovered.id) hoverSet.add(e.source.id);
+        }
+      }
+      // A node is highlighted iff it passes BOTH active dimming layers
+      // (hover AND search compose multiplicatively).
+      const isHighlighted = (id: string): boolean => {
+        if (hoverSet && !hoverSet.has(id)) return false;
+        if (searchMatchSet && !searchMatchSet.has(id)) return false;
+        return true;
+      };
+
       ctx.lineCap = "round";
       for (const e of edges) {
         // Hidden endpoints → don't draw the edge at all.
@@ -619,12 +624,12 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
         if (
           selected?.id === n.id ||
           hoverRef.current?.id === n.id ||
-          focusRef === n.id
+          isolatedRef === n.id
         ) {
           ctx.beginPath();
           ctx.arc(n.x, n.y, r + 3, 0, Math.PI * 2);
           ctx.strokeStyle =
-            focusRef === n.id ? "rgba(20,40,200,0.75)" : "rgba(0,0,0,0.55)";
+            isolatedRef === n.id ? "rgba(20,40,200,0.75)" : "rgba(0,0,0,0.55)";
           ctx.lineWidth = 1.6;
           ctx.stroke();
         }
@@ -638,7 +643,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
         const r = radiusForWeight(n.weight);
         const lit = isHighlighted(n.id);
         const shouldLabel =
-          r > 9 || lit || selected?.id === n.id || focusRef === n.id;
+          r > 9 || lit || selected?.id === n.id || isolatedRef === n.id;
         if (!shouldLabel) continue;
         ctx.fillStyle = lit ? "rgba(0,0,0,0.75)" : "rgba(0,0,0,0.30)";
         ctx.fillText(shortLabel(n.name), n.x, n.y + r + 2);
@@ -654,7 +659,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
       ro.disconnect();
     };
-  }, [_props.active, effectiveView, selected, focusRef, focusNeighbours, searchMatchSet, hiddenTypes, compact]);
+  }, [_props.active, effectiveView, selected, isolatedRef, searchMatchSet, hiddenTypes, compact]);
 
   // Hit-test (for nodes AND edges). Skips nodes hidden by legend
   // toggles so the user can't accidentally select a node that's not
@@ -708,10 +713,9 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
         hit.vy = 0;
         draggingRef.current = hit;
         setSelected(hit);
-        // Caso 1: click opens the node and focuses it IN PLACE (the global
-        // graph dims to its 1-hop neighbourhood via focusRef). No ego-replace
-        // and no camera move — the node you clicked is already on screen. The
-        // ego-graph is reserved for off-cap nodes reached via search.
+        // Click = open the content panel, nothing more (Obsidian's contract:
+        // hover highlights, click navigates). The graph stays as-is; isolation
+        // is an explicit action via the panel's isolate button.
         setPanelExpanded(false);
         setActiveTab(hit.phantom ? "info" : "body");
         setReferenceDetail(null);
@@ -751,7 +755,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
       setSelected(null);
       setEdgePopup(null);
     },
-    [hitTestNode, hitTestEdge, focusOnNode],
+    [hitTestNode, hitTestEdge],
   );
 
   const onPointerMove = useCallback(
@@ -931,12 +935,12 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
   }, []);
 
   // From the Documents shelf back into the graph: open a doc-derived entity's
-  // page (focus it if off-cap, then select).
+  // page (isolate it if the global cap dropped it, then select).
   const handleOpenEntity = useCallback(
     (ref: string) => {
       setMode("entities");
       setReferenceDetail(null);
-      if (!simNodesRef.current.some((n) => n.id === ref)) focusOnNode(ref);
+      if (!simNodesRef.current.some((n) => n.id === ref)) isolateNode(ref, 1);
       const node =
         simNodesRef.current.find((n) => n.id === ref) ?? {
           id: ref,
@@ -949,7 +953,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
       setSelected(node);
       setActiveTab(node.phantom ? "info" : "body");
     },
-    [focusOnNode],
+    [isolateNode],
   );
 
   return (
@@ -1000,13 +1004,40 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
           </span>
         ) : null}
         {focusGraph && effectiveView === "graph" ? (
-          <button
-            type="button"
-            onClick={() => setFocusGraph(null)}
-            className="rounded border border-border/40 px-2 py-0.5 text-[11px] text-primary hover:bg-muted"
-          >
-            ← {t("memoryGraph.backToFull")}
-          </button>
+          <>
+            <button
+              type="button"
+              onClick={exitIsolation}
+              className="rounded border border-border/40 px-2 py-0.5 text-[11px] text-primary hover:bg-muted"
+            >
+              ← {t("memoryGraph.backToFull")}
+            </button>
+            {isolatedRef ? (
+              // Depth of the isolated neighbourhood (Obsidian's local-graph
+              // depth control): each level adds the nodes connected to the
+              // previous level. Server clamps to 1–3.
+              <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                {t("memoryGraph.isolateDepth")}
+                <span className="flex items-center gap-0.5 rounded-md border border-border/50 p-0.5">
+                  {[1, 2, 3].map((h) => (
+                    <button
+                      key={h}
+                      type="button"
+                      onClick={() => isolateNode(isolatedRef, h)}
+                      className={cn(
+                        "rounded px-1.5 py-0.5 transition-colors",
+                        isolateHops === h
+                          ? "bg-primary/10 font-medium text-primary"
+                          : "hover:bg-muted",
+                      )}
+                    >
+                      {h}
+                    </button>
+                  ))}
+                </span>
+              </span>
+            ) : null}
+          </>
         ) : null}
         <div className="ml-auto flex min-w-0 items-center gap-2">
           <div className={cn("relative", compact && "min-w-0 flex-1")}>
@@ -1042,16 +1073,6 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
               </button>
             ) : null}
           </div>
-          {focusRef && effectiveView === "graph" ? (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setFocusRef(null)}
-              className="h-7 gap-1 text-[11px]"
-            >
-              <Focus className="h-3 w-3" /> {t("memoryGraph.unfocus")}
-            </Button>
-          ) : null}
           <Button
             variant="ghost"
             size="icon"
@@ -1335,10 +1356,10 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                       const target = isCanon ? id : (r.entities ?? [])[0];
                       if (!target) return;
                       setReferenceDetail(null);
-                      // Caso 1: ego-replace only for off-cap nodes (not in the
-                      // current graph). In-graph hits just focus in place.
+                      // Isolate only off-cap nodes (not in the current
+                      // graph) — an in-graph hit just opens its panel.
                       if (!simNodesRef.current.some((n) => n.id === target)) {
-                        focusOnNode(target);
+                        isolateNode(target, 1);
                       }
                       const node =
                         simNodesRef.current.find((n) => n.id === target) ?? {
@@ -1478,13 +1499,24 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
               <Button
                 variant="ghost"
                 size="icon"
-                aria-label={focusRef === selected.id ? t("memoryGraph.unfocus") : t("memoryGraph.focusOneHop")}
+                aria-label={
+                  isolatedRef === selected.id
+                    ? t("memoryGraph.backToFull")
+                    : t("memoryGraph.isolate")
+                }
+                title={
+                  isolatedRef === selected.id
+                    ? t("memoryGraph.backToFull")
+                    : t("memoryGraph.isolate")
+                }
                 onClick={() =>
-                  setFocusRef((c) => (c === selected.id ? null : selected.id))
+                  isolatedRef === selected.id
+                    ? exitIsolation()
+                    : isolateNode(selected.id, isolateHops)
                 }
                 className={cn(
                   "h-6 w-6",
-                  focusRef === selected.id && "bg-primary/10 text-primary",
+                  isolatedRef === selected.id && "bg-primary/10 text-primary",
                 )}
               >
                 <Focus className="h-3.5 w-3.5" />
@@ -1507,10 +1539,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                 variant="ghost"
                 size="icon"
                 aria-label={t("memoryGraph.close")}
-                onClick={() => {
-                  setSelected(null);
-                  if (focusRef) setFocusRef(null);
-                }}
+                onClick={() => setSelected(null)}
                 className="h-6 w-6"
               >
                 <X className="h-3.5 w-3.5" />

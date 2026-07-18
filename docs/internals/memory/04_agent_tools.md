@@ -472,7 +472,15 @@ The web dashboard exposes three memory controls under **Settings → Memory**:
   type-filter chips, and the sort control are toolbar state shared by all
   three views; in graph view the search drives the semantic results panel +
   node highlighting, while cards/table filter their grid live from the
-  payload (name / alias / excerpt substring, no backend round-trip). Cards
+  payload (name / alias / excerpt substring, no backend round-trip). The
+  graph canvas follows Obsidian's gesture contract: **hover** transiently
+  highlights the node and its direct connections (plus the body-preview
+  popover), **click** opens the detail panel without altering the graph,
+  and the panel's **isolate** button swaps the canvas for the node's
+  ego-subgraph (uncapped, served by the subgraph endpoint) with a 1–3
+  depth control and a "back to full" exit — isolation is also entered
+  automatically for search hits and document entities the global node cap
+  dropped. Cards
   and table exclude session and reference scaffolding nodes; selecting an
   entity in any view opens the same detail panel. To power the cards/table
   rows, `build_memory_graph` enriches each node with `summary` (plain-text
