@@ -482,7 +482,11 @@ The web dashboard exposes three memory controls under **Settings → Memory**:
   ego-subgraph (uncapped, served by the subgraph endpoint) with a 1–3
   depth control and a "back to full" exit — isolation is also entered
   automatically for search hits and document entities the global node cap
-  dropped. Cards
+  dropped. The canvas has a camera: by default it auto-frames the visible
+  nodes (smoothed, zoom-in clamped) so filtering or isolating re-frames
+  the survivors; wheel-zoom and background-drag panning (Obsidian's manual
+  controls) take over on use, and a floating fit button re-engages
+  auto-framing. Cards
   and table exclude session and reference scaffolding nodes; selecting an
   entity in any view opens the same detail panel. To power the cards/table
   rows, `build_memory_graph` enriches each node with `summary` (plain-text

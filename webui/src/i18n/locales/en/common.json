@@ -2024,6 +2024,7 @@
     "backToFull": "Full graph",
     "isolate": "Isolate neighbourhood",
     "isolateDepth": "Depth",
+    "fitView": "Fit view",
     "provFromSession": "from session",
     "provTurn": "turn {{turn}}",
     "stats": "{{nodesLabel}} · {{edgesLabel}}",
