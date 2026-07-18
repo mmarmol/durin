@@ -2024,6 +2024,7 @@
     "backToFull": "グラフ全体",
     "isolate": "近傍を分離",
     "isolateDepth": "深さ",
+    "fitView": "全体表示",
     "provFromSession": "セッションから",
     "provTurn": "ターン {{turn}}",
     "stats": "{{nodesLabel}} · {{edgesLabel}}",

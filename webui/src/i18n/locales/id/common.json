@@ -2024,6 +2024,7 @@
     "backToFull": "Graf lengkap",
     "isolate": "Isolasi lingkungan",
     "isolateDepth": "Kedalaman",
+    "fitView": "Paskan tampilan",
     "provFromSession": "dari sesi",
     "provTurn": "giliran {{turn}}",
     "stats": "{{nodesLabel}} · {{edgesLabel}}",

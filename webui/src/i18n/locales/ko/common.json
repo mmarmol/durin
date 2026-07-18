@@ -2024,6 +2024,7 @@
     "backToFull": "전체 그래프",
     "isolate": "주변 분리",
     "isolateDepth": "깊이",
+    "fitView": "화면 맞춤",
     "provFromSession": "세션 출처",
     "provTurn": "{{turn}}번째 턴",
     "stats": "{{nodesLabel}} · {{edgesLabel}}",
