@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Union
 
+from durin.security.secrets import is_valid_secret_name
 from durin.workflow.verdict import normalize_label
 
 # ---------------------------------------------------------------------------
@@ -117,6 +118,7 @@ class ScriptNode:
     script: str = ""
     timeout: int | None = None           # seconds; None = the workflow.script_timeout config default
     env: Literal["clean", "inherit"] = "clean"  # "clean" = minimal allowlist + DURIN_*; "inherit" = full gateway env
+    secrets: tuple[str, ...] = ()        # stored secret names injected into the subprocess env (each must allow the 'exec' scope)
     next: str | None = None
     on_pass: str | None = None
     on_fail: str | None = None
@@ -373,6 +375,13 @@ def _build_node(raw: dict[str, Any]) -> Node:
         env = raw.get("env", "clean")
         if env not in ("clean", "inherit"):
             raise WorkflowError(f"node {node_id!r}: env must be 'clean' or 'inherit', got {env!r}")
+        secrets = _str_list(raw.get("secrets", []), node_id, "secrets")
+        bad = [s for s in secrets if not is_valid_secret_name(s)]
+        if bad:
+            raise WorkflowError(
+                f"node {node_id!r}: secrets must be env-var-safe names "
+                f"(A-Z, 0-9, _; starting with a letter), got: {', '.join(bad)}"
+            )
         node_max_visits = raw.get("max_visits")
         if node_max_visits is not None:
             if isinstance(node_max_visits, bool) or not isinstance(node_max_visits, int) or node_max_visits < 1:
@@ -382,8 +391,8 @@ def _build_node(raw: dict[str, Any]) -> Node:
         next_node, on_pass, on_fail, cases = _parse_routing(raw, node_id)
         return ScriptNode(
             id=node_id, title=raw.get("title", ""), command=command.strip(), script=script,
-            timeout=timeout, env=env, next=next_node, on_pass=on_pass, on_fail=on_fail,
-            cases=cases, max_visits=node_max_visits,
+            timeout=timeout, env=env, secrets=secrets, next=next_node, on_pass=on_pass,
+            on_fail=on_fail, cases=cases, max_visits=node_max_visits,
         )
     if kind == "subworkflow":
         workflow = raw.get("workflow", "")
