@@ -21,9 +21,12 @@ state — no LLM call, no mutation.
 - *Entity ↔ entity*: entry co-occurrence across the ``episodic``,
   ``stable`` and ``corpus`` classes — every entry that tags ≥2
   entities contributes +1 to each unordered pair.
-- *Session → entity*: derived from session ``meta.json::derived._last_tags``
-  AND from episodic-entry ``source_refs`` that link back to
-  ``sessions/<key>.md``. Weight = count of evidence per (session, ref).
+- *Session → entity*: derived from entity-page frontmatter ``provenance``
+  events whose ``source_ref`` points at ``sessions/<stem>.md`` (the current
+  model — the dream writes provenance straight onto the page), plus the two
+  legacy sources: session ``meta.json::derived._last_tags`` and
+  episodic-entry ``source_refs`` linking back to ``sessions/<key>.md``.
+  Weight = count of evidence per (session, ref).
 
 Future evolutions:
 
@@ -57,6 +60,33 @@ _HTML_COMMENT_RE = re.compile(r"<!--[\s\S]*?-->")
 # Cards/table excerpt length. Enough for a two-line clamp in the webui grid
 # without shipping whole page bodies for 500 nodes.
 _SUMMARY_MAX_CHARS = 200
+
+
+def _session_stems_in_provenance(provenance: Any) -> list[str]:
+    """Session stems referenced by a page's provenance tree.
+
+    Provenance is a nested dict (per-field, per-relation, per-source) whose
+    leaves carry ``source_ref`` strings like ``[[sessions/<stem>.md#turn-N]]``.
+    Walks the whole tree and returns one stem per matching event (duplicates
+    kept — each event is one unit of evidence weight).
+    """
+    stems: list[str] = []
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            sr = node.get("source_ref")
+            if isinstance(sr, str):
+                m = _SESSION_REF_RE.search(sr)
+                if m is not None:
+                    stems.append(m.group(1))
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(provenance)
+    return stems
 
 
 def _excerpt(body: str | None) -> str | None:
@@ -125,6 +155,12 @@ def build_memory_graph(
     # emitted as a SEPARATE edge loop after reference nodes are registered so
     # both endpoints exist (the both-endpoints guard would otherwise drop them).
     derived_from_edges: list[tuple[str, str]] = []  # (entity_ref, reference_ref)
+    # Session evidence harvested from entity-page frontmatter `provenance`
+    # (`source_ref: "[[sessions/<stem>.md#turn-N]]"`). In the current model the
+    # dream writes provenance straight onto the page — there may be no entry
+    # files and no meta `_last_tags` at all, so without this pass every session
+    # node floats unconnected. (entity_ref, session_stem) per provenance event.
+    page_session_evidence: list[tuple[str, str]] = []
     for page_path in walk_class(workspace, "entities"):
         # `entities/<type>/<slug>.md` — derive `<type>` from the path.
         rel = page_path.relative_to(entities_root)
@@ -160,6 +196,8 @@ def build_memory_graph(
         for dref in (page.derived_from or []):
             if str(dref).startswith("reference:"):
                 derived_from_edges.append((ref, str(dref)))
+        for stem in _session_stems_in_provenance(page.provenance):
+            page_session_evidence.append((ref, stem))
 
     # 2. Walk entry classes (episodic + stable + corpus): accumulate
     # per-ref entry count + pairwise co-occurrence counts. Skip refs not
@@ -177,6 +215,9 @@ def build_memory_graph(
     session_entity_evidence: dict[str, dict[str, int]] = defaultdict(
         lambda: defaultdict(int),
     )
+    # Fold in the page-provenance evidence collected in step 1.
+    for ent_ref, stem in page_session_evidence:
+        session_entity_evidence[f"session:{stem}"][ent_ref] += 1
     entry_paths = chain.from_iterable(
         walk_class(workspace, class_name) for class_name in _ENTRY_CLASSES
     )

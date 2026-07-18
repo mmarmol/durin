@@ -585,3 +585,57 @@ def test_phantom_node_enrichment_defaults(tmp_path: Path) -> None:
     assert node["summary"] is None
     assert node["updated_at"] is None
     assert node["sources"] == 0
+
+
+# ---------------------------------------------------------------------------
+# session→entity edges from entity-page provenance
+# ---------------------------------------------------------------------------
+
+
+def test_page_provenance_yields_session_edges(tmp_path: Path) -> None:
+    # Modern workspaces have no episodic entries and no meta `_last_tags`;
+    # the session evidence lives in entity-page frontmatter `provenance`
+    # (`source_ref: "[[sessions/<stem>.md#turn-N]]"`). The graph must draw
+    # session→entity edges from it.
+    _write_session(tmp_path, "sess_prov", messages=4)
+    page = EntityPage(
+        type="practice",
+        name="Laparoscopy",
+        provenance={
+            "body": {
+                "source_ref": "[[sessions/sess_prov.md#turn-3]]",
+                "author": "dream",
+            },
+            "attributes": {
+                "status": {"source_ref": "[[sessions/sess_prov.md#turn-9]]"},
+            },
+        },
+    )
+    page.save(tmp_path / "memory" / "entities" / "practice" / "laparoscopy.md")
+    g = build_memory_graph(tmp_path)
+    edge = next(
+        (e for e in g["edges"]
+         if e["source"] == "session:sess_prov"
+         and e["target"] == "practice:laparoscopy"),
+        None,
+    )
+    assert edge is not None
+    # Two provenance events referencing the session → weight 2.
+    assert edge["weight"] == 2
+
+
+def test_page_provenance_nonsession_refs_ignored(tmp_path: Path) -> None:
+    _write_session(tmp_path, "sess_other", messages=1)
+    page = EntityPage(
+        type="topic",
+        name="Rabies",
+        provenance={
+            "body": {"source_ref": "[[references/some-paper.md]]"},
+        },
+    )
+    page.save(tmp_path / "memory" / "entities" / "topic" / "rabies.md")
+    g = build_memory_graph(tmp_path)
+    assert not any(
+        e for e in g["edges"]
+        if e["source"].startswith("session:") or e["target"].startswith("session:")
+    )
