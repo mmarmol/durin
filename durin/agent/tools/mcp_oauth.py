@@ -9,12 +9,19 @@ This module supplies only what the SDK leaves to the application:
   instead of the oauth-cli-kit FileTokenStorage.
 * A provider builder + redirect/callback handlers (Tasks 4b/4c).
 
-Cold-load note (verified against mcp 1.27.2): the SDK's `_initialize` loads
-tokens without recomputing expiry, and `is_token_valid()` treats a token with
-no in-memory expiry as valid — so a stale access token simply 401s and the
-SDK's `async_auth_flow` refreshes it. Storage therefore round-trips the
-`OAuthToken` verbatim; it does NOT track an absolute expiry (OAuthToken has no
-such field).
+Cold-load / restart note: the SDK's `_initialize` loads tokens without
+recomputing expiry (`token_expiry_time` stays None), and `is_token_valid()`
+treats a None expiry as valid forever. Contrary to a naive reading, a stale
+access token is NOT refreshed on its 401 — `async_auth_flow` runs a FULL
+re-authorization on a 401, which is impossible in a headless run
+(`NeedsInteractiveAuthError`). So a process that cold-loads an already-expired
+access token would lose the session even though the stored (single-use,
+rotating) refresh token is still good — the token appears to "get lost on
+restart". To make refresh survive restarts, `SecretsTokenStorage` persists an
+absolute `expires_at` alongside the token and `WriteAheadOAuthProvider._initialize`
+restores it into `token_expiry_time`, so the proactive-refresh branch fires
+before a doomed request. `OAuthToken` itself has no absolute-expiry field (only
+a relative `expires_in` with no issuance anchor), hence the companion entry.
 """
 
 from __future__ import annotations
@@ -77,6 +84,7 @@ class SecretsTokenStorage:
         self._tokens_name = _secret_name("OAUTH_TOKENS", server, server_url)
         self._client_name = _secret_name("OAUTH_CLIENT", server, server_url)
         self._marker_name = _secret_name("OAUTH_REFRESH_INFLIGHT", server, server_url)
+        self._expires_name = _secret_name("OAUTH_EXPIRES_AT", server, server_url)
 
     def _read(self, name: str) -> str | None:
         try:
@@ -120,7 +128,41 @@ class SecretsTokenStorage:
 
     async def set_tokens(self, tokens: OAuthToken) -> None:
         self._write(self._tokens_name, tokens.model_dump_json())
+        self._persist_expires_at(tokens)
         self.clear_refresh_marker()
+
+    def _persist_expires_at(self, tokens: OAuthToken) -> None:
+        """Persist the access token's ABSOLUTE expiry (now + expires_in).
+
+        The SDK computes expiry only in memory at exchange time and persists an
+        OAuthToken carrying a relative ``expires_in`` with no issuance anchor,
+        so after a restart it cannot tell an expired access token from a fresh
+        one (see the module docstring). Storing the absolute expiry here — and
+        restoring it on cold load — keeps is_token_valid() honest across
+        restarts so the refresh path runs instead of a headless-impossible full
+        re-authorization."""
+        import json as _json
+        import time as _time
+
+        exp = getattr(tokens, "expires_in", None)
+        if not exp:
+            # No expiry advertised: drop any stale companion so a cold load
+            # assumes-expired and refreshes rather than trusting a phantom.
+            self._delete(self._expires_name)
+            return
+        self._write(self._expires_name, _json.dumps({"expires_at": _time.time() + int(exp)}))
+
+    def read_expires_at(self) -> float | None:
+        """Absolute unix expiry persisted alongside the token, or None."""
+        import json as _json
+
+        raw = self._read(self._expires_name)
+        if not raw:
+            return None
+        try:
+            return float(_json.loads(raw)["expires_at"])
+        except (ValueError, KeyError, TypeError):
+            return None
 
     def write_refresh_marker(self) -> None:
         """Persist 'a refresh request is about to consume the (single-use)
@@ -152,13 +194,13 @@ class SecretsTokenStorage:
         self._write(self._client_name, client_info.model_dump_json())
 
     def forget(self) -> bool:
-        """Delete the stored token, client-registration, and refresh-marker
-        entries (used by `durin mcp logout`). Removing the marker too keeps a
-        logout from leaving a stale interrupted-refresh warning behind.
+        """Delete the stored token, client-registration, refresh-marker, and
+        expiry entries (used by `durin mcp logout`). Removing the marker too
+        keeps a logout from leaving a stale interrupted-refresh warning behind.
         Each remove() persists under the cross-process lock (see _write)."""
         store = SecretStore().load()
         removed = False
-        for name in (self._tokens_name, self._client_name, self._marker_name):
+        for name in (self._tokens_name, self._client_name, self._marker_name, self._expires_name):
             if store.remove(name):
                 removed = True
         if removed:
@@ -321,20 +363,59 @@ def _seed_static_client(
     task.add_done_callback(_PENDING_SEED_TASKS.discard)
 
 
-class WriteAheadOAuthProvider(OAuthClientProvider):
-    """SDK provider + write-ahead marker around refresh-token rotation.
+# is_token_valid() reads: current_tokens and access_token and (not token_expiry_time
+# or time.time() <= token_expiry_time). A truthy, far-past value therefore reads as
+# EXPIRED, whereas 0.0/None would read as "never expires". Used when a cold-loaded
+# token has no persisted absolute expiry (tokens stored before this fix) so the first
+# request refreshes via the still-valid refresh token instead of sending a dead one.
+_EXPIRED_SENTINEL = 1.0
 
-    _refresh_token() is the SDK's request builder for the refresh grant —
-    the last durin-controllable moment before the provider consumes the
-    single-use rotating refresh token. Persisting the marker here (and
-    clearing it in set_tokens) brackets the vulnerable window so an
-    interrupted refresh is detectable at the next startup instead of
-    surfacing as a silent auth loss. Pinned by test_sdk_contract_pin.
+
+class WriteAheadOAuthProvider(OAuthClientProvider):
+    """SDK provider + write-ahead marker + restart-safe expiry restore.
+
+    Two application-level guarantees wrap the SDK provider:
+
+    * _refresh_token() is the SDK's request builder for the refresh grant —
+      the last durin-controllable moment before the provider consumes the
+      single-use rotating refresh token. Persisting the marker here (and
+      clearing it in set_tokens) brackets the vulnerable window so an
+      interrupted refresh is detectable at the next startup instead of
+      surfacing as a silent auth loss.
+
+    * _initialize() restores the persisted absolute expiry into
+      token_expiry_time after a cold load, so is_token_valid() is honest and
+      the proactive-refresh branch fires — without it, a restart makes an
+      expired access token look valid and the 401 triggers a headless-
+      impossible full re-authorization (see the module docstring).
+
+    Both seams are pinned by the test_sdk_contract_pin* tests.
     """
 
     def __init__(self, *args: Any, durin_storage: SecretsTokenStorage, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._durin_storage = durin_storage
+
+    async def _initialize(self) -> None:
+        """Load persisted tokens (via the SDK) then restore the absolute expiry.
+
+        The SDK's _initialize sets current_tokens from storage but never
+        recomputes token_expiry_time, so is_token_valid() would treat an
+        expired cold-loaded access token as valid and skip the proactive
+        refresh. Restoring the persisted expiry keeps is_token_valid() honest;
+        an unknown expiry (token stored before this fix) is treated as
+        already-expired so the first request refreshes via the still-valid
+        refresh token rather than 401ing into a full re-auth."""
+        await super()._initialize()
+        if self.context.current_tokens is None:
+            return
+        try:
+            expires_at = self._durin_storage.read_expires_at()
+        except Exception:  # noqa: BLE001
+            expires_at = None
+        self.context.token_expiry_time = (
+            expires_at if expires_at is not None else _EXPIRED_SENTINEL
+        )
 
     async def _refresh_token(self):  # noqa: ANN201 — mirrors SDK signature
         try:
