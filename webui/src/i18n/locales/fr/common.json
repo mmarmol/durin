@@ -2209,7 +2209,17 @@
     "inProgress": "En cours",
     "finished": "Terminé ({{count}})",
     "empty": "Aucun travail actif",
-    "close": "Fermer le panneau de travail"
+    "close": "Fermer le panneau de travail",
+    "strip": {
+      "statusRunning": "en cours",
+      "statusDone": "terminé",
+      "statusFailed": "échoué",
+      "runningMany": "{{count}} tâches en cours",
+      "needsInput": "{{label}} attend votre réponse",
+      "needsInputMany": "{{count}} tâches attendent votre réponse",
+      "view": "Voir",
+      "respond": "Répondre"
+    }
   },
   "rich": {
     "code": "Code",

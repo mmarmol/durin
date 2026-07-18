@@ -2209,7 +2209,17 @@
     "inProgress": "Đang thực hiện",
     "finished": "Đã xong ({{count}})",
     "empty": "Không có công việc nào đang hoạt động",
-    "close": "Đóng bảng công việc"
+    "close": "Đóng bảng công việc",
+    "strip": {
+      "statusRunning": "đang chạy",
+      "statusDone": "hoàn tất",
+      "statusFailed": "thất bại",
+      "runningMany": "{{count}} tác vụ đang chạy",
+      "needsInput": "{{label}} cần bạn trả lời",
+      "needsInputMany": "{{count}} tác vụ cần bạn trả lời",
+      "view": "Xem",
+      "respond": "Trả lời"
+    }
   },
   "rich": {
     "code": "Mã",

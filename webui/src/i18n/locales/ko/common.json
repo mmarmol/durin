@@ -2209,7 +2209,17 @@
     "inProgress": "진행 중",
     "finished": "완료 ({{count}})",
     "empty": "진행 중인 작업 없음",
-    "close": "작업 패널 닫기"
+    "close": "작업 패널 닫기",
+    "strip": {
+      "statusRunning": "진행 중",
+      "statusDone": "완료",
+      "statusFailed": "실패",
+      "runningMany": "작업 {{count}}개 진행 중",
+      "needsInput": "{{label}}이(가) 응답을 기다리는 중입니다",
+      "needsInputMany": "작업 {{count}}개가 응답을 기다리는 중입니다",
+      "view": "보기",
+      "respond": "응답"
+    }
   },
   "rich": {
     "code": "코드",

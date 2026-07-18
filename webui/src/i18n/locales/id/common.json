@@ -2209,7 +2209,17 @@
     "inProgress": "Sedang berlangsung",
     "finished": "Selesai ({{count}})",
     "empty": "Tidak ada pekerjaan aktif",
-    "close": "Tutup panel kerja"
+    "close": "Tutup panel kerja",
+    "strip": {
+      "statusRunning": "berjalan",
+      "statusDone": "selesai",
+      "statusFailed": "gagal",
+      "runningMany": "{{count}} tugas sedang berjalan",
+      "needsInput": "{{label}} membutuhkan jawaban Anda",
+      "needsInputMany": "{{count}} tugas membutuhkan jawaban Anda",
+      "view": "Lihat",
+      "respond": "Jawab"
+    }
   },
   "rich": {
     "code": "Kode",

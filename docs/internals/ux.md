@@ -261,6 +261,18 @@ background work is running or has finished. Clicking it opens the work panel.
 Per-node detail and sub-agent steps are not expanded inline — they live in the
 panel.
 
+**Work strip.** The panel's collapsed representation: a slim status line docked
+directly above the composer, rendered only while the panel is closed and there
+is something to report (opening the panel replaces it, so the two never show at
+once). It reads the active work in priority order — any item waiting on user
+input renders a warn-tinted "needs your response" line with a Respond
+affordance; otherwise running work renders a neutral line with the item's label
+(a count when several run at once); and when the last active item ends the strip
+flashes a finished/failed line for a few seconds before disappearing. The whole
+strip is a single button that opens the work panel, and the wrapper is a
+`role="status"` live region so state changes are announced by screen readers.
+Unlike the inline work chip, it does not scroll away with the transcript.
+
 ### Work-visibility surfaces (TUI)
 
 The TUI sidebar (toggled with **Ctrl+B**) exposes a WORK section alongside the

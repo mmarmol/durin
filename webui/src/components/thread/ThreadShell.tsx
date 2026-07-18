@@ -8,6 +8,7 @@ import { GoalBanner } from "@/components/thread/GoalBanner";
 import { StreamErrorNotice } from "@/components/thread/StreamErrorNotice";
 import { ThreadViewport } from "@/components/thread/ThreadViewport";
 import { WorkPanel } from "@/components/work/WorkPanel";
+import { WorkStrip } from "@/components/work/WorkStrip";
 import type { OrbState } from "@/components/voice/VoiceOrb";
 import { useDurinStream, type SendImage } from "@/hooks/useDurinStream";
 import { useTranscriptionStatus } from "@/hooks/useTranscriptionStatus";
@@ -527,6 +528,14 @@ export function ThreadShell({
         />
       ) : null}
       {readOnlyBanner}
+      {session && !panelOpen ? (
+        <WorkStrip
+          key={chatId ?? "no-chat"}
+          active={work.active}
+          finished={work.finished}
+          onOpen={() => setPanelOpen(true)}
+        />
+      ) : null}
       {session ? (
         <ThreadComposer
           onSend={handleThreadSend}
