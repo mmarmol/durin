@@ -2753,7 +2753,10 @@ def _status_data(
     try:
         stats = memory_summary(config.workspace_path)
         mem_data = {
-            "docs": stats["memory_docs"],
+            # Three distinct memory object kinds, named as the webui names them.
+            "entities": stats["entities"],       # knowledge graph
+            "docs": stats["ingested_docs"],      # Library (references) — matches webui Documents
+            "fragments": stats["memory_docs"],   # raw class-folder buffer
             "sessions": stats["sessions"],
             "skills": stats["skills"],
             "vector": bool(getattr(config.memory, "enabled", False)),
@@ -2868,7 +2871,8 @@ def _status_sections(
             vector_part = "vector off"
         rows.append((
             "Memory",
-            f"{mem['docs']} docs · {mem['sessions']} sessions · "
+            f"{mem['entities']} entities · {mem['docs']} docs · "
+            f"{mem['fragments']} fragments · {mem['sessions']} sessions · "
             f"{mem['skills']} skills · {vector_part}",
         ))
 

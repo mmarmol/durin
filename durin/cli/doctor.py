@@ -1198,9 +1198,11 @@ def check_memory_summary() -> CheckResult:
 
     stats = memory_summary(workspace)
     pieces = []
-    pieces.append(f"{stats['memory_docs']} memory docs")
+    pieces.append(f"{stats['entities']} entities")
     if stats["ingested_docs"]:
-        pieces.append(f"{stats['ingested_docs']} ingested")
+        pieces.append(f"{stats['ingested_docs']} docs")
+    if stats["memory_docs"]:
+        pieces.append(f"{stats['memory_docs']} fragments")
     if stats["vec_present"]:
         pieces.append("vector index present")
     pieces.append(f"{stats['sessions']} sessions")
