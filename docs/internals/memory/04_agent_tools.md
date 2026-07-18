@@ -465,8 +465,10 @@ The web dashboard exposes three memory controls under **Settings → Memory**:
 - **Read-only memory browser** — one page, two content-domain tabs:
   **Entities** and **Documents**. The Entities tab offers three presentations
   of the same node set (the Obsidian-Bases view model) behind a toolbar
-  switcher: a **graph** canvas (nodes = entity pages, edges = relations +
-  co-mentions; capped payload), a **cards** grid (reading-oriented: type,
+  switcher: a **graph** canvas (nodes = entity pages, edges = relations,
+  co-mentions, `derived_from` document links, and session→entity links
+  harvested from entity-page `provenance` events; capped payload), a
+  **cards** grid (reading-oriented: type,
   name, body excerpt, mention/recency/source counts), and a sortable
   **table** (audit-oriented: same fields as columns). Search, the
   type-filter chips, and the sort control are toolbar state shared by all
