@@ -504,7 +504,11 @@ The waiting contract is push, not poll: because the result is injected on
 completion, the launching agent is told (in the launch reply, the tool
 descriptions, and the `workflows` skill) to report the run to the user and END
 its turn rather than burn it on sleep+status loops — the follow-up wakes it,
-and the user watches live per-node progress in the Work panel. A background
+and the user watches live per-node progress in the Work panel. A deterministic
+backstop reinforces the guidance: a `sleep` that wakes while this session still
+has running background work appends a reminder naming those tasks and telling
+the agent to end its turn, so a polling loop is corrected on its first
+iteration instead of running for minutes. A background
 launch still returns the run's `run_id` (pre-generated and passed to the
 engine as its `run_id_factory`) so the agent can observe or cancel the run
 on demand through the unified `tasks` tool — `tasks(action='status', id=…)`

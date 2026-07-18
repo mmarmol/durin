@@ -98,3 +98,45 @@ def test_sleep_description_excludes_push_delivered_work():
     d = SleepTool().description
     assert "spawn" in d and "run_workflow" in d
     assert "delivered" in d
+
+
+# ---------------------------------------------------------------------------
+# The anti-polling reminder: a sleep that wakes while push-delivered background
+# work is still running tells the agent to stop polling and end its turn.
+# ---------------------------------------------------------------------------
+
+def _tool_with_session(workspace) -> SleepTool:
+    from durin.agent.tools.context import RequestContext
+    tool = SleepTool(workspace=str(workspace))
+    tool.set_context(RequestContext(channel="websocket", chat_id="chatA",
+                                    session_key="websocket:chatA"))
+    return tool
+
+
+def _write_running_workflow_manifest(workspace, run_id="wf01abcd"):
+    import json
+    from pathlib import Path
+    d = Path(workspace) / "workflows-runs" / "qa"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{run_id}.json").write_text(json.dumps({
+        "schema": 2, "run_id": run_id, "workflow": "qa", "status": "running",
+        "root_session_key": "websocket:chatA", "started_at": time.time(),
+        "ts": time.time(), "task": "t", "runs": [],
+    }), encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_sleep_reminds_when_background_work_is_running(tmp_path):
+    _write_running_workflow_manifest(tmp_path)
+    out = await _tool_with_session(tmp_path).execute(seconds=0)
+    assert "Slept" in out
+    assert "delivered to you automatically" in out
+    assert "end your turn" in out
+    assert "wf01abcd" in out
+
+
+@pytest.mark.asyncio
+async def test_sleep_no_reminder_without_running_work(tmp_path):
+    out = await _tool_with_session(tmp_path).execute(seconds=0)
+    assert "Slept" in out
+    assert "end your turn" not in out
