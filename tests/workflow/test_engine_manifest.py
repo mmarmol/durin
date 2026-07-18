@@ -159,3 +159,18 @@ def test_finalize_manifest_prunes_older_terminal_runs(tmp_path):
     remaining = {p.stem for p in (tmp_path / "workflows-runs" / "w").glob("*.json")}
     assert remaining == {"r1", "r2"}   # r0 pruned; the 2 most recent survive
 
+
+
+def test_engine_records_work_dir_and_durations(tmp_path):
+    def runner(req):
+        return NodeRunResponse(output=f"out {req.node.id}",
+                               session_key=f"workflow:r1:{req.node.id}:1")
+
+    engine = WorkflowEngine(runner, workspace=str(tmp_path),
+                            run_id_factory=lambda: "r1")
+    res = engine.run(_two_node_wf(), "go")
+    assert res.status == "completed"
+    m = run_log.read_manifest(tmp_path, "w", "r1")
+    assert m["work_dir"].endswith(".workflow/r1/work")
+    assert len(m["runs"]) == 2
+    assert all(isinstance(r["duration_s"], float) for r in m["runs"])

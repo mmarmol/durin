@@ -55,6 +55,7 @@ def _node_records(result) -> list[dict]:
             "status": r.status,
             "route_label": r.route_label,
             "exit_code": getattr(r, "exit_code", None),
+            "duration_s": getattr(r, "duration_s", None),
             # Failure detail (stderr tail / exception text) for node_failed rows —
             # the evidence the improve pass's script-repair lane reads. Capped so a
             # pathological error cannot bloat every manifest rewrite.
@@ -75,12 +76,14 @@ def start_run(
     root_session_key: str | None, started_at: float,
     task: str | None = None,
     parent_run_id: str | None = None,
+    work_dir: str | None = None,
 ) -> Path:
     """Write the ``running`` manifest before the walk begins. Returns the record path.
     ``parent_run_id`` marks a nested subworkflow run with the run_id of its caller —
     ``None`` for a top-level run. When ``None`` and a prior manifest for this run_id
     exists (a resume rewrites the record), the prior value is preserved so the
-    nested-run marker survives every rewrite."""
+    nested-run marker survives every rewrite. ``work_dir`` is the run's shared working
+    folder, recorded from the start so an in-flight run's artifacts are findable."""
     if parent_run_id is None:
         prior = read_manifest(workspace, name, run_id) or {}
         parent_run_id = prior.get("parent_run_id")
@@ -94,6 +97,7 @@ def start_run(
         "ts": started_at,   # cursor field; finalize bumps it to finished_at
         "task": task,
         "parent_run_id": parent_run_id,
+        "work_dir": work_dir,
         "runs": [],
     }
     path = _record_path(workspace, name, run_id)
@@ -118,6 +122,7 @@ def update_run(
         "ts": base.get("ts", base.get("started_at")),
         "task": base.get("task"),
         "parent_run_id": base.get("parent_run_id"),
+        "work_dir": base.get("work_dir"),
         "runs": _node_records(result),
     }
     path.write_text(json.dumps(record), encoding="utf-8")
@@ -148,6 +153,7 @@ def finalize_run(
         "ts": finished_at,
         "task": effective_task,
         "parent_run_id": effective_parent_run_id,
+        "work_dir": prior.get("work_dir"),
         # The terminal output (the answer, the plan, or — on needs_input — the questions),
         # capped, so a historical audit of the run shows the result, not only the trace.
         "final_output": (result.final_output or "")[:8000],

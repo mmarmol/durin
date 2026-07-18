@@ -26,6 +26,7 @@ class NodeRun:
     status: str = "ok"               # "ok" (node persisted) | "persist_failed" (save raised) | "node_failed" (the node's agent turn raised)
     error: str | None = None         # failure detail when status is "node_failed"/"persist_failed" (None otherwise)
     exit_code: int | None = None     # script nodes: the subprocess exit code (None for agent nodes)
+    duration_s: float | None = None  # wall-clock seconds this pass took (None where not measured)
 
 
 @dataclass
