@@ -30,6 +30,9 @@ export type WorkflowNodeDef = {
   // script node: subprocess env — undefined = backend default "clean" (minimal
   // allowlist + DURIN_*); "inherit" = full gateway process environment.
   env?: "clean" | "inherit";
+  // script node: stored secret names injected into the subprocess env
+  // (each must allow the 'exec' scope; validated backend-side).
+  secrets?: string[];
   [k: string]: unknown;
 };
 
@@ -39,6 +42,10 @@ export type IODescriptor = {
   // Free-text contract: what this input/output is (e.g. "a CSV with columns
   // date,amount"). Steers the boundary node's agent and documents the interface.
   description?: string;
+  // Output only: declared file contract — paths (relative to the run's working
+  // folder) the run promises to produce; the engine reports missing ones as a
+  // warning after completion.
+  artifacts?: { path: string; description?: string }[];
 };
 
 export type WorkflowDef = {
@@ -136,6 +143,41 @@ function findTerminals(def: WorkflowDef, byId: Map<string, WorkflowNodeDef>): st
 // creating a cycle. Excluded: `current` itself, and any name from which `current` is
 // reachable via the call graph (calling them would close a loop).
 // `refs` maps each workflow name to the list of workflow names it directly calls.
+export type OutputArtifact = { path: string; description?: string };
+
+// Parse the Output object's declared-artifacts textarea (one artifact per line,
+// `path | description` with the description optional) into the definition's
+// `output.artifacts` list; blank input returns undefined so the field is omitted.
+export function parseArtifactLines(input: string): OutputArtifact[] | undefined {
+  const artifacts = input
+    .split("\n")
+    .map((line) => {
+      const [path, ...rest] = line.split("|");
+      const p = path.trim();
+      if (!p) return null;
+      const description = rest.join("|").trim();
+      return description ? { path: p, description } : { path: p };
+    })
+    .filter((a): a is OutputArtifact => a !== null);
+  return artifacts.length ? artifacts : undefined;
+}
+
+export function formatArtifactLines(artifacts: OutputArtifact[] | undefined): string {
+  return (artifacts ?? [])
+    .map((a) => (a.description ? `${a.path} | ${a.description}` : a.path))
+    .join("\n");
+}
+
+// Parse the script-node Secrets input (comma/whitespace-separated names) into the
+// definition's `secrets` list; blank input returns undefined so the field is omitted.
+export function parseSecretNames(input: string): string[] | undefined {
+  const names = input
+    .split(/[\s,]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return names.length ? names : undefined;
+}
+
 export function safeSubflowTargets(current: string, refs: Record<string, string[]>): string[] {
   const reachesCurrent = new Set<string>();
   const all = Object.keys(refs);

@@ -30,7 +30,7 @@ target is `null` (end of run).
 | `nodes` | array | — | **Required.** Non-empty list of node objects (see below). |
 | `description` | string | none | One-line discovery hint surfaced by `list_workflows`. Optional but recommended. |
 | `input` | object | none | I/O descriptor: `{ "text": bool, "file": bool, "description": str }`. Text input becomes the start node's task; input files land in the run's shared working folder. Provided files are validated before anything runs (missing or same-named files abort with a clear message); declaring `"file": true` and passing none ends the run immediately as `needs_input`, before any node spends a turn. |
-| `output` | object | none | Same shape as `input`. The free-text `description` is a soft contract that frames every node's task — a hint, not enforced. |
+| `output` | object | none | Same shape as `input`, plus optional `"artifacts"`: a list of `{ "path": str, "description": str? }` — the files (relative to the run's working folder) the run promises to produce. The paths ride in every node's framing, and after a completed run the engine reports missing ones as a **warning** (the run still completes) in the result, manifest, and `tasks(status)`. The free-text `description` stays a soft contract that frames every node's task — a hint, not enforced. |
 | `max_visits` | int ≥ 1 | `3` | Per-node loop cap (a node may run at most this many times across loop-backs). Clamped by the global `workflow.max_node_visits` config ceiling. |
 | `improvement_mode` | `"manual"` \| `"auto"` | `"manual"` | Dream self-improvement: `manual` leaves a recommendation to review; `auto` (later slice) applies edits directly. |
 
@@ -105,7 +105,8 @@ buffer (the buffer passes through it untouched).
 | `command` | string | `""` | Inline command, run via `bash -c` (pipes and redirects work). **Exactly one of `command` / `script`.** |
 | `script` | string | `""` | A file under `<workspace>/workflows/scripts/` (relative path, no `..`): `.py` runs with durin's Python, `.sh` with bash, anything else must be executable with a shebang. Missing file = the run aborts pre-flight, before any node runs. |
 | `timeout` | int ≥ 1 \| null | `workflow.script_timeout` config (300s) | On expiry the whole process group is killed and the node fails — a timeout is an error, never a FAIL verdict. |
-| `env` | `"clean"` \| `"inherit"` | `"clean"` | `"clean"` = a minimal allowlist (`PATH`, `HOME`, `USER`, `SHELL`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TERM`, `TMPDIR`, `DURIN_HOME`, only those present) plus `DURIN_*`. `"inherit"` = the full gateway process environment (opt in only if the script needs an ambient var durin doesn't forward). |
+| `env` | `"clean"` \| `"inherit"` | `"clean"` | `"clean"` = a minimal allowlist (`PATH`, `HOME`, `USER`, `SHELL`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TERM`, `TMPDIR`, `DURIN_HOME`, only those present) plus `DURIN_*`. `"inherit"` = the full gateway process environment (opt in only if the script needs an ambient var durin doesn't forward). **Neither mode carries stored secrets** — they live in the secret store, not the gateway environment; declare them with `secrets` instead. |
+| `secrets` | list of names | `[]` | Stored secrets to inject as env vars (e.g. `["ZENDESK_API_TOKEN"]`). Each must exist in the secret store **and allow the `exec` scope** — an unknown or denied name aborts the run pre-flight, naming the node. Values are redacted out of the node's stdout/stderr before they enter run records. |
 | `next` / `on_pass`-`on_fail` / `cases` | — | — | Same three edge shapes and exclusivity as a `work` node. |
 | `max_visits` | int ≥ 1 \| null | inherit envelope | Per-node loop cap override. |
 
@@ -170,7 +171,12 @@ The parser rejects a definition (with a clear message) when:
   script — `for`, `xargs -P` — so fan-out adds nothing; a script node CAN be the
   `list_from` source, which makes the fan-out list deterministic).
 - A `script` node sets both or neither of `command`/`script`, uses an absolute or
-  `..`-escaping `script` path, or sets any agent-only field.
+  `..`-escaping `script` path, sets any agent-only field, or declares a `secrets` name
+  that is not env-var-safe (`A-Z`, `0-9`, `_`, starting with a letter). (Whether each
+  secret exists and allows the `exec` scope is checked pre-flight at RUN time, not parse
+  time — the store may change between authoring and running.)
+- `output.artifacts` is not a list of `{path, description?}` objects, a path is absolute
+  or `..`-escaping, or two artifacts declare the same path.
 - A `choose`-reconcile parallel node has no `criteria`.
 - **Anti-Goodhart guard:** a routing node is *structurally identical* (same `model`, `mode`,
   and `prompt`) to a producer that feeds it. Vary at least one — the verdict must come from a

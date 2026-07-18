@@ -101,16 +101,38 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v7
+
       - uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist
+
+      # The release body is the tag's curated CHANGELOG.md section (## <version>),
+      # with GitHub's generated PR list appended after it. No section found (or no
+      # CHANGELOG.md, e.g. a historical tag) degrades to the generated list alone.
+      - name: Extract changelog section
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          touch notes.md
+          if [ -f CHANGELOG.md ]; then
+            awk -v ver="$VERSION" '
+              /^## / { on = ($0 == "## " ver || index($0, "## " ver " ") == 1) }
+              on { print }
+            ' CHANGELOG.md > notes.md
+          fi
+          if [ -s notes.md ]; then
+            echo "Release body: CHANGELOG.md section for $VERSION"
+          else
+            echo "No CHANGELOG.md section for $VERSION — generated notes only"
+          fi
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/*
+          body_path: notes.md
           generate_release_notes: true
           prerelease: ${{ needs.build.outputs.prerelease == 'true' }}
 

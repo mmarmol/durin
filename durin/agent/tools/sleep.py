@@ -1,10 +1,15 @@
 """``sleep`` tool — bounded synchronous wait inside a turn.
 
-Lets the model pause the current turn for a fixed delay. The primary use
-case is **polling**: the agent kicks off background work (spawn a
-subagent, run a workflow, trigger a long-running shell, ask an external
-system) and then needs to wait a short while before checking back (via
-``tasks``, ``process``, …).
+Lets the model pause the current turn for a fixed delay. The use case is
+polling **external** state that has no push delivery — a remote job, a
+rate-limit backoff, a service coming up — before checking back (via
+``process``, a fetch, …). It is NOT for background work whose result is
+push-delivered (spawned sub-agents, background workflow runs): those
+inject a follow-up message on completion, so the agent should end its
+turn and let the delivery wake it rather than block the turn sleeping.
+As a deterministic backstop, a sleep that wakes while such work is still
+running appends a reminder to its result naming the running tasks — so a
+sleep+status loop is corrected on its first iteration, in context.
 
 Bounds: 0 to 300 seconds (5 minutes). The cap is intentional —
 
@@ -27,6 +32,7 @@ from contextlib import suppress
 from typing import Any
 
 from durin.agent.tools.base import Tool, tool_parameters
+from durin.agent.tools.context import ContextAware, RequestContext
 from durin.agent.tools.schema import NumberSchema, StringSchema, tool_parameters_schema
 from durin.telemetry.logger import current_telemetry
 
@@ -57,18 +63,56 @@ _MIN_SECONDS = 0.0
         required=["seconds"],
     )
 )
-class SleepTool(Tool):
+class SleepTool(Tool, ContextAware):
     """Block the current turn for *seconds* seconds (0–300)."""
 
     _scopes = {"core"}
 
+    def __init__(self, workspace: str | None = None,
+                 subagent_manager: Any | None = None,
+                 sessions: Any | None = None) -> None:
+        # Optional wiring for the anti-polling reminder: with a workspace and a
+        # session context the tool can see the session's running background work
+        # and remind the agent that those results arrive on their own. All three
+        # may be absent (sub-agent scopes, tests) — the tool still sleeps fine.
+        self._workspace = workspace
+        self._manager = subagent_manager
+        self._sessions = sessions
+        self._request_ctx: RequestContext | None = None
+
+    def set_context(self, ctx: RequestContext) -> None:
+        self._request_ctx = ctx
+
     @classmethod
     def create(cls, ctx: Any) -> Tool:
-        return cls()
+        return cls(
+            workspace=getattr(ctx, "workspace", None),
+            subagent_manager=getattr(ctx, "subagent_manager", None),
+            sessions=getattr(ctx, "sessions", None),
+        )
 
     @classmethod
     def enabled(cls, ctx: Any) -> bool:
         return True
+
+    def _running_background(self) -> list[str]:
+        """Best-effort: ids of this session's still-running background tasks
+        (sub-agents + workflow runs) — the work whose results are push-delivered.
+        Empty on any failure or missing wiring; the reminder is advisory only."""
+        try:
+            ctx = self._request_ctx
+            if not self._workspace or ctx is None:
+                return []
+            session_key = ctx.session_key or (
+                f"{ctx.channel}:{ctx.chat_id}" if ctx.channel and ctx.chat_id else None)
+            if not session_key:
+                return []
+            from durin.agent.background_tasks import collect_tasks
+            rows = collect_tasks(self._workspace, subagent_manager=self._manager,
+                                 sessions=self._sessions, session_key=session_key)
+            return [f"{r['kind']} [{r['id']}]" for r in rows if r.get("status") == "running"]
+        except Exception:  # noqa: BLE001 - the reminder must never break a sleep
+            return []
 
     @property
     def name(self) -> str:
@@ -78,12 +122,15 @@ class SleepTool(Tool):
     def description(self) -> str:
         return (
             "Pause the current turn for the given number of seconds (max 300). "
-            "Use this when you've started background work and need to wait "
-            "before polling for results — e.g. after spawning a subagent, "
-            "running a workflow, or triggering an external job. Do NOT use it as a substitute for "
-            "thinking, to 'wait for the user', or to delay obvious next steps. "
-            "For long waits (> a few minutes), use `cron` to schedule a future "
-            "check instead of blocking this turn."
+            "Use it ONLY to wait on external state that has no push delivery — a "
+            "remote job you must re-check, a rate-limit backoff, a service coming "
+            "up. Do NOT use it to wait for background work you launched with spawn "
+            "or run_workflow: their results are delivered to you automatically as "
+            "a follow-up message when they finish — tell the user the work is "
+            "running and end your turn instead of sleeping. Do NOT use it as a "
+            "substitute for thinking or to 'wait for the user'. For long external "
+            "waits (> a few minutes), use `cron` to schedule a future check "
+            "instead of blocking this turn."
         )
 
     async def execute(
@@ -136,6 +183,18 @@ class SleepTool(Tool):
             body += (
                 f" (Requested {requested:g}s, clamped to the {_MAX_SECONDS:g}s "
                 "ceiling — use `cron` for longer waits.)"
+            )
+        # Anti-polling reminder, checked at wake time: sleep+status loops around
+        # push-delivered background work waste the turn and block the chat, so the
+        # very first sleep of such a loop says so — not a human nine minutes later.
+        running = self._running_background()
+        if running:
+            body += (
+                "\nNote: background work is still running in this session ("
+                + ", ".join(running[:4])
+                + "). Its result will be delivered to you automatically as a "
+                "follow-up message — if this sleep was only waiting for that, "
+                "stop polling: tell the user it is running and end your turn."
             )
         return body
 

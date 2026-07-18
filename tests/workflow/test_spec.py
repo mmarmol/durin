@@ -603,3 +603,44 @@ def test_persistent_session_rejected_on_parallel_units():
                 {"id": "b1", "kind": "work", "session": "persistent"},
             ],
         })
+
+
+# ---------------------------------------------------------------------------
+# output.artifacts — the declared file contract (B2)
+# ---------------------------------------------------------------------------
+
+def _artifacts_wf(output):
+    return {"name": "t", "start": "s", "output": output,
+            "nodes": [{"id": "s", "prompt": "p", "next": None}]}
+
+
+def test_output_artifacts_parse():
+    wf = parse_workflow(_artifacts_wf({"file": True, "artifacts": [
+        {"path": "context.json", "description": "Consolidated ticket context"},
+        {"path": "evidence.json"},
+    ]}))
+    assert [a["path"] for a in wf.output["artifacts"]] == ["context.json", "evidence.json"]
+
+
+def test_output_artifacts_rejects_non_list():
+    with pytest.raises(WorkflowError, match="artifacts"):
+        parse_workflow(_artifacts_wf({"artifacts": {"path": "x.json"}}))
+
+
+def test_output_artifacts_rejects_missing_path():
+    with pytest.raises(WorkflowError, match="path"):
+        parse_workflow(_artifacts_wf({"artifacts": [{"description": "no path"}]}))
+
+
+def test_output_artifacts_rejects_escaping_path():
+    with pytest.raises(WorkflowError, match="relative"):
+        parse_workflow(_artifacts_wf({"artifacts": [{"path": "../evil.json"}]}))
+    with pytest.raises(WorkflowError, match="relative"):
+        parse_workflow(_artifacts_wf({"artifacts": [{"path": "/abs/evil.json"}]}))
+
+
+def test_output_artifacts_rejects_duplicate_paths():
+    with pytest.raises(WorkflowError, match="duplicate"):
+        parse_workflow(_artifacts_wf({"artifacts": [
+            {"path": "context.json"}, {"path": "context.json"},
+        ]}))

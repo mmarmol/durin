@@ -36,7 +36,9 @@ _PARAMETERS = tool_parameters_schema(
         "`workflow_write`). The full replacement definition is validated as a "
         "graph before it is saved — schema errors come back verbatim — and the "
         "change is committed to the workflow version history. Use for a "
-        "user-requested change to a workflow's nodes, prompts, routing, or I/O."
+        "user-requested change to a workflow's nodes, prompts, routing, or I/O. "
+        "Load the `workflows` skill (its authoring reference) before writing a "
+        "definition."
     ),
 )
 

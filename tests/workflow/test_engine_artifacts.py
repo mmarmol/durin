@@ -327,3 +327,53 @@ def test_input_files_seeded_into_a_not_yet_existing_override_dir(tmp_path):
 
     assert result.status == "completed"
     assert (override / "report.txt").read_text() == "hello"
+
+
+# ---------------------------------------------------------------------------
+# Declared artifacts (output.artifacts): post-run verification + node framing
+# ---------------------------------------------------------------------------
+
+def _artifact_wf(produce_cmd):
+    from durin.workflow.spec import parse_workflow
+    return parse_workflow({
+        "name": "contract", "start": "s",
+        "output": {"file": True, "artifacts": [
+            {"path": "context.json", "description": "the context"},
+            {"path": "evidence.json"},
+        ]},
+        "nodes": [{"id": "s", "kind": "script", "command": produce_cmd, "next": None}],
+    })
+
+
+def _script_engine(tmp_path):
+    from durin.workflow.engine import WorkflowEngine
+    from durin.workflow.script_runner import ScriptNodeRunner
+    return WorkflowEngine(
+        node_runner=lambda req: (_ for _ in ()).throw(RuntimeError("no agent nodes")),
+        script_runner=ScriptNodeRunner(str(tmp_path)),
+        workspace=str(tmp_path),
+    )
+
+
+def test_missing_declared_artifacts_reported_as_warning(tmp_path):
+    from durin.workflow import run_log
+    result = _script_engine(tmp_path).run(_artifact_wf("echo '{}' > context.json"), "go")
+    assert result.status == "completed"          # warning, never a failure
+    assert result.missing_artifacts == ["evidence.json"]
+    rec = run_log.read_manifest(tmp_path, "contract", result.run_id)
+    assert rec["missing_artifacts"] == ["evidence.json"]
+
+
+def test_all_declared_artifacts_present_reports_none_missing(tmp_path):
+    result = _script_engine(tmp_path).run(
+        _artifact_wf("echo '{}' > context.json; echo '[]' > evidence.json"), "go")
+    assert result.status == "completed"
+    assert result.missing_artifacts == []
+
+
+def test_framing_carries_declared_artifacts(tmp_path):
+    from durin.workflow.engine import WorkflowEngine
+    wf = _artifact_wf("true")
+    framed = WorkflowEngine._frame_task(wf, "the task")
+    assert "context.json" in framed and "the context" in framed
+    assert "evidence.json" in framed

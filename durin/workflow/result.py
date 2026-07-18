@@ -26,6 +26,7 @@ class NodeRun:
     status: str = "ok"               # "ok" (node persisted) | "persist_failed" (save raised) | "node_failed" (the node's agent turn raised)
     error: str | None = None         # failure detail when status is "node_failed"/"persist_failed" (None otherwise)
     exit_code: int | None = None     # script nodes: the subprocess exit code (None for agent nodes)
+    duration_s: float | None = None  # wall-clock seconds this pass took (None where not measured)
 
 
 @dataclass
@@ -41,3 +42,4 @@ class WorkflowResult:
     failed_iteration: int | None = None  # the iteration of the failed node (with failed_node)
     needs_input_node: str | None = None  # set when status=="needs_input": the node that asked
     output_files: list[str] = field(default_factory=list)  # relative paths in output_dir (completed runs)
+    missing_artifacts: list[str] = field(default_factory=list)  # declared output.artifacts paths absent at completion (warning, not failure)
