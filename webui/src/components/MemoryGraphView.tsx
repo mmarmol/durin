@@ -392,6 +392,13 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
     });
   }
 
+  // Reheat the simulation whenever the visible set changes (chip toggled,
+  // "show all") so the surviving nodes re-distribute across the canvas —
+  // the render loop only simulates visible nodes.
+  useEffect(() => {
+    alphaRef.current = Math.max(alphaRef.current, 0.5);
+  }, [hiddenTypes]);
+
   // Search panel state
   const [search, setSearch] = useState("");
   const [searchResults, setSearchResults] =
@@ -557,7 +564,16 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
 
       const alpha = alphaRef.current;
       if (alpha > 0.02) {
-        tickForces(nodes, edges, w, h, alpha);
+        // Simulate only the nodes the type filters left visible — hidden
+        // nodes must not keep repelling the survivors, or the layout stays
+        // spread out as if they were still there instead of re-flowing to
+        // fill the canvas. Their positions freeze until re-shown (a filter
+        // change reheats the sim, so they re-integrate on return).
+        const activeNodes = nodes.filter(isVisible);
+        const activeEdges = edges.filter(
+          (e) => isVisible(e.source) && isVisible(e.target),
+        );
+        tickForces(activeNodes, activeEdges, w, h, alpha);
         alphaRef.current = alpha * 0.985;
       }
 
