@@ -108,12 +108,14 @@ class ScriptNodeRunner:
             if entry is None:
                 raise NodeExecutionError(
                     node.id, req.iteration, None,
-                    RuntimeError(f"declared secret {name!r} is not in the secret store"))
+                    RuntimeError(f"declared secret {name!r} is not in the secret store "
+                                 f"(the `workflows` skill documents script-node secrets)"))
             if not scope_allows(entry.scope, "exec"):
                 raise NodeExecutionError(
                     node.id, req.iteration, None,
                     RuntimeError(f"secret {name!r} does not allow the 'exec' scope — "
-                                 f"grant it before this node can use it"))
+                                 f"grant it before this node can use it (see the "
+                                 f"`workflows` skill, script-node reference)"))
             out[name] = entry.value
         return out
 

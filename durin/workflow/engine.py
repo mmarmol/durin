@@ -379,7 +379,10 @@ class WorkflowEngine:
                     return WorkflowResult(
                         status="aborted", runs=[], run_id=run_id,
                         final_output=(f"node {node.id!r} declares secrets that cannot "
-                                      f"be provided — {'; '.join(parts)}"))
+                                      f"be provided — {'; '.join(parts)}. Store the "
+                                      f"secret and grant it the 'exec' scope, or fix "
+                                      f"the node's 'secrets' list (the `workflows` "
+                                      f"skill documents script-node secrets)."))
         return None
 
     def _start_manifest(self, workflow, run_id, root_session_key, started_at, task=None,
