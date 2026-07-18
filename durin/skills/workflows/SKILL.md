@@ -99,11 +99,15 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   missing file or two files with the same name abort with a clear message, and a workflow
   that declares `input: {"file": true}` given no files pauses immediately asking for them.
   **By default the run goes to the background:** the call returns immediately with a run id,
-  you keep working, and the result — a per-node trace plus the final text output — is
-  delivered to you as a follow-up message when it finishes. Meanwhile
-  `tasks(action="status", id=<run id>)` observes it and `tasks(action="stop", ...)` cancels
-  it. Pass `background=false` ONLY when you need the result to keep reasoning in the same
-  turn (the call then blocks and returns the result directly).
+  and the result — a per-node trace plus the final text output — is **delivered to you
+  automatically as a follow-up message** when it finishes. Do NOT wait for it with
+  sleep+status polling: tell the user the workflow is running and **end your turn** — the
+  follow-up wakes you, and the user watches live per-node progress in the Work panel.
+  Reach for `tasks(action="status", id=<run id>)` only when the user asks for an update or
+  you need a mid-run look at the run's work dir and files (status reports both, plus
+  per-node durations); `tasks(action="stop", ...)` cancels. Pass `background=false` ONLY
+  when you need the result to keep reasoning in the same turn (the call then blocks and
+  returns the result directly).
   **Getting files back:** when the workflow declares it outputs files
   (`output: {"file": true}`), the summary reports the run's working-folder path AND lists the
   produced files — read them there, and copy out anything that must outlive the run (working

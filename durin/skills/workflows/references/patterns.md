@@ -76,6 +76,23 @@ A linear script node transforms the edge (stdin → stdout); a non-zero exit abo
 the fan-out list deterministic — no more malformed JSON from a model. Use `script` (a file
 under `<workspace>/workflows/scripts/`) instead of `command` when the logic outgrows one line.
 
+An **authenticated** script step declares the stored secrets it needs — they arrive as env
+vars (each must allow the `exec` scope), so a `curl` against a real API stays a
+zero-token script node instead of becoming an agent turn:
+
+```json
+{
+  "name": "fetch-ticket",
+  "start": "fetch",
+  "nodes": [
+    { "id": "fetch", "kind": "script", "script": "zd-fetch-ticket.sh",
+      "secrets": ["ZENDESK_API_TOKEN"], "timeout": 60, "next": "summarize" },
+    { "id": "summarize", "kind": "work", "mode": "read", "tools": "default",
+      "prompt": "Summarize the fetched ticket JSON in the working folder.", "next": null }
+  ]
+}
+```
+
 ```json
 {
   "name": "each-file-reviewed",
