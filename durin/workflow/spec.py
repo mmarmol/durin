@@ -474,6 +474,32 @@ def _edge_targets(node: Node) -> list[str | None]:
     return []  # unreachable with the current Node union
 
 
+def _validate_artifacts(raw: Any) -> None:
+    """Validate ``output.artifacts`` — the workflow's declared file contract: a list
+    of ``{path, description?}``. Paths are relative to the run's working folder; the
+    engine checks them post-run and reports the missing ones as a warning (never a
+    failure), so a composed stage learns immediately which promised file is absent
+    instead of failing confusingly downstream."""
+    if not isinstance(raw, list):
+        raise WorkflowError(f"output 'artifacts' must be a list, got {raw!r}")
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            raise WorkflowError(f"each output artifact must be a dict, got {item!r}")
+        path = item.get("path")
+        if not path or not isinstance(path, str):
+            raise WorkflowError(f"output artifact needs a non-empty string 'path', got {item!r}")
+        if Path(path).is_absolute() or ".." in Path(path).parts:
+            raise WorkflowError(
+                f"output artifact path must be relative inside the working folder (no '..'), got {path!r}")
+        desc = item.get("description")
+        if desc is not None and not isinstance(desc, str):
+            raise WorkflowError(f"output artifact 'description' must be a string, got {desc!r}")
+        if path in seen:
+            raise WorkflowError(f"duplicate output artifact path {path!r}")
+        seen.add(path)
+
+
 def parse_workflow(data: dict[str, Any]) -> Workflow:
     """Parse a workflow definition dict into a validated Workflow."""
     name = data.get("name", "")
@@ -568,6 +594,8 @@ def parse_workflow(data: dict[str, Any]) -> Workflow:
     wf_output = data.get("output")
     if wf_output is not None and not isinstance(wf_output, dict):
         raise WorkflowError(f"workflow 'output' must be a dict or omitted, got {wf_output!r}")
+    if wf_output is not None and wf_output.get("artifacts") is not None:
+        _validate_artifacts(wf_output["artifacts"])
 
     return Workflow(
         name=name, start=start, nodes=nodes, max_visits=max_visits, improvement_mode=mode,

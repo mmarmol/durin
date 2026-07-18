@@ -190,6 +190,14 @@ def _format_result(result: Any, output_files: bool = False) -> str:
     if result.status == "completed" and result.final_output:
         lines.append(f"\nFinal output:\n{result.final_output}")
 
+    # The declared file contract: name every promised artifact the completed run
+    # did not produce, so the caller (or the next stage) acts on the gap now
+    # instead of failing confusingly downstream. A warning — the run still completed.
+    missing = getattr(result, "missing_artifacts", None) or []
+    if result.status == "completed" and missing:
+        lines.append("\nWARNING — declared output artifacts NOT produced:")
+        lines.extend(f"  - {p}" for p in missing)
+
     # Surface the run's working folder only when the workflow declares it outputs files,
     # so a file-producing run tells the agent where to read its outputs. The folder also
     # holds any seeded input files. Pure-text workflows stay silent (no noise).

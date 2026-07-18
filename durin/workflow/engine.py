@@ -442,6 +442,16 @@ class WorkflowEngine:
         goal = (output_format or "").strip() or _desc(workflow.output)
         prefix = f"This workflow's input is: {intro}\n\n" if intro else ""
         suffix = f"\n\nThe workflow's final deliverable should be: {goal}" if goal else ""
+        # Declared artifacts ride in the framing so every node knows the file
+        # contract the run must fulfil (paths relative to the working folder).
+        artifacts = (workflow.output or {}).get("artifacts") or []
+        if artifacts:
+            lines = "\n".join(
+                f"  - {a['path']}" + (f" — {a['description']}" if a.get("description") else "")
+                for a in artifacts
+            )
+            suffix += ("\n\nThe run must produce these files in the shared working "
+                       f"folder:\n{lines}")
         return f"{prefix}{task}{suffix}" if (prefix or suffix) else task
 
     def _walk(
@@ -751,10 +761,17 @@ class WorkflowEngine:
             output_files = sorted(
                 str(p.relative_to(root_dir)) for p in root_dir.rglob("*") if p.is_file()
             )
+        # The declared file contract (output.artifacts): report promised paths the
+        # completed run did not produce. A warning, never a failure — the caller
+        # (an orchestrating agent or the next stage) learns immediately which file
+        # is absent instead of failing confusingly downstream.
+        declared = [a["path"] for a in (workflow.output or {}).get("artifacts") or []]
+        produced = set(output_files)
+        missing = [p for p in declared if p not in produced]
         return WorkflowResult(
             status="completed", final_output=final_output, runs=runs, run_id=run_id,
             output_dir=terminal_output_dir, output_files=output_files,
-            final_output_node=final_output_node,
+            final_output_node=final_output_node, missing_artifacts=missing,
         )
 
     def _run_one_branch(self, branch, task, upstream, run_id, iteration, root_key,

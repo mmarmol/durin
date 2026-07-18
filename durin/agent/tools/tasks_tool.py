@@ -237,6 +237,9 @@ class TasksTool(Tool, ContextAware):
                     line += f" ({d}s)"
                 out.append(line)
         out.extend(self._work_dir_files(work_dir))
+        missing = manifest.get("missing_artifacts") or []
+        if missing:
+            out.append("  declared artifacts not produced: " + ", ".join(missing))
         final = manifest.get("final_output")
         if final:
             if len(final) > _MAX_FINAL_PREVIEW:

@@ -159,3 +159,14 @@ async def test_status_workflow_shows_work_dir_durations_and_files(tmp_path):
     assert f"work dir: {wd}" in out
     assert "(3.2s)" in out
     assert "context.json" in out and "2 B" in out
+
+
+@pytest.mark.asyncio
+async def test_status_workflow_shows_missing_declared_artifacts(tmp_path):
+    _write_manifest(tmp_path, "qa", "wf01abcd", status="completed", final_output="ok")
+    p = tmp_path / "workflows-runs" / "qa" / "wf01abcd.json"
+    rec = json.loads(p.read_text())
+    rec["missing_artifacts"] = ["evidence.json"]
+    p.write_text(json.dumps(rec), encoding="utf-8")
+    out = await _tool(tmp_path, _FakeManager([], running=[])).execute(action="status", id="wf01abcd")
+    assert "evidence.json" in out and "not produced" in out.lower()

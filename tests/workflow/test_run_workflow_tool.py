@@ -395,3 +395,15 @@ def test_run_workflow_description_mentions_cases_and_skill():
     d = tool.description
     assert "cases" in d
     assert "workflows` skill" in d or "workflows skill" in d
+
+
+def test_format_result_warns_on_missing_declared_artifacts():
+    res = WorkflowResult(
+        status="completed", final_output="done", run_id="r1",
+        runs=[NodeRun(node_id="s", iteration=1, output="done")],
+        output_dir="/tmp/wd", output_files=["context.json"],
+        missing_artifacts=["evidence.json"],
+    )
+    out = _format_result(res, output_files=True)
+    assert "evidence.json" in out
+    assert "declared" in out.lower() and "not produced" in out.lower()

@@ -160,6 +160,7 @@ def finalize_run(
         "final_output_node": getattr(result, "final_output_node", None),
         "needs_input_node": getattr(result, "needs_input_node", None),
         "output_files": list(getattr(result, "output_files", []) or []),
+        "missing_artifacts": list(getattr(result, "missing_artifacts", []) or []),
         "runs": _node_records(result),
     }
     path = _record_path(workspace, name, result.run_id)
