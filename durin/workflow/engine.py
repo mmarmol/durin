@@ -254,12 +254,20 @@ class WorkflowEngine:
         if self._workspace is not None and work_dir_override is None:
             prune_runs(self._workspace, keep=self._prune_keep)
         runs: list[NodeRun] = []
+        # The run's shared working folder is fixed here (not in the walk) so the
+        # manifest can record it from the very first write — an in-flight run's
+        # artifacts are then findable by any observer, not only after completion.
+        work_dir: str | None = work_dir_override or (
+            str(artifact_dir(self._workspace, run_id, "work", None))
+            if self._workspace is not None else None
+        )
         # The effective root MUST match node_runner's headless rooting: a None calling
         # session means node sessions are rooted under workflow:<run_id>:root, so the
         # manifest records that same key or runs_for_session can't find the run.
         effective_root = root_session_key or f"workflow:{run_id}:root"
         started_at = time.time()
-        self._start_manifest(workflow, run_id, effective_root, started_at, task, parent_run_id)
+        self._start_manifest(workflow, run_id, effective_root, started_at, task,
+                             parent_run_id, work_dir=work_dir)
 
         def _update() -> None:
             self._update_manifest(workflow, run_id, runs)
@@ -273,7 +281,8 @@ class WorkflowEngine:
                 start_at=resume.start_at if resume else None,
                 initial_visits=dict(resume.visits) if resume else None,
                 initial_upstream=resume.upstream if resume else None,
-                work_dir_override=work_dir_override,
+                work_dir=work_dir,
+                own_work_dir=work_dir_override is None,
             )
         except WorkflowConfigError as exc:
             # A config/wiring error is fatal and re-raised, but finalize the manifest first
@@ -348,16 +357,42 @@ class WorkflowEngine:
                             status="aborted", runs=[], run_id=run_id,
                             final_output=(f"node {node.id!r}: script file not found: "
                                           f"{node.script} (expected under workflows/scripts/)"))
+        # Declared script-node secrets are the author's contract with the store:
+        # an unknown name or one whose scope does not allow the 'exec' consumer
+        # can never be injected, so abort now — before any node runs or a manifest
+        # exists — naming the node and every unresolvable name at once.
+        declared = [n for n in workflow.nodes.values()
+                    if isinstance(n, ScriptNode) and getattr(n, "secrets", ())]
+        if declared:
+            from durin.security.secrets import get_secret_store, scope_allows
+            entries = get_secret_store().all()
+            for node in declared:
+                missing = [s for s in node.secrets if s not in entries]
+                denied = [s for s in node.secrets
+                          if s in entries and not scope_allows(entries[s].scope, "exec")]
+                if missing or denied:
+                    parts = []
+                    if missing:
+                        parts.append(f"not in the secret store: {', '.join(missing)}")
+                    if denied:
+                        parts.append(f"missing the 'exec' scope: {', '.join(denied)}")
+                    return WorkflowResult(
+                        status="aborted", runs=[], run_id=run_id,
+                        final_output=(f"node {node.id!r} declares secrets that cannot "
+                                      f"be provided — {'; '.join(parts)}. Store the "
+                                      f"secret and grant it the 'exec' scope, or fix "
+                                      f"the node's 'secrets' list (the `workflows` "
+                                      f"skill documents script-node secrets)."))
         return None
 
     def _start_manifest(self, workflow, run_id, root_session_key, started_at, task=None,
-                        parent_run_id=None) -> None:
+                        parent_run_id=None, work_dir=None) -> None:
         if self._workspace is None:
             return
         try:
             run_log.start_run(self._workspace, workflow.name, run_id,
                               root_session_key=root_session_key, started_at=started_at,
-                              task=task, parent_run_id=parent_run_id)
+                              task=task, parent_run_id=parent_run_id, work_dir=work_dir)
         except Exception:  # noqa: BLE001 - a manifest write must not break the run
             logger.exception("workflow run manifest start failed for {}", workflow.name)
 
@@ -407,6 +442,16 @@ class WorkflowEngine:
         goal = (output_format or "").strip() or _desc(workflow.output)
         prefix = f"This workflow's input is: {intro}\n\n" if intro else ""
         suffix = f"\n\nThe workflow's final deliverable should be: {goal}" if goal else ""
+        # Declared artifacts ride in the framing so every node knows the file
+        # contract the run must fulfil (paths relative to the working folder).
+        artifacts = (workflow.output or {}).get("artifacts") or []
+        if artifacts:
+            lines = "\n".join(
+                f"  - {a['path']}" + (f" — {a['description']}" if a.get("description") else "")
+                for a in artifacts
+            )
+            suffix += ("\n\nThe run must produce these files in the shared working "
+                       f"folder:\n{lines}")
         return f"{prefix}{task}{suffix}" if (prefix or suffix) else task
 
     def _walk(
@@ -422,18 +467,16 @@ class WorkflowEngine:
         start_at: str | None = None,
         initial_visits: dict[str, int] | None = None,
         initial_upstream: str | None = None,
-        work_dir_override: str | None = None,
+        work_dir: str | None = None,
+        own_work_dir: bool = True,
     ) -> WorkflowResult:
         shared_context: list[dict] = []
         visits: dict[str, int] = dict(initial_visits or {})
         upstream_output: str | None = initial_upstream
-        # One shared working folder per run: every sequential node reads and writes here,
-        # so created/edited files accumulate in one place and each stage sees the prior
-        # work (collaboration). Parallel branches fork this and reconcile (see _run_parallel).
-        work_dir: str | None = work_dir_override or (
-            str(artifact_dir(self._workspace, run_id, "work", None))
-            if self._workspace is not None else None
-        )
+        # One shared working folder per run (chosen by run(), which also records it in
+        # the manifest): every sequential node reads and writes here, so created/edited
+        # files accumulate in one place and each stage sees the prior work
+        # (collaboration). Parallel branches fork this and reconcile (see _run_parallel).
         terminal_output_dir: str | None = work_dir
         final_output: str | None = None
         final_output_node: str | None = None
@@ -537,6 +580,7 @@ class WorkflowEngine:
                 # Run a full agent turn; for a multi-way node the verdict is a matched
                 # case label; for binary routing it is PASS/FAIL from the first non-empty
                 # line; for a linear node there is no verdict.
+                node_t0 = time.monotonic()
                 try:
                     runner = self._script_runner if isinstance(node, ScriptNode) else self._node_runner
                     resp = runner(req)
@@ -548,7 +592,8 @@ class WorkflowEngine:
                                         output="", session_key=exc.session_key,
                                         budget=budget,
                                         status="node_failed", error=str(exc.cause),
-                                        exit_code=getattr(exc, "exit_code", None)))
+                                        exit_code=getattr(exc, "exit_code", None),
+                                        duration_s=round(time.monotonic() - node_t0, 3)))
                     if update_manifest is not None:
                         update_manifest()
                     raise
@@ -565,7 +610,8 @@ class WorkflowEngine:
                                     output=output, session_key=resp.session_key,
                                     passed=passed, budget=budget,
                                     status="persist_failed" if resp.persist_failed else "ok",
-                                    exit_code=getattr(resp, "exit_code", None)))
+                                    exit_code=getattr(resp, "exit_code", None),
+                                    duration_s=round(time.monotonic() - node_t0, 3)))
                 if isinstance(node, WorkNode) and node.context == "shared":
                     shared_context.extend(resp.messages)
                     if len(shared_context) > _SHARED_CONTEXT_MAX_MESSAGES:
@@ -683,7 +729,7 @@ class WorkflowEngine:
             # in-flight run is observable before the next node starts.
             if update_manifest is not None:
                 update_manifest()
-            if work_dir is not None and work_dir_override is None:
+            if work_dir is not None and own_work_dir:
                 try:
                     os.utime(Path(work_dir).parent, None)   # keep .workflow/<run_id>/ recent while running
                 except OSError:
@@ -715,10 +761,17 @@ class WorkflowEngine:
             output_files = sorted(
                 str(p.relative_to(root_dir)) for p in root_dir.rglob("*") if p.is_file()
             )
+        # The declared file contract (output.artifacts): report promised paths the
+        # completed run did not produce. A warning, never a failure — the caller
+        # (an orchestrating agent or the next stage) learns immediately which file
+        # is absent instead of failing confusingly downstream.
+        declared = [a["path"] for a in (workflow.output or {}).get("artifacts") or []]
+        produced = set(output_files)
+        missing = [p for p in declared if p not in produced]
         return WorkflowResult(
             status="completed", final_output=final_output, runs=runs, run_id=run_id,
             output_dir=terminal_output_dir, output_files=output_files,
-            final_output_node=final_output_node,
+            final_output_node=final_output_node, missing_artifacts=missing,
         )
 
     def _run_one_branch(self, branch, task, upstream, run_id, iteration, root_key,
@@ -733,16 +786,17 @@ class WorkflowEngine:
     @staticmethod
     def _record_branches(runs, results, iteration):
         """Append a per-branch NodeRun (carrying its session_key, branch_id and failure
-        status) for each ``(branch_id, output, session_key, error, persist_failed)`` tuple
-        — so static-parallel branch sessions stay attributable in the run trace, mirroring
-        the dynamic fan-out worker records. ``error`` is None for a branch that completed;
-        ``persist_failed`` marks a branch that ran but whose session save raised."""
-        for bid, out, session_key, error, persist_failed in results:
+        status) for each ``(branch_id, output, session_key, error, persist_failed,
+        duration)`` tuple — so static-parallel branch sessions stay attributable in the
+        run trace, mirroring the dynamic fan-out worker records. ``error`` is None for a
+        branch that completed; ``persist_failed`` marks a branch that ran but whose
+        session save raised."""
+        for bid, out, session_key, error, persist_failed, duration in results:
             runs.append(NodeRun(node_id=bid, iteration=iteration, output=out,
                                 session_key=session_key, branch_id=bid,
                                 status=("node_failed" if error else
                                         "persist_failed" if persist_failed else "ok"),
-                                error=error))
+                                error=error, duration_s=duration))
 
     @staticmethod
     def _parse_subtasks(text: str) -> list[str]:
@@ -809,7 +863,9 @@ class WorkflowEngine:
         def _run_worker(args):
             # A worker that raises must not take down the whole fan-out: catch it and
             # return a tagged failure so survivors still complete (per-future isolation).
+            # Each worker times itself: concurrent units cannot share a walk-level clock.
             idx, subtask = args
+            t0 = time.monotonic()
             try:
                 resp = self._node_runner(NodeRunRequest(
                     node=worker_node,
@@ -822,28 +878,28 @@ class WorkflowEngine:
                     worker_index=idx,
                     output_dir=work_dir if worker_node.tools == "default" else None,
                 ))
-                return idx, resp.output, resp.session_key, None, resp.persist_failed
+                return idx, resp.output, resp.session_key, None, resp.persist_failed, round(time.monotonic() - t0, 3)
             except NodeExecutionError as exc:
-                return idx, "", exc.session_key, str(exc.cause), False
+                return idx, "", exc.session_key, str(exc.cause), False, round(time.monotonic() - t0, 3)
             except Exception as exc:  # noqa: BLE001 - isolate a single worker's failure
-                return idx, "", None, str(exc), False
+                return idx, "", None, str(exc), False, round(time.monotonic() - t0, 3)
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
             results = sorted(ex.map(_run_worker, enumerate(subtasks)))
 
-        for idx, out, session_key, error, persist_failed in results:
+        for idx, out, session_key, error, persist_failed, duration in results:
             runs.append(NodeRun(node_id=node.worker, iteration=iteration, output=out,
                                 session_key=session_key, worker_index=idx,
                                 status=("node_failed" if error else
                                         "persist_failed" if persist_failed else "ok"),
-                                error=error))
+                                error=error, duration_s=duration))
 
-        if all(error for _idx, _out, _key, error, _pf in results):
+        if all(error for _idx, _out, _key, error, _pf, _d in results):
             return "", f"parallel node {node.id!r}: every worker failed"
 
         merged = "\n\n".join(
             f"[{idx}] {out}" if error is None else f"[{idx}] FAILED: {error}"
-            for idx, out, _key, error, _pf in results
+            for idx, out, _key, error, _pf, _d in results
         )
         return merged, None
 
@@ -913,6 +969,8 @@ class WorkflowEngine:
             def _run(bid):
                 # A branch that raises must not take down the others: catch it and tag the
                 # failure so survivors still complete (per-branch isolation, like fan-out).
+                # Each branch times itself: concurrent units cannot share a walk-level clock.
+                t0 = time.monotonic()
                 try:
                     resp = self._run_one_branch(
                         workflow.nodes[bid], task, upstream, run_id, iteration, root_key,
@@ -920,25 +978,25 @@ class WorkflowEngine:
                     with _branch_lock:
                         branch_status[bid] = "done"
                     _emit_branches()
-                    return bid, resp.output, resp.session_key, None, resp.persist_failed
+                    return bid, resp.output, resp.session_key, None, resp.persist_failed, round(time.monotonic() - t0, 3)
                 except NodeExecutionError as exc:
                     with _branch_lock:
                         branch_status[bid] = "failed"
                     _emit_branches()
-                    return bid, "", exc.session_key, str(exc.cause), False
+                    return bid, "", exc.session_key, str(exc.cause), False, round(time.monotonic() - t0, 3)
                 except Exception as exc:  # noqa: BLE001 - isolate a single branch's failure
                     with _branch_lock:
                         branch_status[bid] = "failed"
                     _emit_branches()
-                    return bid, "", None, str(exc), False
+                    return bid, "", None, str(exc), False, round(time.monotonic() - t0, 3)
             with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
                 results = list(ex.map(_run, branches))
             self._record_branches(runs, results, iteration)
-            if all(error for _bid, _out, _key, error, _pf in results):
+            if all(error for _bid, _out, _key, error, _pf, _d in results):
                 return "", f"parallel node {node.id!r}: every branch failed"
             return "\n\n".join(
                 f"[{bid}]\n{out}" if error is None else f"[{bid}] FAILED: {error}"
-                for bid, out, _key, error, _pf in results), None
+                for bid, out, _key, error, _pf, _d in results), None
 
         if self._workspace is None:
             return "", f"parallel node {node.id!r}: reconcile={node.reconcile!r} needs a workspace"
@@ -971,7 +1029,7 @@ class WorkflowEngine:
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
                 results = list(ex.map(_run, branches))
-            self._record_branches(runs, [(bid, out, key, None, False) for bid, out, key, _ in results], iteration)
+            self._record_branches(runs, [(bid, out, key, None, False, None) for bid, out, key, _ in results], iteration)
             if node.reconcile == "choose":
                 if self._pick_runner is None:
                     return "", f"parallel node {node.id!r}: 'choose' needs a pick_runner"

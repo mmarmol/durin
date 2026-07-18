@@ -8,7 +8,11 @@ produce empty stdin (no fallback). Small run metadata in DURIN_* env vars, cwd i
 the run's shared working folder (the file channel), stdout (capped) becomes the
 edge text to the next node. The subprocess environment is a minimal allowlist plus
 DURIN_* by default (the node's ``env: "clean"``); a node opting into
-``env: "inherit"`` gets the full gateway process environment instead. Routing is
+``env: "inherit"`` gets the full gateway process environment instead. Neither
+mode carries stored secrets: a node names the ones it needs in ``secrets`` and
+they are resolved from the secret store (each must allow the ``exec`` scope)
+into the subprocess env, with stdout/stderr redacted against the store before
+becoming edge text. Routing is
 derived deterministically — exit code for a binary gate (0 = PASS), the last
 non-empty stdout line for a multi-way node —
 and returned as ``route_label`` so the engine's routing path is identical to an
@@ -26,6 +30,7 @@ import sys
 import time
 from pathlib import Path
 
+from durin.security.secrets import get_secret_store, redact_secrets, scope_allows
 from durin.workflow.engine import NodeExecutionError, NodeRunRequest, NodeRunResponse, ScriptCancelled
 from durin.workflow.verdict import parse_label
 
@@ -86,6 +91,34 @@ class ScriptNodeRunner:
             return dict(os.environ)
         return {k: os.environ[k] for k in _CLEAN_ENV_ALLOWLIST if k in os.environ}
 
+    def _declared_secrets(self, req: NodeRunRequest) -> dict[str, str]:
+        """Resolve the node's declared secret names for env injection. Neither env
+        mode carries stored secrets (they live in the secret store, not the gateway
+        environment), so a script authenticates only via this explicit manifest. A
+        name absent from the store, or whose scope does not authorize the ``exec``
+        consumer, is the author's error: fail the node naming it instead of running
+        the script with a silently missing credential."""
+        node = req.node
+        if not getattr(node, "secrets", ()):
+            return {}
+        entries = get_secret_store().all()
+        out: dict[str, str] = {}
+        for name in node.secrets:
+            entry = entries.get(name)
+            if entry is None:
+                raise NodeExecutionError(
+                    node.id, req.iteration, None,
+                    RuntimeError(f"declared secret {name!r} is not in the secret store "
+                                 f"(the `workflows` skill documents script-node secrets)"))
+            if not scope_allows(entry.scope, "exec"):
+                raise NodeExecutionError(
+                    node.id, req.iteration, None,
+                    RuntimeError(f"secret {name!r} does not allow the 'exec' scope — "
+                                 f"grant it before this node can use it (see the "
+                                 f"`workflows` skill, script-node reference)"))
+            out[name] = entry.value
+        return out
+
     @staticmethod
     def _killpg(proc: subprocess.Popen) -> None:
         try:
@@ -105,6 +138,8 @@ class ScriptNodeRunner:
         if cwd:
             Path(cwd).mkdir(parents=True, exist_ok=True)
         env = self._base_env(node)
+        env.update(self._declared_secrets(req))
+        # DURIN_* metadata is set last so a declared secret can never shadow it.
         env.update({
             "DURIN_TASK": (req.task or "")[:_MAX_TASK_ENV_CHARS],
             "DURIN_RUN_ID": req.run_id,
@@ -151,7 +186,11 @@ class ScriptNodeRunner:
                 except subprocess.TimeoutExpired:
                     continue
         rc = proc.returncode
-        stderr_tail = (stderr or "").strip()[-_STDERR_TAIL_CHARS:]
+        # Redact stored secret values out of both streams before any edge/feedback
+        # text is built — stdout becomes edge text that lands in sessions, manifests
+        # and memory, so a script echoing a credential must never persist it.
+        stdout = redact_secrets(stdout or "")
+        stderr_tail = redact_secrets((stderr or "").strip()[-_STDERR_TAIL_CHARS:])
 
         is_binary_gate = node.cases is None and (node.on_pass is not None or node.on_fail is not None)
         if is_binary_gate:

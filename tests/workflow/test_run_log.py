@@ -537,3 +537,20 @@ def test_legacy_needs_input_without_reentry_node_is_prunable(tmp_path):
     assert run_log.read_manifest(tmp_path, "w", "live") is not None    # resumable never pruned
     kept = [f"t{i}" for i in range(3) if run_log.read_manifest(tmp_path, "w", f"t{i}")]
     assert kept == ["t1", "t2"]                                        # newest 2 terminals kept
+
+
+def test_manifest_carries_work_dir_and_duration(tmp_path):
+    run_log.start_run(tmp_path, "wf", "r9", root_session_key=None, started_at=1.0,
+                      task="t", work_dir=str(tmp_path / "wd"))
+    res = _result("r9", status="running",
+                  runs=[NodeRun(node_id="a", iteration=1, output="", duration_s=2.5)])
+    run_log.update_run(tmp_path, "wf", "r9", res)
+    m = run_log.read_manifest(tmp_path, "wf", "r9")
+    assert m["work_dir"] == str(tmp_path / "wd")
+    assert m["runs"][0]["duration_s"] == 2.5
+    final = _result("r9", runs=res.runs)
+    run_log.finalize_run(tmp_path, "wf", final, root_session_key=None,
+                         started_at=1.0, finished_at=2.0)
+    m = run_log.read_manifest(tmp_path, "wf", "r9")
+    assert m["work_dir"] == str(tmp_path / "wd")   # survives the terminal rewrite
+    assert m["runs"][0]["duration_s"] == 2.5

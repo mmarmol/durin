@@ -37,7 +37,14 @@ with dynamic fan-out (a worker per file). The terminal node's text output and th
 exposed in the run result. Absent ⇒ today's text-task behavior. The optional free-text `description`
 is a lightweight contract: the engine frames every node's task with the input description (what the
 run received) and the output description (what it must deliver), so the agents are steered and the
-interface is documented — descriptions are hints, not enforced. However, **provided input files are validated pre-flight** (existence check, distinct basenames) and return an `aborted` result naming any missing or colliding file; and a workflow that declares file input (`file: true`) given none ends the run immediately with a `needs_input` result before any node runs, so the invoking agent asks the user for the files instead of burning node turns.
+interface is documented — descriptions are hints, not enforced. The output descriptor may
+additionally declare **`artifacts`** — a list of `{path, description?}` naming the files (relative
+to the run's working folder) the run promises to produce. Declared paths are validated at parse
+time (relative, no `..`, no duplicates), ride in every node's framing as the file contract, and
+after a completed run the engine reports the ones not produced as `missing_artifacts` on the
+result and manifest — a **warning, never a failure** — so an orchestrating caller or a composed
+downstream stage learns immediately which promised file is absent instead of failing confusingly
+later. However, **provided input files are validated pre-flight** (existence check, distinct basenames) and return an `aborted` result naming any missing or colliding file; and a workflow that declares file input (`file: true`) given none ends the run immediately with a `needs_input` result before any node runs, so the invoking agent asks the user for the files instead of burning node turns.
 
 A caller may also pass a per-run **`output_format`** (the `run_workflow` tool, the run command):
 a delivery instruction for THIS call — "a bulleted list", "JSON with fields x,y", "a 3-line
@@ -126,7 +133,15 @@ limits that stdin does not). The rest of the subprocess environment is controlle
 by the node's `env` field: `"clean"` (the default) starts from a minimal allowlist
 (`PATH`, `HOME`, `USER`, `SHELL`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TERM`, `TMPDIR`,
 `DURIN_HOME` — only those present); `"inherit"` is the full gateway process environment, opt-in
-per node (see [security.md](security.md)). **cwd** is the
+per node (see [security.md](security.md)). Neither mode carries stored
+secrets — they live in the secret store, not the gateway environment — so a node
+that must authenticate declares the names it needs in **`secrets`**: each is
+resolved from the store into the subprocess env (the entry's `scope` must allow
+the `exec` consumer, the same grant the exec tool honours), validated pre-flight
+(an unknown or scope-denied name aborts the run naming the node, before any node
+executes), and never able to shadow the `DURIN_*` metadata vars. Both streams are
+redacted against the store before becoming edge/feedback text, so a script that
+echoes a credential cannot persist it into sessions, manifests, or memory. **cwd** is the
 run's shared working folder, so a script reads earlier steps' files and writes
 its own the same way a `tools: "default"` work node does. **stdout** (capped
 at `workflow.script_output_max_chars`, truncated with a
@@ -283,13 +298,19 @@ The per-node entries in the manifest's `runs` array carry:
 | `budget` | the node's effective visit budget at this pass (`null` for parallel branches/workers, which are not loop targets) |
 | `exit_code` | a script node's subprocess exit code (`null` for agent nodes, which have no exit code) |
 | `error` | failure detail (stderr tail / exception text, capped) for `node_failed`/`persist_failed` rows — the evidence the improve pass's script-repair lane reads (`null` otherwise) |
+| `duration_s` | wall-clock seconds this pass took (`null` where not measured — e.g. choose/union branches) |
 
-The finalized manifest also carries top-level fields: `needs_input_node` — the node
+The manifest also carries top-level fields. From the very first (`running`) write:
+`work_dir` — the run's shared working folder, recorded at start so an in-flight
+run's artifacts are findable by any observer (the `tasks` tool renders it plus a
+capped listing of the folder's current files). On finalization: `needs_input_node` — the node
 that routed to `__needs_input__` (`null` otherwise), the resume re-entry point;
 `final_output_node` — which node's output became `final_output` (`null` when no node
 contributed, e.g. an aborted run); `output_files`: the relative paths (within the
 run's output folder) a completed run produced, empty for a run that ended any other
-status or produced no files; and `parent_run_id` — the calling run's `run_id` when this
+status or produced no files; `missing_artifacts` — declared `output.artifacts` paths a
+completed run did not produce (the warning-only file contract, empty otherwise); and
+`parent_run_id` — the calling run's `run_id` when this
 run is a nested subworkflow invocation, `None` for a top-level run (including on
 manifests written before this field existed).
 
@@ -479,10 +500,22 @@ stop button has visible context while the agent digests the result. The `backgro
 `run_workflow` invocations from inside an agent turn; the HTTP
 `POST /api/v1/workflows/{name}/run` surface is always synchronous.
 
-A background launch returns the run's `run_id` (pre-generated and passed to the
+The waiting contract is push, not poll: because the result is injected on
+completion, the launching agent is told (in the launch reply, the tool
+descriptions, and the `workflows` skill) to report the run to the user and END
+its turn rather than burn it on sleep+status loops — the follow-up wakes it,
+and the user watches live per-node progress in the Work panel. A deterministic
+backstop reinforces the guidance: a `sleep` that wakes while this session still
+has running background work appends a reminder naming those tasks and telling
+the agent to end its turn, so a polling loop is corrected on its first
+iteration instead of running for minutes. A background
+launch still returns the run's `run_id` (pre-generated and passed to the
 engine as its `run_id_factory`) so the agent can observe or cancel the run
-through the unified `tasks` tool — `tasks(action='status', id=…)` reads the run
-manifest, `tasks(action='stop', id=…)` requests cancellation. The same merge of
+on demand through the unified `tasks` tool — `tasks(action='status', id=…)`
+reads the run manifest (rendering the run's `work_dir`, each node's latest-pass
+`duration_s`, and a capped listing of the working folder's current files — the
+mid-run window onto a run's artifacts), `tasks(action='stop', id=…)` requests
+cancellation. The same merge of
 sub-agents and workflow runs that backs `GET /api/v1/tasks`
 (`durin/agent/background_tasks.py`) is what `tasks` renders. For a run that
 ends `needs_input`, this same surface carries the gate's questions so panels
@@ -830,13 +863,15 @@ End-to-end for a single `run_workflow` call:
   evidence, gated by a deterministic syntax/security/smoke pre-apply check, and never
   auto-applied when the target routes — see §7 above); a **webui Workflows pane** (React Flow) with an editor that
   has clickable Input/Output canvas objects (toggle text and/or files plus a free-text
-  description; file input is supplied as paths in the run bar), a palette that adds
+  description; the Output object also edits the declared artifacts list, one `path |
+  description` per line; file input is supplied as paths in the run bar), a palette that adds
   work / script / parallel / subflow nodes (a routing node is a work or script node —
   shown by its pass/fail edges, never a separate type), draggable nodes with a persisted
   layout, a **"runs as"** picker (model or persona) for work nodes, body/mode/context/routing
   config (including the session fresh/persistent choice, shown only for `context: "own"`),
   a script node's inline-command-or-file source picker (backed by the script-file listing
-  endpoint) with an optional timeout and the same routing config as a work node, static and
+  endpoint) with an optional timeout, the env knob, a `secrets` names field, and the same
+  routing config as a work node, static and
   dynamic fan-out authoring with a concurrency cap, a subflow target picker that excludes
   cycle-creating workflows, and a recommendations banner. Self-improvement applies directly in
   `auto` mode behind an external auto-revert anchor (`manual` mode leaves

@@ -375,3 +375,35 @@ async def test_tool_passes_keep_runs_to_engine(tmp_path):
         await tool.execute(name="simple", task="do it", background=False)
 
     assert captured_kwargs.get("prune_keep") == 7
+
+
+# ---------------------------------------------------------------------------
+# The background waiting contract: the launch reply and the tool description
+# must teach push-delivery (end your turn), never sleep+status polling.
+# ---------------------------------------------------------------------------
+
+def test_background_launch_message_states_push_contract():
+    from durin.agent.tools.run_workflow import _background_launch_message
+    msg = _background_launch_message("w", "r1")
+    assert "end your turn" in msg.lower()
+    assert "do not poll" in msg.lower().replace("not poll", "not poll")
+    assert "r1" in msg
+
+
+def test_run_workflow_description_mentions_cases_and_skill():
+    tool = RunWorkflowTool(workspace="/tmp/x", sessions=None, app_config=None)
+    d = tool.description
+    assert "cases" in d
+    assert "workflows` skill" in d or "workflows skill" in d
+
+
+def test_format_result_warns_on_missing_declared_artifacts():
+    res = WorkflowResult(
+        status="completed", final_output="done", run_id="r1",
+        runs=[NodeRun(node_id="s", iteration=1, output="done")],
+        output_dir="/tmp/wd", output_files=["context.json"],
+        missing_artifacts=["evidence.json"],
+    )
+    out = _format_result(res, output_files=True)
+    assert "evidence.json" in out
+    assert "declared" in out.lower() and "not produced" in out.lower()

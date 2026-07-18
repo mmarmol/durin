@@ -107,3 +107,32 @@ def test_script_path_aliases_normalize_to_canonical():
     assert wf.nodes["s"].script == "check.py"
     wf2 = parse_workflow(_wf([{"id": "s", "kind": "script", "script": "sub/./tool.sh"}]))
     assert wf2.nodes["s"].script == "sub/tool.sh"
+
+
+def test_script_node_secrets_parse():
+    wf = parse_workflow(_wf([{
+        "id": "s", "kind": "script", "command": "true",
+        "secrets": ["ZENDESK_API_TOKEN", "MXHERO_KEY"],
+    }]))
+    assert wf.nodes["s"].secrets == ("ZENDESK_API_TOKEN", "MXHERO_KEY")
+
+
+def test_script_node_secrets_default_empty():
+    wf = parse_workflow(_wf([{"id": "s", "kind": "script", "command": "true"}]))
+    assert wf.nodes["s"].secrets == ()
+
+
+def test_script_node_secrets_rejects_non_list():
+    with pytest.raises(WorkflowError, match="secrets"):
+        parse_workflow(_wf([{
+            "id": "s", "kind": "script", "command": "true",
+            "secrets": "ZENDESK_API_TOKEN",
+        }]))
+
+
+def test_script_node_secrets_rejects_invalid_name():
+    with pytest.raises(WorkflowError, match="env-var-safe"):
+        parse_workflow(_wf([{
+            "id": "s", "kind": "script", "command": "true",
+            "secrets": ["lower-case"],
+        }]))

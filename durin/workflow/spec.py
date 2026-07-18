@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Union
 
+from durin.security.secrets import is_valid_secret_name
 from durin.workflow.verdict import normalize_label
 
 # ---------------------------------------------------------------------------
@@ -117,6 +118,7 @@ class ScriptNode:
     script: str = ""
     timeout: int | None = None           # seconds; None = the workflow.script_timeout config default
     env: Literal["clean", "inherit"] = "clean"  # "clean" = minimal allowlist + DURIN_*; "inherit" = full gateway env
+    secrets: tuple[str, ...] = ()        # stored secret names injected into the subprocess env (each must allow the 'exec' scope)
     next: str | None = None
     on_pass: str | None = None
     on_fail: str | None = None
@@ -373,6 +375,13 @@ def _build_node(raw: dict[str, Any]) -> Node:
         env = raw.get("env", "clean")
         if env not in ("clean", "inherit"):
             raise WorkflowError(f"node {node_id!r}: env must be 'clean' or 'inherit', got {env!r}")
+        secrets = _str_list(raw.get("secrets", []), node_id, "secrets")
+        bad = [s for s in secrets if not is_valid_secret_name(s)]
+        if bad:
+            raise WorkflowError(
+                f"node {node_id!r}: secrets must be env-var-safe names "
+                f"(A-Z, 0-9, _; starting with a letter), got: {', '.join(bad)}"
+            )
         node_max_visits = raw.get("max_visits")
         if node_max_visits is not None:
             if isinstance(node_max_visits, bool) or not isinstance(node_max_visits, int) or node_max_visits < 1:
@@ -382,8 +391,8 @@ def _build_node(raw: dict[str, Any]) -> Node:
         next_node, on_pass, on_fail, cases = _parse_routing(raw, node_id)
         return ScriptNode(
             id=node_id, title=raw.get("title", ""), command=command.strip(), script=script,
-            timeout=timeout, env=env, next=next_node, on_pass=on_pass, on_fail=on_fail,
-            cases=cases, max_visits=node_max_visits,
+            timeout=timeout, env=env, secrets=secrets, next=next_node, on_pass=on_pass,
+            on_fail=on_fail, cases=cases, max_visits=node_max_visits,
         )
     if kind == "subworkflow":
         workflow = raw.get("workflow", "")
@@ -463,6 +472,32 @@ def _edge_targets(node: Node) -> list[str | None]:
             targets.append(node.list_from)
         return targets
     return []  # unreachable with the current Node union
+
+
+def _validate_artifacts(raw: Any) -> None:
+    """Validate ``output.artifacts`` — the workflow's declared file contract: a list
+    of ``{path, description?}``. Paths are relative to the run's working folder; the
+    engine checks them post-run and reports the missing ones as a warning (never a
+    failure), so a composed stage learns immediately which promised file is absent
+    instead of failing confusingly downstream."""
+    if not isinstance(raw, list):
+        raise WorkflowError(f"output 'artifacts' must be a list, got {raw!r}")
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            raise WorkflowError(f"each output artifact must be a dict, got {item!r}")
+        path = item.get("path")
+        if not path or not isinstance(path, str):
+            raise WorkflowError(f"output artifact needs a non-empty string 'path', got {item!r}")
+        if Path(path).is_absolute() or ".." in Path(path).parts:
+            raise WorkflowError(
+                f"output artifact path must be relative inside the working folder (no '..'), got {path!r}")
+        desc = item.get("description")
+        if desc is not None and not isinstance(desc, str):
+            raise WorkflowError(f"output artifact 'description' must be a string, got {desc!r}")
+        if path in seen:
+            raise WorkflowError(f"duplicate output artifact path {path!r}")
+        seen.add(path)
 
 
 def parse_workflow(data: dict[str, Any]) -> Workflow:
@@ -559,6 +594,8 @@ def parse_workflow(data: dict[str, Any]) -> Workflow:
     wf_output = data.get("output")
     if wf_output is not None and not isinstance(wf_output, dict):
         raise WorkflowError(f"workflow 'output' must be a dict or omitted, got {wf_output!r}")
+    if wf_output is not None and wf_output.get("artifacts") is not None:
+        _validate_artifacts(wf_output["artifacts"])
 
     return Workflow(
         name=name, start=start, nodes=nodes, max_visits=max_visits, improvement_mode=mode,
