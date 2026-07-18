@@ -35,22 +35,40 @@ def _config_path(fake_home: Path) -> Path:
     return fake_home / ".durin" / "config.json"
 
 
-def test_memory_docs_count_matches_canonical_classes(
+def test_memory_line_separates_entities_docs_and_fragments(
     config: Config, fake_home: Path
 ) -> None:
-    """status must count the same canonical memory classes as doctor /
-    `/memory list` — a raw recursive glob used to inflate the number with
-    entities/ and archive/ files."""
+    """The status Memory line breaks memory into its three real object kinds:
+    entities (the knowledge graph), docs (the ingested Library), and fragments
+    (the raw class-folder buffer). Historically it showed only the fragment
+    count mislabelled as "docs", so the number disagreed with the webui — which
+    shows the Library (references) and the entity graph."""
     ws = Path(config.agents.defaults.workspace)
+    # 1 fragment (canonical class folder)
     (ws / "memory" / "stable").mkdir(parents=True)
     (ws / "memory" / "stable" / "a.md").write_text("x", encoding="utf-8")
-    (ws / "memory" / "entities").mkdir(parents=True)
-    (ws / "memory" / "entities" / "noise.md").write_text("x", encoding="utf-8")
+    # 2 entities (knowledge graph, per type)
+    (ws / "memory" / "entities" / "person").mkdir(parents=True)
+    (ws / "memory" / "entities" / "person" / "m.md").write_text("x", encoding="utf-8")
+    (ws / "memory" / "entities" / "topic").mkdir(parents=True)
+    (ws / "memory" / "entities" / "topic" / "t.md").write_text("x", encoding="utf-8")
+    # 1 Library doc (references shelf — what the webui shows)
+    (ws / "memory" / "references").mkdir(parents=True)
+    (ws / "memory" / "references" / "guide.md").write_text("x", encoding="utf-8")
+    # archived entries count toward none of the three
     (ws / "memory" / "archive").mkdir(parents=True)
     (ws / "memory" / "archive" / "old.md").write_text("x", encoding="utf-8")
 
     data = _status_data(config, _config_path(fake_home), None)
+    assert data["memory"]["fragments"] == 1
+    assert data["memory"]["entities"] == 2
     assert data["memory"]["docs"] == 1
+
+    rows = _status_sections(config, _config_path(fake_home), None)
+    memory_line = dict(rows)["Memory"]
+    assert "2 entities" in memory_line
+    assert "1 docs" in memory_line
+    assert "1 fragments" in memory_line
 
 
 def test_channels_overlay_runtime_state(config: Config, fake_home: Path) -> None:
