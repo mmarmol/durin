@@ -30,7 +30,7 @@ target is `null` (end of run).
 | `nodes` | array | — | **Required.** Non-empty list of node objects (see below). |
 | `description` | string | none | One-line discovery hint surfaced by `list_workflows`. Optional but recommended. |
 | `input` | object | none | I/O descriptor: `{ "text": bool, "file": bool, "description": str }`. Text input becomes the start node's task; input files land in the run's shared working folder. Provided files are validated before anything runs (missing or same-named files abort with a clear message); declaring `"file": true` and passing none ends the run immediately as `needs_input`, before any node spends a turn. |
-| `output` | object | none | Same shape as `input`. The free-text `description` is a soft contract that frames every node's task — a hint, not enforced. |
+| `output` | object | none | Same shape as `input`, plus optional `"artifacts"`: a list of `{ "path": str, "description": str? }` — the files (relative to the run's working folder) the run promises to produce. The paths ride in every node's framing, and after a completed run the engine reports missing ones as a **warning** (the run still completes) in the result, manifest, and `tasks(status)`. The free-text `description` stays a soft contract that frames every node's task — a hint, not enforced. |
 | `max_visits` | int ≥ 1 | `3` | Per-node loop cap (a node may run at most this many times across loop-backs). Clamped by the global `workflow.max_node_visits` config ceiling. |
 | `improvement_mode` | `"manual"` \| `"auto"` | `"manual"` | Dream self-improvement: `manual` leaves a recommendation to review; `auto` (later slice) applies edits directly. |
 

@@ -53,6 +53,8 @@ import {
   type WorkflowRunSummary,
 } from "@/lib/api";
 import {
+  formatArtifactLines,
+  parseArtifactLines,
   parseSecretNames,
   safeSubflowTargets,
   workflowToFlow,
@@ -572,6 +574,15 @@ function ScriptFields({
   }, [token]);
   useEffect(() => { void refreshScripts(); }, [refreshScripts]);
 
+  // Raw text of the Secrets input while editing — parsing on every keystroke into a
+  // controlled value would eat the separator the user just typed. Resyncs per node.
+  const [secretsText, setSecretsText] = useState(() =>
+    ((node.secrets as string[] | undefined) ?? []).join(", "));
+  useEffect(() => {
+    setSecretsText(((node.secrets as string[] | undefined) ?? []).join(", "));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [node.id]);
+
   // "none": no editor open. "new"/"edit" mirror ScriptFileEditor's modes.
   const [editorMode, setEditorMode] = useState<"none" | "new" | "edit">("none");
 
@@ -686,9 +697,12 @@ function ScriptFields({
 
       <Field label={t("workflows.scriptSecrets")}>
         <Input
-          value={(node.secrets ?? []).join(", ")}
+          value={secretsText}
           placeholder={t("workflows.scriptSecretsPlaceholder")}
-          onChange={(e) => onChange({ secrets: parseSecretNames(e.target.value) })}
+          onChange={(e) => {
+            setSecretsText(e.target.value);
+            onChange({ secrets: parseSecretNames(e.target.value) });
+          }}
           className="h-8 font-mono"
         />
       </Field>
@@ -1136,6 +1150,13 @@ function IOConfigPanel({
   const { t } = useTranslation();
   const title = which === "input" ? t("workflows.ioInputTitle") : t("workflows.ioOutputTitle");
   const hint = which === "input" ? t("workflows.ioInputHint") : t("workflows.ioOutputHint");
+  // Raw text of the artifacts textarea while editing — parsing on every keystroke
+  // into a controlled value would eat the "|" separator the user just typed.
+  const [artifactsText, setArtifactsText] = useState(() => formatArtifactLines(desc.artifacts));
+  useEffect(() => {
+    setArtifactsText(formatArtifactLines(desc.artifacts));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [which]);
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-2">
@@ -1170,6 +1191,21 @@ function IOConfigPanel({
           onChange={(e) => onChange({ ...desc, description: e.target.value || undefined })}
         />
       </div>
+      {which === "output" && (
+        <div className="flex flex-col gap-1">
+          <span className="text-xs text-muted-foreground">{t("workflows.ioArtifacts")}</span>
+          <Textarea
+            className="resize-y min-h-[4.5rem] font-mono text-xs"
+            value={artifactsText}
+            placeholder={t("workflows.ioArtifactsPlaceholder")}
+            onChange={(e) => {
+              setArtifactsText(e.target.value);
+              onChange({ ...desc, artifacts: parseArtifactLines(e.target.value) });
+            }}
+          />
+          <span className="text-[11px] text-muted-foreground">{t("workflows.ioArtifactsHint")}</span>
+        </div>
+      )}
       <button
         type="button"
         className="mt-1 flex items-center gap-1.5 self-start text-xs text-destructive hover:underline"

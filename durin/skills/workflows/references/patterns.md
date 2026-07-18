@@ -250,3 +250,24 @@ input files (declared with `"file": true`) are supplied at call time — `run_wo
   ]
 }
 ```
+
+A file-producing workflow can additionally **declare its artifacts** — the files it promises
+to leave in the working folder. Every node sees the contract in its framing, and a completed
+run that did not produce one reports it as a warning (in the result summary, the manifest,
+and `tasks(status)`) — so a composed downstream stage learns immediately which promised file
+is absent instead of failing confusingly later:
+
+```json
+{
+  "name": "stage1-context",
+  "start": "gather",
+  "output": { "file": true, "artifacts": [
+    { "path": "context.json", "description": "consolidated ticket context" },
+    { "path": "evidence.json" }
+  ]},
+  "nodes": [
+    { "id": "gather", "kind": "work", "mode": "build", "tools": "default",
+      "prompt": "Investigate and write context.json and evidence.json.", "next": null }
+  ]
+}
+```

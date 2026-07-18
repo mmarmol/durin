@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { parseSecretNames, safeSubflowTargets, workflowToFlow, type WorkflowDef } from "./workflow-graph";
+import {
+  formatArtifactLines,
+  parseArtifactLines,
+  parseSecretNames,
+  safeSubflowTargets,
+  workflowToFlow,
+  type WorkflowDef,
+} from "./workflow-graph";
 
 const DEF: WorkflowDef = {
   name: "wf",
@@ -355,5 +362,26 @@ describe("parseSecretNames", () => {
 
   it("returns undefined for blank input so the field is omitted from the def", () => {
     expect(parseSecretNames("  ")).toBeUndefined();
+  });
+});
+
+describe("artifact lines", () => {
+  it("parses one artifact per line with optional pipe description", () => {
+    expect(parseArtifactLines("context.json | the context\nevidence.json")).toEqual([
+      { path: "context.json", description: "the context" },
+      { path: "evidence.json" },
+    ]);
+  });
+
+  it("returns undefined for blank input so the field is omitted", () => {
+    expect(parseArtifactLines(" \n ")).toBeUndefined();
+  });
+
+  it("round-trips through formatArtifactLines", () => {
+    const artifacts = [
+      { path: "context.json", description: "the context" },
+      { path: "evidence.json" },
+    ];
+    expect(parseArtifactLines(formatArtifactLines(artifacts))).toEqual(artifacts);
   });
 });

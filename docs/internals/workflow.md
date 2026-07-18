@@ -37,7 +37,14 @@ with dynamic fan-out (a worker per file). The terminal node's text output and th
 exposed in the run result. Absent ⇒ today's text-task behavior. The optional free-text `description`
 is a lightweight contract: the engine frames every node's task with the input description (what the
 run received) and the output description (what it must deliver), so the agents are steered and the
-interface is documented — descriptions are hints, not enforced. However, **provided input files are validated pre-flight** (existence check, distinct basenames) and return an `aborted` result naming any missing or colliding file; and a workflow that declares file input (`file: true`) given none ends the run immediately with a `needs_input` result before any node runs, so the invoking agent asks the user for the files instead of burning node turns.
+interface is documented — descriptions are hints, not enforced. The output descriptor may
+additionally declare **`artifacts`** — a list of `{path, description?}` naming the files (relative
+to the run's working folder) the run promises to produce. Declared paths are validated at parse
+time (relative, no `..`, no duplicates), ride in every node's framing as the file contract, and
+after a completed run the engine reports the ones not produced as `missing_artifacts` on the
+result and manifest — a **warning, never a failure** — so an orchestrating caller or a composed
+downstream stage learns immediately which promised file is absent instead of failing confusingly
+later. However, **provided input files are validated pre-flight** (existence check, distinct basenames) and return an `aborted` result naming any missing or colliding file; and a workflow that declares file input (`file: true`) given none ends the run immediately with a `needs_input` result before any node runs, so the invoking agent asks the user for the files instead of burning node turns.
 
 A caller may also pass a per-run **`output_format`** (the `run_workflow` tool, the run command):
 a delivery instruction for THIS call — "a bulleted list", "JSON with fields x,y", "a 3-line
@@ -301,7 +308,9 @@ that routed to `__needs_input__` (`null` otherwise), the resume re-entry point;
 `final_output_node` — which node's output became `final_output` (`null` when no node
 contributed, e.g. an aborted run); `output_files`: the relative paths (within the
 run's output folder) a completed run produced, empty for a run that ended any other
-status or produced no files; and `parent_run_id` — the calling run's `run_id` when this
+status or produced no files; `missing_artifacts` — declared `output.artifacts` paths a
+completed run did not produce (the warning-only file contract, empty otherwise); and
+`parent_run_id` — the calling run's `run_id` when this
 run is a nested subworkflow invocation, `None` for a top-level run (including on
 manifests written before this field existed).
 
@@ -850,7 +859,8 @@ End-to-end for a single `run_workflow` call:
   evidence, gated by a deterministic syntax/security/smoke pre-apply check, and never
   auto-applied when the target routes — see §7 above); a **webui Workflows pane** (React Flow) with an editor that
   has clickable Input/Output canvas objects (toggle text and/or files plus a free-text
-  description; file input is supplied as paths in the run bar), a palette that adds
+  description; the Output object also edits the declared artifacts list, one `path |
+  description` per line; file input is supplied as paths in the run bar), a palette that adds
   work / script / parallel / subflow nodes (a routing node is a work or script node —
   shown by its pass/fail edges, never a separate type), draggable nodes with a persisted
   layout, a **"runs as"** picker (model or persona) for work nodes, body/mode/context/routing
