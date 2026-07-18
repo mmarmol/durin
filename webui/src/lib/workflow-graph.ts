@@ -30,6 +30,9 @@ export type WorkflowNodeDef = {
   // script node: subprocess env — undefined = backend default "clean" (minimal
   // allowlist + DURIN_*); "inherit" = full gateway process environment.
   env?: "clean" | "inherit";
+  // script node: stored secret names injected into the subprocess env
+  // (each must allow the 'exec' scope; validated backend-side).
+  secrets?: string[];
   [k: string]: unknown;
 };
 
@@ -136,6 +139,16 @@ function findTerminals(def: WorkflowDef, byId: Map<string, WorkflowNodeDef>): st
 // creating a cycle. Excluded: `current` itself, and any name from which `current` is
 // reachable via the call graph (calling them would close a loop).
 // `refs` maps each workflow name to the list of workflow names it directly calls.
+// Parse the script-node Secrets input (comma/whitespace-separated names) into the
+// definition's `secrets` list; blank input returns undefined so the field is omitted.
+export function parseSecretNames(input: string): string[] | undefined {
+  const names = input
+    .split(/[\s,]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return names.length ? names : undefined;
+}
+
 export function safeSubflowTargets(current: string, refs: Record<string, string[]>): string[] {
   const reachesCurrent = new Set<string>();
   const all = Object.keys(refs);

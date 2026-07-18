@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { safeSubflowTargets, workflowToFlow, type WorkflowDef } from "./workflow-graph";
+import { parseSecretNames, safeSubflowTargets, workflowToFlow, type WorkflowDef } from "./workflow-graph";
 
 const DEF: WorkflowDef = {
   name: "wf",
@@ -341,5 +341,19 @@ describe("safeSubflowTargets", () => {
     // current = C: B->C and A->B->C reach C, so calling them from C would loop; D is safe.
     expect(safeSubflowTargets("C", refs).sort()).toEqual(["D"]);
     expect(safeSubflowTargets("A", refs).sort()).toEqual(["B", "C", "D"]); // none reach A
+  });
+});
+
+describe("parseSecretNames", () => {
+  it("splits on commas and whitespace, drops empties", () => {
+    expect(parseSecretNames("ZENDESK_API_TOKEN, MXHERO_KEY  OTHER")).toEqual([
+      "ZENDESK_API_TOKEN",
+      "MXHERO_KEY",
+      "OTHER",
+    ]);
+  });
+
+  it("returns undefined for blank input so the field is omitted from the def", () => {
+    expect(parseSecretNames("  ")).toBeUndefined();
   });
 });

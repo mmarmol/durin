@@ -53,6 +53,7 @@ import {
   type WorkflowRunSummary,
 } from "@/lib/api";
 import {
+  parseSecretNames,
   safeSubflowTargets,
   workflowToFlow,
   type FlowNodeData,
@@ -682,6 +683,16 @@ function ScriptFields({
           <option value="inherit">{t("workflows.scriptEnvInherit")}</option>
         </select>
       </Field>
+
+      <Field label={t("workflows.scriptSecrets")}>
+        <Input
+          value={(node.secrets ?? []).join(", ")}
+          placeholder={t("workflows.scriptSecretsPlaceholder")}
+          onChange={(e) => onChange({ secrets: parseSecretNames(e.target.value) })}
+          className="h-8 font-mono"
+        />
+      </Field>
+      <span className="text-[11px] text-muted-foreground">{t("workflows.scriptSecretsHint")}</span>
 
       <RoutingFields node={node} nodes={allNodes} patch={onChange} t={t} />
 
