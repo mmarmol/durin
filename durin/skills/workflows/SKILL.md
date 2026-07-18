@@ -55,7 +55,10 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   inline `command` run via bash, or a `script` file under `<workspace>/workflows/scripts/`;
   the upstream text arrives on stdin, its stdout becomes the edge to the next node, and it
   works in the run's shared folder — zero tokens, no drift; a start-position script receives
-  the run's task on stdin); `parallel` (concurrent branches — a *static* `branches` list, or
+  the run's task on stdin; a script that must **authenticate** declares the stored secrets
+  it needs in `secrets: ["NAME"]` — injected as env vars when each allows the `exec` scope,
+  with output redacted, so an authenticated `curl` stays a zero-token script step instead
+  of becoming an agent turn); `parallel` (concurrent branches — a *static* `branches` list, or
   *dynamic* fan-out: a `worker` template mapped over a runtime list named by `list_from`,
   bounded by `max_concurrency`); `subworkflow` (run another named workflow as one step —
   this is how you compose pipelines).
@@ -85,7 +88,10 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   a chain. A `subworkflow` runs in its **parent's** folder, so files flow through composition;
   parallel writing branches fork the folder and their writes reconcile back.
 - **Input / Output** — optional descriptors (text and/or files, plus a free-text contract).
-  A per-call `output_format` overrides the delivery shape for one run.
+  A per-call `output_format` overrides the delivery shape for one run. A file-producing
+  workflow can also **declare its artifacts** (`output.artifacts`: the paths it promises to
+  produce) — every node sees the contract, and promised files missing after completion are
+  reported as a warning, so a composed downstream stage learns the gap immediately.
 
 ## How to invoke and author
 
@@ -111,7 +117,9 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   **Getting files back:** when the workflow declares it outputs files
   (`output: {"file": true}`), the summary reports the run's working-folder path AND lists the
   produced files — read them there, and copy out anything that must outlive the run (working
-  folders are pruned after `workflow.keep_runs` newer runs). **If the result says it needs
+  folders are pruned after `workflow.keep_runs` newer runs). If the workflow declares
+  `output.artifacts`, the summary also WARNS about any promised file the completed run did
+  not produce — act on that gap (re-run, repair, or tell the user) before consuming the rest. **If the result says it needs
   input**, the workflow did not fail — it paused with questions and the summary carries the
   run id; answer them (from your own context when you can, otherwise ask the user), then call
   `run_workflow` again with `resume_run_id=<that id>` and the answers as `task`. That resumes
