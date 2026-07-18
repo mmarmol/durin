@@ -123,14 +123,18 @@ _PARAMETERS = {
 
 
 def _background_launch_message(name: str, run_id: str) -> str:
-    """The reply a background launch returns to the agent. It carries the run id and
-    points at the `tasks` tool — so the agent learns, at launch, that it can observe
-    or cancel the run rather than only wait for the follow-up."""
+    """The reply a background launch returns to the agent. It states the waiting
+    contract at the moment it matters: the result is push-delivered, so the agent
+    must not burn its turn sleep-polling — it ends the turn and the follow-up
+    wakes it. `tasks` stays available for on-demand checks and cancellation."""
     return (
         f"Workflow '{name}' started in the background (run id: {run_id}). "
-        "You can keep working; I'll deliver its result as a follow-up when it "
-        f"finishes. To check progress meanwhile call tasks(action='status', "
-        f"id='{run_id}'), or tasks(action='stop', id='{run_id}') to cancel it."
+        "Its result will be delivered to you automatically as a follow-up message "
+        "when it finishes — do NOT poll for it with sleep+status loops: tell the "
+        "user it is running and end your turn (they can watch live progress in "
+        f"the Work panel). Use tasks(action='status', id='{run_id}') only if the "
+        "user asks for an update or you need a mid-run look at the run's files, "
+        f"and tasks(action='stop', id='{run_id}') to cancel it."
     )
 
 
@@ -244,18 +248,21 @@ class RunWorkflowTool(Tool, ContextAware):
         return (
             "Run a user-defined workflow on a task. The workflow is a flow graph of "
             "nodes (defined in <workspace>/workflows/<name>.json); a node does the work "
-            "and, when it has routing set (on_pass/on_fail), routes the flow on its verdict. "
+            "and, when it routes, branches the flow on its verdict — binary "
+            "(on_pass/on_fail) or multi-way labeled cases (including the __needs_input__ "
+            "terminal that pauses the run to ask for information). Load the `workflows` "
+            "skill before composing, chaining, or authoring workflows — it documents the "
+            "capabilities and patterns. "
             "Returns a run summary. Pass input_files (absolute paths) to hand the workflow files "
             "to work on — they are placed in the run's shared working folder for every node to read. "
             "If the summary says the workflow needs more information, "
             "it ENDED asking for clarification (it did not fail) — ask the user those questions "
             "and call this tool again with resume_run_id set to the run's id and the user's "
             "answers as the task. "
+            "By default it runs in the background and its result is delivered to you "
+            "automatically as a follow-up message — do not poll for it; end your turn. "
             "Pass background=false to block and get the result inline only when you need it "
-            "to continue right now; otherwise it runs in the background and its result is "
-            "delivered as a follow-up message. A background launch returns the run's id; "
-            "use tasks(action='status', id=...) to check progress or tasks(action='stop', "
-            "id=...) to cancel it."
+            "to continue right now. Use tasks(action='stop', id=...) to cancel a run."
         )
 
     async def _inject_result(

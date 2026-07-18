@@ -92,3 +92,9 @@ async def test_sleep_is_cancellable():
 
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+def test_sleep_description_excludes_push_delivered_work():
+    d = SleepTool().description
+    assert "spawn" in d and "run_workflow" in d
+    assert "delivered" in d

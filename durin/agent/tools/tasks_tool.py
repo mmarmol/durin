@@ -115,10 +115,12 @@ class TasksTool(Tool, ContextAware):
             "sub-agents (spawn) and workflow runs (run_workflow), in one place. "
             "action=list shows everything running or recently finished; "
             "action=status with an id gives detail (a sub-agent's progress, or a "
-            "workflow run's per-node tree and output); action=stop with an id cancels "
-            "one (best-effort). Use this instead of waiting when you want to check on "
-            "or stop something you started. Poll with the sleep tool between checks; "
-            "don't busy-loop."
+            "workflow run's per-node tree, work dir, current files and output); "
+            "action=stop with an id cancels one (best-effort). Use it when the user "
+            "asks how the work is going, when you need a mid-run look at a "
+            "workflow's files, or before stopping something. Finished results "
+            "arrive on their own as follow-up messages — do not loop sleep+status "
+            "waiting for them; end your turn instead."
         )
 
     def _rows(self, session_key: str) -> list[dict]:

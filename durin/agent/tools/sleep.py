@@ -1,10 +1,12 @@
 """``sleep`` tool — bounded synchronous wait inside a turn.
 
-Lets the model pause the current turn for a fixed delay. The primary use
-case is **polling**: the agent kicks off background work (spawn a
-subagent, run a workflow, trigger a long-running shell, ask an external
-system) and then needs to wait a short while before checking back (via
-``tasks``, ``process``, …).
+Lets the model pause the current turn for a fixed delay. The use case is
+polling **external** state that has no push delivery — a remote job, a
+rate-limit backoff, a service coming up — before checking back (via
+``process``, a fetch, …). It is NOT for background work whose result is
+push-delivered (spawned sub-agents, background workflow runs): those
+inject a follow-up message on completion, so the agent should end its
+turn and let the delivery wake it rather than block the turn sleeping.
 
 Bounds: 0 to 300 seconds (5 minutes). The cap is intentional —
 
@@ -78,12 +80,15 @@ class SleepTool(Tool):
     def description(self) -> str:
         return (
             "Pause the current turn for the given number of seconds (max 300). "
-            "Use this when you've started background work and need to wait "
-            "before polling for results — e.g. after spawning a subagent, "
-            "running a workflow, or triggering an external job. Do NOT use it as a substitute for "
-            "thinking, to 'wait for the user', or to delay obvious next steps. "
-            "For long waits (> a few minutes), use `cron` to schedule a future "
-            "check instead of blocking this turn."
+            "Use it ONLY to wait on external state that has no push delivery — a "
+            "remote job you must re-check, a rate-limit backoff, a service coming "
+            "up. Do NOT use it to wait for background work you launched with spawn "
+            "or run_workflow: their results are delivered to you automatically as "
+            "a follow-up message when they finish — tell the user the work is "
+            "running and end your turn instead of sleeping. Do NOT use it as a "
+            "substitute for thinking or to 'wait for the user'. For long external "
+            "waits (> a few minutes), use `cron` to schedule a future check "
+            "instead of blocking this turn."
         )
 
     async def execute(
