@@ -230,3 +230,74 @@ def test_timeout_closes_pipes(tmp_path, monkeypatch):
     assert len(procs) == 1
     assert procs[0].stdout.closed
     assert procs[0].stderr.closed
+
+
+# ---------------------------------------------------------------------------
+# Declared secrets (node.secrets): injection, failure modes, redaction
+# ---------------------------------------------------------------------------
+
+class _FakeEntry:
+    def __init__(self, value, scope):
+        self.value, self.scope = value, scope
+
+
+def _store_with(monkeypatch, entries):
+    """Point the runner (and the redactor) at a fake store: {name: (value, scope)}."""
+    class _Store:
+        def all(self):
+            return {n: _FakeEntry(v, sc) for n, (v, sc) in entries.items()}
+
+    monkeypatch.setattr("durin.security.secrets.get_secret_store", lambda **kw: _Store())
+    monkeypatch.setattr("durin.workflow.script_runner.get_secret_store", lambda **kw: _Store())
+
+
+def test_declared_secret_injected(monkeypatch, tmp_path):
+    _store_with(monkeypatch, {"MY_TOKEN": ("tok-value-12345", ["exec"])})
+    node = ScriptNode(id="s", command='printf "%s" "${MY_TOKEN:+set}"', secrets=("MY_TOKEN",))
+    resp = runner(tmp_path)(_req(node, tmp_path=tmp_path))
+    assert resp.output == "set"
+
+
+def test_undeclared_secret_not_injected(monkeypatch, tmp_path):
+    _store_with(monkeypatch, {"MY_TOKEN": ("tok-value-12345", ["exec"])})
+    node = ScriptNode(id="s", command='printf "%s" "${MY_TOKEN:-absent}"')
+    resp = runner(tmp_path)(_req(node, tmp_path=tmp_path))
+    assert resp.output == "absent"
+
+
+def test_missing_secret_is_node_failure(monkeypatch, tmp_path):
+    _store_with(monkeypatch, {})
+    node = ScriptNode(id="s", command="true", secrets=("MY_TOKEN",))
+    with pytest.raises(NodeExecutionError, match="MY_TOKEN"):
+        runner(tmp_path)(_req(node, tmp_path=tmp_path))
+
+
+def test_scope_denied_secret_is_node_failure(monkeypatch, tmp_path):
+    _store_with(monkeypatch, {"MY_TOKEN": ("tok-value-12345", ["skill:deploy"])})
+    node = ScriptNode(id="s", command="true", secrets=("MY_TOKEN",))
+    with pytest.raises(NodeExecutionError, match="scope"):
+        runner(tmp_path)(_req(node, tmp_path=tmp_path))
+
+
+def test_stdout_redacts_secret_values(monkeypatch, tmp_path):
+    _store_with(monkeypatch, {"MY_TOKEN": ("tok-value-12345", ["exec"])})
+    node = ScriptNode(id="s", command='printf "%s" "$MY_TOKEN"', secrets=("MY_TOKEN",))
+    resp = runner(tmp_path)(_req(node, tmp_path=tmp_path))
+    assert "tok-value-12345" not in resp.output
+    assert "MY_TOKEN" in resp.output          # the «redacted:NAME» marker names it
+
+
+def test_stderr_feedback_redacts_secret_values(monkeypatch, tmp_path):
+    _store_with(monkeypatch, {"MY_TOKEN": ("tok-value-12345", ["exec"])})
+    node = ScriptNode(id="g", command='echo "leak $MY_TOKEN" >&2; exit 1',
+                      secrets=("MY_TOKEN",), on_pass=None, on_fail="g")
+    resp = runner(tmp_path)(_req(node, tmp_path=tmp_path))
+    assert resp.route_label == "FAIL"
+    assert "tok-value-12345" not in resp.output
+
+
+def test_secret_cannot_shadow_durin_metadata(monkeypatch, tmp_path):
+    _store_with(monkeypatch, {"DURIN_NODE_ID": ("evil", ["exec"])})
+    node = ScriptNode(id="s", command='printf "%s" "$DURIN_NODE_ID"', secrets=("DURIN_NODE_ID",))
+    resp = runner(tmp_path)(_req(node, tmp_path=tmp_path))
+    assert resp.output == "s"                 # DURIN_* metadata wins over a declared secret
