@@ -2221,7 +2221,17 @@
     "inProgress": "En curso",
     "finished": "Finalizadas ({{count}})",
     "empty": "Sin trabajo activo",
-    "close": "Cerrar panel de trabajo"
+    "close": "Cerrar panel de trabajo",
+    "strip": {
+      "statusRunning": "en curso",
+      "statusDone": "finalizado",
+      "statusFailed": "falló",
+      "runningMany": "{{count}} trabajos en curso",
+      "needsInput": "{{label}} necesita tu respuesta",
+      "needsInputMany": "{{count}} trabajos necesitan tu respuesta",
+      "view": "Ver",
+      "respond": "Responder"
+    }
   },
   "rich": {
     "code": "Código",

@@ -2221,7 +2221,17 @@
     "inProgress": "In progress",
     "finished": "Finished ({{count}})",
     "empty": "No active work",
-    "close": "Close work panel"
+    "close": "Close work panel",
+    "strip": {
+      "statusRunning": "in progress",
+      "statusDone": "finished",
+      "statusFailed": "failed",
+      "runningMany": "{{count}} tasks in progress",
+      "needsInput": "{{label}} needs your response",
+      "needsInputMany": "{{count}} tasks need your response",
+      "view": "View",
+      "respond": "Respond"
+    }
   },
   "rich": {
     "code": "Code",

@@ -2209,7 +2209,17 @@
     "inProgress": "進行中",
     "finished": "已完成（{{count}}）",
     "empty": "沒有進行中的工作",
-    "close": "關閉工作面板"
+    "close": "關閉工作面板",
+    "strip": {
+      "statusRunning": "進行中",
+      "statusDone": "已完成",
+      "statusFailed": "失敗",
+      "runningMany": "{{count}} 個任務進行中",
+      "needsInput": "{{label}} 需要你的回覆",
+      "needsInputMany": "{{count}} 個任務需要你的回覆",
+      "view": "查看",
+      "respond": "回覆"
+    }
   },
   "rich": {
     "code": "程式碼",

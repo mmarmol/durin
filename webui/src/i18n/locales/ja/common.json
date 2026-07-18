@@ -2209,7 +2209,17 @@
     "inProgress": "進行中",
     "finished": "完了（{{count}}）",
     "empty": "進行中の作業はありません",
-    "close": "作業パネルを閉じる"
+    "close": "作業パネルを閉じる",
+    "strip": {
+      "statusRunning": "実行中",
+      "statusDone": "完了",
+      "statusFailed": "失敗",
+      "runningMany": "{{count}} 件のタスクを実行中",
+      "needsInput": "{{label}} が回答を待っています",
+      "needsInputMany": "{{count}} 件のタスクが回答を待っています",
+      "view": "表示",
+      "respond": "回答"
+    }
   },
   "rich": {
     "code": "コード",
