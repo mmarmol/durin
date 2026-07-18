@@ -60,8 +60,11 @@ jobs:
             # either file (a dep constraint, a new extra) still runs the suite.
             sorted_files=$(echo "$files" | sort | tr '\n' ' ' | sed 's/ $//')
             if [ "$sorted_files" = "pyproject.toml uv.lock" ]; then
+              # `grep -c` exits 1 when the count is 0 — exactly the pure-bump
+              # case this branch exists for — so guard it or `set -e` kills
+              # the step right before the skip.
               nonversion=$(git diff "${base}...HEAD" -- pyproject.toml uv.lock \
-                | grep -E '^[+-]' | grep -vE '^[+-]{3}' | grep -vcE '^[+-]version = ')
+                | grep -E '^[+-]' | grep -vE '^[+-]{3}' | { grep -vcE '^[+-]version = ' || true; })
               if [ "$nonversion" = "0" ]; then
                 echo "Version-bump-only PR — skipping the Python suite."
                 echo "run=false" >> "$GITHUB_OUTPUT"
