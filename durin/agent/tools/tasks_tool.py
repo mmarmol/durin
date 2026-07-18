@@ -21,6 +21,7 @@ Scoped to ``core`` (the main agent). Sub-agents do not introspect each other.
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from typing import Any
 
 from durin.agent.background_tasks import collect_tasks
@@ -30,6 +31,7 @@ from durin.agent.tools.schema import StringSchema, tool_parameters_schema
 
 _MAX_TOOL_HISTORY = 8
 _MAX_FINAL_PREVIEW = 4000
+_MAX_WORK_DIR_FILES = 20
 
 
 def _age_epoch(started_at: float, ended_at: float | None) -> str:
@@ -210,20 +212,57 @@ class TasksTool(Tool, ContextAware):
             f"  status: {row['status']}",
             f"  age:    {age}",
         ]
+        work_dir = manifest.get("work_dir")
+        if work_dir:
+            out.append(f"  work dir: {work_dir}")
         if row.get("task"):
             task = row["task"]
             out.append(f"  task:   {task if len(task) <= 200 else task[:197] + '...'}")
+        # Durations come from the manifest trace; the merged row's node summary has
+        # no timing and collapses loop passes to one entry, so show each node's
+        # LATEST pass duration (walk order: the last row for that id wins).
+        durations: dict[str, float] = {}
+        for r in manifest.get("runs") or []:
+            if r.get("duration_s") is not None:
+                durations[r.get("node_id")] = r["duration_s"]
         nodes = row.get("nodes") or []
         if nodes:
             out.append("  nodes:")
             for n in nodes:
-                out.append(f"    - {n['id']} [{n['status']}] {n.get('label', '')}".rstrip())
+                line = f"    - {n['id']} [{n['status']}] {n.get('label', '')}".rstrip()
+                d = durations.get(n["id"])
+                if d is not None:
+                    line += f" ({d}s)"
+                out.append(line)
+        out.extend(self._work_dir_files(work_dir))
         final = manifest.get("final_output")
         if final:
             if len(final) > _MAX_FINAL_PREVIEW:
                 final = final[:_MAX_FINAL_PREVIEW].rstrip() + "\n… (truncated)"
             out.append(f"  final output:\n{final}")
         return "\n".join(out)
+
+    @staticmethod
+    def _work_dir_files(work_dir: str | None) -> list[str]:
+        """Render the run's working-folder contents (relative paths + sizes, capped) —
+        the mid-run window onto a workflow's artifacts as they appear."""
+        if not work_dir or not Path(work_dir).is_dir():
+            return []
+        try:
+            files = sorted(p for p in Path(work_dir).rglob("*") if p.is_file())
+        except OSError:
+            return []
+        if not files:
+            return []
+        out = [f"  files in work dir ({len(files)}):"]
+        for p in files[:_MAX_WORK_DIR_FILES]:
+            try:
+                out.append(f"    - {p.relative_to(work_dir)} ({p.stat().st_size:,} B)")
+            except OSError:
+                continue
+        if len(files) > _MAX_WORK_DIR_FILES:
+            out.append(f"    … and {len(files) - _MAX_WORK_DIR_FILES} more")
+        return out
 
     async def _do_stop(self, session_key: str, task_id: str) -> str:
         row = next((r for r in self._rows(session_key) if r["id"] == task_id), None)
