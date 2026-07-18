@@ -141,18 +141,29 @@ def categorize_tools(tool_names: list[str]) -> dict[str, list[str]]:
 
 
 def memory_summary(workspace: Path) -> dict[str, int | bool]:
-    """Quantify the install: how many memory docs, vectors, sessions live here.
+    """Quantify the install: how many memory objects, vectors, sessions live here.
+
+    Memory holds three distinct object kinds, counted separately so the banner /
+    `status` can name each the way the webui does — rather than collapsing them
+    into one misleading "docs" number:
 
     Returned keys:
-    - ``memory_docs``: count of markdown files under ``memory/``
-    - ``ingested_docs``: count of distinct ingested document directories
+    - ``memory_docs``: the raw fragment buffer — entries under the canonical
+      class folders (stable / episodic / corpus / pending / session_summary).
+      These are surfaced by recency and consolidated into entities by the dream.
+    - ``entities``: knowledge-graph pages under ``memory/entities/<type>/`` —
+      the synthesized, canonical knowledge (what the webui graph draws).
+    - ``ingested_docs``: the Library shelf — ingested reference documents at
+      ``memory/references/<slug>.md`` (the same set the webui Documents endpoint
+      lists). One per document; ``.chunks.jsonl`` / ``.outline.json`` sidecars
+      don't count.
     - ``vec_present``: True when LanceDB index files exist alongside
     - ``vec_rows``: approximate row count if we can read the index cheaply
     - ``sessions``: count of ``.jsonl`` session files
     - ``skills``: count of installed skills (custom + builtin)
     """
     out: dict[str, int | bool] = {
-        "memory_docs": 0, "ingested_docs": 0,
+        "memory_docs": 0, "entities": 0, "ingested_docs": 0,
         "vec_present": False, "vec_rows": 0,
         "sessions": 0, "skills": 0,
     }
@@ -161,11 +172,11 @@ def memory_summary(workspace: Path) -> dict[str, int | bool]:
 
     mem = workspace / "memory"
     if mem.exists():
-        # Count only entries stored under the canonical class folders
-        # (stable / episodic / corpus / pending). Other files under memory/
-        # are not memory entries and would inflate the banner / disagree with
-        # `/memory list`.
-        from durin.memory.paths import MEMORY_CLASSES
+        # Fragment buffer: count only entries stored under the canonical class
+        # folders (stable / episodic / corpus / pending / session_summary).
+        # Other files under memory/ are not fragments and would inflate the
+        # banner / disagree with `/memory list`.
+        from durin.memory.paths import MEMORY_CLASSES, walk_class
 
         entry_count = 0
         for class_name in MEMORY_CLASSES:
@@ -174,9 +185,20 @@ def memory_summary(workspace: Path) -> dict[str, int | bool]:
                 entry_count += sum(1 for _ in class_dir.glob("*.md"))
         out["memory_docs"] = entry_count
 
-        ingested = mem / "ingested"
-        if ingested.exists():
-            out["ingested_docs"] = sum(1 for p in ingested.iterdir() if p.is_dir())
+        # Knowledge graph: every entity page across all type folders, via the
+        # canonical walker — it recurses entities/<type>/ and skips any nested
+        # legacy archive/ paths, so this matches the enumeration the graph view
+        # uses (top-level memory/archive/ is likewise never counted).
+        out["entities"] = sum(1 for _ in walk_class(workspace, "entities"))
+
+        # Library shelf: one row per reference document. Same glob as
+        # `list_reference_documents`, so `status` matches the webui Documents
+        # endpoint by construction. (Legacy installs kept ingested artifacts
+        # under a per-doc `ingested/<id>/` tree; the Library is `references/`.)
+        references_dir = mem / "references"
+        if references_dir.is_dir():
+            out["ingested_docs"] = sum(1 for _ in references_dir.glob("*.md"))
+
         lance_dir = mem / ".lance"
         if lance_dir.exists() and any(lance_dir.iterdir()):
             out["vec_present"] = True
@@ -293,7 +315,8 @@ def build_startup_banner(*, version: str, agent_loop: Any | None) -> str:
     n_skills = len(skills)
     lines.append(
         f"Profile: {preset}  ·  {n_tools} tools  ·  {n_skills} skills"
-        f"  ·  memory {stats['memory_docs']} docs · vec{vec_marker}"
+        f"  ·  memory {stats['entities']} entities · {stats['ingested_docs']} docs"
+        f" · vec{vec_marker}"
         f"  ·  /help for commands"
     )
     lines.append("")
