@@ -171,7 +171,12 @@ The parser rejects a definition (with a clear message) when:
   script — `for`, `xargs -P` — so fan-out adds nothing; a script node CAN be the
   `list_from` source, which makes the fan-out list deterministic).
 - A `script` node sets both or neither of `command`/`script`, uses an absolute or
-  `..`-escaping `script` path, or sets any agent-only field.
+  `..`-escaping `script` path, sets any agent-only field, or declares a `secrets` name
+  that is not env-var-safe (`A-Z`, `0-9`, `_`, starting with a letter). (Whether each
+  secret exists and allows the `exec` scope is checked pre-flight at RUN time, not parse
+  time — the store may change between authoring and running.)
+- `output.artifacts` is not a list of `{path, description?}` objects, a path is absolute
+  or `..`-escaping, or two artifacts declare the same path.
 - A `choose`-reconcile parallel node has no `criteria`.
 - **Anti-Goodhart guard:** a routing node is *structurally identical* (same `model`, `mode`,
   and `prompt`) to a producer that feeds it. Vary at least one — the verdict must come from a
