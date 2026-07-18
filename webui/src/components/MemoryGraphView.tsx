@@ -52,6 +52,7 @@ import {
 } from "@/lib/memory-graph-style";
 import { MemoryEntityCards } from "@/components/MemoryEntityCards";
 import { MemoryEntityTable } from "@/components/MemoryEntityTable";
+import { MemoryTypeFilter } from "@/components/MemoryTypeFilter";
 
 interface MemoryGraphViewProps {
   active: boolean;
@@ -1051,9 +1052,35 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
   }, [search, effectiveView]);
 
   const typesLegend = useMemo(() => {
-    if (!data) return [] as { type: string; color: string }[];
-    return data.stats.types.map((t) => ({ type: t, color: colorForType(t) }));
+    if (!data) return [] as { type: string; color: string; count: number }[];
+    const counts = new Map<string, number>();
+    for (const n of data.nodes) counts.set(n.type, (counts.get(n.type) ?? 0) + 1);
+    return data.stats.types.map((t) => ({
+      type: t,
+      color: colorForType(t),
+      count: counts.get(t) ?? 0,
+    }));
   }, [data]);
+
+  // Hide every type at once (the "start from nothing, reveal one" flow the
+  // subtractive chip row couldn't express); phantom is a pseudo-type toggle.
+  const hideAllTypes = useCallback(() => {
+    if (!data) return;
+    const next = new Set<string>(data.stats.types);
+    if (data.stats.phantom_count > 0) next.add("phantom");
+    setHiddenTypes(next);
+  }, [data]);
+
+  // Solo: show only `type` (hide all others, and phantom unless it's the solo).
+  const soloType = useCallback(
+    (type: string) => {
+      if (!data) return;
+      const next = new Set<string>(data.stats.types.filter((t) => t !== type));
+      if (data.stats.phantom_count > 0 && type !== "phantom") next.add("phantom");
+      setHiddenTypes(next);
+    },
+    [data],
+  );
 
   // Select an entity from the cards grid or the table — same panel wiring as
   // a graph-canvas click, minus the canvas-only concerns (pinning, drag).
@@ -1265,58 +1292,19 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
               <Table2 className="h-3 w-3" /> {t("memoryGraph.viewTable")}
             </button>
           </div>
-          {typesLegend.length > 0 ? (
+          {typesLegend.length > 0 || (data?.stats.phantom_count ?? 0) > 0 ? (
             <span className="mx-0.5 h-4 w-px bg-border/60" aria-hidden />
           ) : null}
-          {typesLegend.map((tl) => {
-            const hidden = hiddenTypes.has(tl.type);
-            return (
-              <button
-                key={tl.type}
-                type="button"
-                onClick={() => toggleType(tl.type)}
-                aria-pressed={!hidden}
-                title={hidden ? `Show ${tl.type}` : `Hide ${tl.type}`}
-                className={cn(
-                  "flex items-center gap-1 rounded px-1.5 py-0.5 transition-opacity hover:bg-muted",
-                  hidden ? "opacity-40" : "opacity-100",
-                )}
-              >
-                <span
-                  className="inline-block h-2.5 w-2.5 rounded-full"
-                  style={{ background: tl.color }}
-                />
-                <span className={cn(hidden && "line-through")}>{tl.type}</span>
-              </button>
-            );
-          })}
-          {data && data.stats.phantom_count > 0 ? (
-            <button
-              type="button"
-              onClick={() => toggleType("phantom")}
-              aria-pressed={!hiddenTypes.has("phantom")}
-              title={hiddenTypes.has("phantom") ? "Show phantom" : "Hide phantom"}
-              className={cn(
-                "flex items-center gap-1 rounded px-1.5 py-0.5 transition-opacity hover:bg-muted",
-                hiddenTypes.has("phantom") ? "opacity-40" : "opacity-100",
-              )}
-            >
-              <span className="inline-block h-2.5 w-2.5 rounded-full border border-dashed border-foreground/50" />
-              <span className={cn(hiddenTypes.has("phantom") && "line-through")}>
-                phantom
-              </span>
-            </button>
-          ) : null}
-          {hiddenTypes.size > 0 ? (
-            <button
-              type="button"
-              onClick={() => setHiddenTypes(new Set())}
-              className="rounded border border-border/40 px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-muted"
-            >
-              {t("memoryGraph.showAll")}
-            </button>
-          ) : null}
-          {effectiveView !== "graph" ? (
+          <MemoryTypeFilter
+            types={typesLegend}
+            phantomCount={data?.stats.phantom_count ?? 0}
+            hidden={hiddenTypes}
+            onToggle={toggleType}
+            onShowAll={() => setHiddenTypes(new Set())}
+            onHideAll={hideAllTypes}
+            onSolo={soloType}
+          />
+          {effectiveView === "cards" ? (
             <label className="ml-auto flex items-center gap-1 text-muted-foreground">
               <ArrowDownUp className="h-3 w-3" aria-hidden />
               <select
