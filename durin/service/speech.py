@@ -32,17 +32,25 @@ def _build_provider(name: str, config: Any) -> SpeechSynthesisProvider:
 
 
 class SpeechSynthesisService:
-    """Lazily builds a TTS provider and synthesizes text to WAV audio."""
+    """Lazily builds a TTS provider and synthesizes text to WAV audio.
+
+    Lifecycle: ``predownload`` at boot verifies the model files exist without
+    keeping the engine resident; the first ``synthesize`` loads it (lazy);
+    ``unload_if_idle`` drops it again after a quiet period.
+    """
 
     def __init__(
         self,
         provider_factory: Callable[[], SpeechSynthesisProvider],
         *,
         enabled: bool = True,
+        provider_name: str = "local",
     ):
         self._provider_factory = provider_factory
         self._provider: SpeechSynthesisProvider | None = None
         self.enabled = enabled
+        self._provider_name = provider_name
+        self._last_used: float | None = None
 
     def _get(self) -> SpeechSynthesisProvider:
         if self._provider is None:
@@ -54,6 +62,9 @@ class SpeechSynthesisService:
     ) -> SpeechAudio:
         if not self.enabled or not text.strip():
             return SpeechAudio(b"", 0)
+        import time
+
+        self._last_used = time.monotonic()
         return await self._get().synthesize(text, voice=voice, language=language)
 
     async def warmup(self) -> None:
@@ -62,6 +73,37 @@ class SpeechSynthesisService:
         if not self.enabled:
             return
         await self._get().warmup()
+
+    async def predownload(self) -> None:
+        """Ensure the engine's model files exist WITHOUT leaving it resident.
+
+        First run per install pays the engine build (that is what downloads
+        the model), then releases it and records a marker; later boots
+        short-circuit on the marker. No-op when disabled."""
+        if not self.enabled:
+            return
+        from durin.service.voice_lifecycle import verified_marker_path
+
+        marker = verified_marker_path("tts", self._provider_name)
+        if marker.exists():
+            return
+        await self._get().warmup()
+        self._provider = None   # release the engine; use-time reloads lazily
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("", encoding="utf-8")
+
+    def unload_if_idle(self, idle_s: float) -> bool:
+        """Drop the engine after ``idle_s`` without use. Returns True when
+        something was actually unloaded. ``idle_s <= 0`` disables."""
+        if idle_s <= 0 or self._provider is None:
+            return False
+        import time
+
+        if self._last_used is not None and (
+                time.monotonic() - self._last_used) < idle_s:
+            return False
+        self._provider = None
+        return True
 
     @classmethod
     def from_config(cls, config: Any) -> "SpeechSynthesisService":
@@ -75,4 +117,5 @@ class SpeechSynthesisService:
                 return FallbackSpeechProvider(primary, _build_provider(config.fallback, config))
             return primary
 
-        return cls(provider_factory=factory, enabled=config.enabled)
+        return cls(provider_factory=factory, enabled=config.enabled,
+                   provider_name=config.provider)

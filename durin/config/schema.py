@@ -102,6 +102,12 @@ class TranscriptionConfig(Base):
     """
 
     enabled: bool = Field(default=True, description="Master toggle for voice transcription")
+    idle_unload_s: int = Field(
+        default=900,
+        ge=0,
+        validation_alias=AliasChoices("idleUnloadS", "idle_unload_s"),
+        description="Unload the loaded transcription engine after this many seconds without use (it reloads lazily on the next transcription); 0 = keep it resident forever",
+    )
     mode: Literal["auto", "preview", "off"] = Field(default="auto", description='"auto" transcribes incoming audio, "preview" shows a transcript without acting on it, "off" disables')
     provider: Literal["local", "openai", "groq", "http"] = Field(default="local", description='Transcription backend: "local" (sherpa-onnx), "openai", "groq", or "http" (OpenAI-compatible endpoint)')
     language: str | None = Field(default=None, pattern=r"^[a-z]{2,3}$", description="Optional ISO-639-1 language hint for transcription")
@@ -129,6 +135,12 @@ class TtsConfig(Base):
     """
 
     enabled: bool = Field(default=True, description="Master toggle for text-to-speech")
+    idle_unload_s: int = Field(
+        default=900,
+        ge=0,
+        validation_alias=AliasChoices("idleUnloadS", "idle_unload_s"),
+        description="Unload the loaded TTS engine after this many seconds without use (it reloads lazily on the next synthesis); 0 = keep it resident forever",
+    )
     provider: Literal["local", "openai"] = Field(default="local", description='TTS backend: "local" (Supertonic) or "openai" (cloud)')
     language: str | None = Field(default=None, pattern=r"^[a-z]{2,3}$", description="Optional ISO-639-1 language hint; None = auto")
     fallback: Literal["none", "openai"] = Field(default="none", description='"openai" falls through to cloud TTS when local synthesis fails; "none" disables the fallback')
@@ -196,14 +208,28 @@ class MemoryEmbeddingConfig(Base):
         le=1024,
         description="Texts per ONNX run inside one embed call. Peak activation memory scales with this; the fastembed default of 256 ratchets the never-shrinking ONNX arena to gigabytes",
     )
-    isolation: Literal["process", "inline"] = Field(
-        default="process",
-        description='"process" runs embeddings in a recyclable worker subprocess so arena growth is reclaimed; "inline" keeps them in the gateway process',
+    isolation: Literal["service", "process", "inline"] = Field(
+        default="service",
+        description='"service" uses the gateway-supervised standing embedding server (one warm model copy shared by every durin process; falls back to "process" when no server is reachable); "process" runs embeddings in a recyclable worker subprocess per process; "inline" keeps them in the calling process',
     )
     worker_recycle_batches: int = Field(
         default=64,
         ge=1,
         description="With isolation=process: recycle the worker after this many embed calls, bounding the arena high-water mark",
+    )
+
+    service_port: int = Field(
+        default=0,
+        ge=0,
+        validation_alias=AliasChoices("servicePort", "service_port"),
+        description="Loopback port for the standing embedding server; 0 = OS-assigned (clients discover it via the discovery file)",
+    )
+
+    service_max_rss_mb: int = Field(
+        default=0,
+        ge=0,
+        validation_alias=AliasChoices("serviceMaxRssMb", "service_max_rss_mb"),
+        description="RSS cap in MB for the embedding server; the gateway restarts it above the cap (reclaiming the ONNX arena); 0 = automatic (a fraction of total RAM)",
     )
     base_url: str | None = Field(
         default=None,

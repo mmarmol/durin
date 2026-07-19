@@ -1246,6 +1246,12 @@ class AgentLoop:
                 "`pip install 'durin-agent[memory]'`."
             )
             return
+        # In "service" isolation the standing embed server (spawned and
+        # supervised by the gateway) warms ITSELF at startup; an in-loop
+        # warmup here would race it and leave a redundant fallback pool
+        # child resident in the gateway.
+        if getattr(self.app_config.memory.embedding, "isolation", "service") == "service":
+            return
         model_name = self.app_config.memory.embedding.model
         try:
             from durin.memory.embedding import provider_from_config

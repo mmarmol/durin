@@ -408,16 +408,21 @@ class ChannelManager:
 
         self._notify_restart_done_if_needed()
 
-        # Pre-load STT/TTS engines in the background so the first transcription /
-        # voice synth doesn't pay the model load (and first-install download)
-        # inline. Parked so the loop keeps a strong ref; never blocks startup.
-        # ``getattr`` so managers built via ``__new__`` in tests (no __init__,
-        # hence no ``_background_tasks``) still run start_all without crashing.
+        # Voice boot contract: verify the STT/TTS model files exist (paying
+        # the download once per install) WITHOUT keeping ~1.2GB of engines
+        # resident in every gateway; first use loads lazily and the idle
+        # sweeper unloads again. Parked so the loop keeps a strong ref;
+        # never blocks startup. ``getattr`` so managers built via ``__new__``
+        # in tests (no __init__, hence no ``_background_tasks``) still run
+        # start_all without crashing.
         park = getattr(self, "_background_tasks", None)
         if park is not None:
             warm = asyncio.create_task(self._warmup_speech())
             park.add(warm)
             warm.add_done_callback(park.discard)
+            sweep = asyncio.create_task(self._voice_idle_sweeper())
+            park.add(sweep)
+            sweep.add_done_callback(park.discard)
 
         # Wait for all to complete (they should run forever)
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -444,10 +449,10 @@ class ChannelManager:
                 if res.status not in ("present", "installed") or not _module_present(module):
                     return
             try:
-                await svc.warmup()
-                logger.info("{} engine warmed", label)
+                await svc.predownload()
+                logger.info("{} model verified (engine loads on first use)", label)
             except Exception as e:  # noqa: BLE001
-                logger.warning("{} warmup skipped: {}", label, e)
+                logger.warning("{} model predownload skipped: {}", label, e)
 
         await _warm(
             getattr(self, "transcription", None),
@@ -457,6 +462,32 @@ class ChannelManager:
             getattr(self, "speech_synthesis", None),
             getattr(self.config, "tts", None), "tts", "supertonic", "Speech synthesis",
         )
+
+    async def _voice_idle_sweeper(self) -> None:
+        """Drop voice engines that sat unused past their idle window.
+
+        The engines reload lazily on the next use; the sweep keeps a rarely-
+        speaking gateway at its slim baseline instead of holding ~1.2GB of
+        ONNX models forever. Interval is coarse — precision is pointless for
+        a minutes-scale timeout."""
+        import asyncio as _asyncio
+
+        while True:
+            await _asyncio.sleep(60.0)
+            for svc, cfg, label in (
+                (getattr(self, "transcription", None),
+                 getattr(self.config, "transcription", None), "Transcription"),
+                (getattr(self, "speech_synthesis", None),
+                 getattr(self.config, "tts", None), "Speech synthesis"),
+            ):
+                if svc is None or cfg is None:
+                    continue
+                try:
+                    idle_s = float(getattr(cfg, "idle_unload_s", 900) or 0)
+                    if svc.unload_if_idle(idle_s):
+                        logger.info("{} engine unloaded after idle", label)
+                except Exception:  # noqa: BLE001 - sweep must never die
+                    logger.exception("{} idle unload failed", label)
 
     def _notify_restart_done_if_needed(self) -> None:
         """Send restart completion message when runtime env markers are present."""

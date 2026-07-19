@@ -104,13 +104,29 @@ and never returns that memory to the OS. Two config knobs on
 - `batch_size` (default 32) — texts per ONNX run inside one embed call.
   Peak activation memory scales roughly linearly with it; the fastembed
   library default (256) reaches gigabytes on large ingests.
-- `isolation` (default `"process"`) — embeddings run in a single-worker
-  subprocess that is recycled every `worker_recycle_batches` embed calls,
-  so arena growth is reclaimed with the child instead of accumulating in
-  the gateway for the life of the process. `"inline"` keeps the legacy
-  in-process behavior; if the worker cannot start, the provider logs an
-  ERROR and degrades to inline (feature keeps working, containment is
-  lost until restart).
+- `isolation` (default `"service"`) — embeddings go to the **standing
+  embedding server**: a gateway-supervised loopback HTTP process
+  (`durin memory embed-server`) holding ONE warm model copy shared by every
+  durin process (gateway, dream worker, TUI). Before the service existed,
+  each process carried its own pool child — during every dream two copies of
+  the same model sat resident simultaneously. The server speaks an
+  OpenAI-compatible `POST /v1/embeddings` (bearer token; endpoint published
+  in a `DURIN_HOME/embed-server.json` discovery file whose dead-owner
+  staleness rule matches run manifests) and keeps a sqlite LRU **result
+  cache** keyed (model, kind, sha256(text)), so re-embedding unchanged
+  content costs nothing. The gateway respawns it on death (giving up after
+  repeated instant exits) and restarts it above an RSS cap
+  (`service_max_rss_mb`, 0 = auto) — the supervised restart is the
+  arena-reclaim mechanism. Clients with no discovered server quietly use
+  the `"process"` pool per call (pure-TUI setups lose nothing); a
+  discovered-but-unreachable server degrades the provider to `"process"`
+  for the life of the process, loudly (`memory.embedding.service_fallback`).
+- `isolation: "process"` — embeddings run in a single-worker subprocess
+  recycled every `worker_recycle_batches` embed calls, so arena growth is
+  reclaimed with the child. `"inline"` keeps the legacy in-process
+  behavior; if the worker cannot start, the provider logs an ERROR and
+  degrades to inline (feature keeps working, containment is lost until
+  restart).
 
 Production code obtains the provider via
 `durin.memory.embedding.provider_from_config`, which reads these knobs;

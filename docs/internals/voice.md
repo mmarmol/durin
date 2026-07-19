@@ -77,6 +77,20 @@ The assistant reply reaches the WebSocket channel as a stream of deltas, not a s
 
 `_speak(chat_id, text, *, full=False)` no-ops unless a `speech_synthesis` service is present and the chat still has an active session. It emits `voice_state speaking`, builds the spoken rendition (or, when `full=True`, applies only the deterministic `speakable_transform`), synthesizes it to a WAV via the TTS service, writes the audio to the media directory and signs a short-lived URL, and sends a `voice_audio` event with that URL. The task is stored as `speak_task` so barge-in can cancel it. When it finishes (or is cancelled), the session returns to `listening`.
 
+### Engine lifecycle (download-verified / load-lazy / unload-idle)
+
+The local STT/TTS engines are ~1.2GB resident when loaded, and most gateways
+speak rarely (a headless box may never speak). Boot therefore only runs
+``predownload`` on each enabled service: verify the model files exist —
+paying the engine build once per install (that is what downloads them), then
+releasing the engine and recording a marker under
+``DURIN_HOME/voice-verified/``. The first real synthesis/transcription loads
+the engine lazily; a channel-manager sweep unloads it again after
+``tts.idle_unload_s`` / ``transcription.idle_unload_s`` seconds without use
+(default 900; ``0`` keeps it resident — the right setting for a box where
+voice latency matters more than memory). Deleting the marker or the model
+cache is harmless: the next first-use downloads lazily.
+
 ### Spoken rendition
 
 `speakable_transform` (in `durin/voice/rendition.py`) is a pure, always-on pass that replaces non-speakable markdown with short descriptions: fenced code → "the code is on screen", tables → "a table", images/links → their alt text or "a link", and it strips headings, horizontal rules, emphasis markers, and list bullets. The descriptive phrases live in a `SpeakableLabels` dataclass so they can be localized.

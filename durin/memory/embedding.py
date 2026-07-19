@@ -366,7 +366,44 @@ class FastembedProvider(EmbeddingProvider):
         if not texts:
             return []
         t0 = time.monotonic()
-        if self._isolation == "process":
+        if self._isolation == "service":
+            # The gateway-supervised standing server: one warm model copy for
+            # every durin process. No discovery file = no gateway serving
+            # (pure-TUI setups, tests) — quietly use the local pool for THIS
+            # call and keep checking, so a gateway started later is picked
+            # up. A discovered-but-failing server flips to "process" for the
+            # life of this process, loudly: hammering a broken server helps
+            # nobody, and the operator must see the containment change.
+            from durin.memory import embed_server
+
+            rec = embed_server.read_discovery()
+            if rec is not None:
+                try:
+                    out = embed_server.service_embed(texts, rec=rec)
+                    if self._pool is not None:
+                        # A fallback pool spawned while the server was still
+                        # coming up (e.g. during boot); the service is healthy
+                        # now, so release the redundant model copy.
+                        try:
+                            self._pool.shutdown(wait=False, cancel_futures=True)
+                        except Exception:  # noqa: BLE001
+                            pass
+                        self._pool = None
+                    self._emit_embed_event(len(texts), t0)
+                    return out
+                except Exception:  # noqa: BLE001 - any failure = fall back
+                    logger.warning(
+                        "embedding service unreachable — falling back to the "
+                        "worker pool for the life of this process"
+                    )
+                    try:
+                        emit_tool_event("memory.embedding.service_fallback", {
+                            "model": self._model_name,
+                        })
+                    except Exception:  # pragma: no cover - best-effort
+                        pass
+                    self._isolation = "process"
+        if self._isolation in ("service", "process"):
             try:
                 from durin.memory import embedding_worker
 

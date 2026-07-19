@@ -1034,3 +1034,23 @@ def cmd_dream_worker(
     except Exception:
         logger.exception("dream worker failed (mode={} trigger={})", mode, trigger)
         raise typer.Exit(1) from None
+
+
+@memory_app.command("embed-server", hidden=True)
+def cmd_embed_server(
+    port: int = typer.Option(
+        0, help="Loopback port to bind; 0 = OS-assigned (published via the "
+        "discovery file)."),
+    model: str = typer.Option(
+        "", help="Embedding model override; empty = the configured model."),
+) -> None:
+    """Run the standing embedding service in THIS process.
+
+    Internal worker entry point: the gateway spawns and supervises it so one
+    warm model copy serves every durin process (gateway, dream worker, TUI)
+    over loopback HTTP. Exits cleanly on SIGTERM; the discovery file is
+    removed on shutdown.
+    """
+    from durin.memory.embed_server import run_embed_server
+
+    run_embed_server(port=port, model=model or None)

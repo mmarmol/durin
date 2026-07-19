@@ -44,6 +44,7 @@ class TranscriptionService:
         enabled: bool = True,
         cache_transcripts: bool = True,
         model_name: str = "unknown",
+        provider_name: str = "local",
     ):
         self._factory = provider_factory
         self.mode = mode
@@ -51,6 +52,8 @@ class TranscriptionService:
         self.cache_transcripts = cache_transcripts
         self.model_name = model_name
         self._provider: Any = None  # lazily constructed
+        self._provider_name = provider_name
+        self._last_used: float | None = None
 
     @classmethod
     def from_config(cls, config: Any) -> "TranscriptionService":
@@ -102,6 +105,7 @@ class TranscriptionService:
             enabled=enabled,
             cache_transcripts=config.cache_transcripts,
             model_name=model_name,
+            provider_name=config.provider,
         )
 
     def _get_provider(self) -> Any:
@@ -115,6 +119,37 @@ class TranscriptionService:
         if not self.enabled:
             return
         await self._get_provider().warmup()
+
+    async def predownload(self) -> None:
+        """Ensure the engine's model files exist WITHOUT leaving it resident.
+
+        First run per install pays the engine build (that is what downloads
+        the model), then releases it and records a marker; later boots
+        short-circuit on the marker. No-op when disabled."""
+        if not self.enabled:
+            return
+        from durin.service.voice_lifecycle import verified_marker_path
+
+        marker = verified_marker_path("stt", self._provider_name)
+        if marker.exists():
+            return
+        await self._get_provider().warmup()
+        self._provider = None   # release the engine; use-time reloads lazily
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("", encoding="utf-8")
+
+    def unload_if_idle(self, idle_s: float) -> bool:
+        """Drop the engine after ``idle_s`` without use. Returns True when
+        something was actually unloaded. ``idle_s <= 0`` disables."""
+        if idle_s <= 0 or self._provider is None:
+            return False
+        import time
+
+        if self._last_used is not None and (
+                time.monotonic() - self._last_used) < idle_s:
+            return False
+        self._provider = None
+        return True
 
     async def transcribe_and_cache(
         self, file_path: str | Path, on_status: Callable | None = None
@@ -147,6 +182,9 @@ class TranscriptionService:
             except (OSError, json.JSONDecodeError):
                 pass  # fall through to retranscribe
 
+        import time
+
+        self._last_used = time.monotonic()
         provider = self._get_provider()
         try:
             text = await provider.transcribe(path, on_status=on_status)

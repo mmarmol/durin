@@ -1279,6 +1279,14 @@ class MemoryEmbeddingPoolFallbackEvent(TypedDict):
     model: str
 
 
+class MemoryEmbeddingServiceFallbackEvent(TypedDict):
+    """The standing embedding server was discovered but unreachable; the
+    provider degraded to its own worker pool for the life of the process —
+    the shared-model saving is lost until restart."""
+
+    model: str
+
+
 class MemoryIndexCompactedEvent(TypedDict):
     """Nightly LanceDB table maintenance ran. ``mode`` is ``optimized`` (the
     normal path) or ``rebuilt`` (the fragment rewrite corrupted the vector
@@ -1657,6 +1665,7 @@ EVENTS: dict[str, type] = {
     "memory.dream.rss": MemoryDreamRssEvent,
     "memory.dream.rss_kill": MemoryDreamRssKillEvent,
     "memory.embedding.pool_fallback": MemoryEmbeddingPoolFallbackEvent,
+    "memory.embedding.service_fallback": MemoryEmbeddingServiceFallbackEvent,
     "memory.index.compacted": MemoryIndexCompactedEvent,
     "gateway.memory": GatewayMemoryEvent,
     "memory.dream.always_on": MemoryDreamAlwaysOnEvent,
