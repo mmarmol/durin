@@ -12,8 +12,12 @@ Actions:
 - ``status`` — detail for one by id: a sub-agent's phase/iteration/tool calls, or
   a workflow run's per-node tree and final output. The id is resolved across both
   kinds, so the caller does not say which kind it is.
-- ``stop``   — cancel one by id: a sub-agent via the manager, a workflow run via
-  the cooperative cancel flag (it stops between nodes — best-effort).
+- ``stop``   — cancel one by id: a sub-agent via the manager (immediate), a
+  workflow run via the cooperative cancel flag. Default is graceful: the run
+  stops at its next node boundary (a running script is still killed; an
+  in-flight agent node finishes first). ``force=true`` — or a repeat ``stop``
+  on a run already cancelling — escalates to hard: the in-flight agent node is
+  interrupted too.
 
 Scoped to ``core`` (the main agent). Sub-agents do not introspect each other.
 """
@@ -27,7 +31,7 @@ from typing import Any
 from durin.agent.background_tasks import collect_tasks
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.context import ContextAware, RequestContext
-from durin.agent.tools.schema import StringSchema, tool_parameters_schema
+from durin.agent.tools.schema import BooleanSchema, StringSchema, tool_parameters_schema
 
 _MAX_TOOL_HISTORY = 8
 _MAX_FINAL_PREVIEW = 4000
@@ -64,6 +68,15 @@ def _age_mono(started_at: float, ended_at: float | None) -> str:
         id=StringSchema(
             description="The task id (a sub-agent id or a workflow run id) — required for status and stop.",
             min_length=1, max_length=64, nullable=True,
+        ),
+        force=BooleanSchema(
+            description=(
+                "stop only: interrupt the node currently executing instead of "
+                "letting it finish (default false = the run stops at its next "
+                "node boundary). A repeat stop on a run that is already "
+                "cancelling escalates to this automatically."
+            ),
+            nullable=True,
         ),
         required=["action"],
     )
@@ -116,7 +129,10 @@ class TasksTool(Tool, ContextAware):
             "action=list shows everything running or recently finished; "
             "action=status with an id gives detail (a sub-agent's progress, or a "
             "workflow run's per-node tree, work dir, current files and output); "
-            "action=stop with an id cancels one (best-effort). Use it when the user "
+            "action=stop with an id cancels one — graceful by default (the run "
+            "stops at its next node boundary; a running script is killed, an "
+            "in-flight agent node finishes first), force=true interrupts the "
+            "executing node immediately. Use it when the user "
             "asks how the work is going, when you need a mid-run look at a "
             "workflow's files, or before stopping something. Finished results "
             "arrive on their own as follow-up messages — do not loop sleep+status "
@@ -129,7 +145,7 @@ class TasksTool(Tool, ContextAware):
             sessions=self._sessions, session_key=session_key,
         )
 
-    async def execute(self, action: str | None = None, id: str | None = None, **kwargs: Any) -> str:  # type: ignore[override]
+    async def execute(self, action: str | None = None, id: str | None = None, force: bool | None = None, **kwargs: Any) -> str:  # type: ignore[override]
         session_key = self._session_key()
         if session_key is None:
             return "Error: no session context available for tasks."
@@ -143,13 +159,13 @@ class TasksTool(Tool, ContextAware):
         if action == "stop":
             if not id:
                 return "Error: 'id' is required for stop."
-            return await self._do_stop(session_key, id)
+            return await self._do_stop(session_key, id, force=bool(force))
         return f"Error: unknown action {action!r} (use list | status | stop)."
 
     def _render_list(self, rows: list[dict]) -> str:
         if not rows:
             return "No background tasks (sub-agents or workflow runs) in this session."
-        running = sum(1 for r in rows if r["status"] == "running")
+        running = sum(1 for r in rows if r["status"] in ("running", "stopping"))
         lines = [
             f"{len(rows)} background task(s) in this session "
             f"({running} running, {len(rows) - running} finished):"
@@ -293,7 +309,7 @@ class TasksTool(Tool, ContextAware):
             out.append(f"    … and {len(files) - _MAX_WORK_DIR_FILES} more")
         return out
 
-    async def _do_stop(self, session_key: str, task_id: str) -> str:
+    async def _do_stop(self, session_key: str, task_id: str, *, force: bool = False) -> str:
         row = next((r for r in self._rows(session_key) if r["id"] == task_id), None)
         if row is None:
             return f"Error: unknown task id {task_id!r} in this session."
@@ -310,12 +326,22 @@ class TasksTool(Tool, ContextAware):
         healed = self._heal_orphaned_workflow(row)
         if healed:
             return healed
-        if row["status"] != "running":
+        if row["status"] not in ("running", "stopping"):
             return f"Workflow run [{task_id}] is already {row['status']} — nothing to cancel."
-        from durin.workflow.cancellation import request_cancel
-        request_cancel(task_id)
+        from durin.workflow.cancellation import is_cancelled, request_cancel
+        # A repeat stop on a run already cancelling escalates: the caller asked
+        # once, the run is still going — "stop it" now means "stop it NOW".
+        hard = force or is_cancelled(task_id)
+        request_cancel(task_id, hard=hard)
+        if hard:
+            return (
+                f"Workflow run [{task_id}] force-stopped: the node currently "
+                "executing is being interrupted. Its result still arrives as a "
+                "follow-up, with status 'cancelled'."
+            )
         return (
             f"Workflow run [{task_id}] asked to cancel. It stops at its next node "
-            "boundary (a node already executing finishes first); its result still "
-            "arrives as a follow-up, with status 'cancelled'."
+            "boundary (a running script is killed; an agent node already executing "
+            "finishes first — repeat stop, or use force=true, to interrupt it). "
+            "Its result still arrives as a follow-up, with status 'cancelled'."
         )

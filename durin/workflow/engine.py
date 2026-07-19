@@ -73,9 +73,11 @@ class NodeRunRequest:
     # left: a FAIL verdict now ends the run as 'exhausted' instead of looping. The
     # runner tells the gate so its last verdict is definitive, not another loop turn.
     fail_would_exhaust: bool = False
-    # The engine's own cooperative-cancel poll, handed only to a script node so its
-    # runner can check it mid-subprocess (an agent turn has no equivalent mid-turn
-    # hook, so it stays None there — unchanged, between-nodes-only cancellation).
+    # Mid-node cancellation poll. For a script node this is the engine's plain
+    # cancel check (the subprocess is killed on either cancel mode); for an agent
+    # node it is the HARD-cancel check (only a force-stop aborts the in-flight
+    # turn — a graceful stop lets it finish and takes effect between nodes).
+    # None means the node cannot be interrupted mid-run (CLI/test callers).
     cancel_check: Callable[[], bool] | None = None
 
 
@@ -156,6 +158,13 @@ class ScriptCancelled(RuntimeError):
     rather than 'aborted'."""
 
 
+class WorkInterrupted(RuntimeError):
+    """A work node's in-flight agent turn was aborted by a HARD cancel (as opposed
+    to failing on its own). Raised by the node runner's cancel watcher and carried
+    as a NodeExecutionError's cause so run() can end the run 'cancelled' rather
+    than 'aborted'."""
+
+
 class NodeExecutionError(RuntimeError):
     """A node's agent turn raised. Carries the node identity, iteration and the session
     key under which the node runner persisted the partial conversation — so the engine
@@ -189,6 +198,7 @@ class WorkflowEngine:
         max_node_visits: int = 1000,
         progress_emit: Callable[[dict], None] | None = None,
         cancel_check: Callable[[], bool] | None = None,
+        hard_cancel_check: Callable[[], bool] | None = None,
         prune_keep: int = 20,
     ) -> None:
         self._node_runner = node_runner
@@ -209,6 +219,11 @@ class WorkflowEngine:
         # background run can be stopped between nodes. None means the run is never
         # cancelled from outside (CLI/test callers).
         self._cancel_check = cancel_check
+        # Optional HARD-cancel poll: true only when the caller asked to interrupt
+        # the node currently executing. Handed to work nodes (and parallel
+        # branches) so their in-flight agent turn can be aborted; script nodes
+        # keep the plain check — their subprocess dies on either mode.
+        self._hard_cancel_check = hard_cancel_check
         self._prune_keep = prune_keep
 
     def run(
@@ -295,8 +310,9 @@ class WorkflowEngine:
                 effective_root, started_at, parent_run_id)
             raise
         except NodeExecutionError as exc:
-            if isinstance(exc.cause, ScriptCancelled):
-                # A running script was killed by a cooperative cancel: end the run
+            if isinstance(exc.cause, (ScriptCancelled, WorkInterrupted)):
+                # The in-flight node was cancelled mid-run (a script killed by any
+                # cancel, or a work turn aborted by a hard cancel): end the run
                 # 'cancelled' (not 'aborted'), carrying the partial trace the walk
                 # already built. The walk's node_failed NodeRun for this node stays
                 # as-is (an honest per-node record); only the run-level status changes.
@@ -572,9 +588,10 @@ class WorkflowEngine:
                     output_dir=out_dir,
                     budget=budget,
                     fail_would_exhaust=fail_would_exhaust,
-                    # Only a script node gets the poll hook — an agent node's
-                    # cancellation stays between-nodes-only (unchanged).
-                    cancel_check=self._cancel_check if isinstance(node, ScriptNode) else None,
+                    # A script node polls the plain check (its subprocess dies on
+                    # either cancel mode); an agent node polls the HARD check so
+                    # only a force-stop interrupts its in-flight turn.
+                    cancel_check=self._cancel_check if isinstance(node, ScriptNode) else self._hard_cancel_check,
                 )
 
                 # Run a full agent turn; for a multi-way node the verdict is a matched
@@ -781,6 +798,8 @@ class WorkflowEngine:
             run_id=run_id, iteration=iteration, root_session_key=root_key,
             workspace_override=workspace_override,
             output_dir=out_dir if getattr(branch, "tools", "none") == "default" else None,
+            # Parallel branches are agent turns: a hard cancel aborts them too.
+            cancel_check=self._hard_cancel_check,
         ))
 
     @staticmethod

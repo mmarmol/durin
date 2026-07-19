@@ -2197,7 +2197,8 @@
   },
   "tasks": {
     "status": {
-      "needs_input": "Cần nhập"
+      "needs_input": "Cần nhập",
+      "stopping": "Đang dừng…"
     },
     "needsInputHint": "Đã chuyển cho tác tử gọi nó — tác tử có thể tự trả lời từ ngữ cảnh của mình hoặc hỏi bạn, rồi tiếp tục lượt chạy này.",
     "questions": "Câu hỏi"
@@ -2218,7 +2219,9 @@
       "needsInput": "{{label}} cần bạn trả lời",
       "needsInputMany": "{{count}} tác vụ cần bạn trả lời",
       "view": "Xem",
-      "respond": "Trả lời"
+      "respond": "Trả lời",
+      "statusStopping": "đang dừng…",
+      "statusCancelled": "đã hủy"
     }
   },
   "rich": {

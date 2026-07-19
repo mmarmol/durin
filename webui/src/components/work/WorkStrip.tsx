@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, HelpCircle, Loader2, PanelRight, X } from "lucide-react";
+import { Ban, Check, HelpCircle, Loader2, PanelRight, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { cn } from "@/lib/utils";
@@ -86,7 +86,13 @@ export function WorkStrip({
           <span className="truncate font-medium text-foreground/90">
             {active[0].label}
           </span>
-          <span className="shrink-0"> · {t("work.strip.statusRunning")}</span>
+          <span className="shrink-0">
+            {" "}
+            ·{" "}
+            {active[0].status === "stopping"
+              ? t("work.strip.statusStopping")
+              : t("work.strip.statusRunning")}
+          </span>
         </>
       ) : (
         <span className="truncate">
@@ -95,8 +101,11 @@ export function WorkStrip({
       );
   } else {
     const failed = shown!.status === "failed";
+    const cancelled = shown!.status === "cancelled";
     icon = failed ? (
       <X className="h-3.5 w-3.5 shrink-0 text-destructive" aria-hidden />
+    ) : cancelled ? (
+      <Ban className="h-3.5 w-3.5 shrink-0" aria-hidden />
     ) : (
       <Check className="h-3.5 w-3.5 shrink-0 text-emerald-500" aria-hidden />
     );
@@ -107,7 +116,12 @@ export function WorkStrip({
         </span>
         <span className={cn("shrink-0", failed && "text-destructive")}>
           {" "}
-          · {failed ? t("work.strip.statusFailed") : t("work.strip.statusDone")}
+          ·{" "}
+          {failed
+            ? t("work.strip.statusFailed")
+            : cancelled
+              ? t("work.strip.statusCancelled")
+              : t("work.strip.statusDone")}
         </span>
       </>
     );

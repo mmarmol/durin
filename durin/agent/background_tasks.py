@@ -7,8 +7,8 @@ scoped to the session) with the on-disk workflow run manifests (run_log), plus
 persisted sub-agent lineage so history survives a gateway restart.
 
 Returns plain dicts with a stable shape — ``kind`` ("subagent" | "workflow"),
-``id``, ``label``, ``status`` ("running" | "needs_input" | "done" | "failed" |
-"cancelled"), ``started_at`` (wall-clock epoch), ``ended_at``, ``session_key``,
+``id``, ``label``, ``status`` ("running" | "stopping" | "needs_input" | "done" |
+"failed" | "cancelled"), ``started_at`` (wall-clock epoch), ``ended_at``, ``session_key``,
 and for workflows a ``nodes`` tree, the run ``task``, and (only when the run's
 status is ``needs_input``) ``needs_input_detail`` — the gate's questions, capped
 at 500 chars. The service wraps these into its pydantic ``BackgroundTask``
@@ -122,10 +122,19 @@ def collect_tasks(
         needs_input_detail = None
         if rec.get("status") == "needs_input":
             needs_input_detail = (rec.get("final_output") or "")[:500] or None
+        status = _workflow_status(rec.get("status", ""))
+        # A running run with a pending cancel surfaces as "stopping" so the UI
+        # acknowledges the stop while the engine winds down. The registry lives
+        # in this process — the same one serving this list — so the check is
+        # exact, and the manifest needs no extra write.
+        if status == "running":
+            from durin.workflow.cancellation import is_cancelled
+            if is_cancelled(rec.get("run_id", "")):
+                status = "stopping"
         tasks.append({
             "kind": "workflow", "id": rec.get("run_id", ""),
             "label": wf_name,
-            "status": _workflow_status(rec.get("status", "")),
+            "status": status,
             "started_at": float(rec.get("started_at") or 0.0),
             "ended_at": rec.get("finished_at"),
             "session_key": drill,

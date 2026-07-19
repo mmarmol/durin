@@ -1,4 +1,4 @@
-import { Check, GitBranch, HelpCircle, Loader2, X } from "lucide-react";
+import { Ban, Check, GitBranch, HelpCircle, Loader2, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { cn } from "@/lib/utils";
@@ -37,6 +37,10 @@ function ItemStatusIcon({ status }: { status: WorkItem["status"] }) {
   if (status === "done") return <Check className="h-3.5 w-3.5 text-emerald-600" aria-hidden />;
   if (status === "failed") return <X className="h-3.5 w-3.5 text-destructive" aria-hidden />;
   if (status === "running") return <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-600" aria-hidden />;
+  // stopping — a cancel is pending; still spinning, but muted while it winds down.
+  if (status === "stopping") return <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" aria-hidden />;
+  // cancelled — ended by the user's stop: neutral, neither success nor failure.
+  if (status === "cancelled") return <Ban className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />;
   // needs_input — accent-tinted: the run paused, it did not fail.
   return <HelpCircle className="h-3.5 w-3.5 text-accent-foreground" aria-hidden />;
 }
@@ -65,6 +69,11 @@ export function WorkItemCard({ item }: { item: WorkItem }): JSX.Element {
         {item.status === "needs_input" && (
           <span className="rounded bg-accent px-1.5 py-0.5 text-[11px] text-accent-foreground">
             {t("tasks.status.needs_input")}
+          </span>
+        )}
+        {item.status === "stopping" && (
+          <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+            {t("tasks.status.stopping")}
           </span>
         )}
         <ItemStatusIcon status={item.status} />

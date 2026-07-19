@@ -95,3 +95,26 @@ def test_needs_input_questions_capped_at_500_chars(tmp_path, monkeypatch):
 
     wf = next(r for r in rows if r["id"] == "r3")
     assert wf["needs_input_detail"] == "q" * 500
+
+
+def test_running_run_with_pending_cancel_shows_stopping(tmp_path, monkeypatch):
+    """A running workflow whose cancel was requested surfaces as "stopping" so
+    the UI acknowledges the stop while the engine winds down; without the
+    pending cancel the same row stays "running"."""
+    import durin.workflow.run_log as run_log
+    from durin.workflow import cancellation
+
+    monkeypatch.setattr(run_log, "runs_for_session", lambda ws, key: [
+        {"run_id": "rstop", "workflow": "w", "status": "running",
+         "started_at": 1.0, "finished_at": None, "runs": []},
+    ])
+
+    rows = collect_tasks(str(tmp_path), session_key="websocket:x")
+    assert rows[0]["status"] == "running"
+
+    cancellation.request_cancel("rstop")
+    try:
+        rows = collect_tasks(str(tmp_path), session_key="websocket:x")
+        assert rows[0]["status"] == "stopping"
+    finally:
+        cancellation.clear("rstop")

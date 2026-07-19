@@ -737,3 +737,49 @@ def test_node_turns_run_concurrency_safe_tools_in_parallel(tmp_path):
     nr(_req(WorkNode(id="a", tools="default", next=None)))
     spec = nr.runner.run.call_args.args[0]
     assert spec.concurrent_tools is True
+
+
+def test_hard_cancel_interrupts_in_flight_turn(tmp_path):
+    """With req.cancel_check true (a force-stop), a turn that never finishes is
+    aborted within the watcher's poll interval and surfaces as a typed node
+    failure whose cause is WorkInterrupted — the engine ends such a run
+    'cancelled'."""
+    import asyncio
+    import time as _time
+
+    import pytest
+
+    from durin.workflow.engine import NodeExecutionError, WorkInterrupted
+
+    sessions = SessionManager(workspace=tmp_path)
+    provider = MagicMock(spec=LLMProvider)
+    provider.get_default_model.return_value = "test-model"
+    from durin.agent.runner import AgentRunner
+    ar = AgentRunner(provider)
+
+    async def hang(spec):
+        await asyncio.sleep(60)
+
+    ar.run = AsyncMock(side_effect=hang)
+    nr = AgentNodeRunner(ar, sessions, default_model="test-model")
+    req = _req(
+        WorkNode(id="slow", model=None, context="own", prompt="p", next=None),
+        cancel_check=lambda: True,
+    )
+
+    t0 = _time.monotonic()
+    with pytest.raises(NodeExecutionError) as ei:
+        nr(req)
+    assert isinstance(ei.value.cause, WorkInterrupted)
+    assert _time.monotonic() - t0 < 10, "the watcher must abort promptly, not wait out the turn"
+
+
+def test_no_cancel_check_runs_turn_directly(tmp_path):
+    """Without a cancel_check the runner takes the plain asyncio.run path and
+    completes normally (the watcher never engages)."""
+    sessions = SessionManager(workspace=tmp_path)
+    sessions.save(Session(key="websocket:abc"))
+    nr = _faithful_runner(sessions, reply="fin")
+    req = _req(WorkNode(id="quick", model=None, context="own", prompt="p", next=None))
+    resp = nr(req)
+    assert resp.output == "fin"

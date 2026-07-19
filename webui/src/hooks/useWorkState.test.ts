@@ -439,3 +439,73 @@ describe("useWorkState", () => {
     expect(fakeclient.onChat).not.toHaveBeenCalled();
   });
 });
+
+it("polled stopping beats a live running frame (cancel acknowledged)", async () => {
+  // The cancel registry knows about the stop before the live stream does —
+  // the engine keeps emitting running frames while it winds down. The item
+  // must show "stopping", and stay ACTIVE (it has not finished yet).
+  const { client, emit } = makeFakeClient();
+  mockUseClient.mockReturnValue({
+    client: client as unknown as ReturnType<typeof useClient>["client"],
+    token: "tok",
+    modelName: null,
+    modelPreset: null,
+  });
+  mockListBackgroundTasks.mockResolvedValue([
+    {
+      kind: "workflow",
+      id: "run-stopping",
+      label: "flow-run-stopping",
+      status: "stopping",
+      started_at: 100,
+      ended_at: null,
+      session_key: null,
+    },
+  ]);
+
+  const { result } = renderHook(() => useWorkState("c1", "websocket:c1"));
+
+  act(() => {
+    emit(workflowProgressFrame("run-stopping", [{ id: "n1", status: "running" }]));
+  });
+
+  await waitFor(() => {
+    const item = result.current.active.find((w) => w.id === "run-stopping");
+    expect(item).toBeDefined();
+    expect(item!.status).toBe("stopping");
+  });
+});
+
+it("a live end frame beats polled stopping (the run actually finished)", async () => {
+  const { client, emit } = makeFakeClient();
+  mockUseClient.mockReturnValue({
+    client: client as unknown as ReturnType<typeof useClient>["client"],
+    token: "tok",
+    modelName: null,
+    modelPreset: null,
+  });
+  mockListBackgroundTasks.mockResolvedValue([
+    {
+      kind: "workflow",
+      id: "run-ending",
+      label: "flow-run-ending",
+      status: "stopping",
+      started_at: 100,
+      ended_at: null,
+      session_key: null,
+    },
+  ]);
+
+  const { result } = renderHook(() => useWorkState("c1", "websocket:c1"));
+
+  act(() => {
+    emit(workflowProgressFrame("run-ending", [{ id: "n1", status: "done" }], "end"));
+  });
+
+  await waitFor(() => {
+    const item = result.current.finished.find((w) => w.id === "run-ending");
+    expect(item).toBeDefined();
+    expect(item!.status).toBe("done");
+    expect(result.current.active.find((w) => w.id === "run-ending")).toBeUndefined();
+  });
+});

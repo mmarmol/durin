@@ -2197,7 +2197,8 @@
   },
   "tasks": {
     "status": {
-      "needs_input": "입력 필요"
+      "needs_input": "입력 필요",
+      "stopping": "중지 중…"
     },
     "needsInputHint": "호출한 에이전트에게 전달되었습니다 — 자체 컨텍스트로 답하거나 사용자에게 물어본 뒤 이 실행을 재개할 수 있습니다.",
     "questions": "질문"
@@ -2218,7 +2219,9 @@
       "needsInput": "{{label}}이(가) 응답을 기다리는 중입니다",
       "needsInputMany": "작업 {{count}}개가 응답을 기다리는 중입니다",
       "view": "보기",
-      "respond": "응답"
+      "respond": "응답",
+      "statusStopping": "중지 중…",
+      "statusCancelled": "취소됨"
     }
   },
   "rich": {

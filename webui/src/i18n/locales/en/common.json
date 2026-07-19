@@ -2209,7 +2209,8 @@
   },
   "tasks": {
     "status": {
-      "needs_input": "Needs input"
+      "needs_input": "Needs input",
+      "stopping": "Stopping…"
     },
     "needsInputHint": "Handed to the calling agent — it may answer from its own context or ask you, then resume this run.",
     "questions": "Questions"
@@ -2230,7 +2231,9 @@
       "needsInput": "{{label}} needs your response",
       "needsInputMany": "{{count}} tasks need your response",
       "view": "View",
-      "respond": "Respond"
+      "respond": "Respond",
+      "statusStopping": "stopping…",
+      "statusCancelled": "cancelled"
     }
   },
   "rich": {

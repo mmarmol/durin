@@ -258,7 +258,13 @@ session lineage and workflow run manifests. Live WebSocket frames win over the
 poll for an item still in flight, but once the poll reports a run as decided
 (done / failed / cancelled) the manifest is authoritative — a crashed or
 reconciled run emits no final frame, so its last live "running" frame must not
-pin the item to in-progress.
+pin the item to in-progress. A polled `stopping` status (a cancel was requested
+and the run is winding down) also beats live running frames, yielding only to a
+live end frame; the panel shows it as a muted spinner with a "stopping" chip,
+and a run that ended by cancellation gets a neutral cancelled icon rather than
+success or failure marks. The work strip mirrors the same vocabulary: a
+stopping item swaps its status word, and a cancelled ending flashes as
+cancelled.
 
 **Work chip.** A compact inline indicator in the message thread shows that
 background work is running or has finished. Clicking it opens the work panel.

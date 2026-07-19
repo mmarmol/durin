@@ -137,7 +137,9 @@ export interface WorkItem {
   kind: "workflow" | "subagent";
   id: string;
   label: string;
-  status: "running" | "needs_input" | "done" | "failed";
+  /** "stopping" = a cancel was requested and the run is winding down;
+   *  "cancelled" = it ended by cancellation (either mode). */
+  status: "running" | "stopping" | "needs_input" | "done" | "failed" | "cancelled";
   /** Workflow node tree; live frames override polled history. */
   nodes?: WorkNode[];
   /** Sub-agent live step count from progress.iteration. */

@@ -2197,7 +2197,8 @@
   },
   "tasks": {
     "status": {
-      "needs_input": "Butuh input"
+      "needs_input": "Butuh input",
+      "stopping": "Menghentikan…"
     },
     "needsInputHint": "Diserahkan ke agen pemanggil — agen ini bisa menjawab dari konteksnya sendiri atau bertanya ke Anda, lalu melanjutkan run ini.",
     "questions": "Pertanyaan"
@@ -2218,7 +2219,9 @@
       "needsInput": "{{label}} membutuhkan jawaban Anda",
       "needsInputMany": "{{count}} tugas membutuhkan jawaban Anda",
       "view": "Lihat",
-      "respond": "Jawab"
+      "respond": "Jawab",
+      "statusStopping": "menghentikan…",
+      "statusCancelled": "dibatalkan"
     }
   },
   "rich": {

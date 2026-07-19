@@ -97,3 +97,22 @@ it("does not flash on first mount with empty active and old finished items", () 
   );
   expect(container).toBeEmptyDOMElement();
 });
+
+it("shows the stopping status word for a single stopping item", () => {
+  const stopping = item({ status: "stopping" });
+  render(wrap(<WorkStrip active={[stopping]} finished={[]} onOpen={() => {}} />));
+  expect(screen.getByText("ticket-stage1-context")).toBeInTheDocument();
+  expect(screen.getByText(/stopping/)).toBeInTheDocument();
+  expect(screen.queryByText(/in progress/)).not.toBeInTheDocument();
+});
+
+it("flashes cancelled with the cancelled status word", () => {
+  const { rerender } = render(
+    wrap(<WorkStrip active={[item()]} finished={[]} onOpen={() => {}} />),
+  );
+  const cancelled = item({ status: "cancelled", endedAt: 2 });
+  rerender(
+    wrap(<WorkStrip active={[]} finished={[cancelled]} onOpen={() => {}} />),
+  );
+  expect(screen.getByText(/cancelled/)).toBeInTheDocument();
+});

@@ -130,6 +130,8 @@ function workItemFromSubagentEvent(
  * the poll reports the run as decided (done / failed / cancelled). A crashed
  * or externally-reconciled run never emits a final WS frame, so its last live
  * frame says "running" forever; the decided manifest is authoritative there.
+ * A polled "stopping" also beats live running frames (the cancel registry
+ * knows before the stream does) but yields to a live end frame.
  */
 export function useWorkState(
   chatId: string | null,
@@ -265,23 +267,36 @@ export function useWorkState(
     // this guard that stale frame pins the panel and strip to in-progress. A
     // polled needs_input does NOT count as decided: a resumed run's fresh
     // running frame must flip the item back to running immediately (the
-    // manifest lags the live stream there).
+    // manifest lags the live stream there). A polled "stopping" (cancel
+    // requested, run winding down) beats a live "running" — the engine keeps
+    // emitting running frames while it winds down — but yields to a live END
+    // frame, which means the run actually finished.
     for (const [id, item] of live) {
       const polledItem = byId.get(id);
       const decided =
         polledItem != null &&
         polledItem.status !== "running" &&
-        polledItem.status !== "needs_input";
-      if (!decided) byId.set(id, item);
+        polledItem.status !== "needs_input" &&
+        polledItem.status !== "stopping";
+      if (decided) continue;
+      if (
+        polledItem?.status === "stopping" &&
+        (item.status === "running" || item.status === "needs_input")
+      ) {
+        continue;
+      }
+      byId.set(id, item);
     }
 
     return Array.from(byId.values());
   }, [polled, liveVersion]);
   const active = all.filter(
-    (w) => w.status === "running" || w.status === "needs_input",
+    (w) => w.status === "running" || w.status === "stopping" || w.status === "needs_input",
   );
   const finished = all
-    .filter((w) => w.status !== "running" && w.status !== "needs_input")
+    .filter(
+      (w) => w.status !== "running" && w.status !== "stopping" && w.status !== "needs_input",
+    )
     .sort((a, b) => (b.endedAt ?? b.startedAt) - (a.endedAt ?? a.startedAt));
 
   const refresh = useCallback(() => {

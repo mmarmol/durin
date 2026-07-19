@@ -30,7 +30,7 @@ class BackgroundTask(Result):
     kind: str  # "subagent" | "workflow"
     id: str
     label: str
-    status: str  # "running" | "needs_input" | "done" | "failed" | "cancelled"
+    status: str  # "running" | "stopping" | "needs_input" | "done" | "failed" | "cancelled"
     started_at: float  # wall-clock epoch seconds
     ended_at: float | None
     session_key: str | None  # for drill-in into the chat thread view

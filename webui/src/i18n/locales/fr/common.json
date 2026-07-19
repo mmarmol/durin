@@ -2197,7 +2197,8 @@
   },
   "tasks": {
     "status": {
-      "needs_input": "Réponse requise"
+      "needs_input": "Réponse requise",
+      "stopping": "Arrêt en cours…"
     },
     "needsInputHint": "Transmis à l’agent appelant — il peut répondre depuis son propre contexte ou vous demander, puis reprendre cette exécution.",
     "questions": "Questions"
@@ -2218,7 +2219,9 @@
       "needsInput": "{{label}} attend votre réponse",
       "needsInputMany": "{{count}} tâches attendent votre réponse",
       "view": "Voir",
-      "respond": "Répondre"
+      "respond": "Répondre",
+      "statusStopping": "arrêt en cours…",
+      "statusCancelled": "annulé"
     }
   },
   "rich": {

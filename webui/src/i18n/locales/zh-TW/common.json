@@ -2197,7 +2197,8 @@
   },
   "tasks": {
     "status": {
-      "needs_input": "需要輸入"
+      "needs_input": "需要輸入",
+      "stopping": "正在停止…"
     },
     "needsInputHint": "已交由呼叫端代理處理——它可能會根據自身脈絡直接回答，或詢問你，然後繼續這次執行。",
     "questions": "問題"
@@ -2218,7 +2219,9 @@
       "needsInput": "{{label}} 需要你的回覆",
       "needsInputMany": "{{count}} 個任務需要你的回覆",
       "view": "查看",
-      "respond": "回覆"
+      "respond": "回覆",
+      "statusStopping": "正在停止…",
+      "statusCancelled": "已取消"
     }
   },
   "rich": {

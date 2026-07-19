@@ -2197,7 +2197,8 @@
   },
   "tasks": {
     "status": {
-      "needs_input": "入力が必要"
+      "needs_input": "入力が必要",
+      "stopping": "停止中…"
     },
     "needsInputHint": "呼び出し元のエージェントに引き渡されます — 自身のコンテキストから回答するか、あなたに確認してからこの実行を再開します。",
     "questions": "質問"
@@ -2218,7 +2219,9 @@
       "needsInput": "{{label}} が回答を待っています",
       "needsInputMany": "{{count}} 件のタスクが回答を待っています",
       "view": "表示",
-      "respond": "回答"
+      "respond": "回答",
+      "statusStopping": "停止中…",
+      "statusCancelled": "キャンセル済み"
     }
   },
   "rich": {

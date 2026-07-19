@@ -420,6 +420,7 @@ class RunWorkflowTool(Tool, ContextAware):
         # the engine's cooperative cancel is keyed by it.
         from durin.workflow.cancellation import clear as _clear_cancel
         from durin.workflow.cancellation import is_cancelled as _is_cancelled
+        from durin.workflow.cancellation import is_hard_cancelled as _is_hard_cancelled
         from durin.workflow.cancellation import request_cancel as _request_cancel
         run_id = resume.run_id if resume is not None else uuid.uuid4().hex[:12]
         engine = WorkflowEngine(
@@ -432,6 +433,7 @@ class RunWorkflowTool(Tool, ContextAware):
             max_node_visits=self._app_config.workflow.max_node_visits,
             progress_emit=progress_emit,
             cancel_check=lambda: _is_cancelled(run_id),
+            hard_cancel_check=lambda: _is_hard_cancelled(run_id),
             prune_keep=self._app_config.workflow.keep_runs,
         )
         root_session_key = self._session_key.get()
@@ -493,10 +495,10 @@ class RunWorkflowTool(Tool, ContextAware):
             if not engine_future.done():
                 # /stop cancelled the turn. asyncio cancellation cannot reach
                 # the engine's worker thread, so signal the cooperative cancel
-                # flag — the engine stops before its next node instead of
-                # burning tokens to completion with nobody waiting for the
-                # result. The flag is dropped once the engine actually stops.
-                _request_cancel(run_id)
+                # flag — HARD, since nobody is waiting for the result: the
+                # in-flight node is interrupted instead of burning tokens to
+                # completion. The flag is dropped once the engine actually stops.
+                _request_cancel(run_id, hard=True)
                 engine_future.add_done_callback(lambda _f: _clear_cancel(run_id))
             raise
         if progress_emit is not None:

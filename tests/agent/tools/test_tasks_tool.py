@@ -223,3 +223,32 @@ async def test_stop_live_owner_run_still_cancels(tmp_path):
         # No engine consumes this flag in the test — drop it so the global
         # cancellation registry stays empty for later tests.
         cancellation.clear("alive789")
+
+
+@pytest.mark.asyncio
+async def test_stop_force_requests_hard_cancel(tmp_path):
+    _write_manifest(tmp_path, "qa", "wfforce01", status="running")
+    try:
+        out = await _tool(tmp_path, _FakeManager([], running=[])).execute(
+            action="stop", id="wfforce01", force=True)
+        assert "force-stopped" in out
+        assert cancellation.is_hard_cancelled("wfforce01") is True
+    finally:
+        cancellation.clear("wfforce01")
+
+
+@pytest.mark.asyncio
+async def test_repeat_stop_escalates_to_hard(tmp_path):
+    """First stop is graceful; a second stop on the (now "stopping") run means
+    "stop it NOW" and escalates to hard without needing force=true."""
+    _write_manifest(tmp_path, "qa", "wfrepeat01", status="running")
+    tool = _tool(tmp_path, _FakeManager([], running=[]))
+    try:
+        first = await tool.execute(action="stop", id="wfrepeat01")
+        assert "asked to cancel" in first
+        assert cancellation.is_hard_cancelled("wfrepeat01") is False
+        second = await tool.execute(action="stop", id="wfrepeat01")
+        assert "force-stopped" in second
+        assert cancellation.is_hard_cancelled("wfrepeat01") is True
+    finally:
+        cancellation.clear("wfrepeat01")

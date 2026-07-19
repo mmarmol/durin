@@ -536,22 +536,34 @@ input. The shared-context buffer is not reconstructed across a resume —
 persistent-session nodes recover their own history, and files live in the
 working folder.
 
-**Cooperative cancellation.** `tasks(action='stop', …)` marks the `run_id` in a
-process-global registry (`durin/workflow/cancellation.py`); the engine polls it
-via a `cancel_check` callback at the top of its node walk. For an agent node a
-cancel takes effect **between** nodes — a node already executing finishes first
-(best-effort, the same contract as cancelling a sub-agent). A script node gets
-the same callback threaded into its subprocess wait, polled every slice while
-the process runs: a cancel there kills the subprocess's process group directly
-(the same group-kill path a timeout uses) instead of waiting for it to finish
-or time out. Either way the run ends with the terminal status `cancelled`,
-carrying the partial per-node trace, and its result is still injected back
-like any other completion. A **foreground** run
-(`background=false`) is bridged to the same mechanism: if `/stop` cancels the
-turn awaiting it, `run_workflow` signals the run's cooperative flag — asyncio
-cancellation cannot reach the engine's worker thread — so the engine stops
-before its next node instead of running to completion unobserved, and the flag
-is dropped once the detached engine actually stops.
+**Cooperative cancellation — two modes.** `tasks(action='stop', …)` marks the
+`run_id` in a process-global registry (`durin/workflow/cancellation.py`); the
+engine polls it via a `cancel_check` callback at the top of its node walk.
+
+- **Graceful** (the default): the run stops at its next node boundary. A
+  script node still dies immediately — the callback is threaded into its
+  subprocess wait, polled every slice, and a cancel kills the subprocess's
+  process group directly (the same group-kill path a timeout uses). An agent
+  node already executing finishes first.
+- **Hard** (`force=true`, or a repeat `stop` on a run already cancelling,
+  which auto-escalates): additionally interrupts an in-flight agent node. The
+  engine hands agent nodes (including parallel branches) a hard-only check;
+  the node runner runs the turn as a task and polls the flag every half
+  second, cancelling the task the moment it turns true — the abort surfaces
+  as a `WorkInterrupted` cause, the partial conversation is persisted like any
+  node failure, and the run ends `cancelled`.
+
+While a cancel is pending, the merged task list reports the run as
+`stopping` (computed from the registry — the manifest is not rewritten), so
+the UI acknowledges the stop before the engine actually winds down. Either
+mode ends the run with the terminal status `cancelled`, carrying the partial
+per-node trace, and its result is still injected back like any other
+completion. A **foreground** run (`background=false`) is bridged to the same
+mechanism: if `/stop` cancels the turn awaiting it, `run_workflow` signals the
+run's cooperative flag hard — asyncio cancellation cannot reach the engine's
+worker thread, and with nobody waiting for the result there is no reason to
+let the in-flight node burn tokens to completion — and the flag is dropped
+once the detached engine actually stops.
 
 **Live per-node and per-branch progress.** The engine emits a progress frame at
 the start of each node (status `running`) and another when the node finishes.

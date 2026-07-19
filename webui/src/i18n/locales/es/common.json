@@ -2209,7 +2209,8 @@
   },
   "tasks": {
     "status": {
-      "needs_input": "Necesita input"
+      "needs_input": "Necesita input",
+      "stopping": "Deteniendo…"
     },
     "needsInputHint": "En manos del agente que lo llamó — puede responder con su propio contexto o preguntarte, y luego reanuda este run.",
     "questions": "Preguntas"
@@ -2230,7 +2231,9 @@
       "needsInput": "{{label}} necesita tu respuesta",
       "needsInputMany": "{{count}} trabajos necesitan tu respuesta",
       "view": "Ver",
-      "respond": "Responder"
+      "respond": "Responder",
+      "statusStopping": "deteniendo…",
+      "statusCancelled": "cancelado"
     }
   },
   "rich": {
