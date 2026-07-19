@@ -529,12 +529,22 @@ export function ThreadShell({
       ) : null}
       {readOnlyBanner}
       {session && !panelOpen ? (
-        <WorkStrip
-          key={chatId ?? "no-chat"}
-          active={work.active}
-          finished={work.finished}
-          onOpen={() => setPanelOpen(true)}
-        />
+        // Same centering constraint as the composer root (58rem hero / 49.5rem
+        // thread) so the strip aligns with the input instead of spanning the
+        // viewport's full content width.
+        <div
+          className={cn(
+            "mx-auto w-full",
+            showHeroComposer ? "max-w-[58rem]" : "max-w-[49.5rem]",
+          )}
+        >
+          <WorkStrip
+            key={chatId ?? "no-chat"}
+            active={work.active}
+            finished={work.finished}
+            onOpen={() => setPanelOpen(true)}
+          />
+        </div>
       ) : null}
       {session ? (
         <ThreadComposer
