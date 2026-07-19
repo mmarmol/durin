@@ -1248,6 +1248,62 @@ class MemoryDreamThrottledEvent(TypedDict):
 
     trigger: str
     reason: str
+    # Present when reason == "low_memory": the reactive memory gate skipped
+    # the spawn because system available memory was under the configured floor.
+    available_mb: NotRequired[float]
+
+
+class MemoryDreamRssEvent(TypedDict):
+    """Per-pass memory waypoint emitted by the dream worker: its own resident
+    set and its children's (embedding pool workers) after a heavy pass."""
+
+    phase: str
+    rss_mb: float
+    children_mb: float
+
+
+class MemoryDreamRssKillEvent(TypedDict):
+    """The supervisor's RSS watchdog terminated a dream worker tree that
+    crossed the configured cap — the run retries on a later trigger."""
+
+    trigger: str
+    mode: str
+    rss_mb: float
+    cap_mb: float
+
+
+class MemoryEmbeddingPoolFallbackEvent(TypedDict):
+    """The embedding worker pool broke and the provider degraded to inline
+    embedding for the life of the process — arena containment is lost."""
+
+    model: str
+
+
+class MemoryIndexCompactedEvent(TypedDict):
+    """Nightly LanceDB table maintenance ran. ``mode`` is ``optimized`` (the
+    normal path) or ``rebuilt`` (the fragment rewrite corrupted the vector
+    read path and the table was re-created from its current rows); when
+    ``compacted`` is false, ``reason`` says why."""
+
+    compacted: bool
+    mode: NotRequired[str]
+    versions_before: NotRequired[int]
+    versions_after: NotRequired[int]
+    reason: NotRequired[str]
+    duration_ms: NotRequired[int]
+
+
+class GatewayMemoryEvent(TypedDict):
+    """Periodic footprint snapshot of the gateway process (boot + every few
+    minutes): resident set, children total, threads, gc generation sizes,
+    and host total/available memory for headroom context."""
+
+    rss_mb: float
+    children_mb: float
+    threads: int
+    gc_counts: list[int]
+    total_mb: float
+    available_mb: float
 
 
 class MemoryDreamAlwaysOnEvent(TypedDict):
@@ -1598,6 +1654,11 @@ EVENTS: dict[str, type] = {
     "memory.dream.skill_signals": MemoryDreamSkillSignalsEvent,
     "memory.dream.max_seconds_reached": MemoryDreamMaxSecondsReachedEvent,
     "memory.dream.throttled": MemoryDreamThrottledEvent,
+    "memory.dream.rss": MemoryDreamRssEvent,
+    "memory.dream.rss_kill": MemoryDreamRssKillEvent,
+    "memory.embedding.pool_fallback": MemoryEmbeddingPoolFallbackEvent,
+    "memory.index.compacted": MemoryIndexCompactedEvent,
+    "gateway.memory": GatewayMemoryEvent,
     "memory.dream.always_on": MemoryDreamAlwaysOnEvent,
     "memory.dream.flagged": MemoryDreamFlaggedEvent,
     "memory.dream.parse_failure": MemoryDreamParseFailureEvent,

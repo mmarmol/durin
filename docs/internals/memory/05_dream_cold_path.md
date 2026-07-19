@@ -70,6 +70,26 @@ cache, since the child's writes bypassed in-process invalidation. Killing the
 worker at any point is safe: memory writes are short flock+CAS critical
 sections and the cursor resumes the remainder on the next trigger.
 
+**Containment and observability.** The worker is spawned in its own process
+group, and the supervisor runs an **RSS watchdog**: it samples the worker
+tree's resident set and terminates the whole group above a cap
+(`memory.dream.max_rss_mb`; 0 = a fraction of total RAM) — a runaway dream
+dies alone instead of dragging the host into swap. Reactive triggers
+additionally pass a **memory gate** before spawning at all
+(`memory.dream.min_available_mb`): with system memory tight, the spawn is
+skipped (`memory.dream.throttled` telemetry, reason `low_memory`) and the
+turns are picked up later. The worker persists its own rotating log
+(`logs/dream-worker.log`, same rotation knobs as the gateway log) and the
+orchestrator emits **RSS waypoints** after the heavy passes — `{"kind":
+"rss", phase, rss_mb, children_mb}` on the progress feed plus a
+`memory.dream.rss` telemetry event — so a ballooning pass is attributable
+after the fact. The nightly run also **compacts the LanceDB table**
+(`compact_index`): every index write commits a new table version and nothing
+else prunes them. Compaction is verify-or-rollback — optimize, probe a real
+vector search, restore the pre-optimize version and rebuild the table from
+its current rows if the fragment rewrite corrupted the vector read path (a
+real lance 4.0 failure mode on tables written by older formats).
+
 **3. Per-session cursor → idempotent, lossless.** The extract pass tracks
 progress with a single integer **per-session cursor** (turns already processed).
 A re-run re-processes nothing already seen; a skipped or failed run is harmless

@@ -12,12 +12,31 @@ import subprocess
 
 __all__ = [
     "available_memory_mb",
+    "memory_snapshot",
     "process_alive",
     "process_identity",
     "process_rss_mb",
     "total_memory_mb",
     "tree_rss_mb",
 ]
+
+
+def memory_snapshot() -> dict:
+    """One cheap footprint snapshot of THIS process for telemetry/diagnostics:
+    resident set, direct+transitive children total, thread count, gc gen
+    sizes, and the host's total/available memory for context."""
+    import gc
+    import threading
+
+    rss, children = tree_rss_mb()
+    return {
+        "rss_mb": rss,
+        "children_mb": children,
+        "threads": threading.active_count(),
+        "gc_counts": list(gc.get_count()),
+        "total_mb": total_memory_mb(),
+        "available_mb": available_memory_mb(),
+    }
 
 
 def _lstart(pid: int) -> str | None:

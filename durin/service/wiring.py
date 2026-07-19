@@ -176,6 +176,7 @@ def build_service_registry(
     # stay "running" until the NEXT gateway restart. A slow periodic sweep
     # keeps every surface truthful within minutes instead.
     start_periodic_run_reconciler(_workspace)
+    start_memory_telemetry()
     return registry
 
 
@@ -215,5 +216,47 @@ def start_periodic_run_reconciler(
 
     threading.Thread(
         target=_sweep_forever, daemon=True, name="run-reconciler",
+    ).start()
+    return True
+
+
+_MEMORY_TELEMETRY_PERIOD_S = 900.0
+_memory_telemetry_started = threading.Event()
+
+
+def start_memory_telemetry(*, period_s: float = _MEMORY_TELEMETRY_PERIOD_S) -> bool:
+    """Emit a ``gateway.memory`` telemetry event at boot and periodically.
+
+    The footprint curve of the serving process is a first-class signal: the
+    2026-07-18 review found a 2GB-resident gateway with zero recorded data
+    about when the memory arrived. Once per process; returns False when
+    already started."""
+    if _memory_telemetry_started.is_set():
+        return False
+    _memory_telemetry_started.set()
+
+    def _emit_once() -> None:
+        from durin.agent.tools._telemetry import emit_tool_event
+        from durin.utils.process_tree import memory_snapshot
+
+        emit_tool_event("gateway.memory", memory_snapshot())
+
+    def _emit_forever() -> None:
+        import time
+
+        from durin.telemetry.logger import bind_telemetry, get_session_logger
+
+        # A fresh thread has no bound telemetry logger and emit_tool_event
+        # drops events without one — bind the gateway's own stream.
+        bind_telemetry(get_session_logger("gateway"))
+        while True:
+            try:
+                _emit_once()
+            except Exception:  # noqa: BLE001 - telemetry must never die
+                logger.exception("gateway memory telemetry failed")
+            time.sleep(period_s)
+
+    threading.Thread(
+        target=_emit_forever, daemon=True, name="gateway-memory-telemetry",
     ).start()
     return True

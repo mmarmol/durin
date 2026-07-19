@@ -36,3 +36,12 @@ def test_tree_rss_counts_a_live_child() -> None:
     finally:
         child.kill()
         child.wait()
+
+
+def test_memory_snapshot_shape() -> None:
+    from durin.utils.process_tree import memory_snapshot
+
+    snap = memory_snapshot()
+    assert snap["rss_mb"] > 0
+    assert snap["threads"] >= 1
+    assert len(snap["gc_counts"]) == 3

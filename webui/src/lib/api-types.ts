@@ -554,6 +554,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/diagnostics/memory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Gateway memory footprint: RSS, children, threads, gc, host headroom */
+        get: operations["health_memory_diagnostics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/extras/ensure": {
         parameters: {
             query?: never;
@@ -4052,6 +4069,29 @@ export interface components {
             /** Uri */
             uri: string;
         };
+        /**
+         * MemoryDiagnosticsQuery
+         * @description No inputs — one process-footprint snapshot.
+         */
+        MemoryDiagnosticsQuery: Record<string, never>;
+        /** MemoryDiagnosticsResult */
+        MemoryDiagnosticsResult: {
+            /** Available Mb */
+            available_mb: number;
+            /** Children Mb */
+            children_mb: number;
+            /**
+             * Gc Counts
+             * @default []
+             */
+            gc_counts: number[];
+            /** Rss Mb */
+            rss_mb: number;
+            /** Threads */
+            threads: number;
+            /** Total Mb */
+            total_mb: number;
+        };
         /** MemoryDocumentForgetCommand */
         MemoryDocumentForgetCommand: {
             /** Slug */
@@ -6793,6 +6833,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CronToggleResult"];
+                };
+            };
+        };
+    };
+    health_memory_diagnostics: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MemoryDiagnosticsQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemoryDiagnosticsResult"];
                 };
             };
         };

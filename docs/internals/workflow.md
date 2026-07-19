@@ -318,11 +318,18 @@ manifests written before this field existed).
 workflow; callers that need only terminal runs should skip records whose `status` is
 `"running"` or `"crashed"`.
 
-**Crash reconciliation.** A `running` manifest whose `started_at` is older than a generous
-threshold can only be a run whose process died before finalizing. The gateway's startup
-sweep (`reconcile_running`) rewrites any such record's status to `"crashed"` (preserving
-its partial trace) so an auditor sees a truthful status rather than a permanently stale
-`running`. The threshold is deliberately generous; real runs finalize fast.
+**Crash reconciliation.** Every manifest records its **owner** — the pid plus the
+process start-time string of the process executing the run — and the sweep
+(`reconcile_running`) rewrites any `running` record whose owner is no longer alive to
+`"crashed"` (preserving its partial trace). Ownership makes the sweep both immediate
+and safe in a multi-process workspace: a gateway that crashes and restarts within
+minutes clears its ghosts at the next boot, while a run owned by another live process
+(the TUI sharing the same workspace) is never touched. The sweep runs at gateway boot
+AND periodically (a background thread wired in the service registry), so an orphan left
+by a crashed co-owner clears without waiting for a gateway restart; the `tasks` tool
+additionally self-heals a dead-owner run on `status`/`stop` and answers with the truth.
+Manifests written before the owner field existed fall back to a generous
+`started_at` age threshold.
 
 **Retention.** `prune_manifests(workspace, name, keep=workflow.keep_runs)` bounds how
 many manifests accumulate per workflow name: after each successful `finalize_run`, the

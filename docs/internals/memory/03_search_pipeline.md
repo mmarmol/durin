@@ -60,7 +60,14 @@ flowchart TD
 
 `decide_lexical_route` (`query_router.py`) runs synchronously before any retrieval:
 
-1. NFC-normalizes and whitespace-collapses the query.
+1. NFC-normalizes and whitespace-collapses the query, then **bounds it** to
+   `MAX_QUERY_CHARS` / `MAX_QUERY_TOKENS` (keeping the head; `truncated` is set on the
+   decision). The bound is a hard invariant for every downstream step: quoting each
+   token of an unbounded text into one FTS5 MATCH makes sqlite allocate memory
+   proportional to the term count (~800MB for a 380KB transcript passed as a query in
+   the 2026-07-18 incident) while matching nothing. A caller holding a long text wants
+   retrieval *about* it, not *of* it; callers that know which window matters (e.g. the
+   dream's discovery pass passes the most recent turns) slice before calling.
 2. Counts CJK characters (Hiragana, Katakana, Hangul, CJK Unified and Extension blocks) to pick the FTS5 path:
    - No CJK → `UNICODE61` (`memory_fts`, BM25-ranked).
    - CJK ≥ 3 and all non-operator tokens ≥ 3 chars → `TRIGRAM` (`memory_fts_trigram`).

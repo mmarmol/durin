@@ -185,8 +185,12 @@ def run_dream_worker(
     watchdog_kill: dict[str, float] = {}
 
     def _watchdog() -> None:
+        from durin.telemetry.logger import bind_telemetry, get_session_logger
         from durin.utils.process_tree import tree_rss_mb
 
+        # This thread emits the rss_kill event; without a bound logger
+        # emit_tool_event drops it.
+        bind_telemetry(get_session_logger("dream_supervisor"))
         while not watchdog_stop.wait(_WATCHDOG_INTERVAL_S):
             if proc.poll() is not None:
                 return

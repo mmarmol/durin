@@ -55,6 +55,29 @@ class RuntimeStatusResult(Result):
 
 
 # ---------------------------------------------------------------------------
+# DTOs — memory diagnostics
+# ---------------------------------------------------------------------------
+
+
+class MemoryDiagnosticsQuery(Query):
+    """No inputs — one process-footprint snapshot."""
+
+
+class MemoryDiagnosticsResult(Result):
+    # Resident set of the gateway process and of its child processes
+    # (embedding pool workers, spawned helpers), in MB.
+    rss_mb: float
+    children_mb: float
+    threads: int
+    # gc generation sizes — a monotonically ballooning gen2 is the classic
+    # signature of Python-side retention.
+    gc_counts: list[int] = []
+    # Host context so a reader can judge headroom without a second call.
+    total_mb: float
+    available_mb: float
+
+
+# ---------------------------------------------------------------------------
 # DTOs — extras_status
 # ---------------------------------------------------------------------------
 
@@ -211,6 +234,30 @@ class HealthService:
             channels=channels,
             cron=cron,
         )
+
+    @route(
+        "GET",
+        "/api/v1/diagnostics/memory",
+        scope=Scope.SYSTEM_READ.value,
+        request_model=MemoryDiagnosticsQuery,
+        response_model=MemoryDiagnosticsResult,
+        summary="Gateway memory footprint: RSS, children, threads, gc, host headroom",
+    )
+    async def memory_diagnostics(
+        self, query: MemoryDiagnosticsQuery, principal: Principal
+    ) -> MemoryDiagnosticsResult:
+        """Live footprint of the gateway process, on demand.
+
+        The 2026-07-18 incident review found the production gateway at 2GB
+        resident with no way to ask it why; this route (with the periodic
+        ``gateway.memory`` telemetry) is the first-class instrument for that
+        question.
+        """
+        principal.require(Scope.SYSTEM_READ)
+        from durin.utils.process_tree import memory_snapshot
+
+        snap = await asyncio.to_thread(memory_snapshot)
+        return MemoryDiagnosticsResult(**snap)
 
     @route(
         "GET",
