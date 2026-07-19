@@ -20,7 +20,8 @@ class _FakeSvc:
         self.enabled = enabled
         self.warmed = 0
 
-    async def warmup(self):
+    async def predownload(self):
+        # Boot verifies model files exist; it never leaves an engine resident.
         self.warmed += 1
 
 
