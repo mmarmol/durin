@@ -1663,6 +1663,16 @@ def _run_gateway(
     # Register the memory dream system job: the daily extract/refine/skill
     # passes that consolidate sessions into memory/entities/<type>/<slug>.md
     # pages + skills.
+    # The standing embedding server: one warm model copy every durin process
+    # shares over loopback HTTP; providers fall back to per-process pools
+    # while it is absent. Best-effort — a spawn failure must not block boot.
+    try:
+        from durin.memory.embed_supervisor import start_embed_server_supervisor
+
+        start_embed_server_supervisor(config)
+    except Exception:  # noqa: BLE001
+        logger.exception("embed server supervision failed to start")
+
     mem_dream_cfg = config.memory.dream
     if mem_dream_cfg.enabled:
         cron.register_system_job(CronJob(
@@ -2012,8 +2022,10 @@ def _run_gateway(
             # in-flight dream worker — hard kills are safe for the store, and
             # the per-session cursors resume the remainder next run.
             from durin.memory.dream_supervisor import stop_dream_workers
+            from durin.memory.embed_supervisor import stop_embed_server
 
             await asyncio.to_thread(stop_dream_workers)
+            await asyncio.to_thread(stop_embed_server)
             agent.stop()
             await channels.stop_all()
             # Flush all cached sessions to durable storage before exit.

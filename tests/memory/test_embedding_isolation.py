@@ -31,7 +31,9 @@ class FakeModel:
 def test_schema_defaults():
     cfg = MemoryEmbeddingConfig()
     assert cfg.batch_size == 32
-    assert cfg.isolation == "process"
+    # "service" = the gateway-supervised standing embedding server; providers
+    # without a discovered server fall back to the per-process pool.
+    assert cfg.isolation == "service"
     assert cfg.worker_recycle_batches == 64
 
 

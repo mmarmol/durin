@@ -196,14 +196,28 @@ class MemoryEmbeddingConfig(Base):
         le=1024,
         description="Texts per ONNX run inside one embed call. Peak activation memory scales with this; the fastembed default of 256 ratchets the never-shrinking ONNX arena to gigabytes",
     )
-    isolation: Literal["process", "inline"] = Field(
-        default="process",
-        description='"process" runs embeddings in a recyclable worker subprocess so arena growth is reclaimed; "inline" keeps them in the gateway process',
+    isolation: Literal["service", "process", "inline"] = Field(
+        default="service",
+        description='"service" uses the gateway-supervised standing embedding server (one warm model copy shared by every durin process; falls back to "process" when no server is reachable); "process" runs embeddings in a recyclable worker subprocess per process; "inline" keeps them in the calling process',
     )
     worker_recycle_batches: int = Field(
         default=64,
         ge=1,
         description="With isolation=process: recycle the worker after this many embed calls, bounding the arena high-water mark",
+    )
+
+    service_port: int = Field(
+        default=0,
+        ge=0,
+        validation_alias=AliasChoices("servicePort", "service_port"),
+        description="Loopback port for the standing embedding server; 0 = OS-assigned (clients discover it via the discovery file)",
+    )
+
+    service_max_rss_mb: int = Field(
+        default=0,
+        ge=0,
+        validation_alias=AliasChoices("serviceMaxRssMb", "service_max_rss_mb"),
+        description="RSS cap in MB for the embedding server; the gateway restarts it above the cap (reclaiming the ONNX arena); 0 = automatic (a fraction of total RAM)",
     )
     base_url: str | None = Field(
         default=None,
