@@ -5,6 +5,48 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.3.3 — 2026-07-19
+
+### Highlights
+
+- **Background workers can finally see, read, and remember.** Sub-agents and
+  workflow work nodes now get the image/audio interpretation bridges (when
+  aux models are configured), document→markdown conversion, memory writes
+  (entity upsert, document ingest, lineage reads), notebook editing, and a
+  bounded `sleep` for polling external jobs. All of these were main-agent-only
+  — mostly by omission, not decision. What stays out is now an explicit,
+  commented policy: no user asking, no channel sends, no nested spawn or
+  workflow runs, no cron/loop creation, no destructive memory ops, no skill
+  self-modification. (#408)
+- **The tool surface is now legible — to you and to the agent.** The `spawn`
+  tool tells the delegating agent exactly what a sub-agent can and cannot do;
+  the workflows skill spells out what `tools: "default"` contains; the
+  workflow editor's mode dropdown lists your custom modes (previously
+  hardcoded — custom modes, the mechanism for per-node tool allowlists, were
+  unselectable); and the modes editor badges which tools are
+  background-capable, so you can see which allowlist entries will actually
+  reach a node or sub-agent. (#408, #409)
+- **Workflow saves now warn about silent tool-surface surprises.** Saving a
+  workflow (from the agent tools or the web editor) returns advisory warnings
+  for a node `mode` that isn't a registered mode — at run time a typo silently
+  falls back to `build`, i.e. FULL access — and for mode-allowlist entries
+  that can never load in a work node. The save still succeeds; the surprise
+  doesn't wait until run time. (#409)
+
+### Changes
+
+- **Agent core:** read-only additions (bridges, document conversion, entity
+  and lineage reads, `sleep`) join the `plan`/`explore`/`read` mode
+  allowlists, so a read-only verify node can inspect a screenshot without
+  gaining write access; `sleep`'s "allowed in every mode" contract is now
+  actually true. Aux bridge construction moved to a shared module
+  (`durin/agent/aux_bridges.py`) — handles rebuild per spawn (hot-reload
+  friendly) and are cached per workflow run.
+- **API:** `GET /api/v1/tools` entries carry `background`; workflow save
+  responses carry `warnings` (contract + typed client regenerated).
+- **WebUI:** mode badges and save-warning notices localized across all nine
+  languages.
+
 ## 0.3.2 — 2026-07-19
 
 ### Highlights
