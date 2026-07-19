@@ -12,10 +12,59 @@ import subprocess
 
 __all__ = [
     "available_memory_mb",
+    "process_alive",
+    "process_identity",
     "process_rss_mb",
     "total_memory_mb",
     "tree_rss_mb",
 ]
+
+
+def _lstart(pid: int) -> str | None:
+    """The process' start-time string from ps, or None when it doesn't exist.
+
+    The string is compared for EQUALITY only (never parsed), so locale and
+    format don't matter — it just has to be stable for a given process,
+    which `ps -o lstart` is on both Linux and macOS.
+    """
+    try:
+        out = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "lstart="],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    text = out.stdout.strip()
+    return text or None
+
+
+def process_identity(pid: int | None = None) -> dict:
+    """A durable identity for a live process: ``{"pid", "started"}``.
+
+    Persisted by run manifests so a later process can tell "this run's owner
+    is still alive" from "the pid was reused by something else".
+    """
+    pid = pid if pid is not None else os.getpid()
+    return {"pid": pid, "started": _lstart(pid)}
+
+
+def process_alive(owner: object) -> bool:
+    """True when the process recorded in *owner* is still the same, live
+    process. A missing/invalid pid is dead; a live pid with a DIFFERENT
+    start time is dead (pid reuse); an owner recorded without a start time
+    falls back to pid-liveness alone.
+    """
+    if not isinstance(owner, dict):
+        return False
+    try:
+        pid = int(owner.get("pid"))
+    except (TypeError, ValueError):
+        return False
+    current = _lstart(pid)
+    if current is None:
+        return False
+    recorded = owner.get("started")
+    return recorded is None or current == recorded
 
 
 def _read_meminfo(field: str) -> float:

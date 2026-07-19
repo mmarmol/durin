@@ -34,9 +34,11 @@ def _wf_dir(workspace: str | Path, name: str) -> Path:
 # {run_id, workflow, status, ts, runs:[{node_id, iteration, passed}]}; readers tolerate them.
 SCHEMA = 2
 
-# A run still "running" this long after it started can only be one whose process died
-# before finalizing — the gateway's boot-time sweep (reconcile_running) flips it to
-# "crashed" so an auditor sees a truthful status. Generous: real runs finalize fast.
+# Age fallback for manifests recorded WITHOUT an owner (pre-ownership
+# releases): a run still "running" this long after it started can only be one
+# whose process died before finalizing. Owned manifests don't use age at all —
+# the sweep checks whether the owner process is alive (the 2026-07-18 ghost
+# was 52 minutes old at the post-crash boot, far under any sane age bound).
 RECONCILE_AGE_S = 6 * 3600
 
 
@@ -87,6 +89,8 @@ def start_run(
     if parent_run_id is None:
         prior = read_manifest(workspace, name, run_id) or {}
         parent_run_id = prior.get("parent_run_id")
+    from durin.utils.process_tree import process_identity
+
     record = {
         "schema": SCHEMA,
         "run_id": run_id,
@@ -98,6 +102,9 @@ def start_run(
         "task": task,
         "parent_run_id": parent_run_id,
         "work_dir": work_dir,
+        # Which process is executing this run — the crash sweep flips any
+        # "running" manifest whose owner is no longer alive.
+        "owner": process_identity(),
         "runs": [],
     }
     path = _record_path(workspace, name, run_id)
@@ -123,6 +130,7 @@ def update_run(
         "task": base.get("task"),
         "parent_run_id": base.get("parent_run_id"),
         "work_dir": base.get("work_dir"),
+        "owner": base.get("owner"),
         "runs": _node_records(result),
     }
     path.write_text(json.dumps(record), encoding="utf-8")
@@ -211,11 +219,17 @@ def runs_for_session(workspace: str | Path, root_session_key: str) -> list[dict]
 
 
 def reconcile_running(workspace: str | Path, *, now: float, max_age_s: float) -> int:
-    """Mark any ``running`` manifest whose ``started_at`` is older than *max_age_s* as
-    ``crashed`` (keeping its partial trace). A still-``running`` record long past its
-    start could only be a run whose process died before finalizing — this recovers it so
-    crash detection is observable. Returns how many records were reconciled. A malformed
+    """Mark orphaned ``running`` manifests as ``crashed`` (keeping the partial trace).
+
+    A manifest that records an ``owner`` is flipped as soon as that process is
+    dead — no age heuristic, so a gateway that crashes and restarts within
+    minutes still clears its ghosts, while a run owned by another LIVE process
+    (e.g. the TUI sharing this workspace) is never touched. Ownerless legacy
+    manifests fall back to the ``started_at`` age cutoff. Safe to run at boot
+    AND periodically. Returns how many records were reconciled; a malformed
     record is skipped, never fatal."""
+    from durin.utils.process_tree import process_alive
+
     root = runs_root(workspace)
     if not root.is_dir():
         return 0
@@ -231,7 +245,14 @@ def reconcile_running(workspace: str | Path, *, now: float, max_age_s: float) ->
                 rec = json.loads(f.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 continue
-            if rec.get("status") == "running" and rec.get("started_at", 0.0) < cutoff:
+            if rec.get("status") != "running":
+                continue
+            owner = rec.get("owner")
+            if owner is not None:
+                orphaned = not process_alive(owner)
+            else:
+                orphaned = rec.get("started_at", 0.0) < cutoff
+            if orphaned:
                 rec["status"] = "crashed"
                 try:
                     f.write_text(json.dumps(rec), encoding="utf-8")
@@ -389,3 +410,26 @@ def prune_manifests(workspace: str | Path, name: str, keep: int = 20) -> None:
             path.unlink()
     except OSError:
         pass
+
+
+def reconcile_one(workspace: str | Path, name: str, run_id: str) -> bool:
+    """Flip ONE ``running`` manifest to ``crashed`` iff its owner process is
+    dead. The self-heal the `tasks` tool applies when the user pokes a run
+    the sweep hasn't reached yet — so "status"/"stop" answer with the truth
+    instead of describing a process that no longer exists. Ownerless legacy
+    manifests are left to the age sweep. Returns True when flipped."""
+    from durin.utils.process_tree import process_alive
+
+    rec = read_manifest(workspace, name, run_id)
+    if not rec or rec.get("status") != "running":
+        return False
+    owner = rec.get("owner")
+    if owner is None or process_alive(owner):
+        return False
+    rec["status"] = "crashed"
+    try:
+        _record_path(workspace, name, run_id).write_text(
+            json.dumps(rec), encoding="utf-8")
+    except OSError:
+        return False
+    return True
