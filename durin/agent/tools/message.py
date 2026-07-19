@@ -44,6 +44,9 @@ from durin.config.paths import get_workspace_path
 class MessageTool(Tool, ContextAware):
     """Tool to send messages to users on chat channels."""
 
+    # Core-only: outbound channel sends stay with the primary conversation.
+    _scopes = {"core"}
+
     def __init__(
         self,
         send_callback: Callable[[OutboundMessage], Awaitable[None]] | None = None,

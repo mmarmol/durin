@@ -91,6 +91,8 @@ _PARAMETERS = tool_parameters_schema(
 class MemoryUpsertEntityTool(Tool):
     """memory_upsert_entity — agent-authored entity pages."""
 
+    _scopes = {"core", "subagent"}
+
     config_key = "memory"
 
     def __init__(self, workspace: str | Path, app_config: Any | None = None) -> None:

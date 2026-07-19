@@ -42,7 +42,7 @@ _PARAMETERS = tool_parameters_schema(
 class ConvertToMarkdownTool(Tool):
     """convert_to_markdown tool — one-shot document → markdown conversion."""
 
-    _scopes = {"core"}
+    _scopes = {"core", "subagent"}
 
     def __init__(self, workspace: str | Path) -> None:
         self._workspace = Path(workspace).expanduser()

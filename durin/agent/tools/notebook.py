@@ -56,7 +56,7 @@ def _make_empty_notebook() -> dict:
 )
 class NotebookEditTool(_FsTool):
     """Edit Jupyter notebook cells: replace, insert, or delete."""
-    _scopes = {"core"}
+    _scopes = {"core", "subagent"}
 
     _VALID_CELL_TYPES = frozenset({"code", "markdown"})
     _VALID_EDIT_MODES = frozenset({"replace", "insert", "delete"})

@@ -113,7 +113,7 @@ def _build_audio_content_blocks(
 class InterpretAudioTool(Tool):
     """Ask a chat-multimodal auxiliary model to interpret a local audio file."""
 
-    _scopes = {"core"}
+    _scopes = {"core", "subagent"}
 
     def __init__(self, aux: AuxProviderHandle, workspace: str | None) -> None:
         self._aux = aux

@@ -56,6 +56,9 @@ _PARAMETERS = tool_parameters_schema(
 class MemoryForgetTool(Tool):
     """Archive a memory entry and drop its FTS + vector index rows."""
 
+    # Core-only: destructive archival stays a primary-agent decision.
+    _scopes = {"core"}
+
     config_key = "memory"
 
     def __init__(self, workspace: str | Path) -> None:

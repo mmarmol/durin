@@ -73,7 +73,11 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   ideal gate for "do the tests pass?"-style checks, where an agent gate would cost a turn
   and could be swayed.
 - **Per node**: a `model` **or** a `persona` (a SOUL + its model); a work `mode` (`build` =
-  may write files, `read` = read-only); built-in `tools` (`none` / `default`); injected
+  may write files, `read` = read-only); built-in `tools` (`none` / `default` — `default` is
+  the background tool set: files, shell, search, web, memory search and memory writes,
+  plus the vision/audio interpretation bridges when aux models are configured; interactive
+  and orchestration tools — asking the user, messaging channels, spawning subagents,
+  running workflows — are never in it); injected
   `skills`; a scoped subset of configured `mcps`; and a `session` policy — `"persistent"`
   makes a *looping* node resume its own conversation when the flow returns to it (it keeps
   its prior reasoning and only receives what is new), instead of restarting cold each pass.

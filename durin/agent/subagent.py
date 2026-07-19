@@ -27,7 +27,7 @@ from durin.utils.prompt_templates import render_template
 def _resolve_subagent_provider(app_config: Any) -> tuple[LLMProvider, str] | None:
     """Resolve ``agents.aux_models.subagents`` to a ``(provider, model)`` pair.
 
-    Mirrors the vision/audio/memory aux bridges (``AgentLoop._build_aux_providers``):
+    Mirrors the vision/audio/memory aux bridges (:func:`durin.agent.aux_bridges.build_aux_providers`):
     a preset reference wins over an inline ``model``/``provider`` pair. Returns
     ``None`` when the aux model is unset or app_config is unavailable, so the
     caller falls back to the inherited session provider — resolved fresh on
@@ -219,15 +219,40 @@ class SubagentManager:
         workspace: Path | None = None,
         tools_config: ToolsConfig | None = None,
     ) -> ToolRegistry:
-        """Build an isolated subagent tool registry via ToolLoader."""
+        """Build an isolated subagent tool registry via ToolLoader.
+
+        The context carries ``aux_providers`` and ``app_config`` so
+        subagent-scoped tools that need them (the vision/audio bridges,
+        the memory write tools) register here the same way they do in
+        the main loop. Aux handles are rebuilt per spawn — like the
+        subagent model itself — so a hot-reloaded ``aux_models`` change
+        takes effect on the next spawn without a restart; a failure to
+        build them must never break spawning, it only hides the bridge
+        tools for this run.
+        """
         root = self.workspace if workspace is None else workspace
         registry = ToolRegistry()
         cfg = tools_config if tools_config is not None else self._subagent_tools_config()
+        app_config = None
+        aux_providers: dict[str, Any] = {}
+        if self._app_config_getter is not None:
+            try:
+                app_config = self._app_config_getter()
+            except Exception:
+                app_config = None
+        if app_config is not None:
+            from durin.agent.aux_bridges import build_aux_providers
+            try:
+                aux_providers = build_aux_providers(app_config)
+            except Exception:
+                logger.warning("Failed to build aux bridges for subagent; continuing without them")
         ctx = ToolContext(
             config=cfg,
             workspace=str(root.resolve()),
             file_state_store=FileStates(),
             scope="subagent",
+            aux_providers=aux_providers,
+            app_config=app_config,
         )
         ToolLoader().load(ctx, registry, scope="subagent")
         return registry

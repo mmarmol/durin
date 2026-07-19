@@ -46,6 +46,9 @@ _PARAMETERS = tool_parameters_schema(
 class SkillEditTool(Tool, ContextAware):
     """skill_edit tool."""
 
+    # Core-only: self-modification of skills stays a primary-agent decision.
+    _scopes = {"core"}
+
     def __init__(self, workspace: str | Path) -> None:
         self._workspace = Path(workspace).expanduser()
         self._session: ContextVar[str | None] = ContextVar("skill_edit_session", default=None)

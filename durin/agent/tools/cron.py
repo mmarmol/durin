@@ -76,6 +76,10 @@ _CRON_PARAMETERS = tool_parameters_schema(
 class CronTool(Tool, ContextAware):
     """Tool to schedule reminders and recurring tasks."""
 
+    # Core-only: an ephemeral background worker must not create standing
+    # scheduled work on the user's behalf.
+    _scopes = {"core"}
+
     def __init__(self, cron_service: CronService, default_timezone: str = "UTC"):
         self._cron = cron_service
         self._default_timezone = default_timezone
