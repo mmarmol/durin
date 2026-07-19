@@ -218,6 +218,10 @@ def _format_result(result: Any, output_files: bool = False) -> str:
 class RunWorkflowTool(Tool, ContextAware):
     """Run a user-defined workflow (a flow graph of nodes) on a task."""
 
+    # Core-only: a workflow started from a subagent or work node would recurse;
+    # workflows compose via subworkflow nodes instead.
+    _scopes = {"core"}
+
     def __init__(self, workspace: str, sessions: Any, app_config: Any, live_tool_registry: Any = None, bus: Any = None) -> None:
         self._workspace = workspace
         self._sessions = sessions

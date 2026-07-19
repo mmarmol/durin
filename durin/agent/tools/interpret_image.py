@@ -83,7 +83,7 @@ _DEFAULT_QUESTION = "Describe this image in detail, including any text visible i
 class InterpretImageTool(Tool):
     """Ask a vision-capable auxiliary model to interpret a local image."""
 
-    _scopes = {"core"}
+    _scopes = {"core", "subagent"}
 
     def __init__(self, aux: AuxProviderHandle, workspace: str | None) -> None:
         self._aux = aux

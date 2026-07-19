@@ -72,6 +72,9 @@ _PARAMETERS = tool_parameters_schema(
 class SkillImportTool(Tool, ContextAware):
     """skill_import tool — import through the security floor."""
 
+    # Core-only: acquiring new skills stays a primary-agent decision.
+    _scopes = {"core"}
+
     def __init__(self, workspace: str | Path, allowlist: list[str] | None = None,
                  caps: tuple[int, int, int] | None = None,
                  judge: tuple[str, str, str] | None = None,

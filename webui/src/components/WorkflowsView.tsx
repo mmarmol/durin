@@ -172,7 +172,10 @@ const nodeTypes = {
   output_obj: IOCard,
 };
 
-const MODES = ["build", "plan", "explore"];
+// "build"/"read" are the node postures; "plan"/"explore" exist but carry
+// interactive sub-agent framing that derails a node — kept selectable for
+// definitions that already use them.
+const MODES = ["build", "read", "plan", "explore"];
 const CONTEXTS = ["own", "shared"];
 const SESSIONS = ["fresh", "persistent"];
 const selectCls = "h-8 w-full rounded-md border border-border bg-background px-2 text-sm";

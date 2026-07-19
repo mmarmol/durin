@@ -75,7 +75,11 @@ but carry conversation/sub-agent framing (exit_plan_mode, "the parent should /bu
 fail-fast-if-modification) that derails a workflow node — e.g. a `verify` gate told it is
 a read-only sub-agent that should bail stops emitting its verdict; nodes use the neutral
 `build`/`read` instead. Besides the mode, a node carries its model, context and built-in
-`tools`, plus the **skills** to inject into its own prompt (loaded the same way the main
+`tools` — `"default"` loads the `subagent`-scoped background set with a context that
+carries `aux_providers` and `app_config`, so memory writes and the vision/audio bridges
+register for a node the same way they do for a spawned sub-agent (see
+[tools.md](tools.md) for the scope/context gates); the mode then subtracts from that
+set — plus the **skills** to inject into its own prompt (loaded the same way the main
 agent loads a skill) and the **MCP servers** whose tools it may use — a scoped subset of
 the already-configured servers, reused from the gateway's live connections (no per-node
 reconnect; the call is marshalled back to the gateway's event loop, where the MCP

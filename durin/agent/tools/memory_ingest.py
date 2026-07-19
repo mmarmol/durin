@@ -62,6 +62,8 @@ _PARAMETERS = tool_parameters_schema(
 class MemoryIngestTool(Tool):
     """memory_ingest tool — persist a document for later recall."""
 
+    _scopes = {"core", "subagent"}
+
     config_key = "memory"
 
     def __init__(

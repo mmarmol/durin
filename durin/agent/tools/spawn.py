@@ -23,6 +23,9 @@ if TYPE_CHECKING:
 class SpawnTool(Tool, ContextAware):
     """Tool to spawn a subagent for background task execution."""
 
+    # Core-only: nested spawn would allow unbounded recursive fan-out.
+    _scopes = {"core"}
+
     def __init__(self, manager: "SubagentManager"):
         self._manager = manager
         self._origin_channel: ContextVar[str] = ContextVar("spawn_origin_channel", default="cli")
@@ -66,7 +69,15 @@ class SpawnTool(Tool, ContextAware):
             "separate research threads at once instead of waiting for each to "
             "finish before starting the next. "
             "For deliverables or existing projects, inspect the workspace first "
-            "and use a dedicated subdirectory when helpful."
+            "and use a dedicated subdirectory when helpful. "
+            "The subagent gets the standard background tool set: files, shell, "
+            "search, web, memory search and memory writes (entity upsert, "
+            "document ingest), plus the vision/audio interpretation bridges "
+            "when aux models are configured. It has NO interactive or "
+            "orchestration tools — it cannot ask the user questions, send "
+            "channel messages, spawn further subagents, or run workflows — so "
+            "do not delegate work that needs those; it also inherits your "
+            "current mode's tool restrictions (e.g. plan mode stays read-only)."
         )
 
     async def execute(self, task: str, label: str | None = None, **kwargs: Any) -> str:

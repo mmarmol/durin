@@ -123,6 +123,12 @@ PLAN_MODE_ALLOWED = frozenset({
     # truncated. Both read-only.
     "memory_search",
     "memory_drill",
+    # Reading an entity page, its lineage, or a source session is recall too.
+    "memory_read_entity",
+    "memory_entity_lineage",
+    "memory_source_session",
+    # Document → markdown conversion reads a file and returns text — read-only.
+    "convert_to_markdown",
     # Capability awareness — to plan HOW to execute, the agent needs to see
     # which skills and workflows already exist. All read-only discovery.
     "skills_list",
@@ -198,6 +204,16 @@ EXPLORE_MODE_ALLOWED = frozenset({
     "web_search",
     "memory_search",
     "memory_drill",
+    # Read-only recall and interpretation: entity/lineage reads, document →
+    # markdown conversion, and the vision/audio bridges never touch the
+    # workspace — an exploring agent or a `read` workflow node may need any
+    # of them to actually see what it is asked to inspect.
+    "memory_read_entity",
+    "memory_entity_lineage",
+    "memory_source_session",
+    "convert_to_markdown",
+    "interpret_image",
+    "interpret_audio",
 })
 
 EXPLORE_MODE = AgentMode(
@@ -209,9 +225,8 @@ EXPLORE_MODE = AgentMode(
         "\n\n## EXPLORE MODE — READ-ONLY (strict)\n"
         "You are an exploration sub-agent in READ-ONLY mode. You CANNOT "
         "edit, write, or execute. Your tool surface is read-only only: file "
-        "reads, code search, web lookup, and project-memory recall "
-        "(read_file, list_dir, grep, repo_overview, web_fetch, web_search, "
-        "memory_search, memory_drill).\n\n"
+        "reads, code search, web lookup, document-to-markdown conversion, "
+        "image/audio interpretation, and project-memory recall.\n\n"
         "If your task requires modifications (writing files, running "
         "commands, applying edits), you CANNOT complete it. Stop "
         "immediately, do NOT loop trying alternative approaches, and "

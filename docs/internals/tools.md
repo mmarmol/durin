@@ -109,12 +109,33 @@ importing each module and collecting concrete `Tool` subclasses. Modules listed 
 they export infrastructure, not tools. For each discovered class:
 
 1. The class's `_scopes` set is checked against the requested scope (`core` for
-   the main agent, `subagent` for spawned workers).
+   the main agent, `subagent` for spawned workers and workflow work nodes).
 2. `tool_cls.enabled(ctx)` is called with the `ToolContext`, which carries the
    resolved config, workspace path, and provider handle.
 3. `tool_cls.create(ctx)` instantiates the tool with config-derived parameters
    (timeout, sandbox mode, API keys, etc.).
 4. The instance is handed to `ToolRegistry.register()`.
+
+Two gates therefore decide whether a tool appears in a registry: the **scope**
+(a policy declaration on the class — the base default is `{"core"}`, so a new
+tool is main-agent-only unless it opts into `subagent`) and the **context**
+(`enabled(ctx)` returning `False` when a dependency the context doesn't carry
+is missing — e.g. the vision bridge without `ctx.aux_providers["vision"]`).
+The subagent manager and the workflow node runner build their contexts with
+`aux_providers` and `app_config` populated, so subagent-scoped tools register
+there exactly as they do in the main loop (see `durin/agent/aux_bridges.py`
+for how the bridge handles are built).
+
+The `subagent` scope is the *background-safe* set: files, exec, search, web,
+memory search and memory writes, `convert_to_markdown`, and the
+vision/audio bridges. Tools stay core-only when they are interactive
+(`ask_user_question`, plan mode, todos), session-bound (`message`,
+`session_search`, `sleep`), orchestrating (`spawn` and its lifecycle tools,
+`run_workflow` — both would recurse from a background worker), standing-state
+creators (`cron`, `loops`), destructive (`memory_forget`), or
+self-modifying (`skill_edit`, `skill_import`). Those classes declare
+`_scopes = {"core"}` explicitly, with the reason in a comment, rather than
+relying on the base default.
 
 External tools can be registered via `entry_points(group="durin.tools")` in a
 package's `pyproject.toml`; the loader discovers these after built-ins.

@@ -31,6 +31,8 @@ def _page_path(workspace: Path, ref: str) -> Path:
 
 @tool_parameters(_READ_PARAMS)
 class MemoryReadEntityTool(Tool):
+    _scopes = {"core", "subagent"}
+
     config_key = "memory"
 
     def __init__(self, workspace: str | Path) -> None:
@@ -79,6 +81,8 @@ _LINEAGE_PARAMS = tool_parameters_schema(
 
 @tool_parameters(_LINEAGE_PARAMS)
 class MemoryEntityLineageTool(Tool):
+    _scopes = {"core", "subagent"}
+
     config_key = "memory"
 
     def __init__(self, workspace: str | Path) -> None:
@@ -155,6 +159,8 @@ def _source_refs(page) -> list[str]:
 
 @tool_parameters(_SRC_PARAMS)
 class MemorySourceSessionTool(Tool):
+    _scopes = {"core", "subagent"}
+
     config_key = "memory"
 
     def __init__(self, workspace: str | Path) -> None:

@@ -97,6 +97,10 @@ class AgentNodeRunner:
         self._live_tool_registry = live_tool_registry
         self._main_loop = main_loop
         self._app_config = app_config
+        # Aux bridge handles (vision/audio/…) are built once per runner —
+        # i.e. once per workflow run — and shared by every node's registry,
+        # so N nodes don't pay N provider constructions.
+        self._aux_providers: dict | None = None
 
     @staticmethod
     def _pass_note(req: NodeRunRequest) -> str:
@@ -146,10 +150,27 @@ class AgentNodeRunner:
                 workspace=workspace_override or str(self.sessions.workspace.resolve()),
                 file_state_store=FileStates(),
                 scope="subagent",
+                aux_providers=self._get_aux_providers(),
+                app_config=self._app_config,
             )
             ToolLoader().load(ctx, registry, scope="subagent")
         self._add_mcp_tools(registry, getattr(node, "mcps", ()))
         return self._apply_mode(node, registry)
+
+    def _get_aux_providers(self) -> dict:
+        """Aux bridge handles (vision/audio/…) for node registries, built lazily
+        on first use and cached for the runner's lifetime. A build failure only
+        hides the bridge tools — it must never break the node."""
+        if self._aux_providers is None:
+            aux: dict = {}
+            if self._app_config is not None:
+                from durin.agent.aux_bridges import build_aux_providers
+                try:
+                    aux = build_aux_providers(self._app_config)
+                except Exception:
+                    logger.warning("Failed to build aux bridges for workflow nodes; continuing without them")
+            self._aux_providers = aux
+        return self._aux_providers
 
     def _apply_mode(self, node, registry: ToolRegistry) -> ToolRegistry:
         """Restrict the registry to what the node's work mode (AgentMode) allows — e.g.
