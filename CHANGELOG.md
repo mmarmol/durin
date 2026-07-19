@@ -5,6 +5,34 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.3.2 — 2026-07-19
+
+### Highlights
+
+- **One embedding model for the whole system.** durin now runs a standing
+  embedding service — a gateway-supervised loopback server holding a single
+  warm model copy that every process shares (gateway, dream worker, TUI).
+  Before, each process loaded its own ~0.5-1GB copy, and two coexisted during
+  every dream. The service caches results by content hash, so re-indexing
+  unchanged text costs zero compute — a big win on small servers. If the
+  service isn't reachable, embedding quietly falls back to the previous
+  per-process behavior: nothing ever stops working. (#406)
+- **Voice engines no longer sit in memory unused.** Startup now only verifies
+  the speech models are downloaded (~1.2GB of STT+TTS engines used to load
+  into every gateway at boot — including headless servers that never speak).
+  The engines load on first use and unload after 15 minutes idle
+  (configurable; `0` keeps them resident for latency-sensitive setups). (#406)
+
+### Changes
+
+- **Memory:** `memory.embedding.isolation` gains `"service"` (the new
+  default) with knobs `service_port` and `service_max_rss_mb`; the gateway
+  supervises the server (respawn with backoff, RSS-cap restart, clean
+  teardown). New telemetry: `memory.embedding.service_fallback`.
+- **Voice:** new knobs `tts.idle_unload_s` and `transcription.idle_unload_s`
+  (default 900); first-install model downloads are verified at boot and
+  recorded under `~/.durin/voice-verified/`.
+
 ## 0.3.1 — 2026-07-19
 
 ### Highlights
