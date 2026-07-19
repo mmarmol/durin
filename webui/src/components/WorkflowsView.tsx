@@ -30,6 +30,7 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { useModes } from "@/hooks/useModes";
 import {
   ApiError,
   applyWorkflowRecommendation,
@@ -172,6 +173,7 @@ const nodeTypes = {
   output_obj: IOCard,
 };
 
+// Fallback mode options while the registry fetch is pending or failed.
 // "build"/"read" are the node postures; "plan"/"explore" exist but carry
 // interactive sub-agent framing that derails a node — kept selectable for
 // definitions that already use them.
@@ -778,6 +780,16 @@ function NodeConfigPanel({
   const [promptModalOpen, setPromptModalOpen] = useState(false);
   const others = nodeIds.filter((id) => id !== node.id);
 
+  // Mode options come from the registry (built-ins plus the user's custom
+  // modes — a custom mode's tool allowlist is how a node gets a tailored
+  // tool surface), falling back to the built-in list while loading or on
+  // fetch failure. The node's current value is always kept selectable so
+  // an unknown/stale mode name isn't silently coerced by the <select>.
+  const registryModes = useModes();
+  const modeNames = registryModes.length ? registryModes.map((m) => m.name) : MODES;
+  const currentMode = (node.mode as string) ?? "build";
+  const modeOptions = modeNames.includes(currentMode) ? modeNames : [...modeNames, currentMode];
+
   // Fetch subflow call-graph refs when this panel is open for a subworkflow node.
   // Hooks must be declared unconditionally; the fetch body is gated inside the effect.
   const [refs, setRefs] = useState<Record<string, string[]> | null>(null);
@@ -882,10 +894,10 @@ function NodeConfigPanel({
               <Field label={t("workflows.mode")}>
                 <select
                   className={selectCls}
-                  value={(node.mode as string) ?? "build"}
+                  value={currentMode}
                   onChange={(e) => onChange({ mode: e.target.value })}
                 >
-                  {MODES.map((m) => <option key={m} value={m}>{m}</option>)}
+                  {modeOptions.map((m) => <option key={m} value={m}>{m}</option>)}
                 </select>
               </Field>
 
