@@ -389,6 +389,14 @@ class FastembedProvider(EmbeddingProvider):
                     "embedding worker failed — falling back to inline for "
                     "the life of this process"
                 )
+                # Containment loss is a state change the operator must be
+                # able to see after the fact, not only in a live log tail.
+                try:
+                    emit_tool_event("memory.embedding.pool_fallback", {
+                        "model": self._model_name,
+                    })
+                except Exception:  # pragma: no cover - telemetry best-effort
+                    pass
                 if self._pool is not None:
                     try:
                         self._pool.shutdown(wait=False, cancel_futures=True)

@@ -531,3 +531,31 @@ def test_upsert_is_atomic_keeps_existing_row_when_insert_fails(
         pass  # old path raises after the destructive delete; new path won't
 
     assert index.search("alpha query", top_k=5), "existing row must survive a failed re-upsert"
+
+
+@pytest.mark.skipif(
+    not vector_index_available(), reason="lancedb not installed",
+)
+def test_compact_index_prunes_versions(tmp_path):
+    """Churned tables accrete one version per write forever (2930 on the
+    2026-07-18 box); the nightly compaction prunes them to a handful."""
+    from durin.memory.vector_index import compact_index
+
+    ws = tmp_path / "ws"
+    vi = VectorIndex(ws, _FakeEmbeddingProvider())
+    for i in range(8):
+        vi.upsert_entity_page(
+            entity_ref=f"topic:t{i}", name=f"T{i}", aliases=[],
+            body=f"body {i}",
+            path=ws / "memory" / "entities" / "topic" / f"t{i}.md",
+        )
+    stats = compact_index(ws)
+    assert stats["compacted"] is True
+    assert stats["versions_before"] > stats["versions_after"]
+    # count_rows survives even on a corrupted rewrite — the promise is that
+    # VECTOR SEARCH still works after maintenance.
+    hits = vi.search("body 3", top_k=3)
+    assert hits
+
+    missing = compact_index(tmp_path / "empty-ws")
+    assert missing == {"compacted": False, "reason": "no_index"}

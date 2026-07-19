@@ -1108,3 +1108,129 @@ def prune_orphan_rows(workspace: Path) -> list[str]:
     if orphan_ids:
         delete_ids(workspace, orphan_ids)
     return orphan_ids
+
+
+# Rebuild reads every current row into memory; past this many rows the
+# fallback skips instead (the healthy optimize path has no such bound).
+_REBUILD_MAX_ROWS = 50_000
+
+
+def _vector_search_ok(table: Any) -> bool:
+    """True when a real ANN probe succeeds — count_rows alone is NOT enough:
+    lance 4.0's fragment rewrite can leave a table countable but unreadable
+    by the vector path (Rust panic in lance-encoding on old-format data)."""
+    try:
+        dims = None
+        for f in table.schema:
+            if f.name == "vector":
+                dims = f.type.list_size
+        if not dims:
+            return False
+        table.search([0.0] * dims).limit(1).to_list()
+        return True
+    except Exception:  # noqa: BLE001 - any failure = unreadable
+        return False
+
+
+def compact_index(workspace: Path) -> dict:
+    """Compact the vector table and drop superseded versions (best-effort).
+
+    Every add/delete/upsert commits a new table version and nothing else
+    ever prunes them; a churned table accretes thousands of tiny fragments
+    and version manifests (2930 versions / 261MB of manifests for 22MB of
+    data on one production workspace), taxing every open and search.
+
+    ``optimize()`` on a table written by an older lance format can corrupt
+    the VECTOR read path while ``count_rows`` still works (verified against
+    that production table), so this is verify-or-rollback:
+
+    1. ``optimize`` + probe search → done (healthy path).
+    2. Probe fails → ``restore`` the pre-optimize version (search verified
+       to recover), then REBUILD: re-create the table from the current
+       rows — the rebuilt table is current-format, searchable, and
+       optimizes cleanly from then on.
+
+    The nightly dream calls this; failure is reported, never raised.
+    Returns ``{"compacted", "mode", "versions_before", "versions_after",
+    "duration_ms"}`` (plus ``"reason"`` when skipped/failed).
+    """
+    import time as _time
+
+    try:
+        import lancedb  # type: ignore[import-not-found]
+    except ImportError:
+        return {"compacted": False, "reason": "lancedb_unavailable"}
+    uri = str(Path(workspace).joinpath(*_INDEX_PATH))
+    if not Path(uri).is_dir():
+        return {"compacted": False, "reason": "no_index"}
+    t0 = _time.perf_counter()
+
+    def _done(out: dict) -> dict:
+        out["duration_ms"] = int((_time.perf_counter() - t0) * 1000)
+        try:
+            from durin.agent.tools._telemetry import emit_tool_event
+
+            emit_tool_event("memory.index.compacted", dict(out))
+        except Exception:  # pragma: no cover - telemetry best-effort
+            pass
+        return out
+
+    try:
+        db = lancedb.connect(uri)
+        if _TABLE_NAME not in db.list_tables().tables:
+            return {"compacted": False, "reason": "no_table"}
+        from datetime import timedelta
+
+        table = db.open_table(_TABLE_NAME)
+        versions_before = len(table.list_versions())
+        rows_before = table.count_rows()
+        v0 = table.version
+
+        # Phase 1 keeps a week of versions so the pre-optimize version is
+        # still there to restore if verification fails; phase 2 prunes the
+        # rest only once the compacted table has proven readable. (Old lance
+        # versions have no user-facing value here — markdown is the source
+        # of truth and vectors are derivable — they are pure rollback fuel.)
+        table.optimize(cleanup_older_than=timedelta(days=7))
+        if _vector_search_ok(table) and table.count_rows() == rows_before:
+            table.optimize(cleanup_older_than=timedelta(0))
+            if _vector_search_ok(table):
+                return _done({
+                    "compacted": True, "mode": "optimized",
+                    "versions_before": versions_before,
+                    "versions_after": len(table.list_versions()),
+                })
+
+        # Fragment rewrite broke the vector read path — roll back.
+        table.restore(v0)
+        if not _vector_search_ok(table):
+            return _done({
+                "compacted": False,
+                "reason": "verify_failed_and_restore_broken",
+                "versions_before": versions_before,
+            })
+        if rows_before > _REBUILD_MAX_ROWS:
+            return _done({
+                "compacted": False, "reason": "rebuild_too_large",
+                "versions_before": versions_before, "rows": rows_before,
+            })
+
+        # Rebuild from the (readable) current version: fresh format, one
+        # fragment, one version. The vectors come along — no re-embedding.
+        rows = table.search().limit(rows_before).to_list()
+        for r in rows:
+            r.pop("_distance", None)
+        db.drop_table(_TABLE_NAME)
+        rebuilt = db.create_table(_TABLE_NAME, data=rows)
+        if not _vector_search_ok(rebuilt) or rebuilt.count_rows() != rows_before:
+            return _done({
+                "compacted": False, "reason": "rebuild_verify_failed",
+                "versions_before": versions_before,
+            })
+        return _done({
+            "compacted": True, "mode": "rebuilt",
+            "versions_before": versions_before,
+            "versions_after": len(rebuilt.list_versions()),
+        })
+    except Exception as exc:  # noqa: BLE001 - maintenance must not fail a dream
+        return _done({"compacted": False, "reason": f"error: {exc}"})

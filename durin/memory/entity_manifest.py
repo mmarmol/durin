@@ -96,7 +96,15 @@ def build_entity_manifest(
             if not isinstance(ref, str) or ":" not in ref or ref in seen:
                 continue
             type_, _, slug = ref.partition(":")
-            page = EntityPage.from_file(root / type_ / f"{slug}.md")
+            # Chunk/section uris can also carry ":" with path-ish slugs
+            # ("memory:reference/…#11") — those are not entity refs, and a
+            # missing page must filter out, never abort the caller's pass.
+            if not type_ or not slug or "/" in slug or "#" in slug:
+                continue
+            try:
+                page = EntityPage.from_file(root / type_ / f"{slug}.md")
+            except OSError:
+                continue
             if page is not None:
                 seen.add(ref)
                 lines.append(_line(ref, page))

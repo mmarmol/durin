@@ -1378,6 +1378,7 @@ def _run_gateway(
                     mode="full",
                     trigger="cron",
                     on_progress=_publish_dream,
+                    max_rss_mb=config.memory.dream.max_rss_mb,
                 )
             finally:
                 # Reap stale per-run cron sessions (cron:{id}:run:{ms}) with the
@@ -1729,8 +1730,27 @@ def _run_gateway(
                 from durin.channels.websocket import publish_dream_progress
                 from durin.memory.dream_supervisor import (
                     publish_threadsafe,
+                    reactive_memory_gate_ok,
                     run_dream_worker,
                 )
+
+                # Don't launch a reactive dream into an already-tight host —
+                # the skipped turns are picked up by the next trigger or the
+                # nightly run.
+                mem_ok, available_mb = reactive_memory_gate_ok(
+                    mem_dream_cfg.min_available_mb)
+                if not mem_ok:
+                    with suppress(Exception):
+                        emit_tool_event(
+                            "memory.dream.throttled",
+                            {"trigger": trigger, "reason": "low_memory",
+                             "available_mb": available_mb},
+                        )
+                    logger.warning(
+                        "reactive dream skipped ({}): {}MB available < {}MB floor",
+                        trigger, available_mb, mem_dream_cfg.min_available_mb,
+                    )
+                    return
 
                 # Skip when a pass is already running or one ran too recently —
                 # the per-session cursor makes a skipped run harmless.
@@ -1757,6 +1777,7 @@ def _run_gateway(
                         mode="reactive",
                         trigger=trigger,
                         on_progress=_forward,
+                        max_rss_mb=mem_dream_cfg.max_rss_mb,
                     )
                     if code == 3:
                         logger.debug(
