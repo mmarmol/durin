@@ -169,22 +169,36 @@ describe("useWorkState", () => {
     });
   });
 
-  it("live item wins over polled history for the same id", async () => {
+  it("live item wins over a polled item that still says running", async () => {
+    // Manual setup: renderUseWorkState would reset the poll mock to [].
+    const { client, emit } = makeFakeClient();
+    mockUseClient.mockReturnValue({
+      client: client as unknown as ReturnType<typeof useClient>["client"],
+      token: "tok",
+      modelName: null,
+      modelPreset: null,
+    });
     mockListBackgroundTasks.mockResolvedValue([
       {
         kind: "workflow",
         id: "run2",
         label: "old label",
-        status: "done",
+        status: "running",
         started_at: 100,
-        ended_at: 200,
+        ended_at: null,
         session_key: null,
       },
     ]);
 
-    const { result, emit } = renderUseWorkState("c1", "websocket:c1");
+    const { result } = renderHook(() => useWorkState("c1", "websocket:c1"));
 
-    // Emit a live running frame for the same id
+    // Ensure the polled running entry is in state before the live frame lands,
+    // so the merge genuinely sees both sources.
+    await waitFor(() => {
+      expect(result.current.active.find((w) => w.id === "run2")).toBeDefined();
+    });
+
+    // Emit a live running frame for the same id — richer (has the node tree).
     act(() => {
       emit(workflowProgressFrame("run2", [{ id: "n1", status: "running" }]));
     });
@@ -193,8 +207,49 @@ describe("useWorkState", () => {
       const item = result.current.active.find((w) => w.id === "run2");
       expect(item).toBeDefined();
       expect(item!.status).toBe("running");
+      expect(item!.nodes?.[0]?.id).toBe("n1");
       // Partition assertion: an id must appear in exactly one of active/finished.
       expect(result.current.finished.find((w) => w.id === "run2")).toBeUndefined();
+    });
+  });
+
+  it("a decided manifest beats a stale live running frame (crashed run)", async () => {
+    // A crashed/reconciled run never emits a final WS frame: its last live
+    // frame says "running" forever. Once the poll reports the run as decided
+    // (failed here), the manifest must win or the panel and strip would show
+    // the run as in-progress indefinitely.
+    const { client, emit } = makeFakeClient();
+    mockUseClient.mockReturnValue({
+      client: client as unknown as ReturnType<typeof useClient>["client"],
+      token: "tok",
+      modelName: null,
+      modelPreset: null,
+    });
+    mockListBackgroundTasks.mockResolvedValue([
+      {
+        kind: "workflow",
+        id: "run-crashed",
+        label: "flow-run-crashed",
+        status: "failed",
+        started_at: 100,
+        ended_at: 200,
+        session_key: null,
+      },
+    ]);
+
+    const { result } = renderHook(() => useWorkState("c1", "websocket:c1"));
+
+    // The stale live frame arrives (order-independent: the merge recomputes on
+    // every state change, and the decided poll must win either way).
+    act(() => {
+      emit(workflowProgressFrame("run-crashed", [{ id: "n1", status: "running" }]));
+    });
+
+    await waitFor(() => {
+      const item = result.current.finished.find((w) => w.id === "run-crashed");
+      expect(item).toBeDefined();
+      expect(item!.status).toBe("failed");
+      expect(result.current.active.find((w) => w.id === "run-crashed")).toBeUndefined();
     });
   });
 

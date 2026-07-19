@@ -125,8 +125,11 @@ function workItemFromSubagentEvent(
  * Merge live WebSocket progress frames with polled /api/v1/tasks history into
  * a single work list with nested sub-step trees.
  *
- * Live items (from `client.onChat`) always win over polled history for the
- * same id — a running item's live tree is fresher than the 4-second poll.
+ * Live items (from `client.onChat`) win over polled history for the same id —
+ * a running item's live tree is fresher than the 4-second poll — EXCEPT when
+ * the poll reports the run as decided (done / failed / cancelled). A crashed
+ * or externally-reconciled run never emits a final WS frame, so its last live
+ * frame says "running" forever; the decided manifest is authoritative there.
  */
 export function useWorkState(
   chatId: string | null,
@@ -243,7 +246,7 @@ export function useWorkState(
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, sessionKey, pollTrigger]);
 
-  // Merge: live items win for any id present in both.
+  // Merge: live items win for any id present in both, decided manifests aside.
   // useMemo so the merged array is computed once per render, not called separately.
   // liveVersion triggers re-computation when the live map changes.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -256,9 +259,20 @@ export function useWorkState(
       byId.set(item.id, item);
     }
 
-    // Live items override polled history.
+    // Live items override polled history — unless the manifest already DECIDED
+    // the run (done / failed / cancelled). A crashed or reconciled run emits no
+    // final WS frame, so its last live frame stays "running" forever; without
+    // this guard that stale frame pins the panel and strip to in-progress. A
+    // polled needs_input does NOT count as decided: a resumed run's fresh
+    // running frame must flip the item back to running immediately (the
+    // manifest lags the live stream there).
     for (const [id, item] of live) {
-      byId.set(id, item);
+      const polledItem = byId.get(id);
+      const decided =
+        polledItem != null &&
+        polledItem.status !== "running" &&
+        polledItem.status !== "needs_input";
+      if (!decided) byId.set(id, item);
     }
 
     return Array.from(byId.values());
