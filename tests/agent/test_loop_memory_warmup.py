@@ -22,12 +22,15 @@ import pytest
 from durin.agent.loop import AgentLoop
 
 
-def _fake_self(*, enabled: bool):
+def _fake_self(*, enabled: bool, isolation: str = "process"):
     return SimpleNamespace(
         app_config=SimpleNamespace(
             memory=SimpleNamespace(
                 enabled=enabled,
-                embedding=SimpleNamespace(model="intfloat/multilingual-e5-small"),
+                embedding=SimpleNamespace(
+                    model="intfloat/multilingual-e5-small",
+                    isolation=isolation,
+                ),
             )
         )
     )
@@ -47,10 +50,26 @@ async def test_warmup_skips_when_extra_missing():
 
 
 @pytest.mark.asyncio
+async def test_warmup_skipped_in_service_mode():
+    """isolation="service": the gateway-supervised embed server warms
+    ITSELF — an in-loop warmup would race it and leave a redundant
+    fallback pool child resident in the gateway."""
+    with patch(
+        "durin.memory.vector_index.vector_index_available", return_value=True
+    ), patch(
+        "durin.memory.embedding.provider_from_config"
+    ) as provider_from_config:
+        await AgentLoop._warmup_memory_embedding(
+            _fake_self(enabled=True, isolation="service"))
+    provider_from_config.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_warmup_runs_when_extra_present():
-    """enabled=True and the extra is available → build the provider from
-    config (picking up the configured isolation) and warm it with a short
-    embed call rather than the isolation-blind `warmup` classmethod."""
+    """enabled=True, non-service isolation, extra available → build the
+    provider from config (picking up the configured isolation) and warm it
+    with a short embed call rather than the isolation-blind `warmup`
+    classmethod."""
     fake_provider = Mock()
     with patch(
         "durin.memory.vector_index.vector_index_available", return_value=True
