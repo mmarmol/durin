@@ -254,7 +254,11 @@ detail is shown in the panel, not inline in the thread; the chat itself shows on
 a compact **work chip** (running or done) that opens the panel when clicked.
 Provider-retry status renders inside the run strip, not as a separate banner.
 The panel is durable across a page reload: finished items are reconstructed from
-session lineage and workflow run manifests.
+session lineage and workflow run manifests. Live WebSocket frames win over the
+poll for an item still in flight, but once the poll reports a run as decided
+(done / failed / cancelled) the manifest is authoritative — a crashed or
+reconciled run emits no final frame, so its last live "running" frame must not
+pin the item to in-progress.
 
 **Work chip.** A compact inline indicator in the message thread shows that
 background work is running or has finished. Clicking it opens the work panel.
