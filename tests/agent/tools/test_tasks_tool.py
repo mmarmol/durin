@@ -216,5 +216,10 @@ async def test_stop_live_owner_run_still_cancels(tmp_path):
 
     _write_manifest(tmp_path, "qa", "alive789", status="running")
     _set_manifest_owner(tmp_path, "qa", "alive789", process_identity(os.getpid()))
-    out = await _tool(tmp_path, None).execute(action="stop", id="alive789")
-    assert "asked to cancel" in out
+    try:
+        out = await _tool(tmp_path, None).execute(action="stop", id="alive789")
+        assert "asked to cancel" in out
+    finally:
+        # No engine consumes this flag in the test — drop it so the global
+        # cancellation registry stays empty for later tests.
+        cancellation.clear("alive789")
