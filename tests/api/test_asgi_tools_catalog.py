@@ -68,8 +68,11 @@ def test_tools_catalog_returns_projected_live_registry(client):
         "description": "Read a file.",
         "read_only": True,
         "source": "builtin",
+        # _FakeTool declares no _scopes → the core-only default applies.
+        "background": False,
     }
     assert by_name["mcp_srv_do"]["source"] == "mcp"
+    assert by_name["mcp_srv_do"]["background"] is True
     # Built-ins sort ahead of MCP tools.
     names = [t["name"] for t in r.json()["tools"]]
     assert names.index("edit_file") < names.index("mcp_srv_do")

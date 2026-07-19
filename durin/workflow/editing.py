@@ -32,6 +32,88 @@ def safe_workflow_name(name: str) -> bool:
     )
 
 
+_background_names_cache: frozenset[str] | None = None
+
+
+def _background_tool_names() -> frozenset[str]:
+    """Names of the built-in tools that can load in a background (subagent-scope)
+    registry — the surface a workflow node's mode allowlist filters.
+
+    Built with dummy aux handles so the vision/audio bridges count as
+    background-capable regardless of this deployment's aux-model config: the
+    question here is "can this entry EVER apply to a node", not "will it load
+    today". Cached for the process lifetime — the built-in surface is static.
+    """
+    global _background_names_cache
+    if _background_names_cache is None:
+        try:
+            from durin.agent.tools.context import AuxProviderHandle, ToolContext
+            from durin.agent.tools.loader import ToolLoader
+            from durin.agent.tools.registry import ToolRegistry
+            from durin.config.schema import ToolsConfig
+
+            handle = AuxProviderHandle(provider=None, model="")
+            ctx = ToolContext(
+                config=ToolsConfig(),
+                workspace="/",
+                scope="subagent",
+                aux_providers={"vision": handle, "audio": handle},
+            )
+            registry = ToolRegistry()
+            ToolLoader().load(ctx, registry, scope="subagent")
+            _background_names_cache = frozenset(registry.tool_names)
+        except Exception:  # noqa: BLE001 - warnings are advisory; never block a save
+            _background_names_cache = frozenset()
+    return _background_names_cache
+
+
+_MAX_WARNED_ENTRIES = 5
+
+
+def definition_warnings(workflow: object) -> list[str]:
+    """Advisory warnings for a parsed workflow — things the parser accepts but
+    that will not behave the way the author likely expects at run time.
+
+    - A node ``mode`` that is not a registered mode name: ``get_mode`` silently
+      falls back to ``build`` (FULL tool access), so a typo'd custom mode
+      *widens* the node's surface instead of narrowing it.
+    - Mode-allowlist entries that can never apply to a node because the tool is
+      not background-capable (not ``subagent``-scoped). ``mcp_*`` entries are
+      skipped — MCP availability is decided by the node's ``mcps`` field, not
+      by scope.
+    """
+    from durin.agent.agent_mode import get_mode, list_modes
+
+    warnings: list[str] = []
+    known = {m.name for m in list_modes()}
+    background = _background_tool_names()
+    for node in getattr(workflow, "nodes", {}).values():
+        if getattr(node, "kind", "") != "work":
+            continue
+        mode_name = getattr(node, "mode", "build")
+        if mode_name not in known:
+            warnings.append(
+                f"node {node.id!r}: mode {mode_name!r} is not a registered mode — "
+                "at run time it silently falls back to 'build' (full tool access)"
+            )
+            continue
+        mode = get_mode(mode_name)
+        if mode.allowed is None or not background:
+            continue
+        dead = sorted(
+            n for n in mode.allowed if n not in background and not n.startswith("mcp_")
+        )
+        if dead:
+            shown = ", ".join(dead[:_MAX_WARNED_ENTRIES])
+            if len(dead) > _MAX_WARNED_ENTRIES:
+                shown += f", … ({len(dead) - _MAX_WARNED_ENTRIES} more)"
+            warnings.append(
+                f"node {node.id!r}: mode {mode_name!r} allows tools that never load "
+                f"in a workflow node (main-agent only): {shown}"
+            )
+    return warnings
+
+
 def save_workflow_definition(
     workspace: str | Path,
     name: str,
@@ -61,9 +143,10 @@ def save_workflow_definition(
     if not must_exist:
         definition.setdefault("improvement_mode", "manual")
     try:
-        parse_workflow(definition)
+        parsed = parse_workflow(definition)
     except WorkflowError as exc:
         return {"error": f"invalid workflow: {exc}"}
+    warnings = definition_warnings(parsed)
 
     d = workflows_dir(workspace)
     d.mkdir(parents=True, exist_ok=True)
@@ -79,4 +162,7 @@ def save_workflow_definition(
         sha = WorkflowVersionStore(d).commit_edit(name, reason.strip(), actor=actor)
     except Exception as exc:  # noqa: BLE001 - versioning is best-effort, the write already landed
         logger.warning("workflow version commit failed for {}: {}", name, exc)
-    return {"ok": True, "name": name, "commit": sha}
+    out: dict = {"ok": True, "name": name, "commit": sha}
+    if warnings:
+        out["warnings"] = warnings
+    return out

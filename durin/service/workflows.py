@@ -77,6 +77,9 @@ class WorkflowSaveCommand(Command):
 
 class WorkflowSaveResult(Result):
     name: str
+    # Advisory only — the save succeeded. E.g. a node mode whose allowlist
+    # references tools that never load in a workflow node.
+    warnings: list[str] = []
 
 
 class WorkflowDeleteCommand(Command):
@@ -294,14 +297,16 @@ class WorkflowsService:
     async def save(self, cmd: WorkflowSaveCommand, principal: Principal) -> WorkflowSaveResult:
         principal.require(Scope.WORKFLOWS_WRITE)
         try:
-            parse_workflow(cmd.definition)   # reject an invalid graph before it lands
+            parsed = parse_workflow(cmd.definition)   # reject an invalid graph before it lands
         except WorkflowError as exc:
             raise ValidationFailedError(f"invalid workflow: {exc}")
+        from durin.workflow.editing import definition_warnings
+        warnings = definition_warnings(parsed)
         path = self._dir() / f"{cmd.name}.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         with cross_process_lock(self._lock_target()):
             atomic_write_text(path, json.dumps(cmd.definition, indent=2, ensure_ascii=False))
-        return WorkflowSaveResult(name=cmd.name)
+        return WorkflowSaveResult(name=cmd.name, warnings=warnings)
 
     @route(
         "DELETE", "/api/v1/workflows/{name}",
