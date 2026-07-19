@@ -599,6 +599,14 @@ function ToolGroup({
                     {t("settings.modes.readOnlyBadge")}
                   </span>
                 ) : null}
+                {tl.background ? (
+                  <span
+                    className="rounded-sm bg-sky-500/15 px-1 text-[9px] uppercase text-sky-600 dark:text-sky-400"
+                    title={t("settings.modes.backgroundBadgeHint")}
+                  >
+                    {t("settings.modes.backgroundBadge")}
+                  </span>
+                ) : null}
               </span>
               {tl.description ? (
                 <span className="block truncate text-[11px] text-muted-foreground">{tl.description}</span>

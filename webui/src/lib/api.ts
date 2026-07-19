@@ -237,12 +237,13 @@ export async function saveWorkflow(
   name: string,
   definition: unknown,
   base: string = "",
-): Promise<void> {
-  await post<{ name: string }>(
+): Promise<string[]> {
+  const body = await post<{ name: string; warnings?: string[] }>(
     `${base}/api/v1/workflows/${encodeURIComponent(name)}`,
     token,
     { definition },
   );
+  return body.warnings ?? [];
 }
 
 export async function listWorkflowScripts(
@@ -570,6 +571,9 @@ export interface ToolInfo {
   description: string;
   read_only: boolean;
   source: "builtin" | "mcp";
+  /** Whether an allowlist entry for this tool can ever apply to a sub-agent
+   *  or workflow work node (main-agent-only tools never load there). */
+  background: boolean;
 }
 
 /** The catalog of agent tools a mode allowlist can reference (the real tool set). */

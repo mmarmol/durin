@@ -56,9 +56,13 @@ async def test_tools_catalog_projects_live_registry():
         "description": "Read a file.",
         "read_only": True,
         "source": "builtin",
+        # _FakeTool declares no _scopes → the core-only default applies.
+        "background": False,
     }
     assert by_name["edit_file"]["read_only"] is False
     assert by_name["mcp_srv_do"]["source"] == "mcp"
+    # MCP tools reach nodes via the node's `mcps` field, not via scope.
+    assert by_name["mcp_srv_do"]["background"] is True
     # Built-ins sort ahead of MCP tools (the primary curation surface first).
     names = [t["name"] for t in result.tools]
     assert names.index("edit_file") < names.index("mcp_srv_do")
@@ -73,3 +77,7 @@ async def test_tools_catalog_falls_back_to_loader_without_live_loop():
     assert "read_file" in by_name
     assert by_name["read_file"]["read_only"] is True
     assert by_name["read_file"]["source"] == "builtin"
+    # Real classes carry real scopes: file tools are background-capable,
+    # workflow authoring stays main-agent only.
+    assert by_name["read_file"]["background"] is True
+    assert by_name["workflow_write"]["background"] is False

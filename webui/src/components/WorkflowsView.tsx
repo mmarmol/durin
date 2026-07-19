@@ -1553,9 +1553,13 @@ export function WorkflowsView() {
     setSaving(true);
     setError(null);
     try {
-      await saveWorkflow(token, selected, def);
+      const warnings = await saveWorkflow(token, selected, def);
       setDirty(false);
-      setNotice(t("workflows.saved"));
+      setNotice(
+        warnings.length
+          ? `${t("workflows.savedWithWarnings")} ${warnings.join(" · ")}`
+          : t("workflows.saved"),
+      );
     } catch (e) {
       setError(errMsg(e));
     } finally {

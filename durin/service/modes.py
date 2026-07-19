@@ -64,12 +64,19 @@ def _project_tool(name: str, tool: Any) -> dict[str, Any]:
     ``read_only`` powers the editor's "these read-only tools are not in this
     mode" hint (surfacing drift the user must resolve by hand); ``source`` lets
     the UI group the built-in surface separately from dynamic MCP tools.
+    ``background`` says whether an allowlist entry for this tool can ever apply
+    to a sub-agent or workflow work node: built-ins must carry the ``subagent``
+    scope; MCP tools reach nodes through the node's ``mcps`` field instead of a
+    scope, so they always count.
     """
+    is_mcp = name.startswith("mcp_")
+    scopes = sorted(getattr(type(tool), "_scopes", {"core"}))
     return {
         "name": name,
         "description": (getattr(tool, "description", "") or "").strip(),
         "read_only": bool(getattr(tool, "read_only", False)),
-        "source": "mcp" if name.startswith("mcp_") else "builtin",
+        "source": "mcp" if is_mcp else "builtin",
+        "background": True if is_mcp else "subagent" in scopes,
     }
 
 

@@ -131,7 +131,10 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   asked, instead of restarting from scratch.
 - **Author:** call `workflow_write(name, definition, rationale)` — it validates the graph
   before anything lands (schema errors come back verbatim), refuses to overwrite an existing
-  name, and records the change in the workflow version history. Use it instead of writing the
+  name, and records the change in the workflow version history. A successful save may still
+  return `warnings` — e.g. a node `mode` that is not a registered mode (at run time it
+  silently falls back to `build`, full access) or a mode allowlist naming tools that never
+  load in a node. Fix what a warning describes rather than shipping it. Use it instead of writing the
   JSON file by hand; the web editor remains the human path. Compose larger processes from
   `subworkflow` nodes — but only where each stage genuinely needs the structure above.
   **Before authoring, read the references below** so the definition is complete and valid the

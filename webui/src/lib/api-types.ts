@@ -5856,6 +5856,11 @@ export interface components {
         WorkflowSaveResult: {
             /** Name */
             name: string;
+            /**
+             * Warnings
+             * @default []
+             */
+            warnings: string[];
         };
         /** WorkflowScriptGetQuery */
         WorkflowScriptGetQuery: {

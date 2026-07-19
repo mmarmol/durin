@@ -501,10 +501,14 @@ The registered modes are listed over `/api/v1/modes` (`ModesService`), which the
 webui composer's mode picker renders by `name`. The picker is mode-agnostic: it
 shows whatever the registry holds, so it follows new modes without UI changes. The
 same service exposes `GET /api/v1/tools` — the catalog of tools a mode allowlist
-can reference (name, description, `read_only`, built-in vs MCP), read from the live
-loop's registry so it matches exactly what the agent can call. The settings
-editor uses it to offer a checklist of the real tool set (rather than free-text
-tool names) and to surface read-only tools left out of an allowlist.
+can reference (name, description, `read_only`, built-in vs MCP, plus `background`:
+whether an entry can ever apply to a sub-agent or workflow node — built-ins need
+the `subagent` scope, MCP tools always qualify because a node opts into them via
+its `mcps` field), read from the live loop's registry so it matches exactly what
+the agent can call. The settings editor uses it to offer a checklist of the real
+tool set (rather than free-text tool names), to surface read-only tools left out
+of an allowlist, and to badge background-capable tools so a custom mode's author
+can see which entries will reach workflow nodes and sub-agents.
 
 User-defined modes are persisted as `ModeConfig` entries under `agent_modes` in
 config and registered into the same registry at startup (`register_config_modes`,

@@ -794,7 +794,13 @@ End-to-end for a single `run_workflow` call:
   `durin/workflow/editing.py::save_workflow_definition` — the single sanctioned path
   for a definition (`workflow_write` create / `workflow_edit` full-definition edit by
   the in-session agent / recommendation applies): graph validation, atomic write
-  under the editor's lock, version-store commit with its actor. A `script_file` write
+  under the editor's lock, version-store commit with its actor. A successful save
+  may also carry advisory `warnings` (`editing.py::definition_warnings`, shared with
+  the HTTP editor's save route): a node `mode` that is not a registered mode name
+  (it would silently fall back to `build` — full access — at run time), or
+  mode-allowlist entries that can never load in a work node because the tool is not
+  `subagent`-scoped (`mcp_*` entries are exempt — node MCP access is decided by the
+  node's `mcps` field, not by scope). A `script_file` write
   instead lands directly under `workflows/scripts/` (atomic write + version
   snapshot, serialized on the same version lock) — the dream never gets the
   full-definition editor. Telemetry: `workflow.improve.recommended` / `.applied` /
