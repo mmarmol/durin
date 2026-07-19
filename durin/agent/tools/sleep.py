@@ -66,7 +66,7 @@ _MIN_SECONDS = 0.0
 class SleepTool(Tool, ContextAware):
     """Block the current turn for *seconds* seconds (0–300)."""
 
-    _scopes = {"core"}
+    _scopes = {"core", "subagent"}
 
     def __init__(self, workspace: str | None = None,
                  subagent_manager: Any | None = None,

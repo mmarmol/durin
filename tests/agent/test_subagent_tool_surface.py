@@ -28,6 +28,8 @@ BACKGROUND_EXPECTED = {
     "memory_read_entity",
     "memory_entity_lineage",
     "memory_source_session",
+    "notebook_edit",
+    "sleep",
 }
 
 # Interactive / orchestration / destructive tools that must never load in

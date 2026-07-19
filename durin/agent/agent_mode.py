@@ -129,6 +129,9 @@ PLAN_MODE_ALLOWED = frozenset({
     "memory_source_session",
     # Document → markdown conversion reads a file and returns text — read-only.
     "convert_to_markdown",
+    # A bounded wait touches nothing; polling an external job while planning
+    # is legitimate.
+    "sleep",
     # Capability awareness — to plan HOW to execute, the agent needs to see
     # which skills and workflows already exist. All read-only discovery.
     "skills_list",
@@ -214,6 +217,8 @@ EXPLORE_MODE_ALLOWED = frozenset({
     "convert_to_markdown",
     "interpret_image",
     "interpret_audio",
+    # A bounded wait touches nothing — needed to poll external state.
+    "sleep",
 })
 
 EXPLORE_MODE = AgentMode(

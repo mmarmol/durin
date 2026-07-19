@@ -126,16 +126,16 @@ The subagent manager and the workflow node runner build their contexts with
 there exactly as they do in the main loop (see `durin/agent/aux_bridges.py`
 for how the bridge handles are built).
 
-The `subagent` scope is the *background-safe* set: files, exec, search, web,
-memory search and memory writes, `convert_to_markdown`, and the
-vision/audio bridges. Tools stay core-only when they are interactive
-(`ask_user_question`, plan mode, todos), session-bound (`message`,
-`session_search`, `sleep`), orchestrating (`spawn` and its lifecycle tools,
-`run_workflow` — both would recurse from a background worker), standing-state
-creators (`cron`, `loops`), destructive (`memory_forget`), or
-self-modifying (`skill_edit`, `skill_import`). Those classes declare
-`_scopes = {"core"}` explicitly, with the reason in a comment, rather than
-relying on the base default.
+The `subagent` scope is the *background-safe* set: files (notebooks
+included), exec, search, web, memory search and memory writes,
+`convert_to_markdown`, a bounded `sleep`, and the vision/audio bridges.
+Tools stay core-only when they are interactive (`ask_user_question`, plan
+mode, todos), session-bound (`message`, `session_search`), orchestrating
+(`spawn` and its lifecycle tools, `run_workflow` — both would recurse from
+a background worker), standing-state creators (`cron`, `loops`),
+destructive (`memory_forget`), or self-modifying (`skill_edit`,
+`skill_import`). Those classes declare `_scopes = {"core"}` explicitly,
+with the reason in a comment, rather than relying on the base default.
 
 External tools can be registered via `entry_points(group="durin.tools")` in a
 package's `pyproject.toml`; the loader discovers these after built-ins.
