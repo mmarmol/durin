@@ -5,6 +5,50 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.3.1 — 2026-07-19
+
+### Highlights
+
+- **The memory dream can no longer take down the host.** A production incident
+  traced a full-box freeze to the dream's discovery pass feeding an entire
+  session transcript into full-text search as a "query" — ~800MB of allocations
+  per call, per session. Search queries are now hard-bounded at the router (any
+  caller, any size), discovery passes a compact recent window, and the fatal
+  input now costs ~3MB. (#402)
+- **Runaway dreams die alone, not with the machine.** The dream worker runs in
+  its own process group under an RSS watchdog that terminates the whole tree
+  above a configurable cap, and reactive dreams skip spawning while system
+  memory is tight — a killed or skipped dream simply retries on the next
+  trigger. Every pass now reports its memory footprint, and the worker keeps
+  its own rotating log so a long run is auditable instead of a black box. (#402)
+- **No more ghost "running" workflows.** Run manifests record which process
+  owns them; at boot and every few minutes, runs whose owner died are marked
+  crashed immediately — no more six-hour grace during which the UI showed a
+  live timer for a run killed by a restart. Poking a ghost with `tasks
+  status/stop` repairs it on the spot with an honest answer. (#402)
+- **Work strip above the composer:** background work (sub-agents and workflow
+  runs) is visible at a glance while you chat, with live per-node progress.
+  (#401)
+
+### Changes
+
+- **Memory:** vector-index maintenance in the nightly dream — the LanceDB
+  table is compacted verify-or-rollback (one production table had accreted
+  2,929 versions; maintenance shrank it 294MB → 2.6MB with search verified
+  intact, rebuilding from current rows when the underlying library corrupts
+  the vector read path). A search hit pointing at a missing entity page no
+  longer aborts the pass; losing embedding-pool isolation now emits telemetry.
+- **Workflows/loops:** ownership-based crash reconciliation (see highlights)
+  applies to loop runs too, so a `single`-concurrency loop can't stay jammed
+  behind a stale manifest.
+- **Observability:** the gateway emits a periodic `gateway.memory` footprint
+  event and serves `GET /api/v1/diagnostics/memory` on demand (RSS, child
+  processes, threads, gc, host headroom); telemetry events emitted from
+  background threads are no longer silently dropped.
+- **Config:** new knobs `memory.dream.max_rss_mb` (worker-tree RSS cap;
+  0 = automatic) and `memory.dream.min_available_mb` (reactive-dream
+  memory floor; 0 = disabled).
+
 ## 0.3.0 — 2026-07-18
 
 ### Highlights
