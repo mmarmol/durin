@@ -241,9 +241,10 @@ def run_dream_worker(
         code = proc.wait()
         err_thread.join(timeout=5)
         logger.info(
-            "dream worker exited (pid={} code={} mode={} trigger={} {}ms)",
+            "dream worker exited (pid={} code={} mode={} trigger={} {}ms{})",
             proc.pid, code, mode, trigger,
             int((time.perf_counter() - t0) * 1000),
+            f" rss_killed_at={watchdog_kill['rss_mb']}MB" if watchdog_kill else "",
         )
     finally:
         watchdog_stop.set()
