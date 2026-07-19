@@ -153,9 +153,54 @@ def test_runs_for_session_matches_root_newest_first(tmp_path):
     assert [r["run_id"] for r in got] == ["new", "old"]   # newest-first
 
 
-def test_reconcile_marks_stale_running_as_crashed(tmp_path):
+def _set_owner(tmp_path, name, run_id, owner):
+    """Rewrite a manifest's owner in place (None = legacy ownerless record)."""
+    import json as _json
+
+    f = tmp_path / "workflows-runs" / name / f"{run_id}.json"
+    rec = _json.loads(f.read_text(encoding="utf-8"))
+    if owner is None:
+        rec.pop("owner", None)
+    else:
+        rec["owner"] = owner
+    f.write_text(_json.dumps(rec), encoding="utf-8")
+
+
+_DEAD_OWNER = {"pid": 2**22 + 54321, "started": "never"}
+
+
+def test_reconcile_flips_dead_owner_regardless_of_age(tmp_path):
+    """The 2026-07-18 ghost: the owning gateway crashed and the run was only
+    52 minutes old at the next boot — under any age cutoff. A dead owner is
+    reason enough."""
+    import time as _time
+
+    run_log.start_run(tmp_path, "wf", "ghost", root_session_key="s",
+                      started_at=_time.time())   # seconds old
+    _set_owner(tmp_path, "wf", "ghost", _DEAD_OWNER)
+
+    n = run_log.reconcile_running(
+        tmp_path, now=_time.time(), max_age_s=run_log.RECONCILE_AGE_S)
+    assert n == 1
+    assert run_log.read_manifest(tmp_path, "wf", "ghost")["status"] == "crashed"
+
+
+def test_reconcile_never_touches_live_owner(tmp_path):
+    """A run owned by a LIVE process (this one) survives the sweep even when
+    ancient — the workspace is multi-process (TUI + gateway) and the sweep
+    must not kill a neighbour's healthy run."""
+    run_log.start_run(tmp_path, "wf", "mine", root_session_key="s", started_at=0.0)
+
+    n = run_log.reconcile_running(tmp_path, now=10**12, max_age_s=1.0)
+    assert n == 0
+    assert run_log.read_manifest(tmp_path, "wf", "mine")["status"] == "running"
+
+
+def test_reconcile_legacy_ownerless_uses_age(tmp_path):
     run_log.start_run(tmp_path, "wf", "stale", root_session_key="s", started_at=0.0)
     run_log.start_run(tmp_path, "wf", "fresh", root_session_key="s", started_at=1950.0)
+    _set_owner(tmp_path, "wf", "stale", None)
+    _set_owner(tmp_path, "wf", "fresh", None)
     run_log.finalize_run(tmp_path, "wf", _result("done"), root_session_key="s",
                          started_at=0.0, finished_at=5.0)
 
@@ -173,6 +218,7 @@ def test_reconcile_preserves_partial_runs_and_survives_malformed(tmp_path):
     ])
     run_log.start_run(tmp_path, "wf", "stale", root_session_key="s", started_at=0.0)
     run_log.update_run(tmp_path, "wf", "stale", res)
+    _set_owner(tmp_path, "wf", "stale", _DEAD_OWNER)
     # A malformed record must not crash the sweep.
     (tmp_path / "workflows-runs" / "wf" / "junk.json").write_text("not json", encoding="utf-8")
 
@@ -180,6 +226,17 @@ def test_reconcile_preserves_partial_runs_and_survives_malformed(tmp_path):
     rec = run_log.read_manifest(tmp_path, "wf", "stale")
     assert rec["status"] == "crashed"
     assert rec["runs"][0]["session_key"] == "workflow:stale:a:1"   # partial trace kept
+
+
+def test_start_and_update_carry_owner(tmp_path):
+    run_log.start_run(tmp_path, "wf", "r1", root_session_key="s", started_at=1.0)
+    rec = run_log.read_manifest(tmp_path, "wf", "r1")
+    import os as _os
+
+    assert rec["owner"]["pid"] == _os.getpid()
+    run_log.update_run(tmp_path, "wf", "r1", _result("r1", status="running"))
+    rec = run_log.read_manifest(tmp_path, "wf", "r1")
+    assert rec["owner"]["pid"] == _os.getpid()   # rewrite preserved it
 
 
 

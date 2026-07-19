@@ -8,6 +8,8 @@ decision the lexical-search layer consumes.
 from __future__ import annotations
 
 from durin.memory.query_router import (
+    MAX_QUERY_CHARS,
+    MAX_QUERY_TOKENS,
     LexicalRoute,
     RoutingDecision,
     count_cjk_chars,
@@ -138,3 +140,44 @@ def test_route_keywords_param_recorded() -> None:
 def test_route_keywords_default_none() -> None:
     decision = decide_lexical_route("marcelo")
     assert decision.keywords is None
+
+
+# ---------------------------------------------------------------------------
+# oversized-query bounding
+#
+# The 2026-07-18 incident: a dream pass fed a whole session transcript
+# (380KB, ~50k tokens) as the search query; quoting every token into one
+# FTS5 MATCH allocated ~800MB in sqlite per call. The router is the single
+# gate to the lexical/grep/vector steps, so it bounds the query itself.
+# ---------------------------------------------------------------------------
+
+
+def test_route_bounds_huge_latin_query() -> None:
+    huge = " ".join(f"token{i}" for i in range(50_000))
+    decision = decide_lexical_route(huge)
+    assert decision.truncated is True
+    assert len(decision.normalized_query) <= MAX_QUERY_CHARS
+    assert len(decision.normalized_query.split()) <= MAX_QUERY_TOKENS
+
+
+def test_route_bounds_huge_cjk_query() -> None:
+    """CJK has no whitespace tokens — the char cap must bound it."""
+    huge = "马塞洛工程师" * 100_000
+    decision = decide_lexical_route(huge)
+    assert decision.truncated is True
+    assert len(decision.normalized_query) <= MAX_QUERY_CHARS
+
+
+def test_route_normal_query_not_truncated() -> None:
+    decision = decide_lexical_route("mxhero onedrive sharing failed 400")
+    assert decision.truncated is False
+    assert decision.normalized_query == "mxhero onedrive sharing failed 400"
+
+
+def test_route_truncation_keeps_head_identifiers() -> None:
+    """An identifier inside the kept head still gets the auto-keyword boost."""
+    huge = "see https://mxhero.zendesk.com/tickets/23098 " + (
+        " ".join(f"filler{i}" for i in range(50_000))
+    )
+    decision = decide_lexical_route(huge)
+    assert decision.auto_keywords == "https://mxhero.zendesk.com/tickets/23098"

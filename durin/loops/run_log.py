@@ -37,11 +37,16 @@ def _write(ws, loop: str, run_id: str, record: dict) -> dict:
 
 
 def start_run(ws, loop: str, run_id: str, *, source: str, task: str, origin: dict | None = None) -> dict:
+    from durin.utils.process_tree import process_identity
+
     return _write(ws, loop, run_id, {
         "schema": SCHEMA, "run_id": run_id, "loop": loop, "status": "running",
         "source": source, "task": task[:8000], "origin": origin, "workflow_run_id": None,
         "ask": None, "detail": None, "checks": None, "goal_reached": None,
         "started_at": time.time(), "finished_at": None,
+        # Which process is executing this run — the crash sweep flips any
+        # "running" manifest whose owner is no longer alive.
+        "owner": process_identity(),
     })
 
 
@@ -132,10 +137,15 @@ def reconcile_running(ws, now: float | None = None, max_age_s: float = 6 * 3600)
     ``error`` (loops vocabulary; ``ask`` cleared) so a gateway restart mid-run
     does not leave a ``single``-concurrency loop permanently jammed — its next
     trigger sees a stale ``running`` manifest in ``active_runs`` and refuses
-    to fire forever. Mirrors ``durin.workflow.run_log.reconcile_running``'s age
-    semantics (``started_at`` compared against ``now - max_age_s``). A
-    malformed manifest is skipped, never fatal. Returns the flipped run ids.
+    to fire forever. Mirrors ``durin.workflow.run_log.reconcile_running``'s
+    ownership semantics: an owned manifest is flipped as soon as its owner
+    process is dead (no age heuristic; a run owned by another LIVE process is
+    never touched); ownerless legacy manifests fall back to the ``started_at``
+    age cutoff. Safe at boot AND periodically. A malformed manifest is
+    skipped, never fatal. Returns the flipped run ids.
     """
+    from durin.utils.process_tree import process_alive
+
     root = runs_root(ws)
     if not root.is_dir():
         return []
@@ -151,7 +161,14 @@ def reconcile_running(ws, now: float | None = None, max_age_s: float = 6 * 3600)
                 rec = json.loads(p.read_text(encoding="utf-8"))
             except Exception:
                 continue
-            if rec.get("status") == "running" and (rec.get("started_at") or 0.0) < cutoff:
+            if rec.get("status") != "running":
+                continue
+            owner = rec.get("owner")
+            if owner is not None:
+                orphaned = not process_alive(owner)
+            else:
+                orphaned = (rec.get("started_at") or 0.0) < cutoff
+            if orphaned:
                 rec["status"] = "error"
                 rec["ask"] = None
                 try:

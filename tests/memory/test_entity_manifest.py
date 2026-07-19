@@ -68,3 +68,35 @@ def test_query_mode_returns_relevant_entity(tmp_path, monkeypatch):
     assert Path(call_args[0]) == Path(ws), "first positional arg must be the workspace path"
     # Query is passed as the second positional arg.
     assert call_args[1] == query, "second positional arg must be the query string"
+
+
+def test_query_mode_skips_bogus_and_missing_refs(tmp_path, monkeypatch):
+    """A search hit whose uri LOOKS like a ref but points at no entity file
+    (e.g. "memory:reference/reference/context#11" seen in the 2026-07-18
+    incident) must be filtered out, not crash the whole pass with
+    FileNotFoundError."""
+    ws = tmp_path / "ws"
+    _seed(ws, "topic:durin", "durin", "A personal AI agent project.")
+
+    from durin.memory.sectioned_output import SectionedHit
+    from durin.memory.search_pipeline import SearchPipelineResult
+
+    fake_result = SearchPipelineResult(
+        hits=[
+            SectionedHit(uri="memory:reference/reference/context#11",
+                         type="chunk", path="", score=2.0),
+            SectionedHit(uri="person:nobody-here", type="entity", path="",
+                         score=1.5),
+            SectionedHit(uri="topic:durin", type="entity", path="", score=1.0),
+        ],
+        vector_count=0,
+        lexical_count=0,
+    )
+
+    import durin.memory.search_pipeline as _sp
+    monkeypatch.setattr(_sp, "run_search_pipeline", lambda *a, **k: fake_result)
+
+    out = build_entity_manifest(ws, query="anything", limit=5)
+    assert "topic:durin" in out
+    assert "context#11" not in out
+    assert "nobody-here" not in out

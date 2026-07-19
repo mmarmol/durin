@@ -161,12 +161,36 @@ class TasksTool(Tool, ContextAware):
             )
         return "\n".join(lines)
 
+    def _heal_orphaned_workflow(self, row: dict) -> str | None:
+        """Repair a "running" workflow row whose owning process died.
+
+        The manifest survives a gateway crash with status "running" (the
+        2026-07-18 ghost); when the user pokes it before the periodic sweep
+        does, flip it here and answer with the truth instead of describing a
+        process that no longer exists. Returns the healed message, or None
+        when the row is genuinely alive."""
+        if row["kind"] != "workflow" or row["status"] != "running":
+            return None
+        from durin.workflow import run_log
+        if not run_log.reconcile_one(self._workspace, row["label"], row["id"]):
+            return None
+        row["status"] = "crashed"
+        return (
+            f"Workflow run [{row['id']}] was still marked running, but the "
+            "process that owned it is gone (a gateway restart or crash killed "
+            "it mid-run). Marked it crashed; its partial trace is preserved. "
+            "Re-run the workflow if the result is still needed."
+        )
+
     def _render_status(self, session_key: str, task_id: str) -> str:
         row = next((r for r in self._rows(session_key) if r["id"] == task_id), None)
         if row is None:
             return f"Error: unknown task id {task_id!r} in this session."
         if row["kind"] == "subagent":
             return self._render_subagent_status(session_key, task_id, row)
+        healed = self._heal_orphaned_workflow(row)
+        if healed:
+            return healed
         return self._render_workflow_status(row)
 
     def _render_subagent_status(self, session_key: str, task_id: str, row: dict) -> str:
@@ -283,6 +307,9 @@ class TasksTool(Tool, ContextAware):
                 return f"Sub-agent [{task_id}] had already finished — nothing to cancel."
             return f"Error: unknown sub-agent id {task_id!r} in this session."
         # workflow
+        healed = self._heal_orphaned_workflow(row)
+        if healed:
+            return healed
         if row["status"] != "running":
             return f"Workflow run [{task_id}] is already {row['status']} — nothing to cancel."
         from durin.workflow.cancellation import request_cancel

@@ -344,3 +344,30 @@ def test_mine_learnings_emits_parse_failure(tmp_path, monkeypatch):
                    source_ref="[[sessions/s1.md#turn-3]]")
     failures = [d for n, d in events if n == "memory.dream.parse_failure"]
     assert failures and failures[0]["stage"] == "learnings"
+
+
+# ---------------------------------------------------------------------------
+# discovery query bounding (2026-07-18 incident)
+# ---------------------------------------------------------------------------
+
+
+def test_discover_manifest_query_is_bounded_and_recent(tmp_path, monkeypatch):
+    """discover_entities must not pass the raw turns text as the manifest
+    query — a whole transcript as an FTS query cost ~800MB per call. It
+    passes a bounded window of the MOST RECENT content instead."""
+    from durin.memory import extract_dream
+    from durin.memory.query_router import MAX_QUERY_CHARS
+
+    seen: dict = {}
+
+    def _fake_manifest(workspace, **kwargs):
+        seen.update(kwargs)
+        return ""
+
+    monkeypatch.setattr(extract_dream, "build_entity_manifest", _fake_manifest)
+    huge = "\n".join(f"[turn-{i}] USER: filler line {i}" for i in range(20_000))
+    huge += "\n[turn-20000] USER: newest fact about mxhero"
+    discover_entities(tmp_path, huge, existing_refs=[],
+                      llm_invoke=lambda *a, **k: _Resp("[]"), model="m")
+    assert len(seen["query"]) <= MAX_QUERY_CHARS
+    assert "newest fact about mxhero" in seen["query"]

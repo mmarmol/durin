@@ -9,8 +9,11 @@ functional, dependency-wired registry.
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Any, Callable
+
+from loguru import logger
 
 from durin.service.registry import ServiceRegistry
 
@@ -167,4 +170,93 @@ def build_service_registry(
         loops_claims.prune(_workspace(), max_age_s=7 * 24 * 3600)
     except Exception:  # noqa: BLE001 - best-effort sweep
         pass
+
+    # The boot sweep only helps when the gateway restarts; a run orphaned by
+    # a crashed TUI (or any other co-owner of this workspace) would otherwise
+    # stay "running" until the NEXT gateway restart. A slow periodic sweep
+    # keeps every surface truthful within minutes instead.
+    start_periodic_run_reconciler(_workspace)
+    start_memory_telemetry()
     return registry
+
+
+_RECONCILE_PERIOD_S = 600.0
+_reconciler_started = threading.Event()
+
+
+def start_periodic_run_reconciler(
+    workspace_resolver: Callable[[], Path],
+    *,
+    period_s: float = _RECONCILE_PERIOD_S,
+) -> bool:
+    """Start the background workflow/loop run-manifest sweep (once per process).
+
+    Daemon thread, file-based sweeps only — dead-owner manifests flip to
+    their crashed/error status so the UI and `tasks` never show a ghost for
+    more than one period. Returns False when already started."""
+    if _reconciler_started.is_set():
+        return False
+    _reconciler_started.set()
+
+    def _sweep_forever() -> None:
+        import time
+
+        from durin.loops import run_log as loops_run_log
+        from durin.workflow import run_log as wf_run_log
+
+        while True:
+            time.sleep(period_s)
+            try:
+                ws = workspace_resolver()
+                wf_run_log.reconcile_running(
+                    ws, now=time.time(), max_age_s=wf_run_log.RECONCILE_AGE_S)
+                loops_run_log.reconcile_running(ws, now=time.time())
+            except Exception:  # noqa: BLE001 - the sweep must never die
+                logger.exception("periodic run reconciliation failed")
+
+    threading.Thread(
+        target=_sweep_forever, daemon=True, name="run-reconciler",
+    ).start()
+    return True
+
+
+_MEMORY_TELEMETRY_PERIOD_S = 900.0
+_memory_telemetry_started = threading.Event()
+
+
+def start_memory_telemetry(*, period_s: float = _MEMORY_TELEMETRY_PERIOD_S) -> bool:
+    """Emit a ``gateway.memory`` telemetry event at boot and periodically.
+
+    The footprint curve of the serving process is a first-class signal: the
+    2026-07-18 review found a 2GB-resident gateway with zero recorded data
+    about when the memory arrived. Once per process; returns False when
+    already started."""
+    if _memory_telemetry_started.is_set():
+        return False
+    _memory_telemetry_started.set()
+
+    def _emit_once() -> None:
+        from durin.agent.tools._telemetry import emit_tool_event
+        from durin.utils.process_tree import memory_snapshot
+
+        emit_tool_event("gateway.memory", memory_snapshot())
+
+    def _emit_forever() -> None:
+        import time
+
+        from durin.telemetry.logger import bind_telemetry, get_session_logger
+
+        # A fresh thread has no bound telemetry logger and emit_tool_event
+        # drops events without one — bind the gateway's own stream.
+        bind_telemetry(get_session_logger("gateway"))
+        while True:
+            try:
+                _emit_once()
+            except Exception:  # noqa: BLE001 - telemetry must never die
+                logger.exception("gateway memory telemetry failed")
+            time.sleep(period_s)
+
+    threading.Thread(
+        target=_emit_forever, daemon=True, name="gateway-memory-telemetry",
+    ).start()
+    return True

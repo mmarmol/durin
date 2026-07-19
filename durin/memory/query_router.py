@@ -25,11 +25,24 @@ from typing import Optional
 
 __all__ = [
     "LexicalRoute",
+    "MAX_QUERY_CHARS",
+    "MAX_QUERY_TOKENS",
     "RoutingDecision",
     "count_cjk_chars",
     "decide_lexical_route",
     "normalize_query",
 ]
+
+
+# Hard bound on what counts as a "query". Every token of the query gets
+# quoted into one FTS5 MATCH expression, and sqlite's memory for a MATCH
+# grows with the term count — a whole transcript passed as a query (~50k
+# tokens) costs hundreds of MB per call and matches nothing. Any caller
+# with a longer text wants retrieval *about* it, not retrieval *of* it,
+# so the head is a faithful stand-in. Chars bound CJK (no whitespace
+# tokens); tokens bound Latin.
+MAX_QUERY_CHARS = 2048
+MAX_QUERY_TOKENS = 64
 
 
 # FTS5 operators that count as "structural" not "content" — their
@@ -104,6 +117,9 @@ class RoutingDecision:
     route: LexicalRoute
     cjk_chars: int
     keywords: Optional[str] = None
+    # True when the incoming query exceeded MAX_QUERY_CHARS/MAX_QUERY_TOKENS
+    # and normalized_query is its bounded head.
+    truncated: bool = False
     # Auto-detected identifier token. When the query contains an email,
     # URL, UUID, or file path, surface it here so the search pipeline
     # applies the lexical boost without the agent having to pass
@@ -153,6 +169,14 @@ def decide_lexical_route(
     - **Otherwise (Latin only, or short query)** → unicode61.
     """
     normalized = normalize_query(query)
+    truncated = False
+    if len(normalized) > MAX_QUERY_CHARS:
+        normalized = normalized[:MAX_QUERY_CHARS].rstrip()
+        truncated = True
+    tokens = normalized.split()
+    if len(tokens) > MAX_QUERY_TOKENS:
+        normalized = " ".join(tokens[:MAX_QUERY_TOKENS])
+        truncated = True
     cjk = count_cjk_chars(normalized)
 
     if cjk == 0:
@@ -171,4 +195,5 @@ def decide_lexical_route(
         cjk_chars=cjk,
         keywords=keywords,
         auto_keywords=_detect_auto_keywords(normalized),
+        truncated=truncated,
     )

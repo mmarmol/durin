@@ -996,6 +996,27 @@ def cmd_dream_worker(
     # --workspace makes the worker consolidate exactly what the gateway meant.
     workspace = _Path(workspace_opt) if workspace_opt else config.workspace_path
 
+    # Persist this worker's own log next to the gateway's. The parent only
+    # keeps a stderr tail for the exit line, so without a file sink a long
+    # run is unauditable after the fact. Best-effort: logging setup must
+    # never keep a dream from running.
+    try:
+        from durin.cli.gateway_daemon import daemon_logs_path
+        from durin.cli.gateway_logging import configure_gateway_file_logging
+
+        logging_cfg = getattr(config, "logging", None)
+        configure_gateway_file_logging(
+            daemon_logs_path().parent / "dream-worker.log",
+            max_file_mb=getattr(logging_cfg, "max_file_mb", 50),
+            retention_days=getattr(logging_cfg, "retention_days", 14),
+        )
+        logger.info(
+            "dream worker starting (mode={} trigger={} workspace={})",
+            mode, trigger, workspace,
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("dream worker file logging unavailable")
+
     def emit(payload: dict) -> None:
         _sys.stdout.write(_json.dumps(payload, ensure_ascii=False) + "\n")
         _sys.stdout.flush()

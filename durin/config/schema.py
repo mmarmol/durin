@@ -328,6 +328,20 @@ class MemoryDreamConfig(Base):
         description="Wall-clock cap in seconds per extract pass; the pass yields after the current session when crossed; 0 = run to completion",
     )
 
+    max_rss_mb: int = Field(
+        default=0,
+        ge=0,
+        validation_alias=AliasChoices("maxRssMb", "max_rss_mb"),
+        description="RSS cap in MB for the dream worker's process tree; the gateway's watchdog terminates the tree above it and the dream retries on the next trigger; 0 = automatic (a fraction of total RAM)",
+    )
+
+    min_available_mb: int = Field(
+        default=1024,
+        ge=0,
+        validation_alias=AliasChoices("minAvailableMb", "min_available_mb"),
+        description="Skip spawning a REACTIVE dream while system available memory is below this many MB (the skipped turns are picked up by the next trigger or the nightly run); 0 disables the gate",
+    )
+
     # Injected into EVERY prompt, so this is a per-turn cost. Default 1500 ≈
     # 15-25 concise standing instructions.
     always_on_token_budget: int = Field(

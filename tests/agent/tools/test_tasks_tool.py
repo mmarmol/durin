@@ -170,3 +170,56 @@ async def test_status_workflow_shows_missing_declared_artifacts(tmp_path):
     p.write_text(json.dumps(rec), encoding="utf-8")
     out = await _tool(tmp_path, _FakeManager([], running=[])).execute(action="status", id="wf01abcd")
     assert "evidence.json" in out and "not produced" in out.lower()
+
+
+def _set_manifest_owner(workspace, name, run_id, owner):
+    f = Path(workspace) / "workflows-runs" / name / f"{run_id}.json"
+    rec = json.loads(f.read_text(encoding="utf-8"))
+    rec["owner"] = owner
+    f.write_text(json.dumps(rec), encoding="utf-8")
+
+
+_DEAD_OWNER = {"pid": 2**22 + 999, "started": "never"}
+
+
+@pytest.mark.asyncio
+async def test_stop_ghost_run_self_heals(tmp_path):
+    """A "running" manifest whose owning process died (gateway crash) is
+    repaired on stop — honest answer, no 'asked to cancel' for a corpse."""
+    from durin.workflow import run_log
+
+    _write_manifest(tmp_path, "qa", "ghost123", status="running")
+    _set_manifest_owner(tmp_path, "qa", "ghost123", _DEAD_OWNER)
+    out = await _tool(tmp_path, None).execute(action="stop", id="ghost123")
+    assert "gone" in out or "crashed" in out
+    assert "asked to cancel" not in out
+    assert run_log.read_manifest(tmp_path, "qa", "ghost123")["status"] == "crashed"
+
+
+@pytest.mark.asyncio
+async def test_status_ghost_run_self_heals(tmp_path):
+    from durin.workflow import run_log
+
+    _write_manifest(tmp_path, "qa", "ghost456", status="running")
+    _set_manifest_owner(tmp_path, "qa", "ghost456", _DEAD_OWNER)
+    out = await _tool(tmp_path, None).execute(action="status", id="ghost456")
+    assert "crashed" in out
+    assert run_log.read_manifest(tmp_path, "qa", "ghost456")["status"] == "crashed"
+
+
+@pytest.mark.asyncio
+async def test_stop_live_owner_run_still_cancels(tmp_path):
+    """A running manifest owned by a LIVE process keeps the normal cancel path."""
+    import os
+
+    from durin.utils.process_tree import process_identity
+
+    _write_manifest(tmp_path, "qa", "alive789", status="running")
+    _set_manifest_owner(tmp_path, "qa", "alive789", process_identity(os.getpid()))
+    try:
+        out = await _tool(tmp_path, None).execute(action="stop", id="alive789")
+        assert "asked to cancel" in out
+    finally:
+        # No engine consumes this flag in the test — drop it so the global
+        # cancellation registry stays empty for later tests.
+        cancellation.clear("alive789")

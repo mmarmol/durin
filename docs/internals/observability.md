@@ -94,7 +94,7 @@ flowchart TD
         PID["~/.durin/gateway.pid\n(written by parent)"]
         FG["_run_gateway foreground\n(Starlette + AgentLoop)"]
         GLOG["configure_gateway_file_logging\nloguru JSONL sink\nenqueue=True, rotation 5 MB, gz, 7d"]
-        GL["~/.durin/logs/gateway.log\n(+ rotated .log.*.gz)"]
+        GL["~/.durin/logs/gateway.log\n+ dream-worker.log\n(+ rotated .log.*.gz)"]
         STOP["durin gateway stop\nSIGTERM → SIGKILL grace\nremove PID"]
         STAT["daemon_status:\nrunning / not_running / stale_pid"]
         GS --> SP
@@ -120,6 +120,15 @@ At the start of each turn, `AgentLoop._run_agent_loop` calls
 `bind_telemetry(get_session_logger(session_key))`, which sets a ContextVar
 (`_current_logger`) for the current async task. The binding token is stored and
 reset in a `finally` block to prevent cross-turn leakage.
+
+The gateway also emits a periodic `gateway.memory` footprint event (RSS,
+children, threads, gc, host headroom) from a background thread wired at
+service-registry build time, and serves the same snapshot on demand via
+`GET /api/v1/diagnostics/memory` — the first-class instruments for "where is
+the serving process' memory going", added after the 2026-07-18 incident
+found a 2GB-resident gateway with no recorded footprint history. Background
+threads that emit must bind a session logger first (`bind_telemetry(
+get_session_logger(...))`) — `emit_tool_event` drops events without one.
 
 Tools call `emit_tool_event(event_type, data)` from
 `durin/agent/tools/_telemetry.py`. This free function:
@@ -278,7 +287,7 @@ escalates to SIGKILL if needed, then removes the PID file.
 | `start_daemon` | `durin/cli/gateway_daemon.py` | Spawns detached child subprocess, writes PID file, exits parent. Raises `AlreadyRunningError` on live daemon. |
 | `daemon_status` | `durin/cli/gateway_daemon.py` | Reads PID file and probes liveness via `os.kill(pid, 0)`. |
 | `acquire_gateway_singleton` | `durin/cli/gateway_daemon.py` | Acquires exclusive flock on `~/.durin/gateway.lock`. Held for process lifetime; OS releases on exit. |
-| `configure_gateway_file_logging` | `durin/cli/gateway_logging.py` | Attaches loguru JSONL file sink (`serialize=True`, `enqueue=True`, rotation + gz + retention). Called on every gateway run. |
+| `configure_gateway_file_logging` | `durin/cli/gateway_logging.py` | Attaches loguru JSONL file sink (`serialize=True`, `enqueue=True`, rotation + gz + retention). Called on every gateway run, and by the dream worker subprocess for its own `logs/dream-worker.log` (same rotation knobs) — a long dream run is auditable after the fact instead of a black box. |
 
 ---
 

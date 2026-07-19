@@ -188,3 +188,28 @@ def test_provider_from_config_reads_all_knobs():
         # explicit model override wins over cfg
         p2 = provider_from_config(cfg, model=p.model_name)
         assert p2.model_name == p.model_name
+
+
+def test_infra_fallback_emits_telemetry(monkeypatch):
+    """Losing arena containment must be observable: the inline fallback
+    emits a memory.embedding.pool_fallback event (the 2026-07-18 incident
+    showed a silent fallback is invisible post-mortem)."""
+    from concurrent.futures.process import BrokenProcessPool
+
+    from durin.memory import embedding as embedding_mod
+
+    events: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        embedding_mod, "emit_tool_event",
+        lambda name, payload: events.append((name, payload)),
+    )
+    with _inject_fake_fastembed():
+        provider = FastembedProvider(isolation="process")
+    provider._model = FakeModel()
+    provider._pool = _StubPool(BrokenProcessPool("child died"))
+
+    provider.embed(["a"])
+    names = [n for n, _ in events]
+    assert "memory.embedding.pool_fallback" in names
+    payload = dict(events[names.index("memory.embedding.pool_fallback")][1])
+    assert payload.get("model")

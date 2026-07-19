@@ -27,6 +27,7 @@ from durin.memory.entity_page import EntityPage
 from durin.memory.field_patch import FieldPatch
 from durin.memory.llm_invoke import default_llm_invoke, emit_parse_failure
 from durin.memory.memory_writer import WriteResult, write_entity
+from durin.memory.query_router import MAX_QUERY_CHARS
 
 
 def _mine_emit_tool_event(name: str, payload: dict) -> None:
@@ -371,8 +372,13 @@ def discover_entities(
     if not turns.strip():
         return []
     skip = set(existing_refs)
+    # The manifest query seeds "which existing entities are relevant" — the
+    # raw turns text is NOT a query (the router would keep its head, i.e.
+    # the OLDEST turns). Pass the most recent window instead, sized to the
+    # router's own bound so one constant governs both ends.
     existing = build_entity_manifest(
-        workspace, query=turns, limit=20, vector_index=vector_index)
+        workspace, query=turns[-MAX_QUERY_CHARS:], limit=20,
+        vector_index=vector_index)
     prompt = build_discover_prompt(turns, existing=existing)
     resp = llm_invoke(prompt, model=model) if model else llm_invoke(prompt)
     raw = resp.text if hasattr(resp, "text") else str(resp)

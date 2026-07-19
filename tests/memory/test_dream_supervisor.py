@@ -159,3 +159,73 @@ def test_stop_terminates_running_worker(fake_worker, no_invalidate, tmp_path):
     t.join(timeout=15)
     assert not t.is_alive()
     assert result["code"] != 0
+
+
+def test_rss_watchdog_kills_runaway_worker(fake_worker, no_invalidate, tmp_path, monkeypatch):
+    """A worker tree that crosses the RSS cap is terminated by the supervisor
+    (the 2026-07-18 worker grew to 3.4GB and took the whole box down before
+    the kernel finally killed it)."""
+    import durin.memory.dream_supervisor as sup
+    from durin.memory.dream_supervisor import run_dream_worker
+
+    monkeypatch.setattr(sup, "_WATCHDOG_INTERVAL_S", 0.2)
+    fake_worker(
+        """
+        import json, sys, time
+        print(json.dumps({"kind": "run_started"}), flush=True)
+        hog = "x" * (120 * 2**20)   # ~120MB
+        time.sleep(60)
+        print(json.dumps({"kind": "run_finished", "ok": True}), flush=True)
+        """
+    )
+    events: list[dict] = []
+    t0 = time.monotonic()
+    code, err = run_dream_worker(
+        workspace=tmp_path, mode="reactive", trigger="post_compaction",
+        on_progress=events.append, max_rss_mb=50,
+    )
+    assert time.monotonic() - t0 < 30, "watchdog must not wait out the sleep"
+    assert code != 0
+    assert events[-1] == {"kind": "run_finished", "ok": False}
+
+
+def test_rss_watchdog_leaves_small_worker_alone(fake_worker, no_invalidate, tmp_path, monkeypatch):
+    import durin.memory.dream_supervisor as sup
+    from durin.memory.dream_supervisor import run_dream_worker
+
+    monkeypatch.setattr(sup, "_WATCHDOG_INTERVAL_S", 0.2)
+    fake_worker(
+        """
+        import json, time
+        print(json.dumps({"kind": "run_started"}), flush=True)
+        time.sleep(1.5)
+        print(json.dumps({"kind": "run_finished", "ok": True}), flush=True)
+        """
+    )
+    events: list[dict] = []
+    code, _err = run_dream_worker(
+        workspace=tmp_path, mode="full", trigger="cron",
+        on_progress=events.append, max_rss_mb=4096,
+    )
+    assert code == 0
+    assert events[-1] == {"kind": "run_finished", "ok": True}
+
+
+def test_memory_gate_skips_when_tight(monkeypatch):
+    import durin.utils.process_tree as pt
+    from durin.memory.dream_supervisor import reactive_memory_gate_ok
+
+    monkeypatch.setattr(pt, "available_memory_mb", lambda: 512.0)
+    ok, available = reactive_memory_gate_ok(1024)
+    assert ok is False and available == 512.0
+
+
+def test_memory_gate_open_when_ample_or_unknown_or_disabled(monkeypatch):
+    import durin.utils.process_tree as pt
+    from durin.memory.dream_supervisor import reactive_memory_gate_ok
+
+    monkeypatch.setattr(pt, "available_memory_mb", lambda: 4096.0)
+    assert reactive_memory_gate_ok(1024)[0] is True
+    monkeypatch.setattr(pt, "available_memory_mb", lambda: 0.0)
+    assert reactive_memory_gate_ok(1024)[0] is True   # no signal ≠ no memory
+    assert reactive_memory_gate_ok(0)[0] is True      # gate disabled

@@ -137,3 +137,21 @@ def test_worker_real_subprocess_smoke(tmp_path):
         kinds.append(obj["kind"])
     assert kinds[0] == "run_started"
     assert kinds[-1] == "run_finished"
+
+
+def test_worker_writes_persistent_log_file(worker_env, monkeypatch):
+    """The worker subprocess persists its own rotating log under
+    DURIN_HOME/logs — a 52-minute run must never again be a black box."""
+    import durin.memory.dream_orchestrator as orch
+
+    monkeypatch.setattr(
+        orch, "run_full_dream",
+        lambda config, workspace, *, progress: {"sessions": 0},
+    )
+    result = runner.invoke(memory_app, ["dream-worker", "--mode", "full"])
+    assert result.exit_code == 0, result.output
+    from loguru import logger as _logger
+
+    _logger.complete()  # the file sink is enqueue=True; flush before asserting
+    log = worker_env.parent / "logs" / "dream-worker.log"
+    assert log.is_file() and log.stat().st_size > 0

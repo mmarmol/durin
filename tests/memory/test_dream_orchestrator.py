@@ -198,3 +198,30 @@ def test_dream_lock_exclusive(tmp_path):
         t.start()
         t.join(timeout=10)
     assert outcome == {"rejected": True}
+
+
+def test_reactive_dream_emits_rss_waypoints(stubbed_passes, tmp_path):
+    """The 2026-07-18 worker ran 52 minutes with zero persisted signal about
+    its memory. Pass boundaries now emit an rss waypoint (progress + telemetry)
+    so a ballooning pass is attributable post-mortem."""
+    from durin.memory.dream_orchestrator import run_reactive_dream
+
+    events: list[dict] = []
+    run_reactive_dream(
+        _cfg(), tmp_path, trigger="post_compaction", progress=events.append
+    )
+    rss_events = [e for e in events if e.get("kind") == "rss"]
+    assert rss_events, "expected at least one rss waypoint"
+    assert rss_events[0]["phase"] == "extract"
+    assert rss_events[0]["rss_mb"] > 0
+    assert "children_mb" in rss_events[0]
+
+
+def test_full_dream_emits_rss_waypoints(stubbed_passes, tmp_path):
+    from durin.memory.dream_orchestrator import run_full_dream
+
+    events: list[dict] = []
+    run_full_dream(_cfg(), tmp_path, progress=events.append)
+    phases = [e["phase"] for e in events if e.get("kind") == "rss"]
+    assert "extract" in phases
+    assert "refine" in phases

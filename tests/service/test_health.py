@@ -232,3 +232,18 @@ async def test_status_skips_disabled_and_not_running_channels(local, monkeypatch
     svc = HealthService(channel_manager=_FakeChannelManager({}))
     result = await svc.status(RuntimeStatusQuery(), local)
     assert result.channels == []
+
+
+# ---------------------------------------------------------------------------
+# memory diagnostics
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_memory_diagnostics_reports_live_footprint(svc, local):
+    from durin.service.health import MemoryDiagnosticsQuery
+
+    out = await svc.memory_diagnostics(MemoryDiagnosticsQuery(), local)
+    assert out.rss_mb > 0
+    assert out.threads >= 1
+    assert out.children_mb >= 0

@@ -53,6 +53,29 @@ def dream_lock(workspace: Path) -> Iterator[None]:
         raise DreamAlreadyRunningError(str(exc)) from exc
 
 
+def _emit_rss(progress: "Progress", phase: str) -> None:
+    """Memory waypoint after a pass: progress event + telemetry, best-effort.
+
+    The fatal 2026-07-18 reactive run spent 52 minutes growing to 3.4GB with
+    no persisted signal about WHICH pass ballooned. Waypoints make the growth
+    curve attributable from the dream feed and telemetry alone.
+    """
+    try:
+        from durin.utils.process_tree import tree_rss_mb
+
+        rss, children = tree_rss_mb()
+        payload = {"kind": "rss", "phase": phase,
+                   "rss_mb": rss, "children_mb": children}
+        progress(payload)
+        from durin.agent.tools._telemetry import emit_tool_event
+
+        emit_tool_event("memory.dream.rss", {
+            "phase": phase, "rss_mb": rss, "children_mb": children,
+        })
+    except Exception:  # noqa: BLE001 - observability must never break a run
+        pass
+
+
 def _summary(ex: dict, rf: dict, sk: dict, skills_improved: int) -> dict[str, Any]:
     return {
         "sessions": ex.get("sessions", 0) if isinstance(ex, dict) else 0,
@@ -122,6 +145,7 @@ def run_full_dream(
                 confidence_threshold=absorb.confidence_threshold,
                 semantic_distance_threshold=absorb.semantic_distance_threshold,
                 vector_index=vi)
+            _emit_rss(progress, "extract")
             df = run_derived_from_pass(workspace, model=model, max_seconds=max_s)
             # Distil ingested reference documents into outline sidecars — the
             # "know the book" index. Independent of entity merges, so it slots
@@ -164,6 +188,7 @@ def run_full_dream(
                 semantic_distance_threshold=absorb.semantic_distance_threshold,
                 run_started_at=run_started_at,
                 vector_index=vi)
+            _emit_rss(progress, "refine")
             # Relation-vocabulary hygiene: canonicalise entity-relation type
             # labels so graph edges line up. Runs after refine (which merges
             # entities and their relations).
@@ -188,6 +213,16 @@ def run_full_dream(
             logger.info(
                 "memory_dream: workflow_improve(workflows={} proposals={})",
                 wi.get("workflows", 0), wi.get("proposals", 0))
+            # Index hygiene: every write committed a new lance version and
+            # nothing else ever prunes them — compact here so the table's
+            # fragment/version count stays flat across days of churn.
+            from durin.memory.vector_index import compact_index
+            ci = compact_index(workspace)
+            logger.info(
+                "memory_dream: index_compact(compacted={} versions {}→{} {}ms{})",
+                ci.get("compacted"), ci.get("versions_before", 0),
+                ci.get("versions_after", 0), ci.get("duration_ms", 0),
+                " reason=" + ci["reason"] if ci.get("reason") else "")
             logger.info(
                 "memory_dream: extract(sessions={} entities={} {}ms yielded={}) "
                 "derived_from(links={} sessions={} {}ms) "
@@ -322,6 +357,7 @@ def run_reactive_dream(
             semantic_distance_threshold=config.memory.dream.auto_absorb.semantic_distance_threshold,
             vector_index=dream_vector_index(workspace, config),
         )
+        _emit_rss(progress, "extract")
         logger.info(
             "reactive dream done ({}): {} session(s), {} attribute update(s), "
             "yielded={}, {}ms",

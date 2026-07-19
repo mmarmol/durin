@@ -3405,6 +3405,54 @@
         "title": "MemoryBacklinksQuery",
         "type": "object"
       },
+      "MemoryDiagnosticsQuery": {
+        "additionalProperties": false,
+        "description": "No inputs \u2014 one process-footprint snapshot.",
+        "properties": {},
+        "title": "MemoryDiagnosticsQuery",
+        "type": "object"
+      },
+      "MemoryDiagnosticsResult": {
+        "properties": {
+          "available_mb": {
+            "title": "Available Mb",
+            "type": "number"
+          },
+          "children_mb": {
+            "title": "Children Mb",
+            "type": "number"
+          },
+          "gc_counts": {
+            "default": [],
+            "items": {
+              "type": "integer"
+            },
+            "title": "Gc Counts",
+            "type": "array"
+          },
+          "rss_mb": {
+            "title": "Rss Mb",
+            "type": "number"
+          },
+          "threads": {
+            "title": "Threads",
+            "type": "integer"
+          },
+          "total_mb": {
+            "title": "Total Mb",
+            "type": "number"
+          }
+        },
+        "required": [
+          "rss_mb",
+          "children_mb",
+          "threads",
+          "total_mb",
+          "available_mb"
+        ],
+        "title": "MemoryDiagnosticsResult",
+        "type": "object"
+      },
       "MemoryDocumentForgetCommand": {
         "additionalProperties": false,
         "properties": {
@@ -8477,6 +8525,35 @@
         },
         "summary": "Enable or disable a cron job without removing it",
         "x-required-scope": "cron:write"
+      }
+    },
+    "/api/v1/diagnostics/memory": {
+      "get": {
+        "operationId": "health_memory_diagnostics",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemoryDiagnosticsQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryDiagnosticsResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Gateway memory footprint: RSS, children, threads, gc, host headroom",
+        "x-required-scope": "system:read"
       }
     },
     "/api/v1/extras/ensure": {
