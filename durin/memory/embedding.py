@@ -380,6 +380,15 @@ class FastembedProvider(EmbeddingProvider):
             if rec is not None:
                 try:
                     out = embed_server.service_embed(texts, rec=rec)
+                    if self._pool is not None:
+                        # A fallback pool spawned while the server was still
+                        # coming up (e.g. during boot); the service is healthy
+                        # now, so release the redundant model copy.
+                        try:
+                            self._pool.shutdown(wait=False, cancel_futures=True)
+                        except Exception:  # noqa: BLE001
+                            pass
+                        self._pool = None
                     self._emit_embed_event(len(texts), t0)
                     return out
                 except Exception:  # noqa: BLE001 - any failure = fall back
