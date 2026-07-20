@@ -2205,11 +2205,6 @@
     "transcriptPrefix": "transcript",
     "processing": "Processing…"
   },
-  "goal": {
-    "banner": {
-      "label": "Active goal"
-    }
-  },
   "tasks": {
     "status": {
       "needs_input": "Needs input"

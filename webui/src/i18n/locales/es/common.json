@@ -2205,11 +2205,6 @@
     "countLabel_one": "{{count}} ejecución",
     "countLabel_other": "{{count}} ejecuciones"
   },
-  "goal": {
-    "banner": {
-      "label": "Objetivo activo"
-    }
-  },
   "tasks": {
     "status": {
       "needs_input": "Necesita input"
