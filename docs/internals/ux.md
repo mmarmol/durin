@@ -238,11 +238,12 @@ every rich block in the message on any re-render.
 Three surfaces make background work visible inside a chat without navigating
 away from it.
 
-**Goal banner.** A pinned strip at the top of the chat thread renders the
-session's `goal_state` — the agent-maintained description of what it is trying
-to accomplish for this turn. The banner is persistent: it stays visible while
-the agent runs and is cleared when the turn ends with no active goal. It draws
-from the `_turn_end` frame's `goal_state` field.
+**Goal strip.** The session's `goal_state` — the agent-maintained description of
+the sustained objective it is working toward — surfaces as a compact strip docked
+above the composer: the objective's short label plus an expand control that opens
+the full objective in a panel. It shows only while a goal is active and draws from
+the `_turn_end` frame's `goal_state` field and the dedicated `_goal_state_sync`
+push.
 
 **Work panel.** A collapsible side panel docked to the right of the chat thread,
 toggled from a button in the chat header (next to the theme toggle). A badge on

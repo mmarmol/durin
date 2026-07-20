@@ -2193,11 +2193,6 @@
     "transcriptPrefix": "전사",
     "processing": "처리 중…"
   },
-  "goal": {
-    "banner": {
-      "label": "진행 중인 목표"
-    }
-  },
   "tasks": {
     "status": {
       "needs_input": "입력 필요"

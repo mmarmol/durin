@@ -2193,11 +2193,6 @@
     "transcriptPrefix": "文字起こし",
     "processing": "処理中…"
   },
-  "goal": {
-    "banner": {
-      "label": "進行中の目標"
-    }
-  },
   "tasks": {
     "status": {
       "needs_input": "入力が必要"

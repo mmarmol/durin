@@ -4,7 +4,6 @@ import { useTranslation } from "react-i18next";
 import { ThreadActionsProvider } from "@/components/thread/ThreadActionsContext";
 import { ThreadComposer } from "@/components/thread/ThreadComposer";
 import { ThreadHeader } from "@/components/thread/ThreadHeader";
-import { GoalBanner } from "@/components/thread/GoalBanner";
 import { StreamErrorNotice } from "@/components/thread/StreamErrorNotice";
 import { ThreadViewport } from "@/components/thread/ThreadViewport";
 import { WorkPanel } from "@/components/work/WorkPanel";
@@ -647,7 +646,6 @@ export function ThreadShell({
       />
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
-          <GoalBanner goal={goalState} />
           <ThreadViewport
             messages={displayMessages}
             isStreaming={isStreaming}
