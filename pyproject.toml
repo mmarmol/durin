@@ -197,6 +197,14 @@ packages = ["durin"]
 # force-include needed.
 artifacts = ["durin/web/dist/**/*"]
 
+# The changelog lives at the repo root (CHANGELOG.md), outside the durin/
+# package, so `packages = ["durin"]` alone leaves it out of the wheel — a
+# running agent can't consult what isn't installed. Force-include copies the
+# committed root file into the wheel as package data (durin/CHANGELOG.md), read
+# at runtime by durin/changelog.py. The source file is not moved.
+[tool.hatch.build.targets.wheel.force-include]
+"CHANGELOG.md" = "durin/CHANGELOG.md"
+
 # Build the webui SPA before the wheel is assembled (so durin/web/dist/ exists
 # for the force-include) and assert it landed in the wheel. Without this hook a
 # bare `python -m build` shipped a wheel with NO SPA → a 404 dashboard. The hook

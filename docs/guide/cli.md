@@ -14,6 +14,7 @@ and where durin keeps its state on disk, see [install.md](install.md).
 | Change one key | `durin config set agents.defaults.model glm-5.1` |
 | Edit config in `$EDITOR` | `durin config edit` |
 | Pull the latest build | `durin upgrade` |
+| See what changed | `durin changelog` (`--all` for full history; `durin changelog <version>` for one) |
 | Remove durin + data | `durin uninstall --purge` |
 
 `status` = a factual snapshot; `doctor` = health checks with fixes.

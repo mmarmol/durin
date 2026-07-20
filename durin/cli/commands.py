@@ -520,6 +520,49 @@ def main(
     pass
 
 
+@app.command()
+def changelog(
+    version: str | None = typer.Argument(
+        None,
+        help="Show a specific version's entry (e.g. 0.3.3). Defaults to the running version.",
+    ),
+    all_: bool = typer.Option(False, "--all", help="Show the entire changelog."),
+) -> None:
+    """Show what changed — the running version's entry by default."""
+    from durin import changelog as _changelog
+
+    text = _changelog._locate()
+    if text is None:
+        typer.echo("Changelog is not available in this install.", err=True)
+        raise typer.Exit(1)
+
+    if all_:
+        typer.echo(text)
+        return
+
+    sections = _changelog.parse(text)
+    if not sections:
+        typer.echo("The changelog has no entries.", err=True)
+        raise typer.Exit(1)
+
+    if version is not None:
+        sec = _changelog.find(sections, version)
+        if sec is None:
+            typer.echo(f"No changelog entry for '{version}'.", err=True)
+            typer.echo(
+                f"Available versions: {', '.join(_changelog.versions(sections))}",
+                err=True,
+            )
+            raise typer.Exit(1)
+        typer.echo(sec.body)
+        return
+
+    sec, fell_back = _changelog.current(sections)
+    if fell_back:
+        typer.echo(f"(No entry for v{__version__}; showing the latest.)", err=True)
+    typer.echo(sec.body)
+
+
 # ============================================================================
 # Onboard / Setup
 # ============================================================================
