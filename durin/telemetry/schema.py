@@ -1217,6 +1217,7 @@ class MemoryDreamSkillExtractEvent(TypedDict):
     """The extract dream's skill pass wrote/updated procedural skills."""
 
     skills_touched: int
+    gaps_closed: NotRequired[int]
     duration_ms: NotRequired[int]
 
 
