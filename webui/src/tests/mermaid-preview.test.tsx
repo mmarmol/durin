@@ -40,7 +40,9 @@ describe("MermaidPreview", () => {
 
   it("reports the rendered SVG via onRendered", async () => {
     const onRendered = vi.fn();
-    render(<MermaidPreview code="graph TD; A-->B" onRendered={onRendered} />);
+    // A code string used nowhere else in this file, so it misses the module-level
+    // svgCache and exercises the fresh-render onRendered path, not the cache hit.
+    render(<MermaidPreview code="graph TD; ONRENDERED-->FRESH" onRendered={onRendered} />);
     await waitFor(() => expect(onRendered).toHaveBeenCalledWith(expect.stringContaining("<svg")));
   });
 });
