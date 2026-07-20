@@ -10,13 +10,17 @@ related: 00_overview.md, 02_lifecycle_and_curation.md, ../memory/07_telemetry_an
 
 A skill can be authored, curated, and never used — or used constantly and
 never corrected — and neither loop knows about the other unless something
-measures it. This document describes the telemetry that closes that gap: five
-`skill.*` events that instrument the loop end to end (used → observed →
-curated → suggested), plus three pre-existing `memory.dream.*` /
+measures it. This document describes the telemetry that closes that gap:
+`skill.*` events that instrument the loop end to end (authored → used →
+observed → curated → suggested), plus the pre-existing `memory.dream.*` /
 `memory.skill_miss` events that were already tracking the skill-related parts
-of Dream and search. Together they answer three questions an operator or a
+of Dream and search. Together they answer the questions an operator or a
 future curation change needs answered empirically, not by inference:
 
+- **Where did a skill come from, and by what route?** — a quick `skill_write`,
+  an iterative draft promoted with `skill_publish`, or the unverified-origin
+  sweep attributing one to a session after the fact — and whether its bundled
+  code scanned clean.
 - **Are skills used?** — which skills the agent actually loads, how often, how
   recently.
 - **Is feedback flowing?** — is the observation queue receiving corrections
@@ -32,27 +36,38 @@ failure must never break an observation write, a curation action, or a skill
 mutation. This mirrors the convention already established for Dream's
 `memory.dream.*` events (see `../memory/05_dream_cold_path.md` §4).
 
-**Five events, four loop stages.** `skill.used` marks the *use* signal (a
+**One authoring signal, then the use-feedback-judgment loop.**
+`skill.authored` marks the *activation* signal: a skill became real, via
+whichever ramp produced it (see below). `skill.used` marks the *use* signal (a
 skill was loaded or edited during a turn). `skill.observation_logged` marks
-the *feedback* signal (something was noted for later review). `skill.
-curation_action` and `skill.curation_run` mark the *judgment* signal (what the
-daily judge did, item-by-item and in aggregate). `skill.suggestion_resolved`
-closes the loop for manual skills specifically — it records what the *user*
-decided about a suggestion the judge could not apply unilaterally.
+the *feedback* signal (something was noted for later review), and
+`skill.observation_resolved` closes a single observation the user resolves by
+hand. `skill.curation_action` and `skill.curation_run` mark the *judgment*
+signal (what the daily judge did, item-by-item and in aggregate).
+`skill.suggestion_resolved` closes the loop for manual skills specifically —
+it records what the *user* decided about a suggestion the judge could not
+apply unilaterally.
 
-**The three pre-existing events cover what the five don't.**
+**The pre-existing events cover what the loop-stage events don't.**
 `memory.dream.skill_extract` and `memory.dream.skill_signals` instrument the
-two dream-side production stages — new skills authored, and observations
-logged in hindsight — that predate this event set and already fed the webui
-Dream digest. `memory.skill_miss` instruments retrieval failure — a
-`memory_search(kind=skill)` query that found nothing — which is a different
-kind of signal from the other eight: absence of a match, not a completed
+two dream-side production stages — new skills authored by the dream, and
+observations logged in hindsight — that predate this event set and already
+fed the webui Dream digest. `memory.skill_miss` instruments retrieval
+failure — a `memory_search(kind=skill)` query that found nothing — a
+different kind of signal from the rest: absence of a match, not a completed
 action.
 
 ## 3. Diagram
 
 ```mermaid
 flowchart TD
+    subgraph Authoring["Authoring (write / publish / backstop)"]
+        ACT["_finalize_skill\n(skill_write, skill_publish)"]
+        SWEEP["sweep_unverified_skills\n(attributed backstop)"]
+    end
+    ACT -->|ramp=write/publish| AUTHORED["skill.authored"]
+    SWEEP -->|ramp=backstop, when attributed| AUTHORED
+
     subgraph Use["In-session use"]
         VIEW["skill_view / read_file(SKILL.md) / skill_edit"]
     end
@@ -88,7 +103,8 @@ flowchart TD
     end
     MSEARCH -->|zero results| SKILLMISS["memory.skill_miss"]
 
-    USED --> DIGEST["Telemetry JSONL\n(local, best-effort)"]
+    AUTHORED --> DIGEST["Telemetry JSONL\n(local, best-effort)"]
+    USED --> DIGEST
     OBSLOG --> DIGEST
     SKILLSIGNALS --> DIGEST
     SKILLEXTRACT --> DIGEST
@@ -101,6 +117,36 @@ flowchart TD
 ```
 
 ## 4. How it works
+
+### `skill.authored` — a skill became real
+
+Emitted once by `_finalize_skill` (`durin/agent/skills_store.py`) whenever a
+skill completes activation — the quick `skill_write` ramp, an iterative
+`skill_publish`, or the unverified-origin sweep successfully attributing a
+no-provenance skill to a session (see `02_lifecycle_and_curation.md` /
+`00_overview.md` for all three routes). Payload:
+`{name, actor, session, model, ramp, composition, scan_verdict, files_count}`.
+
+- `ramp` is `"write"`, `"publish"`, or `"backstop"` — which door produced the
+  skill.
+- `composition` is `"compliant"` or `"overridden"` — whether the composition
+  gate passed cleanly or was skipped by an explicit override. Always
+  `"compliant"` for the backstop ramp: a swept skill was never run through the
+  gate, since the sweep only attributes it.
+- `scan_verdict` is `"safe"` when bundled files were scanned and cleared, and
+  absent when the skill carries no bundled files at all. For the write/publish
+  ramps it is never `"caution"`/`"dangerous"` — a risky verdict quarantines the
+  skill instead of activating it, and a quarantined skill emits no
+  `skill.authored` event at all. The backstop ramp is the exception: it always
+  fires with a `"caution"` or `"dangerous"` scan_verdict, because the sweep's
+  job is to quarantine whatever it finds regardless of scan outcome — there
+  `skill.authored` measures *attribution*, not activation, and fires alongside
+  the quarantine rather than instead of it.
+- `files_count` is the number of bundled files (0 for a pure-prose skill).
+
+This is the production-side counterpart the loop-stage events below did not
+have until this event existed: without it, the only way to know a skill was
+newly authored versus merely edited was to diff the catalog by hand.
 
 ### `skill.used` — the use signal
 
@@ -193,14 +239,26 @@ cannot answer for `auto` skills (those get applied without a human gate).
 ### Pre-existing events this document also covers
 
 **`memory.dream.skill_extract`** (`durin/telemetry/schema.py`:
-`MemoryDreamSkillExtractEvent`) is emitted once per
-`run_skill_extract_pass` invocation with `{skills_touched, duration_ms}`.
-`skills_touched` counts `skill_write` tool calls the sub-agent made — the
-production-side counterpart to the five loop events above, answering "how
-many new skills did the dream author this run." The webui Dream digest
-(`durin/memory/dream_digest.py::map_dream_event`) surfaces this only when
-`skills_touched > 0`, since the pass runs on every dream cycle and a
-zero-result run is not feed-worthy noise.
+`MemoryDreamSkillExtractEvent`) is emitted once per `run_skill_extract_pass`
+invocation with `{skills_touched, gaps_closed, duration_ms}`. `skills_touched`
+counts genuine authorings — a `skill_write` call that actually landed a
+skill — not every call the tool returned a response for: a
+composition-rejected or quarantined call produces the identically-named tool
+event with the same runner-level `status: "ok"` (the call itself didn't raise
+or return an error string), so counting by tool name and status alone would
+over-count. The pass tells a landed skill apart by checking the tool event's
+truncated `detail` field for `"ok": true` — the only signal available, since
+tool events don't carry the full JSON payload, but `_finalize_skill`'s success
+dict always puts `"ok": true` first, so it lands well inside that truncation
+window regardless of length. `gaps_closed` is the count
+`_resolve_gap_observations` returned for the same pass
+(`02_lifecycle_and_curation.md`) — how many logged `new:*` gaps a
+newly-authored skill closed. Together they are the production-side
+counterpart to the loop-stage events above, answering "how many new skills did
+the dream author this run, and how many coverage gaps did that close." The
+webui Dream digest (`durin/memory/dream_digest.py::map_dream_event`) surfaces
+this only when `skills_touched > 0`, since the pass runs on every dream cycle
+and a zero-result run is not feed-worthy noise.
 
 **`memory.dream.skill_signals`** (`MemoryDreamSkillSignalsEvent`) is emitted
 once per `discover_skill_signals` call with `{proposed, logged, skills}`:
@@ -225,7 +283,7 @@ telemetry it belongs to.
 
 ### From telemetry to webui
 
-All eight events are best-effort JSONL writes via `emit_tool_event`
+All these events are best-effort JSONL writes via `emit_tool_event`
 (`durin/agent/tools/_telemetry.py`), read back by whichever surface needs
 them — there is no separate skills-specific telemetry sink.
 
@@ -269,25 +327,29 @@ them — there is no separate skills-specific telemetry sink.
   `kind: "improved"` for every other verb — deep-linked to the named skill and
   surfaced through the same `GET /api/v1/memory/dream/digest` path as the
   `memory.dream.*` events above. The other `skill.*` events —
-  `skill.used`, `skill.observation_logged`, `skill.curation_run`,
-  `skill.suggestion_resolved`, and `skill.observation_resolved` — have no
-  dedicated webui reader as of this writing; they exist as a queryable telemetry stream (local JSONL) for offline
-  analysis of the loop's effectiveness, the same as many `memory.*` events that
-  predate any webui surface for them.
+  `skill.authored`, `skill.used`, `skill.observation_logged`,
+  `skill.curation_run`, `skill.suggestion_resolved`, and
+  `skill.observation_resolved` — have no dedicated webui reader as of this
+  writing; they exist as a queryable telemetry stream (local JSONL) for
+  offline analysis of the loop's effectiveness, the same as many `memory.*`
+  events that predate any webui surface for them.
 
 ## 5. Key types & entry points
 
 | Symbol | File | Role |
 |---|---|---|
+| `SkillAuthoredEvent` | `durin/telemetry/schema.py` | `{name, actor, session?, model?, ramp, composition, scan_verdict?, files_count}` — one skill activation, via write/publish/backstop. |
 | `SkillUsedEvent` | `durin/telemetry/schema.py` | `{skill, op, turn, iteration?, session_key?}` — one skill touch. |
 | `SkillObservationLoggedEvent` | `durin/telemetry/schema.py` | `{skill, kind, dedup_bumped, count}` — one observation append or dedup bump. |
 | `SkillCurationActionEvent` | `durin/telemetry/schema.py` | `{action, skill?, applied}` — one curation action attempt. |
 | `SkillCurationRunEvent` | `durin/telemetry/schema.py` | `{reviewed, applied, deferred, backfilled?}` — one curation pass summary. |
 | `SkillSuggestionResolvedEvent` | `durin/telemetry/schema.py` | `{skill, action, resolution}` — user's accept/reject of a manual-skill suggestion. |
 | `SkillObservationResolvedEvent` | `durin/telemetry/schema.py` | `{skill, kind, disposition}` — user's manual resolve/dismiss of an open observation. |
-| `MemoryDreamSkillExtractEvent` | `durin/telemetry/schema.py` | `{skills_touched, duration_ms?}` — pre-existing; one skill-extract pass summary. |
+| `MemoryDreamSkillExtractEvent` | `durin/telemetry/schema.py` | `{skills_touched, gaps_closed?, duration_ms?}` — pre-existing; one skill-extract pass summary. |
 | `MemoryDreamSkillSignalsEvent` | `durin/telemetry/schema.py` | `{proposed, logged, skills?}` — pre-existing; one hindsight-pass summary. |
 | `MemorySkillMissEvent` | `durin/telemetry/schema.py` | `{query, result_count, had_skill_candidate, iteration?, session_key?}` — pre-existing; a zero-result skill search. |
+| `_finalize_skill` | `durin/agent/skills_store.py` | Emits `skill.authored` (`ramp="write"`/`"publish"`) once a skill clears the shared activation core; a quarantined skill emits nothing. |
+| `sweep_unverified_skills` | `durin/agent/skill_lifecycle.py` | Emits `skill.authored` (`ramp="backstop"`) when it can attribute a swept skill to a session; emits nothing when it falls back to `unverified:workspace`. |
 | `emit_skill_used` | `durin/agent/skill_usage.py` | Emits `skill.used` per call in a turn's `skill_calls`. |
 | `collect_usage_and_last_used` | `durin/agent/skill_usage.py` | Single-pass sidecar scan producing per-skill op counts and last-touched mtime; backs the webui usage line. |
 | `log_observation` | `durin/agent/skill_observations.py` | Emits `skill.observation_logged`; the single write path for the observation queue. |
@@ -324,6 +386,15 @@ documented in `02_lifecycle_and_curation.md` §6
   websocket (`dream_progress`) behavior shared across all Dream passes.
 
 ## 7. Curated rationale
+
+**Why `skill.authored` exists as its own event, separate from
+`memory.dream.skill_extract`.** The pre-existing event only ever measured the
+dream's own production (the skill-extract pass) — it could not see a skill
+`skill_write`d or `skill_publish`d by the in-loop agent mid-conversation, or a
+skill the unverified-origin sweep managed to attribute after the fact.
+`skill.authored` is emitted from the one place all three routes actually
+converge — `_finalize_skill` and the sweep — so it is the single source for
+"was a skill genuinely activated," regardless of which route produced it.
 
 **Why per-item events in addition to per-run summaries.** `skill.
 curation_action` and `skill.used` fire once per item rather than being folded

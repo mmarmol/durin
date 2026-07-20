@@ -32,9 +32,10 @@ and the skills catalog. A skill with a missing or vague description is
 effectively undiscoverable in the searchable tier.
 
 **Write path preserves foreign fields.** All mutations (`dream_create_skill`,
-`apply_skill_edit`, `save_skill_content`, `set_mode`, `mark_curated`,
-`dream_fuse_skills`) round-trip through `split_frontmatter` → mutate → `join_frontmatter(sort_keys=False)`.
-Unknown root keys and every `metadata.<vendor>` block survive byte-equivalently.
+`_finalize_skill`, `apply_skill_edit`, `save_skill_content`, `set_mode`,
+`mark_curated`, `dream_fuse_skills`) round-trip through `split_frontmatter` →
+mutate → `join_frontmatter(sort_keys=False)`. Unknown root keys and every
+`metadata.<vendor>` block survive byte-equivalently.
 
 ---
 
@@ -81,6 +82,12 @@ workspace/skills/<name>/
 the durin package; a workspace copy of the same name takes precedence and is
 forked on first write (`fork_on_write`). Subdirectories are preserved on import
 and reachable via `read_file`.
+
+A skill built through the iterative authoring ramp
+(`02_lifecycle_and_curation.md`) is assembled at this exact layout under
+`skill-drafts/<name>/` first — `skill_publish` moves the directory into
+`skills/<name>/` unchanged, so this format contract applies identically
+whether a skill lands via a draft or a direct `skill_write`.
 
 ### Root frontmatter — agentskills.io standard
 
