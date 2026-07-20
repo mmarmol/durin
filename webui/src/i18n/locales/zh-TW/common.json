@@ -2229,6 +2229,8 @@
     "zoomOut": "縮小",
     "fit": "適應螢幕",
     "close": "關閉",
-    "panZoomHint": "滾動縮放 · 拖曳平移"
+    "panZoomHint": "滾動縮放 · 拖曳平移",
+    "errorDiagram": "無法渲染此示意圖",
+    "errorChart": "無法渲染此圖表"
   }
 }

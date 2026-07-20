@@ -45,4 +45,14 @@ describe("MermaidPreview", () => {
     render(<MermaidPreview code="graph TD; ONRENDERED-->FRESH" onRendered={onRendered} />);
     await waitFor(() => expect(onRendered).toHaveBeenCalledWith(expect.stringContaining("<svg")));
   });
+
+  it("configures mermaid to suppress its injected error graphic", async () => {
+    const mermaid = (await import("mermaid")).default;
+    render(<MermaidPreview code="graph TD; SUPPRESS-->BOMB" />);
+    await waitFor(() =>
+      expect(mermaid.initialize).toHaveBeenCalledWith(
+        expect.objectContaining({ suppressErrorRendering: true }),
+      ),
+    );
+  });
 });

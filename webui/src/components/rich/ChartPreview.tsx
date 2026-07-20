@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 // Content-addressed cache of rendered chart markup (SVG), keyed by spec
 // source. The transcript remounts message subtrees on streaming/poll
@@ -39,6 +40,7 @@ function hasRemoteUrl(obj: unknown): boolean {
  *  Input is declarative JSON — no arbitrary JS executes.
  *  Specs referencing remote URLs are rejected before embed is called. */
 export default function ChartPreview({ code, onRendered }: { code: string; onRendered?: (svg: string) => void }) {
+  const { t } = useTranslation();
   const hostRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState(false);
 
@@ -127,7 +129,7 @@ export default function ChartPreview({ code, onRendered }: { code: string; onRen
   if (error) {
     return (
       <div role="alert" className="p-4 text-sm text-destructive">
-        Could not render this chart.
+        {t("rich.errorChart")}
       </div>
     );
   }

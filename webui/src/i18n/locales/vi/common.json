@@ -2229,6 +2229,8 @@
     "zoomOut": "Thu nhỏ",
     "fit": "Vừa với màn hình",
     "close": "Đóng",
-    "panZoomHint": "cuộn để thu phóng · kéo để di chuyển"
+    "panZoomHint": "cuộn để thu phóng · kéo để di chuyển",
+    "errorDiagram": "Không thể hiển thị sơ đồ này",
+    "errorChart": "Không thể hiển thị biểu đồ này"
   }
 }

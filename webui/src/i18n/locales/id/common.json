@@ -2229,6 +2229,8 @@
     "zoomOut": "Perkecil",
     "fit": "Sesuaikan dengan layar",
     "close": "Tutup",
-    "panZoomHint": "gulir untuk zoom · seret untuk menggeser"
+    "panZoomHint": "gulir untuk zoom · seret untuk menggeser",
+    "errorDiagram": "Tidak dapat merender diagram ini",
+    "errorChart": "Tidak dapat merender grafik ini"
   }
 }

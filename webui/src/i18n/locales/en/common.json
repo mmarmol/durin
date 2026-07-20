@@ -2241,6 +2241,8 @@
     "zoomOut": "Zoom out",
     "fit": "Fit to screen",
     "close": "Close",
-    "panZoomHint": "scroll to zoom · drag to pan"
+    "panZoomHint": "scroll to zoom · drag to pan",
+    "errorDiagram": "Couldn't render this diagram",
+    "errorChart": "Couldn't render this chart"
   }
 }

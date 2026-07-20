@@ -1,5 +1,6 @@
 // webui/src/components/rich/MermaidPreview.tsx
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 let nextId = 0;
 
@@ -24,6 +25,7 @@ function cacheSvg(code: string, svg: string): void {
  *  is imported via React.lazy from RichBlock) and runs with securityLevel
  *  "strict" so labels cannot inject markup. */
 export default function MermaidPreview({ code, onRendered }: { code: string; onRendered?: (svg: string) => void }) {
+  const { t } = useTranslation();
   const [svg, setSvg] = useState<string | null>(() => svgCache.get(code) ?? null);
   const [error, setError] = useState(false);
   const idRef = useRef(`mmd-${nextId++}`);
@@ -44,7 +46,7 @@ export default function MermaidPreview({ code, onRendered }: { code: string; onR
     void (async () => {
       try {
         const mermaid = (await import("mermaid")).default;
-        mermaid.initialize({ startOnLoad: false, securityLevel: "strict" });
+        mermaid.initialize({ startOnLoad: false, securityLevel: "strict", suppressErrorRendering: true });
         const { svg: out } = await mermaid.render(idRef.current, code);
         if (!cancelled) {
           cacheSvg(code, out);
@@ -73,7 +75,7 @@ export default function MermaidPreview({ code, onRendered }: { code: string; onR
   if (error) {
     return (
       <div role="alert" className="p-4 text-sm text-destructive">
-        Could not render this diagram.
+        {t("rich.errorDiagram")}
       </div>
     );
   }
