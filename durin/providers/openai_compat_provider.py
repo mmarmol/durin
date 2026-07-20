@@ -7,6 +7,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import secrets
 import string
 import time
@@ -56,6 +57,12 @@ _ALLOWED_MSG_KEYS = frozenset({
     "reasoning_content", "extra_content",
 })
 _ALNUM = string.ascii_letters + string.digits
+
+# Sentinel meaning "omit this parameter entirely from the request". Set by the
+# reactive strip-on-error recovery when an endpoint rejects a param it otherwise
+# lists as supported — distinct from None, which some providers treat as an
+# explicit "use the default" rather than "don't send".
+_OMIT: Any = object()
 
 _STANDARD_TC_KEYS = frozenset({"id", "type", "index", "function"})
 _STANDARD_FN_KEYS = frozenset({"name", "arguments"})
@@ -173,6 +180,75 @@ def _is_mimo_thinking_model(model_name: str) -> bool:
     if "/" in name and name.rsplit("/", 1)[1] in _MIMO_THINKING_MODELS:
         return True
     return False
+
+
+_SURROGATE_RE = re.compile(r"[\ud800-\udfff]")
+
+
+def _scrub_surrogates(value: str) -> str:
+    """Replace lone UTF-16 surrogate code points with U+FFFD.
+
+    Byte-level reasoning models (GLM, Kimi, MiMo) occasionally emit an unpaired
+    surrogate in content or reasoning text. It rides along fine inside a Python
+    str, but the moment the HTTP client encodes the request body as UTF-8 it
+    raises ``UnicodeEncodeError`` — turning one malformed token into a hard,
+    non-retryable request failure. Scrubbing at the wire boundary keeps a single
+    bad code point from sinking the whole call.
+    """
+    if _SURROGATE_RE.search(value):
+        return _SURROGATE_RE.sub("�", value)
+    return value
+
+
+def _scrub_message_surrogates(msg: dict[str, Any]) -> None:
+    """Scrub lone surrogates from every string field of a wire message in place."""
+    content = msg.get("content")
+    if isinstance(content, str):
+        msg["content"] = _scrub_surrogates(content)
+    elif isinstance(content, list):
+        for part in content:
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                part["text"] = _scrub_surrogates(part["text"])
+    for key in ("reasoning_content", "name"):
+        value = msg.get(key)
+        if isinstance(value, str):
+            msg[key] = _scrub_surrogates(value)
+    tool_calls = msg.get("tool_calls")
+    if isinstance(tool_calls, list):
+        for tc in tool_calls:
+            fn = tc.get("function") if isinstance(tc, dict) else None
+            if isinstance(fn, dict):
+                for key in ("name", "arguments"):
+                    value = fn.get(key)
+                    if isinstance(value, str):
+                        fn[key] = _scrub_surrogates(value)
+
+
+def _blank_assistant_tool_call_content(
+    messages: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]] | None:
+    """Return a copy of *messages* with assistant content blanked on every
+    message that carries tool_calls, or ``None`` if there is nothing to blank.
+
+    The recovery for the minority of gateways that reject content and tool_calls
+    in the same assistant message. Kept off the default path so models that
+    accept the mix — the majority, including GLM — keep their narration visible.
+    """
+    if not isinstance(messages, list):
+        return None
+    changed = False
+    out: list[dict[str, Any]] = []
+    for msg in messages:
+        if (
+            isinstance(msg, dict)
+            and msg.get("role") == "assistant"
+            and msg.get("tool_calls")
+            and msg.get("content") not in (None, "")
+        ):
+            msg = {**msg, "content": None}
+            changed = True
+        out.append(msg)
+    return out if changed else None
 
 
 def _openai_compat_timeout_s() -> float:
@@ -581,10 +657,12 @@ class OpenAICompatProvider(LLMProvider):
                         tc_clean["function"] = function_clean
                     normalized.append(tc_clean)
                 clean["tool_calls"] = normalized
-                if clean.get("role") == "assistant":
-                    # Some OpenAI-compatible gateways reject assistant messages
-                    # that mix non-empty content with tool_calls.
-                    clean["content"] = None
+                # Assistant content is kept alongside tool_calls — the OpenAI
+                # standard allows it and models like GLM emit both together, so
+                # blanking it here hid the model's own narration across tool
+                # steps and made it re-narrate the same reply every step. The
+                # rare gateway that rejects the mix is handled reactively by
+                # _recover_request_for_error, not by muting every model.
             if "tool_call_id" in clean and clean["tool_call_id"]:
                 clean["tool_call_id"] = map_id(clean["tool_call_id"])
             if (
@@ -592,7 +670,37 @@ class OpenAICompatProvider(LLMProvider):
                 and not (clean.get("role") == "assistant" and clean.get("tool_calls"))
             ):
                 clean["content"] = self._coerce_content_to_string(clean.get("content"))
+            _scrub_message_surrogates(clean)
         return self._enforce_role_alternation(sanitized)
+
+    def _recover_request_for_error(
+        self, kw: dict[str, Any], response: LLMResponse,
+    ) -> dict[str, Any] | None:
+        """Reactively strip the piece of the request an endpoint just rejected.
+
+        Runs on a non-transient error so the retry loop can try once more with a
+        request shape the endpoint accepts. This is what lets us send the
+        OpenAI-standard shape by default and degrade only where an endpoint
+        proves it must — instead of per-model allowlists that rot as providers
+        ship new models. Returns a mutated copy of *kw* or ``None``.
+        """
+        text = (response.content or "").lower()
+        # Gateway rejects assistant content sent alongside tool_calls: blank it
+        # (the old unconditional behavior, now applied only where it's needed).
+        if ("tool_call" in text or "tool call" in text) and "content" in text:
+            blanked = _blank_assistant_tool_call_content(kw.get("messages"))
+            if blanked is not None:
+                return {**kw, "messages": blanked}
+        # Endpoint rejects a sampling / token-limit param it otherwise advertises:
+        # strip the named one so the retry can succeed without it.
+        if "temperature" in text and kw.get("temperature") not in (None, _OMIT):
+            return {**kw, "temperature": _OMIT}
+        if (
+            ("max_tokens" in text or "max_completion_tokens" in text)
+            and kw.get("max_tokens") not in (None, _OMIT)
+        ):
+            return {**kw, "max_tokens": _OMIT}
+        return None
 
     # ------------------------------------------------------------------
     # Build kwargs
@@ -645,15 +753,18 @@ class OpenAICompatProvider(LLMProvider):
         }
 
         # GPT-5 and reasoning models (o1/o3/o4) reject temperature when
-        # reasoning_effort is active.  Only include it when safe.
-        if self._supports_temperature(model_name, reasoning_effort):
+        # reasoning_effort is active.  Only include it when safe. ``_OMIT`` is
+        # the recovery signal that this endpoint rejected the param outright.
+        if temperature is not _OMIT and self._supports_temperature(model_name, reasoning_effort):
             kwargs["temperature"] = temperature
             # top_p is a standard nucleus-sampling param gated the same way as
             # temperature (the same reasoning models reject it when thinking).
             if top_p is not None:
                 kwargs["top_p"] = top_p
 
-        if spec and getattr(spec, "supports_max_completion_tokens", False):
+        if max_tokens is _OMIT:
+            pass  # endpoint rejected an explicit cap — let it apply its default
+        elif spec and getattr(spec, "supports_max_completion_tokens", False):
             kwargs["max_completion_tokens"] = max(1, max_tokens)
         else:
             kwargs["max_tokens"] = max(1, max_tokens)
@@ -741,8 +852,16 @@ class OpenAICompatProvider(LLMProvider):
         )
         if explicit_thinking or implicit_deepseek_thinking:
             for msg in kwargs["messages"]:
-                if msg.get("role") == "assistant" and "reasoning_content" not in msg:
-                    msg["reasoning_content"] = ""
+                if msg.get("role") != "assistant":
+                    continue
+                rc = msg.get("reasoning_content")
+                if rc is None or rc == "":
+                    # DeepSeek V4 Pro rejects an empty-string reasoning_content
+                    # on replayed thinking-mode turns ("must be passed back to
+                    # the API"); a single space clears the non-empty check
+                    # without fabricating chain-of-thought. Covers both the
+                    # absent key and a legacy "" persisted before this fix.
+                    msg["reasoning_content"] = " "
 
         # Non-standard sampling params ride in extra_body: ollama / LM Studio
         # read top_k and repeat_penalty there (the OpenAI schema has no
