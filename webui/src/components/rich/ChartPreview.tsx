@@ -50,7 +50,7 @@ export default function ChartPreview({ code, onRendered }: { code: string; onRen
       hostRef.current.innerHTML = cached;
       onRendered?.(cached);
     }
-  }, [code, onRendered]);
+  }, [code]);
 
   useEffect(() => {
     // Already rendered and cached — the layout effect painted it; skip the
