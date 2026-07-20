@@ -49,5 +49,8 @@ contaminated by having written it.
 
 `name` and `description` are required; `metadata`, `always`, `license`, and
 `allowed-tools` are accepted. Do not add other keys — run `scripts/quick_validate.py`
-to see the enforced list. In durin, workspace skills live under the active workspace
-`skills/` directory and are discovered automatically at runtime.
+to see the enforced list. In durin, new skills are scaffolded under the workspace
+`skill-drafts/<name>/` scratch directory and iterated/tested there with the normal
+file and exec tools; `skill_publish` activates a finished draft into the active
+workspace `skills/` registry, which refuses direct writes. Once active, skills are
+discovered automatically at runtime.
