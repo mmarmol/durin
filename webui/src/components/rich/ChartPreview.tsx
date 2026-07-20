@@ -38,7 +38,7 @@ function hasRemoteUrl(obj: unknown): boolean {
 /** Renders a Vega-Lite JSON spec to a chart via vega-embed (loaded lazily).
  *  Input is declarative JSON — no arbitrary JS executes.
  *  Specs referencing remote URLs are rejected before embed is called. */
-export default function ChartPreview({ code }: { code: string }) {
+export default function ChartPreview({ code, onRendered }: { code: string; onRendered?: (svg: string) => void }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState(false);
 
@@ -46,8 +46,11 @@ export default function ChartPreview({ code }: { code: string }) {
   // shows a blank host frame before the async embed below resolves.
   useLayoutEffect(() => {
     const cached = chartCache.get(code);
-    if (cached != null && hostRef.current) hostRef.current.innerHTML = cached;
-  }, [code]);
+    if (cached != null && hostRef.current) {
+      hostRef.current.innerHTML = cached;
+      onRendered?.(cached);
+    }
+  }, [code, onRendered]);
 
   useEffect(() => {
     // Already rendered and cached — the layout effect painted it; skip the
@@ -108,6 +111,7 @@ export default function ChartPreview({ code }: { code: string }) {
         });
         if (!cancelled && hostRef.current) {
           cacheChart(code, hostRef.current.innerHTML);
+          onRendered?.(hostRef.current.innerHTML);
         }
       } catch {
         if (!cancelled) setError(true);
@@ -127,5 +131,5 @@ export default function ChartPreview({ code }: { code: string }) {
       </div>
     );
   }
-  return <div ref={hostRef} className="overflow-x-auto bg-white p-4" />;
+  return <div ref={hostRef} className="w-max" />;
 }
