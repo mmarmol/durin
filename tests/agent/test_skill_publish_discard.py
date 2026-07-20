@@ -1,3 +1,4 @@
+from durin.agent.skills_frontmatter import split_frontmatter
 from durin.agent.skills_store import (
     Attribution,
     discard_draft_skill,
@@ -79,3 +80,22 @@ def test_publish_refuses_empty_draft_body(tmp_path):
     assert "error" in out and "empty" in out["error"]
     assert (tmp_path / "skill-drafts" / "blank").exists()      # draft untouched
     assert not (tmp_path / "skills" / "blank").exists()        # nothing activated
+
+
+def test_publish_backfills_missing_description(tmp_path):
+    """A draft can have a derivable body (enough prose for _skill_md_integrity
+    to accept it) but no explicit `description:` frontmatter field. dream_create_skill
+    backfills that through _ensure_surface_frontmatter before finalizing — publish
+    must get the same treatment (via _finalize_skill, shared by both ramps), or the
+    published skill lands with an empty indexed description until the next curation
+    backfill sweeps it up."""
+    body = (
+        "---\nname: emailer\n---\n"
+        "Parse incoming email and extract structured data from each .eml file it is given.\n"
+    )
+    _draft(tmp_path, "emailer", body)
+
+    out = publish_draft_skill(tmp_path, "emailer")
+    assert out.get("ok"), out
+    data, _ = split_frontmatter(read_skill_content(tmp_path, "emailer"))
+    assert data.get("description")

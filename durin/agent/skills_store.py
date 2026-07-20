@@ -753,13 +753,15 @@ def _bundled_file_count(skill_dir: Path) -> int:
 def _finalize_skill(workspace: Path, name: str, skill_dir: Path, *, source: str,
                     attribution: "Attribution | None", ramp: str, composition: str,
                     commit_subject: str) -> dict:
-    """Scan (iff bundled files) -> quarantine-or-(stamp+commit+sync+emit) for
-    skills/<name>/. `commit_subject` is the caller's full commit subject line
-    (each activation path keeps its own rationale-bearing message; this helper
-    does not synthesize one) — trailers are still derived from `attribution`."""
+    """Backfill-then-scan (iff bundled files)-then-quarantine-or-(stamp+commit+
+    sync+emit) for skills/<name>/. `commit_subject` is the caller's full commit
+    subject line (each activation path keeps its own rationale-bearing message;
+    this helper does not synthesize one) — trailers are still derived from
+    `attribution`."""
     from durin.agent.tools._telemetry import emit_tool_event
 
     md = skill_dir / "SKILL.md"
+    _ensure_surface_frontmatter(md, name)
     files_count = _bundled_file_count(skill_dir)
     scan_verdict = None
     if files_count:
@@ -838,7 +840,6 @@ def dream_create_skill(workspace: Path, name: str, content: str,
         target = md.parent / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(str(body), encoding="utf-8")
-    _ensure_surface_frontmatter(md, name)
     composition = "overridden" if composition_override else "compliant"
     return _finalize_skill(workspace, name, md.parent, source="dream",
                            attribution=attribution, ramp="write", composition=composition,

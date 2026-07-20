@@ -440,15 +440,18 @@ capped at 500 characters. Two details matter:
   untouched. Where a real duplicate still occurs (e.g. the author quoted the
   same line twice), `apply_skill_edit` returns a descriptive error pointing at
   the frontmatter/body ambiguity rather than a bare "not unique".
-- **`_ensure_surface_frontmatter`** is the single call site that fills a
+- **`_ensure_surface_frontmatter`** is the single function that fills a
   missing `name` (from the skill's directory name) and/or `description` (via
-  `_derive_description`) and is invoked by every self-authored create path:
-  `dream_create_skill`, `dream_fuse_skills`, and (via `backfill_surface_
-  frontmatter`) curation's deterministic repair step. `dream_create_skill`
-  additionally refuses outright when neither the raw frontmatter nor the
-  derived fallback yields any usable description — an empty derivation means
-  the body itself has no prose to summarize, which is a stronger signal than a
-  merely-missing frontmatter field.
+  `_derive_description`). It runs inside `_finalize_skill` (`00_overview.md`
+  §4), so every path that converges there — `dream_create_skill` and
+  `publish_draft_skill` alike — backfills the frontmatter before the security
+  scan and provenance stamp; it also runs directly in `dream_restructure_skill`
+  and `dream_fuse_skills` (neither routes through `_finalize_skill`), and via
+  `backfill_surface_frontmatter` for curation's deterministic repair step.
+  `dream_create_skill` additionally refuses outright when neither the raw
+  frontmatter nor the derived fallback yields any usable description — an
+  empty derivation means the body itself has no prose to summarize, which is
+  a stronger signal than a merely-missing frontmatter field.
 
 ### Skill suggestions: the manual-skill path
 
@@ -515,7 +518,7 @@ decisions about external content are never made silently.
 | `curate_catalog` | `durin/agent/skill_curation.py` | Daily delta curation over `auto` workspace skills: backfill, delta build, judge, apply, stamp. |
 | `suggest_manual_skills` | `durin/agent/skill_curation.py` | Parallel curation pass over `manual` skills that enqueues suggestions instead of applying them. |
 | `backfill_surface_frontmatter` | `durin/agent/skills_store.py` | Deterministic pre-judge repair of a missing frontmatter `name`/`description`. |
-| `_derive_description` / `_ensure_surface_frontmatter` | `durin/agent/skills_store.py` | Body-derived description (whitespace-collapsed to avoid edit-uniqueness collisions) and the shared create-time frontmatter fill. |
+| `_derive_description` / `_ensure_surface_frontmatter` | `durin/agent/skills_store.py` | Body-derived description (whitespace-collapsed to avoid edit-uniqueness collisions) and the shared frontmatter fill, run by `_finalize_skill` for both authoring ramps. |
 | `needs_curation` / `mark_curated` | `durin/agent/skills_store.py` | Delta gate (body-hash mismatch OR stale `curation_rules`) and the post-curation stamp. |
 | `CURATION_RULES_VERSION` | `durin/agent/skills_store.py` | Module constant; bump to pull the whole `auto` catalog back through curation once. |
 | `user_edits_since_curation` | `durin/agent/skills_store.py` | Reads `Actor: user` commits (with diffs) since the last curation stamp, for the judge prompt. |

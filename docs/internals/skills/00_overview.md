@@ -166,9 +166,13 @@ Two ramps produce new skills, and both converge on the same activation core.
 
 **The shared activation core.** `_finalize_skill` (`durin/agent/skills_store.py`)
 is the chokepoint every create-time and publish-time write passes through,
-whichever ramp produced the body. When the skill carries bundled files it runs
-`scan_skill` first — the same deterministic scanner imports pass through — and
-a `caution`/`dangerous` verdict quarantines the whole directory instead of
+whichever ramp produced the body. It first calls `_ensure_surface_frontmatter`
+to backfill a missing `name`/`description` in the frontmatter, derived from the
+body (`02_lifecycle_and_curation.md` §4) — so a body with no explicit
+`description:` field still lands with a searchable one, regardless of which
+ramp produced it. When the skill carries bundled files it then runs
+`scan_skill` — the same deterministic scanner imports pass through — and a
+`caution`/`dangerous` verdict quarantines the whole directory instead of
 activating it (see Sweep and quarantine below for the quarantine shape). A
 `safe` verdict (or no bundled files at all) stamps `metadata.durin.provenance`
 (`source`, `created_at`, and `scan_verdict` when a scan ran) and
@@ -181,11 +185,10 @@ quarantined skill emits no `skill.authored` event.
 
 **Quick ramp — `skill_write`.** For a body the agent already has in hand. The
 core tool calls `skills_store.dream_create_skill`, which runs the composition
-gate (`02_lifecycle_and_curation.md`), fills in a missing `name` or
-`description` derived from the body when the caller omitted them (refusing
-outright if no description can be derived either way), writes `SKILL.md` (+ any
-bundled `files`), then hands off to `_finalize_skill` with `ramp="write"`. One
-call, one commit.
+gate (`02_lifecycle_and_curation.md`), refuses outright if no description can
+be derived from the body either (frontmatter or prose), writes `SKILL.md` (+
+any bundled `files`), then hands off to `_finalize_skill` with `ramp="write"` —
+which backfills the frontmatter as described above. One call, one commit.
 
 **Dream skill-extract pass.** `durin/memory/dream_passes.py::run_skill_extract_pass`
 runs a sub-agent (`AgentRunner`, `max_iterations=8`) over recent sessions plus
@@ -225,10 +228,13 @@ composition gate against the draft's `SKILL.md` *before* moving anything, so a
 malformed or rejected draft is left exactly as it was, for revision. It then
 refuses if a skill of the same name is already active — nothing is clobbered —
 moves the draft directory into `skills/<name>/`, and hands off to
-`_finalize_skill` with `ramp="publish"`. `skill_publish` carries the same
-`override_composition` escape hatch `skill_write`'s in-session door does (the
-user's explicit word, after seeing the gate's reason); there is no dream-side
-"hard" variant for it, because dream never builds drafts.
+`_finalize_skill` with `ramp="publish"`. Because both ramps converge on that
+same core, a draft with a derivable body but no explicit `description:` field
+gets the identical frontmatter backfill the quick ramp gets — a published
+skill is never left with an empty indexed description. `skill_publish` carries
+the same `override_composition` escape hatch `skill_write`'s in-session door
+does (the user's explicit word, after seeing the gate's reason); there is no
+dream-side "hard" variant for it, because dream never builds drafts.
 
 **`skill_discard`** deletes `skill-drafts/<name>/` outright. It never touches
 the active registry — there is nothing to gate, since nothing was ever
@@ -465,7 +471,7 @@ there is no session left to credit.
 | Symbol | File | Role |
 |---|---|---|
 | `SkillsStore` functions (`_store`) | `durin/agent/skills_store.py` | Single write chokepoint for all skill mutations. Provides `dream_create_skill`, `install_imported_skill`, `remove_skill`, `fork_on_write`, `mark_curated`, `needs_curation`. All writes call `GitStore.auto_commit` with `Attribution` trailers. |
-| `_finalize_skill` | `durin/agent/skills_store.py` | Shared activation core for both authoring ramps: scans bundled files, stamps provenance + `mode=auto`, commits with attribution, syncs the index, emits `skill.authored`. Quarantines instead of activating on a caution/dangerous scan (no event emitted). |
+| `_finalize_skill` | `durin/agent/skills_store.py` | Shared activation core for both authoring ramps: backfills a missing frontmatter `name`/`description`, scans bundled files, stamps provenance + `mode=auto`, commits with attribution, syncs the index, emits `skill.authored`. Quarantines instead of activating on a caution/dangerous scan (no event emitted). |
 | `publish_draft_skill` / `discard_draft_skill` | `durin/agent/skills_store.py` | Promote `skill-drafts/<name>/` into the registry via `_finalize_skill` (`ramp="publish"`) — gated on the same integrity check and composition gate as create, refusing a name collision with an already-active skill — or delete the draft outright without touching the registry. |
 | `Attribution` | `durin/agent/skills_store.py` | Actor, Session, Agent trailers stamped on every skill git commit. |
 | `SkillsLoader` | `durin/agent/skills.py` | Loads skills from workspace (shadows builtins). `list_skills`, `load_skill`, `get_always_skills`, `build_skills_summary`, `load_skills_for_context`. |
