@@ -2235,6 +2235,12 @@
     "code": "Código",
     "preview": "Vista",
     "expand": "Ampliar",
-    "copy": "Copiar"
+    "copy": "Copiar",
+    "download": "Descargar",
+    "zoomIn": "Acercar",
+    "zoomOut": "Alejar",
+    "fit": "Ajustar a pantalla",
+    "close": "Cerrar",
+    "panZoomHint": "rueda para zoom · arrastrar para mover"
   }
 }

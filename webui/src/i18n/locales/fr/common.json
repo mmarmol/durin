@@ -2223,6 +2223,12 @@
     "code": "Code",
     "preview": "Aperçu",
     "expand": "Agrandir",
-    "copy": "Copier"
+    "copy": "Copier",
+    "download": "Télécharger",
+    "zoomIn": "Zoom avant",
+    "zoomOut": "Zoom arrière",
+    "fit": "Ajuster à l’écran",
+    "close": "Fermer",
+    "panZoomHint": "défiler pour zoomer · glisser pour déplacer"
   }
 }

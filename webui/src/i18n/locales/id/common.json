@@ -2223,6 +2223,12 @@
     "code": "Kode",
     "preview": "Pratinjau",
     "expand": "Perluas",
-    "copy": "Salin"
+    "copy": "Salin",
+    "download": "Unduh",
+    "zoomIn": "Perbesar",
+    "zoomOut": "Perkecil",
+    "fit": "Sesuaikan dengan layar",
+    "close": "Tutup",
+    "panZoomHint": "gulir untuk zoom · seret untuk menggeser"
   }
 }

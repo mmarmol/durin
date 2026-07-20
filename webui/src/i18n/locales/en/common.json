@@ -2235,6 +2235,12 @@
     "code": "Code",
     "preview": "Preview",
     "expand": "Expand",
-    "copy": "Copy"
+    "copy": "Copy",
+    "download": "Download",
+    "zoomIn": "Zoom in",
+    "zoomOut": "Zoom out",
+    "fit": "Fit to screen",
+    "close": "Close",
+    "panZoomHint": "scroll to zoom · drag to pan"
   }
 }

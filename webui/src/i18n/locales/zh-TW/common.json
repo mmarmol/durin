@@ -2223,6 +2223,12 @@
     "code": "程式碼",
     "preview": "預覽",
     "expand": "展開",
-    "copy": "複製"
+    "copy": "複製",
+    "download": "下載",
+    "zoomIn": "放大",
+    "zoomOut": "縮小",
+    "fit": "適應螢幕",
+    "close": "關閉",
+    "panZoomHint": "滾動縮放 · 拖曳平移"
   }
 }
