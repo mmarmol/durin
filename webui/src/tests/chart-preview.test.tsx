@@ -2,7 +2,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const embed = vi.fn(async (host: HTMLElement) => {
+const embed = vi.fn(async (host: HTMLElement, ..._rest: unknown[]) => {
   host.innerHTML = "<svg id='c'></svg>";
   return { finalize: vi.fn() };
 });
