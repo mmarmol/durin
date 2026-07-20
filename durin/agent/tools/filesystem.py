@@ -455,24 +455,24 @@ class ReadFileTool(_FsTool):
 
     def _read_pdf(self, fp: Path, pages: str | None) -> str:
         try:
-            import fitz  # pymupdf
+            from pypdf import PdfReader
         except ImportError:
-            return "Error: PDF reading requires pymupdf. Install with: pip install pymupdf"
+            return "Error: PDF reading requires pypdf. Install with: pip install pypdf"
 
         try:
-            doc = fitz.open(str(fp))
+            reader = PdfReader(str(fp))
+            total_pages = len(reader.pages)
         except Exception as e:
             return f"Error reading PDF: {e}"
 
-        total_pages = len(doc)
         if pages:
             try:
                 start, end = _parse_page_range(pages, total_pages)
             except (ValueError, IndexError):
-                doc.close()
+                reader.close()
                 return f"Error: Invalid page range '{pages}'. Use format like '1-5'."
             if start > end or start >= total_pages:
-                doc.close()
+                reader.close()
                 return f"Error: Page range '{pages}' is out of bounds (document has {total_pages} pages)."
         else:
             start = 0
@@ -483,11 +483,10 @@ class ReadFileTool(_FsTool):
 
         parts: list[str] = []
         for i in range(start, end + 1):
-            page = doc[i]
-            text = page.get_text().strip()
+            text = (reader.pages[i].extract_text() or "").strip()
             if text:
                 parts.append(f"--- Page {i + 1} ---\n{text}")
-        doc.close()
+        reader.close()
 
         if not parts:
             return f"(PDF has no extractable text: {fp})"

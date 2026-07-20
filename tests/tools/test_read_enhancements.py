@@ -162,6 +162,46 @@ class TestReadDedupSessionIsolation:
 # PDF support
 # ---------------------------------------------------------------------------
 
+def _write_text_pdf(path, texts):
+    """Write a minimal valid multi-page PDF whose pages carry ``texts``.
+
+    Hand-built so the fixtures need no PDF-writer dependency (pymupdf,
+    reportlab). That matters: it lets these tests actually run in CI — where
+    those libraries are absent — instead of silently skipping, which is how
+    the ``fitz``-only PDF path shipped broken. pypdf (a declared dependency)
+    reads the text back out. Inputs are controlled, so PDF string escaping is
+    intentionally omitted.
+    """
+    n = len(texts)
+    font_num = 2 * n + 3
+    page_nums = [3 + 2 * i for i in range(n)]
+    content_nums = [4 + 2 * i for i in range(n)]
+    objs = {1: b"<< /Type /Catalog /Pages 2 0 R >>"}
+    kids = b" ".join(b"%d 0 R" % p for p in page_nums)
+    objs[2] = b"<< /Type /Pages /Kids [%s] /Count %d >>" % (kids, n)
+    for i, text in enumerate(texts):
+        stream = b"BT /F1 24 Tf 72 700 Td (%s) Tj ET" % text.encode()
+        objs[content_nums[i]] = b"<< /Length %d >>\nstream\n%s\nendstream" % (len(stream), stream)
+        objs[page_nums[i]] = (
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            b"/Contents %d 0 R /Resources << /Font << /F1 %d 0 R >> >> >>"
+            % (content_nums[i], font_num)
+        )
+    objs[font_num] = b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"
+    buf = bytearray(b"%PDF-1.4\n")
+    offsets = {}
+    for num in sorted(objs):
+        offsets[num] = len(buf)
+        buf += b"%d 0 obj\n" % num + objs[num] + b"\nendobj\n"
+    xref = len(buf)
+    total = max(objs) + 1
+    buf += b"xref\n0 %d\n0000000000 65535 f \n" % total
+    for num in range(1, total):
+        buf += b"%010d 00000 n \n" % offsets[num]
+    buf += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (total, xref)
+    path.write_bytes(bytes(buf))
+
+
 class TestReadPdf:
 
     @pytest.fixture()
@@ -170,27 +210,16 @@ class TestReadPdf:
 
     @pytest.mark.asyncio
     async def test_pdf_returns_text_content(self, tool, tmp_path):
-        fitz = pytest.importorskip("fitz")
         pdf_path = tmp_path / "test.pdf"
-        doc = fitz.open()
-        page = doc.new_page()
-        page.insert_text((72, 72), "Hello PDF World")
-        doc.save(str(pdf_path))
-        doc.close()
+        _write_text_pdf(pdf_path, ["Hello PDF World"])
 
         result = await tool.execute(path=str(pdf_path))
         assert "Hello PDF World" in result
 
     @pytest.mark.asyncio
     async def test_pdf_pages_parameter(self, tool, tmp_path):
-        fitz = pytest.importorskip("fitz")
         pdf_path = tmp_path / "multi.pdf"
-        doc = fitz.open()
-        for i in range(5):
-            page = doc.new_page()
-            page.insert_text((72, 72), f"Page {i + 1} content")
-        doc.save(str(pdf_path))
-        doc.close()
+        _write_text_pdf(pdf_path, [f"Page {i + 1} content" for i in range(5)])
 
         result = await tool.execute(path=str(pdf_path), pages="2-3")
         assert "Page 2 content" in result
