@@ -210,7 +210,9 @@ raw fence source for HTML/SVG. HTML and SVG previews run in a sandboxed iframe w
 `allow-scripts` and a `Content-Security-Policy` that blocks all network requests,
 so embedded content cannot load external resources. Mermaid diagrams and Vega-Lite
 charts are rendered by bundled lazy-loaded modules so they do not add to the
-initial bundle.
+initial bundle. If a diagram or chart fails to render, the block shows a brief
+inline message in place of the preview; the renderer's own error graphic is
+suppressed so it never leaks into the page.
 
 The agent-side contract lives in the system prompt
 (`durin/templates/agent/rich_output.md`, injected by the context builder's stable
