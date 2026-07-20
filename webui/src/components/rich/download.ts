@@ -9,7 +9,3 @@ export function downloadBlob(filename: string, mime: string, data: string): void
   a.remove();
   URL.revokeObjectURL(url);
 }
-
-export function serializeSvg(svg: SVGSVGElement): string {
-  return new XMLSerializer().serializeToString(svg);
-}
