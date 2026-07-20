@@ -2223,6 +2223,14 @@
     "code": "代码",
     "preview": "预览",
     "expand": "展开",
-    "copy": "复制"
+    "copy": "复制",
+    "download": "下载",
+    "zoomIn": "放大",
+    "zoomOut": "缩小",
+    "fit": "适应屏幕",
+    "close": "关闭",
+    "panZoomHint": "滚动缩放 · 拖动平移",
+    "errorDiagram": "无法渲染此示意图",
+    "errorChart": "无法渲染此图表"
   }
 }

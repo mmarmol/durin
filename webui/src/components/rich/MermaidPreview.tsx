@@ -1,5 +1,6 @@
 // webui/src/components/rich/MermaidPreview.tsx
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 let nextId = 0;
 
@@ -23,10 +24,12 @@ function cacheSvg(code: string, svg: string): void {
 /** Renders Mermaid diagram source to SVG. Mermaid is loaded lazily (this module
  *  is imported via React.lazy from RichBlock) and runs with securityLevel
  *  "strict" so labels cannot inject markup. */
-export default function MermaidPreview({ code }: { code: string }) {
+export default function MermaidPreview({ code, onRendered }: { code: string; onRendered?: (svg: string) => void }) {
+  const { t } = useTranslation();
   const [svg, setSvg] = useState<string | null>(() => svgCache.get(code) ?? null);
   const [error, setError] = useState(false);
   const idRef = useRef(`mmd-${nextId++}`);
+  const hostRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const cached = svgCache.get(code);
@@ -34,6 +37,7 @@ export default function MermaidPreview({ code }: { code: string }) {
       // Cache hit (e.g. a remount): paint the finished diagram, no flash.
       setError(false);
       setSvg(cached);
+      onRendered?.(cached);
       return;
     }
     let cancelled = false;
@@ -42,11 +46,12 @@ export default function MermaidPreview({ code }: { code: string }) {
     void (async () => {
       try {
         const mermaid = (await import("mermaid")).default;
-        mermaid.initialize({ startOnLoad: false, securityLevel: "strict" });
+        mermaid.initialize({ startOnLoad: false, securityLevel: "strict", suppressErrorRendering: true });
         const { svg: out } = await mermaid.render(idRef.current, code);
         if (!cancelled) {
           cacheSvg(code, out);
           setSvg(out);
+          onRendered?.(out);
         }
       } catch {
         if (!cancelled) setError(true);
@@ -57,10 +62,20 @@ export default function MermaidPreview({ code }: { code: string }) {
     };
   }, [code]);
 
+  useLayoutEffect(() => {
+    const el = hostRef.current?.querySelector("svg");
+    if (!el) return;
+    const vb = el.getAttribute("viewBox");
+    const w = vb ? Number(vb.split(/\s+/)[2]) : NaN;
+    if (Number.isFinite(w) && w > 0) el.style.width = `${w}px`;
+    el.style.maxWidth = "none";
+    el.style.height = "auto";
+  }, [svg]);
+
   if (error) {
     return (
       <div role="alert" className="p-4 text-sm text-destructive">
-        Could not render this diagram.
+        {t("rich.errorDiagram")}
       </div>
     );
   }
@@ -69,7 +84,8 @@ export default function MermaidPreview({ code }: { code: string }) {
   }
   return (
     <div
-      className="flex justify-center overflow-x-auto bg-white p-4"
+      ref={hostRef}
+      className="w-max"
       // Mermaid output with securityLevel "strict" is sanitized SVG.
       dangerouslySetInnerHTML={{ __html: svg }}
     />

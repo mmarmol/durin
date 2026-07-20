@@ -2223,6 +2223,14 @@
     "code": "コード",
     "preview": "プレビュー",
     "expand": "展開",
-    "copy": "コピー"
+    "copy": "コピー",
+    "download": "ダウンロード",
+    "zoomIn": "拡大",
+    "zoomOut": "縮小",
+    "fit": "画面に合わせる",
+    "close": "閉じる",
+    "panZoomHint": "スクロールでズーム・ドラッグで移動",
+    "errorDiagram": "この図を描画できませんでした",
+    "errorChart": "このグラフを描画できませんでした"
   }
 }

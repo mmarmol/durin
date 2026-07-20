@@ -15,13 +15,13 @@ function wrap(html: string): string {
 
 /** Renders untrusted, LLM-generated HTML/SVG in an isolated frame: scripts run
  *  but have no same-origin access and no network (CSP ``connect-src 'none'``). */
-export function SandboxFrame({ html, title }: { html: string; title: string }) {
+export function SandboxFrame({ html, title, fill }: { html: string; title: string; fill?: boolean }) {
   return (
     <iframe
       title={title}
       sandbox="allow-scripts"
       srcDoc={wrap(html)}
-      className="h-[360px] w-full rounded-b-lg border-0 bg-white"
+      className={fill ? "h-full w-full border-0 bg-white" : "h-[360px] w-full rounded-b-lg border-0 bg-white"}
     />
   );
 }

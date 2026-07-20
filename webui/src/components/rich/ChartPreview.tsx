@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 // Content-addressed cache of rendered chart markup (SVG), keyed by spec
 // source. The transcript remounts message subtrees on streaming/poll
@@ -38,7 +39,8 @@ function hasRemoteUrl(obj: unknown): boolean {
 /** Renders a Vega-Lite JSON spec to a chart via vega-embed (loaded lazily).
  *  Input is declarative JSON — no arbitrary JS executes.
  *  Specs referencing remote URLs are rejected before embed is called. */
-export default function ChartPreview({ code }: { code: string }) {
+export default function ChartPreview({ code, onRendered }: { code: string; onRendered?: (svg: string) => void }) {
+  const { t } = useTranslation();
   const hostRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState(false);
 
@@ -46,7 +48,10 @@ export default function ChartPreview({ code }: { code: string }) {
   // shows a blank host frame before the async embed below resolves.
   useLayoutEffect(() => {
     const cached = chartCache.get(code);
-    if (cached != null && hostRef.current) hostRef.current.innerHTML = cached;
+    if (cached != null && hostRef.current) {
+      hostRef.current.innerHTML = cached;
+      onRendered?.(cached);
+    }
   }, [code]);
 
   useEffect(() => {
@@ -108,6 +113,7 @@ export default function ChartPreview({ code }: { code: string }) {
         });
         if (!cancelled && hostRef.current) {
           cacheChart(code, hostRef.current.innerHTML);
+          onRendered?.(hostRef.current.innerHTML);
         }
       } catch {
         if (!cancelled) setError(true);
@@ -123,9 +129,9 @@ export default function ChartPreview({ code }: { code: string }) {
   if (error) {
     return (
       <div role="alert" className="p-4 text-sm text-destructive">
-        Could not render this chart.
+        {t("rich.errorChart")}
       </div>
     );
   }
-  return <div ref={hostRef} className="overflow-x-auto bg-white p-4" />;
+  return <div ref={hostRef} className="w-max" />;
 }

@@ -2223,6 +2223,14 @@
     "code": "코드",
     "preview": "미리보기",
     "expand": "펼치기",
-    "copy": "복사"
+    "copy": "복사",
+    "download": "다운로드",
+    "zoomIn": "확대",
+    "zoomOut": "축소",
+    "fit": "화면에 맞춤",
+    "close": "닫기",
+    "panZoomHint": "스크롤로 확대/축소 · 드래그로 이동",
+    "errorDiagram": "이 다이어그램을 렌더링할 수 없습니다",
+    "errorChart": "이 차트를 렌더링할 수 없습니다"
   }
 }

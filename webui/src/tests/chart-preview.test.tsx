@@ -2,7 +2,10 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const embed = vi.fn().mockResolvedValue({ finalize: vi.fn() });
+const embed = vi.fn(async (host: HTMLElement, ..._rest: unknown[]) => {
+  host.innerHTML = "<svg id='c'></svg>";
+  return { finalize: vi.fn() };
+});
 vi.mock("vega-embed", () => ({ default: embed }));
 
 import ChartPreview from "@/components/rich/ChartPreview";
@@ -29,5 +32,11 @@ describe("ChartPreview", () => {
     render(<ChartPreview code={remoteSpec} />);
     await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
     expect(embed).not.toHaveBeenCalled();
+  });
+
+  it("reports the embedded SVG via onRendered", async () => {
+    const onRendered = vi.fn();
+    render(<ChartPreview code='{"mark":"bar"}' onRendered={onRendered} />);
+    await waitFor(() => expect(onRendered).toHaveBeenCalledWith(expect.stringContaining("<svg")));
   });
 });

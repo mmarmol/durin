@@ -2223,6 +2223,14 @@
     "code": "Mã",
     "preview": "Xem trước",
     "expand": "Mở rộng",
-    "copy": "Sao chép"
+    "copy": "Sao chép",
+    "download": "Tải xuống",
+    "zoomIn": "Phóng to",
+    "zoomOut": "Thu nhỏ",
+    "fit": "Vừa với màn hình",
+    "close": "Đóng",
+    "panZoomHint": "cuộn để thu phóng · kéo để di chuyển",
+    "errorDiagram": "Không thể hiển thị sơ đồ này",
+    "errorChart": "Không thể hiển thị biểu đồ này"
   }
 }
