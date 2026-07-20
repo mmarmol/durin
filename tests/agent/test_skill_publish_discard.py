@@ -42,3 +42,27 @@ def test_discard_removes_draft(tmp_path):
     out = discard_draft_skill(tmp_path, "emailer")
     assert out.get("ok") is True
     assert not (tmp_path / "skill-drafts" / "emailer").exists()
+
+
+def test_publish_composition_reject_leaves_draft_intact(tmp_path):
+    _draft(tmp_path, "emailer", BODY)
+
+    def _reject(prompt: str) -> str:
+        return "narrates a workflow\nNARRATION — should be a workflow"
+
+    out = publish_draft_skill(tmp_path, "emailer", composition_judge=_reject)
+    assert out.get("composition_rejected") is True
+    assert (tmp_path / "skill-drafts" / "emailer").exists()          # draft untouched
+    assert not (tmp_path / "skills" / "emailer").exists()            # nothing activated
+
+
+def test_publish_refuses_when_active_skill_exists(tmp_path):
+    active = tmp_path / "skills" / "emailer"
+    active.mkdir(parents=True)
+    (active / "SKILL.md").write_text("ORIGINAL", encoding="utf-8")
+    _draft(tmp_path, "emailer", BODY)
+
+    out = publish_draft_skill(tmp_path, "emailer")
+    assert "already exists" in out.get("error", "")
+    assert (tmp_path / "skill-drafts" / "emailer").exists()          # draft untouched
+    assert (active / "SKILL.md").read_text(encoding="utf-8") == "ORIGINAL"  # not clobbered
