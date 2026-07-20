@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Check, ClipboardList, FileText, KeyRound } from "lucide-react";
+import { Check, CircleHelp, ClipboardList, FileText, KeyRound } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { MarkdownText } from "@/components/MarkdownText";
@@ -65,7 +65,7 @@ function BlockShell({
       className={cn(
         "w-full rounded-lg border px-3 py-2",
         tone === "accent"
-          ? "border-primary/35 bg-primary/5"
+          ? "border-border/60 border-l-2 border-l-primary bg-muted/25"
           : "border-border/60 bg-muted/25",
       )}
     >
@@ -98,7 +98,7 @@ function AskUserBlock({
     );
   }
   return (
-    <BlockShell tone="accent" icon={<span aria-hidden>❓</span>}>
+    <BlockShell tone="accent" icon={<CircleHelp className="h-3.5 w-3.5 text-primary" aria-hidden />}>
       <AskUserAnswer event={event} />
     </BlockShell>
   );
