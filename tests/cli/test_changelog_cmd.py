@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+from typer.testing import CliRunner
+
 from durin import changelog
+from durin.cli.commands import app
+
+runner = CliRunner()
 
 SAMPLE = """# Changelog
 
@@ -80,3 +85,31 @@ def test_pyproject_force_includes_changelog():
     data = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     force_include = data["tool"]["hatch"]["build"]["targets"]["wheel"]["force-include"]
     assert force_include["CHANGELOG.md"] == "durin/CHANGELOG.md"
+
+
+def _newest_version() -> str:
+    return changelog.versions(changelog.parse(changelog._locate()))[0]
+
+
+def test_cli_default_prints_a_version_section():
+    result = runner.invoke(app, ["changelog"])
+    assert result.exit_code == 0
+    assert "## " in result.stdout
+
+
+def test_cli_all_shows_multiple_versions():
+    result = runner.invoke(app, ["changelog", "--all"])
+    assert result.exit_code == 0
+    assert result.stdout.count("## ") >= 2
+
+
+def test_cli_specific_known_version():
+    version = _newest_version()
+    result = runner.invoke(app, ["changelog", version])
+    assert result.exit_code == 0
+    assert version in result.stdout
+
+
+def test_cli_unknown_version_exits_nonzero():
+    result = runner.invoke(app, ["changelog", "99.99.99"])
+    assert result.exit_code == 1
