@@ -1,5 +1,5 @@
 // webui/src/tests/rich-block.test.tsx
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { I18nextProvider } from "react-i18next";
 import i18n from "@/i18n";
@@ -34,5 +34,25 @@ describe("RichBlock", () => {
   it("falls back to a code block for non-rich languages", () => {
     const { container } = render(wrap(<RichBlock language="python" code="print(1)" />));
     expect(container.querySelector("pre")).not.toBeNull();
+  });
+
+  it("renders an HTML preview by default in a sandboxed iframe", () => {
+    const { container } = render(wrap(<RichBlock language="html" code="<b>hello</b>" />));
+    const iframe = container.querySelector("iframe");
+    expect(iframe).not.toBeNull();
+    expect(iframe!.getAttribute("sandbox")).toBe("allow-scripts");
+  });
+
+  it("toggles to the source view", () => {
+    const { container } = render(wrap(<RichBlock language="html" code="<b>hello</b>" />));
+    fireEvent.click(screen.getByRole("button", { name: "Code" }));
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(container.textContent).toContain("hello");
+  });
+
+  it("wraps SVG source as iframe content", () => {
+    const { container } = render(wrap(<RichBlock language="svg" code='<svg><circle r="5"/></svg>' />));
+    const iframe = container.querySelector("iframe")!;
+    expect(iframe.getAttribute("srcdoc")).toContain("<svg>");
   });
 });
