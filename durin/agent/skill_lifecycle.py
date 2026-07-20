@@ -25,23 +25,26 @@ _UNVERIFIED_DETAIL = (
 def _attributed_source(workspace: Path, skill_name: str) -> str:
     """Best-effort attribution for a skill swept into quarantine.
 
-    Returns `agent:session:<id>` when the most recent skills-store commit
-    whose subject mentions `skill_name` carries a `Session:` trailer, else the
-    `unverified:workspace` fallback. Never raises — an uninitialized store or
-    any git-log failure degrades straight to the fallback."""
+    Returns `agent:session:<id>` when the most recent skills-store commit that
+    touched this skill's own path (`GitStore.log(path=skill_name)`, the same
+    path-scoping `skill_history`/`user_edits_since_curation` use) carries a
+    `Session:` trailer, else the `unverified:workspace` fallback. Path-scoping
+    — not a text search — is what keeps a generically-named skill from being
+    attributed to an unrelated commit that merely mentions its name. Never
+    raises — an uninitialized store or any git-log failure degrades straight
+    to the fallback."""
     try:
         from durin.agent.skills_store import _store
-        entries = _store(workspace).log(max_entries=50)
+        entries = _store(workspace).log(max_entries=50, path=skill_name)
     except Exception:
         return "unverified:workspace"
     for entry in entries:
         msg = getattr(entry, "message", "") or ""
-        if skill_name in msg:
-            for line in msg.splitlines():
-                if line.strip().lower().startswith("session:"):
-                    sid = line.split(":", 1)[1].strip()
-                    if sid:
-                        return f"agent:session:{sid}"
+        for line in msg.splitlines():
+            if line.strip().lower().startswith("session:"):
+                sid = line.split(":", 1)[1].strip()
+                if sid:
+                    return f"agent:session:{sid}"
     return "unverified:workspace"
 
 

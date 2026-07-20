@@ -17,8 +17,10 @@ def _events(p) -> list[dict]:
 
 
 def test_attributed_when_commit_has_session(tmp_path):
-    _raw_skill(tmp_path, "rogue")
+    # Store must exist before the skill file lands, so the commit below is the
+    # one that introduces `rogue` and its own path-scoped log picks it up.
     store = _store_init(tmp_path)
+    _raw_skill(tmp_path, "rogue")
     store.auto_commit("skill(rogue): draft landed", trailers={"Actor": "agent", "Session": "sess-9"})
     moved = sweep_unverified_skills(tmp_path)
     assert moved == ["rogue"]
@@ -33,9 +35,24 @@ def test_falls_back_to_unverified(tmp_path):
     assert scan["source"] == "unverified:workspace"
 
 
-def test_attributed_sweep_emits_skill_authored_backstop(tmp_path):
-    _raw_skill(tmp_path, "rogue")
+def test_generic_name_not_attributed_via_unrelated_commit(tmp_path):
+    """A generically-named skill (e.g. "api") must not be attributed to an
+    unrelated commit whose MESSAGE happens to contain that word — only a
+    commit that actually touched the skill's own path should count. This
+    reproduces the collision a reviewer found for a skill named "a"."""
     store = _store_init(tmp_path)
+    _raw_skill(tmp_path, "helper")
+    # Touches "helper", not "api" — the message merely mentions "api" in prose.
+    store.auto_commit("update api docs", trailers={"Actor": "agent", "Session": "sess-collision"})
+    _raw_skill(tmp_path, "api")   # unrelated skill, never committed under its own path
+    sweep_unverified_skills(tmp_path)
+    scan = json.loads((tmp_path / ".durin" / "import-quarantine" / "api" / ".scan.json").read_text())
+    assert scan["source"] == "unverified:workspace"
+
+
+def test_attributed_sweep_emits_skill_authored_backstop(tmp_path):
+    store = _store_init(tmp_path)
+    _raw_skill(tmp_path, "rogue")
     store.auto_commit("skill(rogue): draft landed", trailers={"Actor": "agent", "Session": "sess-9"})
     log = tmp_path / "t.jsonl"
     token = bind_telemetry(TelemetryLogger(log))
