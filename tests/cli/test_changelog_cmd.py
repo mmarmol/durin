@@ -67,3 +67,16 @@ def test_locate_finds_repo_changelog():
     text = changelog._locate()
     assert text is not None
     assert "# Changelog" in text
+
+
+def test_pyproject_force_includes_changelog():
+    """The wheel must ship CHANGELOG.md as package data, or a running agent
+    can't consult it. Guard the force-include mapping so a pyproject refactor
+    can't silently drop it (the release CI is what actually builds the wheel)."""
+    import tomllib
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]  # tests/cli/ -> repo root
+    data = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    force_include = data["tool"]["hatch"]["build"]["targets"]["wheel"]["force-include"]
+    assert force_include["CHANGELOG.md"] == "durin/CHANGELOG.md"
