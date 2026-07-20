@@ -1018,6 +1018,53 @@ def dream_fuse_skills(workspace: Path, *, target: str, content: str,
     return {"ok": True, "target": target, "removed": list(sources), "commit": sha}
 
 
+DRAFTS_DIRNAME = "skill-drafts"
+
+
+def _draft_dir(workspace: Path, name: str) -> Path:
+    return Path(workspace) / DRAFTS_DIRNAME / name
+
+
+def publish_draft_skill(workspace: Path, name: str, *, attribution: "Attribution | None" = None,
+                        composition_judge=None, composition_override: bool = False) -> dict:
+    """Promote skill-drafts/<name>/ into the registry through the activation core.
+
+    Gates on the draft body BEFORE moving anything, so a rejected draft is left
+    intact for the author to revise. Refuses to clobber an already-active skill
+    of the same name."""
+    if not _safe_name(name):
+        return {"error": "invalid skill name"}
+    draft = _draft_dir(workspace, name)
+    md = draft / "SKILL.md"
+    if not md.is_file():
+        return {"error": f"no draft to publish: {name}"}
+    content = md.read_text(encoding="utf-8")
+    ok, reason = _run_composition_gate(content, workspace, composition_judge, composition_override)
+    if not ok:
+        return {"error": f"composition gate: {reason}", "composition_rejected": True}
+    dest = _skill_md(workspace, name).parent
+    if dest.exists():
+        return {"error": f"skill already exists: {name}"}
+    _store_init(workspace)  # ensure repo exists before moving files under it
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(draft), str(dest))
+    composition = "overridden" if composition_override else "compliant"
+    return _finalize_skill(workspace, name, dest, source="dream",
+                           attribution=attribution, ramp="publish", composition=composition,
+                           commit_subject=f"skill({name}): publish draft")
+
+
+def discard_draft_skill(workspace: Path, name: str) -> dict:
+    """Delete skill-drafts/<name>/ without touching the active registry."""
+    if not _safe_name(name):
+        return {"error": "invalid skill name"}
+    draft = _draft_dir(workspace, name)
+    if not draft.exists():
+        return {"error": f"no draft: {name}"}
+    shutil.rmtree(draft)
+    return {"ok": True, "name": name}
+
+
 def _parse_trailers(message: str) -> dict[str, str]:
     """Parse a trailing `Key: value` block (Actor/Session/Agent) from a commit message."""
     out: dict[str, str] = {}
