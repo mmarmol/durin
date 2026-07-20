@@ -66,3 +66,16 @@ def test_publish_refuses_when_active_skill_exists(tmp_path):
     assert "already exists" in out.get("error", "")
     assert (tmp_path / "skill-drafts" / "emailer").exists()          # draft untouched
     assert (active / "SKILL.md").read_text(encoding="utf-8") == "ORIGINAL"  # not clobbered
+
+
+def test_publish_refuses_empty_draft_body(tmp_path):
+    """publish_draft_skill must enforce the same integrity floor every other
+    whole-body write path in this module does (save_skill_file, dream_fuse_skills,
+    dream_restructure_skill) — an empty or description-less draft must not reach
+    the active registry just because it skipped skill_write's own check."""
+    _draft(tmp_path, "blank", "")
+
+    out = publish_draft_skill(tmp_path, "blank")
+    assert "error" in out and "empty" in out["error"]
+    assert (tmp_path / "skill-drafts" / "blank").exists()      # draft untouched
+    assert not (tmp_path / "skills" / "blank").exists()        # nothing activated

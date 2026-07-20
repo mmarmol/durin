@@ -1039,6 +1039,9 @@ def publish_draft_skill(workspace: Path, name: str, *, attribution: "Attribution
     if not md.is_file():
         return {"error": f"no draft to publish: {name}"}
     content = md.read_text(encoding="utf-8")
+    bad = _skill_md_integrity(content)
+    if bad is not None:
+        return {"error": bad}  # integrity floor - nothing moved, draft left intact
     ok, reason = _run_composition_gate(content, workspace, composition_judge, composition_override)
     if not ok:
         return {"error": f"composition gate: {reason}", "composition_rejected": True}
