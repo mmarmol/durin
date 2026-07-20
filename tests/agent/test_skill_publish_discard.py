@@ -1,5 +1,9 @@
 from durin.agent.skills_store import (
-    Attribution, discard_draft_skill, publish_draft_skill, read_mode, read_skill_content,
+    Attribution,
+    discard_draft_skill,
+    publish_draft_skill,
+    read_mode,
+    read_skill_content,
 )
 
 
