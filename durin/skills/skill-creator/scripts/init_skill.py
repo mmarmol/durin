@@ -277,6 +277,15 @@ def init_skill(skill_name, path, resources, include_examples):
     # Determine skill directory path
     skill_dir = Path(path).resolve() / skill_name
 
+    # Refuse to scaffold straight into the active skills/ registry — durin's
+    # generic write tools already refuse writes there (skills authoring goes
+    # through skill-drafts/<name>/ + skill_publish), so catch it here too for
+    # anyone invoking this script directly.
+    if skill_dir.parent.name == "skills":
+        print("[ERROR] Do not scaffold into the active skills/ registry. "
+              "Use --path skill-drafts and run skill_publish when the skill is ready.")
+        return None
+
     # Check if directory already exists
     if skill_dir.exists():
         print(f"[ERROR] Skill directory already exists: {skill_dir}")
