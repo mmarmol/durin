@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { Check, Loader2, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -179,10 +179,12 @@ export function ToolCallBlock({ event }: ToolCallBlockProps) {
  * before sending; the field is also free-text for an "other" answer.
  * Submitting routes through ThreadActions as the user's next message.
  */
+const ANSWER_FIELD_MAX_PX = 120;
+
 export function AskUserAnswer({ event }: { event: ToolProgressEvent }) {
   const { t } = useTranslation();
   const actions = useThreadActions();
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const question = argString(event.arguments, "question") ?? "";
   const options = argStringList(event.arguments, "options");
   const [draft, setDraft] = useState("");
@@ -198,6 +200,21 @@ export function AskUserAnswer({ event }: { event: ToolProgressEvent }) {
     actions.sendUserMessage(text);
     setSent(true);
   };
+
+  // Auto-grow the answer field like the main composer: one line at rest,
+  // grows with the content up to a cap, then scrolls. When empty, defer to the
+  // native rows={1} height instead of measuring — a mount-time measurement
+  // (before layout/CSS settle) can misread and lock the field open.
+  useLayoutEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    if (!draft) {
+      el.style.height = "";
+      return;
+    }
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, ANSWER_FIELD_MAX_PX)}px`;
+  }, [draft]);
 
   return (
     <div className="space-y-1.5 pb-1.5 pt-0.5">
@@ -233,21 +250,24 @@ export function AskUserAnswer({ event }: { event: ToolProgressEvent }) {
             </div>
           )}
           {actions && (
-            <div className="flex items-center gap-1.5">
-              <input
+            <div className="flex items-end gap-1.5">
+              <textarea
                 ref={inputRef}
+                rows={1}
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") {
+                  // Enter sends; Shift+Enter inserts a newline. Ignore Enter
+                  // mid-IME-composition so accented / CJK input isn't cut off.
+                  if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                     e.preventDefault();
                     submit();
                   }
                 }}
                 placeholder={t("message.askUser.placeholder")}
                 className={cn(
-                  "h-7 min-w-0 flex-1 rounded-md border border-border/60 bg-background",
-                  "px-2 text-[12px] outline-none focus:border-primary/60",
+                  "min-w-0 flex-1 resize-none overflow-y-auto rounded-md border border-border/60 bg-background",
+                  "px-2 py-1 text-[12px] leading-snug outline-none focus:border-primary/60",
                 )}
               />
               <button

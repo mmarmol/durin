@@ -50,7 +50,7 @@ describe("ToolCallBlock — ask_user_question", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Postgres" }));
     const field = screen.getByPlaceholderText(/Type your answer/);
-    expect((field as HTMLInputElement).value).toBe("Postgres");
+    expect((field as HTMLTextAreaElement).value).toBe("Postgres");
   });
 
   it("submitting an (edited) answer routes through ThreadActions", () => {
@@ -66,6 +66,21 @@ describe("ToolCallBlock — ask_user_question", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
     expect(sendUserMessage).toHaveBeenCalledWith("Postgres 16, read replicas");
     expect(screen.getByText(/Answer sent/)).toBeInTheDocument();
+  });
+
+  it("Enter sends but Shift+Enter does not, so long answers can span lines", () => {
+    const sendUserMessage = vi.fn();
+    render(
+      <ThreadActionsProvider value={actions({ sendUserMessage })}>
+        <ToolCallBlock event={askEvent} />
+      </ThreadActionsProvider>,
+    );
+    const field = screen.getByPlaceholderText(/Type your answer/);
+    fireEvent.change(field, { target: { value: "a long, multi-line answer" } });
+    fireEvent.keyDown(field, { key: "Enter", shiftKey: true });
+    expect(sendUserMessage).not.toHaveBeenCalled();
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(sendUserMessage).toHaveBeenCalledWith("a long, multi-line answer");
   });
 });
 
