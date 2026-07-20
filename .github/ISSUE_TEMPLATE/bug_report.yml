@@ -1,0 +1,65 @@
+name: Bug report
+description: Report a problem with durin
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Please fill out the fields
+        below so we can reproduce and fix it. For security vulnerabilities, do
+        **not** use this form — report privately via the Security tab.
+  - type: input
+    id: version
+    attributes:
+      label: durin version
+      description: Output of `durin --version`.
+      placeholder: "0.3.3"
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where did it happen?
+      options:
+        - CLI / TUI
+        - Gateway / web dashboard
+        - A channel (Telegram, Discord, WhatsApp, Slack, ...)
+        - Memory / dream
+        - MCP / tools
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps to reproduce the behavior.
+      placeholder: |
+        1. Run `durin ...`
+        2. ...
+        3. See error
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or output
+      description: Paste any relevant terminal output or gateway logs. This will be rendered as code, so no backticks needed.
+      render: shell
+    validations:
+      required: false
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS and Python version, and how durin was installed (pipx, uv tool, from source).
+      placeholder: "macOS 15, Python 3.12, pipx"
+    validations:
+      required: false
