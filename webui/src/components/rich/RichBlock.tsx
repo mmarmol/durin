@@ -95,7 +95,10 @@ export function RichBlock({ language, code }: { language: string; code: string }
         </div>
         {mode === "preview" ? (
           isSvgKind ? (
-            <div className="overflow-auto bg-white" style={{ maxHeight: 240 }}>
+            <div
+              className={cn("overflow-auto", kind === "mermaid" ? "bg-background" : "bg-white")}
+              style={{ maxHeight: 240 }}
+            >
               {previewNode}
             </div>
           ) : (
@@ -111,7 +114,7 @@ export function RichBlock({ language, code }: { language: string; code: string }
           <Dialog.Title className="sr-only">{t("rich.expand")}</Dialog.Title>
           {isSvgKind ? (
             <ZoomInspector onDownload={onDownload} onClose={() => setExpanded(false)}>
-              <div className="bg-white">{previewNode}</div>
+              <div className={kind === "mermaid" ? "bg-background" : "bg-white"}>{previewNode}</div>
             </ZoomInspector>
           ) : (
             <div className="relative h-full w-full bg-white">

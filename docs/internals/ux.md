@@ -214,6 +214,17 @@ initial bundle. If a diagram or chart fails to render, the block shows a brief
 inline message in place of the preview; the renderer's own error graphic is
 suppressed so it never leaks into the page.
 
+**Diagram theming.** Mermaid diagrams follow durin's design tokens instead of
+Mermaid's stock palette. On render the preview reads the active palette × mode
+from the document root and maps the token values (`--background`, `--secondary`,
+`--border`, `--muted-foreground`, …) onto Mermaid's `base`-theme variables, then
+re-renders when the palette or light/dark mode changes — so a diagram always
+matches the surrounding surface across every palette (ithildin/forge/mithril) and
+mode. Because the colours derive solely from the token sheet, the agent emits
+plain diagram source and never styles diagrams itself; the render cache is keyed
+on the theme so a switch cannot serve a stale-coloured SVG. Vega-Lite charts keep
+their own default theme and render on a light canvas.
+
 The agent-side contract lives in the system prompt
 (`durin/templates/agent/rich_output.md`, injected by the context builder's stable
 layer): it advertises the four fence languages and the sandbox constraints, and
