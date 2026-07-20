@@ -103,7 +103,7 @@ class NotebookEditTool(_FsTool):
                     "Use one of: code, markdown."
                 )
 
-            fp = self._resolve(path)
+            fp = self._resolve_write(path)
 
             # Create new notebook if file doesn't exist and mode is insert
             if not fp.exists():
