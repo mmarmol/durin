@@ -1427,6 +1427,19 @@ class SkillObservationLoggedEvent(TypedDict):
     count: int
 
 
+class SkillAuthoredEvent(TypedDict):
+    """A skill was activated into the registry (quick write, draft publish, or backstop adoption)."""
+
+    name: str
+    actor: str  # "agent" | "user" | "curation" | "import"
+    session: NotRequired[str | None]
+    model: NotRequired[str | None]
+    ramp: str  # "write" | "publish" | "backstop"
+    composition: str  # "compliant" | "overridden"
+    scan_verdict: NotRequired[str | None]  # "safe" | None (no bundled files)
+    files_count: int
+
+
 class SkillCurationActionEvent(TypedDict):
     """One curation action was applied (or attempted) during a curation run."""
 
@@ -1693,6 +1706,7 @@ EVENTS: dict[str, type] = {
     "memory.health.critical": MemoryHealthCriticalEvent,
     "memory.fallback_tool_used": MemoryFallbackToolUsedEvent,
     # Skill loop (use / observe / curate / suggest)
+    "skill.authored": SkillAuthoredEvent,
     "skill.used": SkillUsedEvent,
     "skill.observation_logged": SkillObservationLoggedEvent,
     "skill.curation_action": SkillCurationActionEvent,
@@ -1794,6 +1808,7 @@ __all__ = [
     "MemoryIndexRebuildEvent",
     "MemoryIndexStalenessDetectedEvent",
     # Skill loop
+    "SkillAuthoredEvent",
     "SkillUsedEvent",
     "SkillObservationLoggedEvent",
     "SkillCurationActionEvent",
