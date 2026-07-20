@@ -5,6 +5,58 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.3.4 — 2026-07-21
+
+### Highlights
+
+- **GLM stops answering the same question twice, and the provider path heals
+  itself.** On a multi-step tool turn the assistant's own narration was being
+  stripped from what the model saw on the next step, so models that narrate
+  every step — GLM in particular — re-emitted the same acknowledgment over and
+  over. Content now rides alongside tool calls the way the OpenAI standard
+  intends. The same change hardens the OpenAI-compatible path: lone surrogate
+  characters that reasoning models occasionally emit are scrubbed before they
+  can crash the request, overloaded endpoints (Z.AI Coding Plan's "service
+  temporarily overloaded") back off progressively instead of hammering, and a
+  new reactive recovery strips a parameter an endpoint rejects and retries once
+  — so a new model whose endpoint drops support self-heals without a
+  hand-maintained list. (#422)
+- **Skill authoring is now a governed boundary.** Authoring a skill goes through
+  a draft → publish path with a registry write-lock and provenance instead of
+  writing files straight into `skills/`. Agent-authored skills are attributed
+  and no longer indistinguishable from an unverified external drop. (#419)
+- **A calmer, more legible web dashboard.** The redundant top goal banner is
+  gone; interactive tool blocks are toned to durin's palette; rich fenced-block
+  previews (mermaid, vega-lite, sandboxed html/svg) get a real zoom inspector, a
+  download, and hardened error handling instead of leaking a raw parse-error
+  graphic; mermaid diagrams follow the durin theme; and the ask-user answer
+  field auto-grows like the composer. (#411, #414, #415, #416, #417)
+- **The agent can read its own changelog.** `CHANGELOG.md` now ships inside the
+  installed package, and `durin changelog` prints the running version's entry
+  (or `--all`, or a named version) so a running agent — or you — can check what
+  changed. (#418)
+
+### Changes
+
+- **Providers** — assistant content is kept alongside `tool_calls`; lone UTF-16
+  surrogates are scrubbed before the request is encoded; DeepSeek thinking-mode
+  `reasoning_content` is padded with a space (V4 Pro rejects the empty string);
+  overloaded endpoints use a wider retry backoff; a reactive strip-on-error
+  recovery drops a rejected request parameter and retries once. (#422)
+- **Skills** — governed authoring: draft → publish, registry lock, provenance,
+  attributed agent-authored backstop. (#419)
+- **CLI** — `durin changelog [--all | <version>]`, with `CHANGELOG.md` bundled
+  in the installed package. (#418)
+- **Web UI** — removed the top goal banner (#411); calmer interactive tool
+  blocks (#414); rich-preview zoom / download / error hardening (#415);
+  auto-growing ask-user field (#416); theme-aware mermaid diagrams (#417).
+- **Tools** — PDFs are read via `pypdf` rather than the undeclared `pymupdf`.
+  (#412)
+- **Model data** — weekly automated refresh of the vendored model catalog
+  (community sources + NVIDIA id ground truth). (#413)
+- **Project** — a structured bug-report issue form that blocks blank issues
+  (#420); dropped a dead docs pointer from the release workflow (#421).
+
 ## 0.3.3 — 2026-07-19
 
 ### Highlights
