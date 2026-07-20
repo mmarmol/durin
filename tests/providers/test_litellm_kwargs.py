@@ -698,7 +698,9 @@ def test_openai_compat_preserves_message_level_reasoning_fields() -> None:
         {"role": "user", "content": "thanks"},
     ])
 
-    assert sanitized[1]["content"] is None
+    # Content rides alongside tool_calls now (OpenAI-standard): blanking it hid
+    # the model's own narration and made models like GLM re-narrate every step.
+    assert sanitized[1]["content"] == "done"
     assert sanitized[1]["reasoning_content"] == "hidden"
     assert sanitized[1]["extra_content"] == {"debug": True}
     assert sanitized[1]["tool_calls"][0]["extra_content"] == {"google": {"thought_signature": "sig"}}
@@ -732,7 +734,11 @@ def _tool_call(call_id: str) -> dict:
 
 
 def test_deepseek_thinking_backfills_missing_reasoning_content_on_tool_history() -> None:
-    """Backfill reasoning_content="" instead of dropping the turn (#3554, #3584)."""
+    """Backfill reasoning_content=" " instead of dropping the turn (#3554, #3584).
+
+    A single space, not "": DeepSeek V4 Pro rejects an empty-string
+    reasoning_content ("must be passed back to the API").
+    """
     kwargs = _deepseek_kwargs([
         {"role": "system", "content": "system"},
         {"role": "user", "content": "can we use wechat?"},
@@ -745,7 +751,7 @@ def test_deepseek_thinking_backfills_missing_reasoning_content_on_tool_history()
         "system", "user", "assistant", "tool", "user",
     ]
     assistant = kwargs["messages"][2]
-    assert assistant["reasoning_content"] == ""
+    assert assistant["reasoning_content"] == " "
     assert assistant["tool_calls"][0]["function"]["name"] == "my"
 
 
@@ -791,7 +797,9 @@ def test_openai_compat_keeps_tool_calls_after_consecutive_assistant_messages() -
     ])
 
     assert sanitized[1]["role"] == "assistant"
-    assert sanitized[1]["content"] is None
+    # The tool-call-bearing assistant survives the merge with its content intact
+    # (no longer blanked); only tool_call id normalization is applied.
+    assert sanitized[1]["content"] == "<think>我再查一下</think>"
     assert sanitized[1]["tool_calls"][0]["id"] == "3ec83c30d"
     assert sanitized[2]["tool_call_id"] == "3ec83c30d"
 
@@ -1002,7 +1010,8 @@ def test_deepseek_no_extra_body_when_reasoning_effort_none() -> None:
 def test_deepseek_backfills_reasoning_content_on_legacy_tool_call_messages() -> None:
     """Session messages from before thinking mode was enabled may have assistant
     messages with tool_calls but no reasoning_content. DeepSeek V4 rejects these
-    with 400. _build_kwargs must backfill reasoning_content='' on them."""
+    with 400. _build_kwargs must backfill reasoning_content=' ' on them (a space,
+    not '': DeepSeek V4 Pro rejects the empty string)."""
     spec = find_by_name("deepseek")
     with patch("durin.providers.openai_compat_provider.AsyncOpenAI"):
         p = OpenAICompatProvider(api_key="k", default_model="deepseek-v4-pro", spec=spec)
@@ -1023,7 +1032,7 @@ def test_deepseek_backfills_reasoning_content_on_legacy_tool_call_messages() -> 
     for msg in kw["messages"]:
         if msg.get("role") == "assistant":
             assert "reasoning_content" in msg, "legacy assistant message missing reasoning_content"
-            assert msg["reasoning_content"] == ""
+            assert msg["reasoning_content"] == " "
 
 
 def test_backfill_does_not_touch_messages_when_thinking_explicitly_off() -> None:
@@ -1074,7 +1083,7 @@ def test_deepseek_v4_backfills_incomplete_reasoning_history_when_effort_implicit
     assert [msg["role"] for msg in kw["messages"]] == [
         "system", "user", "assistant", "tool", "user",
     ]
-    assert kw["messages"][2]["reasoning_content"] == ""
+    assert kw["messages"][2]["reasoning_content"] == " "
     assert kw["messages"][-1]["content"] == "thanks"
 
 

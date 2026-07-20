@@ -318,6 +318,39 @@ settings). When a `/model` switch or config reload changes the signature, the ag
 loop builds a fresh snapshot rather than reusing the stale one. This isolates each
 turn from mid-session provider changes on other sessions.
 
+### 4.10 Request hardening and reactive recovery
+
+The OpenAI-compatible request is sent in the **OpenAI-standard shape by default**,
+and only degraded for the specific endpoints that prove they need it — rather than
+carrying per-model allowlists that rot as providers ship new models. Four behaviors
+implement this:
+
+- **Assistant content rides alongside `tool_calls`.** `_sanitize_messages` keeps the
+  model's own narration on tool-call turns. Blanking it (the earlier default) hid
+  what the model had already said, so models that narrate every step — GLM in
+  particular — re-emitted the same acknowledgment on each tool step of a turn.
+- **Surrogate scrub.** Lone UTF-16 surrogate code points emitted by byte-level
+  reasoning models (GLM, Kimi, MiMo) are replaced with U+FFFD before the body is
+  UTF-8 encoded; otherwise one bad code point raises `UnicodeEncodeError` and sinks
+  the whole call.
+- **DeepSeek reasoning pad is a single space.** When thinking mode requires a
+  `reasoning_content` on replayed tool-call turns, the backfill is `" "`, not `""` —
+  DeepSeek V4 Pro rejects the empty string ("must be passed back to the API"). A
+  legacy `""` is upgraded on the way out.
+- **Overload backoff.** `_is_overloaded_response` (Z.AI Coding Plan GLM returns
+  HTTP 429 code `1305`, "service temporarily overloaded") switches the retry loop
+  from the fast default schedule to a wider one (`_OVERLOAD_BACKOFF_DELAYS`) so it
+  stops hammering a still-hot endpoint.
+
+The self-healing net is `_recover_request_for_error(kw, response)`. On a
+*non-transient* error the retry loop calls it once; a provider overrides it to strip
+the piece the endpoint just rejected and return a mutated request the loop retries a
+single time. The OpenAI-compat provider recovers three shapes: content sent alongside
+`tool_calls` (blank it — the backstop for the default above), and an unsupported
+`temperature` or token-limit param (drop it via the `_OMIT` sentinel that
+`_build_kwargs` honors). A new model whose endpoint quietly drops support for a param
+is absorbed here without a code edit; the base-class default is no recovery.
+
 ---
 
 ## 5. Key types and entry points

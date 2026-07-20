@@ -170,6 +170,12 @@ class LLMProvider(ABC):
     # Persistent mode caps each delay at ``_PERSISTENT_MAX_DELAY`` and keeps
     # retrying as long as errors are distinct.
     _CHAT_RETRY_DELAYS = (1, 2, 4, 8, 15, 30)
+    # Overloaded endpoints (Z.AI Coding Plan GLM returns HTTP 429 code 1305,
+    # "service temporarily overloaded") stay hot for tens of seconds; the fast
+    # default schedule just hammers the same window. Walk a progressively wider
+    # schedule instead, kept interactive-friendly: fails visibly in minutes, not
+    # silent for 20+.
+    _OVERLOAD_BACKOFF_DELAYS = (30, 60, 90, 120)
     _PERSISTENT_MAX_DELAY = 60
     _PERSISTENT_IDENTICAL_ERROR_LIMIT = 10
     _RETRY_HEARTBEAT_CHUNK = 30
@@ -462,6 +468,36 @@ class LLMProvider(ABC):
             return True
         # Unknown 429 defaults to WAIT+retry.
         return True
+
+    @classmethod
+    def _is_overloaded_response(cls, response: LLMResponse) -> bool:
+        """Return True when the endpoint reported a temporary overload.
+
+        Overloads clear on their own but not quickly; they warrant the wider
+        ``_OVERLOAD_BACKOFF_DELAYS`` schedule rather than the fast default so we
+        stop battering a still-hot endpoint. Detected by Z.AI's ``1305`` overload
+        code or an explicit overload phrase in the body.
+        """
+        if cls._normalize_error_token(response.error_code) == "1305":
+            return True
+        content = (response.content or "").lower()
+        return "temporarily overloaded" in content or "is overloaded" in content
+
+    def _recover_request_for_error(
+        self, kw: dict[str, Any], response: LLMResponse,
+    ) -> dict[str, Any] | None:
+        """Return a mutated copy of *kw* that may succeed where the original hit
+        a non-transient error, or ``None`` when no recovery applies.
+
+        This is the self-healing net for request shapes a specific endpoint
+        rejects — a param it doesn't support, assistant content sent alongside
+        tool_calls. Providers override it to strip the offending piece so the
+        retry loop can try once more. It lets durin send the OpenAI-standard
+        request shape by default and degrade only for the endpoints that
+        actually reject it, instead of maintaining per-model allowlists that rot
+        every time a provider ships a new model. Base default: no recovery.
+        """
+        return None
 
     @staticmethod
     def _enforce_role_alternation(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -883,6 +919,14 @@ class LLMProvider(ABC):
                     if result.finish_reason != "error":
                         self._strip_image_content_inplace(original_messages)
                     return result
+                recovered = self._recover_request_for_error(kw, response)
+                if recovered is not None:
+                    logger.warning(
+                        "Non-transient LLM error; retrying once with a recovered "
+                        "request shape: {}",
+                        (response.content or "")[:120].lower(),
+                    )
+                    return await call(**recovered)
                 return response
 
             if persistent and identical_error_count >= self._PERSISTENT_IDENTICAL_ERROR_LIMIT:
@@ -931,7 +975,11 @@ class LLMProvider(ABC):
                     )
                 break
 
-            base_delay = delays[min(attempt - 1, len(delays) - 1)]
+            if self._is_overloaded_response(response):
+                schedule = self._OVERLOAD_BACKOFF_DELAYS
+                base_delay = schedule[min(attempt - 1, len(schedule) - 1)]
+            else:
+                base_delay = delays[min(attempt - 1, len(delays) - 1)]
             delay = self._extract_retry_after_from_response(response) or base_delay
             if persistent:
                 delay = min(delay, self._PERSISTENT_MAX_DELAY)
