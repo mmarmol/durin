@@ -738,6 +738,61 @@ def _quarantine_authored_skill(workspace: Path, skill_dir: Path, rep) -> dict:
                     "it awaits review in the import quarantine"}
 
 
+def _run_composition_gate(content: str, workspace: Path, composition_judge, override: bool) -> tuple[bool, str]:
+    """Run the composition doctrine gate. Accept on no-judge / override / pass."""
+    if composition_judge is None or override:
+        return True, ""
+    from durin.agent.skills_doctrine import judge_composition
+    return judge_composition(content, workspace, composition_judge)
+
+
+def _bundled_file_count(skill_dir: Path) -> int:
+    return sum(1 for p in skill_dir.rglob("*") if p.is_file() and p.name != "SKILL.md")
+
+
+def _finalize_skill(workspace: Path, name: str, skill_dir: Path, *, source: str,
+                    attribution: "Attribution | None", ramp: str, composition: str,
+                    commit_subject: str) -> dict:
+    """Scan (iff bundled files) -> quarantine-or-(stamp+commit+sync+emit) for
+    skills/<name>/. `commit_subject` is the caller's full commit subject line
+    (each activation path keeps its own rationale-bearing message; this helper
+    does not synthesize one) — trailers are still derived from `attribution`."""
+    from durin.agent.tools._telemetry import emit_tool_event
+
+    md = skill_dir / "SKILL.md"
+    files_count = _bundled_file_count(skill_dir)
+    scan_verdict = None
+    if files_count:
+        from durin.security.skill_scan import scan_skill
+        rep = scan_skill(skill_dir)
+        if rep.verdict != "safe":
+            return _quarantine_authored_skill(workspace, skill_dir, rep)
+        scan_verdict = rep.verdict
+
+    def _stamp(data: dict) -> None:
+        durin = ensure_durin(data)
+        durin["mode"] = "auto"
+        durin["provenance"] = {"source": source, "created_at": _today()}
+        if scan_verdict is not None:
+            durin["provenance"]["scan_verdict"] = scan_verdict
+
+    _update_md(md, _stamp)
+    store = _store_init(workspace)
+    sha = store.auto_commit(commit_subject, trailers=attribution_to_trailers(attribution))
+    _sync_index(workspace, name)
+    emit_tool_event("skill.authored", {
+        "name": name,
+        "actor": attribution.actor if attribution else "agent",
+        "session": attribution.session if attribution else None,
+        "model": attribution.agent if attribution else None,
+        "ramp": ramp,
+        "composition": composition,
+        "scan_verdict": scan_verdict,
+        "files_count": files_count,
+    })
+    return {"ok": True, "name": name, "commit": sha}
+
+
 def dream_create_skill(workspace: Path, name: str, content: str,
                        rationale: str, attribution: "Attribution | None" = None,
                        files: dict[str, str] | None = None,
@@ -770,12 +825,10 @@ def dream_create_skill(workspace: Path, name: str, content: str,
     md = _skill_md(workspace, name)
     if md.exists():
         return {"error": f"skill already exists: {name}"}
-    if composition_judge is not None and not composition_override:
-        from durin.agent.skills_doctrine import judge_composition
-        ok, reason = judge_composition(content, workspace, composition_judge)
-        if not ok:
-            return {"error": f"composition gate: {reason}", "composition_rejected": True}
-    store = _store_init(workspace)  # ensure git repo exists before mutating files
+    ok, reason = _run_composition_gate(content, workspace, composition_judge, composition_override)
+    if not ok:
+        return {"error": f"composition gate: {reason}", "composition_rejected": True}
+    _store_init(workspace)  # ensure git repo exists (on the clean tree) before writing files
     md.parent.mkdir(parents=True, exist_ok=True)
     md.write_text(content, encoding="utf-8")
     if not (content.strip() and (_frontmatter_description(content) or _derive_description(content))):
@@ -786,27 +839,10 @@ def dream_create_skill(workspace: Path, name: str, content: str,
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(str(body), encoding="utf-8")
     _ensure_surface_frontmatter(md, name)
-
-    scan_verdict = None
-    if files:
-        from durin.security.skill_scan import scan_skill
-        rep = scan_skill(md.parent)
-        if rep.verdict != "safe":
-            return _quarantine_authored_skill(workspace, md.parent, rep)
-        scan_verdict = rep.verdict
-
-    def _stamp(data: dict) -> None:
-        durin = ensure_durin(data)
-        durin["mode"] = "auto"
-        durin["provenance"] = {"source": "dream", "created_at": _today()}
-        if scan_verdict is not None:
-            durin["provenance"]["scan_verdict"] = scan_verdict
-
-    _update_md(md, _stamp)
-    sha = store.auto_commit(f"skill({name}): {rationale.strip()} [dream]",
-                            trailers=attribution_to_trailers(attribution))
-    _sync_index(workspace, name)
-    return {"ok": True, "name": name, "commit": sha}
+    composition = "overridden" if composition_override else "compliant"
+    return _finalize_skill(workspace, name, md.parent, source="dream",
+                           attribution=attribution, ramp="write", composition=composition,
+                           commit_subject=f"skill({name}): {rationale.strip()} [dream]")
 
 
 def dream_restructure_skill(workspace: Path, name: str, *, content: str,
