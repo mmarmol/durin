@@ -11,7 +11,7 @@ import json
 import shutil
 from pathlib import Path
 
-from durin.agent.skills_store import _durin_blob
+from durin.agent.skills_store import _bundled_file_count, _durin_blob
 from durin.security.skill_scan import scan_skill
 
 _UNVERIFIED_DETAIL = (
@@ -20,6 +20,32 @@ _UNVERIFIED_DETAIL = (
     "never scanned or approved; it could exfiltrate data or manipulate the agent. "
     "Audit and approve to use it, or reject it."
 )
+
+
+def _attributed_source(workspace: Path, skill_name: str) -> str:
+    """Best-effort attribution for a skill swept into quarantine.
+
+    Returns `agent:session:<id>` when the most recent skills-store commit that
+    touched this skill's own path (`GitStore.log(path=skill_name)`, the same
+    path-scoping `skill_history`/`user_edits_since_curation` use) carries a
+    `Session:` trailer, else the `unverified:workspace` fallback. Path-scoping
+    — not a text search — is what keeps a generically-named skill from being
+    attributed to an unrelated commit that merely mentions its name. Never
+    raises — an uninitialized store or any git-log failure degrades straight
+    to the fallback."""
+    try:
+        from durin.agent.skills_store import _store
+        entries = _store(workspace).log(max_entries=50, path=skill_name)
+    except Exception:
+        return "unverified:workspace"
+    for entry in entries:
+        msg = getattr(entry, "message", "") or ""
+        for line in msg.splitlines():
+            if line.strip().lower().startswith("session:"):
+                sid = line.split(":", 1)[1].strip()
+                if sid:
+                    return f"agent:session:{sid}"
+    return "unverified:workspace"
 
 
 def sweep_unverified_skills(workspace) -> list[str]:
@@ -46,6 +72,10 @@ def sweep_unverified_skills(workspace) -> list[str]:
             shutil.rmtree(dest)
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(d), str(dest))
+        source = _attributed_source(workspace, d.name)
+        # Count bundled files BEFORE .scan.json is written below — it would
+        # otherwise count the scan artifact itself as a "bundled file".
+        files_count = _bundled_file_count(dest)
         rep = scan_skill(dest)
         findings = [{"category": "unverified_origin", "severity": "caution",
                      "where": "SKILL.md", "detail": _UNVERIFIED_DETAIL}]
@@ -53,7 +83,13 @@ def sweep_unverified_skills(workspace) -> list[str]:
                       "where": f.where, "detail": f.detail} for f in rep.findings]
         verdict = "dangerous" if rep.verdict == "dangerous" else "caution"
         (dest / ".scan.json").write_text(
-            json.dumps({"source": "unverified:workspace", "verdict": verdict,
+            json.dumps({"source": source, "verdict": verdict,
                         "findings": findings}), encoding="utf-8")
+        if source.startswith("agent:session:"):
+            from durin.agent.tools._telemetry import emit_tool_event
+            emit_tool_event("skill.authored", {
+                "name": d.name, "actor": "agent", "session": source.split(":", 2)[2],
+                "model": None, "ramp": "backstop", "composition": "compliant",
+                "scan_verdict": verdict, "files_count": files_count})
         moved.append(d.name)
     return moved

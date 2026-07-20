@@ -145,3 +145,21 @@ class TestNotebookEdit:
         result = await tool.execute(path=path, cell_index=0, new_source="x", cell_type="raw")
         assert "Error" in result
         assert "cell_type" in result
+
+    @pytest.mark.asyncio
+    async def test_refuses_write_under_skills_registry(self, tool, tmp_path):
+        """notebook_edit is a generic file tool like write_file/edit_file, so it
+        must not be a bypass around the skills/ write-guard (durin/agent/tools/
+        path_utils.py's denied_subdirs, enforced via _FsTool._resolve_write)."""
+        (tmp_path / "skills").mkdir()
+        path = str(tmp_path / "skills" / "evil" / "notebook.ipynb")
+        result = await tool.execute(path=path, cell_index=0, new_source="x", edit_mode="insert")
+        assert "Error" in result and "skill-drafts" in result
+        assert not (tmp_path / "skills" / "evil" / "notebook.ipynb").exists()
+
+    @pytest.mark.asyncio
+    async def test_allows_write_under_skill_drafts(self, tool, tmp_path):
+        path = str(tmp_path / "skill-drafts" / "my-skill" / "notebook.ipynb")
+        result = await tool.execute(path=path, cell_index=0, new_source="x", edit_mode="insert")
+        assert "Successfully" in result
+        assert (tmp_path / "skill-drafts" / "my-skill" / "notebook.ipynb").exists()

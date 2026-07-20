@@ -738,6 +738,63 @@ def _quarantine_authored_skill(workspace: Path, skill_dir: Path, rep) -> dict:
                     "it awaits review in the import quarantine"}
 
 
+def _run_composition_gate(content: str, workspace: Path, composition_judge, override: bool) -> tuple[bool, str]:
+    """Run the composition doctrine gate. Accept on no-judge / override / pass."""
+    if composition_judge is None or override:
+        return True, ""
+    from durin.agent.skills_doctrine import judge_composition
+    return judge_composition(content, workspace, composition_judge)
+
+
+def _bundled_file_count(skill_dir: Path) -> int:
+    return sum(1 for p in skill_dir.rglob("*") if p.is_file() and p.name != "SKILL.md")
+
+
+def _finalize_skill(workspace: Path, name: str, skill_dir: Path, *, source: str,
+                    attribution: "Attribution | None", ramp: str, composition: str,
+                    commit_subject: str) -> dict:
+    """Backfill-then-scan (iff bundled files)-then-quarantine-or-(stamp+commit+
+    sync+emit) for skills/<name>/. `commit_subject` is the caller's full commit
+    subject line (each activation path keeps its own rationale-bearing message;
+    this helper does not synthesize one) — trailers are still derived from
+    `attribution`."""
+    from durin.agent.tools._telemetry import emit_tool_event
+
+    md = skill_dir / "SKILL.md"
+    _ensure_surface_frontmatter(md, name)
+    files_count = _bundled_file_count(skill_dir)
+    scan_verdict = None
+    if files_count:
+        from durin.security.skill_scan import scan_skill
+        rep = scan_skill(skill_dir)
+        if rep.verdict != "safe":
+            return _quarantine_authored_skill(workspace, skill_dir, rep)
+        scan_verdict = rep.verdict
+
+    def _stamp(data: dict) -> None:
+        durin = ensure_durin(data)
+        durin["mode"] = "auto"
+        durin["provenance"] = {"source": source, "created_at": _today()}
+        if scan_verdict is not None:
+            durin["provenance"]["scan_verdict"] = scan_verdict
+
+    _update_md(md, _stamp)
+    store = _store_init(workspace)
+    sha = store.auto_commit(commit_subject, trailers=attribution_to_trailers(attribution))
+    _sync_index(workspace, name)
+    emit_tool_event("skill.authored", {
+        "name": name,
+        "actor": attribution.actor if attribution else "agent",
+        "session": attribution.session if attribution else None,
+        "model": attribution.agent if attribution else None,
+        "ramp": ramp,
+        "composition": composition,
+        "scan_verdict": scan_verdict,
+        "files_count": files_count,
+    })
+    return {"ok": True, "name": name, "commit": sha}
+
+
 def dream_create_skill(workspace: Path, name: str, content: str,
                        rationale: str, attribution: "Attribution | None" = None,
                        files: dict[str, str] | None = None,
@@ -770,12 +827,10 @@ def dream_create_skill(workspace: Path, name: str, content: str,
     md = _skill_md(workspace, name)
     if md.exists():
         return {"error": f"skill already exists: {name}"}
-    if composition_judge is not None and not composition_override:
-        from durin.agent.skills_doctrine import judge_composition
-        ok, reason = judge_composition(content, workspace, composition_judge)
-        if not ok:
-            return {"error": f"composition gate: {reason}", "composition_rejected": True}
-    store = _store_init(workspace)  # ensure git repo exists before mutating files
+    ok, reason = _run_composition_gate(content, workspace, composition_judge, composition_override)
+    if not ok:
+        return {"error": f"composition gate: {reason}", "composition_rejected": True}
+    _store_init(workspace)  # ensure git repo exists (on the clean tree) before writing files
     md.parent.mkdir(parents=True, exist_ok=True)
     md.write_text(content, encoding="utf-8")
     if not (content.strip() and (_frontmatter_description(content) or _derive_description(content))):
@@ -785,28 +840,10 @@ def dream_create_skill(workspace: Path, name: str, content: str,
         target = md.parent / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(str(body), encoding="utf-8")
-    _ensure_surface_frontmatter(md, name)
-
-    scan_verdict = None
-    if files:
-        from durin.security.skill_scan import scan_skill
-        rep = scan_skill(md.parent)
-        if rep.verdict != "safe":
-            return _quarantine_authored_skill(workspace, md.parent, rep)
-        scan_verdict = rep.verdict
-
-    def _stamp(data: dict) -> None:
-        durin = ensure_durin(data)
-        durin["mode"] = "auto"
-        durin["provenance"] = {"source": "dream", "created_at": _today()}
-        if scan_verdict is not None:
-            durin["provenance"]["scan_verdict"] = scan_verdict
-
-    _update_md(md, _stamp)
-    sha = store.auto_commit(f"skill({name}): {rationale.strip()} [dream]",
-                            trailers=attribution_to_trailers(attribution))
-    _sync_index(workspace, name)
-    return {"ok": True, "name": name, "commit": sha}
+    composition = "overridden" if composition_override else "compliant"
+    return _finalize_skill(workspace, name, md.parent, source="dream",
+                           attribution=attribution, ramp="write", composition=composition,
+                           commit_subject=f"skill({name}): {rationale.strip()} [dream]")
 
 
 def dream_restructure_skill(workspace: Path, name: str, *, content: str,
@@ -980,6 +1017,56 @@ def dream_fuse_skills(workspace: Path, *, target: str, content: str,
     for s in sources:
         _unsync_index(workspace, s)
     return {"ok": True, "target": target, "removed": list(sources), "commit": sha}
+
+
+DRAFTS_DIRNAME = "skill-drafts"
+
+
+def _draft_dir(workspace: Path, name: str) -> Path:
+    return Path(workspace) / DRAFTS_DIRNAME / name
+
+
+def publish_draft_skill(workspace: Path, name: str, *, attribution: "Attribution | None" = None,
+                        composition_judge=None, composition_override: bool = False) -> dict:
+    """Promote skill-drafts/<name>/ into the registry through the activation core.
+
+    Gates on the draft body BEFORE moving anything, so a rejected draft is left
+    intact for the author to revise. Refuses to clobber an already-active skill
+    of the same name."""
+    if not _safe_name(name):
+        return {"error": "invalid skill name"}
+    draft = _draft_dir(workspace, name)
+    md = draft / "SKILL.md"
+    if not md.is_file():
+        return {"error": f"no draft to publish: {name}"}
+    content = md.read_text(encoding="utf-8")
+    bad = _skill_md_integrity(content)
+    if bad is not None:
+        return {"error": bad}  # integrity floor - nothing moved, draft left intact
+    ok, reason = _run_composition_gate(content, workspace, composition_judge, composition_override)
+    if not ok:
+        return {"error": f"composition gate: {reason}", "composition_rejected": True}
+    dest = _skill_md(workspace, name).parent
+    if dest.exists():
+        return {"error": f"skill already exists: {name}"}
+    _store_init(workspace)  # ensure repo exists before moving files under it
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(draft), str(dest))
+    composition = "overridden" if composition_override else "compliant"
+    return _finalize_skill(workspace, name, dest, source="dream",
+                           attribution=attribution, ramp="publish", composition=composition,
+                           commit_subject=f"skill({name}): publish draft")
+
+
+def discard_draft_skill(workspace: Path, name: str) -> dict:
+    """Delete skill-drafts/<name>/ without touching the active registry."""
+    if not _safe_name(name):
+        return {"error": "invalid skill name"}
+    draft = _draft_dir(workspace, name)
+    if not draft.exists():
+        return {"error": f"no draft: {name}"}
+    shutil.rmtree(draft)
+    return {"ok": True, "name": name}
 
 
 def _parse_trailers(message: str) -> dict[str, str]:

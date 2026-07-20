@@ -6,9 +6,9 @@ Usage:
     init_skill.py <skill-name> --path <path> [--resources scripts,references,assets] [--examples]
 
 Examples:
-    init_skill.py my-new-skill --path skills/public
-    init_skill.py my-new-skill --path skills/public --resources scripts,references
-    init_skill.py my-api-helper --path skills/private --resources scripts --examples
+    init_skill.py my-new-skill --path skill-drafts
+    init_skill.py my-new-skill --path skill-drafts --resources scripts,references
+    init_skill.py my-api-helper --path skill-drafts --resources scripts --examples
     init_skill.py custom-skill --path /custom/location
 """
 
@@ -276,6 +276,15 @@ def init_skill(skill_name, path, resources, include_examples):
     """
     # Determine skill directory path
     skill_dir = Path(path).resolve() / skill_name
+
+    # Refuse to scaffold straight into the active skills/ registry — durin's
+    # generic write tools already refuse writes there (skills authoring goes
+    # through skill-drafts/<name>/ + skill_publish), so catch it here too for
+    # anyone invoking this script directly.
+    if skill_dir.parent.name == "skills":
+        print("[ERROR] Do not scaffold into the active skills/ registry. "
+              "Use --path skill-drafts and run skill_publish when the skill is ready.")
+        return None
 
     # Check if directory already exists
     if skill_dir.exists():

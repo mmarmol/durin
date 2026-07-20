@@ -196,8 +196,18 @@ def _build_restructure_tools(staging: Path) -> Any:
     fs = FileStates()
     tools = ToolRegistry()
     tools.register(ReadFileTool(workspace=staging, allowed_dir=staging, file_states=fs))
-    tools.register(WriteFileTool(workspace=staging, allowed_dir=staging, file_states=fs))
-    tools.register(EditFileTool(workspace=staging, allowed_dir=staging, file_states=fs))
+    # guard_skills_dir=False: `staging` is a throwaway tempdir copy (mirroring
+    # the live layout as `staging/skills/<name>/` purely so the sub-agent's
+    # path references line up), not the live skills registry — the generic
+    # skills-write guard would otherwise block the very `skills/{name}/...`
+    # writes this sub-agent is instructed to make. The staged result only
+    # ever reaches the live tree through the validated, gated commit path in
+    # `_restructure_async` (integrity check + composition judge + security
+    # scan), so this isolated copy needs no additional path guarding.
+    tools.register(WriteFileTool(workspace=staging, allowed_dir=staging, file_states=fs,
+                                  guard_skills_dir=False))
+    tools.register(EditFileTool(workspace=staging, allowed_dir=staging, file_states=fs,
+                                 guard_skills_dir=False))
     tools.register(ListWorkflowsTool(workspace=staging))
     tools.register(WorkflowWriteTool(workspace=staging))
     return tools

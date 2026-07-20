@@ -8,7 +8,7 @@ from durin.agent.tools.work_area import (
 
 
 def test_managed_prefixes_cover_workspace_dirs():
-    for name in ("memory", "ingested", "skills", "sessions", "souls",
+    for name in ("memory", "ingested", "skills", "skill-drafts", "sessions", "souls",
                  "workflows", "workflows-runs", "cron", "work"):
         assert name in MANAGED_PREFIXES
 

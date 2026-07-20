@@ -36,12 +36,20 @@ class _FsTool(Tool, ContextAware):
         extra_allowed_dirs: list[Path] | None = None,
         file_states: FileStates | None = None,
         post_edit_config: Any = None,
+        guard_skills_dir: bool = True,
     ):
         self._workspace = workspace
         self._allowed_dir = allowed_dir
         self._extra_allowed_dirs = extra_allowed_dirs
         # PostEditCheckConfig | None — only Write/Edit consume it.
         self._post_edit_config = post_edit_config
+        # Whether _resolve_write() refuses writes under workspace/skills/. On
+        # by default so every LLM-facing instance (main loop, subagents,
+        # execute_code — all built via `create(ctx)`) is protected. Callers
+        # that hand-build a tool over an isolated, non-live workspace (e.g. a
+        # throwaway staging copy that is itself validated before ever
+        # reaching the live tree) may pass False — see skill_restructure.py.
+        self._guard_skills_dir = guard_skills_dir
         # Explicit state is used by isolated runners like Dream/subagents.
         # Main AgentLoop tools leave this unset and resolve state from the
         # current async task, which keeps shared tool instances session-safe.
@@ -97,6 +105,26 @@ class _FsTool(Tool, ContextAware):
             self._allowed_dir,
             self._extra_allowed_dirs,
             work_dir=self._work_dir(),
+        )
+
+    def _resolve_write(self, path: str) -> Path:
+        """Like `_resolve`, but additionally refuses paths under the skills
+        registry — reads of `skills/` stay legitimate (builtins, installed
+        skills), but generic write tools must not touch it directly. Skill
+        authoring goes through `skill-drafts/<name>/` + `skill_publish`.
+        """
+        denied = (
+            [self._workspace / "skills"]
+            if self._guard_skills_dir and self._workspace is not None
+            else None
+        )
+        return resolve_workspace_path(
+            path,
+            self._workspace,
+            self._allowed_dir,
+            self._extra_allowed_dirs,
+            work_dir=self._work_dir(),
+            denied_subdirs=denied,
         )
 
     def _display_path(self, fp: Path) -> str:
@@ -552,7 +580,7 @@ class WriteFileTool(_FsTool):
                 raise ValueError("Unknown path")
             if content is None:
                 raise ValueError("Unknown content")
-            fp = self._resolve(path)
+            fp = self._resolve_write(path)
             atomic_write_text(fp, content)
             self._file_states.record_write(fp)
             msg = f"Successfully wrote {len(content)} characters to {fp}"
@@ -998,7 +1026,7 @@ class EditFileTool(_FsTool):
             if path.endswith(".ipynb"):
                 return "Error: This is a Jupyter notebook. Use the notebook_edit tool instead of edit_file."
 
-            fp = self._resolve(path)
+            fp = self._resolve_write(path)
 
             # Create-file semantics: old_text='' + file doesn't exist → create
             if not fp.exists():

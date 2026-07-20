@@ -26,6 +26,7 @@ def resolve_workspace_path(
     allowed_dir: Path | None = None,
     extra_allowed_dirs: list[Path] | None = None,
     work_dir: Path | None = None,
+    denied_subdirs: list[Path] | None = None,
 ) -> Path:
     """Resolve path against workspace (or the session work dir) and enforce
     allowed-directory containment.
@@ -33,6 +34,12 @@ def resolve_workspace_path(
     Relative paths anchor to ``work_dir`` unless their first segment is a
     managed prefix (then to ``workspace``). With ``work_dir=None`` the original
     workspace-relative behavior is preserved.
+
+    ``denied_subdirs`` is a second, narrower gate checked after the
+    allowed-directory containment: even a path inside the allowed directory
+    is refused if it falls under one of these subdirs. Callers use this to
+    carve out a read-only or publish-only area (e.g. the skills registry)
+    within an otherwise-writable workspace.
     """
     from durin.agent.tools.work_area import anchored_base
 
@@ -51,5 +58,11 @@ def resolve_workspace_path(
             raise PermissionError(
                 f"Path {path} is outside allowed directory {allowed_dir}"
                 + WORKSPACE_BOUNDARY_NOTE
+            )
+    for denied in (denied_subdirs or []):
+        if is_under(resolved, denied):
+            raise PermissionError(
+                f"Path {path} is under the protected skills registry. Author skills under "
+                f"skill-drafts/<name>/ and run skill_publish to activate them." + WORKSPACE_BOUNDARY_NOTE
             )
     return resolved

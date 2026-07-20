@@ -1217,6 +1217,7 @@ class MemoryDreamSkillExtractEvent(TypedDict):
     """The extract dream's skill pass wrote/updated procedural skills."""
 
     skills_touched: int
+    gaps_closed: NotRequired[int]
     duration_ms: NotRequired[int]
 
 
@@ -1425,6 +1426,19 @@ class SkillObservationLoggedEvent(TypedDict):
     kind: str
     dedup_bumped: bool
     count: int
+
+
+class SkillAuthoredEvent(TypedDict):
+    """A skill was activated into the registry (quick write, draft publish, or backstop adoption)."""
+
+    name: str
+    actor: str  # "agent" | "user" | "curation" | "import"
+    session: NotRequired[str | None]
+    model: NotRequired[str | None]
+    ramp: str  # "write" | "publish" | "backstop"
+    composition: str  # "compliant" | "overridden"
+    scan_verdict: NotRequired[str | None]  # "safe" | "caution" | "dangerous" | None (no bundled files)
+    files_count: int
 
 
 class SkillCurationActionEvent(TypedDict):
@@ -1693,6 +1707,7 @@ EVENTS: dict[str, type] = {
     "memory.health.critical": MemoryHealthCriticalEvent,
     "memory.fallback_tool_used": MemoryFallbackToolUsedEvent,
     # Skill loop (use / observe / curate / suggest)
+    "skill.authored": SkillAuthoredEvent,
     "skill.used": SkillUsedEvent,
     "skill.observation_logged": SkillObservationLoggedEvent,
     "skill.curation_action": SkillCurationActionEvent,
@@ -1794,6 +1809,7 @@ __all__ = [
     "MemoryIndexRebuildEvent",
     "MemoryIndexStalenessDetectedEvent",
     # Skill loop
+    "SkillAuthoredEvent",
     "SkillUsedEvent",
     "SkillObservationLoggedEvent",
     "SkillCurationActionEvent",

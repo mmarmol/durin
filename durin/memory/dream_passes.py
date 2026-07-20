@@ -560,8 +560,25 @@ async def _skill_extract_async(
     except Exception as exc:  # noqa: BLE001
         return {"skills_touched": 0, "error": str(exc)}
 
-    touched = sum(1 for ev in (result.tool_events or [])
-                  if ev.get("name") == "skill_write")
+    def _authored(ev: dict) -> bool:
+        # A composition-reject or quarantine also produces a skill_write/
+        # skill_publish tool_event with runner status "ok" — the call itself
+        # didn't raise or return an "Error"-prefixed string, it returned a
+        # JSON payload describing the outcome. Only that payload tells a
+        # landed skill ({"ok": true, ...}) apart from a reject
+        # ({"error": ..., "composition_rejected": true}) or a quarantine
+        # ({"quarantined": true, ...}). tool_events don't carry the full
+        # JSON, only `detail` — a copy of the tool's return value truncated
+        # to 120 chars — but the activation core always puts "ok" first in
+        # the success dict, so '"ok": true' lands well inside that window
+        # whenever it's actually there.
+        if ev.get("name") not in ("skill_write", "skill_publish"):
+            return False
+        if ev.get("status") != "ok":
+            return False
+        return '"ok": true' in (ev.get("detail") or "")
+
+    touched = sum(1 for ev in (result.tool_events or []) if _authored(ev))
     gaps_closed = _resolve_gap_observations(workspace)
     duration_ms = int((time.perf_counter() - t0) * 1000)
     _emit("memory.dream.skill_extract", skills_touched=touched,

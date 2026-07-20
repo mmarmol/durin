@@ -2,7 +2,7 @@
 name: skill-creator
 description: >-
   Create or update AgentSkills following the full process: understand, survey peers,
-  plan with the scriptability test, init, edit, verify, package. Use whenever the user
+  plan with the scriptability test, init, edit, verify, publish. Use whenever the user
   wants to design, create, edit, improve, quality-audit (a skill's structure and
   format — not its security, which is `skill_audit`), fix, validate, test, or package a
   skill, or mentions SKILL.md, skill scripts, skill references, or a skill description
@@ -167,7 +167,7 @@ warns about resource files the body never mentions. Splitting patterns and guide
 4. Initialize the skill (run init_skill.py)
 5. Edit the skill (scripts first, then prose, then description)
 6. Verify (run scripts, validate, dry-run)
-7. Package and iterate
+7. Publish (skill_publish), package, and iterate
 
 Follow these steps in order, skipping only with a clear reason.
 
@@ -229,14 +229,16 @@ everything a skill requires. Script paths below are relative to this skill's own
 directory — resolve them to absolute paths when running from elsewhere:
 
 ```bash
-scripts/init_skill.py my-skill --path ./workspace/skills
-scripts/init_skill.py my-skill --path ./workspace/skills --resources scripts,references
-scripts/init_skill.py my-skill --path ./workspace/skills --resources scripts --examples
+scripts/init_skill.py my-skill --path ./workspace/skill-drafts
+scripts/init_skill.py my-skill --path ./workspace/skill-drafts --resources scripts,references
+scripts/init_skill.py my-skill --path ./workspace/skill-drafts --resources scripts --examples
 ```
 
-For durin, custom skills live under the active workspace `skills/` directory so they
-are discovered automatically at runtime (for example,
-`workspace/skills/my-skill/SKILL.md`).
+For durin, scaffold into the workspace `skill-drafts/` scratch area, never straight into
+`skills/` — the active registry refuses direct writes, and `init_skill.py` itself rejects
+a `--path` that resolves there. Build, edit, and dry-run the draft entirely under
+`skill-drafts/my-skill/` with the normal file tools; it stays invisible to skill
+search/load until Step 7 publishes it.
 
 After initialization, customize SKILL.md and add resources. If you used `--examples`,
 replace or delete placeholder files.
@@ -278,9 +280,23 @@ Three gates, in order:
    subagent wrote helper code the skill does not bundle, go back to step 3: that code
    was a missing script.
 
-### Step 7: Package and Iterate
+### Step 7: Publish, Package, and Iterate
 
-Once development is complete, package the skill into a distributable .skill file:
+Once development and verification are complete, activate the draft:
+
+```
+skill_publish my-skill
+```
+
+This moves `skill-drafts/my-skill/` into the active registry — running the composition
+gate + security scan, stamping provenance, and versioning it — so the skill becomes
+available to search/load. Nothing under `skill-drafts/` is usable until this runs: do
+not tell the user the skill is installed or done before calling it. A gate rejection
+leaves the draft untouched for revision; only retry with `override_composition=true` if
+the user explicitly wants the prose kept after seeing the gate's reason.
+
+Optionally, also package the published skill into a distributable .skill file, e.g. to
+share it outside this workspace:
 
 ```bash
 scripts/package_skill.py path/to/skill-folder

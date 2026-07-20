@@ -18,8 +18,13 @@ __all__ = ["MANAGED_PREFIXES", "session_work_dir", "anchored_base"]
 # session work dir. These are durin-managed surfaces the agent reads by name
 # (file references, ingested drill-paths). ``work`` itself is anchored so that
 # completer-offered ``work/<session>/...`` paths resolve correctly too.
+# ``skill-drafts`` sits next to ``skills``: the draft scratch area a skill is
+# built and tested in before ``skill_publish`` moves it into the registry, so
+# it must resolve the same way ``skills`` does — a session-anchored path would
+# put the agent's draft writes somewhere ``skill_publish``/``skill_discard``
+# (which read/write skill-drafts/<name>/ at the workspace root) can't find them.
 MANAGED_PREFIXES: frozenset[str] = frozenset({
-    "memory", "ingested", "skills", "sessions", "souls",
+    "memory", "ingested", "skills", "skill-drafts", "sessions", "souls",
     "workflows", "workflows-runs", "cron", "work",
 })
 

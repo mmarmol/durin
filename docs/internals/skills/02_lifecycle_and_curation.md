@@ -161,51 +161,68 @@ the gap, and failing that, both the gap's working name and every existing
 skill name are passed through `_norm` (lowercase, non-alphanumeric collapsed to
 hyphens, trimmed) for a normalized comparison — so a gap logged as `"Release
 Runbook"` still closes against a skill authored as `release-runbook`. An
-unmatched gap stays OPEN and is offered again to the next pass.
+unmatched gap stays OPEN and is offered again to the next pass. The count of
+gaps closed this way travels on the pass's own telemetry event as
+`gaps_closed` (`03_telemetry_and_effectiveness.md`), alongside `skills_touched`.
 
 `run_skill_extract_pass` is a sync wrapper (`asyncio.run`) over the async
 `AgentRunner` flow so the cron loop, which calls dream passes from a thread,
 can invoke it without an event loop of its own.
 
-### skill_write: bundled files, the scan, and the composition gate
+### skill_write and skill_publish: bundled files, the scan, and the composition gate
 
 `skill_write` accepts optional bundled `files` (path → content) next to
-SKILL.md — the authoring path for scripts the doctrine prefers over prose
-steps. Paths are confined to the skill directory (relative-only, no parent
-escapes), and any write that bundles code runs `scan_skill` — the same scanner
-imports pass through — **before the skill activates**: a `safe` verdict
-installs with the verdict stamped in provenance; `caution`/`dangerous`
-relocates the whole directory to the import quarantine with a `.scan.json`
-(`source: "authored:agent"`), where the existing approve/reject surfaces
-review it. Self-authored prose is trusted; self-authored *code* earns the same
-gate as third-party code.
+SKILL.md, and a draft promoted via `skill_publish` carries whatever files the
+agent already wrote under `skill-drafts/<name>/` — either way, this is the
+authoring path for scripts the doctrine prefers over prose steps. Bundled
+paths are confined to the skill directory (relative-only, no parent escapes),
+and `_finalize_skill` (`00_overview.md` §4) runs `scan_skill` on any skill
+carrying bundled files — the same scanner imports pass through — **before the
+skill activates**: a `safe` verdict installs with the verdict stamped in
+provenance; `caution`/`dangerous` relocates the whole directory to the import
+quarantine with a `.scan.json` (`source: "authored:agent"`), where the
+existing approve/reject surfaces review it. Self-authored prose is trusted;
+self-authored *code* earns the same gate as third-party code, regardless of
+which ramp produced it.
 
 Prompts are guidance; the **composition gate** (`judge_composition`,
 `durin/agent/skills_doctrine.py`) is the enforced invariant — the same pattern
 as the plan-verification lint and the import scan gate. At create time
-(`dream_create_skill`), a judge model (the `judge` aux preset; injectable in
-tests) checks the body for the two doctrine violations: a prose-only
-`NARRATION` of a workflow-shaped procedure — manual multi-source fan-out,
-gathering, synthesis or a verification loop — with nothing delegated and
-nothing bundled, or `INLINE_CODE`, a deterministic transformation inlined into
-the body that should be a bundled script. Either verdict rejects the save and
-returns the judge's reason, so the author retries with feedback. The gate is
-deliberately narrow (it errs toward accepting judgment-heavy bodies) and
-**failure-open**: no judge configured, a judge error, or an unparseable reply
-all accept — infrastructure trouble must never cost a skill.
+(`dream_create_skill`) or publish time (`publish_draft_skill`), a judge model
+(the `judge` aux preset; injectable in tests) checks the body for the two
+doctrine violations: a prose-only `NARRATION` of a workflow-shaped procedure —
+manual multi-source fan-out, gathering, synthesis or a verification loop —
+with nothing delegated and nothing bundled, or `INLINE_CODE`, a deterministic
+transformation inlined into the body that should be a bundled script. Either
+verdict rejects the save and returns the judge's reason, so the author retries
+with feedback. The gate is deliberately narrow (it errs toward accepting
+judgment-heavy bodies) and **failure-open**: no judge configured, a judge
+error, or an unparseable reply all accept — infrastructure trouble must never
+cost a skill.
+
+Before either gate runs, both `dream_create_skill` and `publish_draft_skill`
+apply the same body/description integrity floor — an empty body, or one with
+no derivable description, is refused outright (`_skill_md_integrity` for
+publish; the equivalent inline check for create), draft or fresh content left
+untouched. The iterative ramp does not get to skip a check the quick one
+enforces just because the body was assembled over several tool calls instead
+of one.
 
 Who may override differs by door. The in-session `SkillWriteTool` runs in
 `override` mode: after a rejection, the agent surfaces the reason, and if the
 user explicitly insists on prose, a retry with `override_composition=true`
 saves it — the system warns, the user's word wins (the import gate's trust
-model). The dream's instance runs in `hard` mode: the override parameter is
-ignored and an autonomous narration-only write cannot land — but the bounce is
-never silently lost. The hard door queues the rejected body in the suggestions
-bandeja as a `create` card (`skill_suggestions.add_gate_bounce`): the full body
-as a diff, the gate's reason, and an accept action that IS the user's explicit
-override (`apply_suggestion` replays it with `composition_override=True`,
-actor=user). A later compliant landing of the same skill name clears the stale
-card (`clear_gate_bounces`), so only genuinely unresolved bounces await review. Curation `evolve`
+model). `skill_publish` shares this same override door and trust model —
+there is no dream-side "hard" variant for it, because drafts are only ever
+built by the in-loop agent. The dream's `skill_write` instance runs in `hard`
+mode instead: the override parameter is ignored and an autonomous
+narration-only write cannot land — but the bounce is never silently lost. The
+hard door queues the rejected body in the suggestions bandeja as a `create`
+card (`skill_suggestions.add_gate_bounce`): the full body as a diff, the
+gate's reason, and an accept action that IS the user's explicit override
+(`apply_suggestion` replays it with `composition_override=True`, actor=user).
+A later compliant landing of the same skill name clears the stale card
+(`clear_gate_bounces`), so only genuinely unresolved bounces await review. Curation `evolve`
 output is not re-gated: the curation judge itself carries the doctrine and the
 catalog in its prompt, so gating its output would re-judge the same judge.
 
@@ -364,7 +381,12 @@ narration into a delegating wrapper when no workflow yet exists. Unlike `evolve`
 `restructure` is executed by an agentic sub-agent with tools (read the skill's
 files, write a script, author a workflow) working in isolation and validated
 before it touches live — the judge decides the intent, it does not hand-write the
-artifacts. `retire`
+artifacts. The sub-agent's file tools run against that isolated tempdir copy
+with the generic `skills/` write-guard (`00_overview.md`) turned off for the
+copy specifically: the copy mirrors `skills/<name>/` only so the sub-agent's
+path references line up, and the guard exists to protect the live registry,
+which this copy never touches directly — the validated result reaches
+`skills/` only through the locked commit above. `retire`
 exists as a distinct action from `evolve` because an `evolve`-only model can only
 push a fully-obsolete skill toward an empty body, leaving dead clutter;
 `remove_skill` is the same git-recoverable delete used by the manual admin
@@ -418,15 +440,18 @@ capped at 500 characters. Two details matter:
   untouched. Where a real duplicate still occurs (e.g. the author quoted the
   same line twice), `apply_skill_edit` returns a descriptive error pointing at
   the frontmatter/body ambiguity rather than a bare "not unique".
-- **`_ensure_surface_frontmatter`** is the single call site that fills a
+- **`_ensure_surface_frontmatter`** is the single function that fills a
   missing `name` (from the skill's directory name) and/or `description` (via
-  `_derive_description`) and is invoked by every self-authored create path:
-  `dream_create_skill`, `dream_fuse_skills`, and (via `backfill_surface_
-  frontmatter`) curation's deterministic repair step. `dream_create_skill`
-  additionally refuses outright when neither the raw frontmatter nor the
-  derived fallback yields any usable description — an empty derivation means
-  the body itself has no prose to summarize, which is a stronger signal than a
-  merely-missing frontmatter field.
+  `_derive_description`). It runs inside `_finalize_skill` (`00_overview.md`
+  §4), so every path that converges there — `dream_create_skill` and
+  `publish_draft_skill` alike — backfills the frontmatter before the security
+  scan and provenance stamp; it also runs directly in `dream_restructure_skill`
+  and `dream_fuse_skills` (neither routes through `_finalize_skill`), and via
+  `backfill_surface_frontmatter` for curation's deterministic repair step.
+  `dream_create_skill` additionally refuses outright when neither the raw
+  frontmatter nor the derived fallback yields any usable description — an
+  empty derivation means the body itself has no prose to summarize, which is
+  a stronger signal than a merely-missing frontmatter field.
 
 ### Skill suggestions: the manual-skill path
 
@@ -493,7 +518,7 @@ decisions about external content are never made silently.
 | `curate_catalog` | `durin/agent/skill_curation.py` | Daily delta curation over `auto` workspace skills: backfill, delta build, judge, apply, stamp. |
 | `suggest_manual_skills` | `durin/agent/skill_curation.py` | Parallel curation pass over `manual` skills that enqueues suggestions instead of applying them. |
 | `backfill_surface_frontmatter` | `durin/agent/skills_store.py` | Deterministic pre-judge repair of a missing frontmatter `name`/`description`. |
-| `_derive_description` / `_ensure_surface_frontmatter` | `durin/agent/skills_store.py` | Body-derived description (whitespace-collapsed to avoid edit-uniqueness collisions) and the shared create-time frontmatter fill. |
+| `_derive_description` / `_ensure_surface_frontmatter` | `durin/agent/skills_store.py` | Body-derived description (whitespace-collapsed to avoid edit-uniqueness collisions) and the shared frontmatter fill, run by `_finalize_skill` for both authoring ramps. |
 | `needs_curation` / `mark_curated` | `durin/agent/skills_store.py` | Delta gate (body-hash mismatch OR stale `curation_rules`) and the post-curation stamp. |
 | `CURATION_RULES_VERSION` | `durin/agent/skills_store.py` | Module constant; bump to pull the whole `auto` catalog back through curation once. |
 | `user_edits_since_curation` | `durin/agent/skills_store.py` | Reads `Actor: user` commits (with diffs) since the last curation stamp, for the judge prompt. |
