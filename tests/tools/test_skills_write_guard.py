@@ -2,6 +2,7 @@
 
 import pytest
 
+from durin.agent.tools.context import RequestContext
 from durin.agent.tools.filesystem import EditFileTool, WriteFileTool
 from durin.agent.tools.path_utils import resolve_workspace_path
 
@@ -38,6 +39,24 @@ async def test_write_tool_allows_drafts(tmp_path):
     tool = WriteFileTool(workspace=ws, allowed_dir=ws)
     result = await tool.execute(path="skill-drafts/emailer/SKILL.md", content="hi")
     assert "Successfully wrote" in result
+
+
+@pytest.mark.asyncio
+async def test_write_tool_drafts_anchor_to_workspace_with_active_session(tmp_path):
+    """A real turn always has a session_key set (see AgentLoop._set_tool_context),
+    which routes an unmanaged relative path to the per-session work dir instead of
+    the workspace root. skill-drafts/ must NOT take that branch — skill_publish /
+    skill_discard (durin/agent/skills_store.py's _draft_dir) read and write the
+    draft at the workspace root, so a session-anchored write would silently land
+    somewhere the publish/discard tools can never find it."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    tool = WriteFileTool(workspace=ws, allowed_dir=ws)
+    tool.set_context(RequestContext(channel="test", chat_id="c1", session_key="sess-1"))
+    result = await tool.execute(path="skill-drafts/emailer/SKILL.md", content="hi")
+    assert "Successfully wrote" in result
+    assert (ws / "skill-drafts" / "emailer" / "SKILL.md").read_text(encoding="utf-8") == "hi"
+    assert not (ws / "work").exists()  # must not have landed under the session work dir
 
 
 @pytest.mark.asyncio
