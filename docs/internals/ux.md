@@ -199,13 +199,18 @@ have.
 
 **Rich fenced blocks.** Code blocks tagged `html`, `svg`, `mermaid`, or
 `vega-lite` render inline as a `RichBlock`. Each block shows a header strip with
-a code⇄preview toggle, an expand button, and a copy button. The
+a code⇄preview toggle, a download button, an expand button, and a copy button. The
 preview is the default view; the toggle reveals the raw source. The expand button
-opens a full-screen dialog so large diagrams or charts fill the viewport. HTML and
-SVG previews run in a sandboxed iframe with `allow-scripts` and a
-`Content-Security-Policy` that blocks all network requests, so embedded content
-cannot load external resources. Mermaid diagrams and Vega-Lite charts are rendered
-by bundled lazy-loaded modules so they do not add to the initial bundle.
+opens a true full-screen dialog so large diagrams or charts fill the viewport.
+Inside it, Mermaid and Vega-Lite previews route into a pan/zoom inspector (drag to
+pan, scroll or the +/- controls to zoom, a fit-to-screen control), while HTML and
+SVG previews route into a plain sandboxed frame with its own close and download
+controls. The download button saves the rendered SVG for Mermaid/Vega-Lite, or the
+raw fence source for HTML/SVG. HTML and SVG previews run in a sandboxed iframe with
+`allow-scripts` and a `Content-Security-Policy` that blocks all network requests,
+so embedded content cannot load external resources. Mermaid diagrams and Vega-Lite
+charts are rendered by bundled lazy-loaded modules so they do not add to the
+initial bundle.
 
 The agent-side contract lives in the system prompt
 (`durin/templates/agent/rich_output.md`, injected by the context builder's stable
