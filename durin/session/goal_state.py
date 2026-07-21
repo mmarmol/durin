@@ -17,6 +17,9 @@ GOAL_STATE_KEY = "goal_state"
 _LEGACY_GOAL_STATE_SESSION_KEY = "thread_goal"
 _MAX_OBJECTIVE_IN_RUNTIME = 4000
 _MAX_OBJECTIVE_WS = 600
+# A finished goal keeps only a short trace in the anchor — it is orientation,
+# not the working objective, and it rides every turn.
+_MAX_COMPLETED_GOAL_CHARS = 240
 
 
 def _session_goal_raw(metadata: Mapping[str, Any] | None) -> Any:
@@ -57,12 +60,53 @@ def parse_goal_state(blob: Any) -> dict[str, Any] | None:
     return None
 
 
+def goal_headline(goal: Mapping[str, Any] | None) -> str:
+    """Shortest faithful label for a goal: its summary, else the objective's
+    first line. Shared so the runtime anchor and the decision-log breadcrumb
+    cannot drift into two different descriptions of the same goal."""
+    if not isinstance(goal, Mapping):
+        return ""
+    headline = str(goal.get("ui_summary") or "").strip()
+    if not headline:
+        objective = str(goal.get("objective") or "").strip()
+        headline = objective.splitlines()[0] if objective else ""
+    if len(headline) > _MAX_COMPLETED_GOAL_CHARS:
+        headline = headline[:_MAX_COMPLETED_GOAL_CHARS].rstrip() + "…"
+    return headline
+
+
+def _completed_goal_lines(goal: Mapping[str, Any]) -> list[str]:
+    """Compact trace of a finished goal: what it was and how it ended."""
+    headline = goal_headline(goal)
+    if not headline:
+        return []
+    out = [f"Goal (completed): {headline}"]
+    recap = str(goal.get("recap") or "").strip()
+    if recap:
+        if len(recap) > _MAX_COMPLETED_GOAL_CHARS:
+            recap = recap[:_MAX_COMPLETED_GOAL_CHARS].rstrip() + "…"
+        out.append(f"Outcome: {recap}")
+    return out
+
+
 def goal_state_runtime_lines(metadata: Mapping[str, Any] | None) -> list[str]:
     """Lines appended inside the Runtime Context block when a goal is active."""
     if not metadata:
         return []
     goal = parse_goal_state(_session_goal_raw(metadata))
-    if not isinstance(goal, dict) or goal.get("status") != "active":
+    if not isinstance(goal, dict):
+        return []
+    status = goal.get("status")
+    if status == "completed":
+        # A session rarely ends when its goal does — work continues, and the
+        # objective is exactly the context compaction must not drop. Keep a
+        # compact trace in the anchor instead of rendering nothing, so the
+        # model can still tell what this session was for (and that it is done,
+        # so it does not resume the finished work). Deliberately does NOT go
+        # through ``sustained_goal_active``, which gates the runner's
+        # wall-clock backstop and must stay false for a finished goal.
+        return _completed_goal_lines(goal)
+    if status != "active":
         return []
     objective = str(goal.get("objective") or "").strip()
     if not objective:

@@ -155,6 +155,38 @@ class CompactionPreemptiveTriggerEvent(TypedDict):
     ratio: float
 
 
+class CompactionDeferredEvent(TypedDict):
+    """A rough estimate over the trigger was vetoed by the provider's own
+    token accounting, so no consolidation ran this turn.
+
+    ``reason`` is ``post_compaction`` (a compaction just shortened the
+    conversation and no fresh provider count exists yet) or ``provider_fit``
+    (the last real prompt came in under the trigger and the estimate has only
+    drifted modestly since)."""
+    session_key: str
+    reason: str
+    estimated_tokens: int
+    trigger_tokens: int
+
+
+class CompactionCompletedEvent(TypedDict):
+    """One ``maybe_consolidate_by_tokens`` call that advanced the cursor.
+
+    ``exit_reason`` says why the round loop stopped: ``target_reached``,
+    ``no_boundary`` (ran out of user-turn boundaries to cut on),
+    ``max_rounds``, ``summary_failed``, ``empty_chunk`` or
+    ``estimate_unavailable``."""
+    session_key: str
+    rounds: int
+    exit_reason: str
+    messages_consolidated: int
+    estimated_before: int
+    estimated_after: int
+    trigger_tokens: int
+    target_tokens: int
+    context_window_tokens: int
+
+
 class CompactionGraceExtendedEvent(TypedDict):
     """LLM wall-clock timeout would have fired during active compaction;
     deadline extended by one grace window."""
@@ -1603,6 +1635,8 @@ EVENTS: dict[str, type] = {
     "tools.parallelism": ToolsParallelismEvent,
     # Compaction
     "compaction.preemptive_trigger": CompactionPreemptiveTriggerEvent,
+    "compaction.deferred": CompactionDeferredEvent,
+    "compaction.completed": CompactionCompletedEvent,
     "compaction.grace_extended": CompactionGraceExtendedEvent,
     "compaction.lock_timeout": CompactionLockTimeoutEvent,
     "compaction.paths_preserved": CompactionPathsPreservedEvent,

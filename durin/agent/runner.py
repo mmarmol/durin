@@ -76,6 +76,15 @@ _MICROCOMPACT_MIN_CHARS = 500
 # the user hasn't asked yet).
 _MICROCOMPACT_PRESSURE_RATIO = 0.5
 _MICROCOMPACT_HEAD_CHARS = 120
+# Minimum aggregate characters a microcompaction pass must be able to reclaim
+# before it rewrites anything. Rewriting invalidates the cached prompt prefix
+# from the first rewritten message onward, and this pass runs on every
+# iteration, so trading a whole cached prefix for a few hundred tokens is a
+# losing exchange on any provider that serves most of the prompt from cache.
+# Anchored at roughly one full-size tool result (``max_tool_result_chars``
+# defaults to 16,000): below that, the pass is not reclaiming even a single
+# result's worth and can wait for the next iteration.
+_MICROCOMPACT_MIN_RECLAIM_CHARS = 10_000
 
 def _output_reservation(max_output: int) -> int:
     """Tokens to hold back for output when sizing the input budget.
@@ -2444,13 +2453,28 @@ class AgentRunner:
                 return messages
 
         stale = compactable_indices[: len(compactable_indices) - _MICROCOMPACT_KEEP_RECENT]
+        eligible = [
+            idx for idx in stale
+            if isinstance(messages[idx].get("content"), str)
+            and len(messages[idx]["content"]) >= _MICROCOMPACT_MIN_CHARS
+        ]
+        if not eligible:
+            return messages
+
+        # Rewriting a message invalidates every cached prompt prefix from that
+        # point on, and the rewrite happens on each iteration. Below a floor
+        # the reclaimed context is not worth forcing a cache write — providers
+        # that serve most of the prompt from cache would pay more for the
+        # re-write than the freed tokens are worth. (The same trade-off the
+        # Anthropic context-editing API exposes as ``clear_at_least``.)
+        reclaimable = sum(len(messages[idx]["content"]) for idx in eligible)
+        if reclaimable < _MICROCOMPACT_MIN_RECLAIM_CHARS:
+            return messages
+
         updated: list[dict[str, Any]] | None = None
-        for idx in stale:
-            msg = messages[idx]
-            content = msg.get("content")
-            if not isinstance(content, str) or len(content) < _MICROCOMPACT_MIN_CHARS:
-                continue
-            summary = self._microcompact_reference(spec, msg, idx, content)
+        for idx in eligible:
+            content = messages[idx]["content"]
+            summary = self._microcompact_reference(spec, messages[idx], idx, content)
             if updated is None:
                 updated = [dict(m) for m in messages]
             updated[idx]["content"] = summary

@@ -700,6 +700,7 @@ def build_status_content(
     search_usage_text: str | None = None,
     active_task_count: int = 0,
     max_completion_tokens: int = 8192,
+    compaction_trigger_tokens: int = 0,
     composition_payload: dict[str, Any] | None = None,
 ) -> str:
     """Build a human-readable runtime status snapshot.
@@ -724,8 +725,13 @@ def build_status_content(
     last_out = last_usage.get("completion_tokens", 0)
     cached = last_usage.get("cached_tokens", 0)
     ctx_total = max(context_window_tokens, 0)
-    # Budget mirrors Consolidator formula: ctx_window - max_completion - _SAFETY_BUFFER
-    ctx_budget = max(ctx_total - int(max_completion_tokens) - 1024, 1)
+    # Measure against the point where compaction actually fires, not the raw
+    # window and not the consolidation LLM's own input budget. Those two
+    # differ from the trigger by up to 2x, so a percentage against either
+    # reads as far more (or less) headroom than the session really has.
+    ctx_budget = int(compaction_trigger_tokens or 0)
+    if ctx_budget <= 0:
+        ctx_budget = max(ctx_total - int(max_completion_tokens) - 1024, 1)
     ctx_pct = min(int((context_tokens_estimate / ctx_budget) * 100), 999) if ctx_budget > 0 else 0
     ctx_used_str = (
         f"{context_tokens_estimate // 1000}k"
@@ -740,7 +746,7 @@ def build_status_content(
         f"\U0001f408 durin v{version}",
         f"\U0001f9e0 Model: {model}",
         token_line,
-        f"\U0001f4da Context: {ctx_used_str}/{ctx_total_str} ({ctx_pct}% of input budget)",
+        f"\U0001f4da Context: {ctx_used_str}/{ctx_total_str} ({ctx_pct}% to compaction)",
         f"\U0001f4ac Session: {session_msg_count} messages",
         f"\u23f1 Uptime: {uptime}",
         f"\u26a1 Tasks: {active_task_count} active",

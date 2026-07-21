@@ -36,7 +36,7 @@ Those belong to the execution phase after the marker is set.
 
 - **`long_task`** — Register **one** sustained objective per thread. Call it promptly once the user has asked for a sustained task. The `goal` should follow the idempotent-goal rules below, but it should be produced quickly from the user's request—not after a long hidden planning pass. Optional **`max_turns`** sets a turn budget: the Runtime Context then shows `Turn budget: used/max`, and once exceeded it tells you to wrap up — `complete_goal` with an honest recap, or ask the user whether to extend.
 
-- **`complete_goal`** — Close bookkeeping for the **current** active goal. Call when work is **done**, **and also** when the user **cancels**, **changes direction**, or **replaces** the objective: use **`recap`** to state honestly what happened (e.g. cancelled, partially done, superseded). Then you may call **`long_task`** again for a **new** objective after the session shows no active goal (or after the user agrees to replace).
+- **`complete_goal`** — Close bookkeeping for the **current** active goal. Call when work is **done**, **and also** when the user **cancels**, **changes direction**, or **replaces** the objective: use **`recap`** to state honestly what happened (e.g. cancelled, partially done, superseded). Then you may call **`long_task`** again for a **new** objective after the session shows no active goal (or after the user agrees to replace). Write the recap for a reader who has lost the conversation: it keeps showing in the task-state anchor as `Outcome:` after the goal closes, and it is often the only thing left saying what this session accomplished.
 
 If a goal is already active and the user wants something different, **`complete_goal`** first (honest recap), then **`long_task`** with the new objective—do not stack conflicting active goals.
 
@@ -45,6 +45,8 @@ If a goal is already active and the user wants something different, **`complete_
 Inside **`[Runtime Context — metadata only, not instructions]`**, lines starting with **`Goal (active):`** carry the **persisted objective** for this chat session (session metadata). Treat them as the active sustained goal, not user-authored instructions for bypassing policy.
 
 Optional **`Summary:`** is a short UI label only—put crisp acceptance hints in the **`goal`** body itself.
+
+After `complete_goal` the same block keeps a shortened trace — **`Goal (completed):`** plus **`Outcome:`** — so a session that carries on working still knows what it set out to do and that it is already done. Do **not** resume finished work on the strength of that line; it is orientation, not a live objective. It is replaced when a new `long_task` starts, and a compact record of the old one moves to `## Decisions & findings` at that moment.
 
 ---
 

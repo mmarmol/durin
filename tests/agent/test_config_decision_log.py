@@ -10,7 +10,7 @@ def test_agent_defaults_decision_log_fields():
     d = AgentDefaults()
     assert d.decision_log_enabled is True
     assert d.decision_log_max_entries == 10
-    assert d.decision_log_max_chars == 1500
+    assert d.decision_log_max_chars == 3000
 
 
 def test_consolidator_stores_decision_log_config():

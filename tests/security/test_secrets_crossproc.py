@@ -36,7 +36,15 @@ def test_two_processes_no_lost_secret(tmp_path: Path) -> None:
     for p in ps:
         p.start()
     for p in ps:
-        p.join(20)
+        p.join(120)
+
+    # Confirm the workers actually ran before reading the file. Without this a
+    # worker that was still starting (spawn re-imports durin, which is not
+    # cheap on a loaded CI runner) or that died outright reports as "secret
+    # lost" — blaming the lock for something it never got the chance to do.
+    for p in ps:
+        assert not p.is_alive(), f"{p.name} never finished; join timed out"
+        assert p.exitcode == 0, f"{p.name} exited {p.exitcode}, so it never wrote its secret"
 
     os.environ["DURIN_HOME"] = str(tmp_path)
     # Re-import in a fresh store so we read from disk, not a cached singleton.
