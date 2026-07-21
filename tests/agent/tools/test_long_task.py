@@ -156,59 +156,105 @@ async def test_long_task_and_complete_goal_registered(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_complete_goal_folds_recap_into_the_decision_log(tmp_path):
-    """A completed goal stops rendering into the task-state anchor, so the
-    objective and recap would vanish from context at the next compaction.
-    They survive as a decision-log entry, which rides the same anchor."""
+async def test_completed_goal_stays_in_the_task_state_anchor(tmp_path):
+    """The end-to-end property that matters: after complete_goal the objective
+    is still in the block that goes into the prompt. Rendering nothing here is
+    what let a session lose its stated purpose while work continued."""
+    from durin.agent.task_state import task_state_runtime_lines
+
+    sm = SessionManager(tmp_path)
+    lt, cg = _tools(sm)
+
+    await lt.execute(
+        goal="Ship the ticket pipeline without ever POSTing",
+        ui_summary="Ticket pipeline, DELIVER only",
+    )
+    await cg.execute(recap="Stages 1-3 verified; stage 4 left in DELIVER mode.")
+
+    sess = sm.get_or_create("websocket:c1")
+    block = "\n".join(task_state_runtime_lines(sess.metadata))
+    assert "## Goal" in block
+    assert "Goal (completed): Ticket pipeline, DELIVER only" in block
+    assert "Outcome: Stages 1-3 verified" in block
+
+
+@pytest.mark.asyncio
+async def test_complete_goal_does_not_duplicate_the_goal_into_the_log(tmp_path):
+    """While the blob lives the anchor already carries the text, so writing a
+    decision-log copy at completion time would pay for it in every prompt."""
     from durin.session.decision_log import decision_log_raw, parse_decisions
 
     sm = SessionManager(tmp_path)
     lt, cg = _tools(sm)
 
-    await lt.execute(goal="Ship the ticket pipeline without ever POSTing")
-    await cg.execute(recap="Stages 1-3 verified; stage 4 left in DELIVER mode.")
-
-    sess = sm.get_or_create("websocket:c1")
-    entries = parse_decisions(decision_log_raw(sess.metadata))
-    assert len(entries) == 1
-    entry = entries[0]
-    assert entry["source"] == "auto"
-    assert "Ship the ticket pipeline without ever POSTing" in entry["text"]
-    assert "DELIVER mode" in entry["text"]
-
-
-@pytest.mark.asyncio
-async def test_complete_goal_without_a_goal_writes_no_decision(tmp_path):
-    """The no-active-goal path leaves metadata alone, decision log included."""
-    from durin.session.decision_log import decision_log_raw, parse_decisions
-
-    sm = SessionManager(tmp_path)
-    _lt, cg = _tools(sm)
-
-    await cg.execute(recap="nothing to close")
+    await lt.execute(goal="Ship the ticket pipeline", ui_summary="pipeline")
+    await cg.execute(recap="done")
 
     sess = sm.get_or_create("websocket:c1")
     assert parse_decisions(decision_log_raw(sess.metadata)) == []
 
 
 @pytest.mark.asyncio
-async def test_complete_goal_honours_configured_decision_caps(tmp_path):
-    """The recap goes through the same configured caps as note_decision."""
+async def test_replacing_a_completed_goal_leaves_a_breadcrumb(tmp_path):
+    """long_task overwrites the blob — the only moment the finished goal would
+    otherwise be lost. The decision log survives that."""
+    from durin.agent.task_state import task_state_runtime_lines
     from durin.session.decision_log import decision_log_raw, parse_decisions
 
     sm = SessionManager(tmp_path)
-    lt = LongTaskTool(sessions=sm)
-    cg = CompleteGoalTool(sessions=sm, decision_log_max_entries=10, decision_log_max_chars=20)
+    lt, cg = _tools(sm)
+
+    await lt.execute(goal="First objective", ui_summary="first")
+    await cg.execute(recap="shipped it")
+    await lt.execute(goal="Second, unrelated objective", ui_summary="second")
+
+    sess = sm.get_or_create("websocket:c1")
+    entries = parse_decisions(decision_log_raw(sess.metadata))
+    assert len(entries) == 1
+    assert entries[0]["source"] == "auto"
+    assert "first" in entries[0]["text"]
+    assert "shipped it" in entries[0]["text"]
+
+    block = "\n".join(task_state_runtime_lines(sess.metadata))
+    assert "Goal (active):" in block          # the new objective
+    assert "first" in block                   # and the old one is still traceable
+
+
+@pytest.mark.asyncio
+async def test_replacing_an_active_goal_is_refused(tmp_path):
+    """No breadcrumb needed: long_task refuses to clobber a live objective."""
+    from durin.session.decision_log import decision_log_raw, parse_decisions
+
+    sm = SessionManager(tmp_path)
+    lt, _cg = _tools(sm)
+
+    await lt.execute(goal="First objective", ui_summary="first")
+    out = await lt.execute(goal="Second objective")
+
+    assert "already active" in out
+    sess = sm.get_or_create("websocket:c1")
+    assert sess.metadata[GOAL_STATE_KEY]["objective"] == "First objective"
+    assert parse_decisions(decision_log_raw(sess.metadata)) == []
+
+
+@pytest.mark.asyncio
+async def test_breadcrumb_honours_configured_decision_caps(tmp_path):
+    """The breadcrumb goes through the same configured caps as note_decision."""
+    from durin.session.decision_log import decision_log_raw, parse_decisions
+
+    sm = SessionManager(tmp_path)
+    lt = LongTaskTool(sessions=sm, decision_log_max_entries=10, decision_log_max_chars=20)
+    cg = CompleteGoalTool(sessions=sm)
     for tool in (lt, cg):
         tool.set_context(RequestContext(
             channel="websocket", chat_id="c1", session_key="websocket:c1", metadata={},
         ))
 
-    await lt.execute(goal="A goal whose recap will not fit the tiny cap")
+    await lt.execute(goal="A goal whose breadcrumb will not fit the tiny cap")
     await cg.execute(recap="a recap that is comfortably over twenty characters")
+    await lt.execute(goal="Replacement objective")
 
     sess = sm.get_or_create("websocket:c1")
-    # A single entry over the cap is still kept (the cap never empties the log),
+    # A lone entry over the cap is still kept (the cap never empties the log),
     # but it was written through the configured value, not the module default.
-    entries = parse_decisions(decision_log_raw(sess.metadata))
-    assert len(entries) <= 1
+    assert len(parse_decisions(decision_log_raw(sess.metadata))) <= 1

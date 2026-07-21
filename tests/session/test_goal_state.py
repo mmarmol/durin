@@ -19,10 +19,51 @@ def test_runtime_lines_empty_when_no_metadata():
     assert goal_state_runtime_lines({}) == []
 
 
-def test_runtime_lines_empty_when_completed():
+def test_runtime_lines_keep_a_compact_trace_when_completed():
+    """A session rarely ends when its goal does. Rendering nothing dropped the
+    objective from the anchor entirely — on one observed session the goal was
+    completed three messages before the first compaction and 16 of 19
+    compactions then ran with no objective in context at all."""
     meta = {
-        GOAL_STATE_KEY: {"status": "completed", "objective": "was doing X"},
+        GOAL_STATE_KEY: {
+            "status": "completed",
+            "objective": "was doing X",
+            "recap": "shipped it",
+        },
     }
+    assert goal_state_runtime_lines(meta) == [
+        "Goal (completed): was doing X",
+        "Outcome: shipped it",
+    ]
+
+
+def test_completed_goal_prefers_the_ui_summary_and_stays_short():
+    meta = {
+        GOAL_STATE_KEY: {
+            "status": "completed",
+            "objective": "a very long objective\nspanning several lines",
+            "ui_summary": "short label",
+            "recap": "R" * 900,
+        },
+    }
+    lines = goal_state_runtime_lines(meta)
+    assert lines[0] == "Goal (completed): short label"
+    assert lines[1].endswith("…")
+    assert all(len(line) < 300 for line in lines)
+
+
+def test_completed_goal_does_not_reactivate_the_wall_clock_backstop():
+    """Rendering a finished goal must not make it look active — that flag gates
+    the runner's wall-clock timeout, and cron/workflow sessions rely on it."""
+    from durin.session.goal_state import sustained_goal_active
+
+    meta = {GOAL_STATE_KEY: {"status": "completed", "objective": "done"}}
+    assert goal_state_runtime_lines(meta)          # renders
+    assert sustained_goal_active(meta) is False    # but is not active
+
+
+def test_runtime_lines_empty_when_completed_goal_has_no_text():
+    meta = {GOAL_STATE_KEY: {"status": "completed"}}
     assert goal_state_runtime_lines(meta) == []
 
 

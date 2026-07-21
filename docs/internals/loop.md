@@ -592,11 +592,15 @@ Two metadata splits matter:
   `auto` present and evicts *itself*, making the write a no-op), and an `auto`
   append that could only fit by evicting a manual anchor is rejected instead —
   still counted as a drop, so `decision_log.capped` records the loss.
-- **A completed goal folds its recap into the decision log.** `goal_state`
-  renders into the task-state anchor only while `status == "active"`, so
-  `complete_goal` would otherwise erase the session's stated purpose the moment
-  it succeeds. It appends an `auto` decision naming the objective and the recap,
-  which rides the same anchor and does survive.
+- **A finished goal still leaves a trace in the anchor.** A session rarely ends
+  when its goal does, and rendering only `status == "active"` erased the
+  session's stated purpose the moment it succeeded — work continued with no
+  objective in context at all. A completed goal now renders a compact
+  `Goal (completed)` / `Outcome` pair (capped, `ui_summary` preferred over the
+  full objective), and `complete_goal` additionally folds objective and recap
+  into the decision log so they survive a later `long_task` overwriting the
+  blob. Neither path touches `sustained_goal_active`, which gates the runner's
+  wall-clock backstop and must stay false once a goal is done.
 
 #### Compaction thresholds
 
