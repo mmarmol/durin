@@ -17,7 +17,7 @@ from durin.agent.hook import AgentHookContext, CompositeHook
 from durin.agent.runner import AgentRunner, AgentRunResult
 from durin.providers.base import LLMProvider
 from durin.session.manager import SessionManager
-from durin.workflow.engine import NodeRunRequest
+from durin.workflow.engine import NodeExecutionError, NodeRunRequest
 from durin.workflow.node_progress import NodeCheckpointHook
 from durin.workflow.node_runner import AgentNodeRunner
 from durin.workflow.spec import WorkNode
@@ -164,3 +164,56 @@ def test_node_runner_composes_progress_and_checkpoint_hooks_together(tmp_path):
     assert progress_frames, "the progress hook must still fire when composed with the checkpoint hook"
     reloaded = SessionManager(workspace=tmp_path).get_or_create("workflow:r1:a:1")
     assert any(m.get("content") == "x" for m in reloaded.messages), "the checkpoint hook must still fire too"
+
+
+# ── Failure path: must not erase what the checkpoint already saved ──────────
+
+
+def test_node_runner_failure_after_checkpoint_persists_the_checkpointed_rounds(tmp_path):
+    """The bug this task fixes: when the agent turn raises AFTER the checkpoint
+    hook already saved a round, the node's session must end up holding that
+    round — not the pre-turn snapshot. Before the fix, the except handler always
+    persisted its own `messages` (never mutated in place, since AgentRunner.run
+    copies initial_messages into its own list and mutates only that copy),
+    silently overwriting the checkpoint's round-1 content with zero rounds of
+    progress — exactly when someone wants to inspect why the node failed."""
+    sessions = SessionManager(workspace=tmp_path)
+
+    async def fake_run(spec):
+        live = list(spec.initial_messages)   # mirrors AgentRunner.run's own copy
+        live.append({"role": "assistant", "content": "round 1 output"})
+        await spec.hook.after_iteration(AgentHookContext(iteration=0, messages=live))
+        raise RuntimeError("provider exploded on round 2")
+
+    ar = _fake_agent_runner(AsyncMock(side_effect=fake_run))
+    nr = AgentNodeRunner(ar, sessions, default_model="m")
+
+    with pytest.raises(NodeExecutionError):
+        nr(_req())
+
+    reloaded = SessionManager(workspace=tmp_path).get_or_create("workflow:r1:a:1")
+    assert any(m.get("content") == "round 1 output" for m in reloaded.messages), (
+        "the round-1 checkpoint must survive the failure, not be overwritten by "
+        "the pre-turn snapshot"
+    )
+
+
+def test_node_runner_failure_before_any_checkpoint_persists_the_pre_turn_snapshot(tmp_path):
+    """Degenerate case: the turn raises before round 1 even completes, so the
+    checkpoint hook never fires and its `last_persisted` stays None. Must fall
+    back to the pre-turn snapshot exactly as before this fix — unchanged
+    behavior, not a crash from reading a hook that never ran."""
+    sessions = SessionManager(workspace=tmp_path)
+
+    async def fake_run(spec):
+        raise RuntimeError("provider exploded before round 1")
+
+    ar = _fake_agent_runner(AsyncMock(side_effect=fake_run))
+    nr = AgentNodeRunner(ar, sessions, default_model="m")
+
+    with pytest.raises(NodeExecutionError):
+        nr(_req())
+
+    pre_turn_messages = list(ar.run.call_args.args[0].initial_messages)
+    reloaded = SessionManager(workspace=tmp_path).get_or_create("workflow:r1:a:1")
+    assert reloaded.messages == pre_turn_messages

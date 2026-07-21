@@ -1,16 +1,18 @@
-"""The hook that makes a running workflow node legible from outside.
+"""Hooks that make a running workflow node legible and durable from outside.
 
 A node is a full agent turn: it can run for minutes between the engine's
-"node started" and "node finished" frames. This hook reports from inside that
-turn — which round it is on, and which tool it is about to invoke.
+"node started" and "node finished" frames. ``NodeProgressHook`` reports from
+inside that turn — which round it is on, and which tool it is about to
+invoke. ``NodeCheckpointHook`` persists the node's conversation every round,
+so a node interrupted mid-turn keeps the rounds it already completed instead
+of losing them all at once.
 
-It reports from ``before_execute_tools`` rather than ``after_iteration``: the
-former names the tool that is about to run, the latter names the one that
-already finished. For a six-minute node the difference is the whole point.
-
-``emit`` is synchronous by contract. The node executes on a worker thread
-inside its own event loop, so the callback must marshal to the gateway's loop
-rather than await it.
+``NodeProgressHook`` reports from ``before_execute_tools`` rather than
+``after_iteration``: the former names the tool that is about to run, the
+latter names the one that already finished. For a six-minute node the
+difference is the whole point. Its ``emit`` is synchronous by contract: the
+node executes on a worker thread inside its own event loop, so the callback
+must marshal to the gateway's loop rather than await it.
 """
 
 from __future__ import annotations
@@ -86,13 +88,23 @@ class NodeCheckpointHook(AgentHook):
     This hook does not guard its own exceptions: it must always be composed
     inside a ``CompositeHook`` (see durin/agent/hook.py), whose per-hook error
     isolation is what keeps a failing persist from ever aborting the node.
+
+    ``last_persisted`` remembers the most recent list handed to ``persist`` —
+    a single reference, replaced each round rather than accumulated — so a
+    caller whose own turn later fails can recover the rounds this hook already
+    saved instead of the pre-turn snapshot it started from.
     """
 
-    __slots__ = ("_persist",)
+    __slots__ = ("_persist", "last_persisted")
 
     def __init__(self, persist: Callable[[list[dict]], None]) -> None:
         super().__init__()
         self._persist = persist
+        self.last_persisted: list[dict] | None = None
 
     async def after_iteration(self, context: AgentHookContext) -> None:
+        # Record the reference before persisting, so a caller can still recover
+        # it even if `persist` itself raises. A plain assignment cannot fail, so
+        # remembering can never be what breaks this hook's best-effort contract.
+        self.last_persisted = context.messages
         self._persist(context.messages)

@@ -300,11 +300,14 @@ class AgentNodeRunner:
         # must be durable mid-turn whether or not anything is watching its progress.
         # Composing via CompositeHook even for the single-hook case gives the
         # checkpoint hook its error isolation for free (see CompositeHook), so it
-        # need not guard its own exceptions.
+        # need not guard its own exceptions. Keep a direct reference to the
+        # checkpoint hook (not just the composite) so the failure path below can
+        # recover the rounds it already saved.
         hooks: list[AgentHook] = []
         if req.progress is not None:
             hooks.append(NodeProgressHook(req.progress, max_rounds=run_max_iterations))
-        hooks.append(NodeCheckpointHook(lambda msgs: self._persist(req, msgs)))
+        checkpoint_hook = NodeCheckpointHook(lambda msgs: self._persist(req, msgs))
+        hooks.append(checkpoint_hook)
         hook = CompositeHook(hooks)
 
         # If the agent turn raises (provider/MCP/tool error), the partial conversation
@@ -325,7 +328,28 @@ class AgentNodeRunner:
                 hook=hook,
             )))
         except Exception as exc:  # noqa: BLE001 - persist + re-raise as a typed node failure
-            raise self._on_failure(req, messages, exc) from exc
+            # `messages` is the pre-turn snapshot built above. AgentRunner.run()
+            # copies it into its own list (`messages = list(spec.initial_messages)`)
+            # and mutates only that copy, so this reference never gains the rounds
+            # the turn actually completed before raising — the checkpoint hook,
+            # wired above, saw that live copy directly instead.
+            #
+            # Prefer the hook's last checkpoint, but only when it is strictly
+            # longer than the pre-turn snapshot rather than merely "the hook fired
+            # at all": a length check is a local, self-verifying guarantee that
+            # can never replace a longer list with a shorter one, regardless of
+            # what AgentRunner.run() does internally — "the hook fired" would
+            # instead be trusting that its list only ever grows, which is true
+            # today but not a property this call site can verify on its own.
+            # `last_persisted` is None when the turn raised before round 1
+            # completed; that (and an equal-or-shorter checkpoint) falls back to
+            # `messages`, exactly as before this fix.
+            checkpointed = checkpoint_hook.last_persisted
+            failure_messages = (
+                checkpointed if checkpointed is not None and len(checkpointed) > len(messages)
+                else messages
+            )
+            raise self._on_failure(req, failure_messages, exc) from exc
 
         # When the node exhausted its tool-round budget without finishing, make a
         # second call with no tools so the model must emit a synthesis from what it
@@ -464,7 +488,10 @@ class AgentNodeRunner:
     def _on_failure(self, req: NodeRunRequest, messages: list[dict], cause: Exception) -> NodeExecutionError:
         """Persist the node's partial conversation (best-effort) and build the typed
         error the engine catches — so a failed node keeps a navigable session and the
-        aborted result can name it by id, iteration and session key."""
+        aborted result can name it by id, iteration and session key. ``messages`` is
+        whatever the caller resolved as the richest conversation available: the
+        checkpoint hook's last mid-turn save when the turn got that far, otherwise
+        the pre-turn snapshot."""
         logger.exception("workflow node {} agent turn failed", req.node.id)
         session_key = self._persist(req, messages)
         return NodeExecutionError(req.node.id, req.iteration, session_key, cause)
