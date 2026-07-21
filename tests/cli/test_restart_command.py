@@ -204,7 +204,9 @@ class TestRestartCommand:
         assert response is not None
         assert "Model: test-model" in response.content
         assert "Tokens: 0 in / 0 out" in response.content
-        assert "Context: 20k/65k (31% of input budget)" in response.content
+        # Denominated by the compaction trigger (49,152 = 0.75 x 65,536), not the
+        # raw window and not the consolidator's own input budget.
+        assert "Context: 20k/65k (41% to compaction)" in response.content
         assert "Session: 3 messages" in response.content
         assert "Uptime: 2m 5s" in response.content
         assert "Tasks: 0 active" in response.content
@@ -268,7 +270,7 @@ class TestRestartCommand:
 
         assert response is not None
         assert "Tokens: 1200 in / 34 out" in response.content
-        assert "Context: 1k/65k (1% of input budget)" in response.content
+        assert "Context: 1k/65k (2% to compaction)" in response.content
         assert "Tasks: 0 active" in response.content
 
     @pytest.mark.asyncio

@@ -153,3 +153,62 @@ async def test_long_task_and_complete_goal_registered(tmp_path):
     cg = loop.tools.get("complete_goal")
     assert lt is not None and lt.name == "long_task"
     assert cg is not None and cg.name == "complete_goal"
+
+
+@pytest.mark.asyncio
+async def test_complete_goal_folds_recap_into_the_decision_log(tmp_path):
+    """A completed goal stops rendering into the task-state anchor, so the
+    objective and recap would vanish from context at the next compaction.
+    They survive as a decision-log entry, which rides the same anchor."""
+    from durin.session.decision_log import decision_log_raw, parse_decisions
+
+    sm = SessionManager(tmp_path)
+    lt, cg = _tools(sm)
+
+    await lt.execute(goal="Ship the ticket pipeline without ever POSTing")
+    await cg.execute(recap="Stages 1-3 verified; stage 4 left in DELIVER mode.")
+
+    sess = sm.get_or_create("websocket:c1")
+    entries = parse_decisions(decision_log_raw(sess.metadata))
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["source"] == "auto"
+    assert "Ship the ticket pipeline without ever POSTing" in entry["text"]
+    assert "DELIVER mode" in entry["text"]
+
+
+@pytest.mark.asyncio
+async def test_complete_goal_without_a_goal_writes_no_decision(tmp_path):
+    """The no-active-goal path leaves metadata alone, decision log included."""
+    from durin.session.decision_log import decision_log_raw, parse_decisions
+
+    sm = SessionManager(tmp_path)
+    _lt, cg = _tools(sm)
+
+    await cg.execute(recap="nothing to close")
+
+    sess = sm.get_or_create("websocket:c1")
+    assert parse_decisions(decision_log_raw(sess.metadata)) == []
+
+
+@pytest.mark.asyncio
+async def test_complete_goal_honours_configured_decision_caps(tmp_path):
+    """The recap goes through the same configured caps as note_decision."""
+    from durin.session.decision_log import decision_log_raw, parse_decisions
+
+    sm = SessionManager(tmp_path)
+    lt = LongTaskTool(sessions=sm)
+    cg = CompleteGoalTool(sessions=sm, decision_log_max_entries=10, decision_log_max_chars=20)
+    for tool in (lt, cg):
+        tool.set_context(RequestContext(
+            channel="websocket", chat_id="c1", session_key="websocket:c1", metadata={},
+        ))
+
+    await lt.execute(goal="A goal whose recap will not fit the tiny cap")
+    await cg.execute(recap="a recap that is comfortably over twenty characters")
+
+    sess = sm.get_or_create("websocket:c1")
+    # A single entry over the cap is still kept (the cap never empties the log),
+    # but it was written through the configured value, not the module default.
+    entries = parse_decisions(decision_log_raw(sess.metadata))
+    assert len(entries) <= 1

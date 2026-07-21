@@ -256,11 +256,12 @@ The handlers, in order:
   `AgentRunner.run`. The result tuple
   `(final_content, tools_used, all_messages, stop_reason, had_injections, tool_events)`
   is stored on the context. An overflow that aborted *before any tool ran*
-  (the consolidator budget is structurally tighter than the runner's, so a
-  successful BUILD consolidation always fits — an iteration-0 overflow means it
-  failed) triggers one bounded retry: force a fresh consolidation, rebuild the
-  context, re-run (`overflow_retry.forced_consolidation`); skipped once a tool
-  has run, so side-effecting tools never re-fire.
+  (the consolidator's trigger ceiling is held strictly under the runner's input
+  budget, so a successful BUILD consolidation always fits — an iteration-0
+  overflow means it failed) triggers one bounded retry: force a fresh
+  consolidation, rebuild the context, re-run
+  (`overflow_retry.forced_consolidation`); skipped once a tool has run, so
+  side-effecting tools never re-fire.
 - **`_state_save`** — finalizes plan/stall/goal bookkeeping, records skill-usage
   signals, appends only the new turn's messages to the session
   (`_save_turn` rewrites the `.jsonl` and mirrors derived/volatile metadata to
@@ -305,8 +306,13 @@ recover does it abort *before* the LLM call with
 `_MICROCOMPACT_KEEP_RECENT` are only collapsed when the estimated prompt
 already exceeds `_MICROCOMPACT_PRESSURE_RATIO` of the input budget, so a
 turn with headroom to spare keeps stale tool results in full — they may
-still hold the answer to a question the user hasn't asked yet. When it does
-fire, the placeholder is informative rather than opaque: it names the tool,
+still hold the answer to a question the user hasn't asked yet. A second gate
+is economic: rewriting a message invalidates every cached prompt prefix from
+that point on, and this pass runs on every iteration, so a pass that could
+reclaim less than `_MICROCOMPACT_MIN_RECLAIM_CHARS` in aggregate leaves the
+messages alone rather than force a cache write that costs more than the freed
+context is worth. When it does fire, the placeholder is informative rather
+than opaque: it names the tool,
 quotes a short head snippet of what the output began with (omitted when the
 content is already a persisted reference, since its head is marker
 boilerplate), and points at the recoverable file via `read_file`.
@@ -580,7 +586,57 @@ Two metadata splits matter:
   archived and appends any decisions/findings found. When the log's
   entry/char caps are hit, auto-extracted entries are evicted first;
   a manually authored (`note_decision`) entry is only dropped once no
-  auto-extracted entry remains to take its place.
+  auto-extracted entry remains to take its place. Two rules keep that priority
+  from silently swallowing writes: the entry just appended is never the one
+  evicted (otherwise an `auto` entry that overflows the char cap is the only
+  `auto` present and evicts *itself*, making the write a no-op), and an `auto`
+  append that could only fit by evicting a manual anchor is rejected instead —
+  still counted as a drop, so `decision_log.capped` records the loss.
+- **A completed goal folds its recap into the decision log.** `goal_state`
+  renders into the task-state anchor only while `status == "active"`, so
+  `complete_goal` would otherwise erase the session's stated purpose the moment
+  it succeeds. It appends an `auto` decision naming the objective and the recap,
+  which rides the same anchor and does survive.
+
+#### Compaction thresholds
+
+Three numbers govern when the consolidator fires, and they are deliberately
+distinct:
+
+| Number | Formula | What it bounds |
+|---|---|---|
+| `_input_token_budget` | `window − max_completion_tokens − buffer` | Size of the text handed to the consolidation LLM. Reserves the *real* completion ceiling, because that call has to fit too. |
+| `_preemptive_ceiling` | `window − min(max_completion_tokens, cap) − 2×buffer` | Hard upper bound on the trigger. Reserves only a *capped* output slice, mirroring the runner's `_output_reservation`, and stays strictly under the runner's input budget so the `_state_run` overflow invariant holds. |
+| `_preemptive_trigger_tokens` | `min(window × effective_ratio, ceiling)` | Where compaction actually fires. |
+
+Clamping the trigger against `_input_token_budget` instead of the ceiling is
+what made `preemptive_compact_ratio` inert: a model whose catalog `max_tokens`
+is a large fraction of its window (131,072 on a 231,072 window) pinned every
+ratio above ~0.43 to the same trigger, and raising the knob changed nothing.
+
+`effective_ratio` applies a **raise-only** floor below
+`_SMALL_CTX_WINDOW_LIMIT`. On a small window the incompressible part of a
+prompt (system + tool schemas + summary + task state) is a large fraction of
+the whole, so a low ratio leaves almost no runway between the post-compaction
+floor and the next trigger, and the session thrashes. An explicitly configured
+higher ratio is always honoured; large-window models are untouched, where a
+high ratio would mean shipping a huge prompt every turn.
+
+**The real-usage veto.** `estimate_session_prompt_tokens` probes the *raw*
+unconsolidated tail — it does not apply microcompaction or the tool-result
+budget, which the runner does apply to what it ships. The estimate therefore
+runs conservatively high by design, and a rough number over the trigger does
+not prove the real prompt is over it. Two vetoes, both keyed on the provider's
+own `usage_prompt_tokens` rather than the local estimator, are checked before
+consolidating (`compaction.deferred` records either):
+
+- `provider_fit` — the last real count came in under the trigger and the rough
+  estimate has drifted less than the tolerance since. The estimate is measuring
+  padding the provider never receives.
+- `post_compaction` — a compaction just advanced the cursor and no LLM call has
+  happened since, so the newest anchor still describes the *pre*-compaction
+  prompt. Without this, reading that stale anchor fires a second compaction
+  against an already-shortened conversation. Parked for exactly one turn.
 
 ### After DONE (post-processing in `_dispatch`)
 
@@ -641,7 +697,7 @@ Loop-relevant `agents.defaults.*` keys (see
 | `max_messages` | `480` | History replay window (token-budget is the effective bound on large-context models). |
 | `unified_session` | `false` | Collapse all channels to one shared session. |
 | `consolidation_ratio` | `0.5` | How far each compaction round reduces the prompt. |
-| `preemptive_compact_ratio` | `0.5` | Fraction of the window that triggers preemptive compaction. |
+| `preemptive_compact_ratio` | `0.5` | Fraction of the window that triggers preemptive compaction. Clamped by the trigger ceiling and floored on small windows — see [Compaction thresholds](#compaction-thresholds). |
 | `plan_stall_turns` | `8` | Turns of no todo progress on an executing plan before a "reassess" reminder (`0` disables). |
 | `agents.defaults.persona` | `null` | Default persona name for interactive conversations. Overridden per-conversation via `/persona`. |
 | `context_window_tokens`, `context_block_limit`, `max_tool_result_chars` | — | Token/size budgets used when building and persisting. |

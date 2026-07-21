@@ -464,12 +464,14 @@ async def test_preemptive_compaction_writes_event(e2e_telemetry, tmp_path, monke
 
     loop = AgentLoop(
         bus=MessageBus(), provider=provider, workspace=tmp_path,
-        model="test-model", context_window_tokens=1000,
-        # ratio 0.4 → trigger at 400 tokens
+        model="test-model", context_window_tokens=1_000_000,
+        # ratio 0.4 → trigger at 400,000 tokens. A window this large is above
+        # _SMALL_CTX_WINDOW_LIMIT, so the configured ratio is authoritative
+        # (below that limit it would be raised to the small-context floor).
         preemptive_compact_ratio=0.4,
     )
     loop.tools.get_definitions = MagicMock(return_value=[])
-    # max_completion=0 + safety=50 → budget = 950; trigger = 400.
+    # max_completion=0 + safety=50 → ceiling = 999,900; trigger = 400,000.
     loop.consolidator._SAFETY_BUFFER = 50
 
     session = loop.sessions.get_or_create("e2e-test")
@@ -481,9 +483,9 @@ async def test_preemptive_compaction_writes_event(e2e_telemetry, tmp_path, monke
     ]
     loop.sessions.save(session)
 
-    # First estimate ABOVE trigger (500 > 400) but BELOW budget (500 < 950).
-    # After one archive it drops below trigger.
-    estimates = iter([500, 100])
+    # First estimate ABOVE trigger (500,000 > 400,000) but BELOW the ceiling
+    # (500,000 < 999,900). After one archive it drops below the target.
+    estimates = iter([500_000, 100_000])
     loop.consolidator.estimate_session_prompt_tokens = lambda _s, **_: (next(estimates), "test")
     monkeypatch.setattr(memory_module, "estimate_message_tokens", lambda _m: 100)
     loop.consolidator.archive = AsyncMock(return_value=("A summary.", {"entities": [], "topics": []}))
@@ -494,9 +496,10 @@ async def test_preemptive_compaction_writes_event(e2e_telemetry, tmp_path, monke
     assert len(events) == 1
     data = events[0]["data"]
     assert data["session_key"] == session.key
-    assert data["estimated_tokens"] == 500
-    assert data["trigger_tokens"] == 400
+    assert data["estimated_tokens"] == 500_000
+    assert data["trigger_tokens"] == 400_000
     assert data["ratio"] == 0.4
+    assert data["budget_tokens"] == 999_900  # the trigger ceiling
 
 
 # ---------------------------------------------------------------------------

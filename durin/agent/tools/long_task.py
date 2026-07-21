@@ -29,6 +29,7 @@ from durin.agent.tools.schema import (
     tool_parameters_schema,
 )
 from durin.bus.events import OutboundMessage
+from durin.session.decision_log import add_decision
 from durin.session.goal_state import (
     GOAL_STATE_KEY,
     discard_legacy_goal_state_key,
@@ -204,14 +205,30 @@ class LongTaskTool(Tool, _GoalToolsMixin):
 class CompleteGoalTool(Tool, _GoalToolsMixin):
     """Mark the active sustained goal finished after all required work is verified."""
 
-    def __init__(self, sessions: Any, bus: Any | None = None) -> None:
+    def __init__(
+        self,
+        sessions: Any,
+        bus: Any | None = None,
+        decision_log_max_entries: int | None = None,
+        decision_log_max_chars: int | None = None,
+    ) -> None:
         _GoalToolsMixin.__init__(self, sessions, bus)
+        # The completion recap is folded into the decision log, so it has to
+        # respect the same configured caps note_decision does.
+        self._decision_max_entries = decision_log_max_entries
+        self._decision_max_chars = decision_log_max_chars
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
         sess = getattr(ctx, "sessions", None)
         assert sess is not None
-        return cls(sessions=sess, bus=getattr(ctx, "bus", None))
+        defaults = getattr(getattr(getattr(ctx, "app_config", None), "agents", None), "defaults", None)
+        return cls(
+            sessions=sess,
+            bus=getattr(ctx, "bus", None),
+            decision_log_max_entries=getattr(defaults, "decision_log_max_entries", None),
+            decision_log_max_chars=getattr(defaults, "decision_log_max_chars", None),
+        )
 
     @classmethod
     def enabled(cls, ctx: Any) -> bool:
@@ -246,6 +263,27 @@ class CompleteGoalTool(Tool, _GoalToolsMixin):
             "completed_at": ended,
             "recap": (recap or "").strip(),
         }
+        # A completed goal stops rendering into the task-state anchor, so the
+        # recap is the only trace of what the objective was and how it ended.
+        # Fold it into the decision log, which rides the same anchor and does
+        # survive — otherwise finishing one goal and carrying on erases the
+        # session's stated purpose at the next compaction.
+        objective = str(prior.get("objective") or "").strip()
+        tail = (recap or "").strip()
+        if objective or tail:
+            headline = objective.splitlines()[0][:160] if objective else "goal"
+            caps: dict[str, int] = {}
+            if self._decision_max_entries is not None:
+                caps["max_entries"] = self._decision_max_entries
+            if self._decision_max_chars is not None:
+                caps["max_chars"] = self._decision_max_chars
+            add_decision(
+                sess.metadata,
+                f"Goal completed — {headline}" + (f". Recap: {tail}" if tail else "."),
+                source="auto",
+                ts=ended,
+                **caps,
+            )
         discard_legacy_goal_state_key(sess.metadata)
         self._sessions.save(sess)
         await self._publish_goal_state_ws(sess.metadata)

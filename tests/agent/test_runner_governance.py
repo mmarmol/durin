@@ -10,6 +10,26 @@ from durin.config.schema import AgentDefaults
 from durin.providers.base import LLMResponse
 
 _MAX_TOOL_RESULT_CHARS = AgentDefaults().max_tool_result_chars
+# Captured at import time, before the autouse fixture below patches it to 0.
+from durin.agent.runner import (  # noqa: E402
+    _MICROCOMPACT_MIN_RECLAIM_CHARS as _RECLAIM_FLOOR_DEFAULT,
+)
+
+
+@pytest.fixture(autouse=True)
+def _neutralize_reclaim_floor(monkeypatch):
+    """Microcompaction refuses to rewrite anything unless the pass can reclaim
+    ``_MICROCOMPACT_MIN_RECLAIM_CHARS`` in aggregate — a cache-economics gate,
+    since a rewrite invalidates the cached prompt prefix from that point on.
+
+    The tests below exercise the *mechanism* (which results get collapsed, what
+    the placeholder says, that the spill stays recoverable) with deliberately
+    small fixtures, so the gate is neutralized here. The gate itself is covered
+    by ``test_microcompact_skipped_below_reclaim_floor``.
+    """
+    monkeypatch.setattr(
+        "durin.agent.runner._MICROCOMPACT_MIN_RECLAIM_CHARS", 0, raising=False,
+    )
 
 
 def _make_loop(tmp_path):
@@ -775,3 +795,34 @@ def test_snip_history_no_user_at_all_falls_back_gracefully(monkeypatch):
         assert non_system[0]["role"] in ("user", "tool"), (
             f"Safety net should ensure first non-system is user/tool, got {non_system[0]['role']}"
         )
+
+
+def test_microcompact_skipped_below_reclaim_floor(monkeypatch):
+    """A pass that can only reclaim a trickle leaves the messages untouched.
+
+    Rewriting invalidates the cached prompt prefix from the first rewritten
+    message onward, and this pass runs on every iteration — so trading a whole
+    cached prefix for a few hundred tokens is a losing exchange on a provider
+    that serves most of the prompt from cache.
+    """
+    from durin.agent.runner import AgentRunner
+
+    monkeypatch.setattr(
+        "durin.agent.runner._MICROCOMPACT_MIN_RECLAIM_CHARS",
+        _RECLAIM_FLOOR_DEFAULT,
+        raising=False,
+    )
+    runner = AgentRunner(MagicMock())
+    spec = _microcompact_spec(context_window_tokens=8_000)
+
+    # 14 results of 600 chars: 4 are stale, reclaiming 2,400 chars — under the
+    # floor, so nothing is rewritten even though the pressure gate is open.
+    thin = _many_compactable_tool_results(count=14, chars=600)
+    assert runner._microcompact(spec, thin, MagicMock()) is thin
+
+    # Same shape, results large enough that the stale ones clear the floor.
+    chars = (_RECLAIM_FLOOR_DEFAULT // 4) + 100
+    fat = _many_compactable_tool_results(count=14, chars=chars)
+    result = runner._microcompact(spec, fat, MagicMock())
+    assert result is not fat
+    assert "result trimmed" in str(result[0]["content"])

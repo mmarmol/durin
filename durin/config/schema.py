@@ -913,7 +913,7 @@ class AgentDefaults(Base):
     decision_log_enabled: bool = Field(default=True, description="Record key decisions/findings in a task-state anchor that survives compaction")
     compaction_learnings_enabled: bool = Field(default=True, description="Distil durable user learnings (preferences, corrections) at compaction time")
     decision_log_max_entries: int = Field(default=10, ge=1, le=100, description="Cap on decision-log entries (the log is re-injected every turn)")
-    decision_log_max_chars: int = Field(default=1500, ge=100, le=20_000, description="Total character cap on the decision log")
+    decision_log_max_chars: int = Field(default=3000, ge=100, le=20_000, description="Total character cap on the decision log; re-injected every turn, so raising it costs tokens on every request")
     parallel_tool_calls: dict[str, bool] = Field(
         default_factory=dict,
         validation_alias=AliasChoices("parallelToolCalls", "parallel_tool_calls"),

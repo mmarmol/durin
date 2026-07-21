@@ -360,6 +360,9 @@ async def cmd_status(ctx: CommandContext) -> OutboundMessage:
             max_completion_tokens=getattr(
                 getattr(loop.provider, "generation", None), "max_tokens", 8192
             ),
+            compaction_trigger_tokens=getattr(
+                loop.consolidator, "_preemptive_trigger_tokens", 0
+            ),
             composition_payload=composition_payload,
         ),
         metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},

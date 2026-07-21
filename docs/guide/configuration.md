@@ -124,11 +124,11 @@ behaviour, tool iteration limits, and per-model capability overrides.
 | `disabled_skills` | `[]` | Skill names to exclude from loading |
 | `max_messages` | `480` | Max messages replayed from session history; `0` uses default |
 | `consolidation_ratio` | `0.5` | Target ratio of context budget retained after compaction |
-| `preemptive_compact_ratio` | `0.5` | Fraction of context window that triggers pre-emptive compaction |
+| `preemptive_compact_ratio` | `0.5` | Fraction of context window that triggers pre-emptive compaction. Raised to a floor on windows under 512K (a low ratio thrashes there), and capped so the resulting prompt still fits the runner |
 | `decision_log_enabled` | `true` | Record key decisions/findings across compaction boundaries |
 | `compaction_learnings_enabled` | `true` | Distil durable user learnings (preferences, corrections) at compaction time |
 | `decision_log_max_entries` | `10` | Cap on decision-log entries re-injected each turn |
-| `decision_log_max_chars` | `1500` | Total character cap on the decision log |
+| `decision_log_max_chars` | `3000` | Total character cap on the decision log. Re-injected every turn, so raising it costs tokens on every request; lowering it too far starves the auto-extracted channel, since manual `note_decision` entries hold their slots first |
 | `parallel_tool_calls` | `{}` | Per-model substring → bool map for the `parallel_tool_calls` request flag |
 | `tool_hint_max_length` | `40` | Max characters for tool-call hints shown in the channel (e.g. `$ cd …/project`) |
 | `context_block_limit` | `null` | Hard limit on context blocks (overrides token budget when set) |

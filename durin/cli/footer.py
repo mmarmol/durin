@@ -15,6 +15,7 @@ billing.
 
 from __future__ import annotations
 
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -51,7 +52,14 @@ def _token_estimate(session: Any) -> int:
     """
     if session is None:
         return 0
+    # Only the unconsolidated tail is replayed to the model; everything before
+    # the cursor was archived into the summary and is never shipped again.
+    # Counting the whole transcript overstates the live context by the entire
+    # consolidated history — on a long session, several times over.
     msgs = getattr(session, "messages", []) or []
+    cursor = int(getattr(session, "last_consolidated", 0) or 0)
+    if 0 < cursor <= len(msgs):
+        msgs = msgs[cursor:]
     total = 0
     try:
         for msg in msgs:
@@ -94,7 +102,17 @@ def build_footer_text(
     msg_count = len(getattr(session, "messages", []) or []) if session else 0
     token_est = _token_estimate(session)
     ctx_window = int(getattr(agent_loop, "context_window_tokens", 0) or 0)
-    ctx_pct = (token_est * 100 // ctx_window) if ctx_window else 0
+    # Percentage of the way to the next compaction, not of the raw window —
+    # compaction fires well below 100% of the window, so a window-denominated
+    # gauge never approaches the number that actually matters.
+    ctx_denominator = 0
+    with suppress(Exception):
+        ctx_denominator = int(
+            getattr(agent_loop.consolidator, "_preemptive_trigger_tokens", 0) or 0
+        )
+    if ctx_denominator <= 0:
+        ctx_denominator = ctx_window
+    ctx_pct = (token_est * 100 // ctx_denominator) if ctx_denominator else 0
 
     mem_count, vec_present = _memory_summary(workspace)
 
