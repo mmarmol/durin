@@ -515,22 +515,13 @@ class WorkflowEngine:
             # appears as "running".  Best-effort only — a crashing emit must never
             # abort the run.
             if self._progress_emit is not None:
-                started = [
-                    {"id": r.node_id,
-                     "label": node_label(workflow.nodes[r.node_id]) if r.node_id in workflow.nodes else r.node_id,
-                     "status": ("failed" if r.status in ("node_failed", "persist_failed") else "done"),
-                     "route_label": r.route_label,
-                     "iteration": r.iteration, "budget": r.budget}
-                    for r in runs
-                ]
-                started.append({
-                    "id": node.id,
-                    "label": node_label(node),
-                    "status": "running",
-                    "route_label": None,
-                    "iteration": iteration,
-                    "budget": budget if isinstance(node, (WorkNode, ScriptNode)) else None,
-                })
+                from durin.workflow.progress import finished_frames, running_frame
+
+                started = finished_frames(workflow, runs)
+                started.append(running_frame(
+                    node, iteration=iteration,
+                    budget=budget if isinstance(node, (WorkNode, ScriptNode)) else None,
+                ))
                 try:
                     self._progress_emit({"run_id": run_id, "nodes": started, "done": False})
                 except Exception:  # noqa: BLE001 - best-effort
@@ -735,21 +726,9 @@ class WorkflowEngine:
                 except OSError:
                     pass
             if self._progress_emit is not None:
-                nodes = [
-                    {
-                        "id": r.node_id,
-                        "label": node_label(workflow.nodes[r.node_id]) if r.node_id in workflow.nodes else r.node_id,
-                        "status": (
-                            "failed"
-                            if r.status in ("node_failed", "persist_failed")
-                            else "done"
-                        ),
-                        "route_label": r.route_label,
-                        "iteration": r.iteration,
-                        "budget": r.budget,
-                    }
-                    for r in runs
-                ]
+                from durin.workflow.progress import finished_frames
+
+                nodes = finished_frames(workflow, runs)
                 try:
                     self._progress_emit({"run_id": run_id, "nodes": nodes, "done": False})
                 except Exception:  # noqa: BLE001 - progress is best-effort; never break the run
@@ -943,13 +922,9 @@ class WorkflowEngine:
             annotated with a snapshot of each branch's live status."""
             if self._progress_emit is None:
                 return
-            prior = [
-                {"id": r.node_id,
-                 "label": node_label(workflow.nodes[r.node_id]) if r.node_id in workflow.nodes else r.node_id,
-                 "status": ("failed" if r.status in ("node_failed", "persist_failed") else "done"),
-                 "route_label": r.route_label}
-                for r in runs
-            ]
+            from durin.workflow.progress import finished_frames
+
+            prior = finished_frames(workflow, runs)
             with _branch_lock:
                 branch_list = [
                     {"id": bid, "label": node_label(workflow.nodes[bid]) if bid in workflow.nodes else bid, "status": st}
