@@ -68,3 +68,31 @@ class NodeProgressHook(AgentHook):
 
     async def after_iteration(self, context: AgentHookContext) -> None:
         self._send(lambda: {"round": _round(context), "activity": None, "max_rounds": self._max_rounds})
+
+
+class NodeCheckpointHook(AgentHook):
+    """Persist a node's conversation every round, not only when its turn returns.
+
+    Without this a node interrupted mid-turn — a gateway restart, an OOM kill —
+    loses every round it completed, and a hung node leaves no transcript to
+    inspect. The main agent loop and sub-agents already checkpoint mid-turn;
+    this gives workflow nodes the same durability.
+
+    ``context.messages`` is the runner's own live list — the same object it
+    mutates in place across iterations (see AgentRunner.run) — so every call
+    reflects everything accumulated up to that round, never a snapshot frozen
+    at an earlier one.
+
+    This hook does not guard its own exceptions: it must always be composed
+    inside a ``CompositeHook`` (see durin/agent/hook.py), whose per-hook error
+    isolation is what keeps a failing persist from ever aborting the node.
+    """
+
+    __slots__ = ("_persist",)
+
+    def __init__(self, persist: Callable[[list[dict]], None]) -> None:
+        super().__init__()
+        self._persist = persist
+
+    async def after_iteration(self, context: AgentHookContext) -> None:
+        self._persist(context.messages)

@@ -16,6 +16,7 @@ import json
 
 from loguru import logger
 
+from durin.agent.hook import AgentHook, CompositeHook
 from durin.agent.runner import AgentRunner, AgentRunSpec
 from durin.agent.tools.base import Tool
 from durin.agent.tools.context import ToolContext
@@ -26,7 +27,7 @@ from durin.config.schema import ToolsConfig
 from durin.session.lineage import ORIGIN_ID, ORIGIN_TYPE, build_lineage, root_of
 from durin.session.manager import Session, SessionManager
 from durin.workflow.engine import NodeExecutionError, NodeRunRequest, NodeRunResponse
-from durin.workflow.node_progress import NodeProgressHook
+from durin.workflow.node_progress import NodeCheckpointHook, NodeProgressHook
 from durin.workflow.persona_resolve import resolve_persona
 
 
@@ -292,10 +293,19 @@ class AgentNodeRunner:
         else:
             run_max_iterations = self.max_iterations
 
-        # Built only now that run_max_iterations is known, so the hook can report the
-        # node's actual round budget alongside every round — the same ceiling the
-        # agent turn below is bounded by, not the node's separate re-entry budget.
-        hook = NodeProgressHook(req.progress, max_rounds=run_max_iterations) if req.progress is not None else None
+        # Built only now that run_max_iterations is known, so the progress hook can
+        # report the node's actual round budget alongside every round — the same
+        # ceiling the agent turn below is bounded by, not the node's separate
+        # re-entry budget. The checkpoint hook is unconditional: a node's session
+        # must be durable mid-turn whether or not anything is watching its progress.
+        # Composing via CompositeHook even for the single-hook case gives the
+        # checkpoint hook its error isolation for free (see CompositeHook), so it
+        # need not guard its own exceptions.
+        hooks: list[AgentHook] = []
+        if req.progress is not None:
+            hooks.append(NodeProgressHook(req.progress, max_rounds=run_max_iterations))
+        hooks.append(NodeCheckpointHook(lambda msgs: self._persist(req, msgs)))
+        hook = CompositeHook(hooks)
 
         # If the agent turn raises (provider/MCP/tool error), the partial conversation
         # would otherwise be lost and the failure would name no node. Persist whatever
