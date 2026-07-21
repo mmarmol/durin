@@ -24,7 +24,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from loguru import logger
 
@@ -77,6 +77,10 @@ class NodeRunRequest:
     # runner can check it mid-subprocess (an agent turn has no equivalent mid-turn
     # hook, so it stays None there — unchanged, between-nodes-only cancellation).
     cancel_check: Callable[[], bool] | None = None
+    # Synchronous sink for in-node progress ({"round", "activity"}). The node runs
+    # on a worker thread with its own event loop, so this must never be awaited
+    # from inside the node — it marshals to the gateway loop itself.
+    progress: Any = None
 
 
 @dataclass
@@ -543,6 +547,34 @@ class WorkflowEngine:
                 except Exception:  # noqa: BLE001 - best-effort
                     pass
 
+            # What the in-flight node is doing right now, reported from inside its
+            # turn. The node hands over raw state ({"round", "activity"}) and the
+            # engine re-emits a whole frame set, because only the engine knows the
+            # other nodes — a bare fragment could not be merged into a node list.
+            # Called from the node's own event loop on this worker thread: it must
+            # stay synchronous and never await, or the node deadlocks.
+            node_activity: dict = {"round": None, "activity": None}
+
+            def _node_progress(update: dict, _node=node, _iter=iteration,
+                               _budget=budget, _started=node_started_at) -> None:
+                node_activity.update(update)
+                if self._progress_emit is None:
+                    return
+                from durin.workflow.progress import finished_frames, running_frame
+
+                frames = finished_frames(workflow, runs)
+                frames.append(running_frame(
+                    _node, iteration=_iter,
+                    budget=_budget if isinstance(_node, (WorkNode, ScriptNode)) else None,
+                    started_at=_started,
+                    activity=node_activity["activity"],
+                    round_=node_activity["round"],
+                ))
+                try:
+                    self._progress_emit({"run_id": run_id, "nodes": frames, "done": False})
+                except Exception:  # noqa: BLE001 - best-effort
+                    pass
+
             if isinstance(node, (WorkNode, ScriptNode)):
                 if isinstance(node, ScriptNode) and self._script_runner is None:
                     raise WorkflowConfigError(
@@ -582,6 +614,7 @@ class WorkflowEngine:
                     # Only a script node gets the poll hook — an agent node's
                     # cancellation stays between-nodes-only (unchanged).
                     cancel_check=self._cancel_check if isinstance(node, ScriptNode) else None,
+                    progress=_node_progress,
                 )
 
                 # Run a full agent turn; for a multi-way node the verdict is a matched

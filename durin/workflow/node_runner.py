@@ -26,6 +26,7 @@ from durin.config.schema import ToolsConfig
 from durin.session.lineage import ORIGIN_ID, ORIGIN_TYPE, build_lineage, root_of
 from durin.session.manager import Session, SessionManager
 from durin.workflow.engine import NodeExecutionError, NodeRunRequest, NodeRunResponse
+from durin.workflow.node_progress import NodeProgressHook
 from durin.workflow.persona_resolve import resolve_persona
 
 
@@ -306,6 +307,7 @@ class AgentNodeRunner:
                 # concurrency-safe tool calls in parallel, same as the main loop and
                 # subagents; the runner keeps mutations serial.
                 concurrent_tools=True,
+                hook=(NodeProgressHook(req.progress) if req.progress is not None else None),
             )))
         except Exception as exc:  # noqa: BLE001 - persist + re-raise as a typed node failure
             raise self._on_failure(req, messages, exc) from exc
