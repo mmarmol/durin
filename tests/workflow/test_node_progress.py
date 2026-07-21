@@ -31,7 +31,7 @@ async def test_before_execute_tools_emits_the_tool_about_to_run():
 
     await hook.before_execute_tools(ctx)
 
-    assert seen == [{"round": 3, "activity": {"tool": "read_file", "target": "investigation.json", "at": seen[0]["activity"]["at"]}}]
+    assert seen == [{"round": 4, "activity": {"tool": "read_file", "target": "investigation.json", "at": seen[0]["activity"]["at"]}}]
     assert isinstance(seen[0]["activity"]["at"], float)
 
 
@@ -40,7 +40,17 @@ async def test_after_iteration_advances_the_round_without_activity():
     seen = []
     hook = NodeProgressHook(seen.append)
     await hook.after_iteration(AgentHookContext(iteration=4, messages=[]))
-    assert seen == [{"round": 4, "activity": None}]
+    assert seen == [{"round": 5, "activity": None}]
+
+
+@pytest.mark.asyncio
+async def test_first_round_is_reported_as_one_not_zero():
+    """The runner counts iterations from zero; a surface rendering the raw value
+    would show "round 0 of 10" on a node's first round."""
+    seen = []
+    hook = NodeProgressHook(seen.append)
+    await hook.after_iteration(AgentHookContext(iteration=0, messages=[]))
+    assert seen == [{"round": 1, "activity": None}]
 
 
 @pytest.mark.asyncio

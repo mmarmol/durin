@@ -24,6 +24,17 @@ from durin.agent.hook import AgentHook, AgentHookContext
 from durin.workflow.progress import tool_target
 
 
+def _round(context: AgentHookContext) -> int:
+    """The node's current agent round, 1-based.
+
+    The runner counts iterations from zero (`for iteration in range(...)`), but
+    the sibling `iteration` field in the same progress frame is 1-based and
+    renders as "pass X of Y". Normalizing here keeps the two comparable and
+    stops any surface from showing "round 0 of 10".
+    """
+    return context.iteration + 1
+
+
 class NodeProgressHook(AgentHook):
     __slots__ = ("_emit",)
 
@@ -46,7 +57,7 @@ class NodeProgressHook(AgentHook):
                 "target": tool_target(call.arguments),
                 "at": time.time(),
             }
-        self._send({"round": context.iteration, "activity": activity})
+        self._send({"round": _round(context), "activity": activity})
 
     async def after_iteration(self, context: AgentHookContext) -> None:
-        self._send({"round": context.iteration, "activity": None})
+        self._send({"round": _round(context), "activity": None})
