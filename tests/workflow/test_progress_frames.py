@@ -33,7 +33,7 @@ def test_running_frame_marks_the_node_running():
     assert frame == {
         "id": "judge", "label": "Judge", "status": "running",
         "route_label": None, "iteration": 2, "budget": 5, "started_at": None,
-        "activity": None, "round": None,
+        "activity": None, "round": None, "max_rounds": None,
     }
 
 

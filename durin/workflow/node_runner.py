@@ -292,6 +292,11 @@ class AgentNodeRunner:
         else:
             run_max_iterations = self.max_iterations
 
+        # Built only now that run_max_iterations is known, so the hook can report the
+        # node's actual round budget alongside every round — the same ceiling the
+        # agent turn below is bounded by, not the node's separate re-entry budget.
+        hook = NodeProgressHook(req.progress, max_rounds=run_max_iterations) if req.progress is not None else None
+
         # If the agent turn raises (provider/MCP/tool error), the partial conversation
         # would otherwise be lost and the failure would name no node. Persist whatever
         # messages exist (status node_failed) and raise a typed error carrying the node
@@ -307,7 +312,7 @@ class AgentNodeRunner:
                 # concurrency-safe tool calls in parallel, same as the main loop and
                 # subagents; the runner keeps mutations serial.
                 concurrent_tools=True,
-                hook=(NodeProgressHook(req.progress) if req.progress is not None else None),
+                hook=hook,
             )))
         except Exception as exc:  # noqa: BLE001 - persist + re-raise as a typed node failure
             raise self._on_failure(req, messages, exc) from exc

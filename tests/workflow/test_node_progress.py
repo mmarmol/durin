@@ -31,8 +31,46 @@ async def test_before_execute_tools_emits_the_tool_about_to_run():
 
     await hook.before_execute_tools(ctx)
 
-    assert seen == [{"round": 4, "activity": {"tool": "read_file", "target": "investigation.json", "at": seen[0]["activity"]["at"]}}]
+    assert seen == [{
+        "round": 4,
+        "activity": {"tool": "read_file", "target": "investigation.json", "at": seen[0]["activity"]["at"]},
+        "max_rounds": None,
+    }]
     assert isinstance(seen[0]["activity"]["at"], float)
+
+
+@pytest.mark.asyncio
+async def test_before_execute_tools_with_no_tool_calls_emits_no_activity():
+    seen = []
+    hook = NodeProgressHook(seen.append)
+    ctx = AgentHookContext(iteration=0, messages=[])
+    ctx.tool_calls = []
+
+    await hook.before_execute_tools(ctx)
+
+    assert seen == [{"round": 1, "activity": None, "max_rounds": None}]
+
+
+@pytest.mark.asyncio
+async def test_before_execute_tools_with_several_calls_reports_only_the_first():
+    """Pins the current contract: a round that fans out several tool calls at once
+    still reports just the first one. A refactor that emitted all of them should
+    fail this test loudly rather than silently changing the wire shape."""
+    seen = []
+    hook = NodeProgressHook(seen.append)
+    ctx = AgentHookContext(iteration=0, messages=[])
+    ctx.tool_calls = [
+        ToolCallRequest(id="1", name="read_file", arguments={"path": "a.json"}),
+        ToolCallRequest(id="2", name="exec", arguments={"command": "ls"}),
+    ]
+
+    await hook.before_execute_tools(ctx)
+
+    assert seen == [{
+        "round": 1,
+        "activity": {"tool": "read_file", "target": "a.json", "at": seen[0]["activity"]["at"]},
+        "max_rounds": None,
+    }]
 
 
 @pytest.mark.asyncio
@@ -40,7 +78,7 @@ async def test_after_iteration_advances_the_round_without_activity():
     seen = []
     hook = NodeProgressHook(seen.append)
     await hook.after_iteration(AgentHookContext(iteration=4, messages=[]))
-    assert seen == [{"round": 5, "activity": None}]
+    assert seen == [{"round": 5, "activity": None, "max_rounds": None}]
 
 
 @pytest.mark.asyncio
@@ -50,7 +88,23 @@ async def test_first_round_is_reported_as_one_not_zero():
     seen = []
     hook = NodeProgressHook(seen.append)
     await hook.after_iteration(AgentHookContext(iteration=0, messages=[]))
-    assert seen == [{"round": 1, "activity": None}]
+    assert seen == [{"round": 1, "activity": None, "max_rounds": None}]
+
+
+@pytest.mark.asyncio
+async def test_hook_includes_the_round_budget_in_every_payload():
+    """max_rounds is the denominator round is rendered against — it has to ride
+    along on both hook methods, not just one, or a surface reading whichever
+    frame arrived last could find it missing."""
+    seen = []
+    hook = NodeProgressHook(seen.append, max_rounds=10)
+    ctx = AgentHookContext(iteration=0, messages=[])
+    ctx.tool_calls = [ToolCallRequest(id="1", name="read_file", arguments={"path": "x.json"})]
+
+    await hook.before_execute_tools(ctx)
+    await hook.after_iteration(ctx)
+
+    assert [p["max_rounds"] for p in seen] == [10, 10]
 
 
 @pytest.mark.asyncio
@@ -97,6 +151,30 @@ def test_engine_reemits_a_full_frame_set_when_a_node_reports(tmp_path):
     assert reported[-1]["activity"]["tool"] == "read_file"
     assert reported[-1]["round"] == 2
     assert reported[-1]["started_at"] is not None
+
+
+def test_engine_frame_reports_the_round_budget(tmp_path):
+    """max_rounds is the round budget `round` is measured against — a different
+    axis from `budget` (the node's visit budget, how many times the graph may
+    re-enter it). Surfaces rendering "round N of M" need this on the frame, or
+    they would have to mix the two axes and show the wrong denominator."""
+    from durin.workflow.engine import NodeRunResponse, WorkflowEngine
+
+    wf = _one_node_workflow()
+    emitted = []
+
+    def _runner(req):
+        req.progress({"round": 2, "activity": None, "max_rounds": 10})
+        return NodeRunResponse(output="done", session_key="s", messages=[])
+
+    engine = WorkflowEngine(node_runner=_runner, workspace=str(tmp_path),
+                            progress_emit=emitted.append)
+    engine.run(wf, "task")
+
+    live = [f for p in emitted for f in p["nodes"] if f["status"] == "running"]
+    reported = [f for f in live if f.get("round") == 2]
+    assert reported, f"no frame carried round 2; got {[f.get('round') for f in live]}"
+    assert reported[-1]["max_rounds"] == 10
 
 
 def test_progress_crosses_the_node_loop_to_the_gateway_loop_without_waiting(tmp_path):

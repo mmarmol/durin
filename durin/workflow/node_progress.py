@@ -36,28 +36,35 @@ def _round(context: AgentHookContext) -> int:
 
 
 class NodeProgressHook(AgentHook):
-    __slots__ = ("_emit",)
+    __slots__ = ("_emit", "_max_rounds")
 
-    def __init__(self, emit: Callable[[dict], None]) -> None:
+    def __init__(self, emit: Callable[[dict], None], max_rounds: int | None = None) -> None:
         super().__init__()
         self._emit = emit
+        self._max_rounds = max_rounds
 
-    def _send(self, payload: dict[str, Any]) -> None:
+    def _send(self, build: Callable[[], dict[str, Any]]) -> None:
+        """Build and emit a payload under one guard. The runner calls the hook's
+        methods directly with no try/except of its own, so a raise from building
+        the payload is exactly as dangerous to the node as a raise from a dead
+        listener — both must be swallowed here, not just the emit call."""
         try:
-            self._emit(payload)
-        except Exception:  # noqa: BLE001 - a dead listener must not fail the node
-            logger.debug("workflow node progress emit failed (suppressed)")
+            self._emit(build())
+        except Exception:  # noqa: BLE001 - a dead listener or a bad payload must not fail the node
+            logger.opt(exception=True).debug("workflow node progress emit failed (suppressed)")
 
     async def before_execute_tools(self, context: AgentHookContext) -> None:
-        call = context.tool_calls[0] if context.tool_calls else None
-        activity = None
-        if call is not None:
-            activity = {
-                "tool": call.name,
-                "target": tool_target(call.arguments),
-                "at": time.time(),
-            }
-        self._send({"round": _round(context), "activity": activity})
+        def _build() -> dict[str, Any]:
+            call = context.tool_calls[0] if context.tool_calls else None
+            activity = None
+            if call is not None:
+                activity = {
+                    "tool": call.name,
+                    "target": tool_target(call.arguments),
+                    "at": time.time(),
+                }
+            return {"round": _round(context), "activity": activity, "max_rounds": self._max_rounds}
+        self._send(_build)
 
     async def after_iteration(self, context: AgentHookContext) -> None:
-        self._send({"round": _round(context), "activity": None})
+        self._send(lambda: {"round": _round(context), "activity": None, "max_rounds": self._max_rounds})

@@ -16,8 +16,9 @@ from durin.workflow.spec import node_label
 # order the web UI uses to summarize a tool call, so the same call reads the same
 # way in a node frame and in a chat tool block.
 _TARGET_KEYS = (
-    "path", "file_path", "filename", "image_path", "audio_path",
-    "command", "url", "query", "pattern", "name", "uri",
+    "path", "file_path", "filename", "image_path", "audio_path", "command",
+    "url", "query", "pattern", "question", "name", "uri", "ref", "goal",
+    "action", "source",
 )
 _TARGET_MAX = 120
 
@@ -63,7 +64,8 @@ def finished_frames(workflow: Any, runs: list[Any]) -> list[dict]:
 def running_frame(node: Any, *, iteration: int, budget: int | None,
                   started_at: float | None = None,
                   activity: dict | None = None,
-                  round_: int | None = None) -> dict:
+                  round_: int | None = None,
+                  max_rounds: int | None = None) -> dict:
     """The frame for the node the engine is about to execute.
 
     ``started_at`` is wall-clock epoch seconds; surfaces derive the elapsed
@@ -72,8 +74,11 @@ def running_frame(node: Any, *, iteration: int, budget: int | None,
 
     ``activity`` is what the node is doing right now — ``{tool, target, at}``,
     reported from inside the running turn — and ``round_`` which tool round it
-    is on. Both are None until the node reports, and stay None for a node type
-    that has no rounds.
+    is on. ``max_rounds`` is the round budget to render ``round_`` against — the
+    node's effective max_turns, a different axis from ``budget`` above (which is
+    the node's *visit* budget: how many times the graph may re-enter it). All
+    three are None until the node reports, and stay None for a node type that
+    has no rounds.
     """
     return {
         "id": node.id,
@@ -85,4 +90,5 @@ def running_frame(node: Any, *, iteration: int, budget: int | None,
         "started_at": started_at,
         "activity": activity,
         "round": round_,
+        "max_rounds": max_rounds,
     }

@@ -548,16 +548,25 @@ class WorkflowEngine:
                     pass
 
             # What the in-flight node is doing right now, reported from inside its
-            # turn. The node hands over raw state ({"round", "activity"}) and the
-            # engine re-emits a whole frame set, because only the engine knows the
-            # other nodes — a bare fragment could not be merged into a node list.
-            # Called from the node's own event loop on this worker thread: it must
-            # stay synchronous and never await, or the node deadlocks.
-            node_activity: dict = {"round": None, "activity": None}
+            # turn. The node hands over raw state ({"round", "activity", "max_rounds"})
+            # and the engine re-emits a whole frame set, because only the engine knows
+            # the other nodes — a bare fragment could not be merged into a node list.
+            # `_node`, `_iter`, `_budget`, `_started` and `_activity` are pinned as
+            # default arguments so this closure keeps this visit's values rather than
+            # the enclosing loop's — `node`, `iteration`, `budget`, `node_started_at`
+            # and `node_activity` are all rebound on the next visit. That rebinding
+            # would be able to corrupt an in-flight closure if this callback could
+            # still be invoked once the loop has moved on, but it can't: it is only
+            # ever called synchronously on this walk thread, inside the `runner(req)`
+            # call below, and must stay synchronous and never await there or the node
+            # deadlocks — the same walk-thread-only invariant that makes the pinning
+            # sufficient.
+            node_activity: dict = {"round": None, "activity": None, "max_rounds": None}
 
             def _node_progress(update: dict, _node=node, _iter=iteration,
-                               _budget=budget, _started=node_started_at) -> None:
-                node_activity.update(update)
+                               _budget=budget, _started=node_started_at,
+                               _activity=node_activity) -> None:
+                _activity.update(update)
                 if self._progress_emit is None:
                     return
                 from durin.workflow.progress import finished_frames, running_frame
@@ -567,13 +576,14 @@ class WorkflowEngine:
                     _node, iteration=_iter,
                     budget=_budget if isinstance(_node, (WorkNode, ScriptNode)) else None,
                     started_at=_started,
-                    activity=node_activity["activity"],
-                    round_=node_activity["round"],
+                    activity=_activity["activity"],
+                    round_=_activity["round"],
+                    max_rounds=_activity["max_rounds"],
                 ))
                 try:
                     self._progress_emit({"run_id": run_id, "nodes": frames, "done": False})
                 except Exception:  # noqa: BLE001 - best-effort
-                    pass
+                    logger.opt(exception=True).debug("workflow node progress re-emit failed (suppressed)")
 
             if isinstance(node, (WorkNode, ScriptNode)):
                 if isinstance(node, ScriptNode) and self._script_runner is None:
