@@ -32,5 +32,15 @@ def test_running_frame_marks_the_node_running():
     frame = running_frame(node, iteration=2, budget=5)
     assert frame == {
         "id": "judge", "label": "Judge", "status": "running",
-        "route_label": None, "iteration": 2, "budget": 5,
+        "route_label": None, "iteration": 2, "budget": 5, "started_at": None,
     }
+
+
+def test_running_frame_carries_started_at():
+    node = SimpleNamespace(id="judge", title="Judge", prompt="", command="", script="")
+    assert running_frame(node, iteration=1, budget=None, started_at=1700.5)["started_at"] == 1700.5
+
+
+def test_running_frame_started_at_defaults_to_none():
+    node = SimpleNamespace(id="judge", title="Judge", prompt="", command="", script="")
+    assert running_frame(node, iteration=1, budget=None)["started_at"] is None

@@ -514,6 +514,15 @@ class WorkflowEngine:
             # execute.  Prior nodes carry their finished status; the current node
             # appears as "running".  Best-effort only — a crashing emit must never
             # abort the run.
+            node_started_at = time.time()
+            try:
+                run_log.mark_node_started(
+                    self._workspace, workflow.name, run_id,
+                    node_id=node.id, label=node_label(node), started_at=node_started_at,
+                )
+            except Exception:  # noqa: BLE001 - observability write; never break the run
+                pass
+
             if self._progress_emit is not None:
                 from durin.workflow.progress import finished_frames, running_frame
 
@@ -521,6 +530,7 @@ class WorkflowEngine:
                 started.append(running_frame(
                     node, iteration=iteration,
                     budget=budget if isinstance(node, (WorkNode, ScriptNode)) else None,
+                    started_at=node_started_at,
                 ))
                 try:
                     self._progress_emit({"run_id": run_id, "nodes": started, "done": False})

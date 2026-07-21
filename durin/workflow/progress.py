@@ -37,8 +37,14 @@ def finished_frames(workflow: Any, runs: list[Any]) -> list[dict]:
     ]
 
 
-def running_frame(node: Any, *, iteration: int, budget: int | None) -> dict:
-    """The frame for the node the engine is about to execute."""
+def running_frame(node: Any, *, iteration: int, budget: int | None,
+                  started_at: float | None = None) -> dict:
+    """The frame for the node the engine is about to execute.
+
+    ``started_at`` is wall-clock epoch seconds; surfaces derive the elapsed
+    clock from it rather than counting frames, so the clock stays right across
+    a reconnect that misses frames.
+    """
     return {
         "id": node.id,
         "label": node_label(node),
@@ -46,4 +52,5 @@ def running_frame(node: Any, *, iteration: int, budget: int | None) -> dict:
         "route_label": None,
         "iteration": iteration,
         "budget": budget,
+        "started_at": started_at,
     }

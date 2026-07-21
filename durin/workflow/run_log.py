@@ -131,9 +131,33 @@ def update_run(
         "parent_run_id": base.get("parent_run_id"),
         "work_dir": base.get("work_dir"),
         "owner": base.get("owner"),
+        # The node that was in flight has now finished; leaving the marker set
+        # would pin a completed node as running for readers of the manifest.
+        "active_node": None,
         "runs": _node_records(result),
     }
     path.write_text(json.dumps(record), encoding="utf-8")
+
+
+def mark_node_started(
+    workspace: str | Path, name: str, run_id: str, *,
+    node_id: str, label: str, started_at: float,
+) -> None:
+    """Record which node is in flight, so a reader that arrives mid-node knows.
+
+    The manifest is otherwise only rewritten when a node *completes*, which
+    leaves a multi-minute node invisible on disk for its whole duration: a
+    reloaded page finds the run alive and its finished nodes listed, but nothing
+    about the node actually running. Cleared by the next ``update_run``.
+
+    No-op when no manifest exists — a nested run may not have written one, and
+    fabricating a partial record here would confuse the crash sweep.
+    """
+    base = read_manifest(workspace, name, run_id)
+    if base is None:
+        return
+    base["active_node"] = {"node_id": node_id, "label": label, "started_at": started_at}
+    _record_path(workspace, name, run_id).write_text(json.dumps(base), encoding="utf-8")
 
 
 def finalize_run(
