@@ -39,9 +39,11 @@ export function useGraphLayers(
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<"staleCluster" | null>(null);
   const overviewJson = useRef<string | null>(null);
+  const getTokenRef = useRef(getToken);
+  getTokenRef.current = getToken;
 
   const loadOverview = useCallback(async (): Promise<boolean> => {
-    const token = getToken();
+    const token = getTokenRef.current();
     if (token == null) return false;
     setLoading(true);
     try {
@@ -58,7 +60,7 @@ export function useGraphLayers(
     } finally {
       setLoading(false);
     }
-  }, [getToken]);
+  }, []);
 
   useEffect(() => {
     if (enabled) void loadOverview();
@@ -73,7 +75,7 @@ export function useGraphLayers(
 
   const enterCluster = useCallback(
     async (ref: string, name: string) => {
-      const token = getToken();
+      const token = getTokenRef.current();
       if (token == null) return;
       setLoading(true);
       setNotice(null);
@@ -95,12 +97,12 @@ export function useGraphLayers(
         setLoading(false);
       }
     },
-    [getToken, backToOverview, loadOverview],
+    [backToOverview, loadOverview],
   );
 
   const enterEgo = useCallback(
     async (ref: string, name: string, hops = 1) => {
-      const token = getToken();
+      const token = getTokenRef.current();
       if (token == null) return;
       setLoading(true);
       setNotice(null);
@@ -116,7 +118,7 @@ export function useGraphLayers(
         setLoading(false);
       }
     },
-    [getToken],
+    [],
   );
 
   return {
