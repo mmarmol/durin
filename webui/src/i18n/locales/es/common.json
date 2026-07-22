@@ -1863,6 +1863,8 @@
     "entitiesTotal_other": "{{count}} entidades",
     "groupsCount_one": "{{count}} grupo",
     "groupsCount_other": "{{count}} grupos",
+    "bubbleEntities": "{{count}} entidades",
+    "clusterOthers": "otros",
     "andMore": "y {{count}} más — buscá dentro",
     "statsPhantom": "{{count}} fantasma",
     "statsTruncated": "truncado",

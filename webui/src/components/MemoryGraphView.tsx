@@ -49,7 +49,15 @@ import {
   colorForType,
   type EntitySortKey,
 } from "@/lib/memory-graph-style";
-import { overviewToGraph } from "@/lib/memory-graph-layout";
+import {
+  labelBudget,
+  overviewToGraph,
+  radiusForBubble,
+  radiusForNode,
+  visibleLabels,
+  type LabelCandidate,
+} from "@/lib/memory-graph-layout";
+import { readCanvasTheme, watchTheme } from "@/lib/canvas-theme";
 import { MemoryEntityCards } from "@/components/MemoryEntityCards";
 import { MemoryEntityTable } from "@/components/MemoryEntityTable";
 import { MemoryTypeFilter } from "@/components/MemoryTypeFilter";
@@ -109,8 +117,24 @@ function reservedRightWidth(): number {
   return p ? Math.round((p as HTMLElement).getBoundingClientRect().width) : 0;
 }
 
-function radiusForWeight(weight: number): number {
-  return 5 + Math.sqrt(Math.max(0, weight)) * 2.2;
+// Bubbles size by member count (falling back to weight if count is somehow
+// absent); every other node (including sessions, handled inside
+// radiusForNode) sizes by weight/type.
+function nodeRadius(n: SimNode): number {
+  return n.kind === "bubble"
+    ? radiusForBubble(n.count ?? n.weight)
+    : radiusForNode(n.weight, n.type);
+}
+
+// prefers-reduced-motion is read once per RAF-effect mount rather than once
+// per animation frame — the check is cheap, but there is no reason to poll
+// it 60x/sec, and a fresh read per mount still picks up an OS setting change
+// made while the graph view was unmounted.
+function prefersReducedMotion(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
 }
 
 /** Cap a node label to a sensible visual length without dropping the
@@ -598,6 +622,14 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
     return refs.size > 0 ? refs : null;
   }, [searchResults]);
 
+  // Canvas chrome (edges, rings, label text) tracks durin's active colour
+  // tokens instead of hardcoded literals, so a palette or light/dark change
+  // repaints the graph too. Resolved once up front and re-resolved only on
+  // a theme change (watchTheme), not per frame — resolving a CSS custom
+  // property is a synchronous style read, too costly to repeat 60x/sec.
+  const themeRef = useRef(readCanvasTheme());
+  useEffect(() => watchTheme(() => { themeRef.current = readCanvasTheme(); }), []);
+
   // RAF render loop — graph view only (the canvas is unmounted otherwise).
   useEffect(() => {
     if (!_props.active || effectiveView !== "graph") return;
@@ -608,6 +640,9 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
     if (!ctx) return;
 
     let stopped = false;
+    // Read once per mount rather than inside frame(), which runs every
+    // animation frame (see prefersReducedMotion).
+    const ease = prefersReducedMotion() ? 1 : 0.08;
 
     function resize() {
       if (!canvas || !wrap) return;
@@ -695,7 +730,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
         let maxY = -Infinity;
         for (const n of nodes) {
           if (!isVisible(n)) continue;
-          const r = radiusForWeight(n.weight) + 18;
+          const r = nodeRadius(n) + 18;
           if (n.x - r < minX) minX = n.x - r;
           if (n.x + r > maxX) maxX = n.x + r;
           if (n.y - r < minY) minY = n.y - r;
@@ -709,9 +744,9 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
           const ttx = w / 2 - ((minX + maxX) / 2) * tk;
           const tty = h / 2 - ((minY + maxY) / 2) * tk;
           const cam = cameraRef.current;
-          cam.k += (tk - cam.k) * 0.08;
-          cam.tx += (ttx - cam.tx) * 0.08;
-          cam.ty += (tty - cam.ty) * 0.08;
+          cam.k += (tk - cam.k) * ease;
+          cam.tx += (ttx - cam.tx) * ease;
+          cam.ty += (tty - cam.ty) * ease;
         }
       }
 
@@ -725,7 +760,11 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
       // while there are no matched nodes to highlight. Once searchMatchSet
       // exists, the per-node dimming (matches lit, rest faint) IS the signal;
       // a uniform veil on top would grey out the very nodes the search found.
-      ctx.globalAlpha = recedeRef.current && !searchMatchSet ? 0.18 : 1;
+      // Named (not just left in ctx.globalAlpha) because every themed element
+      // below restores to it, not to 1, after its own temporary alpha
+      // override — the veil must keep applying to whatever draws next.
+      const veil = recedeRef.current && !searchMatchSet ? 0.18 : 1;
+      ctx.globalAlpha = veil;
 
       // Hover highlight (Obsidian's graph hover): while the pointer rests on
       // a node, that node + its direct connections light up and the rest
@@ -753,58 +792,123 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
         // Hidden endpoints → don't draw the edge at all.
         if (!isVisible(e.source) || !isVisible(e.target)) continue;
         const lit = isHighlighted(e.source.id) && isHighlighted(e.target.id);
-        ctx.strokeStyle = lit
-          ? `rgba(120,120,140,${Math.min(0.55, 0.18 + e.weight * 0.06)})`
-          : "rgba(120,120,140,0.08)";
+        // themeRef.current.line resolves to an opaque colour, so the lit/dim
+        // distinction (previously baked into the rgba alpha channel) now
+        // goes through globalAlpha instead.
+        ctx.globalAlpha = veil * (lit ? Math.min(0.55, 0.18 + e.weight * 0.06) : 0.08);
+        ctx.strokeStyle = themeRef.current.line;
         ctx.lineWidth = Math.min(3, 0.8 + Math.log(1 + e.weight));
         ctx.beginPath();
         ctx.moveTo(e.source.x, e.source.y);
         ctx.lineTo(e.target.x, e.target.y);
         ctx.stroke();
       }
+      ctx.globalAlpha = veil;
 
       for (const n of nodes) {
         if (!isVisible(n)) continue;
-        const r = radiusForWeight(n.weight);
+        const r = nodeRadius(n);
         const lit = isHighlighted(n.id);
-        const fill = colorForType(n.type);
-        ctx.beginPath();
-        ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
-        ctx.fillStyle = lit ? fill : `${fill}33`;
-        ctx.fill();
+        if (n.kind === "bubble") {
+          // A bubble stands in for a whole cluster — drawn hollow so it
+          // reads as a container around member entities, not as one more
+          // entity itself.
+          ctx.beginPath();
+          ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
+          ctx.fillStyle = themeRef.current.surface;
+          ctx.fill();
+          ctx.strokeStyle = lit ? themeRef.current.accent : themeRef.current.border;
+          ctx.lineWidth = 1.4;
+          ctx.stroke();
+        } else if (n.type === "session") {
+          ctx.fillStyle = lit ? colorForType("session") : `${colorForType("session")}33`;
+          ctx.fillRect(n.x - r, n.y - r, r * 2, r * 2);
+        } else {
+          const fill = colorForType(n.type);
+          ctx.beginPath();
+          ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
+          ctx.fillStyle = lit ? fill : `${fill}33`;
+          ctx.fill();
+        }
         if (n.phantom) {
           ctx.setLineDash([3, 3]);
-          ctx.strokeStyle = lit ? "rgba(0,0,0,0.4)" : "rgba(0,0,0,0.15)";
+          ctx.globalAlpha = veil * (lit ? 0.4 : 0.15);
+          ctx.strokeStyle = themeRef.current.textMuted;
           ctx.lineWidth = 1;
           ctx.stroke();
           ctx.setLineDash([]);
+          ctx.globalAlpha = veil;
         }
         if (
           selected?.id === n.id ||
           hoverRef.current?.id === n.id ||
           isolatedRef === n.id
         ) {
+          const isolating = isolatedRef === n.id;
           ctx.beginPath();
           ctx.arc(n.x, n.y, r + 3, 0, Math.PI * 2);
-          ctx.strokeStyle =
-            isolatedRef === n.id ? "rgba(20,40,200,0.75)" : "rgba(0,0,0,0.55)";
+          ctx.globalAlpha = veil * (isolating ? 0.75 : 0.55);
+          ctx.strokeStyle = isolating ? themeRef.current.accent : themeRef.current.text;
           ctx.lineWidth = 1.6;
           ctx.stroke();
+          ctx.globalAlpha = veil;
         }
       }
 
+      // Label pass runs in screen space with a constant font size — resetting
+      // the transform here (instead of keeping the camera's world-space
+      // transform the edge/node passes drew under) means label text never
+      // scales with zoom the way node/edge geometry does.
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.font = "11px ui-sans-serif, system-ui, -apple-system";
       ctx.textBaseline = "top";
       ctx.textAlign = "center";
+      // A label anchors below its node's circle, except bubbles: their
+      // name + count line render centered inside the hollow circle instead.
+      const labelSy = (n: SimNode, r: number): number =>
+        n.kind === "bubble"
+          ? n.y * cam.k + cam.ty - 8
+          : (n.y + r) * cam.k + cam.ty + 2;
+      const cands: LabelCandidate[] = [];
       for (const n of nodes) {
         if (!isVisible(n)) continue;
-        const r = radiusForWeight(n.weight);
+        const r = nodeRadius(n);
+        cands.push({
+          id: n.id,
+          sx: n.x * cam.k + cam.tx,
+          sy: labelSy(n, r),
+          weight: n.weight,
+          priority:
+            n.kind === "bubble" ||
+            hoverSet?.has(n.id) === true ||
+            selected?.id === n.id ||
+            isolatedRef === n.id,
+        });
+      }
+      const show = visibleLabels(cands, { w, h }, labelBudget(cam.k));
+      for (const n of nodes) {
+        if (!show.has(n.id)) continue;
+        const r = nodeRadius(n);
+        const sx = n.x * cam.k + cam.tx;
+        const sy = labelSy(n, r);
         const lit = isHighlighted(n.id);
-        const shouldLabel =
-          r > 9 || lit || selected?.id === n.id || isolatedRef === n.id;
-        if (!shouldLabel) continue;
-        ctx.fillStyle = lit ? "rgba(0,0,0,0.75)" : "rgba(0,0,0,0.30)";
-        ctx.fillText(shortLabel(n.name), n.x, n.y + r + 2);
+        if (n.kind === "bubble") {
+          const displayName =
+            n.name === "__others__" ? t("memoryGraph.clusterOthers") : n.name;
+          ctx.font = "500 13px ui-sans-serif, system-ui, -apple-system";
+          ctx.fillStyle = themeRef.current.text;
+          ctx.fillText(shortLabel(displayName), sx, sy);
+          ctx.font = "11px ui-sans-serif, system-ui, -apple-system";
+          ctx.fillStyle = themeRef.current.textMuted;
+          ctx.fillText(
+            t("memoryGraph.bubbleEntities", { count: n.count ?? 0 }),
+            sx,
+            sy + 15,
+          );
+        } else {
+          ctx.fillStyle = lit ? themeRef.current.text : themeRef.current.textMuted;
+          ctx.fillText(shortLabel(n.name), sx, sy);
+        }
       }
 
       ctx.globalAlpha = 1;
@@ -829,7 +933,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
       const n = nodes[i];
       if (hiddenTypes.has(n.type)) continue;
       if (n.phantom && hiddenTypes.has("phantom")) continue;
-      const r = radiusForWeight(n.weight) + 4;
+      const r = nodeRadius(n) + 4;
       const dx = x - n.x;
       const dy = y - n.y;
       if (dx * dx + dy * dy <= r * r) return n;

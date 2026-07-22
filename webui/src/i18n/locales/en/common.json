@@ -2059,6 +2059,8 @@
     "entitiesTotal_other": "{{count}} entities",
     "groupsCount_one": "{{count}} group",
     "groupsCount_other": "{{count}} groups",
+    "bubbleEntities": "{{count}} entities",
+    "clusterOthers": "others",
     "andMore": "and {{count}} more — search within",
     "statsPhantom": "{{count}} phantom",
     "statsTruncated": "truncated",
