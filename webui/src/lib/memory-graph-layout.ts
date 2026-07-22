@@ -43,7 +43,7 @@ export function visibleLabels(
   budget: number,
   cell = 90,
 ): Set<string> {
-  const margin = Math.round(Math.max(viewport.w, viewport.h) * 1.5);
+  const margin = 40;
   const inView = cands.filter(
     (c) =>
       c.sx >= -margin &&
@@ -51,9 +51,9 @@ export function visibleLabels(
       c.sy >= -margin &&
       c.sy <= viewport.h + margin,
   );
-  const ordered = [...inView].sort((a, b) => {
+  const ordered = inView.sort((a, b) => {
     if (!!a.priority !== !!b.priority) return a.priority ? -1 : 1;
-    return b.weight - a.weight || a.id.localeCompare(b.id);
+    return b.weight - a.weight || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   });
   const taken = new Set<string>();
   const out = new Set<string>();

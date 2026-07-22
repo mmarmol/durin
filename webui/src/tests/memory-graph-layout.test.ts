@@ -40,7 +40,7 @@ describe("visibleLabels", () => {
   const vp = { w: 800, h: 600 };
   it("respects the budget, highest weight first", () => {
     const cands = Array.from({ length: 50 }, (_, i) => ({
-      id: `n${i}`, sx: (i % 10) * 200, sy: Math.floor(i / 10) * 200, weight: i,
+      id: `n${i}`, sx: (i % 10) * 80, sy: Math.floor(i / 10) * 110, weight: i,
     }));
     const out = visibleLabels(cands, vp, 5);
     expect(out.size).toBeLessThanOrEqual(5);
