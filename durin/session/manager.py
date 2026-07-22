@@ -29,6 +29,19 @@ from durin.utils.helpers import (
 from durin.utils.subagent_channel_display import scrub_subagent_announce_body
 
 FILE_MAX_MESSAGES = 2000
+
+# Session archive: when ``enforce_file_cap`` trims the prefix off the live
+# file, the trimmed messages are appended to per-session archive segments
+# instead of being destroyed. The live file must stay bounded — ``save()``
+# rewrites it whole every turn and the full list lives in RAM — but the
+# trimmed history only costs disk, and an append-only segment is never
+# rewritten, so retention adds zero per-turn cost. Segments rotate at
+# ``ARCHIVE_SEGMENT_MAX_BYTES``; the per-session total is capped at
+# ``ARCHIVE_TOTAL_MAX_BYTES`` (oldest segment pruned first) as insurance —
+# at the observed ~2.2KB/message, even a heavy session takes years to reach
+# it. ``0`` for the total disables archiving (trim deletes, as before).
+ARCHIVE_SEGMENT_MAX_BYTES = 10_000_000
+ARCHIVE_TOTAL_MAX_BYTES = 500_000_000
 _MESSAGE_TIME_PREFIX_RE = re.compile(r"^\[Message Time: [^\]]+\]\n?")
 _LOCAL_IMAGE_BREADCRUMB_RE = re.compile(r"^\[image: (?:/|~)[^\]]+\]\s*$")
 _TOOL_CALL_ECHO_RE = re.compile(r'^\s*message\([^)]*\)\s*$')
@@ -287,8 +300,19 @@ class Session:
         self,
         on_archive: Any = None,
         limit: int = FILE_MAX_MESSAGES,
+        archive_sink: Any = None,
     ) -> None:
-        """Bound session message growth by archiving and trimming old prefixes."""
+        """Bound session message growth by archiving and trimming old prefixes.
+
+        ``on_archive`` receives only the *not-yet-consolidated* slice of the
+        dropped prefix (the summarization breadcrumb). ``archive_sink``
+        receives the WHOLE dropped prefix — the raw-retention path
+        (``SessionManager.append_to_archive``) — so the trimmed history stays
+        recoverable instead of surviving only as summaries. Best-effort: a
+        failing sink is logged and the trim proceeds, matching the guarantees
+        the live file already has (if disk writes are failing, ``save()`` is
+        failing too).
+        """
         if limit <= 0 or len(self.messages) <= limit:
             return
 
@@ -301,6 +325,16 @@ class Session:
             return
 
         dropped = before[:dropped_count]
+        if archive_sink:
+            try:
+                archive_sink(dropped)
+            except Exception:
+                logger.exception(
+                    "Session archive sink failed for {}; trimmed prefix "
+                    "({} msgs) survives only as summaries this round",
+                    self.key,
+                    dropped_count,
+                )
         already_consolidated = min(before_last_consolidated, dropped_count)
         archive_chunk = dropped[already_consolidated:]
         if archive_chunk and on_archive:
@@ -371,6 +405,124 @@ class SessionManager:
     def _get_legacy_session_path(self, key: str) -> Path:
         """Legacy session path under the instance home (``<DURIN_HOME>/sessions/``)."""
         return self.legacy_sessions_dir / f"{self.safe_key(key)}.jsonl"
+
+    # ------------------------------------------------------------------
+    # Session archive (append-only retention for file-cap trims)
+    # ------------------------------------------------------------------
+
+    _ARCHIVE_SEGMENT_RE = re.compile(r"\.(\d{6})\.jsonl$")
+
+    def _archive_dir(self) -> Path:
+        return self.sessions_dir / "archive"
+
+    def archive_paths(self, key: str) -> list[Path]:
+        """Existing archive segments for *key*, oldest first.
+
+        Segments are ``archive/<safe_key>.NNNNNN.jsonl`` — plain message
+        lines in the live file's serialization, no metadata line. Sorted by
+        segment number, which only ever grows.
+        """
+        safe = self.safe_key(key)
+        adir = self._archive_dir()
+        if not adir.is_dir():
+            return []
+        prefix = f"{safe}."
+        out: list[tuple[int, Path]] = []
+        for path in adir.iterdir():
+            name = path.name
+            if not name.startswith(prefix):
+                continue
+            m = self._ARCHIVE_SEGMENT_RE.search(name)
+            if m is None or name[: -len(m.group(0))] != safe:
+                continue
+            out.append((int(m.group(1)), path))
+        out.sort()
+        return [p for _n, p in out]
+
+    def append_to_archive(self, key: str, messages: list[dict[str, Any]]) -> None:
+        """Append trimmed messages to the session's archive, rotating segments.
+
+        The sink ``enforce_file_cap`` calls when it drops the live prefix.
+        Append-only by design: segments are never rewritten, so retention has
+        no per-turn cost — unlike the live file, which ``save()`` rewrites
+        whole. Writes are serialized under a per-session cross-process lock
+        (segment selection + append + prune is a read-modify-write; two
+        processes can legally own turns of the same workspace).
+        """
+        if not messages or ARCHIVE_TOTAL_MAX_BYTES <= 0:
+            return
+        safe = self.safe_key(key)
+        adir = ensure_dir(self._archive_dir())
+        with cross_process_lock(adir / f"{safe}.archive"):
+            segments = self.archive_paths(key)
+            if segments:
+                last = segments[-1]
+                m = self._ARCHIVE_SEGMENT_RE.search(last.name)
+                last_n = int(m.group(1)) if m else len(segments)
+                try:
+                    last_size = last.stat().st_size
+                except OSError:
+                    last_size = 0
+                if last_size >= ARCHIVE_SEGMENT_MAX_BYTES:
+                    target = adir / f"{safe}.{last_n + 1:06d}.jsonl"
+                else:
+                    target = last
+            else:
+                target = adir / f"{safe}.{1:06d}.jsonl"
+
+            payload = "".join(
+                json.dumps(msg, ensure_ascii=False, default=str) + "\n"
+                for msg in messages
+                if isinstance(msg, dict)
+            )
+            with open(target, "a", encoding="utf-8") as f:
+                f.write(payload)
+
+            # Insurance cap: prune oldest-first, never the segment just
+            # written. A single over-cap segment is kept — deleting the only
+            # copy of what we just archived would defeat the point.
+            pruned = 0
+            segments = self.archive_paths(key)
+            total = 0
+            sizes: list[tuple[Path, int]] = []
+            for path in segments:
+                try:
+                    size = path.stat().st_size
+                except OSError:
+                    size = 0
+                sizes.append((path, size))
+                total += size
+            for path, size in sizes[:-1]:
+                if total <= ARCHIVE_TOTAL_MAX_BYTES:
+                    break
+                path.unlink(missing_ok=True)
+                total -= size
+                pruned += 1
+
+        logger.info(
+            "Session archive for {}: +{} msgs ({} bytes) -> {} (total {} bytes{})",
+            key,
+            len(messages),
+            len(payload),
+            target.name,
+            total,
+            f", pruned {pruned} segment(s)" if pruned else "",
+        )
+        try:
+            from durin.telemetry.logger import current_telemetry
+            _logger = current_telemetry()
+            if _logger is not None:
+                _logger.log("session.archived", {
+                    "session_key": key,
+                    "messages": len(messages),
+                    "bytes_written": len(payload),
+                    "segment": target.name,
+                    "total_bytes": total,
+                    "pruned_segments": pruned,
+                })
+        except Exception:  # noqa: BLE001
+            # Telemetry must never break the archive path.
+            pass
 
     def exists(self, key: str) -> bool:
         """True when the session is cached or present on disk.
