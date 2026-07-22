@@ -52,6 +52,20 @@ describe("touchedNodeCount", () => {
       startedAt: 0, endedAt: null } as never;
     expect(touchedNodeCount(item)).toBe(0);
   });
+  it("counts a looping node once, however many passes it ran", () => {
+    // A live frame list carries one row per pass; the polled tree collapses
+    // them by node id. Counting rows makes the same run report 4 nodes live
+    // and 2 after a reload.
+    const item = { kind: "workflow", id: "r", label: "wf", status: "running",
+      startedAt: 0, endedAt: null,
+      nodes: [
+        { id: "produce", status: "done" },
+        { id: "gate", status: "done" },
+        { id: "produce", status: "done" },
+        { id: "gate", status: "running" },
+      ] } as never;
+    expect(touchedNodeCount(item)).toBe(2);
+  });
 });
 
 describe("useTicker", () => {

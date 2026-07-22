@@ -520,6 +520,64 @@ describe("useWorkState", () => {
     expect(result.current.active[0].typicalTotalS).toBe(1080);
   });
 
+  it("keeps the run's true start when a live frame overwrites a polled item", async () => {
+    // Opening a chat mid-run (or reloading): the poll delivers the manifest's
+    // started_at, then the next live frame arrives. Taking the live item's own
+    // startedAt (= when THIS browser saw its first frame) would reset the card's
+    // run clock to 0:00 while the node clock above it, which comes off the
+    // manifest, keeps counting.
+    const { client, emit } = makeFakeClient();
+    mockUseClient.mockReturnValue({
+      client: client as unknown as ReturnType<typeof useClient>["client"],
+      token: "tok",
+      modelName: null,
+      modelPreset: null,
+    });
+    mockListBackgroundTasks.mockResolvedValue([
+      {
+        kind: "workflow", id: "run1", label: "wf", status: "running",
+        started_at: 1_700_000_000, ended_at: null, session_key: null,
+        nodes: [{ id: "consolidate", status: "running", started_at: 1_700_000_100 }],
+      },
+    ]);
+
+    const { result } = renderHook(() => useWorkState("c1", "websocket:c1"));
+    await waitFor(() => expect(result.current.active).toHaveLength(1));
+
+    act(() => {
+      emit(workflowProgressFrame("run1", [{ id: "consolidate", status: "running" }]));
+    });
+
+    expect(result.current.active[0].startedAt).toBe(1_700_000_000_000);
+  });
+
+  it("falls back to the live start when the polled row has no start time", async () => {
+    // A manifest with no started_at polls as 0; treating that as the run's start
+    // would render an elapsed measured from 1970.
+    const { client, emit } = makeFakeClient();
+    mockUseClient.mockReturnValue({
+      client: client as unknown as ReturnType<typeof useClient>["client"],
+      token: "tok",
+      modelName: null,
+      modelPreset: null,
+    });
+    mockListBackgroundTasks.mockResolvedValue([
+      {
+        kind: "workflow", id: "run2", label: "wf", status: "running",
+        started_at: 0, ended_at: null, session_key: null, nodes: [],
+      },
+    ]);
+
+    const { result } = renderHook(() => useWorkState("c1", "websocket:c1"));
+    await waitFor(() => expect(result.current.active).toHaveLength(1));
+
+    act(() => {
+      emit(workflowProgressFrame("run2", [{ id: "n1", status: "running" }]));
+    });
+
+    expect(result.current.active[0].startedAt).toBeGreaterThan(0);
+  });
+
   it("carries max rounds, artifacts, description and parent node from a live frame", () => {
     const { result } = renderHookWithFrame({
       call_id: "workflow:r2", name: "workflow_progress", phase: "running",

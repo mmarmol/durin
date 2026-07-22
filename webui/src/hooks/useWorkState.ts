@@ -287,7 +287,18 @@ export function useWorkState(
         polledItem != null &&
         polledItem.status !== "running" &&
         polledItem.status !== "needs_input";
-      if (!decided) byId.set(id, item);
+      if (decided) continue;
+      // A live item's startedAt is only when THIS browser saw its first frame;
+      // the polled one is the run's true start, off the manifest. Keeping the
+      // polled value means a run watched after a reload (or opened mid-run in a
+      // second tab) shows the run's real elapsed instead of resetting to 0:00 on
+      // the next frame — and stops the card's run clock from contradicting the
+      // node clock above it, which has always come off the manifest. Guarded on
+      // > 0 so a manifest with no started_at (which polls as 0) cannot turn the
+      // clock into time-since-1970.
+      const startedAt =
+        polledItem != null && polledItem.startedAt > 0 ? polledItem.startedAt : item.startedAt;
+      byId.set(id, { ...item, startedAt });
     }
 
     return Array.from(byId.values());

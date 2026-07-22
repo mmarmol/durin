@@ -19,12 +19,20 @@ export function activeNode(item: WorkItem): WorkNode | undefined {
   return item.nodes?.filter((n) => n.status === "running").at(-1);
 }
 
-/** Count of nodes a run has actually touched — i.e. excluding the pending
- *  tail the engine appends for nodes certain to run next but not yet
+/** Count of DISTINCT nodes a run has actually touched — i.e. excluding the
+ *  pending tail the engine appends for nodes certain to run next but not yet
  *  started. Never "N of M": the total is unknowable while routers can still
- *  pick a branch, and a false denominator is worse than none. */
+ *  pick a branch, and a false denominator is worse than none.
+ *
+ *  Counted by node id, not by row: a live frame list carries one row per pass,
+ *  so a 2-node loop that ran twice would otherwise report 4 while the same run
+ *  reports 2 after a reload (the polled tree collapses passes by node id). */
 export function touchedNodeCount(item: WorkItem): number {
-  return item.nodes?.filter((n) => n.status !== "pending").length ?? 0;
+  const ids = new Set<string>();
+  for (const n of item.nodes ?? []) {
+    if (n.status !== "pending") ids.add(n.id);
+  }
+  return ids.size;
 }
 
 /** Epoch milliseconds, refreshed every second while `active`. Clocks tick from
