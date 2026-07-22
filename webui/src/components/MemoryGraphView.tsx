@@ -22,6 +22,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { DocumentsShelf } from "@/components/DocumentsShelf";
+import { useGraphLayers } from "@/hooks/useGraphLayers";
 import { useMemoryGraph } from "@/hooks/useMemoryGraph";
 import { useClient } from "@/providers/ClientProvider";
 import MarkdownTextRenderer from "@/components/MarkdownTextRenderer";
@@ -32,7 +33,6 @@ import {
   fetchMemoryEntity,
   fetchMemoryEntry,
   fetchMemorySession,
-  fetchMemorySubgraph,
   forgetMemoryEntry,
   searchMemoryApi,
   type MemoryBacklinksPayload,
@@ -40,7 +40,6 @@ import {
   type MemoryEntityDetail,
   type MemoryEntryDetail,
   type MemoryGraphNode,
-  type MemoryGraphPayload,
   type MemorySearchPayload,
   type MemorySearchResult,
   type MemorySessionDetail,
@@ -50,6 +49,7 @@ import {
   colorForType,
   type EntitySortKey,
 } from "@/lib/memory-graph-style";
+import { overviewToGraph, type OverviewNode } from "@/lib/memory-graph-layout";
 import { MemoryEntityCards } from "@/components/MemoryEntityCards";
 import { MemoryEntityTable } from "@/components/MemoryEntityTable";
 import { MemoryTypeFilter } from "@/components/MemoryTypeFilter";
@@ -209,11 +209,6 @@ type SessionTabName = "info" | "messages" | "events" | "memory_ops" | "entries";
 export function MemoryGraphView(_props: MemoryGraphViewProps) {
   const { t } = useTranslation();
   const { data: rawData, loading, error, refresh } = useMemoryGraph(_props.active);
-  // Focus mode (Obsidian local graph): when set, the canvas renders this
-  // ego-graph (a node + its neighbourhood, fetched uncapped) instead of the
-  // global overview, so the node is centred even if the cap dropped it.
-  const [focusGraph, setFocusGraph] = useState<MemoryGraphPayload | null>(null);
-  const data = focusGraph ?? rawData;
   // Reference docs (memory/references/*) aren't graph nodes; clicking a
   // reference search hit opens its content in this side panel.
   const [referenceDetail, setReferenceDetail] = useState<MemoryEntryDetail | null>(null);
@@ -353,63 +348,19 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
     });
   }, []);
 
-  // Navigate to the session a fact came from (provenance source_ref →
-  // `session:<stem>` node). Selecting the node opens the session detail
-  // panel via the existing `selected` effect. No-op when the session node
-  // isn't in the graph payload (e.g. its .jsonl was removed).
-  const selectSessionByStem = useCallback(
-    (stem: string, targetTs?: string | null) => {
-      const id = `session:${stem}`;
-      const node =
-        simNodesRef.current.find((n) => n.id === id) ??
-        data?.nodes.find((n) => n.id === id);
-      if (!node) return;
-      setSelected(node as MemoryGraphNode);
-      if (targetTs) {
-        // Came from a provenance event: open the thread and scroll to the
-        // moment that fact was recorded.
-        setSessionTab("messages");
-        setSessionScrollTs(targetTs);
-      } else {
-        setSessionTab("info");
-      }
-    },
-    [data],
-  );
-
   // Caso 0: re-fit the graph whenever the content panel opens/closes/resizes —
   // the canvas shrinks to the leftover width and the sim reheats to re-centre.
   useEffect(() => {
     refitGraph();
   }, [selected?.id, !!referenceDetail, panelExpanded]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Switch the canvas to a node's ego-graph (uncapped neighbourhood) at the
-  // given depth. Entered from the panel's isolate button, the depth control,
-  // and search hits for nodes the global cap dropped; "back to full" exits.
-  const isolateNode = useCallback((ref: string, hops: number) => {
-    if (!tokenRef.current) return;
-    void (async () => {
-      try {
-        const g = await fetchMemorySubgraph(tokenRef.current!, ref, { hops });
-        setFocusGraph(g);
-        setIsolatedRef(ref);
-        setIsolateHops(hops);
-      } catch {
-        /* ego fetch failed — stay on the current graph */
-      }
-    })();
-  }, []);
-
-  const exitIsolation = useCallback(() => {
-    setFocusGraph(null);
-    setIsolatedRef(null);
-    setIsolateHops(1);
-  }, []);
-
-  // Set of node types the user has toggled OFF in the legend. Default
-  // empty = show all. Clicking a legend chip flips inclusion. Phantom
-  // is treated as its own pseudo-type for the toggle.
-  const [hiddenTypes, setHiddenTypes] = useState<Set<string>>(new Set());
+  // Set of node types the user has toggled OFF in the legend. Default hides
+  // phantom (unconsolidated noise) and session (scaffolding, not an entity)
+  // so a fresh view opens on real, consolidated entities. Clicking a legend
+  // chip flips inclusion. Phantom is treated as its own pseudo-type.
+  const [hiddenTypes, setHiddenTypes] = useState<Set<string>>(
+    new Set(["phantom", "session"]),
+  );
 
   function toggleType(type: string): void {
     setHiddenTypes((prev) => {
@@ -460,6 +411,96 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
   const [edgePopup, setEdgePopup] = useState<{
     x: number; y: number; detail: MemoryEdgeDetail | null; loading: boolean;
   } | null>(null);
+
+  // Two-layer graph (overview bubbles/hubs/loose → drill into a cluster or
+  // an ego neighbourhood). The hook owns the layer state machine; this view
+  // only has to plug its result into the existing data seam and drill
+  // functions below, kept under their pre-existing names so every call site
+  // (depth buttons, the panel's focus button, handleOpenEntity, search hits)
+  // keeps working unchanged.
+  const layers = useGraphLayers(
+    _props.active && effectiveView === "graph",
+    () => tokenRef.current,
+  );
+  // The overview only replaces the canvas payload in clustered mode; a flat
+  // workspace (too small to bubble) has nothing to translate, so the canvas
+  // falls back to today's capped graph instead.
+  const overviewGraph = useMemo(
+    () =>
+      layers.overview && layers.overview.mode === "clustered"
+        ? overviewToGraph(layers.overview)
+        : null,
+    [layers.overview],
+  );
+  // THE SEAM: a cluster/ego drill wins, then the clustered overview, then
+  // today's raw graph — cards/table never look at the overview, since they
+  // present the full entity list rather than a navigable bubble map.
+  const data =
+    layers.focusGraph ??
+    (effectiveView === "graph" ? overviewGraph ?? rawData : rawData);
+
+  // Navigate to the session a fact came from (provenance source_ref →
+  // `session:<stem>` node). Selecting the node opens the session detail
+  // panel via the existing `selected` effect. No-op when the session node
+  // isn't in the graph payload (e.g. its .jsonl was removed).
+  const selectSessionByStem = useCallback(
+    (stem: string, targetTs?: string | null) => {
+      const id = `session:${stem}`;
+      const node =
+        simNodesRef.current.find((n) => n.id === id) ??
+        data?.nodes.find((n) => n.id === id);
+      if (!node) return;
+      setSelected(node as MemoryGraphNode);
+      if (targetTs) {
+        // Came from a provenance event: open the thread and scroll to the
+        // moment that fact was recorded.
+        setSessionTab("messages");
+        setSessionScrollTs(targetTs);
+      } else {
+        setSessionTab("info");
+      }
+    },
+    [data],
+  );
+
+  // Switch the canvas to a node's ego-graph (uncapped neighbourhood) at the
+  // given depth — a thin wrapper over the shared layer state machine so
+  // isolating a node also updates the breadcrumb. Entered from the panel's
+  // isolate button, the depth control, and search hits for nodes the global
+  // cap dropped; "back to full" / the breadcrumb / Esc all exit it.
+  const isolateNode = useCallback(
+    (ref: string, hops: number) => {
+      setIsolateHops(hops);
+      const name =
+        data?.nodes.find((n) => n.id === ref)?.name ??
+        ref.replace(/^[a-z_]+:/, "");
+      void layers.enterEgo(ref, name, hops);
+    },
+    [data, layers],
+  );
+
+  const exitIsolation = useCallback(() => {
+    layers.backToOverview();
+  }, [layers]);
+
+  // isolatedRef mirrors the hook's layer so the canvas can keep ring-
+  // highlighting the isolated node; it's only meaningful for an ego drill.
+  useEffect(() => {
+    setIsolatedRef(layers.layer.kind === "ego" ? layers.layer.ref : null);
+  }, [layers.layer]);
+
+  // Esc backs out one layer (cluster/ego → overview) — but not while the
+  // search panel or the edge popover is up, so Escape closes those first.
+  useEffect(() => {
+    if (layers.layer.kind === "overview") return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (searchOpen || edgePopup) return;
+      layers.backToOverview();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [layers, searchOpen, edgePopup]);
 
   // Build simulation arrays from data
   const { simNodes, simEdges } = useMemo(() => {
@@ -805,6 +846,26 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
       const sy = evt.clientY - rect.top;
       const { x, y } = toWorld(sx, sy);
       const hit = hitTestNode(x, y);
+      // Overview mode: a node click is pure navigation (drill into the
+      // bubble's cluster, or straight into an ego neighbourhood for a
+      // hub/loose node) — not a selection, so it skips the pin/panel
+      // behavior below entirely. Once a cluster/ego is entered the canvas
+      // shows a real (non-overview) graph and clicks fall through to the
+      // existing select behavior.
+      if (
+        hit &&
+        layers.layer.kind === "overview" &&
+        overviewGraph != null &&
+        layers.focusGraph == null
+      ) {
+        const asOverview = hit as OverviewNode;
+        if (asOverview.kind === "bubble") {
+          void layers.enterCluster(hit.id, hit.name);
+        } else {
+          void layers.enterEgo(hit.id, hit.name);
+        }
+        return;
+      }
       if (hit) {
         hit.pinned = true;
         hit.vx = 0;
@@ -858,7 +919,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
       panRef.current = { lastX: sx, lastY: sy, moved: 0 };
       evt.currentTarget.setPointerCapture(evt.pointerId);
     },
-    [hitTestNode, hitTestEdge, toWorld],
+    [hitTestNode, hitTestEdge, toWorld, layers, overviewGraph],
   );
 
   const onPointerMove = useCallback(
@@ -1082,6 +1143,14 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
     [data],
   );
 
+  // The clustered overview has nothing to filter by type: the server
+  // already excluded phantoms/sessions before bubbling, and a bubble isn't
+  // itself a type. The filter comes back once there's a real per-type node
+  // set to browse — a cluster/ego drill, flat mode, or the cards/table
+  // presentations (which always read the full entity list).
+  const showTypeFilter =
+    effectiveView !== "graph" || layers.focusGraph != null || overviewGraph == null;
+
   // Select an entity from the cards grid or the table — same panel wiring as
   // a graph-canvas click, minus the canvas-only concerns (pinning, drag).
   const selectEntity = useCallback((n: MemoryGraphNode) => {
@@ -1149,10 +1218,21 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
           <>
         {data && !compact ? (
           <span className="text-xs text-muted-foreground">
-            {t("memoryGraph.stats", {
-              nodesLabel: t("memoryGraph.nodesCount", { count: data.stats.node_count }),
-              edgesLabel: t("memoryGraph.edgesCount", { count: data.stats.edge_count }),
-            })}
+            {overviewGraph != null && layers.focusGraph == null && layers.overview ? (
+              // Clustered overview, no drill: report the workspace's honest
+              // totals (from the overview's own stats) instead of the
+              // canvas's capped bubble/hub/loose node count.
+              <>
+                {t("memoryGraph.entitiesTotal", { count: layers.overview.stats.entity_count })}
+                {" · "}
+                {t("memoryGraph.groupsCount", { count: layers.overview.stats.bubble_count })}
+              </>
+            ) : (
+              t("memoryGraph.stats", {
+                nodesLabel: t("memoryGraph.nodesCount", { count: data.stats.node_count }),
+                edgesLabel: t("memoryGraph.edgesCount", { count: data.stats.edge_count }),
+              })
+            )}
             {data.stats.phantom_count > 0
               ? ` · ${t("memoryGraph.statsPhantom", { count: data.stats.phantom_count })}`
               : ""}
@@ -1161,7 +1241,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
               : ""}
           </span>
         ) : null}
-        {focusGraph && effectiveView === "graph" ? (
+        {layers.focusGraph && effectiveView === "graph" ? (
           <>
             <button
               type="button"
@@ -1292,18 +1372,21 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
               <Table2 className="h-3 w-3" /> {t("memoryGraph.viewTable")}
             </button>
           </div>
-          {typesLegend.length > 0 || (data?.stats.phantom_count ?? 0) > 0 ? (
+          {showTypeFilter &&
+          (typesLegend.length > 0 || (data?.stats.phantom_count ?? 0) > 0) ? (
             <span className="mx-0.5 h-4 w-px bg-border/60" aria-hidden />
           ) : null}
-          <MemoryTypeFilter
-            types={typesLegend}
-            phantomCount={data?.stats.phantom_count ?? 0}
-            hidden={hiddenTypes}
-            onToggle={toggleType}
-            onShowAll={() => setHiddenTypes(new Set())}
-            onHideAll={hideAllTypes}
-            onSolo={soloType}
-          />
+          {showTypeFilter ? (
+            <MemoryTypeFilter
+              types={typesLegend}
+              phantomCount={data?.stats.phantom_count ?? 0}
+              hidden={hiddenTypes}
+              onToggle={toggleType}
+              onShowAll={() => setHiddenTypes(new Set())}
+              onHideAll={hideAllTypes}
+              onSolo={soloType}
+            />
+          ) : null}
           {effectiveView === "cards" ? (
             <label className="ml-auto flex items-center gap-1 text-muted-foreground">
               <ArrowDownUp className="h-3 w-3" aria-hidden />
@@ -1328,6 +1411,42 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
           onOpenEntity={handleOpenEntity}
         />
       ) : (
+      <>
+        {/* Breadcrumb: shown only while drilled into a cluster/ego layer —
+            the clustered overview IS the top level, so it gets no crumb of
+            its own. A normal flow row (not an overlay) so the canvas below
+            re-fits into the remaining height via wrapRef's flex-1, the same
+            way the toolbar row above it already does. */}
+        {effectiveView === "graph" && layers.layer.kind !== "overview" ? (
+          <div className="flex shrink-0 items-center gap-2 border-b border-border/40 px-3 py-1.5 text-sm">
+            <button
+              type="button"
+              onClick={() => layers.backToOverview()}
+              className="text-primary hover:underline"
+            >
+              {t("memoryGraph.title")}
+            </button>
+            <span className="text-muted-foreground">›</span>
+            <span className="font-medium">{layers.layer.name}</span>
+            {layers.layer.kind === "cluster" &&
+            layers.totalMembers != null &&
+            data &&
+            data.nodes.length < layers.totalMembers ? (
+              // totalMembers is the server's uncapped count of real cluster
+              // members, but data.nodes also carries phantom/session nodes
+              // kept only as scaffolding around them — exclude those before
+              // subtracting, or the hidden remainder undercounts.
+              <span className="ml-auto text-xs text-muted-foreground">
+                {t("memoryGraph.andMore", {
+                  count:
+                    layers.totalMembers -
+                    data.nodes.filter((n) => !n.phantom && n.type !== "session")
+                      .length,
+                })}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
       <div ref={wrapRef} className="relative min-h-0 flex-1">
         {error ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm text-destructive">
@@ -2118,6 +2237,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
           </div>
         ) : null}
       </div>
+      </>
       )}
     </div>
   );
