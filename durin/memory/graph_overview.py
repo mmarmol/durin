@@ -313,13 +313,23 @@ def _tree_signature(workspace: Path) -> int:
     return hash(tuple(sorted(items)))
 
 
-def _evict_oldest(cache: dict[Path, Any]) -> None:
-    while len(cache) >= _CACHE_MAX:
+def _put(
+    cache: dict[Path, tuple[int, dict[str, Any]]],
+    ws: Path,
+    value: tuple[int, dict[str, Any]],
+) -> None:
+    """Insert/update under the caller's lock; evict oldest only on growth.
+
+    Refreshing a key already in the cache must never evict anything else —
+    eviction only makes room for a workspace the cache hasn't seen before.
+    """
+    if ws not in cache and len(cache) >= _CACHE_MAX:
         del cache[next(iter(cache))]
+    cache[ws] = value
 
 
-def get_full_graph_cached(workspace: Path) -> dict[str, Any]:
-    """Uncapped graph payload, rebuilt only when the memory tree changed.
+def _cached_payload(workspace: Path) -> tuple[int, dict[str, Any]]:
+    """Tree signature and uncapped graph payload, rebuilt only on tree change.
 
     Synchronous and disk-heavy — event-loop callers must hop through
     ``asyncio.to_thread``.
@@ -329,7 +339,7 @@ def get_full_graph_cached(workspace: Path) -> dict[str, Any]:
     with _lock:
         hit = _cache.get(ws)
         if hit is not None and hit[0] == sig:
-            return hit[1]
+            return sig, hit[1]
     payload = build_memory_graph(
         ws,
         max_nodes=_UNCAPPED_NODES,
@@ -337,24 +347,31 @@ def get_full_graph_cached(workspace: Path) -> dict[str, Any]:
         include_sessions=True,
     )
     with _lock:
-        _evict_oldest(_cache)
-        _cache[ws] = (sig, payload)
-    return payload
+        _put(_cache, ws, (sig, payload))
+    return sig, payload
+
+
+def get_full_graph_cached(workspace: Path) -> dict[str, Any]:
+    """Uncapped graph payload, rebuilt only when the memory tree changed."""
+    return _cached_payload(workspace)[1]
 
 
 def build_overview(workspace: Path) -> dict[str, Any]:
-    """Overview payload for the workspace, cached at both levels."""
+    """Overview payload for the workspace, cached at both levels.
+
+    Both cache levels key on the same tree signature, so the overview cache
+    invalidates exactly when the underlying payload would be rebuilt — no
+    separate identity to fall out of sync with it.
+    """
     ws = workspace.resolve()
-    payload = get_full_graph_cached(ws)
-    key = id(payload)
+    sig, payload = _cached_payload(ws)
     with _lock:
         hit = _overview_cache.get(ws)
-        if hit is not None and hit[0] == key:
+        if hit is not None and hit[0] == sig:
             return hit[1]
     overview = assemble_overview(payload)
     with _lock:
-        _evict_oldest(_overview_cache)
-        _overview_cache[ws] = (key, overview)
+        _put(_overview_cache, ws, (sig, overview))
     return overview
 
 

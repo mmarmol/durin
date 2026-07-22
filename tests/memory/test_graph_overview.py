@@ -322,3 +322,43 @@ def test_build_overview_smoke_on_real_workspace(tmp_path):
     out = build_overview(tmp_path)
     assert out["mode"] == "flat"
     assert out["stats"]["entity_count"] == 3
+
+
+def test_build_overview_is_cached_and_invalidates_on_tree_change(tmp_path, monkeypatch):
+    _write_page(tmp_path, "person", "alice")
+    store_memory(
+        tmp_path,
+        content="alice did a thing",
+        entities=["person:alice"],
+        valid_from=datetime.date(2026, 5, 4),
+    )
+    calls = {"n": 0}
+    real = graph_overview.assemble_overview
+
+    def counting(payload):
+        calls["n"] += 1
+        return real(payload)
+
+    monkeypatch.setattr(graph_overview, "assemble_overview", counting)
+    first = build_overview(tmp_path)
+    again = build_overview(tmp_path)
+    assert calls["n"] == 1
+    assert again is first
+    _write_page(tmp_path, "person", "bob")
+    build_overview(tmp_path)
+    assert calls["n"] == 2
+
+
+def test_refreshing_existing_workspace_does_not_evict_others(tmp_path, monkeypatch):
+    monkeypatch.setattr(graph_overview, "_CACHE_MAX", 2)
+    ws_a = tmp_path / "a"
+    ws_b = tmp_path / "b"
+    for ws, slug in ((ws_a, "alice"), (ws_b, "bob")):
+        ws.mkdir()
+        _write_page(ws, "person", slug)
+    get_full_graph_cached(ws_a)
+    get_full_graph_cached(ws_b)
+    _write_page(ws_b, "person", "carol")
+    get_full_graph_cached(ws_b)
+    assert ws_a.resolve() in graph_overview._cache
+    assert len(graph_overview._cache) == 2
