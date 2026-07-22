@@ -278,4 +278,65 @@ describe("WorkItemCard", () => {
     );
     expect(screen.queryByText("Questions")).not.toBeInTheDocument();
   });
+
+  it("shows the round and the activity for the running node only", () => {
+    render(<WorkItemCard item={{
+      kind: "workflow", id: "r1", label: "ticket-stage1-context", status: "running",
+      // The run's own clock (footer) must read distinctly from the running
+      // node's clock below: this run also spent 120s on the finished node
+      // before the still-running one started 261s ago, so its total is older.
+      startedAt: Date.now() - 381_000, endedAt: null,
+      nodes: [
+        { id: "resolve-org", label: "Resolve org", status: "done", durationS: 120 },
+        // round/maxRounds is the agent-round axis — distinct from iteration/budget
+        // (the node's visit count), which PassChip renders. Not the same "10".
+        { id: "consolidate", label: "Consolidate", status: "running", startedAt: Date.now() / 1000 - 261,
+          round: 3, maxRounds: 10, activity: { tool: "read_file", target: "investigation.json", at: 0 } },
+      ],
+    }} />);
+
+    expect(screen.getByText("2:00")).toBeInTheDocument();       // finished node duration
+    expect(screen.getByText(/4:2\d/)).toBeInTheDocument();       // running node clock
+    expect(screen.getByText(/3.*10/)).toBeInTheDocument();       // round 3 of 10
+    expect(screen.getByText(/investigation\.json/)).toBeInTheDocument();
+  });
+
+  it("shows no activity line for a finished node", () => {
+    render(<WorkItemCard item={{
+      kind: "workflow", id: "r1", label: "wf", status: "done",
+      startedAt: 0, endedAt: 1,
+      nodes: [{ id: "a", label: "A", status: "done", durationS: 3,
+                activity: { tool: "read_file", target: "stale.json", at: 0 } }],
+    }} />);
+    expect(screen.queryByText(/stale\.json/)).not.toBeInTheDocument();
+  });
+
+  it("renders pending nodes muted and without a clock", () => {
+    render(<WorkItemCard item={{
+      kind: "workflow", id: "r1", label: "wf", status: "running",
+      startedAt: Date.now() - 1000, endedAt: null,
+      nodes: [
+        { id: "consolidate", label: "Consolidate", status: "running", startedAt: Date.now() / 1000 - 5 },
+        { id: "report", label: "Report", status: "pending" },
+      ],
+    }} />);
+    const pending = screen.getByText("Report");
+    expect(pending).toBeInTheDocument();
+    expect(pending.parentElement?.textContent).not.toMatch(/\d:\d\d/);
+  });
+
+  it("counts the nodes the run has touched, with no denominator", () => {
+    render(<WorkItemCard item={{
+      kind: "workflow", id: "r1", label: "wf", status: "running",
+      startedAt: Date.now() - 1000, endedAt: null,
+      nodes: [
+        { id: "a", label: "A", status: "done", durationS: 1 },
+        { id: "b", label: "B", status: "running", startedAt: Date.now() / 1000 },
+        { id: "c", label: "C", status: "pending" },
+      ],
+    }} />);
+    // Two touched (done + running); the pending tail is not a promise and is not counted.
+    expect(screen.getByText(/2 nodes/)).toBeInTheDocument();
+    expect(screen.queryByText(/of 3/)).not.toBeInTheDocument();
+  });
 });

@@ -2,7 +2,9 @@ import { Check, GitBranch, HelpCircle, Loader2, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { cn } from "@/lib/utils";
+import { activeNode, formatElapsed, touchedNodeCount, useTicker } from "@/lib/work-format";
 import type { WorkBranch, WorkItem, WorkNode } from "@/lib/types";
+import { NodeActivityLine } from "./NodeActivityLine";
 
 // Status icon vocabulary matches ToolBlocks.tsx: spinner for running,
 // check for done, X for failed, muted dot for pending.
@@ -26,6 +28,22 @@ function PassChip({ iteration, budget }: { iteration?: number; budget?: number }
   );
 }
 
+// Elapsed shown on the right of a node row: a live clock derived from the
+// node's own start instant while running, or its recorded duration once
+// finished. A duration is already a span of seconds, not a timestamp — it is
+// formatted through the same helper but anchored at 0, never treated as a
+// start instant to diff against "now". Absent for pending nodes and for
+// older records that predate these fields (additive only).
+function nodeElapsed(node: WorkNode, now: number): string | null {
+  if (node.status === "running" && node.startedAt != null) {
+    return formatElapsed(node.startedAt * 1000, now);
+  }
+  if ((node.status === "done" || node.status === "failed") && node.durationS != null) {
+    return formatElapsed(0, node.durationS * 1000);
+  }
+  return null;
+}
+
 function BranchStatusIcon({ status }: { status: WorkBranch["status"] }) {
   if (status === "done") return <Check className="h-3 w-3 text-emerald-600" aria-hidden />;
   if (status === "failed") return <X className="h-3 w-3 text-destructive" aria-hidden />;
@@ -44,6 +62,13 @@ function ItemStatusIcon({ status }: { status: WorkItem["status"] }) {
 /** Presentational card for one WorkItem (workflow or sub-agent). */
 export function WorkItemCard({ item }: { item: WorkItem }): JSX.Element {
   const { t } = useTranslation();
+  // One ticker drives every live clock in this card; frozen (no re-render)
+  // once the item is no longer running, so a finished node's clock never ticks.
+  const now = useTicker(item.status === "running");
+  // The single node the round/activity detail attaches to — reused from Task 12
+  // rather than re-derived, so the panel and the chat strip agree on which node
+  // is "the" running one.
+  const runningNode = activeNode(item);
 
   return (
     <div className="w-full rounded-lg border border-border/60 bg-muted/25 px-3 py-2">
@@ -90,43 +115,78 @@ export function WorkItemCard({ item }: { item: WorkItem }): JSX.Element {
 
       {/* Workflow: node list with optional nested parallel branches */}
       {item.kind === "workflow" && item.nodes && item.nodes.length > 0 && (
-        <ul className="mt-1.5 flex flex-col gap-0.5 pl-5">
-          {item.nodes.map((node, ni) => (
-            <li key={`${node.id}-${ni}`}>
-              <div className="flex items-center gap-2 text-[12.5px]">
-                <NodeStatusIcon status={node.status} />
-                <span
-                  className={cn(
-                    "text-foreground/80",
-                    node.status === "failed" && "text-destructive",
-                    node.status === "pending" && "text-muted-foreground/60",
-                  )}
-                >
-                  {node.label ?? node.id}
-                </span>
-                <PassChip iteration={node.iteration} budget={node.budget} />
-              </div>
-              {/* Parallel branches: indented beneath the node with a left rail */}
-              {node.branches && node.branches.length > 0 && (
-                <ul className="ml-4 mt-0.5 flex flex-col gap-0.5 border-l border-border/50 pl-3">
-                  {node.branches.map((branch, bi) => (
-                    <li key={`${branch.id}-${bi}`} className="flex items-center gap-2 text-[12px]">
-                      <BranchStatusIcon status={branch.status} />
-                      <span
-                        className={cn(
-                          "text-foreground/70",
-                          branch.status === "failed" && "text-destructive",
-                        )}
-                      >
-                        {branch.label ?? branch.id}
+        <>
+          <ul className="mt-1.5 flex flex-col gap-0.5 pl-5">
+            {item.nodes.map((node, ni) => {
+              const elapsed = nodeElapsed(node, now);
+              // The round/activity detail is scoped to the single active node
+              // (not merely any node whose status happens to read "running"),
+              // and only when it has something to show — no empty indent.
+              const showDetail =
+                node === runningNode &&
+                (node.activity != null || (node.round != null && node.maxRounds != null));
+              return (
+                <li key={`${node.id}-${ni}`}>
+                  <div className="flex items-center gap-2 text-[12.5px]">
+                    <NodeStatusIcon status={node.status} />
+                    <span
+                      className={cn(
+                        "text-foreground/80",
+                        node.status === "failed" && "text-destructive",
+                        node.status === "pending" && "text-muted-foreground/60",
+                      )}
+                    >
+                      {node.label ?? node.id}
+                    </span>
+                    <PassChip iteration={node.iteration} budget={node.budget} />
+                    {elapsed != null && (
+                      <span className="ml-auto shrink-0 tabular-nums text-[11px] text-muted-foreground">
+                        {elapsed}
                       </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </li>
-          ))}
-        </ul>
+                    )}
+                  </div>
+                  {showDetail && (
+                    <div className="mt-0.5 flex flex-col gap-0.5 pl-5">
+                      {node.round != null && node.maxRounds != null && (
+                        <div className="text-[11px] text-muted-foreground">
+                          {t("work.round", { round: node.round, budget: node.maxRounds })}
+                        </div>
+                      )}
+                      {node.activity && <NodeActivityLine activity={node.activity} />}
+                    </div>
+                  )}
+                  {/* Parallel branches: indented beneath the node with a left rail */}
+                  {node.branches && node.branches.length > 0 && (
+                    <ul className="ml-4 mt-0.5 flex flex-col gap-0.5 border-l border-border/50 pl-3">
+                      {node.branches.map((branch, bi) => (
+                        <li key={`${branch.id}-${bi}`} className="flex items-center gap-2 text-[12px]">
+                          <BranchStatusIcon status={branch.status} />
+                          <span
+                            className={cn(
+                              "text-foreground/70",
+                              branch.status === "failed" && "text-destructive",
+                            )}
+                          >
+                            {branch.label ?? branch.id}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+          {/* Footer: nodes touched (never "N of M" — the pending tail is not a
+              promise) and the run's total elapsed. */}
+          <div className="mt-1 flex items-center gap-1.5 pl-5 text-[11px] text-muted-foreground">
+            <span>{t("work.nodeCount", { count: touchedNodeCount(item) })}</span>
+            <span aria-hidden>·</span>
+            <span className="tabular-nums">
+              {formatElapsed(item.startedAt, item.endedAt ?? now)}
+            </span>
+          </div>
+        </>
       )}
 
       {/* Sub-agent: compact step count */}

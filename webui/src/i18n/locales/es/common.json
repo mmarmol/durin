@@ -2220,6 +2220,20 @@
     "finished": "Finalizadas ({{count}})",
     "empty": "Sin trabajo activo",
     "close": "Cerrar panel de trabajo",
+    "round": "ronda {{round}} de {{budget}}",
+    "nodeCount_one": "{{count}} nodo",
+    "nodeCount_other": "{{count}} nodos",
+    "activity": {
+      "fallback": "{{tool}}",
+      "read_file": "leyendo",
+      "write_file": "escribiendo",
+      "edit_file": "editando",
+      "exec": "ejecutando",
+      "grep": "buscando",
+      "web_search": "buscando en la web",
+      "web_fetch": "descargando",
+      "memory_search": "buscando en memoria"
+    },
     "strip": {
       "statusRunning": "en curso",
       "statusDone": "finalizado",
