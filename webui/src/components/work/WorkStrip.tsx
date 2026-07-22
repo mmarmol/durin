@@ -67,13 +67,17 @@ export function WorkStrip({
   const needsInput = active.filter((w) => w.status === "needs_input");
   const running = active.length > 0;
   const shown = running ? null : flash;
-  // Only meaningful for the single-item case (see body below); computed here,
-  // ahead of the early return, so the ticker hook always runs unconditionally.
-  const node = active.length === 1 ? activeNode(active[0]) : undefined;
+  const warn = needsInput.length > 0;
+  // Only meaningful for the single-item, non-warn case (see body below);
+  // computed here, ahead of the early return, so the ticker hook always runs
+  // unconditionally. Gated on `!warn` too: WorkNode has no "paused" state, so
+  // the node a needs_input run is blocked on most plausibly still carries
+  // status: "running" with a startedAt — and the warn branch below never
+  // reads `node`/`now`, so without this gate the 1-second ticker would keep
+  // running for as long as the human takes to answer.
+  const node = !warn && active.length === 1 ? activeNode(active[0]) : undefined;
   const now = useTicker(node?.startedAt != null);
   if (!running && !shown) return null;
-
-  const warn = needsInput.length > 0;
 
   let icon: JSX.Element;
   let body: JSX.Element;

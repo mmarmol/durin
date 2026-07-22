@@ -65,6 +65,23 @@ it("prioritizes needs_input over running and offers Respond", () => {
   expect(screen.queryByText(/in progress/)).not.toBeInTheDocument();
 });
 
+it("does not drive the ticker for a single needs_input item whose blocking node is still status: running", () => {
+  // WorkNode has no "paused" state, so the node a needs_input run is blocked
+  // on most plausibly still reports status: "running" with a startedAt. The
+  // warn branch never reads the node/clock, so this must not start the
+  // 1-second ticker — it would otherwise spin for as long as the human takes
+  // to answer.
+  const waiting = item({
+    status: "needs_input",
+    nodes: [{ id: "gather", label: "Gather", status: "running", startedAt: 1 }],
+  });
+  render(wrap(<WorkStrip active={[waiting]} finished={[]} onOpen={() => {}} />));
+  expect(
+    screen.getByText("ticket-stage1-context needs your response"),
+  ).toBeInTheDocument();
+  expect(vi.getTimerCount()).toBe(0);
+});
+
 it("flashes finished when the last active item ends, then clears", () => {
   const { rerender, container } = render(
     wrap(<WorkStrip active={[item()]} finished={[]} onOpen={() => {}} />),
@@ -139,4 +156,16 @@ it("counts only the nodes the run has touched, excluding the pending tail", () =
   // Two touched (done + running); the two-node pending tail is not counted.
   expect(screen.getByText(/Consolidate · 0:00 · 2 nodes/)).toBeInTheDocument();
   expect(screen.queryByText(/4 nodes/)).not.toBeInTheDocument();
+});
+
+it("uses the singular node count when only one node has been touched", () => {
+  vi.setSystemTime(new Date(2024, 0, 1, 0, 0, 0));
+  const startedAt = Math.floor(Date.now() / 1000);
+  const withOneNode = item({
+    nodes: [{ id: "gather", label: "Gather", status: "running", startedAt }],
+  });
+  render(wrap(<WorkStrip active={[withOneNode]} finished={[]} onOpen={() => {}} />));
+  // Anchored on `$` so a regression to the plural ("1 nodes") would not
+  // satisfy this match.
+  expect(screen.getByText(/Gather · 0:00 · 1 node$/)).toBeInTheDocument();
 });
