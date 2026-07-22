@@ -24,6 +24,16 @@ previous tag — highlights first, then changes grouped by area.
   had already completed are preserved in its session instead of vanishing
   with the process. (#428)
 
+### Fixes
+
+- **Concurrent workflow runs can no longer prune a live run's working folder.**
+  Run folders are pruned to the most recent `workflow.keep_runs`, but the cut
+  was by folder age alone — a long-running node freezes its folder's age, so
+  enough runs starting during it could delete a mid-flight run's files out
+  from under it. Runs that are still executing (or paused waiting for input,
+  which resume into the same folder) are now exempt from pruning and don't
+  consume retention slots, matching the protection run manifests already had.
+
 ## 0.3.4 — 2026-07-21
 
 ### Highlights
