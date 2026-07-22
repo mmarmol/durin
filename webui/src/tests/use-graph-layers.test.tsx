@@ -75,4 +75,26 @@ describe("useGraphLayers", () => {
     await act(async () => { changed = await result.current.refreshOverview(); });
     expect(changed).toBe(true);
   });
+
+  it("enterEgo drills into the ego neighborhood", async () => {
+    const { result } = renderHook(() => useGraphLayers(true, () => "tok"));
+    await waitFor(() => expect(result.current.overview).not.toBeNull());
+    await act(() => result.current.enterEgo("person:a", "A"));
+    expect(result.current.layer).toEqual({ kind: "ego", ref: "person:a", name: "A" });
+    expect(result.current.focusGraph).not.toBeNull();
+    expect(result.current.totalMembers).toBeNull();
+  });
+
+  it("a failed drill keeps the current layer and sets error", async () => {
+    api.fetchClusterSubgraph.mockRejectedValue(new Error("net down"));
+    api.fetchMemorySubgraph.mockRejectedValue(new Error("net down"));
+    const { result } = renderHook(() => useGraphLayers(true, () => "tok"));
+    await waitFor(() => expect(result.current.overview).not.toBeNull());
+    await act(() => result.current.enterCluster("topic:m0", "m0"));
+    expect(result.current.layer.kind).toBe("overview");
+    expect(result.current.error).toBeTruthy();
+    await act(() => result.current.enterEgo("person:a", "A"));
+    expect(result.current.layer.kind).toBe("overview");
+    expect(result.current.error).toBeTruthy();
+  });
 });
