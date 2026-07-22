@@ -1295,6 +1295,8 @@
     "historyRetention": "history and working folders keep the most recent runs (workflow.keep_runs)",
     "copySession": "copy session key",
     "sessionCopied": "session key copied",
+    "copyOutput": "copy final output",
+    "outputCopied": "final output copied",
     "workerLabel": "worker {{index}}",
     "branchLabel": "branch {{id}}",
     "needsInputTitle": "Waiting for your input",
@@ -1321,7 +1323,14 @@
       "ok": "ok",
       "no_session": "no session",
       "persist_failed": "save failed",
-      "node_failed": "failed"
+      "node_failed": "failed",
+      "completed": "completed",
+      "running": "running",
+      "needs_input": "waiting for input",
+      "exhausted": "retries exhausted",
+      "aborted": "aborted",
+      "crashed": "crashed",
+      "cancelled": "cancelled"
     }
   },
   "runs": {
@@ -1335,7 +1344,12 @@
     "empty": "No runs match this filter.",
     "subOf": "sub of {{id}}",
     "countLabel_one": "{{count}} run",
-    "countLabel_other": "{{count}} runs"
+    "countLabel_other": "{{count}} runs",
+    "selectPrompt": "Select a run",
+    "selectHint": "Its node trace, timings, sub-runs and final output show up here.",
+    "subRuns": "sub-runs",
+    "partOf": "part of {{workflow}}",
+    "backToList": "back to runs"
   },
   "loops": {
     "title": "Loops",
