@@ -759,6 +759,20 @@ class WorkflowEngine:
                 final_output = output
                 final_output_node = node.id
                 current = node.next
+                # A nested run can be cancelled entirely inside this call: the nested
+                # engine notices and stops itself, but SubworkflowRunner.__call__ returns
+                # a plain string (other callers depend on that shape), so no status
+                # crosses back with it. Ordinarily the next loop iteration's cancel_check
+                # at the top would catch it — but when this was the last node, there is
+                # no next iteration, and the walk would otherwise fall through to the
+                # completed result below, misreporting a cancelled run as completed.
+                # Re-consult here so this path agrees with the top-of-loop check above
+                # on status and shape.
+                if self._cancel_check is not None and self._cancel_check():
+                    return WorkflowResult(
+                        status="cancelled", final_output=final_output, runs=runs,
+                        run_id=run_id, final_output_node=final_output_node,
+                    )
 
             elif isinstance(node, ParallelNode):
                 if node.worker is not None:
