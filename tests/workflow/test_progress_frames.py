@@ -18,8 +18,20 @@ def test_finished_frames_map_status_and_label():
     assert frames[0]["label"] == "Scan the repo"
     assert frames[0]["route_label"] == "pass"
     assert frames[0]["budget"] == 3
-    # A run row whose node id is absent from the definition falls back to the id.
+    # No prompt on the node -> no sentence to show.
+    assert frames[0]["description"] == ""
+    # A run row whose node id is absent from the definition falls back to the id
+    # for the label, and to an empty description (no node to read a prompt from) —
+    # it must not raise.
     assert frames[1]["label"] == "fix"
+    assert frames[1]["description"] == ""
+
+
+def test_finished_frames_carry_the_prompt_sentence_as_description():
+    node = SimpleNamespace(id="judge", title="", prompt="You are the JUDGE. Be strict.",
+                           command="", script="")
+    runs = [SimpleNamespace(node_id="judge", status="ok", route_label=None, iteration=1, budget=None)]
+    assert finished_frames(_wf(judge=node), runs)[0]["description"] == "You are the JUDGE"
 
 
 def test_finished_frames_treat_persist_failed_as_failed():
@@ -31,10 +43,16 @@ def test_running_frame_marks_the_node_running():
     node = SimpleNamespace(id="judge", title="Judge", prompt="", command="", script="")
     frame = running_frame(node, iteration=2, budget=5)
     assert frame == {
-        "id": "judge", "label": "Judge", "status": "running",
+        "id": "judge", "label": "Judge", "description": "", "status": "running",
         "route_label": None, "iteration": 2, "budget": 5, "started_at": None,
         "activity": None, "round": None, "max_rounds": None,
     }
+
+
+def test_running_frame_carries_the_prompt_sentence_as_description():
+    node = SimpleNamespace(id="judge", title="", prompt="You are the JUDGE. Be strict.",
+                           command="", script="")
+    assert running_frame(node, iteration=1, budget=None)["description"] == "You are the JUDGE"
 
 
 def test_running_frame_carries_started_at():

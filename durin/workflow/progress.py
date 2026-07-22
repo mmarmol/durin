@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from durin.workflow.spec import node_label
+from durin.workflow.spec import node_description, node_label
 
 # Argument keys that name what a tool acted on, in priority order. Mirrors the
 # order the web UI uses to summarize a tool call, so the same call reads the same
@@ -42,6 +42,11 @@ def _label(workflow: Any, node_id: str) -> str:
     return node_label(node) if node is not None else node_id
 
 
+def _description(workflow: Any, node_id: str) -> str:
+    node = getattr(workflow, "nodes", {}).get(node_id)
+    return node_description(node) if node is not None else ""
+
+
 def _finished_status(status: str) -> str:
     return "failed" if status in ("node_failed", "persist_failed") else "done"
 
@@ -52,6 +57,7 @@ def finished_frames(workflow: Any, runs: list[Any]) -> list[dict]:
         {
             "id": r.node_id,
             "label": _label(workflow, r.node_id),
+            "description": _description(workflow, r.node_id),
             "status": _finished_status(r.status),
             "route_label": getattr(r, "route_label", None),
             "iteration": r.iteration,
@@ -83,6 +89,7 @@ def running_frame(node: Any, *, iteration: int, budget: int | None,
     return {
         "id": node.id,
         "label": node_label(node),
+        "description": node_description(node),
         "status": "running",
         "route_label": None,
         "iteration": iteration,
