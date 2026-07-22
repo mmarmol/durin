@@ -471,6 +471,33 @@ def list_all_runs(workspace: str | Path, limit: int = 50) -> list[dict]:
 _TERMINAL_STATUSES = {"completed", "exhausted", "aborted", "cancelled", "crashed"}
 
 
+def live_run_ids(workspace: str | Path) -> set[str]:
+    """Run ids whose working folders must survive folder pruning: runs still
+    executing, plus paused ``needs_input`` runs that can be resumed into the
+    same folder. The same set of states ``prune_manifests`` refuses to delete —
+    the folder pruner and the manifest pruner must agree on what "live" means,
+    or a resumable run keeps its manifest but loses its files. A ``needs_input``
+    record with no re-entry node cannot be resumed (the resume endpoints reject
+    it), so it is not owed protection. Unreadable manifests are skipped."""
+    out: set[str] = set()
+    root = runs_root(workspace)
+    if not root.is_dir():
+        return out
+    for f in root.glob("*/*.json"):
+        if f.name == ".cursor.json":
+            continue
+        try:
+            rec = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        status = rec.get("status")
+        if status == "running" or (status == "needs_input" and rec.get("needs_input_node")):
+            rid = rec.get("run_id")
+            if rid:
+                out.add(rid)
+    return out
+
+
 def prune_manifests(workspace: str | Path, name: str, keep: int = 20) -> None:
     """Delete the oldest terminal run manifests for *name* beyond the *keep* most
     recent, keyed by ``ts``. Best-effort: any OSError is swallowed, so a failure here

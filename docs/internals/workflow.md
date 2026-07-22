@@ -97,8 +97,14 @@ hand a copy down a chain. Parallel branches fork the run's working folder along 
 workspace: a writing branch starts from the folder's current files, and its folder writes
 reconcile back (choose/union) exactly like workspace writes; read branches and dynamic
 fan-out workers are handed the shared folder directly. The `.workflow` tree gitignores
-itself and is pruned to recent runs. (Real deliverables a node writes into the workspace
-proper are the separate, already-shared filesystem channel.) **When a node routes**, the engine derives a verdict from what the node produced
+itself and is pruned to recent runs — with a status exemption: folders belonging to runs
+that are still executing, or paused at `needs_input` with a resume point, are never
+deleted and never count toward the retention window (`prune_runs`'s `protect` set, fed
+from `run_log.live_run_ids`). Age alone cannot protect a live run — a long node freezes
+its folder's mtime, so enough concurrent runs starting during it would otherwise evict
+a mid-flight run's working folder. The folder pruner and the manifest pruner (§4a
+Retention) therefore agree on what "live" means. (Real deliverables a node writes into
+the workspace proper are the separate, already-shared filesystem channel.) **When a node routes**, the engine derives a verdict from what the node produced
 and follows an edge. A node may route in one of two shapes:
 
 **Binary routing** (`on_pass`/`on_fail`): a routing node ends its own reply with a `PASS`/`FAIL`

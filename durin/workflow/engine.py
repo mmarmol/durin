@@ -256,7 +256,11 @@ class WorkflowEngine:
             return preflight
 
         if self._workspace is not None and work_dir_override is None:
-            prune_runs(self._workspace, keep=self._prune_keep)
+            # Live runs are exempt from pruning by status, not by age: a long node
+            # freezes its folder's mtime, and enough concurrent runs starting during
+            # it would otherwise evict a mid-flight run's working folder.
+            prune_runs(self._workspace, keep=self._prune_keep,
+                       protect=run_log.live_run_ids(self._workspace))
         runs: list[NodeRun] = []
         # The run's shared working folder is fixed here (not in the walk) so the
         # manifest can record it from the very first write — an in-flight run's

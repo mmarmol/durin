@@ -31,13 +31,21 @@ def artifact_dir(base: str | Path, run_id: str, node_id: str, iteration: int | N
     return d
 
 
-def prune_runs(base: str | Path, keep: int = 20) -> None:
-    """Best-effort: keep the `keep` most-recent run subtrees, remove older ones."""
+def prune_runs(base: str | Path, keep: int = 20, protect: set[str] | None = None) -> None:
+    """Best-effort: keep the `keep` most-recent run subtrees, remove older ones.
+
+    ``protect`` names run ids that are never deleted and never counted toward
+    ``keep`` — the caller passes the runs still executing or paused awaiting
+    resume. Age alone cannot protect a live run: a long node freezes its
+    folder's mtime, so enough newer runs starting during it would push the
+    live run out of the retained window and delete its files mid-run.
+    """
     try:
         root = Path(base) / ARTIFACT_ROOT
         if not root.is_dir():
             return
-        runs = sorted((p for p in root.iterdir() if p.is_dir()),
+        protected = protect or set()
+        runs = sorted((p for p in root.iterdir() if p.is_dir() and p.name not in protected),
                       key=lambda p: p.stat().st_mtime, reverse=True)
         for old in runs[keep:]:
             shutil.rmtree(old, ignore_errors=True)

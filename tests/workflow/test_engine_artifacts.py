@@ -258,8 +258,9 @@ def test_completed_result_lists_output_files(tmp_path):
 def test_engine_prune_keep_is_wired(tmp_path):
     import durin.workflow.engine as engine_mod
     seen = {}
-    def fake_prune(base, keep=20):
+    def fake_prune(base, keep=20, protect=None):
         seen["keep"] = keep
+        seen["protect"] = protect
     orig = engine_mod.prune_runs
     engine_mod.prune_runs = fake_prune
     try:
@@ -269,6 +270,9 @@ def test_engine_prune_keep_is_wired(tmp_path):
     finally:
         engine_mod.prune_runs = orig
     assert seen["keep"] == 5
+    # The engine must hand the pruner the live-run exemption set (empty here —
+    # no other run is in flight — but always a set, never omitted).
+    assert seen["protect"] == set()
 
 
 # work_dir_override: nested/subworkflow runs must not prune or crash the parent's folder
