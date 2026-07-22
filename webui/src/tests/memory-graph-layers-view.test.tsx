@@ -294,6 +294,27 @@ describe("MemoryGraphView layered", () => {
     expect(screen.getByText(/1[.,]?238/)).toBeInTheDocument();
   });
 
+  it("shows the overview error banner without blanking the still-loaded raw graph", async () => {
+    // The reachable middle state: the raw graph loaded fine (fetchMemoryGraph
+    // resolves) but the overview never has — layers.overview stays null while
+    // layers.error is set. Pre-fix, neither the slim banner (gated on a
+    // last-good overview) nor the full-frame error (gated on rawData == null)
+    // fires, so the failure is completely silent.
+    vi.mocked(api.fetchMemoryGraph).mockResolvedValue(RAW_DATA);
+    vi.mocked(api.fetchMemoryGraphOverview).mockRejectedValue(new Error("boom"));
+    render(wrap(<MemoryGraphView active />));
+
+    await waitFor(() =>
+      expect(screen.getByText(/refresh the graph/i)).toBeInTheDocument(),
+    );
+    expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument();
+    // Exactly one error surface (the slim banner) — not also the full-frame
+    // duplicate, which would mean the raw view got replaced instead of kept.
+    expect(screen.queryAllByText(/refresh the graph/i)).toHaveLength(1);
+    // The canvas is still the thing on screen, driven by the raw graph.
+    expect(document.querySelector("canvas")).not.toBeNull();
+  });
+
   it("shows a dismissible stale-cluster pill after a drill 404s, and restores the overview", async () => {
     // A single bubble (no hubs/loose) so the click below is unambiguous —
     // see the dispatch comment for why this doesn't need real geometry.

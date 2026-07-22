@@ -49,9 +49,16 @@ export function useGraphLayers(
     try {
       const payload = await fetchMemoryGraphOverview(token);
       const json = JSON.stringify(payload.stats) + payload.mode;
-      const changed = overviewJson.current !== null && overviewJson.current !== json;
+      const prior = overviewJson.current;
+      const changed = prior !== null && prior !== json;
       overviewJson.current = json;
-      setOverview(payload);
+      // Only replace the overview object when the payload actually differs —
+      // an identical refresh must not hand downstream consumers a new
+      // reference, or the sim-node rebuild it triggers reheats the layout
+      // and wipes any positions the user has pinned.
+      if (prior === null || prior !== json) {
+        setOverview(payload);
+      }
       setError(null);
       return changed;
     } catch (e) {

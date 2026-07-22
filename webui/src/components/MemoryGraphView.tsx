@@ -1677,7 +1677,11 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
             user why they landed back here. Locally dismissible; re-armed by
             the effect above whenever a fresh staleness event lands. */}
         {effectiveView === "graph" && layers.notice === "staleCluster" && !staleDismissed ? (
-          <div className="flex shrink-0 items-center gap-2 border-b border-border/40 bg-muted/40 px-3 py-1.5 text-xs text-muted-foreground">
+          <div
+            role="status"
+            aria-live="polite"
+            className="flex shrink-0 items-center gap-2 border-b border-border/40 bg-muted/40 px-3 py-1.5 text-xs text-muted-foreground"
+          >
             <span className="flex-1">{t("memoryGraph.staleCluster")}</span>
             <button
               type="button"
@@ -1689,11 +1693,18 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
             </button>
           </div>
         ) : null}
-        {/* Overview refresh failed but we still have the last good payload —
-            keep the canvas showing it (below) and just flag the failure,
-            rather than blanking a working view. */}
-        {effectiveView === "graph" && layers.error != null && layers.overview != null ? (
-          <div className="flex shrink-0 items-center gap-2 border-b border-border/40 bg-destructive/10 px-3 py-1.5 text-xs text-destructive">
+        {/* Overview call failed but there's still something on screen — either
+            the last good overview payload, or (when the overview has never
+            succeeded) the raw graph loaded independently via useMemoryGraph.
+            Either way, keep the canvas showing it (below) and just flag the
+            failure instead of blanking a working view. */}
+        {effectiveView === "graph" &&
+        layers.error != null &&
+        (layers.overview != null || rawData != null) ? (
+          <div
+            role="alert"
+            className="flex shrink-0 items-center gap-2 border-b border-border/40 bg-destructive/10 px-3 py-1.5 text-xs text-destructive"
+          >
             <span className="flex-1">{t("memoryGraph.loadError")}</span>
             <Button
               variant="outline"
@@ -1719,7 +1730,10 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
             a last-good overview), so fail the whole canvas area instead of
             leaving it blank. */}
         {effectiveView === "graph" && !error && layers.error != null && layers.overview == null && rawData == null ? (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm text-destructive">
+          <div
+            role="alert"
+            className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm text-destructive"
+          >
             <span>{t("memoryGraph.loadError")}</span>
             <Button variant="outline" size="sm" onClick={() => void layers.refreshOverview()}>
               {t("memoryGraph.retry")}
@@ -1794,7 +1808,11 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
             overview refresh triggered by the tab regaining focus; the new
             payload is already applied by the time this shows. */}
         {effectiveView === "graph" && mapChanged ? (
-          <div className="absolute right-3 top-3 z-10 rounded-md border border-border/50 bg-card/95 px-3 py-1.5 text-[11px] shadow-lg backdrop-blur">
+          <div
+            role="status"
+            aria-live="polite"
+            className="absolute right-3 top-3 z-10 rounded-md border border-border/50 bg-card/95 px-3 py-1.5 text-[11px] shadow-lg backdrop-blur"
+          >
             {t("memoryGraph.mapChanged")}
           </div>
         ) : null}

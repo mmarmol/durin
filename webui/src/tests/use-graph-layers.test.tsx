@@ -76,6 +76,21 @@ describe("useGraphLayers", () => {
     expect(changed).toBe(true);
   });
 
+  it("an unchanged refresh keeps the same overview reference", async () => {
+    // A real fetch never hands back the literal same JS object twice; mock a
+    // fresh (but content-identical) object per call so this exercises the
+    // signature comparison instead of trivially passing because the mock
+    // happens to resolve the same reference every time.
+    api.fetchMemoryGraphOverview.mockImplementation(() =>
+      Promise.resolve({ ...OVERVIEW }),
+    );
+    const { result } = renderHook(() => useGraphLayers(true, () => "tok"));
+    await waitFor(() => expect(result.current.overview).not.toBeNull());
+    const first = result.current.overview;
+    await act(async () => { await result.current.refreshOverview(); });
+    expect(result.current.overview).toBe(first);
+  });
+
   it("enterEgo drills into the ego neighborhood", async () => {
     const { result } = renderHook(() => useGraphLayers(true, () => "tok"));
     await waitFor(() => expect(result.current.overview).not.toBeNull());
