@@ -67,20 +67,11 @@ function workItemFromWorkflowEvent(
   ev: ToolProgressEvent,
   now: number,
 ): WorkItem | null {
-  const e = ev as {
-    call_id?: string;
-    phase?: string;
-    arguments?: unknown;
-    nodes?: Array<{
-      id: string;
-      label?: string;
-      status: "running" | "done" | "failed";
-      route_label?: string | null;
-      iteration?: number | null;
-      budget?: number | null;
-      branches?: Array<{ id: string; label?: string; status: "running" | "done" | "failed" }>;
-    }>;
-  };
+  // ev is already a ToolProgressEvent — its own `nodes` shape carries every
+  // field toWorkNodes reads (including the newer clock/round/activity ones).
+  // No local recast here: a narrower one previously shadowed those fields,
+  // making live frames look like they could never carry them.
+  const e = ev;
 
   const runId = e.call_id?.replace(/^workflow:/, "");
   if (!runId) return null;

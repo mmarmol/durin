@@ -97,3 +97,29 @@ it("does not flash on first mount with empty active and old finished items", () 
   );
   expect(container).toBeEmptyDOMElement();
 });
+
+it("shows the active node label and a ticking clock for a single running item", () => {
+  vi.setSystemTime(new Date(2024, 0, 1, 0, 0, 0));
+  const startedAt = Math.floor(Date.now() / 1000);
+  const withNode = item({
+    nodes: [
+      { id: "gather", status: "done" },
+      { id: "consolidate", label: "Consolidate", status: "running", startedAt },
+    ],
+  });
+  render(wrap(<WorkStrip active={[withNode]} finished={[]} onOpen={() => {}} />));
+  expect(screen.getByText("ticket-stage1-context")).toBeInTheDocument();
+  expect(screen.getByText(/Consolidate · 0:00 · 2 nodes/)).toBeInTheDocument();
+  expect(screen.queryByText(/in progress/)).not.toBeInTheDocument();
+
+  act(() => {
+    vi.advanceTimersByTime(5000);
+  });
+  expect(screen.getByText(/Consolidate · 0:05 · 2 nodes/)).toBeInTheDocument();
+});
+
+it("falls back to the status text when the item has nodes but none are running", () => {
+  const withDoneNodes = item({ nodes: [{ id: "gather", status: "done" }] });
+  render(wrap(<WorkStrip active={[withDoneNodes]} finished={[]} onOpen={() => {}} />));
+  expect(screen.getByText(/in progress/)).toBeInTheDocument();
+});

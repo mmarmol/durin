@@ -104,7 +104,7 @@ export interface ToolProgressEvent {
   nodes?: Array<{
     id: string;
     label?: string;
-    status: "running" | "done" | "failed";
+    status: "running" | "done" | "failed" | "pending";
     route_label?: string | null;
     iteration?: number | null;
     budget?: number | null;

@@ -2227,6 +2227,8 @@
       "runningMany": "{{count}} tasks in progress",
       "needsInput": "{{label}} needs your response",
       "needsInputMany": "{{count}} tasks need your response",
+      "nodes_one": "{{count}} node",
+      "nodes_other": "{{count}} nodes",
       "view": "View",
       "respond": "Respond"
     }

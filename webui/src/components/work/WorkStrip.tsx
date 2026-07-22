@@ -3,6 +3,7 @@ import { Check, HelpCircle, Loader2, PanelRight, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { cn } from "@/lib/utils";
+import { activeNode, formatElapsed, useTicker } from "@/lib/work-format";
 import type { WorkItem } from "@/lib/types";
 
 /** How long the finished/failed flash stays up after the last active item ends. */
@@ -16,7 +17,10 @@ const FLASH_MS = 6000;
  *
  * Reads the work state in priority order:
  *  - any item needs input → warn-tinted "<label> needs your response" + Respond
- *  - anything running     → neutral "<label> · in progress" (a count when >1)
+ *  - anything running     → neutral "<label> · in progress" (a count when >1);
+ *    for a single item with a node currently running, the in-progress text is
+ *    replaced by "<node label> · <live clock> · <n> nodes" so the strip keeps
+ *    changing during a long node instead of sitting on "in progress" for minutes
  *  - active just emptied  → transient finished/failed flash, then nothing
  *
  * The whole strip is one button that opens the work panel.
@@ -63,6 +67,10 @@ export function WorkStrip({
   const needsInput = active.filter((w) => w.status === "needs_input");
   const running = active.length > 0;
   const shown = running ? null : flash;
+  // Only meaningful for the single-item case (see body below); computed here,
+  // ahead of the early return, so the ticker hook always runs unconditionally.
+  const node = active.length === 1 ? activeNode(active[0]) : undefined;
+  const now = useTicker(node?.startedAt != null);
   if (!running && !shown) return null;
 
   const warn = needsInput.length > 0;
@@ -80,13 +88,22 @@ export function WorkStrip({
     );
   } else if (running) {
     icon = <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden />;
+    // Falls back to the plain status text when nothing is running yet (no
+    // node list, or none of the nodes have started) — old behavior preserved.
+    const runningSuffix =
+      node && node.startedAt != null
+        ? `${node.label ?? node.id} · ${formatElapsed(node.startedAt * 1000, now)} · ${t(
+            "work.strip.nodes",
+            { count: active[0].nodes?.length ?? 0 },
+          )}`
+        : t("work.strip.statusRunning");
     body =
       active.length === 1 ? (
         <>
           <span className="truncate font-medium text-foreground/90">
             {active[0].label}
           </span>
-          <span className="shrink-0"> · {t("work.strip.statusRunning")}</span>
+          <span className="shrink-0"> · {runningSuffix}</span>
         </>
       ) : (
         <span className="truncate">

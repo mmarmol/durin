@@ -2227,6 +2227,8 @@
       "runningMany": "{{count}} trabajos en curso",
       "needsInput": "{{label}} necesita tu respuesta",
       "needsInputMany": "{{count}} trabajos necesitan tu respuesta",
+      "nodes_one": "{{count}} nodo",
+      "nodes_other": "{{count}} nodos",
       "view": "Ver",
       "respond": "Responder"
     }
