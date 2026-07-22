@@ -13,7 +13,16 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import type { WorkflowRunNode, WorkflowRunResult } from "@/lib/api";
+import { formatElapsed, useTicker } from "@/lib/work-format";
 import { cn } from "@/lib/utils";
+
+/** Sum of every present value, or null if none are present — an absent sum reads as
+ *  "no data" rather than a fabricated 0 (e.g. a workflow with no completed runs yet
+ *  has no typical durations at all, not a typical of zero). */
+function sumKnown(values: Array<number | null | undefined>): number | null {
+  const known = values.filter((v): v is number => v != null);
+  return known.length > 0 ? known.reduce((a, b) => a + b, 0) : null;
+}
 
 function statusTone(status: string): string {
   if (status === "node_failed" || status === "persist_failed") {
@@ -66,8 +75,18 @@ export function CopyableKey({ value }: { value: string }) {
 // worker_index / static branch_id so concurrent units are legible, a status
 // chip and route verdict, a "continues session" chip when this row picks up
 // an earlier row's session (a resumed/looping node), the copyable session
-// key, and the node's (truncated) output.
-export function RunNodeRow({ run, continuesSession }: { run: WorkflowRunNode; continuesSession: boolean }) {
+// key, the node's (truncated) output, and — the wide surface's own columns —
+// how long it actually took, how long it typically takes, and what it produced.
+export function RunNodeRow({
+  run,
+  continuesSession,
+  typicalS,
+}: {
+  run: WorkflowRunNode;
+  continuesSession: boolean;
+  // Median seconds this node took across prior completed runs; absent with no history.
+  typicalS?: number;
+}) {
   const { t } = useTranslation();
   const verdict =
     run.route_label != null && run.route_label !== ""
@@ -78,6 +97,19 @@ export function RunNodeRow({ run, continuesSession }: { run: WorkflowRunNode; co
           ? "✗"
           : null;
   const isFinalPass = run.budget != null && run.iteration === run.budget;
+
+  // "took"/"typical" combined into one line rather than two separate elements:
+  // an actual duration can format to the same m:ss as its typical counterpart,
+  // and keeping both readings in a single text node avoids showing what looks
+  // like one duplicated number in two places.
+  const metaParts: string[] = [];
+  if (run.duration_s != null) {
+    metaParts.push(`${t("workflows.nodeDuration")} ${formatElapsed(0, run.duration_s * 1000)}`);
+  }
+  if (typicalS != null) {
+    metaParts.push(`${t("workflows.nodeTypical")} ${formatElapsed(0, typicalS * 1000)}`);
+  }
+
   return (
     <div className="flex flex-col gap-1 rounded border px-2 py-1.5">
       <div className="flex flex-wrap items-center gap-1.5">
@@ -127,6 +159,14 @@ export function RunNodeRow({ run, continuesSession }: { run: WorkflowRunNode; co
           {run.output}
         </div>
       )}
+      {metaParts.length > 0 && (
+        <div className="text-[10px] text-muted-foreground">{metaParts.join(" · ")}</div>
+      )}
+      {run.artifacts && run.artifacts.length > 0 && (
+        <div className="text-[10px] text-muted-foreground">
+          {t("workflows.nodeArtifacts")}: {run.artifacts.join(", ")}
+        </div>
+      )}
     </div>
   );
 }
@@ -161,6 +201,22 @@ export function RunDetail({
   const [answers, setAnswers] = useState("");
   const continues = continuesSessionFlags(result.runs);
   const outputFiles = result.output_files ?? [];
+  const activeNode = result.active_node;
+
+  // Ticks only while a node is actually in flight, so the header's elapsed total
+  // (below) advances live for a running run and freezes once there's nothing left
+  // for it to count up from.
+  const now = useTicker(activeNode != null);
+
+  // The run header's totals: actual elapsed (completed nodes' durations, plus the
+  // active node's live delta while one is running) alongside the typical total from
+  // prior runs — both sums, so they read as a direct comparison. Either is null
+  // (rendered as absent, not 0) when there is nothing to sum: an older manifest with
+  // no duration data, or a workflow with no completed-run history yet.
+  const completedS = sumKnown(result.runs.map((r) => r.duration_s));
+  const activeS = activeNode != null ? Math.max(0, now / 1000 - activeNode.started_at) : null;
+  const elapsedTotalS = completedS != null || activeS != null ? (completedS ?? 0) + (activeS ?? 0) : null;
+  const typicalTotalS = sumKnown(Object.values(result.typical_s ?? {}));
 
   // Reset answers when the run identity or needs_input status changes to avoid stale
   // textarea content on nested resume (same component instance with new result props).
@@ -238,10 +294,41 @@ export function RunDetail({
           <span className="font-medium">{t("workflows.cancelledTitle")}</span>
         </div>
       )}
+      {(elapsedTotalS != null || typicalTotalS != null) && (
+        <div className="flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
+          {elapsedTotalS != null && (
+            <span className="tabular-nums">
+              {t("workflows.runElapsed")} {formatElapsed(0, elapsedTotalS * 1000)}
+            </span>
+          )}
+          {typicalTotalS != null && (
+            <span>
+              {t("workflows.runTypicalTotal", { duration: formatElapsed(0, typicalTotalS * 1000) })}
+            </span>
+          )}
+        </div>
+      )}
       <div className="flex flex-col gap-1.5">
         {result.runs.map((run, i) => (
-          <RunNodeRow key={`${run.node_id}#${run.iteration}#${i}`} run={run} continuesSession={continues[i]} />
+          <RunNodeRow
+            key={`${run.node_id}#${run.iteration}#${i}`}
+            run={run}
+            continuesSession={continues[i]}
+            typicalS={result.typical_s?.[run.node_id]}
+          />
         ))}
+        {activeNode && (
+          <div className="flex flex-wrap items-center gap-1.5 rounded border border-amber-500/50 bg-amber-500/5 px-2 py-1.5">
+            <Loader2 className="h-3 w-3 shrink-0 animate-spin text-amber-600" aria-hidden />
+            <span className="font-mono text-[11px] font-medium">{activeNode.label}</span>
+            <span className="rounded bg-amber-500/10 px-1 py-0.5 text-[10px] text-amber-700 dark:text-amber-400">
+              {t("workflows.runStatus.running", "running")}
+            </span>
+            <span className="ml-auto shrink-0 tabular-nums text-[10px] text-muted-foreground">
+              {formatElapsed(activeNode.started_at * 1000, now)}
+            </span>
+          </div>
+        )}
       </div>
       {result.status === "completed" && result.final_output && (
         <div className="flex flex-col gap-0.5">

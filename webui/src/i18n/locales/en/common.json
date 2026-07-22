@@ -1303,6 +1303,11 @@
     "passOf": "pass {{iteration}} of {{budget}}",
     "finalPass": "final pass",
     "continuesSession": "continues session",
+    "nodeDuration": "took",
+    "nodeTypical": "typical",
+    "nodeArtifacts": "produced",
+    "runElapsed": "elapsed",
+    "runTypicalTotal": "prior runs ~{{duration}}",
     "persistentInParallelWarning": "This node is a branch of {{parallelId}} — persistent sessions aren't allowed on parallel units. Saving will fail.",
     "runStatus": {
       "ok": "ok",

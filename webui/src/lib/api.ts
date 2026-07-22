@@ -345,6 +345,11 @@ export type WorkflowRunNode = {
   budget?: number | null;
   status: string;
   route_label: string | null;
+  // Seconds this node took, once finished; absent/null for a row recorded before
+  // this field shipped.
+  duration_s?: number | null;
+  // Files this node added to the run's shared working folder.
+  artifacts?: string[];
 };
 
 export type WorkflowRunResult = {
@@ -360,6 +365,12 @@ export type WorkflowRunResult = {
   needs_input_node?: string;
   // relative paths in output_dir (completed runs)
   output_files?: string[];
+  // The node currently in flight, while status=="running"; absent once the run
+  // finishes or for a manifest recorded before this field shipped.
+  active_node?: { node_id: string; label: string; started_at: number } | null;
+  // Median seconds each node took across this workflow's recent completed runs,
+  // keyed by node_id; absent (or empty) when the workflow has no run history yet.
+  typical_s?: Record<string, number>;
 };
 
 // One row of a workflow's persisted run history (GET .../runs), newest-first.

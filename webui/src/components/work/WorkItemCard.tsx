@@ -65,9 +65,9 @@ export function WorkItemCard({ item }: { item: WorkItem }): JSX.Element {
   // One ticker drives every live clock in this card; frozen (no re-render)
   // once the item is no longer running, so a finished node's clock never ticks.
   const now = useTicker(item.status === "running");
-  // The single node the round/activity detail attaches to — reused from Task 12
-  // rather than re-derived, so the panel and the chat strip agree on which node
-  // is "the" running one.
+  // The single node the round/activity detail attaches to — shared with the chat
+  // strip's own lookup rather than re-derived here, so the panel and the strip
+  // always agree on which node is "the" running one.
   const runningNode = activeNode(item);
 
   return (

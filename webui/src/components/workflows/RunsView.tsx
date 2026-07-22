@@ -148,6 +148,21 @@ export function RunsView() {
     void refresh();
   }, [refresh]);
 
+  const anyRunning = useMemo(() => runs.some((r) => r.status === "running"), [runs]);
+
+  // While any listed run is still "running", poll the feed every 4 seconds — the
+  // same cadence useWorkState already uses, so the side panel and this screen never
+  // disagree about how fresh they are. The interval is torn down the moment a poll
+  // finds nothing running, so a screen left open on an all-finished feed doesn't
+  // keep polling forever.
+  useEffect(() => {
+    if (!anyRunning) return;
+    const id = setInterval(() => {
+      void refresh();
+    }, 4000);
+    return () => clearInterval(id);
+  }, [anyRunning, refresh]);
+
   const tray = useMemo(() => strandedRuns(runs), [runs]);
 
   const workflowNames = useMemo(

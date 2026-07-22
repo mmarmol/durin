@@ -1,10 +1,14 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
+import { I18nextProvider } from "react-i18next";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import i18n from "@/i18n";
+import { RunNodeRow } from "@/components/workflows/RunDetail";
 import { RunsView, strandedRuns } from "@/components/workflows/RunsView";
 import * as api from "@/lib/api";
+import { listAllWorkflowRuns } from "@/lib/api";
 import { ClientProvider } from "@/providers/ClientProvider";
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -195,5 +199,69 @@ describe("RunsView", () => {
     // Tray (built from strandedRuns) surfaces only the resumable one: its resume
     // form/textarea appears exactly once, not twice.
     expect(screen.getAllByPlaceholderText(/Type your answers/i)).toHaveLength(1);
+  });
+
+  it("polls while a run is still running", async () => {
+    vi.useFakeTimers();
+    // vi.restoreAllMocks() in afterEach only restores vi.spyOn spies, not the
+    // vi.fn() mocks vi.mock()'s factory returns — clear this mock's call
+    // history explicitly so counts from earlier tests in this file can't
+    // leak in and make a broken poll implementation look like it's working.
+    const listSpy = vi.mocked(listAllWorkflowRuns);
+    listSpy.mockClear();
+    listSpy.mockResolvedValue([
+      { workflow: "wf", run_id: "r1", status: "running", started_at: 1, task: "t" },
+    ] as never);
+
+    render(wrap(<RunsView />));
+    // Flush the mount effect's fetch before advancing the fake clock: at t=0
+    // no interval exists yet (it's only created once `anyRunning` is known),
+    // so there's nothing for advanceTimersByTimeAsync to iterate on until
+    // this initial async render settles.
+    await act(async () => {});
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(listSpy.mock.calls.length).toBeGreaterThan(1);
+    vi.useRealTimers();
+  });
+
+  it("stops polling once every run is finished", async () => {
+    vi.useFakeTimers();
+    const listSpy = vi.mocked(listAllWorkflowRuns);
+    listSpy.mockClear();
+    listSpy.mockResolvedValue([
+      { workflow: "wf", run_id: "r1", status: "completed", started_at: 1, task: "t" },
+    ] as never);
+
+    render(wrap(<RunsView />));
+    await act(async () => {});
+    await vi.advanceTimersByTimeAsync(5000);
+    const after = listSpy.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(listSpy.mock.calls.length).toBe(after);
+    vi.useRealTimers();
+  });
+});
+
+describe("RunNodeRow", () => {
+  it("renders duration, typical duration and artifacts on a node row", () => {
+    render(
+      <I18nextProvider i18n={i18n}>
+        <RunNodeRow
+          continuesSession={false}
+          typicalS={361}
+          run={{
+            node_id: "consolidate", iteration: 1, passed: null,
+            session_key: "workflow:r1:consolidate:1", worker_index: null, branch_id: null,
+            budget: null, status: "ok", route_label: null,
+            duration_s: 361.5, artifacts: ["context.json"],
+          }}
+        />
+      </I18nextProvider>,
+    );
+
+    expect(screen.getByText(/6:01/)).toBeInTheDocument();     // 361.5 s elapsed
+    expect(screen.getByText(/context\.json/)).toBeInTheDocument();
   });
 });

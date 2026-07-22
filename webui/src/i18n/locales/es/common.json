@@ -2184,6 +2184,11 @@
     "passOf": "pasada {{iteration}} de {{budget}}",
     "finalPass": "pasada final",
     "continuesSession": "continúa sesión",
+    "nodeDuration": "tardó",
+    "nodeTypical": "típico",
+    "nodeArtifacts": "produjo",
+    "runElapsed": "transcurrido",
+    "runTypicalTotal": "corridas previas ~{{duration}}",
     "persistentInParallelWarning": "Este nodo es una rama de {{parallelId}} — las sesiones persistentes no están permitidas en unidades paralelas. Guardar fallará.",
     "runStatus": {
       "ok": "ok",
