@@ -112,16 +112,12 @@ export interface ToolProgressEvent {
     started_at?: number | null;
     /** Seconds the node took, once finished. */
     duration_s?: number | null;
-    /** Median seconds this node took in prior completed runs; absent with no history. */
-    typical_s?: number | null;
     /** Agent round inside the node — distinct from `iteration`, the node's visit count. */
     round?: number | null;
     /** Denominator for `round` (e.g. "round 3 of 10"); distinct from `budget`,
      *  the node's visit budget across loop iterations. */
     max_rounds?: number | null;
     activity?: WorkActivity | null;
-    /** Files this node added to the run's shared working folder. */
-    artifacts?: string[] | null;
     /** One-line description of what this node does, from the workflow definition. */
     description?: string | null;
     /** Id of the sub-workflow node this node runs under, when nested. */
@@ -164,17 +160,14 @@ export interface WorkNode {
   startedAt?: number;
   /** Seconds the node took, once finished. */
   durationS?: number;
-  /** Median seconds this node took in prior completed runs; absent with no history. */
-  typicalS?: number;
   /** Agent round inside the node — distinct from `iteration`, the node's visit count. */
   round?: number;
   /** Denominator for `round` (e.g. "round 3 of 10"); distinct from `budget`,
    *  the node's visit budget across loop iterations. */
   maxRounds?: number;
   activity?: WorkActivity;
-  /** Files this node added to the run's shared working folder. */
-  artifacts?: string[];
-  /** Id of the sub-workflow node this node runs under, when nested. */
+  /** Id of the sub-workflow node this node runs under, when nested — the node
+   *  belongs to a nested run, not to this run's own graph. */
   parentNode?: string;
 }
 
@@ -191,8 +184,6 @@ export interface WorkItem {
   task?: string;
   /** The gate's questions when status=="needs_input"; absent otherwise. */
   needsInputDetail?: string;
-  /** Summed per-node medians from prior runs; absent when the workflow has no history. */
-  typicalTotalS?: number;
   /** Epoch milliseconds (matches `Date.now()`) — unlike WorkNode.startedAt, which is
    *  epoch seconds. Both producers in useWorkState.ts normalize to this unit. */
   startedAt: number;

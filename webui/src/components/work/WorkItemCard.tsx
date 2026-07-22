@@ -127,7 +127,15 @@ export function WorkItemCard({ item }: { item: WorkItem }): JSX.Element {
                 (node.activity != null || (node.round != null && node.maxRounds != null));
               return (
                 <li key={`${node.id}-${ni}`}>
-                  <div className="flex items-center gap-2 text-[12.5px]">
+                  {/* A node running inside a sub-workflow is not part of this
+                      run's own graph: rail it in, like a parallel branch, so the
+                      two are not read as siblings. */}
+                  <div
+                    className={cn(
+                      "flex items-center gap-2 text-[12.5px]",
+                      node.parentNode && "ml-3 border-l border-border/50 pl-2",
+                    )}
+                  >
                     <NodeStatusIcon status={node.status} />
                     <span
                       className={cn(
@@ -135,6 +143,9 @@ export function WorkItemCard({ item }: { item: WorkItem }): JSX.Element {
                         node.status === "failed" && "text-destructive",
                         node.status === "pending" && "text-muted-foreground/60",
                       )}
+                      // The node's own sentence, too long for this width, offered
+                      // on hover instead of replacing the short label.
+                      title={node.description}
                     >
                       {node.label ?? node.id}
                     </span>

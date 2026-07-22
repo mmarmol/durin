@@ -133,14 +133,14 @@ async def test_workflow_task_none_when_absent(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_workflow_task_carries_typical_total_s(tmp_path):
-    """typical_total_s must survive the pydantic BackgroundTask wrapping, not just
-    the collect_tasks dict — Result does not forbid extra fields, so a field
-    missing from the response model would be silently dropped here rather than
-    raising, and only a test that goes through TasksService.list() would notice."""
+async def test_the_response_model_declares_no_duration_estimate(tmp_path):
+    """Estimates are the executions screen's, and it reads the manifest itself.
+    A `typical_total_s` here would be dropped silently by the pydantic wrapping
+    (Result does not forbid extra fields) if the model ever lost the field —
+    so assert the contract has no such field at all rather than a value."""
     run_log.start_run(
         tmp_path, 'my-wf', 'r_typ', root_session_key='websocket:ctyp',
-        started_at=1.0, typical_s={'a': 42.0},
+        started_at=1.0, typical_s={'a': 42.0}, typical_total_s=42.0,
     )
     result = WorkflowResult(
         status='completed', final_output='done', run_id='r_typ',
@@ -153,7 +153,8 @@ async def test_workflow_task_carries_typical_total_s(tmp_path):
     svc = TasksService(workspace=tmp_path)
     res = await svc.list(TasksListQuery(session='websocket:ctyp'), _principal())
     wf = [t for t in res.tasks if t.kind == 'workflow'][0]
-    assert wf.typical_total_s == 42.0
+    assert 'typical_total_s' not in type(wf).model_fields
+    assert 'typical_total_s' not in wf.model_dump()
 
 
 # ---------------------------------------------------------------------------

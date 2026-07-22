@@ -490,7 +490,7 @@ describe("useWorkState", () => {
       version: 1, phase: "running", call_id: "workflow:r1", name: "workflow_progress",
       arguments: { workflow: "ticket-stage1-context", task: "TICKET_ID=23098" },
       nodes: [
-        { id: "resolve-org", label: "Resolve org", status: "done", duration_s: 119.8, typical_s: 120 },
+        { id: "resolve-org", label: "Resolve org", status: "done", duration_s: 119.8 },
         {
           id: "consolidate", label: "Consolidate", status: "running",
           started_at: 1700, round: 3, budget: 10,
@@ -501,7 +501,6 @@ describe("useWorkState", () => {
 
     const nodes = result.current.active[0].nodes!;
     expect(nodes[0].durationS).toBe(119.8);
-    expect(nodes[0].typicalS).toBe(120);
     expect(nodes[1].startedAt).toBe(1700);
     expect(nodes[1].round).toBe(3);
     expect(nodes[1].activity).toEqual({ tool: "read_file", target: "investigation.json", at: 1712 });
@@ -512,12 +511,11 @@ describe("useWorkState", () => {
     const { result } = await renderHookWithPolled([
       {
         kind: "workflow", id: "r1", label: "wf", status: "running",
-        started_at: 100, ended_at: null, session_key: null, typical_total_s: 1080,
+        started_at: 100, ended_at: null, session_key: null,
         nodes: [{ id: "consolidate", label: "Consolidate", status: "running", started_at: 140 }],
       },
     ]);
     expect(result.current.active[0].nodes![0].startedAt).toBe(140);
-    expect(result.current.active[0].typicalTotalS).toBe(1080);
   });
 
   it("keeps the run's true start when a live frame overwrites a polled item", async () => {
@@ -578,14 +576,14 @@ describe("useWorkState", () => {
     expect(result.current.active[0].startedAt).toBeGreaterThan(0);
   });
 
-  it("carries max rounds, artifacts, description and parent node from a live frame", () => {
+  it("carries max rounds, description and parent node from a live frame", () => {
     const { result } = renderHookWithFrame({
       call_id: "workflow:r2", name: "workflow_progress", phase: "running",
       arguments: { workflow: "flow-r2" },
       nodes: [
         {
           id: "sub-step", label: "Sub step", status: "running",
-          round: 2, max_rounds: 10, artifacts: ["report.md"],
+          round: 2, max_rounds: 10,
           description: "Drafts the report", parent_node: "gather",
         },
       ],
@@ -593,7 +591,6 @@ describe("useWorkState", () => {
 
     const node = result.current.active[0].nodes![0];
     expect(node.maxRounds).toBe(10);
-    expect(node.artifacts).toEqual(["report.md"]);
     expect(node.description).toBe("Drafts the report");
     expect(node.parentNode).toBe("gather");
   });

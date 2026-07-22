@@ -37,7 +37,6 @@ class BackgroundTask(Result):
     nodes: list[dict] | None = None  # workflow node tree; None for sub-agents
     task: str | None = None  # workflow run task (the input given to this run); None for sub-agents
     needs_input_detail: str | None = None  # the gate's questions when status=="needs_input"; None otherwise
-    typical_total_s: float | None = None  # summed per-node medians from prior runs; None with no history
 
 
 class TasksListQuery(Query):

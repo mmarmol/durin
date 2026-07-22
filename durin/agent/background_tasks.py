@@ -9,13 +9,15 @@ persisted sub-agent lineage so history survives a gateway restart.
 Returns plain dicts with a stable shape — ``kind`` ("subagent" | "workflow"),
 ``id``, ``label``, ``status`` ("running" | "needs_input" | "done" | "failed" |
 "cancelled"), ``started_at`` (wall-clock epoch), ``ended_at``, ``session_key``,
-and for workflows a ``nodes`` tree (each entry carrying ``duration_s``,
-``artifacts``, and ``typical_s``, plus a trailing running entry when a node is
-in flight), the run ``task``, ``typical_total_s`` (summed per-node medians,
-absent with no history), and (only when the run's status is ``needs_input``)
-``needs_input_detail`` — the gate's questions, capped at 500 chars. The service
-wraps these into its pydantic ``BackgroundTask`` response model; the tool
-renders them.
+and for workflows a ``nodes`` tree (each entry carrying ``duration_s``, plus a
+trailing running entry when a node is in flight), the run ``task``, and (only
+when the run's status is ``needs_input``) ``needs_input_detail`` — the gate's
+questions, capped at 500 chars. The service wraps these into its pydantic
+``BackgroundTask`` response model; the tool renders them.
+
+Duration estimates are deliberately absent here: they belong to the wide
+executions surface, which reads the run manifest directly, not to the narrow
+panel this list feeds.
 """
 
 from __future__ import annotations
@@ -69,7 +71,6 @@ def _node_run_status(s: str) -> str:
 
 
 def _node_tree(node_runs: list[dict], label_map: dict[str, str] | None = None,
-               typical: dict[str, float] | None = None,
                active_node: dict | None = None) -> list[dict]:
     """Group manifest node runs by node id (first-seen order). A node id that
     recurs across iterations collapses to one entry showing its latest status.
@@ -98,8 +99,6 @@ def _node_tree(node_runs: list[dict], label_map: dict[str, str] | None = None,
             "status": _node_run_status(r.get("status", "ok")),
             "branches": None,
             "duration_s": r.get("duration_s"),
-            "artifacts": list(r.get("artifacts") or []),
-            "typical_s": (typical or {}).get(nid),
         }
     if active_node and active_node.get("node_id"):
         nid = active_node["node_id"]
@@ -110,8 +109,7 @@ def _node_tree(node_runs: list[dict], label_map: dict[str, str] | None = None,
             "label": active_node.get("label") or (label_map or {}).get(nid) or _prettify_id(nid),
             "status": "running", "branches": None,
             "started_at": active_node.get("started_at"),
-            "duration_s": None, "artifacts": [],
-            "typical_s": (typical or {}).get(nid),
+            "duration_s": None,
         }
     return [latest[nid] for nid in order]
 
@@ -156,8 +154,6 @@ def collect_tasks(
         needs_input_detail = None
         if rec.get("status") == "needs_input":
             needs_input_detail = (rec.get("final_output") or "")[:500] or None
-        typical = rec.get("typical_s") or {}
-        typical_total = sum(typical.values()) if typical else None
         # active_node is only trustworthy while the run is actually "running": crash
         # reconciliation (reconcile_running / reconcile_one) flips a dead run's status
         # to "crashed" without clearing it (only a normal completion, via update_run,
@@ -176,10 +172,9 @@ def collect_tasks(
             "started_at": float(rec.get("started_at") or 0.0),
             "ended_at": rec.get("finished_at"),
             "session_key": drill,
-            "nodes": _node_tree(node_runs, label_map, typical, active_node),
+            "nodes": _node_tree(node_runs, label_map, active_node),
             "task": rec.get("task"),
             "needs_input_detail": needs_input_detail,
-            "typical_total_s": typical_total,
         })
 
     # Reconstruct finished sub-agents from persisted session lineage so the history

@@ -22,11 +22,9 @@ function toWorkNodes(
     budget?: number | null;
     started_at?: number | null;
     duration_s?: number | null;
-    typical_s?: number | null;
     round?: number | null;
     max_rounds?: number | null;
     activity?: WorkActivity | null;
-    artifacts?: string[] | null;
     description?: string | null;
     parent_node?: string | null;
     branches?: Array<{ id: string; label?: string; status: string }> | null;
@@ -47,12 +45,10 @@ function toWorkNodes(
       ...(n.budget != null ? { budget: n.budget } : {}),
       ...(n.started_at != null ? { startedAt: n.started_at } : {}),
       ...(n.duration_s != null ? { durationS: n.duration_s } : {}),
-      ...(n.typical_s != null ? { typicalS: n.typical_s } : {}),
       ...(n.round != null ? { round: n.round } : {}),
       ...(n.max_rounds != null ? { maxRounds: n.max_rounds } : {}),
       ...(n.description ? { description: n.description } : {}),
       ...(n.activity ? { activity: n.activity } : {}),
-      ...(n.artifacts && n.artifacts.length > 0 ? { artifacts: n.artifacts } : {}),
       ...(n.parent_node ? { parentNode: n.parent_node } : {}),
       ...(branches && branches.length > 0 ? { branches } : {}),
     };
@@ -234,7 +230,6 @@ export function useWorkState(
             status: r.status,
             ...(r.task != null ? { task: r.task } : {}),
             ...(r.needs_input_detail != null ? { needsInputDetail: r.needs_input_detail } : {}),
-            ...(r.typical_total_s != null ? { typicalTotalS: r.typical_total_s } : {}),
             // The API sends epoch seconds (Python time.time()); WorkItem.startedAt/
             // endedAt are epoch milliseconds everywhere else (the live WS path below
             // sets them from Date.now()) — convert here, at the boundary, so a

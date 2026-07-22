@@ -115,7 +115,7 @@ def test_a_running_node_appears_in_the_node_tree(tmp_path):
     assert running[0]["label"] == "Consolidate"
 
 
-def test_finished_nodes_carry_duration_artifacts_and_typical(tmp_path):
+def test_finished_nodes_carry_their_duration(tmp_path):
     from durin.agent.background_tasks import collect_tasks
     from durin.workflow import run_log
 
@@ -131,20 +131,29 @@ def test_finished_nodes_carry_duration_artifacts_and_typical(tmp_path):
                if t["kind"] == "workflow")
     node = next(n for n in row["nodes"] if n["id"] == "consolidate")
     assert node["duration_s"] == 361.5
-    assert node["artifacts"] == ["context.json"]
-    assert node["typical_s"] == 360.0
-    assert row["typical_total_s"] == 360.0
 
 
-def test_typical_total_is_absent_without_history(tmp_path):
-    """A first-ever run must show no estimate rather than an estimate of zero."""
+def test_the_task_list_carries_no_duration_estimates(tmp_path):
+    """Estimates and per-node artifacts belong to the wide executions surface,
+    which reads the manifest itself. Emitting them here produced a payload the
+    narrow panel this list feeds never rendered — and, for the run total, one
+    computed by summing branches no single run can all take."""
     from durin.agent.background_tasks import collect_tasks
     from durin.workflow import run_log
 
-    run_log.start_run(tmp_path, "wf", "r3", root_session_key="websocket:c", started_at=100.0)
+    run_log.start_run(tmp_path, "wf", "r3", root_session_key="websocket:c",
+                      started_at=100.0, typical_s={"a": 5.0, "b": 7.0},
+                      typical_total_s=6.0)
+    path = run_log._record_path(tmp_path, "wf", "r3")
+    rec = run_log.read_manifest(tmp_path, "wf", "r3")
+    rec["runs"] = [{"node_id": "a", "iteration": 1, "status": "ok",
+                    "duration_s": 5.0, "artifacts": ["out.json"]}]
+    path.write_text(json.dumps(rec), encoding="utf-8")
+
     row = next(t for t in collect_tasks(tmp_path, session_key="websocket:c")
                if t["kind"] == "workflow")
-    assert row["typical_total_s"] is None
+    assert "typical_total_s" not in row
+    assert set(row["nodes"][0]) == {"id", "label", "status", "branches", "duration_s"}
 
 
 def test_running_revisit_of_a_completed_node_collapses_to_one_row(tmp_path):

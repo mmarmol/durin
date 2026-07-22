@@ -339,4 +339,35 @@ describe("WorkItemCard", () => {
     expect(screen.getByText(/2 nodes/)).toBeInTheDocument();
     expect(screen.queryByText(/of 3/)).not.toBeInTheDocument();
   });
+
+  it("offers the node's own sentence as hover text on its label", () => {
+    render(<WorkItemCard item={{
+      kind: "workflow", id: "r1", label: "wf", status: "running",
+      startedAt: Date.now() - 1000, endedAt: null,
+      nodes: [{
+        id: "judge", label: "Judge", status: "running",
+        startedAt: Date.now() / 1000,
+        description: "You are the JUDGE — the final quality gate before a note reaches the customer",
+      }],
+    }} />);
+    expect(screen.getByText("Judge")).toHaveAttribute(
+      "title",
+      "You are the JUDGE — the final quality gate before a note reaches the customer",
+    );
+  });
+
+  it("rails in a node that belongs to a nested sub-workflow run", () => {
+    render(<WorkItemCard item={{
+      kind: "workflow", id: "r1", label: "wf", status: "running",
+      startedAt: Date.now() - 1000, endedAt: null,
+      nodes: [
+        { id: "own", label: "Own", status: "done", durationS: 1 },
+        { id: "nested", label: "Nested", status: "running",
+          startedAt: Date.now() / 1000, parentNode: "call-child" },
+      ],
+    }} />);
+    // The nested node's row is indented and railed; the run's own node's is not.
+    expect(screen.getByText("Nested").parentElement?.className).toMatch(/border-l/);
+    expect(screen.getByText("Own").parentElement?.className).not.toMatch(/border-l/);
+  });
 });
