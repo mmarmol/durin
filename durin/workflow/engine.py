@@ -394,15 +394,17 @@ class WorkflowEngine:
         if self._workspace is None:
             return
         typical = {}
+        typical_total = None
         try:
             typical = run_log.typical_node_durations(self._workspace, workflow.name)
+            typical_total = run_log.typical_total_duration(self._workspace, workflow.name)
         except Exception:  # noqa: BLE001 - history is a nicety; never block a run
             pass
         try:
             run_log.start_run(self._workspace, workflow.name, run_id,
                               root_session_key=root_session_key, started_at=started_at,
                               task=task, parent_run_id=parent_run_id, work_dir=work_dir,
-                              typical_s=typical)
+                              typical_s=typical, typical_total_s=typical_total)
         except Exception:  # noqa: BLE001 - a manifest write must not break the run
             logger.exception("workflow run manifest start failed for {}", workflow.name)
 

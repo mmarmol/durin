@@ -5,7 +5,7 @@ import { I18nextProvider } from "react-i18next";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import i18n from "@/i18n";
-import { RunNodeRow } from "@/components/workflows/RunDetail";
+import { RunDetail, RunNodeRow } from "@/components/workflows/RunDetail";
 import { RunsView, strandedRuns } from "@/components/workflows/RunsView";
 import * as api from "@/lib/api";
 import { listAllWorkflowRuns } from "@/lib/api";
@@ -500,6 +500,60 @@ describe("RunsView", () => {
     // It must not have clobbered B's already-rendered detail.
     expect(screen.getByText(/b-step/)).toBeInTheDocument();
     expect(screen.queryByText(/a-step/)).not.toBeInTheDocument();
+  });
+});
+
+describe("RunDetail", () => {
+  function renderDetail(result: api.WorkflowRunResult) {
+    return render(
+      <I18nextProvider i18n={i18n}>
+        <RunDetail result={result} onResume={() => {}} resuming={false} />
+      </I18nextProvider>,
+    );
+  }
+
+  const RUNNING: api.WorkflowRunResult = {
+    status: "running",
+    final_output: "",
+    run_id: "r1",
+    runs: [],
+    active_node: { node_id: "consolidate", label: "Consolidate", started_at: 1000 },
+  };
+
+  it("shows the in-flight node of a running run", () => {
+    renderDetail(RUNNING);
+    expect(screen.getByText("Consolidate")).toBeInTheDocument();
+  });
+
+  it("does not report a crashed run's last node as still running", () => {
+    // Crash reconciliation flips the status without clearing active_node, so an
+    // ungated read spins forever on a node whose process died long ago.
+    renderDetail({ ...RUNNING, status: "crashed" });
+    expect(screen.queryByText("Consolidate")).not.toBeInTheDocument();
+  });
+
+  it("takes the typical total from the run's own estimate, not the sum of node medians", () => {
+    // The per-node medians cover both branches of a router; a run takes one.
+    renderDetail({
+      status: "completed",
+      final_output: "",
+      run_id: "r2",
+      runs: [{
+        node_id: "branch-a", iteration: 1, passed: null, session_key: null,
+        worker_index: null, branch_id: null, budget: null, status: "ok",
+        route_label: null, duration_s: 500,
+      }],
+      typical_s: { "branch-a": 500, "branch-b": 520 },
+      typical_total_s: 515,
+    });
+
+    expect(screen.getByText(/8:35/)).toBeInTheDocument();     // the measured median total
+    expect(screen.queryByText(/17:00/)).not.toBeInTheDocument();  // the summed branches
+  });
+
+  it("omits the typical total for a workflow with no completed-run history", () => {
+    renderDetail({ status: "completed", final_output: "", run_id: "r3", runs: [] });
+    expect(screen.queryByText(/prior runs/)).not.toBeInTheDocument();
   });
 });
 

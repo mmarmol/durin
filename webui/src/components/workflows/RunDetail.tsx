@@ -201,7 +201,11 @@ export function RunDetail({
   const [answers, setAnswers] = useState("");
   const continues = continuesSessionFlags(result.runs);
   const outputFiles = result.output_files ?? [];
-  const activeNodeInfo = result.active_node;
+  // Only a run that is still running has a node in flight. Crash reconciliation
+  // flips a dead run to "crashed" without clearing its active_node marker (only
+  // a node's own completion does that), so an ungated read renders a long-dead
+  // node as a spinning "running" row whose clock never stops.
+  const activeNodeInfo = result.status === "running" ? (result.active_node ?? null) : null;
 
   // Ticks only while a node is actually in flight, so the header's elapsed total
   // (below) advances live for a running run and freezes once there's nothing left
@@ -216,7 +220,10 @@ export function RunDetail({
   const completedS = sumKnown(result.runs.map((r) => r.duration_s));
   const activeS = activeNodeInfo != null ? Math.max(0, now / 1000 - activeNodeInfo.started_at) : null;
   const elapsedTotalS = completedS != null || activeS != null ? (completedS ?? 0) + (activeS ?? 0) : null;
-  const typicalTotalS = sumKnown(Object.values(result.typical_s ?? {}));
+  // The run's own recorded estimate: the median TOTAL of prior completed runs.
+  // Never the sum of the per-node medians — those cover every branch any prior
+  // run took, while this run takes one of them.
+  const typicalTotalS = result.typical_total_s ?? null;
 
   // Reset answers when the run identity or needs_input status changes to avoid stale
   // textarea content on nested resume (same component instance with new result props).
