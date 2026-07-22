@@ -50,7 +50,15 @@ export function MemoryTypeFilter({
       }
     }
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key !== "Escape") return;
+      setOpen(false);
+      // Consume the keypress: MemoryGraphView also listens for Escape
+      // (to back out of a graph drill) on `window`, which — in the bubble
+      // phase — fires AFTER this `document` listener. Marking it prevented
+      // here lets that later handler check `e.defaultPrevented` and skip
+      // its own action, so one Escape press closes only the top-most layer
+      // (this popover) instead of also exiting the drill underneath it.
+      e.preventDefault();
     }
     document.addEventListener("mousedown", onDoc);
     document.addEventListener("keydown", onKey);

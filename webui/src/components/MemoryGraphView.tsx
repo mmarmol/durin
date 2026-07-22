@@ -49,7 +49,7 @@ import {
   colorForType,
   type EntitySortKey,
 } from "@/lib/memory-graph-style";
-import { overviewToGraph, type OverviewNode } from "@/lib/memory-graph-layout";
+import { overviewToGraph } from "@/lib/memory-graph-layout";
 import { MemoryEntityCards } from "@/components/MemoryEntityCards";
 import { MemoryEntityTable } from "@/components/MemoryEntityTable";
 import { MemoryTypeFilter } from "@/components/MemoryTypeFilter";
@@ -66,6 +66,11 @@ interface SimNode extends MemoryGraphNode {
   vx: number;
   vy: number;
   pinned: boolean;
+  // Overview-layer-only fields (see OverviewNode in memory-graph-layout.ts):
+  // a bubble stands in for a whole cluster, `count` is its member count.
+  // Optional because normal (non-overview) nodes never carry them.
+  kind?: "bubble";
+  count?: number;
 }
 
 interface SimEdge {
@@ -252,6 +257,13 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
   const alphaRef = useRef(1);
   const rafRef = useRef<number | null>(null);
   const draggingRef = useRef<SimNode | null>(null);
+  // Overview layer only: a press on a bubble/hub/loose node starts a drag
+  // (see onPointerDown) rather than navigating immediately, so the click-vs-
+  // drag decision is made on release — screen coords of the press, compared
+  // against release position, distinguish "drilled in" from "repositioned".
+  const overviewPressRef = useRef<{ id: string; x: number; y: number } | null>(
+    null,
+  );
   const hoverRef = useRef<SimNode | null>(null);
   // Camera over the sim's world coordinates: screen = world * k + (tx, ty).
   // Auto-fit continuously frames the visible nodes (smoothed each frame,
@@ -432,12 +444,13 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
         : null,
     [layers.overview],
   );
-  // THE SEAM: a cluster/ego drill wins, then the clustered overview, then
-  // today's raw graph — cards/table never look at the overview, since they
-  // present the full entity list rather than a navigable bubble map.
+  // THE SEAM: graph view only — a cluster/ego drill wins, then the clustered
+  // overview, then today's raw graph. Cards/table never look at the overview
+  // OR a drill: they present the full entity list rather than a navigable
+  // bubble map, so a drill entered from the canvas must not truncate their
+  // grid down to the focused subgraph.
   const data =
-    layers.focusGraph ??
-    (effectiveView === "graph" ? overviewGraph ?? rawData : rawData);
+    effectiveView === "graph" ? layers.focusGraph ?? overviewGraph ?? rawData : rawData;
 
   // Navigate to the session a fact came from (provenance source_ref →
   // `session:<stem>` node). Selecting the node opens the session detail
@@ -491,10 +504,18 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
 
   // Esc backs out one layer (cluster/ego → overview) — but not while the
   // search panel or the edge popover is up, so Escape closes those first.
+  // Listens on `window` (rather than `document`): in the bubble phase,
+  // `document`-level listeners fire before `window`-level ones, so a
+  // popover that listens on `document` — e.g. MemoryTypeFilter's own Escape
+  // handler — always gets first refusal on the same keypress. It calls
+  // `preventDefault()` when it actually closes; checking that here means
+  // one Escape closes only the top-most layer instead of cascading through
+  // both at once.
   useEffect(() => {
     if (layers.layer.kind === "overview") return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
+      if (e.defaultPrevented) return;
       if (searchOpen || edgePopup) return;
       layers.backToOverview();
     };
@@ -846,24 +867,27 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
       const sy = evt.clientY - rect.top;
       const { x, y } = toWorld(sx, sy);
       const hit = hitTestNode(x, y);
-      // Overview mode: a node click is pure navigation (drill into the
-      // bubble's cluster, or straight into an ego neighbourhood for a
-      // hub/loose node) — not a selection, so it skips the pin/panel
-      // behavior below entirely. Once a cluster/ego is entered the canvas
-      // shows a real (non-overview) graph and clicks fall through to the
-      // existing select behavior.
+      // Overview mode: a press on a node starts a drag exactly like the
+      // normal path below (pin, draggingRef, pointer capture) — it must NOT
+      // navigate immediately, or the node could never be repositioned.
+      // Whether this turns out to be a click (drill into the bubble's
+      // cluster, or straight into an ego neighbourhood for a hub/loose node)
+      // or a real drag is decided on release, by comparing the pointer's
+      // screen position then vs. now (see onPointerUp). Once a cluster/ego
+      // is entered the canvas shows a real (non-overview) graph and clicks
+      // fall through to the existing select behavior below.
       if (
         hit &&
         layers.layer.kind === "overview" &&
         overviewGraph != null &&
         layers.focusGraph == null
       ) {
-        const asOverview = hit as OverviewNode;
-        if (asOverview.kind === "bubble") {
-          void layers.enterCluster(hit.id, hit.name);
-        } else {
-          void layers.enterEgo(hit.id, hit.name);
-        }
+        hit.pinned = true;
+        hit.vx = 0;
+        hit.vy = 0;
+        draggingRef.current = hit;
+        overviewPressRef.current = { id: hit.id, x: sx, y: sy };
+        evt.currentTarget.setPointerCapture(evt.pointerId);
         return;
       }
       if (hit) {
@@ -1008,14 +1032,33 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
         return;
       }
       const drag = draggingRef.current;
+      const press = overviewPressRef.current;
       if (drag) {
         drag.pinned = false;
         draggingRef.current = null;
         alphaRef.current = Math.max(alphaRef.current, 0.3);
         evt.currentTarget.releasePointerCapture(evt.pointerId);
       }
+      if (press) {
+        overviewPressRef.current = null;
+        // Click-vs-drag: only route (drill in) when the released node is
+        // the one we pressed AND the pointer barely moved. Movement past
+        // the threshold is a real drag — the node keeps its new position
+        // (already applied live in onPointerMove) and nothing navigates.
+        const rect = evt.currentTarget.getBoundingClientRect();
+        const sx = evt.clientX - rect.left;
+        const sy = evt.clientY - rect.top;
+        const moved = Math.hypot(sx - press.x, sy - press.y);
+        if (drag && drag.id === press.id && moved < 5) {
+          if (drag.kind === "bubble") {
+            void layers.enterCluster(drag.id, drag.name);
+          } else {
+            void layers.enterEgo(drag.id, drag.name);
+          }
+        }
+      }
     },
-    [],
+    [layers],
   );
 
   // Fetch detail whenever the selection changes — branch by type.
@@ -1151,6 +1194,15 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
   const showTypeFilter =
     effectiveView !== "graph" || layers.focusGraph != null || overviewGraph == null;
 
+  // Real (non-scaffolding) node count in the current drill — phantom and
+  // session nodes are kept in a cluster's focusGraph only as scaffolding
+  // around the real members, so they're excluded before comparing against
+  // the server's uncapped totalMembers. Computed once and shared by both
+  // the breadcrumb's "and N more" gate and the number it prints, so the two
+  // can't drift apart.
+  const realShown =
+    data?.nodes.filter((n) => !n.phantom && n.type !== "session").length ?? 0;
+
   // Select an entity from the cards grid or the table — same panel wiring as
   // a graph-canvas click, minus the canvas-only concerns (pinning, drag).
   const selectEntity = useCallback((n: MemoryGraphNode) => {
@@ -1218,10 +1270,12 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
           <>
         {data && !compact ? (
           <span className="text-xs text-muted-foreground">
-            {overviewGraph != null && layers.focusGraph == null && layers.overview ? (
-              // Clustered overview, no drill: report the workspace's honest
-              // totals (from the overview's own stats) instead of the
-              // canvas's capped bubble/hub/loose node count.
+            {effectiveView === "graph" && overviewGraph != null && layers.focusGraph == null && layers.overview ? (
+              // Clustered overview, no drill, graph view: report the
+              // workspace's honest totals (from the overview's own stats)
+              // instead of the canvas's capped bubble/hub/loose node count.
+              // Gated on graph view too, or Cards/Table (which always show
+              // the full rawData list) would inherit this graph-only count.
               <>
                 {t("memoryGraph.entitiesTotal", { count: layers.overview.stats.entity_count })}
                 {" · "}
@@ -1430,19 +1484,12 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
             <span className="font-medium">{layers.layer.name}</span>
             {layers.layer.kind === "cluster" &&
             layers.totalMembers != null &&
-            data &&
-            data.nodes.length < layers.totalMembers ? (
-              // totalMembers is the server's uncapped count of real cluster
-              // members, but data.nodes also carries phantom/session nodes
-              // kept only as scaffolding around them — exclude those before
-              // subtracting, or the hidden remainder undercounts.
+            realShown < layers.totalMembers ? (
+              // realShown already excludes phantom/session scaffolding nodes
+              // (see its definition above) — reusing it here for the number
+              // keeps the gate and the printed count from drifting apart.
               <span className="ml-auto text-xs text-muted-foreground">
-                {t("memoryGraph.andMore", {
-                  count:
-                    layers.totalMembers -
-                    data.nodes.filter((n) => !n.phantom && n.type !== "session")
-                      .length,
-                })}
+                {t("memoryGraph.andMore", { count: layers.totalMembers - realShown })}
               </span>
             ) : null}
           </div>
