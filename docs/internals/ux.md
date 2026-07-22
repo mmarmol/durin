@@ -345,10 +345,11 @@ be on screen. Clicking a bubble or a node moves to the **neighborhood**
 layer — a cluster's members, or a single node's ego-subgraph — which draws
 with full per-type coloring and exposes the phantom/session visibility
 chips. A breadcrumb sits above the canvas whenever a neighborhood is open,
-with a click back to the overview; Esc does the same but yields first to an
-open search panel or edge popover — both listen for the same key and call
-`preventDefault()` when they actually close something, so one keypress
-closes only the top-most layer.
+with a click back to the overview; Esc navigates back to the overview but
+honors `event.defaultPrevented` from any popover that has already handled the
+key. The type-filter popover closes itself and calls `preventDefault()` when
+Esc is pressed while it is open, so a single keypress closes only that popover,
+not the neighborhood layer beneath it.
 
 **Click contract.** A bubble click enters its cluster; a hub or loose-node
 click enters that node's ego-subgraph; a node click inside a neighborhood
