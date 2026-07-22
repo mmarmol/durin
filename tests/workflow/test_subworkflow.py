@@ -140,6 +140,40 @@ def test_nested_run_emits_progress_tagged_with_its_parent_node(tmp_path):
     assert all(f["parent_node"] == "call-child" for f in frames)
 
 
+def test_nested_frames_are_re_keyed_onto_the_parent_run(tmp_path):
+    """Surfaces key a work item by the frame's run id. A nested frame carrying the
+    nested engine's OWN id opens a second item that the terminal frame (emitted for
+    the caller's run id only) never closes — a phantom "running" entry."""
+    _write(tmp_path, "child", {"name": "child", "start": "a",
+                               "nodes": [{"id": "a", "kind": "work", "next": None}]})
+    emitted = []
+    runner = SubworkflowRunner(tmp_path, _node_runner("child-result"), judge_runner=None)
+
+    runner("child", "do the child", progress_emit=emitted.append,
+           parent_run_id="parent1", parent_node_id="call-child")
+
+    assert emitted, "the nested engine emitted nothing"
+    assert {p["run_id"] for p in emitted} == {"parent1"}
+    # Only the emitted payload is re-keyed: the nested run still owns its own
+    # manifest under its own id.
+    stems = [p.stem for p in (tmp_path / "workflows-runs" / "child").glob("*.json")]
+    assert stems and "parent1" not in stems
+
+
+def test_nested_frames_keep_their_run_id_without_a_parent_run(tmp_path):
+    """A sub-workflow invoked with no parent run (a standalone call) has no run to
+    re-key onto, so its frames keep the nested engine's own id."""
+    _write(tmp_path, "child", {"name": "child", "start": "a",
+                               "nodes": [{"id": "a", "kind": "work", "next": None}]})
+    emitted = []
+    runner = SubworkflowRunner(tmp_path, _node_runner("child-result"), judge_runner=None)
+
+    runner("child", "do the child", progress_emit=emitted.append)
+
+    stems = {p.stem for p in (tmp_path / "workflows-runs" / "child").glob("*.json")}
+    assert {p["run_id"] for p in emitted} == stems
+
+
 def test_nested_progress_is_silent_when_the_parent_is_not_listening(tmp_path):
     _write(tmp_path, "child", {"name": "child", "start": "a",
                                "nodes": [{"id": "a", "kind": "work", "next": None}]})
@@ -179,7 +213,9 @@ def test_engine_forwards_live_progress_and_cancel_to_a_real_subworkflow(tmp_path
     SubworkflowRunner) and asserts through both layers: the child's own frames
     arrive at the parent's emitter tagged with the parent node's id, and
     cancelling the parent halts the child mid-graph. A dropped or swapped
-    progress_emit/cancel_check at that call site must fail this test.
+    progress_emit/cancel_check at that call site must fail this test. Every frame
+    the parent's emitter sees — its own and the child's — must be keyed by the
+    parent's run id, or the child's frames become a second, never-ending work item.
 
     The parent workflow has a node after the subworkflow call so this test's
     outcome does not depend on how the parent reports its OWN terminal status
@@ -210,7 +246,7 @@ def test_engine_forwards_live_progress_and_cancel_to_a_real_subworkflow(tmp_path
         cancel_check=lambda: len(ran) >= 1,
     )
 
-    engine.run(parent_wf, "t")
+    result = engine.run(parent_wf, "t")
 
     # Only the child's own nodes ("a", "b") are checked for the tag — the parent's
     # own frames (for "call-child"/"after") are correctly untagged, since they are
@@ -218,4 +254,5 @@ def test_engine_forwards_live_progress_and_cancel_to_a_real_subworkflow(tmp_path
     child_frames = [f for p in emitted for f in p["nodes"] if f["id"] in ("a", "b")]
     assert child_frames, "the nested engine emitted nothing"
     assert all(f.get("parent_node") == "call-child" for f in child_frames)
+    assert {p["run_id"] for p in emitted} == {result.run_id}
     assert ran == ["a"], f"nested run continued past the cancel: {ran}"
