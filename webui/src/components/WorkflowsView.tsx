@@ -331,6 +331,53 @@ function CasesEditor({
 // cases editor, and the `next` field fallback when routing is off. `routingExtras`
 // merges extra fields when routing is switched on — work nodes default the mode to
 // "explore"; script nodes pass nothing, since mode does not apply to them.
+// JSON textarea with LOCAL raw-text state: parsing on every keystroke into a
+// controlled input eats separators mid-typing, so the def is only patched on blur
+// (valid JSON) and an inline hint shows while the draft text does not parse.
+function SchemaField({
+  value,
+  onChange,
+  t,
+}: {
+  value: Record<string, unknown> | null | undefined;
+  onChange: (v: Record<string, unknown> | undefined) => void;
+  t: (k: string) => string;
+}) {
+  const [raw, setRaw] = useState<string>(() => (value ? JSON.stringify(value, null, 2) : ""));
+  const [invalid, setInvalid] = useState(false);
+
+  function commit(text: string) {
+    const trimmed = text.trim();
+    if (!trimmed) {
+      setInvalid(false);
+      onChange(undefined);
+      return;
+    }
+    try {
+      const parsed = JSON.parse(trimmed);
+      setInvalid(false);
+      onChange(parsed);
+    } catch {
+      setInvalid(true);
+    }
+  }
+
+  return (
+    <>
+      <textarea
+        className="min-h-24 w-full rounded-md border border-input bg-transparent p-2 font-mono text-xs"
+        value={raw}
+        placeholder='{"type": "object", "required": ["items"], ...}'
+        onChange={(e) => setRaw(e.target.value)}
+        onBlur={(e) => commit(e.target.value)}
+      />
+      {invalid && (
+        <span className="text-xs text-amber-600">{t("workflows.outputSchemaInvalid")}</span>
+      )}
+    </>
+  );
+}
+
 function RoutingFields({
   node,
   nodes,
@@ -345,6 +392,15 @@ function RoutingFields({
   routingExtras?: Partial<WorkflowNodeDef>;
 }) {
   const others = nodes.map((n) => n.id).filter((id) => id !== node.id);
+  // inputs_from sources: any other node whose output rides an edge (detached
+  // nodes never contribute one, mirroring the parser's rejection).
+  const sourceIds = others.filter((id) => nodes.find((n) => n.id === id)?.detached !== true);
+  const inputsFrom: string[] = Array.isArray(node.inputs_from) ? (node.inputs_from as string[]) : [];
+
+  function toggleSource(id: string, checked: boolean) {
+    const next = checked ? [...new Set([...inputsFrom, id])] : inputsFrom.filter((s) => s !== id);
+    patch({ inputs_from: next.length ? next : undefined });
+  }
 
   // Determine the active routing shape: "binary" (on_pass/on_fail), "multiway" (cases), or "none" (next).
   // Detect by KEY PRESENCE (!== undefined), not value: a routing branch may legitimately be
@@ -413,6 +469,50 @@ function RoutingFields({
             {t("workflows.detached")}
           </label>
         </div>
+      )}
+
+      <Field label={t("workflows.inputsFrom")}>
+        <div className="flex flex-col gap-1">
+          {sourceIds.length === 0 ? (
+            <span className="text-xs text-muted-foreground">(no other nodes)</span>
+          ) : (
+            sourceIds.map((id) => (
+              <label key={id} className="flex items-center gap-2 text-xs">
+                <input
+                  type="checkbox"
+                  className="h-3.5 w-3.5 cursor-pointer accent-primary"
+                  checked={inputsFrom.includes(id)}
+                  onChange={(e) => toggleSource(id, e.target.checked)}
+                />
+                {id}
+              </label>
+            ))
+          )}
+        </div>
+      </Field>
+
+      {!routes && node.kind !== "script" && (
+        <>
+          <Field label={t("workflows.outputSchema")}>
+            <SchemaField
+              value={node.output_schema as Record<string, unknown> | null | undefined}
+              onChange={(v) =>
+                patch({ output_schema: v, ...(v === undefined ? { output_file: undefined } : {}) })
+              }
+              t={t}
+            />
+          </Field>
+          {node.output_schema != null && (
+            <Field label={t("workflows.outputFile")}>
+              <Input
+                value={(node.output_file as string) ?? ""}
+                placeholder="plan.json"
+                onChange={(e) => patch({ output_file: e.target.value || undefined })}
+                className="h-8"
+              />
+            </Field>
+          )}
+        </>
       )}
 
       {routes && (

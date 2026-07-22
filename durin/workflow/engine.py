@@ -117,6 +117,10 @@ class ResumeState:
     start_at: str
     visits: dict[str, int]
     upstream: str | None = None
+    # Last recorded outputs of prior nodes (from the manifest's resume_inputs), so a
+    # resumed walk — whose in-memory runs list starts empty — can still compose
+    # inputs_from blocks for nodes that reference pre-pause/pre-abort sources.
+    recorded_outputs: dict[str, str] = field(default_factory=dict)
 
 
 def build_resume_state(manifest: dict, answers: str) -> ResumeState:
@@ -134,6 +138,7 @@ def build_resume_state(manifest: dict, answers: str) -> ResumeState:
         nid, it = r.get("node_id"), r.get("iteration", 1)
         if nid:
             visits[nid] = max(visits.get(nid, 0), int(it))
+    recorded_outputs = dict(manifest.get("resume_inputs") or {})
     needs_input_node = manifest.get("needs_input_node")
     if needs_input_node:
         questions = manifest.get("final_output") or ""
@@ -146,12 +151,14 @@ def build_resume_state(manifest: dict, answers: str) -> ResumeState:
                 f"--- Your questions were ---\n{questions}\n\n"
                 f"--- The user's answers ---\n{answers}\n\nContinue from here."
             ),
+            recorded_outputs=recorded_outputs,
         )
     return ResumeState(
         run_id=manifest["run_id"],
         start_at=manifest["failed_node"],
         visits=visits,
         upstream=manifest.get("resume_upstream"),
+        recorded_outputs=recorded_outputs,
     )
 
 # Upper bound on messages carried in the running shared-context buffer. A long
@@ -357,6 +364,7 @@ class WorkflowEngine:
                 start_at=resume.start_at if resume else None,
                 initial_visits=dict(resume.visits) if resume else None,
                 initial_upstream=resume.upstream if resume else None,
+                resume_outputs=dict(resume.recorded_outputs) if resume else None,
                 work_dir=work_dir,
                 own_work_dir=work_dir_override is None,
                 detached_tracker=detached_tracker,
@@ -504,7 +512,8 @@ class WorkflowEngine:
         try:
             run_log.finalize_run(self._workspace, workflow.name, result,
                                  root_session_key=root_session_key, started_at=started_at,
-                                 finished_at=time.time(), parent_run_id=parent_run_id)
+                                 finished_at=time.time(), parent_run_id=parent_run_id,
+                                 workflow=workflow)
         except Exception:  # noqa: BLE001 - a manifest write must not break the run
             logger.exception("workflow run manifest finalize failed for {}", workflow.name)
         else:
@@ -562,6 +571,7 @@ class WorkflowEngine:
         work_dir: str | None = None,
         own_work_dir: bool = True,
         detached_tracker: "_DetachedTracker | None" = None,
+        resume_outputs: dict[str, str] | None = None,
     ) -> WorkflowResult:
         shared_context: list[dict] = []
         visits: dict[str, int] = dict(initial_visits or {})
@@ -701,8 +711,11 @@ class WorkflowEngine:
                 # upstream), its output never becomes final_output, and its record
                 # joins the trace when it finishes (or at the run's terminal join).
                 if detached_tracker is not None:
+                    detached_input = upstream_output
+                    if getattr(node, "inputs_from", ()):
+                        detached_input = self._compose_inputs(node, runs, upstream_output, resume_outputs)
                     self._launch_detached(
-                        detached_tracker, node, task, upstream_output, run_id,
+                        detached_tracker, node, task, detached_input, run_id,
                         iteration, root_session_key, work_dir)
                 current = node.next
 
@@ -728,10 +741,13 @@ class WorkflowEngine:
                         )
                         fail_would_exhaust = visits.get(node.on_fail, 0) >= t_budget
 
+                node_input = upstream_output
+                if getattr(node, "inputs_from", ()):
+                    node_input = self._compose_inputs(node, runs, upstream_output, resume_outputs)
                 req = NodeRunRequest(
                     node=node,
                     task=task,
-                    upstream_output=upstream_output,
+                    upstream_output=node_input,
                     # 'own' nodes are isolated from the shared buffer; 'shared'
                     # nodes read it (a copy, so the runner can't mutate ours). A
                     # script node has no context field — it never reads the buffer.
@@ -787,6 +803,18 @@ class WorkflowEngine:
                                     status="persist_failed" if resp.persist_failed else "ok",
                                     exit_code=getattr(resp, "exit_code", None),
                                     duration_s=round(time.monotonic() - node_t0, 3)))
+                if isinstance(node, WorkNode) and node.output_file and work_dir is not None:
+                    # The ENGINE writes the schema-validated payload: the file cannot be
+                    # malformed because the model never types it. A write failure is a
+                    # disk problem, not a node problem — log it; the declared-artifacts
+                    # warning surfaces the gap at completion.
+                    try:
+                        target = Path(work_dir) / node.output_file
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_text(output, encoding="utf-8")
+                    except OSError:
+                        logger.opt(exception=True).warning(
+                            "workflow output_file write failed for node {}", node.id)
                 runs[-1].artifacts = sorted(_work_snapshot() - before_files)[:20]
                 if isinstance(node, WorkNode) and node.context == "shared":
                     shared_context.extend(resp.messages)
@@ -1014,6 +1042,27 @@ class WorkflowEngine:
             output_dir=terminal_output_dir, output_files=output_files,
             final_output_node=final_output_node, missing_artifacts=missing,
         )
+
+    @staticmethod
+    def _compose_inputs(node, runs, upstream, resume_outputs=None) -> str:
+        """Compose a node's declared inputs: one labeled block per source (its LAST
+        recorded output this run, falling back to resume-seeded outputs, else an
+        explicit absence marker — conditional branches legitimately skip), ALWAYS
+        followed by an ``[upstream]`` block carrying the walk's current edge text so
+        loop-back feedback and route context are never lost."""
+        blocks: list[str] = []
+        for src in node.inputs_from:
+            text: str | None = None
+            for recorded in reversed(runs):
+                if recorded.node_id == src:
+                    text = recorded.output
+                    break
+            if text is None and resume_outputs:
+                text = resume_outputs.get(src)
+            blocks.append(f"[{src}]\n{text}" if text is not None
+                          else f"[{src}]\n(no output recorded)")
+        blocks.append(f"[upstream]\n{upstream or ''}")
+        return "\n\n".join(blocks)
 
     def _launch_detached(self, tracker, node, task, upstream, run_id, iteration,
                          root_key, work_dir):

@@ -206,6 +206,17 @@ depth-cap, and missing-workflow errors take the aborted path too — an unrunnab
 stops the run instead of threading an error string downstream as if it were output. The
 sub-workflow node's wall-clock `duration_s` is recorded in the parent's trace like any
 other node's.
+A node may declare **named inputs** (`inputs_from`): its input becomes one labeled block
+`[source-id]` per named node — the source's last recorded output this run, falling back on
+a resumed run to the manifest's `resume_inputs` seeds — always followed by an `[upstream]`
+block carrying the walk's current edge text, so loop-back feedback and route context are
+never lost and a script chain between producer and consumer no longer needs courier files.
+A work node may declare a **structured output** (`output_schema`): the node runner forces a
+`deliver` tool call whose parameters ARE the schema (the same machinery as the `route`
+verdict), validates the payload server-side (jsonschema), retries immediately inside the
+node with the exact validation error, and fails the node after the attempt budget — no
+text fallback. The node's output is the validated payload as JSON, and with `output_file`
+the ENGINE writes it into the working folder (the model never types the file).
 A work or script node may be **detached** (`detached: true`): the walk launches it on a
 small per-run executor and continues immediately along its `next` — the upstream edge text
 passes THROUGH unchanged (the detached node and the next node both receive it), its output

@@ -47,6 +47,35 @@ RECONCILE_AGE_S = 6 * 3600
 # of THAT run degrades gracefully (the node sees the capped text).
 RESUME_UPSTREAM_MAX_CHARS = 16_000
 
+# Per-source cap for ``resume_inputs``: the last outputs of nodes referenced by
+# some node's ``inputs_from``, stored on a paused/aborted manifest so a resumed
+# walk (whose in-memory trace starts empty) can still compose those inputs.
+RESUME_INPUT_MAX_CHARS = 8_000
+
+
+def _resume_inputs(workflow, result) -> dict[str, str] | None:
+    """{source: capped last output} for the union of every node's inputs_from —
+    only for runs that can be resumed (needs_input, or aborted with a failed
+    node), and only for sources that actually recorded an output."""
+    if workflow is None:
+        return None
+    resumable = (
+        (result.status == "needs_input" and getattr(result, "needs_input_node", None))
+        or (result.status == "aborted" and getattr(result, "failed_node", None))
+    )
+    if not resumable:
+        return None
+    sources: set[str] = set()
+    for node in workflow.nodes.values():
+        sources.update(getattr(node, "inputs_from", ()) or ())
+    if not sources:
+        return None
+    out: dict[str, str] = {}
+    for r in result.runs:
+        if r.node_id in sources and r.output:
+            out[r.node_id] = r.output[:RESUME_INPUT_MAX_CHARS]
+    return out or None
+
 
 def _node_records(result) -> list[dict]:
     """The per-node trace each manifest write embeds: every field an auditor or the
@@ -186,6 +215,7 @@ def finalize_run(
     root_session_key: str | None, started_at: float, finished_at: float,
     task: str | None = None,
     parent_run_id: str | None = None,
+    workflow=None,
 ) -> Path:
     """Terminal write: the run's final status, ``finished_at``, and full per-node trace.
     ``ts`` advances to ``finished_at`` so the dream cursor consumes the completed run."""
@@ -218,6 +248,8 @@ def finalize_run(
         # text it received (verbatim — a retried script parses its stdin, so no
         # framing may pollute it). Only present on aborted runs that name a node.
         "failed_node": getattr(result, "failed_node", None),
+        # {source: capped output} for inputs_from sources — resume composition seeds.
+        "resume_inputs": _resume_inputs(workflow, result),
         "resume_upstream": (
             (getattr(result, "resume_upstream", None) or "")[:RESUME_UPSTREAM_MAX_CHARS]
             if getattr(result, "resume_upstream", None) is not None else None
