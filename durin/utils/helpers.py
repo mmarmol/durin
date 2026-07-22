@@ -801,32 +801,17 @@ def _format_composition_section(payload: dict[str, Any]) -> list[str]:
 
 
 def seed_workflows(workspace: Path) -> list[str]:
-    """Copy bundled seed workflow JSONs into <workspace>/workflows/.
+    """Reconcile bundled seed workflow JSONs into <workspace>/workflows/.
 
-    Idempotent: only creates files that are absent, never overwrites existing ones.
-    Returns the list of relative paths that were created.
+    Provenance-aware (durin.workflow.seeds): installs missing seeds, follows
+    the wheel for seeds the user never edited, and turns updates to edited
+    seeds into suggestions instead of overwrites. Returns the relative paths
+    this pass wrote (installed + refreshed).
     """
-    from importlib.resources import files as pkg_files
+    from durin.workflow.seeds import refresh_seeds
 
-    try:
-        tpl = pkg_files("durin") / "templates" / "workflows"
-    except Exception:
-        return []
-    if not tpl.is_dir():
-        return []
-
-    added: list[str] = []
-    dest_dir = Path(workspace) / "workflows"
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    for item in tpl.iterdir():
-        if not item.name.endswith(".json") or item.name.startswith("."):
-            continue
-        dest = dest_dir / item.name
-        if dest.exists():
-            continue
-        dest.write_text(item.read_text(encoding="utf-8"), encoding="utf-8")
-        added.append(str(dest.relative_to(workspace)))
-    return added
+    report = refresh_seeds(Path(workspace))
+    return [f"workflows/{name}.json" for name in report.changed]
 
 
 def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]:

@@ -52,7 +52,9 @@ describe("ConcurrencySettings", () => {
 
   it("saves an edited interactive cap", async () => {
     renderCard();
-    const input = await screen.findByDisplayValue("4");
+    // Two rows can legitimately show "4" (interactive cap and the workflow
+    // script cap) — the interactive row renders first.
+    const input = (await screen.findAllByDisplayValue("4"))[0];
     fireEvent.change(input, { target: { value: "6" } });
     const saveButtons = screen.getAllByRole("button", { name: /save/i });
     fireEvent.click(saveButtons[0]);
@@ -61,6 +63,25 @@ describe("ConcurrencySettings", () => {
         "tok",
         "agents.defaults.max_concurrent_interactive",
         6,
+      ),
+    );
+  });
+});
+
+describe("workflow branch caps", () => {
+  it("renders the workflow group and saves the script cap", async () => {
+    renderCard();
+    await screen.findByText("Parallel script branches");
+    // The script-cap row: default 4, second of the "4"-valued inputs.
+    const input = (await screen.findAllByDisplayValue("4"))[1];
+    fireEvent.change(input, { target: { value: "8" } });
+    const saveButtons = screen.getAllByRole("button", { name: /save/i });
+    fireEvent.click(saveButtons[saveButtons.length - 1]);
+    await waitFor(() =>
+      expect(vi.mocked(setConfigValue)).toHaveBeenCalledWith(
+        "tok",
+        "workflow.parallel_script_concurrency",
+        8,
       ),
     );
   });

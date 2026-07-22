@@ -105,6 +105,8 @@ def _improvable_workflows(workspace):
     manual → recommend), not whether the workflow is observed."""
     out = []
     for f in sorted(workflows_dir(workspace).glob("*.json")):
+        if f.name.startswith("."):   # seeding metadata, not a workflow
+            continue
         try:
             wf = load_workflow(workspace, f.stem)
         except (WorkflowError, OSError, ValueError):
@@ -134,6 +136,8 @@ def _script_referenced_outside(workspace, name: str, script: str) -> bool:
         if any(isinstance(n, ScriptNode) and n.script == script for n in other_wf.nodes.values()):
             return True
     for f in sorted(workflows_dir(workspace).glob("*.json")):
+        if f.name.startswith("."):   # seeding metadata, not a workflow
+            continue
         if f.stem == name or f.stem in parsed_names:
             continue
         try:

@@ -63,7 +63,7 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   *runtime-selected*: `branches_from` names the node — typically a routing script — whose
   output lists which declared work-node ids run this pass, as a JSON array or a
   comma-separated last line, so "run only the branches that apply" is ONE parallel node
-  instead of one static block per combination; all bounded by `max_concurrency`);
+  instead of one static block per combination; bounded by the global per-kind concurrency caps — script branches run wider than LLM branches — with `max_concurrency` as a uniform per-node override);
   `subworkflow` (run another named workflow as one step — this is how you compose
   pipelines; the child's terminal status propagates: a child that pauses for input pauses
   the parent resumably, a cancelled child cancels it, and a failed child aborts it naming

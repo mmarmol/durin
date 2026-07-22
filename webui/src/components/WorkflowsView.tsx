@@ -41,6 +41,9 @@ import {
   getWorkflowRecommendations,
   getWorkflowRunManifest,
   getWorkflowScript,
+  applySeedSuggestion,
+  dismissSeedSuggestion,
+  listSeedSuggestions,
   listWorkflowRuns,
   listWorkflows,
   listWorkflowScripts,
@@ -49,6 +52,7 @@ import {
   saveWorkflow,
   saveWorkflowScript,
   type PersonaItem,
+  type SeedSuggestion,
   type WorkflowRecommendation,
   type WorkflowRunResult,
   type WorkflowRunSummary,
@@ -1221,17 +1225,10 @@ function NodeConfigPanel({
               </span>
             )}
 
-            {/* Common: max_concurrency, next (merge), reconcile */}
-            <Field label={t("workflows.parallelMaxConcurrency")}>
-              <Input
-                type="number"
-                min={1}
-                value={(node.max_concurrency as number) ?? 2}
-                onChange={(e) => onChange({ max_concurrency: Math.max(1, parseInt(e.target.value, 10) || 2) })}
-                className="h-8"
-              />
-            </Field>
-
+            {/* Branch width comes from the GLOBAL per-kind caps in Settings ->
+                Concurrency (LLM vs script branches). A hand-written JSON may
+                still carry a per-node max_concurrency override; the editor
+                neither sets nor strips it. */}
             <Field label={t("workflows.next")}>
               <TargetSelect
                 value={node.next as string | null}
@@ -1407,6 +1404,94 @@ let _idSeq = 0;
 
 type WorkflowsPane = "editor" | "runs";
 
+export function SeedUpdatesBanner({ token, onApplied }: {
+  token: string;
+  onApplied: (name: string) => void;
+}) {
+  const { t } = useTranslation();
+  const [suggestions, setSuggestions] = useState<SeedSuggestion[]>([]);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const reload = useCallback(() => {
+    return listSeedSuggestions(token).then(setSuggestions).catch(() => setSuggestions([]));
+  }, [token]);
+  useEffect(() => { void reload(); }, [reload]);
+
+  if (suggestions.length === 0) return null;
+
+  const act = async (name: string, fn: () => Promise<{ error?: string }>) => {
+    setBusy(name);
+    setError(null);
+    try {
+      const out = await fn();
+      if (out.error) setError(out.error);
+      await reload();
+    } catch (e) {
+      setError(errMsg(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="border-b bg-amber-500/10 px-3 py-2" data-testid="seed-updates-banner">
+      <div className="text-[12.5px] font-medium">{t("workflows.seedBanner.title")}</div>
+      <div className="text-[12px] text-muted-foreground">{t("workflows.seedBanner.intro")}</div>
+      {error && <div className="mt-1 text-[12px] text-destructive">{error}</div>}
+      <ul className="mt-1 space-y-1">
+        {suggestions.map((s) => (
+          <li key={s.name} className="text-[12.5px]">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-mono">{s.name}</span>
+              <span className="text-muted-foreground">
+                {s.reason === "edited"
+                  ? t("workflows.seedBanner.reasonEdited")
+                  : t("workflows.seedBanner.reasonUnknown")}
+              </span>
+              <button
+                type="button"
+                className="text-primary underline-offset-2 hover:underline"
+                onClick={() => setExpanded(expanded === s.name ? null : s.name)}
+              >
+                {expanded === s.name
+                  ? t("workflows.seedBanner.hideDiff")
+                  : t("workflows.seedBanner.viewDiff")}
+              </button>
+              <button
+                type="button"
+                disabled={busy === s.name}
+                className="rounded border px-2 py-0.5 text-[12px] hover:bg-accent disabled:opacity-50"
+                onClick={() => void act(s.name, async () => {
+                  const out = await applySeedSuggestion(token, s.name);
+                  if (out.applied) onApplied(s.name);
+                  return out;
+                })}
+              >
+                {t("workflows.seedBanner.apply")}
+              </button>
+              <button
+                type="button"
+                disabled={busy === s.name}
+                className="rounded border px-2 py-0.5 text-[12px] text-muted-foreground hover:bg-accent disabled:opacity-50"
+                onClick={() => void act(s.name, () => dismissSeedSuggestion(token, s.name))}
+              >
+                {t("workflows.seedBanner.dismiss")}
+              </button>
+            </div>
+            {expanded === s.name && (
+              <pre className="mt-1 max-h-64 overflow-auto rounded bg-muted p-2 text-[11px] leading-tight">
+                {s.diff || t("workflows.seedBanner.noDiff")}
+              </pre>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 export function WorkflowsView() {
   const { t } = useTranslation();
   const { token } = useClient();
@@ -1519,7 +1604,7 @@ export function WorkflowsView() {
 
   const addParallelNode = useCallback(() => {
     const id = `parallel-${++_idSeq}`;
-    const node: WorkflowNodeDef = { id, kind: "parallel", reconcile: "read", max_concurrency: 2, branches: [], next: null };
+    const node: WorkflowNodeDef = { id, kind: "parallel", reconcile: "read", branches: [], next: null };
     mutate((d) => ({ ...d, nodes: [...d.nodes, node] }));
     setSelectedNodeId(id);
   }, [mutate]);
@@ -1901,6 +1986,18 @@ export function WorkflowsView() {
           ))}
         </div>
       </div>
+      <SeedUpdatesBanner
+        token={token}
+        onApplied={(name) => {
+          // The applied file changed on disk: re-pull the list and, if it is the
+          // selected workflow, its definition (the [selected] effect reloads it).
+          void listWorkflows(token).then(setNames).catch(() => undefined);
+          if (selected === name) {
+            setSelected(null);
+            setTimeout(() => setSelected(name), 0);
+          }
+        }}
+      />
       <div className={cn("flex min-h-0 flex-1", pane !== "runs" && "hidden")}>
         <RunsView />
       </div>

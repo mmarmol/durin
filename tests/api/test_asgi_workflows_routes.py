@@ -144,3 +144,77 @@ def test_scripts_name_route_does_not_collide_with_a_run_of_a_workflow_named_scri
     # 404/422 that a scripts/{name} route mismatch would raise. Proves the POST landed
     # on the run() handler for workflow "scripts", not on a scripts/{name} handler.
     assert resp.status_code == 503
+
+
+def test_seed_suggestions_route_wins_over_workflow_name_param(client, workspace):
+    # A workflow could be literally named "seed-suggestions"; the static route
+    # must still win (same _route_order guarantee as /workflows/scripts).
+    workflows_dir = workspace / "workflows"
+    workflows_dir.mkdir(parents=True)
+    (workflows_dir / "seed-suggestions.json").write_text(
+        json.dumps({"name": "seed-suggestions", "nodes": [{"id": "a", "kind": "work"}]})
+    )
+    resp = client.get("/api/v1/workflows/seed-suggestions", headers=_auth_headers())
+    assert resp.status_code == 200
+    body = resp.json()
+    # The suggestions listing shape — not a workflow definition.
+    assert "suggestions" in body and "definition" not in body
+
+
+def test_seed_suggestions_lists_pending_entry_written_by_the_seeder(client, workspace):
+    workflows_dir = workspace / "workflows"
+    workflows_dir.mkdir(parents=True)
+    (workflows_dir / ".seed_suggestions.json").write_text(json.dumps({
+        "debug": {"template_hash": "abc", "reason": "edited",
+                  "created_at": "2026-07-23T00:00:00+00:00"},
+    }))
+    (workflows_dir / "debug.json").write_text('{"name": "debug", "nodes": []}')
+    resp = client.get("/api/v1/workflows/seed-suggestions", headers=_auth_headers())
+    assert resp.status_code == 200
+    (sugg,) = resp.json()["suggestions"]
+    assert sugg["name"] == "debug"
+    assert sugg["reason"] == "edited"
+    assert sugg["diff"]   # unified diff vs the real wheel template
+
+
+def test_seed_apply_overwrites_with_the_builtin_template(client, workspace):
+    workflows_dir = workspace / "workflows"
+    workflows_dir.mkdir(parents=True)
+    (workflows_dir / "debug.json").write_text('{"name": "debug", "nodes": []}')
+    (workflows_dir / ".seed_suggestions.json").write_text(json.dumps({
+        "debug": {"template_hash": "abc", "reason": "edited",
+                  "created_at": "2026-07-23T00:00:00+00:00"},
+    }))
+    resp = client.post("/api/v1/workflows/seed-suggestions/apply",
+                       headers=_auth_headers(), json={"name": "debug"})
+    assert resp.status_code == 200
+    assert resp.json()["applied"] is True
+    data = json.loads((workflows_dir / "debug.json").read_text())
+    assert data["nodes"]   # the real template, not the stub
+    resp = client.get("/api/v1/workflows/seed-suggestions", headers=_auth_headers())
+    assert resp.json()["suggestions"] == []
+
+
+def test_seed_apply_unknown_template_reports_error(client, workspace):
+    resp = client.post("/api/v1/workflows/seed-suggestions/apply",
+                       headers=_auth_headers(), json={"name": "no-such-builtin"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["applied"] is False and body["error"]
+
+
+def test_seed_dismiss_tombstones_the_pending_entry(client, workspace):
+    workflows_dir = workspace / "workflows"
+    workflows_dir.mkdir(parents=True)
+    (workflows_dir / ".seed_suggestions.json").write_text(json.dumps({
+        "debug": {"template_hash": "abc", "reason": "edited",
+                  "created_at": "2026-07-23T00:00:00+00:00"},
+    }))
+    resp = client.post("/api/v1/workflows/seed-suggestions/dismiss",
+                       headers=_auth_headers(), json={"name": "debug"})
+    assert resp.status_code == 200
+    assert resp.json()["dismissed"] is True
+    tombs = json.loads((workflows_dir / ".seed_tombstones.json").read_text())
+    assert "debug:abc" in tombs
+    resp = client.get("/api/v1/workflows/seed-suggestions", headers=_auth_headers())
+    assert resp.json()["suggestions"] == []

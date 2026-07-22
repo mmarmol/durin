@@ -56,7 +56,6 @@
       "worker": "spec",
       "list_from": "frame",
       "reconcile": "read",
-      "max_concurrency": 4,
       "next": "assemble"
     },
     {

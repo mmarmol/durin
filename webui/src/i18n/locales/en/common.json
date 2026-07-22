@@ -1115,17 +1115,22 @@
       "description": "How many turns and sub-agents run at once. Changes apply immediately, no restart.",
       "sections": {
         "caps": "Limits",
-        "live": "Live"
+        "live": "Live",
+        "workflows": "Workflow branches"
       },
       "rows": {
         "interactive": "Interactive turns",
         "ceiling": "Global ceiling",
-        "subagents": "Sub-agents"
+        "subagents": "Sub-agents",
+        "workflowLlm": "Parallel LLM branches",
+        "workflowScript": "Parallel script branches"
       },
       "help": {
         "interactive": "Max interactive turns running at once across all sessions.",
         "ceiling": "Max concurrent work overall — interactive turns plus sub-agents.",
-        "subagents": "Max sub-agents running at once."
+        "subagents": "Max sub-agents running at once.",
+        "workflowLlm": "Simultaneous agent branches inside a workflow parallel node (bounded by provider rate limits).",
+        "workflowScript": "Simultaneous script branches inside a workflow parallel node — cheap, safe to run wider than LLM branches."
       },
       "live": {
         "interactive": "Interactive",
@@ -1331,6 +1336,17 @@
       "aborted": "aborted",
       "crashed": "crashed",
       "cancelled": "cancelled"
+    },
+    "seedBanner": {
+      "title": "Builtin workflow updates",
+      "intro": "These builtin workflows have a newer bundled version, but your copies were edited. Review the diff and update, or dismiss this version.",
+      "reasonEdited": "edited locally",
+      "reasonUnknown": "local copy differs (origin unknown)",
+      "viewDiff": "View diff",
+      "hideDiff": "Hide diff",
+      "apply": "Update to builtin",
+      "dismiss": "Dismiss",
+      "noDiff": "(no diff available)"
     }
   },
   "runs": {

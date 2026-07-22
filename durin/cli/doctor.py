@@ -157,6 +157,28 @@ def check_workspace() -> CheckResult:
     return CheckResult("workspace", "ok", str(ws), category="config")
 
 
+def check_seed_suggestions() -> CheckResult:
+    """Pending builtin-workflow updates the seeder could not auto-apply (the
+    user edited those seeds). Purely informational — the workflows screen is
+    where they get reviewed and applied."""
+    try:
+        cfg = load_config()
+        from durin.workflow.seeds import list_suggestions
+
+        pending = list_suggestions(cfg.workspace_path)
+    except Exception:  # noqa: BLE001 — diagnosis must not crash on a broken workspace
+        return CheckResult("workflow seeds", "ok", "not checked", category="config")
+    if not pending:
+        return CheckResult("workflow seeds", "ok", "builtin seeds current", category="config")
+    names = ", ".join(s["name"] for s in pending)
+    return CheckResult(
+        "workflow seeds", "warn",
+        f"{len(pending)} builtin workflow update(s) pending review: {names}",
+        fix="Review them in the dashboard's Workflows screen (apply or dismiss).",
+        category="config",
+    )
+
+
 def check_state_dirs_writable() -> CheckResult:
     """Verify the durin home and ~/.cache/durin are writable (or their parents)."""
     from durin.config.home import durin_home
@@ -1550,6 +1572,7 @@ def run_checks(*, ping: bool = False, ping_model: bool = False) -> DoctorReport:
     report.add(check_config_file())
     report.add(check_config_parses())
     report.add(check_workspace())
+    report.add(check_seed_suggestions())
     report.add(check_state_dirs_writable())
     report.add(check_at_least_one_provider())
     report.add(check_default_model_resolvable())

@@ -99,6 +99,31 @@ class WorkflowDuplicateResult(Result):
     name: str      # the name of the created copy
 
 
+class WorkflowSeedSuggestionsResult(Result):
+    # Each: {name, reason: "edited"|"unknown-provenance", created_at, diff}.
+    # A suggestion is a builtin-template update the seeder could not apply
+    # automatically because the workspace copy diverged from what was seeded.
+    suggestions: list[dict[str, Any]]
+
+
+class WorkflowSeedApplyCommand(Command):
+    name: str
+
+
+class WorkflowSeedApplyResult(Result):
+    applied: bool
+    error: str = ""
+
+
+class WorkflowSeedDismissCommand(Command):
+    name: str
+
+
+class WorkflowSeedDismissResult(Result):
+    dismissed: bool
+    error: str = ""
+
+
 class WorkflowRunCommand(Command):
     name: str
     task: str
@@ -214,7 +239,9 @@ class WorkflowsService:
     async def list(self, query: WorkflowsListQuery, principal: Principal) -> WorkflowsListResult:
         principal.require(Scope.WORKFLOWS_READ)
         d = self._dir()
-        names = [p.stem for p in d.glob("*.json") if p.is_file()] if d.is_dir() else []
+        # Dotfiles are seeding metadata (.seeds.json et al), not workflows.
+        names = [p.stem for p in d.glob("*.json")
+                 if p.is_file() and not p.name.startswith(".")] if d.is_dir() else []
         return WorkflowsListResult(workflows=sorted(names))
 
     @route(
@@ -246,6 +273,50 @@ class WorkflowsService:
         except OSError as exc:
             raise ValidationFailedError(f"script {query.name!r} is unreadable: {exc}")
         return WorkflowScriptGetResult(name=query.name, content=content)
+
+    # Static "seed-suggestions" paths win over the "/{name}" param routes via
+    # build_api_app's _route_order sort (same guarantee /workflows/scripts uses).
+    @route(
+        "GET", "/api/v1/workflows/seed-suggestions",
+        scope=Scope.WORKFLOWS_READ.value,
+        request_model=None, response_model=WorkflowSeedSuggestionsResult,
+        summary="Pending builtin-workflow seed updates (edited seeds the seeder will not overwrite).",
+    )
+    async def seed_suggestions(self, principal: Principal) -> WorkflowSeedSuggestionsResult:
+        principal.require(Scope.WORKFLOWS_READ)
+        from durin.workflow.seeds import list_suggestions
+
+        return WorkflowSeedSuggestionsResult(
+            suggestions=list_suggestions(self._workspace))
+
+    @route(
+        "POST", "/api/v1/workflows/seed-suggestions/apply",
+        scope=Scope.WORKFLOWS_WRITE.value,
+        request_model=WorkflowSeedApplyCommand, response_model=WorkflowSeedApplyResult,
+        summary="Apply a pending seed update: overwrite the workflow with the new builtin template.",
+    )
+    async def seed_apply(self, cmd: WorkflowSeedApplyCommand, principal: Principal) -> WorkflowSeedApplyResult:
+        principal.require(Scope.WORKFLOWS_WRITE)
+        from durin.workflow.seeds import apply_suggestion
+
+        with cross_process_lock(self._lock_target()):
+            out = apply_suggestion(self._workspace, cmd.name)
+        return WorkflowSeedApplyResult(
+            applied=bool(out.get("applied")), error=out.get("error", ""))
+
+    @route(
+        "POST", "/api/v1/workflows/seed-suggestions/dismiss",
+        scope=Scope.WORKFLOWS_WRITE.value,
+        request_model=WorkflowSeedDismissCommand, response_model=WorkflowSeedDismissResult,
+        summary="Dismiss a pending seed update for this template version (a newer version will ask again).",
+    )
+    async def seed_dismiss(self, cmd: WorkflowSeedDismissCommand, principal: Principal) -> WorkflowSeedDismissResult:
+        principal.require(Scope.WORKFLOWS_WRITE)
+        from durin.workflow.seeds import dismiss_suggestion
+
+        out = dismiss_suggestion(self._workspace, cmd.name)
+        return WorkflowSeedDismissResult(
+            dismissed=bool(out.get("dismissed")), error=out.get("error", ""))
 
     @route(
         "PUT", "/api/v1/workflows/scripts/{name}",
@@ -441,12 +512,18 @@ class WorkflowsService:
         )
         judge = AgentJudgeRunner(runner, default_model=provider.get_default_model())
         ws = str(self._workspace)
+        wf_cfg = self._app_config.workflow
         engine = WorkflowEngine(
             node_runner=node_runner,
             script_runner=script_runner,
-            subworkflow_runner=SubworkflowRunner(ws, node_runner, judge, script_runner=script_runner),
+            subworkflow_runner=SubworkflowRunner(
+                ws, node_runner, judge, script_runner=script_runner,
+                parallel_llm_concurrency=wf_cfg.parallel_llm_concurrency,
+                parallel_script_concurrency=wf_cfg.parallel_script_concurrency),
             workspace=ws, pick_runner=judge.pick,
-            max_node_visits=self._app_config.workflow.max_node_visits)
+            max_node_visits=wf_cfg.max_node_visits,
+            parallel_llm_concurrency=wf_cfg.parallel_llm_concurrency,
+            parallel_script_concurrency=wf_cfg.parallel_script_concurrency)
         result = await asyncio.to_thread(
             engine.run, workflow, task,
             input_files=input_files,

@@ -30,6 +30,8 @@ class SubworkflowRunner:
         *,
         script_runner: Callable[[Any], Any] | None = None,
         max_depth: int = 5,
+        parallel_llm_concurrency: int = 2,
+        parallel_script_concurrency: int = 4,
         _depth: int = 0,
         _stack: tuple[str, ...] = (),
     ) -> None:
@@ -38,6 +40,8 @@ class SubworkflowRunner:
         self.judge_runner = judge_runner
         self.script_runner = script_runner
         self.max_depth = max_depth
+        self.parallel_llm_concurrency = parallel_llm_concurrency
+        self.parallel_script_concurrency = parallel_script_concurrency
         self._depth = _depth
         self._stack = _stack
 
@@ -63,7 +67,10 @@ class SubworkflowRunner:
         nested = SubworkflowRunner(
             self.workspace, self.node_runner, self.judge_runner,
             script_runner=self.script_runner,
-            max_depth=self.max_depth, _depth=self._depth + 1, _stack=self._stack + (name,),
+            max_depth=self.max_depth,
+            parallel_llm_concurrency=self.parallel_llm_concurrency,
+            parallel_script_concurrency=self.parallel_script_concurrency,
+            _depth=self._depth + 1, _stack=self._stack + (name,),
         )
 
         # Tag nested frames with the node they run under: without it a surface
@@ -94,6 +101,8 @@ class SubworkflowRunner:
             pick_runner=self.judge_runner.pick if self.judge_runner is not None else None,
             progress_emit=(_tagged_emit if progress_emit is not None else None),
             cancel_check=cancel_check,
+            parallel_llm_concurrency=self.parallel_llm_concurrency,
+            parallel_script_concurrency=self.parallel_script_concurrency,
         )
         # Anchor the sub-workflow's node sessions to the invoking conversation too,
         # so nested work is navigable under it (no orphan subtrees).

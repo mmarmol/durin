@@ -232,6 +232,48 @@ export async function listWorkflows(
   return body.workflows;
 }
 
+export interface SeedSuggestion {
+  name: string;
+  reason: "edited" | "unknown-provenance" | string;
+  created_at: string;
+  diff: string;
+}
+
+export async function listSeedSuggestions(
+  token: string,
+  base: string = "",
+): Promise<SeedSuggestion[]> {
+  const body = await request<{ suggestions: SeedSuggestion[] }>(
+    `${base}/api/v1/workflows/seed-suggestions`,
+    token,
+  );
+  return body.suggestions;
+}
+
+export async function applySeedSuggestion(
+  token: string,
+  name: string,
+  base: string = "",
+): Promise<{ applied: boolean; error: string }> {
+  return post<{ applied: boolean; error: string }>(
+    `${base}/api/v1/workflows/seed-suggestions/apply`,
+    token,
+    { name },
+  );
+}
+
+export async function dismissSeedSuggestion(
+  token: string,
+  name: string,
+  base: string = "",
+): Promise<{ dismissed: boolean; error: string }> {
+  return post<{ dismissed: boolean; error: string }>(
+    `${base}/api/v1/workflows/seed-suggestions/dismiss`,
+    token,
+    { name },
+  );
+}
+
 export async function getWorkflow(
   token: string,
   name: string,

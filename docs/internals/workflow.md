@@ -248,9 +248,13 @@ per branch combination). Runtime-resolved ids are held to the same rules as stat
 (declared work nodes, no persistent sessions) — an id that fails aborts the run naming it,
 since it is an authoring bug in the emitting node; an *empty* resolved list is a legitimate
 "nothing applies" pass that records empty output and continues to `next`.
-**`max_concurrency`** (default 2) bounds every
-shape — at most this many runners execute simultaneously; excess items queue and run in
-waves (anti-rate-limit backpressure). Fan-in collects all branch/worker text outputs into the
+Branch width comes from the **global per-kind caps** in config
+(`workflow.parallel_llm_concurrency`, default 2, for work/subworkflow branches and the
+dynamic worker fan-out; `workflow.parallel_script_concurrency`, default 4, for script
+branches — scripts are cheap and run wider, and never queue behind LLM branches; both
+editable under Settings → Concurrency). A node's explicit **`max_concurrency`** is a
+uniform override across every branch kind (the pre-split behavior); excess items queue
+and run in waves (anti-rate-limit backpressure). Fan-in collects all branch/worker text outputs into the
 `next` node's input. For **static** branches, `reconcile` decides how branch *writes* come
 back together (`durin/workflow/workspace_fork.py`): `read` = read/analysis branches, no
 writes applied; `choose` = each branch writes in a private copy of the run's **shared
@@ -855,7 +859,7 @@ End-to-end for a single `run_workflow` call:
 | `ScriptNodeRunner` | `durin/workflow/script_runner.py` | The script-node runner: runs the node's `command`/`script` as a subprocess in the run's working folder (stdin = upstream edge text, capped stdout = edge text, stderr diagnostic-only), timeout-bounded with a process-group kill on expiry, exit code (or last stdout line for `cases`) drives routing. |
 | `NodeProgressHook`, `NodeCheckpointHook` | `durin/workflow/node_progress.py` | Agent hooks composed into a work node's turn: the first reports live `round`/`activity` for progress frames (from `before_execute_tools`, the leading edge of a tool call); the second persists the node's session after every round so a mid-turn failure or a crash keeps the rounds already completed instead of losing them all at once. |
 | `running_frame`, `finished_frames`, `pending_frames`, `tool_target` | `durin/workflow/progress.py` | The single builder for every node-frame shape the engine emits (running, finished, the certain-pending tail) and the tool reuses for the terminal frame — a field added to a frame is added here once. |
-| `seed_workflows` | `durin/utils/helpers.py` | Copy bundled seed JSONs into a workspace's `workflows/` dir (idempotent, called from `sync_workspace_templates`). |
+| `refresh_seeds`, `list_suggestions`, `apply_suggestion`, `dismiss_suggestion` | `durin/workflow/seeds.py` | Provenance-aware seeding: install missing seeds, auto-refresh untouched ones from the wheel, and turn updates to user-edited seeds into reviewable suggestions (see the Seeds bullet below). `seed_workflows` in `durin/utils/helpers.py` is the `sync_workspace_templates` entry that delegates here. |
 | `load_workflow` | `durin/workflow/loader.py` | Load and parse a workflow by name from the workspace. |
 | `WorkflowResult`, `NodeRun` | `durin/workflow/result.py` | The typed run outcome and per-node trace. |
 | `RunWorkflowTool` | `durin/agent/tools/run_workflow.py` | The `run_workflow` LLM tool (core scope) that loads, runs, summarizes a workflow, and records its run. |
@@ -1028,9 +1032,23 @@ End-to-end for a single `run_workflow` call:
   `.reverted` / `.structural`, each carrying a `kind` (`prompt` | `command` |
   `script_file`) (catalogued in `durin/telemetry/schema.py`).
 - **Seeds.** Starter workflows ship bundled under `durin/templates/workflows/` and
-  are copied into a fresh workspace's `workflows/` directory by
-  `seed_workflows(workspace)` (called from `sync_workspace_templates`) — idempotent,
-  never overwrites a user-edited file.
+  are reconciled into the workspace's `workflows/` directory by
+  `refresh_seeds(workspace)` (`durin/workflow/seeds.py`, reached via
+  `seed_workflows` from `sync_workspace_templates` at every CLI/gateway entry).
+  Seeding is provenance-aware: `.seeds.json` records the content hash each seed
+  was installed with. A seed still matching its recorded hash was never touched
+  by the user, so a newer bundled template overwrites it automatically (the
+  change is committed to the workflows version store). A seed that diverged
+  belongs to the user: a newer template becomes an entry in
+  `.seed_suggestions.json` instead — surfaced by `durin doctor` and as a banner
+  on the dashboard's Workflows screen with per-item diff, apply, and dismiss
+  (dismissing tombstones that template version only; the next version asks
+  again). A workspace predating the manifest is adopted on first pass: files
+  equal to the current template become tracked seeds, diverged ones surface a
+  one-time `unknown-provenance` suggestion for a human to settle. The dotfiles
+  are seeding metadata — every workflow-listing path skips them. Builtin
+  *skills* need none of this: they are read live from the wheel and a workspace
+  copy shadows by name.
 
   | Seed | Pattern |
   |---|---|
@@ -1049,11 +1067,11 @@ End-to-end for a single `run_workflow` call:
   trustworthy example at a time, never as stubs.
 
 - **Current scope.** Today: sequential execution with **concurrent parallel** branches —
-  static (fixed `branches` list) or **dynamic** (`worker` template mapped over a runtime
-  list, bounded by `max_concurrency` default 2) — only an agent work node may serve as a
-  branch or the fan-out worker template; a script node is rejected there (the parser
-  requires `WorkNode`), since a script already does its own iteration/parallelism
-  internally and wrapping it in the engine's fan-out would be redundant; read-only or **writing** with `choose` /
+  static (fixed `branches` list of work and/or script nodes), **runtime-selected**
+  (`branches_from`), or **dynamic** (`worker` template mapped over a runtime list —
+  agent-only, since a script already iterates internally). Branch width comes from the
+  global per-kind caps (LLM 2 / script 4, configurable) with per-node `max_concurrency`
+  as a uniform override; read-only or **writing** with `choose` /
   `union` reconciliation (private copy per branch + content-aware conflict detection); a
   **shared working folder** per run that sequential nodes read and write, so file-producing
   stages collaborate on one evolving fileset (and a self-loop accumulates) instead of handing

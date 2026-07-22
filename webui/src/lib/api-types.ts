@@ -2375,6 +2375,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workflows/seed-suggestions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Pending builtin-workflow seed updates (edited seeds the seeder will not overwrite). */
+        get: operations["workflows_seed_suggestions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows/seed-suggestions/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Apply a pending seed update: overwrite the workflow with the new builtin template. */
+        post: operations["workflows_seed_apply"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows/seed-suggestions/dismiss": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Dismiss a pending seed update for this template version (a newer version will ask again). */
+        post: operations["workflows_seed_dismiss"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workflows/{name}": {
         parameters: {
             query?: never;
@@ -5890,6 +5941,43 @@ export interface components {
         WorkflowScriptsResult: {
             /** Scripts */
             scripts: string[];
+        };
+        /** WorkflowSeedApplyCommand */
+        WorkflowSeedApplyCommand: {
+            /** Name */
+            name: string;
+        };
+        /** WorkflowSeedApplyResult */
+        WorkflowSeedApplyResult: {
+            /** Applied */
+            applied: boolean;
+            /**
+             * Error
+             * @default
+             */
+            error: string;
+        };
+        /** WorkflowSeedDismissCommand */
+        WorkflowSeedDismissCommand: {
+            /** Name */
+            name: string;
+        };
+        /** WorkflowSeedDismissResult */
+        WorkflowSeedDismissResult: {
+            /** Dismissed */
+            dismissed: boolean;
+            /**
+             * Error
+             * @default
+             */
+            error: string;
+        };
+        /** WorkflowSeedSuggestionsResult */
+        WorkflowSeedSuggestionsResult: {
+            /** Suggestions */
+            suggestions: {
+                [key: string]: unknown;
+            }[];
         };
         /** WorkflowSessionRunsQuery */
         WorkflowSessionRunsQuery: {
@@ -9834,6 +9922,74 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkflowScriptPutResult"];
+                };
+            };
+        };
+    };
+    workflows_seed_suggestions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowSeedSuggestionsResult"];
+                };
+            };
+        };
+    };
+    workflows_seed_apply: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowSeedApplyCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowSeedApplyResult"];
+                };
+            };
+        };
+    };
+    workflows_seed_dismiss: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowSeedDismissCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowSeedDismissResult"];
                 };
             };
         };

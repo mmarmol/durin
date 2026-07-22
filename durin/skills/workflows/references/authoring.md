@@ -152,7 +152,7 @@ shapes:
 | `worker` | string \| null | none | **Dynamic only.** Id of the `work` node used as the per-item template. |
 | `list_from` | string \| null | none | **Dynamic only.** Id of the upstream node whose output is the runtime list. Required when `worker` is set. |
 | `branches_from` | string \| null | none | **Runtime-selected only.** Id of the node whose output names the branch ids to run this pass. Must reference a declared node. |
-| `max_concurrency` | int ≥ 1 | `2` | Max simultaneous branch/worker runners; excess queue in waves. |
+| `max_concurrency` | int ≥ 1 | unset | Unset (recommended): the GLOBAL per-kind caps govern — LLM branches (work/subworkflow) default 2, script branches default 4, both configurable in Settings → Concurrency (`workflow.parallel_llm_concurrency` / `parallel_script_concurrency`). Script branches never queue behind LLM branches. An explicit int is a uniform override for every branch kind. |
 | `reconcile` | `"read"` \| `"choose"` \| `"union"` | `"read"` | How **static** branch *file writes* merge: `read` = no writes applied; `choose` = each branch writes a private copy, a judge picks one; `union` = apply all, abort on a same-path content conflict. Writing branches fork the run's shared working folder (and only it — never the surrounding durin workspace) — a branch starts from the folder's current files and its writes reconcile back into it. (Dynamic workers and `read` branches are handed the shared folder directly; `reconcile` has no effect on dynamic fan-out.) |
 | `criteria` | string | `""` | **Required when `reconcile` is `choose`** — how the judge picks the winner. |
 | `judge_model` | string \| null | none | Optional model for the `choose` judge. |

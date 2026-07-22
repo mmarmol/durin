@@ -55,7 +55,6 @@
       "kind": "parallel",
       "worker": "probe",
       "list_from": "frame",
-      "max_concurrency": 3,
       "next": "synthesize"
     },
     {
