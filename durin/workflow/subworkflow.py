@@ -39,7 +39,9 @@ class SubworkflowRunner:
         self._stack = _stack
 
     def __call__(self, name: str, task: str, root_session_key: str | None = None,
-                work_dir: str | None = None, parent_run_id: str | None = None) -> str:
+                work_dir: str | None = None, parent_run_id: str | None = None,
+                progress_emit: Any = None, cancel_check: Any = None,
+                parent_node_id: str | None = None) -> str:
         if name in self._stack:
             chain = " -> ".join(self._stack + (name,))
             return f"Error: workflow cycle detected: {chain}"
@@ -54,12 +56,24 @@ class SubworkflowRunner:
             script_runner=self.script_runner,
             max_depth=self.max_depth, _depth=self._depth + 1, _stack=self._stack + (name,),
         )
+
+        # Tag nested frames with the node they run under: without it a surface
+        # cannot distinguish a sub-workflow's nodes from the caller's own.
+        def _tagged_emit(payload: dict) -> None:
+            if progress_emit is None:
+                return
+            for frame in payload.get("nodes") or []:
+                frame.setdefault("parent_node", parent_node_id)
+            progress_emit(payload)
+
         engine = WorkflowEngine(
             node_runner=self.node_runner,
             script_runner=self.script_runner,
             subworkflow_runner=nested,
             workspace=str(self.workspace),
             pick_runner=self.judge_runner.pick if self.judge_runner is not None else None,
+            progress_emit=(_tagged_emit if progress_emit is not None else None),
+            cancel_check=cancel_check,
         )
         # Anchor the sub-workflow's node sessions to the invoking conversation too,
         # so nested work is navigable under it (no orphan subtrees).

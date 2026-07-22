@@ -187,7 +187,7 @@ class WorkflowEngine:
         *,
         script_runner: NodeRunner | None = None,
         run_id_factory: Callable[[], str] | None = None,
-        subworkflow_runner: Callable[..., str] | None = None,  # (name, task, root_session_key, work_dir=None, parent_run_id=None) -> str
+        subworkflow_runner: Callable[..., str] | None = None,  # (name, task, root_session_key, work_dir=None, parent_run_id=None, progress_emit=None, cancel_check=None, parent_node_id=None) -> str
         workspace: str | None = None,
         pick_runner: Callable[[str, list[str], "str | None"], int] | None = None,
         max_node_visits: int = 1000,
@@ -748,8 +748,12 @@ class WorkflowEngine:
                     raise WorkflowConfigError(
                         f"node {node.id!r} is a subworkflow but the engine has no subworkflow_runner"
                     )
-                output = self._subworkflow_runner(node.workflow, upstream_output or task, root_session_key,
-                                                  work_dir=work_dir, parent_run_id=run_id)
+                output = self._subworkflow_runner(
+                    node.workflow, upstream_output or task, root_session_key,
+                    work_dir=work_dir, parent_run_id=run_id,
+                    progress_emit=self._progress_emit, cancel_check=self._cancel_check,
+                    parent_node_id=node.id,
+                )
                 runs.append(NodeRun(node_id=node.id, iteration=iteration, output=output))
                 upstream_output = output
                 final_output = output

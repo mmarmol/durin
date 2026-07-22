@@ -122,3 +122,44 @@ def test_nested_nodes_work_in_the_parent_folder(tmp_path):
     out = SubworkflowRunner(tmp_path, node_runner)("child", "task", None, work_dir=str(parent_work))
     assert out == "child-out"
     assert seen["c"] == str(parent_work)
+
+
+def test_nested_run_emits_progress_tagged_with_its_parent_node(tmp_path):
+    """Without the tag a surface cannot tell a nested frame from a top-level one
+    and would render the sub-workflow's nodes as siblings of the caller's."""
+    _write(tmp_path, "child", {"name": "child", "start": "a",
+                               "nodes": [{"id": "a", "kind": "work", "next": None}]})
+    emitted = []
+    runner = SubworkflowRunner(tmp_path, _node_runner("child-result"), judge_runner=None)
+
+    runner("child", "do the child", progress_emit=emitted.append, parent_node_id="call-child")
+
+    frames = [f for p in emitted for f in p["nodes"]]
+    assert frames, "the nested engine emitted nothing"
+    assert all(f["parent_node"] == "call-child" for f in frames)
+
+
+def test_nested_progress_is_silent_when_the_parent_is_not_listening(tmp_path):
+    _write(tmp_path, "child", {"name": "child", "start": "a",
+                               "nodes": [{"id": "a", "kind": "work", "next": None}]})
+    runner = SubworkflowRunner(tmp_path, _node_runner("x"), judge_runner=None)
+    # No progress_emit: must run normally, not construct a tagging wrapper.
+    assert runner("child", "t") == "x"
+
+
+def test_cancelling_the_parent_stops_the_nested_run(tmp_path):
+    """A /stop on the caller must reach inside the sub-workflow, not burn tokens
+    to completion with nobody waiting for the result."""
+    _write(tmp_path, "child", {"name": "child", "start": "a",
+                               "nodes": [{"id": "a", "kind": "work", "next": "b"},
+                                         {"id": "b", "kind": "work", "next": None}]})
+    ran = []
+
+    def _counting_runner(req):
+        ran.append(req.node.id)
+        return NodeRunResponse(output="x", session_key=None, messages=[])
+
+    runner = SubworkflowRunner(tmp_path, _counting_runner, judge_runner=None)
+    runner("child", "t", cancel_check=lambda: len(ran) >= 1)
+
+    assert ran == ["a"], f"nested run continued past the cancel: {ran}"

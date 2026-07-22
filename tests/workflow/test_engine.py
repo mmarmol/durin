@@ -279,7 +279,7 @@ def test_subworkflow_node_runs_and_threads_output():
     ]})
     calls = []
 
-    def subworkflow_runner(name, task, root_session_key=None, work_dir=None, parent_run_id=None):
+    def subworkflow_runner(name, task, root_session_key=None, work_dir=None, parent_run_id=None, **_kwargs):
         calls.append((name, task, root_session_key, work_dir, parent_run_id))
         return "child-output"
 
@@ -317,7 +317,7 @@ def test_subworkflow_node_without_runner_raises():
 
 def test_subworkflow_receives_the_parent_work_dir(tmp_path):
     calls = {}
-    def sub_runner(name, task, root_key, work_dir=None, parent_run_id=None):
+    def sub_runner(name, task, root_key, work_dir=None, parent_run_id=None, **_kwargs):
         calls["work_dir"] = work_dir
         return "sub-out"
     wf = parse_workflow({
