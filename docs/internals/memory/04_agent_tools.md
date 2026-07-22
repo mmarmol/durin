@@ -473,7 +473,7 @@ that no longer keys a current bubble (the tree changed shape since the
 overview was built) raises `KeyError`, which the service maps to a 404; the
 client falls back to the overview and refreshes it.
 
-**Member display cap and scaffolding.** `build_cluster_subgraph` returns a
+**Member display cap.** `build_cluster_subgraph` returns a
 neighborhood payload with a display-capped member list (sorted by
 descending weight, deterministic tie-break by id) and a separate
 `total_members` count that always reports the true pre-cap member count —
