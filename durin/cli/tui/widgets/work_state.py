@@ -170,8 +170,37 @@ class WorkStore:
         n_glyph = self._glyph(n_status, spin)
         route = node.get("route_label")
         suffix = f" [work-count]{route}[/]" if route else ""
+        if n_status == "running":
+            suffix += self._render_running_detail(node)
         pad = "  " * indent
         out = [f"{pad}[{n_cls}]{n_glyph} {node.get('label', '?')}[/]{suffix}"]
         for branch in node.get("branches") or []:
             out.extend(self._render_node(branch, indent + 1, spin=spin))
         return out
+
+    def _render_running_detail(self, node: dict) -> str:
+        """Round and current-activity suffix for a running node.
+
+        ``round``/``max_rounds`` count the agent's turns within this one visit —
+        a different axis from the node's ``iteration``/``budget`` (how many times
+        the graph has re-entered the node), so the two are never mixed together
+        here. ``activity`` is the tool in flight, as ``{tool, target}``. Every
+        field is optional — nested sub-workflow frames, branch frames, and older
+        emitters may omit any of them — so each segment is skipped, not rendered
+        blank, when absent.
+        """
+        segments: list[str] = []
+        round_, max_rounds = node.get("round"), node.get("max_rounds")
+        if round_ is not None and max_rounds is not None:
+            segments.append(f"round {round_}/{max_rounds}")
+        activity = node.get("activity") or {}
+        tool = activity.get("tool")
+        if tool:
+            target = activity.get("target")
+            # ``target`` is arbitrary text from the run (a path, a shell command,
+            # a search query) and may contain literal brackets Rich would
+            # otherwise parse as markup tags.
+            segments.append(f"{tool} {escape(target)}" if target else str(tool))
+        if not segments:
+            return ""
+        return " [work-count]· " + " · ".join(segments) + "[/]"

@@ -201,3 +201,65 @@ def test_workflow_end_non_completed_status_is_failed():
     markup = store.render_markup()
     assert "Finished" in markup
     assert "work-failed" in markup
+
+
+def test_running_node_renders_round_and_activity():
+    store = WorkStore()
+    store.ingest({
+        "name": "workflow_progress", "phase": "running", "call_id": "workflow:r1",
+        "arguments": {"workflow": "wf"},
+        "nodes": [{
+            "id": "consolidate", "label": "Consolidate", "status": "running",
+            "round": 3, "max_rounds": 10, "started_at": 1700.0,
+            "activity": {"tool": "read_file", "target": "investigation.json", "at": 1712.0},
+        }],
+    })
+    markup = store.render_markup()
+    assert "Consolidate" in markup
+    assert "3/10" in markup
+    assert "investigation.json" in markup
+
+
+def test_a_frame_without_the_new_fields_still_renders():
+    """Older emitters and nested runs may omit them; the panel must not crash."""
+    store = WorkStore()
+    store.ingest({
+        "name": "workflow_progress", "phase": "running", "call_id": "workflow:r1",
+        "arguments": {"workflow": "wf"},
+        "nodes": [{"id": "a", "label": "A", "status": "running"}],
+    })
+    assert "A" in store.render_markup()
+
+
+def test_running_node_round_without_max_rounds_is_not_shown():
+    """`round` and `max_rounds` are a pair — the node's *visit* budget (`iteration`/
+    `budget`) is a different axis and must never stand in as the denominator."""
+    store = WorkStore()
+    store.ingest({
+        "name": "workflow_progress", "phase": "running", "call_id": "workflow:r3",
+        "arguments": {"workflow": "wf"},
+        "nodes": [{
+            "id": "n", "label": "N", "status": "running",
+            "round": 3, "iteration": 2, "budget": 5,
+        }],
+    })
+    markup = store.render_markup()
+    assert "3/5" not in markup
+    assert "3/10" not in markup
+
+
+def test_running_node_activity_target_escapes_markup():
+    """A tool's target is arbitrary run text (a path, a shell command, a search
+    query) and may contain literal brackets — they must not be parsed as Rich
+    markup tags when rendered in the sidebar."""
+    store = WorkStore()
+    store.ingest({
+        "name": "workflow_progress", "phase": "running", "call_id": "workflow:r4",
+        "arguments": {"workflow": "wf"},
+        "nodes": [{
+            "id": "n", "label": "N", "status": "running",
+            "activity": {"tool": "grep", "target": "TODO[urgent]", "at": 1712.0},
+        }],
+    })
+    markup = store.render_markup()
+    assert r"TODO\[urgent]" in markup
