@@ -2225,7 +2225,7 @@
     "finished": "Finalizadas ({{count}})",
     "empty": "Sin trabajo activo",
     "close": "Cerrar panel de trabajo",
-    "round": "ronda {{round}} de {{budget}}",
+    "round": "ronda {{round}} de {{maxRounds}}",
     "nodeCount_one": "{{count}} nodo",
     "nodeCount_other": "{{count}} nodos",
     "activity": {

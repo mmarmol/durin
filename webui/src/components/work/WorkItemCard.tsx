@@ -160,7 +160,7 @@ export function WorkItemCard({ item }: { item: WorkItem }): JSX.Element {
                     <div className="mt-0.5 flex flex-col gap-0.5 pl-5">
                       {node.round != null && node.maxRounds != null && (
                         <div className="text-[11px] text-muted-foreground">
-                          {t("work.round", { round: node.round, budget: node.maxRounds })}
+                          {t("work.round", { round: node.round, maxRounds: node.maxRounds })}
                         </div>
                       )}
                       {node.activity && <NodeActivityLine activity={node.activity} />}

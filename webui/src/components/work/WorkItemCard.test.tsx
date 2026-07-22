@@ -297,7 +297,9 @@ describe("WorkItemCard", () => {
 
     expect(screen.getByText("2:00")).toBeInTheDocument();       // finished node duration
     expect(screen.getByText(/4:2\d/)).toBeInTheDocument();       // running node clock
-    expect(screen.getByText(/3.*10/)).toBeInTheDocument();       // round 3 of 10
+    // Exact, not a loose /3.*10/: the round line's placeholders must match what
+    // the call site binds, or an unbound one renders as literal "{{...}}".
+    expect(screen.getByText("round 3 of 10")).toBeInTheDocument();
     expect(screen.getByText(/investigation\.json/)).toBeInTheDocument();
   });
 
