@@ -229,10 +229,13 @@ shape — at most this many runners execute simultaneously; excess items queue a
 waves (anti-rate-limit backpressure). Fan-in collects all branch/worker text outputs into the
 `next` node's input. For **static** branches, `reconcile` decides how branch *writes* come
 back together (`durin/workflow/workspace_fork.py`): `read` = read/analysis branches, no
-writes applied; `choose` = each branch writes in a private copy of the workspace and a judge
-picks one to apply, discarding the rest; `union` = apply every branch's writes, aborting on a
-genuine conflict (two branches wrote *different* content to the same path — identical
-incidental files reconcile cleanly). **Dynamic fan-out workers share the workspace** directly
+writes applied; `choose` = each branch writes in a private copy of the run's **shared
+working folder** and a judge picks one to apply, discarding the rest; `union` = apply every
+branch's writes, aborting on a genuine conflict (two branches wrote *different* content to
+the same path — identical incidental files reconcile cleanly). The fork copies the working
+folder ONLY — never the durin workspace around it: state dirs (sessions, memory, run
+manifests) are not branch output, and copying them per branch would be ruinous on a real
+workspace. **Dynamic fan-out workers share the workspace** directly
 (no per-worker isolation in v1); they hand their output off to the merge node via text, so
 `reconcile` has no effect on a dynamic parallel and is not shown in the editor for that mode. A per-node visit count bounds loop-backs across three tiers (the Airflow/Temporal
 shape — a config default, a per-unit override, and a hard cap). Each node's budget is

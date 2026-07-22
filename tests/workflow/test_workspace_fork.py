@@ -12,25 +12,24 @@ def _write(root: Path, rel: str, text: str) -> None:
     p.write_text(text)
 
 
-def test_extra_include_exempts_the_work_subtree(tmp_path):
-    (tmp_path / ".workflow" / "r1" / "work").mkdir(parents=True)
-    (tmp_path / ".workflow" / "r1" / "work" / "draft.md").write_text("v1")
-    (tmp_path / ".workflow" / "r1" / "other.txt").write_text("not included")
-    (tmp_path / "code.py").write_text("x = 1")
+def test_fork_of_a_working_folder_roundtrips_edits(tmp_path):
+    # The engine forks the run's shared working folder directly: seeded files come
+    # along, edits and additions diff cleanly against the base snapshot.
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "draft.md").write_text("v1")
 
-    inc = ".workflow/r1/work"
-    base = snapshot(tmp_path, extra_include=inc)
-    assert f"{inc}/draft.md" in base
-    assert ".workflow/r1/other.txt" not in base       # only the work subtree
+    base = snapshot(work)
+    assert "draft.md" in base
 
-    fork_dir = fork(tmp_path, extra_include=inc)
+    fork_dir = fork(work)
     try:
-        assert (fork_dir / inc / "draft.md").read_text() == "v1"   # seeded
-        (fork_dir / inc / "draft.md").write_text("v2")
-        (fork_dir / inc / "new.md").write_text("added")
-        cs = diff(base, fork_dir, extra_include=inc)
-        assert f"{inc}/draft.md" in cs.modified
-        assert f"{inc}/new.md" in cs.created
+        assert (fork_dir / "draft.md").read_text() == "v1"   # seeded
+        (fork_dir / "draft.md").write_text("v2")
+        (fork_dir / "new.md").write_text("added")
+        cs = diff(base, fork_dir)
+        assert "draft.md" in cs.modified
+        assert "new.md" in cs.created
     finally:
         cleanup(fork_dir)
 

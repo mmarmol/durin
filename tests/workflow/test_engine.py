@@ -409,7 +409,8 @@ def _writing_wf(reconcile, **extra):
 
 
 def test_parallel_choose_applies_only_the_winner(tmp_path):
-    # each branch writes the same artifact in its own private copy
+    # each branch writes the same artifact in its own private copy of the run's
+    # shared working folder; the winner's write lands in the REAL working folder
     def node_runner(req):
         Path(req.workspace_override, "result.txt").write_text(f"from {req.node.id}")
         return NodeRunResponse(output=f"out-{req.node.id}", session_key=None, messages=[])
@@ -420,7 +421,9 @@ def test_parallel_choose_applies_only_the_winner(tmp_path):
     )
     res = eng.run(_writing_wf("choose", criteria="best"), "t")
     assert res.status == "completed"
-    assert (tmp_path / "result.txt").read_text() == "from b"   # only the winner applied
+    work = tmp_path / ".workflow" / "r1" / "work"
+    assert (work / "result.txt").read_text() == "from b"   # only the winner applied
+    assert not (tmp_path / "result.txt").exists()          # never at the workspace root
     assert "chosen: b" in res.final_output
 
 
@@ -433,8 +436,9 @@ def test_parallel_union_applies_disjoint_branches(tmp_path):
     eng = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1", workspace=str(tmp_path))
     res = eng.run(_writing_wf("union"), "t")
     assert res.status == "completed"
-    assert (tmp_path / "x.txt").read_text() == "a"
-    assert (tmp_path / "y.txt").read_text() == "b"
+    work = tmp_path / ".workflow" / "r1" / "work"
+    assert (work / "x.txt").read_text() == "a"
+    assert (work / "y.txt").read_text() == "b"
 
 
 def test_parallel_union_conflict_aborts_and_applies_nothing(tmp_path):
@@ -446,7 +450,32 @@ def test_parallel_union_conflict_aborts_and_applies_nothing(tmp_path):
     res = eng.run(_writing_wf("union"), "t")
     assert res.status == "aborted"
     assert "conflict" in res.final_output and "same.txt" in res.final_output
+    assert not (tmp_path / ".workflow" / "r1" / "work" / "same.txt").exists()
     assert not (tmp_path / "same.txt").exists()   # nothing applied when there is a conflict
+
+
+def test_parallel_fork_copies_the_working_folder_not_the_workspace(tmp_path):
+    """The fork a writing branch runs in is a copy of the run's shared working
+    folder ONLY. Forking the whole durin workspace copied sessions/, memory/ and
+    every other state dir per branch — ruinous on a real workspace and never
+    branch output (live finding, mxHero box 2026-07-22)."""
+    (tmp_path / "sessions").mkdir()
+    (tmp_path / "sessions" / "big.jsonl").write_text("x" * 1000)
+    (tmp_path / "memory").mkdir()
+    (tmp_path / "memory" / "graph.json").write_text("{}")
+
+    seen: dict[str, bool] = {}
+
+    def node_runner(req):
+        fork_root = Path(req.workspace_override)
+        seen[req.node.id] = (fork_root / "sessions").exists() or (fork_root / "memory").exists()
+        Path(fork_root, f"{req.node.id}.txt").write_text(req.node.id)
+        return NodeRunResponse(output=f"out-{req.node.id}", session_key=None, messages=[])
+
+    eng = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1", workspace=str(tmp_path))
+    res = eng.run(_writing_wf("union"), "t")
+    assert res.status == "completed"
+    assert seen and not any(seen.values()), f"state dirs leaked into branch forks: {seen}"
 
 
 def test_node_exception_aborts_with_partial_trace():

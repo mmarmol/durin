@@ -160,7 +160,8 @@ parallel, then merges. The worker node is defined like any `work` node and is na
 ## Static parallel with reconcile (`branches` + `choose`)
 
 Fixed branches all see the same input. With `reconcile: "choose"` each branch writes in a
-private workspace copy and a judge picks one (needs `criteria`). Use `"union"` to apply all
+private copy of the run's shared working folder and a judge picks one (needs `criteria`).
+Use `"union"` to apply all
 (aborts on a same-path conflict) or `"read"` for analysis-only branches.
 
 ```json
@@ -256,7 +257,7 @@ Any `work` node can be tuned independently. `model` and `persona` are mutually e
   (`tools: "default"`, `mode: "build"`) reads earlier steps' files there and writes its own,
   so file-producing stages build on each other (a plan's code accumulates; a debug loop's
   reproduction, fix, and test live together). Subworkflows run in the parent's folder;
-  parallel writing branches fork the folder along with the workspace and their writes
+  parallel writing branches fork the folder and their writes
   reconcile back; read branches and dynamic workers are handed the folder directly. You do
   not declare the folder — it exists per run; just have nodes read and write files normally.
   To hand produced files back to the caller, declare `output: {"file": true}` on the

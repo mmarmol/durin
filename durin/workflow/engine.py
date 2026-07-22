@@ -1138,13 +1138,13 @@ class WorkflowEngine:
         # set was resolved (and validated) from the source node's output this pass.
         branches = tuple(branch_ids) if branch_ids is not None else node.branches
         workers = max(1, min(len(branches), node.max_concurrency))
-        # The run's shared working folder, expressed relative to the workspace, so it
-        # can be exempted from the fork/diff exclusion — the folder IS branch output,
-        # not machine-managed state. None when there is no work_dir or no workspace.
-        rel_work = (
-            str(Path(work_dir).resolve().relative_to(Path(self._workspace).resolve()))
-            if (work_dir and self._workspace) else None
-        )
+        # Writing branches (choose/union) fork the run's SHARED WORKING FOLDER, not
+        # the durin workspace: the folder is where sequential nodes collaborate and
+        # is therefore the write surface a branch legitimately owns. Forking the
+        # whole workspace copied sessions/, memory/ and every other state dir per
+        # branch — ruinous on a real workspace, and a concurrent gateway write there
+        # could even read as a phantom branch change in the diff.
+        fork_root = work_dir if work_dir else self._workspace
 
         # Shared branch-status map, guarded by a lock because branches run in
         # ThreadPoolExecutor workers concurrently.
@@ -1210,26 +1210,24 @@ class WorkflowEngine:
 
         if self._workspace is None:
             return "", f"parallel node {node.id!r}: reconcile={node.reconcile!r} needs a workspace"
+        Path(fork_root).mkdir(parents=True, exist_ok=True)   # a fresh run's folder may not exist yet
 
-        base = workspace_fork.snapshot(self._workspace, extra_include=rel_work)
+        base = workspace_fork.snapshot(fork_root)
         forks: list = []
 
         def _run(bid):
-            fork_dir = workspace_fork.fork(self._workspace, extra_include=rel_work)
+            # Each branch gets a private copy of the working folder: its file tools
+            # anchor there (workspace override) and its writes diff against the base.
+            fork_dir = workspace_fork.fork(fork_root)
             forks.append(fork_dir)
             try:
-                if rel_work is not None:
-                    branch_out = Path(fork_dir) / rel_work
-                    branch_out.mkdir(parents=True, exist_ok=True)   # fork copy may be empty
-                else:
-                    branch_out = artifact_dir(fork_dir, run_id, bid, iteration)
                 resp = self._run_one_branch(
                     workflow.nodes[bid], task, upstream, run_id, iteration, root_key,
-                    str(fork_dir), out_dir=str(branch_out))
+                    str(fork_dir), out_dir=str(fork_dir))
                 with _branch_lock:
                     branch_status[bid] = "done"
                 _emit_branches()
-                return bid, resp.output, resp.session_key, workspace_fork.diff(base, fork_dir, extra_include=rel_work)
+                return bid, resp.output, resp.session_key, workspace_fork.diff(base, fork_dir)
             except Exception:
                 with _branch_lock:
                     branch_status[bid] = "failed"
@@ -1246,7 +1244,7 @@ class WorkflowEngine:
                 idx = self._pick_runner(node.criteria, [out for _, out, _, _ in results], node.judge_model)
                 idx = idx if isinstance(idx, int) and 0 <= idx < len(results) else 0
                 bid, out, _key, cs = results[idx]
-                workspace_fork.apply(cs, self._workspace)
+                workspace_fork.apply(cs, fork_root)
                 return f"[chosen: {bid}]\n{out}", None
             # union: apply every branch unless two touched the same path
             changesets = [cs for _, _, _, cs in results]
@@ -1254,7 +1252,7 @@ class WorkflowEngine:
             if conflict:
                 return "", f"parallel node {node.id!r}: union conflict on {sorted(conflict)}"
             for cs in changesets:
-                workspace_fork.apply(cs, self._workspace)
+                workspace_fork.apply(cs, fork_root)
             return "\n\n".join(f"[{bid}]\n{out}" for bid, out, _, _ in results), None
         finally:
             for fork_dir in forks:
