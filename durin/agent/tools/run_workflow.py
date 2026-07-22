@@ -34,7 +34,7 @@ def _terminal_progress_payload(workflow: Any, run_id: str, result: Any) -> dict:
     (capped, same limit the tasks API applies) so the user sees what the run
     is waiting for without opening the manifest.
     """
-    from durin.workflow.spec import node_label
+    from durin.workflow.progress import finished_frames
 
     # Only the *last* run row of the asking node represents the pause —
     # earlier rows of the same node are completed loop iterations.
@@ -43,21 +43,9 @@ def _terminal_progress_payload(workflow: Any, run_id: str, result: Any) -> dict:
         for i, r in enumerate(result.runs):
             if r.node_id == result.needs_input_node:
                 ni_idx = i
-    nodes = [
-        {
-            "id": r.node_id,
-            "label": node_label(workflow.nodes[r.node_id]) if r.node_id in workflow.nodes else r.node_id,
-            "status": (
-                "needs_input" if i == ni_idx
-                else "failed" if r.status in ("node_failed", "persist_failed")
-                else "done"
-            ),
-            "route_label": getattr(r, "route_label", None),
-            "iteration": r.iteration,
-            "budget": getattr(r, "budget", None),
-        }
-        for i, r in enumerate(result.runs)
-    ]
+    nodes = finished_frames(workflow, result.runs)
+    if ni_idx >= 0:
+        nodes[ni_idx]["status"] = "needs_input"
     payload: dict = {"run_id": run_id, "nodes": nodes, "done": True, "status": result.status}
     if result.status == "needs_input" and result.final_output:
         payload["detail"] = str(result.final_output)[:500]

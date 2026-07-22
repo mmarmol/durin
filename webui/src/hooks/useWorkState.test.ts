@@ -1,8 +1,9 @@
 import { renderHook, waitFor, act } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { listBackgroundTasks } from "@/lib/api";
+import type { BackgroundTask } from "@/lib/api";
 import { useClient } from "@/providers/ClientProvider";
-import type { InboundEvent } from "@/lib/types";
+import type { InboundEvent, ToolProgressEvent } from "@/lib/types";
 import { useWorkState } from "./useWorkState";
 
 // ---------------------------------------------------------------------------
@@ -110,6 +111,51 @@ function renderUseWorkState(chatId: string, sessionKey: string) {
   );
 
   return { result, emit, unmount };
+}
+
+/**
+ * Render the hook and emit a single tool_events entry (a workflow_progress
+ * frame) as a live WS frame. The live path updates liveRef (a ref mutation)
+ * and bumps state synchronously within the same handler call, so the merge
+ * is settled by the time `act` returns — no `waitFor` needed here, unlike
+ * the polled path below which crosses a real microtask boundary.
+ */
+function renderHookWithFrame(toolEvent: ToolProgressEvent) {
+  const { result, emit } = renderUseWorkState("c1", "websocket:c1");
+  act(() => {
+    emit({
+      event: "message",
+      chat_id: "c1",
+      text: "",
+      kind: "progress",
+      tool_events: [toolEvent],
+    });
+  });
+  return { result };
+}
+
+/**
+ * Render the hook against a polled-only /api/v1/tasks response — the reload
+ * case, where liveRef is empty and the poll is the only source. Waits for
+ * the mocked promise chain to resolve and land in state before returning.
+ */
+async function renderHookWithPolled(rows: BackgroundTask[]) {
+  const { client } = makeFakeClient();
+  mockUseClient.mockReturnValue({
+    client: client as unknown as ReturnType<typeof useClient>["client"],
+    token: "tok",
+    modelName: null,
+    modelPreset: null,
+  });
+  mockListBackgroundTasks.mockResolvedValue(rows);
+
+  const { result } = renderHook(() => useWorkState("c1", "websocket:c1"));
+
+  await waitFor(() => {
+    expect(result.current.active.length + result.current.finished.length).toBe(rows.length);
+  });
+
+  return { result };
 }
 
 // ---------------------------------------------------------------------------
@@ -437,5 +483,205 @@ describe("useWorkState", () => {
     expect(result.current.finished).toHaveLength(0);
     expect(mockListBackgroundTasks).not.toHaveBeenCalled();
     expect(fakeclient.onChat).not.toHaveBeenCalled();
+  });
+
+  it("carries node activity and clock from a live workflow frame", () => {
+    const { result } = renderHookWithFrame({
+      version: 1, phase: "running", call_id: "workflow:r1", name: "workflow_progress",
+      arguments: { workflow: "ticket-stage1-context", task: "TICKET_ID=23098" },
+      nodes: [
+        { id: "resolve-org", label: "Resolve org", status: "done", duration_s: 119.8 },
+        {
+          id: "consolidate", label: "Consolidate", status: "running",
+          started_at: 1700, round: 3, budget: 10,
+          activity: { tool: "read_file", target: "investigation.json", at: 1712 },
+        },
+      ],
+    });
+
+    const nodes = result.current.active[0].nodes!;
+    expect(nodes[0].durationS).toBe(119.8);
+    expect(nodes[1].startedAt).toBe(1700);
+    expect(nodes[1].round).toBe(3);
+    expect(nodes[1].activity).toEqual({ tool: "read_file", target: "investigation.json", at: 1712 });
+  });
+
+  it("keeps a polled running node when no live frame has arrived", async () => {
+    // The reload case: liveRef is empty, the poll is the only source.
+    const { result } = await renderHookWithPolled([
+      {
+        kind: "workflow", id: "r1", label: "wf", status: "running",
+        started_at: 100, ended_at: null, session_key: null,
+        nodes: [{ id: "consolidate", label: "Consolidate", status: "running", started_at: 140 }],
+      },
+    ]);
+    expect(result.current.active[0].nodes![0].startedAt).toBe(140);
+  });
+
+  it("keeps the run's true start when a live frame overwrites a polled item", async () => {
+    // Opening a chat mid-run (or reloading): the poll delivers the manifest's
+    // started_at, then the next live frame arrives. Taking the live item's own
+    // startedAt (= when THIS browser saw its first frame) would reset the card's
+    // run clock to 0:00 while the node clock above it, which comes off the
+    // manifest, keeps counting.
+    const { client, emit } = makeFakeClient();
+    mockUseClient.mockReturnValue({
+      client: client as unknown as ReturnType<typeof useClient>["client"],
+      token: "tok",
+      modelName: null,
+      modelPreset: null,
+    });
+    mockListBackgroundTasks.mockResolvedValue([
+      {
+        kind: "workflow", id: "run1", label: "wf", status: "running",
+        started_at: 1_700_000_000, ended_at: null, session_key: null,
+        nodes: [{ id: "consolidate", status: "running", started_at: 1_700_000_100 }],
+      },
+    ]);
+
+    const { result } = renderHook(() => useWorkState("c1", "websocket:c1"));
+    await waitFor(() => expect(result.current.active).toHaveLength(1));
+
+    act(() => {
+      emit(workflowProgressFrame("run1", [{ id: "consolidate", status: "running" }]));
+    });
+
+    expect(result.current.active[0].startedAt).toBe(1_700_000_000_000);
+  });
+
+  it("falls back to the live start when the polled row has no start time", async () => {
+    // A manifest with no started_at polls as 0; treating that as the run's start
+    // would render an elapsed measured from 1970.
+    const { client, emit } = makeFakeClient();
+    mockUseClient.mockReturnValue({
+      client: client as unknown as ReturnType<typeof useClient>["client"],
+      token: "tok",
+      modelName: null,
+      modelPreset: null,
+    });
+    mockListBackgroundTasks.mockResolvedValue([
+      {
+        kind: "workflow", id: "run2", label: "wf", status: "running",
+        started_at: 0, ended_at: null, session_key: null, nodes: [],
+      },
+    ]);
+
+    const { result } = renderHook(() => useWorkState("c1", "websocket:c1"));
+    await waitFor(() => expect(result.current.active).toHaveLength(1));
+
+    act(() => {
+      emit(workflowProgressFrame("run2", [{ id: "n1", status: "running" }]));
+    });
+
+    expect(result.current.active[0].startedAt).toBeGreaterThan(0);
+  });
+
+  it("carries max rounds, description and parent node from a live frame", () => {
+    const { result } = renderHookWithFrame({
+      call_id: "workflow:r2", name: "workflow_progress", phase: "running",
+      arguments: { workflow: "flow-r2" },
+      nodes: [
+        {
+          id: "sub-step", label: "Sub step", status: "running",
+          round: 2, max_rounds: 10,
+          description: "Drafts the report", parent_node: "gather",
+        },
+      ],
+    });
+
+    const node = result.current.active[0].nodes![0];
+    expect(node.maxRounds).toBe(10);
+    expect(node.description).toBe("Drafts the report");
+    expect(node.parentNode).toBe("gather");
+  });
+
+  // -------------------------------------------------------------------------
+  // Item-level startedAt/endedAt unit: the polled path must convert the API's
+  // epoch-seconds fields to epoch milliseconds, matching the live WS path
+  // (which sets startedAt/endedAt from Date.now()).
+  // -------------------------------------------------------------------------
+
+  it("converts a polled item's startedAt from epoch seconds to epoch milliseconds", async () => {
+    const { result } = await renderHookWithPolled([
+      {
+        kind: "subagent",
+        id: "polled-ms",
+        label: "polled task",
+        status: "running",
+        started_at: 1700000000,
+        ended_at: null,
+        session_key: null,
+      },
+    ]);
+
+    const item = result.current.active.find((w) => w.id === "polled-ms");
+    expect(item).toBeDefined();
+    expect(item!.startedAt).toBe(1700000000 * 1000);
+  });
+
+  it("keeps endedAt null for a still-running polled item, instead of coercing to 0", async () => {
+    const { result } = await renderHookWithPolled([
+      {
+        kind: "subagent",
+        id: "polled-running",
+        label: "polled task",
+        status: "running",
+        started_at: 1700000000,
+        ended_at: null,
+        session_key: null,
+      },
+    ]);
+
+    const item = result.current.active.find((w) => w.id === "polled-running");
+    expect(item).toBeDefined();
+    expect(item!.endedAt).toBeNull();
+  });
+
+  it("sorts a live item and a polled item correctly by ended-at instant (mixed units)", async () => {
+    // The polled row's ended_at is epoch SECONDS, set far enough in the future
+    // (relative to real "now") that this item truly ends after the live item
+    // below (whose endedAt is Date.now(), i.e. real epoch milliseconds) once
+    // both are compared in the same unit. Before the fix, the polled item's
+    // raw (unconverted) seconds value is ~1000x smaller than any real
+    // millisecond epoch, so it would always sort as "older" than a live item
+    // regardless of the true chronological order — the scenario here is
+    // engineered to flip the correct order if that bug is present.
+    const futureSeconds = Math.floor(Date.now() / 1000) + 10_000_000;
+    const { client, emit } = makeFakeClient();
+    mockUseClient.mockReturnValue({
+      client: client as unknown as ReturnType<typeof useClient>["client"],
+      token: "tok",
+      modelName: null,
+      modelPreset: null,
+    });
+    mockListBackgroundTasks.mockResolvedValue([
+      {
+        kind: "workflow",
+        id: "polled-later",
+        label: "flow-polled-later",
+        status: "done",
+        started_at: futureSeconds - 100,
+        ended_at: futureSeconds,
+        session_key: null,
+      },
+    ]);
+
+    const { result } = renderHook(() => useWorkState("c1", "websocket:c1"));
+
+    await waitFor(() => {
+      expect(result.current.finished.find((w) => w.id === "polled-later")).toBeDefined();
+    });
+
+    // Live item ends "now" — chronologically before the polled item above.
+    act(() => {
+      emit(workflowProgressFrame("live-earlier", [{ id: "n1", status: "done" }], "end"));
+    });
+
+    await waitFor(() => {
+      expect(result.current.finished.find((w) => w.id === "live-earlier")).toBeDefined();
+    });
+
+    const ids = result.current.finished.map((w) => w.id);
+    expect(ids.indexOf("polled-later")).toBeLessThan(ids.indexOf("live-earlier"));
   });
 });

@@ -279,7 +279,7 @@ def test_subworkflow_node_runs_and_threads_output():
     ]})
     calls = []
 
-    def subworkflow_runner(name, task, root_session_key=None, work_dir=None, parent_run_id=None):
+    def subworkflow_runner(name, task, root_session_key=None, work_dir=None, parent_run_id=None, **_kwargs):
         calls.append((name, task, root_session_key, work_dir, parent_run_id))
         return "child-output"
 
@@ -317,7 +317,7 @@ def test_subworkflow_node_without_runner_raises():
 
 def test_subworkflow_receives_the_parent_work_dir(tmp_path):
     calls = {}
-    def sub_runner(name, task, root_key, work_dir=None, parent_run_id=None):
+    def sub_runner(name, task, root_key, work_dir=None, parent_run_id=None, **_kwargs):
         calls["work_dir"] = work_dir
         return "sub-out"
     wf = parse_workflow({
@@ -944,3 +944,82 @@ def test_cancelled_result_names_the_last_producer_node():
     assert res.status == "cancelled"
     assert res.final_output == "output-first"
     assert res.final_output_node == "first"
+
+
+def test_cancelled_during_terminal_subworkflow_node_reports_cancelled():
+    """A cancel that lands entirely inside a subworkflow node's nested run must not
+    be misreported as 'completed' when that subworkflow node is the parent's LAST
+    node. SubworkflowRunner.__call__ returns a plain string with no status (other
+    callers depend on that shape), and — unlike every other node type — there is no
+    next loop iteration here for the ordinary top-of-loop cancel_check to run in,
+    so without a re-check right after the branch the walk falls through to the
+    completed result at the bottom of _walk."""
+    wf = parse_workflow({"name": "d", "start": "sub", "nodes": [
+        {"id": "sub", "kind": "subworkflow", "workflow": "child", "next": None},
+    ]})
+
+    def subworkflow_runner(name, task, root_session_key=None, work_dir=None,
+                           parent_run_id=None, **_kwargs):
+        return "child-partial-output"
+
+    # False on the top-of-loop check before "sub" runs (so it gets a chance to run
+    # at all), True on every call after — simulating a cancel that was requested
+    # while the nested run was in flight and only discovered once it returns.
+    cancel_after_first_check = [False]
+
+    def cancel_check():
+        if cancel_after_first_check[0]:
+            return True
+        cancel_after_first_check[0] = True
+        return False
+
+    eng = WorkflowEngine(
+        node_runner=lambda req: NodeRunResponse(output="unused"),
+        run_id_factory=lambda: "r1",
+        subworkflow_runner=subworkflow_runner,
+        cancel_check=cancel_check,
+    )
+    res = eng.run(wf, "t")
+    assert res.status == "cancelled"
+    assert res.final_output == "child-partial-output"
+    assert res.final_output_node == "sub"
+
+
+def test_cancelled_during_non_terminal_subworkflow_node_still_reports_cancelled():
+    """Regression guard for the non-terminal case: when the subworkflow node has a
+    next node, the ordinary top-of-loop cancel_check already catches the cancel
+    before that next node starts — this must keep working exactly as before."""
+    wf = parse_workflow({"name": "d", "start": "sub", "nodes": [
+        {"id": "sub", "kind": "subworkflow", "workflow": "child", "next": "after"},
+        {"id": "after", "kind": "work", "next": None},
+    ]})
+
+    def subworkflow_runner(name, task, root_session_key=None, work_dir=None,
+                           parent_run_id=None, **_kwargs):
+        return "child-partial-output"
+
+    after_ran = []
+
+    def node_runner(req):
+        after_ran.append(req.node.id)
+        return NodeRunResponse(output="after-out")
+
+    cancel_after_first_check = [False]
+
+    def cancel_check():
+        if cancel_after_first_check[0]:
+            return True
+        cancel_after_first_check[0] = True
+        return False
+
+    eng = WorkflowEngine(
+        node_runner=node_runner,
+        run_id_factory=lambda: "r1",
+        subworkflow_runner=subworkflow_runner,
+        cancel_check=cancel_check,
+    )
+    res = eng.run(wf, "t")
+    assert res.status == "cancelled"
+    assert after_ran == []                          # "after" never ran
+    assert res.final_output == "child-partial-output"
+    assert res.final_output_node == "sub"

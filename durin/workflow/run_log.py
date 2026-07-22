@@ -62,6 +62,9 @@ def _node_records(result) -> list[dict]:
             # the evidence the improve pass's script-repair lane reads. Capped so a
             # pathological error cannot bloat every manifest rewrite.
             "error": (r.error or "")[:2000] or None,
+            # Files this node added to the run's shared working folder — the folder
+            # is shared, so attribution only exists if it is captured per node.
+            "artifacts": list(getattr(r, "artifacts", []) or []),
         }
         for r in result.runs
     ]
@@ -79,6 +82,8 @@ def start_run(
     task: str | None = None,
     parent_run_id: str | None = None,
     work_dir: str | None = None,
+    typical_s: dict[str, float] | None = None,
+    typical_total_s: float | None = None,
 ) -> Path:
     """Write the ``running`` manifest before the walk begins. Returns the record path.
     ``parent_run_id`` marks a nested subworkflow run with the run_id of its caller —
@@ -105,6 +110,14 @@ def start_run(
         # Which process is executing this run — the crash sweep flips any
         # "running" manifest whose owner is no longer alive.
         "owner": process_identity(),
+        # Median per-node seconds from prior completed runs, computed once here so
+        # every reader (panel, executions screen, tasks API) shows one number
+        # instead of each recomputing it from the manifest history.
+        "typical_s": typical_s or {},
+        # Median TOTAL seconds of a prior completed run — a separate measurement,
+        # never the sum of the per-node medians above, which would add up branches
+        # no single run can all take.
+        "typical_total_s": typical_total_s,
         "runs": [],
     }
     path = _record_path(workspace, name, run_id)
@@ -131,9 +144,35 @@ def update_run(
         "parent_run_id": base.get("parent_run_id"),
         "work_dir": base.get("work_dir"),
         "owner": base.get("owner"),
+        "typical_s": base.get("typical_s") or {},
+        "typical_total_s": base.get("typical_total_s"),
+        # The node that was in flight has now finished; leaving the marker set
+        # would pin a completed node as running for readers of the manifest.
+        "active_node": None,
         "runs": _node_records(result),
     }
     path.write_text(json.dumps(record), encoding="utf-8")
+
+
+def mark_node_started(
+    workspace: str | Path, name: str, run_id: str, *,
+    node_id: str, label: str, started_at: float,
+) -> None:
+    """Record which node is in flight, so a reader that arrives mid-node knows.
+
+    The manifest is otherwise only rewritten when a node *completes*, which
+    leaves a multi-minute node invisible on disk for its whole duration: a
+    reloaded page finds the run alive and its finished nodes listed, but nothing
+    about the node actually running. Cleared by the next ``update_run``.
+
+    No-op when no manifest exists — a nested run may not have written one, and
+    fabricating a partial record here would confuse the crash sweep.
+    """
+    base = read_manifest(workspace, name, run_id)
+    if base is None:
+        return
+    base["active_node"] = {"node_id": node_id, "label": label, "started_at": started_at}
+    _record_path(workspace, name, run_id).write_text(json.dumps(base), encoding="utf-8")
 
 
 def finalize_run(
@@ -162,6 +201,8 @@ def finalize_run(
         "task": effective_task,
         "parent_run_id": effective_parent_run_id,
         "work_dir": prior.get("work_dir"),
+        "typical_s": prior.get("typical_s") or {},
+        "typical_total_s": prior.get("typical_total_s"),
         # The terminal output (the answer, the plan, or — on needs_input — the questions),
         # capped, so a historical audit of the run shows the result, not only the trace.
         "final_output": (result.final_output or "")[:8000],
@@ -303,6 +344,65 @@ def workflow_names_with_runs(workspace: str | Path) -> list[str]:
     if not root.is_dir():
         return []
     return sorted(p.name for p in root.iterdir() if p.is_dir())
+
+
+def typical_node_durations(
+    workspace: str | Path, name: str, *, limit: int = 5,
+) -> dict[str, float]:
+    """Median seconds each node took across this workflow's recent completed runs.
+
+    Only completed runs count: an aborted run's node timings describe a path that
+    ended early. The median (not the mean) so one pathological run does not skew
+    the number a user reads as "normal". Nodes with no recorded duration — gates
+    and routers — are absent rather than zero.
+    """
+    from statistics import median
+
+    samples: dict[str, list[float]] = {}
+    for rec in list_runs(workspace, name, limit=limit):
+        if rec.get("status") != "completed":
+            continue
+        # list_runs returns trimmed summaries (by design, so listing endpoints stay
+        # light); the per-node trace only lives in the full manifest.
+        manifest = read_manifest(workspace, name, rec["run_id"]) or {}
+        for r in manifest.get("runs") or []:
+            d = r.get("duration_s")
+            nid = r.get("node_id")
+            if d is None or not nid:
+                continue
+            samples.setdefault(nid, []).append(float(d))
+    return {nid: float(median(vals)) for nid, vals in samples.items() if vals}
+
+
+def typical_total_duration(
+    workspace: str | Path, name: str, *, limit: int = 5,
+) -> float | None:
+    """Median seconds a whole run of this workflow takes, across recent completed runs.
+
+    Each run contributes the sum of its OWN node durations — the same quantity a
+    surface sums to show a run's actual elapsed, so the two read as a direct
+    comparison — and the median of those totals is the estimate.
+
+    Summing the per-node medians instead would sum the union of the paths prior
+    runs took: a workflow whose router picks one of several mutually exclusive
+    branches has a median for every branch any prior run visited, while a single
+    run walks exactly one of them. That over-counts badly (a graph with eight
+    exclusive branches counts all eight) and under-counts loops (a node visited
+    three times contributes one median). None when no completed run recorded any
+    node duration — absent rather than a guessed zero.
+    """
+    from statistics import median
+
+    totals: list[float] = []
+    for rec in list_runs(workspace, name, limit=limit):
+        if rec.get("status") != "completed":
+            continue
+        manifest = read_manifest(workspace, name, rec["run_id"]) or {}
+        durations = [float(r["duration_s"]) for r in manifest.get("runs") or []
+                     if r.get("duration_s") is not None]
+        if durations:
+            totals.append(sum(durations))
+    return float(median(totals)) if totals else None
 
 
 def list_runs(workspace: str | Path, name: str, limit: int = 20) -> list[dict]:

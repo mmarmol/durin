@@ -2184,6 +2184,11 @@
     "passOf": "pasada {{iteration}} de {{budget}}",
     "finalPass": "pasada final",
     "continuesSession": "continúa sesión",
+    "nodeDuration": "tardó",
+    "nodeTypical": "típico",
+    "nodeArtifacts": "produjo",
+    "runElapsed": "transcurrido",
+    "runTypicalTotal": "corridas previas ~{{duration}}",
     "persistentInParallelWarning": "Este nodo es una rama de {{parallelId}} — las sesiones persistentes no están permitidas en unidades paralelas. Guardar fallará.",
     "runStatus": {
       "ok": "ok",
@@ -2220,6 +2225,20 @@
     "finished": "Finalizadas ({{count}})",
     "empty": "Sin trabajo activo",
     "close": "Cerrar panel de trabajo",
+    "round": "ronda {{round}} de {{maxRounds}}",
+    "nodeCount_one": "{{count}} nodo",
+    "nodeCount_other": "{{count}} nodos",
+    "activity": {
+      "fallback": "{{tool}}",
+      "read_file": "leyendo",
+      "write_file": "escribiendo",
+      "edit_file": "editando",
+      "exec": "ejecutando",
+      "grep": "buscando",
+      "web_search": "buscando en la web",
+      "web_fetch": "descargando",
+      "memory_search": "buscando en memoria"
+    },
     "strip": {
       "statusRunning": "en curso",
       "statusDone": "finalizado",
@@ -2227,6 +2246,8 @@
       "runningMany": "{{count}} trabajos en curso",
       "needsInput": "{{label}} necesita tu respuesta",
       "needsInputMany": "{{count}} trabajos necesitan tu respuesta",
+      "nodes_one": "{{count}} nodo",
+      "nodes_other": "{{count}} nodos",
       "view": "Ver",
       "respond": "Responder"
     }

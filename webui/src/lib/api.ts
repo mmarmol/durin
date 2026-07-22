@@ -129,7 +129,19 @@ export interface BackgroundTask {
   started_at: number;
   ended_at: number | null;
   session_key: string | null;
-  nodes?: Array<{ id: string; label?: string; status: string; branches?: Array<{ id: string; label?: string; status: string }> | null }> | null;
+  nodes?: Array<{
+    id: string;
+    label?: string;
+    status: string;
+    started_at?: number | null;
+    duration_s?: number | null;
+    round?: number | null;
+    max_rounds?: number | null;
+    activity?: { tool: string; target?: string; at: number } | null;
+    description?: string | null;
+    parent_node?: string | null;
+    branches?: Array<{ id: string; label?: string; status: string }> | null;
+  }> | null;
   task?: string | null;
   needs_input_detail?: string | null;
 }
@@ -329,6 +341,11 @@ export type WorkflowRunNode = {
   budget?: number | null;
   status: string;
   route_label: string | null;
+  // Seconds this node took, once finished; absent/null for a row recorded before
+  // this field shipped.
+  duration_s?: number | null;
+  // Files this node added to the run's shared working folder.
+  artifacts?: string[];
 };
 
 export type WorkflowRunResult = {
@@ -344,6 +361,16 @@ export type WorkflowRunResult = {
   needs_input_node?: string;
   // relative paths in output_dir (completed runs)
   output_files?: string[];
+  // The node currently in flight, while status=="running"; absent once the run
+  // finishes or for a manifest recorded before this field shipped.
+  active_node?: { node_id: string; label: string; started_at: number } | null;
+  // Median seconds each node took across this workflow's recent completed runs,
+  // keyed by node_id; absent (or empty) when the workflow has no run history yet.
+  typical_s?: Record<string, number>;
+  // Median seconds a whole prior run took — measured per run, not summed from
+  // typical_s (which spans every branch prior runs took, while one run takes
+  // one). Absent/null when the workflow has no completed-run history yet.
+  typical_total_s?: number | null;
 };
 
 // One row of a workflow's persisted run history (GET .../runs), newest-first.

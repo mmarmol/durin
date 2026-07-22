@@ -1,5 +1,6 @@
 """The shared background-task merge (consumed by the HTTP service AND the tasks tool)."""
 
+import json
 import time
 
 from durin.agent.background_tasks import collect_tasks
@@ -95,3 +96,116 @@ def test_needs_input_questions_capped_at_500_chars(tmp_path, monkeypatch):
 
     wf = next(r for r in rows if r["id"] == "r3")
     assert wf["needs_input_detail"] == "q" * 500
+
+
+def test_a_running_node_appears_in_the_node_tree(tmp_path):
+    """Reloading mid-node must still show which node is in flight — the live WS
+    frames are gone after a reload, so this polled path is the only source."""
+    from durin.agent.background_tasks import collect_tasks
+    from durin.workflow import run_log
+
+    run_log.start_run(tmp_path, "wf", "r1", root_session_key="websocket:c", started_at=100.0)
+    run_log.mark_node_started(tmp_path, "wf", "r1", node_id="consolidate",
+                              label="Consolidate", started_at=140.0)
+
+    row = next(t for t in collect_tasks(tmp_path, session_key="websocket:c") if t["kind"] == "workflow")
+    running = [n for n in row["nodes"] if n["status"] == "running"]
+    assert [n["id"] for n in running] == ["consolidate"]
+    assert running[0]["started_at"] == 140.0
+    assert running[0]["label"] == "Consolidate"
+
+
+def test_finished_nodes_carry_their_duration(tmp_path):
+    from durin.agent.background_tasks import collect_tasks
+    from durin.workflow import run_log
+
+    run_log.start_run(tmp_path, "wf", "r2", root_session_key="websocket:c",
+                      started_at=100.0, typical_s={"consolidate": 360.0})
+    path = run_log._record_path(tmp_path, "wf", "r2")
+    rec = run_log.read_manifest(tmp_path, "wf", "r2")
+    rec["runs"] = [{"node_id": "consolidate", "iteration": 1, "status": "ok",
+                    "duration_s": 361.5, "artifacts": ["context.json"]}]
+    path.write_text(json.dumps(rec), encoding="utf-8")
+
+    row = next(t for t in collect_tasks(tmp_path, session_key="websocket:c")
+               if t["kind"] == "workflow")
+    node = next(n for n in row["nodes"] if n["id"] == "consolidate")
+    assert node["duration_s"] == 361.5
+
+
+def test_the_task_list_carries_no_duration_estimates(tmp_path):
+    """Estimates and per-node artifacts belong to the wide executions surface,
+    which reads the manifest itself. Emitting them here produced a payload the
+    narrow panel this list feeds never rendered — and, for the run total, one
+    computed by summing branches no single run can all take."""
+    from durin.agent.background_tasks import collect_tasks
+    from durin.workflow import run_log
+
+    run_log.start_run(tmp_path, "wf", "r3", root_session_key="websocket:c",
+                      started_at=100.0, typical_s={"a": 5.0, "b": 7.0},
+                      typical_total_s=6.0)
+    path = run_log._record_path(tmp_path, "wf", "r3")
+    rec = run_log.read_manifest(tmp_path, "wf", "r3")
+    rec["runs"] = [{"node_id": "a", "iteration": 1, "status": "ok",
+                    "duration_s": 5.0, "artifacts": ["out.json"]}]
+    path.write_text(json.dumps(rec), encoding="utf-8")
+
+    row = next(t for t in collect_tasks(tmp_path, session_key="websocket:c")
+               if t["kind"] == "workflow")
+    assert "typical_total_s" not in row
+    assert set(row["nodes"][0]) == {"id", "label", "status", "branches", "duration_s"}
+
+
+def test_running_revisit_of_a_completed_node_collapses_to_one_row(tmp_path):
+    """A looping workflow can revisit a node that already completed at least once.
+    The manifest's active_node then names an id already present in the completed
+    ``runs`` rows — the merged tree must still show exactly ONE row for that id,
+    now reporting it as running, never two rows for the same node."""
+    from durin.agent.background_tasks import collect_tasks
+    from durin.workflow import run_log
+
+    run_log.start_run(tmp_path, "wf", "r4", root_session_key="websocket:c", started_at=100.0)
+    path = run_log._record_path(tmp_path, "wf", "r4")
+    rec = run_log.read_manifest(tmp_path, "wf", "r4")
+    rec["runs"] = [{"node_id": "search", "iteration": 1, "status": "ok",
+                    "duration_s": 12.0, "artifacts": ["hits.json"]}]
+    path.write_text(json.dumps(rec), encoding="utf-8")
+    run_log.mark_node_started(tmp_path, "wf", "r4", node_id="search",
+                              label="Search", started_at=250.0)
+
+    row = next(t for t in collect_tasks(tmp_path, session_key="websocket:c")
+               if t["kind"] == "workflow")
+    matches = [n for n in row["nodes"] if n["id"] == "search"]
+    assert len(matches) == 1
+    assert matches[0]["status"] == "running"
+    assert matches[0]["started_at"] == 250.0
+
+
+def test_a_crashed_run_reports_no_running_node(tmp_path):
+    """Crash reconciliation (reconcile_one / reconcile_running) flips a dead run's
+    status to "crashed" but does not touch active_node — only a normal completion
+    (update_run) clears that marker. Without a status gate at the reader, a run
+    that died mid-node would report that node as "running" forever."""
+    from durin.agent.background_tasks import collect_tasks
+    from durin.workflow import run_log
+
+    run_log.start_run(tmp_path, "wf", "r5", root_session_key="websocket:c", started_at=100.0)
+    run_log.mark_node_started(tmp_path, "wf", "r5", node_id="search",
+                              label="Search", started_at=140.0)
+    # Simulate the owning process having died mid-node, then run the real
+    # crash-reconciliation path against it — the same one the gateway runs at
+    # boot and the one the tasks tool runs when a user pokes a stale run.
+    path = run_log._record_path(tmp_path, "wf", "r5")
+    rec = run_log.read_manifest(tmp_path, "wf", "r5")
+    rec["owner"] = {"pid": 2**22 + 54321, "started": "never"}
+    path.write_text(json.dumps(rec), encoding="utf-8")
+    assert run_log.reconcile_one(tmp_path, "wf", "r5") is True
+
+    manifest = run_log.read_manifest(tmp_path, "wf", "r5")
+    assert manifest["status"] == "crashed"
+    assert manifest["active_node"]["node_id"] == "search"   # reconcile leaves it set
+
+    row = next(t for t in collect_tasks(tmp_path, session_key="websocket:c")
+               if t["kind"] == "workflow")
+    assert row["status"] == "failed"
+    assert not any(n["status"] == "running" for n in row["nodes"])

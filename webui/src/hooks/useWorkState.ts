@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { listBackgroundTasks } from "@/lib/api";
 import { useClient } from "@/providers/ClientProvider";
-import type { InboundEvent, ToolProgressEvent, WorkBranch, WorkItem, WorkNode } from "@/lib/types";
+import type { InboundEvent, ToolProgressEvent, WorkActivity, WorkBranch, WorkItem, WorkNode } from "@/lib/types";
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -20,6 +20,13 @@ function toWorkNodes(
     status: string;
     iteration?: number | null;
     budget?: number | null;
+    started_at?: number | null;
+    duration_s?: number | null;
+    round?: number | null;
+    max_rounds?: number | null;
+    activity?: WorkActivity | null;
+    description?: string | null;
+    parent_node?: string | null;
     branches?: Array<{ id: string; label?: string; status: string }> | null;
   }> | null | undefined,
 ): WorkNode[] {
@@ -36,6 +43,13 @@ function toWorkNodes(
       status: n.status as WorkNode["status"],
       ...(n.iteration != null ? { iteration: n.iteration } : {}),
       ...(n.budget != null ? { budget: n.budget } : {}),
+      ...(n.started_at != null ? { startedAt: n.started_at } : {}),
+      ...(n.duration_s != null ? { durationS: n.duration_s } : {}),
+      ...(n.round != null ? { round: n.round } : {}),
+      ...(n.max_rounds != null ? { maxRounds: n.max_rounds } : {}),
+      ...(n.description ? { description: n.description } : {}),
+      ...(n.activity ? { activity: n.activity } : {}),
+      ...(n.parent_node ? { parentNode: n.parent_node } : {}),
       ...(branches && branches.length > 0 ? { branches } : {}),
     };
   });
@@ -49,20 +63,11 @@ function workItemFromWorkflowEvent(
   ev: ToolProgressEvent,
   now: number,
 ): WorkItem | null {
-  const e = ev as {
-    call_id?: string;
-    phase?: string;
-    arguments?: unknown;
-    nodes?: Array<{
-      id: string;
-      label?: string;
-      status: "running" | "done" | "failed";
-      route_label?: string | null;
-      iteration?: number | null;
-      budget?: number | null;
-      branches?: Array<{ id: string; label?: string; status: "running" | "done" | "failed" }>;
-    }>;
-  };
+  // ev is already a ToolProgressEvent — its own `nodes` shape carries every
+  // field toWorkNodes reads (including the newer clock/round/activity ones).
+  // No local recast here: a narrower one previously shadowed those fields,
+  // making live frames look like they could never carry them.
+  const e = ev;
 
   const runId = e.call_id?.replace(/^workflow:/, "");
   if (!runId) return null;
@@ -225,8 +230,13 @@ export function useWorkState(
             status: r.status,
             ...(r.task != null ? { task: r.task } : {}),
             ...(r.needs_input_detail != null ? { needsInputDetail: r.needs_input_detail } : {}),
-            startedAt: r.started_at,
-            endedAt: r.ended_at,
+            // The API sends epoch seconds (Python time.time()); WorkItem.startedAt/
+            // endedAt are epoch milliseconds everywhere else (the live WS path below
+            // sets them from Date.now()) — convert here, at the boundary, so a
+            // polled-only item (e.g. right after a page reload) doesn't mix units
+            // with a live one.
+            startedAt: r.started_at * 1000,
+            endedAt: r.ended_at != null ? r.ended_at * 1000 : null,
             nodes: toWorkNodes(r.nodes),
           }));
           setPolled(items);
@@ -272,7 +282,18 @@ export function useWorkState(
         polledItem != null &&
         polledItem.status !== "running" &&
         polledItem.status !== "needs_input";
-      if (!decided) byId.set(id, item);
+      if (decided) continue;
+      // A live item's startedAt is only when THIS browser saw its first frame;
+      // the polled one is the run's true start, off the manifest. Keeping the
+      // polled value means a run watched after a reload (or opened mid-run in a
+      // second tab) shows the run's real elapsed instead of resetting to 0:00 on
+      // the next frame — and stops the card's run clock from contradicting the
+      // node clock above it, which has always come off the manifest. Guarded on
+      // > 0 so a manifest with no started_at (which polls as 0) cannot turn the
+      // clock into time-since-1970.
+      const startedAt =
+        polledItem != null && polledItem.startedAt > 0 ? polledItem.startedAt : item.startedAt;
+      byId.set(id, { ...item, startedAt });
     }
 
     return Array.from(byId.values());

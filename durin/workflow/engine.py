@@ -24,7 +24,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from loguru import logger
 
@@ -77,6 +77,10 @@ class NodeRunRequest:
     # runner can check it mid-subprocess (an agent turn has no equivalent mid-turn
     # hook, so it stays None there — unchanged, between-nodes-only cancellation).
     cancel_check: Callable[[], bool] | None = None
+    # Synchronous sink for in-node progress ({"round", "activity"}). The node runs
+    # on a worker thread with its own event loop, so this must never be awaited
+    # from inside the node — it marshals to the gateway loop itself.
+    progress: Any = None
 
 
 @dataclass
@@ -183,7 +187,7 @@ class WorkflowEngine:
         *,
         script_runner: NodeRunner | None = None,
         run_id_factory: Callable[[], str] | None = None,
-        subworkflow_runner: Callable[..., str] | None = None,  # (name, task, root_session_key, work_dir=None, parent_run_id=None) -> str
+        subworkflow_runner: Callable[..., str] | None = None,  # (name, task, root_session_key, work_dir=None, parent_run_id=None, progress_emit=None, cancel_check=None, parent_node_id=None) -> str
         workspace: str | None = None,
         pick_runner: Callable[[str, list[str], "str | None"], int] | None = None,
         max_node_visits: int = 1000,
@@ -389,10 +393,18 @@ class WorkflowEngine:
                         parent_run_id=None, work_dir=None) -> None:
         if self._workspace is None:
             return
+        typical = {}
+        typical_total = None
+        try:
+            typical = run_log.typical_node_durations(self._workspace, workflow.name)
+            typical_total = run_log.typical_total_duration(self._workspace, workflow.name)
+        except Exception:  # noqa: BLE001 - history is a nicety; never block a run
+            pass
         try:
             run_log.start_run(self._workspace, workflow.name, run_id,
                               root_session_key=root_session_key, started_at=started_at,
-                              task=task, parent_run_id=parent_run_id, work_dir=work_dir)
+                              task=task, parent_run_id=parent_run_id, work_dir=work_dir,
+                              typical_s=typical, typical_total_s=typical_total)
         except Exception:  # noqa: BLE001 - a manifest write must not break the run
             logger.exception("workflow run manifest start failed for {}", workflow.name)
 
@@ -514,27 +526,92 @@ class WorkflowEngine:
             # execute.  Prior nodes carry their finished status; the current node
             # appears as "running".  Best-effort only — a crashing emit must never
             # abort the run.
+            node_started_at = time.time()
+            # Guarded like every other manifest write in this class: without a
+            # workspace there is no manifest to mark, and calling through would
+            # raise on every node of every workspace-less run — an exception the
+            # handler below would then swallow on a purely normal path, hiding
+            # any real write failure among the noise.
+            if self._workspace is not None:
+                try:
+                    run_log.mark_node_started(
+                        self._workspace, workflow.name, run_id,
+                        node_id=node.id, label=node_label(node), started_at=node_started_at,
+                    )
+                except Exception:  # noqa: BLE001 - observability write; never break the run
+                    logger.exception("workflow node start marker failed for {}", workflow.name)
+
+            # The shared working folder is one folder for every sequential node, so
+            # nothing on disk records which node wrote what — a before/after listing
+            # around this node's turn is the only way to attribute a file to it.
+            # Best-effort like the rest of this block: an unreadable folder yields an
+            # empty set rather than raising, so a snapshot failure never breaks the run.
+            def _work_snapshot() -> set[str]:
+                if work_dir is None:
+                    return set()
+                root = Path(work_dir)
+                try:
+                    return {str(p.relative_to(root)) for p in root.rglob("*") if p.is_file()}
+                except OSError:
+                    return set()
+
+            before_files = _work_snapshot()
+
             if self._progress_emit is not None:
-                started = [
-                    {"id": r.node_id,
-                     "label": node_label(workflow.nodes[r.node_id]) if r.node_id in workflow.nodes else r.node_id,
-                     "status": ("failed" if r.status in ("node_failed", "persist_failed") else "done"),
-                     "route_label": r.route_label,
-                     "iteration": r.iteration, "budget": r.budget}
-                    for r in runs
-                ]
-                started.append({
-                    "id": node.id,
-                    "label": node_label(node),
-                    "status": "running",
-                    "route_label": None,
-                    "iteration": iteration,
-                    "budget": budget if isinstance(node, (WorkNode, ScriptNode)) else None,
-                })
+                from durin.workflow.progress import finished_frames, pending_frames, running_frame
+
+                started = finished_frames(workflow, runs)
+                started.append(running_frame(
+                    node, iteration=iteration,
+                    budget=budget if isinstance(node, (WorkNode, ScriptNode)) else None,
+                    started_at=node_started_at,
+                ))
+                started.extend(pending_frames(workflow, node.id,
+                                             [r.node_id for r in runs]))
                 try:
                     self._progress_emit({"run_id": run_id, "nodes": started, "done": False})
                 except Exception:  # noqa: BLE001 - best-effort
                     pass
+
+            # What the in-flight node is doing right now, reported from inside its
+            # turn. The node hands over raw state ({"round", "activity", "max_rounds"})
+            # and the engine re-emits a whole frame set, because only the engine knows
+            # the other nodes — a bare fragment could not be merged into a node list.
+            # `_node`, `_iter`, `_budget`, `_started` and `_activity` are pinned as
+            # default arguments so this closure keeps this visit's values rather than
+            # the enclosing loop's — `node`, `iteration`, `budget`, `node_started_at`
+            # and `node_activity` are all rebound on the next visit. That rebinding
+            # would be able to corrupt an in-flight closure if this callback could
+            # still be invoked once the loop has moved on, but it can't: it is only
+            # ever called synchronously on this walk thread, inside the `runner(req)`
+            # call below, and must stay synchronous and never await there or the node
+            # deadlocks — the same walk-thread-only invariant that makes the pinning
+            # sufficient.
+            node_activity: dict = {"round": None, "activity": None, "max_rounds": None}
+
+            def _node_progress(update: dict, _node=node, _iter=iteration,
+                               _budget=budget, _started=node_started_at,
+                               _activity=node_activity) -> None:
+                _activity.update(update)
+                if self._progress_emit is None:
+                    return
+                from durin.workflow.progress import finished_frames, pending_frames, running_frame
+
+                frames = finished_frames(workflow, runs)
+                frames.append(running_frame(
+                    _node, iteration=_iter,
+                    budget=_budget if isinstance(_node, (WorkNode, ScriptNode)) else None,
+                    started_at=_started,
+                    activity=_activity["activity"],
+                    round_=_activity["round"],
+                    max_rounds=_activity["max_rounds"],
+                ))
+                frames.extend(pending_frames(workflow, _node.id,
+                                             [r.node_id for r in runs]))
+                try:
+                    self._progress_emit({"run_id": run_id, "nodes": frames, "done": False})
+                except Exception:  # noqa: BLE001 - best-effort
+                    logger.opt(exception=True).debug("workflow node progress re-emit failed (suppressed)")
 
             if isinstance(node, (WorkNode, ScriptNode)):
                 if isinstance(node, ScriptNode) and self._script_runner is None:
@@ -575,6 +652,7 @@ class WorkflowEngine:
                     # Only a script node gets the poll hook — an agent node's
                     # cancellation stays between-nodes-only (unchanged).
                     cancel_check=self._cancel_check if isinstance(node, ScriptNode) else None,
+                    progress=_node_progress,
                 )
 
                 # Run a full agent turn; for a multi-way node the verdict is a matched
@@ -594,6 +672,7 @@ class WorkflowEngine:
                                         status="node_failed", error=str(exc.cause),
                                         exit_code=getattr(exc, "exit_code", None),
                                         duration_s=round(time.monotonic() - node_t0, 3)))
+                    runs[-1].artifacts = sorted(_work_snapshot() - before_files)[:20]
                     if update_manifest is not None:
                         update_manifest()
                     raise
@@ -612,6 +691,7 @@ class WorkflowEngine:
                                     status="persist_failed" if resp.persist_failed else "ok",
                                     exit_code=getattr(resp, "exit_code", None),
                                     duration_s=round(time.monotonic() - node_t0, 3)))
+                runs[-1].artifacts = sorted(_work_snapshot() - before_files)[:20]
                 if isinstance(node, WorkNode) and node.context == "shared":
                     shared_context.extend(resp.messages)
                     if len(shared_context) > _SHARED_CONTEXT_MAX_MESSAGES:
@@ -698,13 +778,36 @@ class WorkflowEngine:
                     raise WorkflowConfigError(
                         f"node {node.id!r} is a subworkflow but the engine has no subworkflow_runner"
                     )
-                output = self._subworkflow_runner(node.workflow, upstream_output or task, root_session_key,
-                                                  work_dir=work_dir, parent_run_id=run_id)
+                output = self._subworkflow_runner(
+                    node.workflow, upstream_output or task, root_session_key,
+                    work_dir=work_dir, parent_run_id=run_id,
+                    progress_emit=self._progress_emit, cancel_check=self._cancel_check,
+                    parent_node_id=node.id,
+                )
                 runs.append(NodeRun(node_id=node.id, iteration=iteration, output=output))
+                # The nested run shares this same work_dir (see SubworkflowRunner's
+                # work_dir_override) and runs synchronously on this thread, so the
+                # diff here is deterministic and credits the sub-workflow as a whole —
+                # its own manifest separately attributes files to its inner nodes.
+                runs[-1].artifacts = sorted(_work_snapshot() - before_files)[:20]
                 upstream_output = output
                 final_output = output
                 final_output_node = node.id
                 current = node.next
+                # A nested run can be cancelled entirely inside this call: the nested
+                # engine notices and stops itself, but SubworkflowRunner.__call__ returns
+                # a plain string (other callers depend on that shape), so no status
+                # crosses back with it. Ordinarily the next loop iteration's cancel_check
+                # at the top would catch it — but when this was the last node, there is
+                # no next iteration, and the walk would otherwise fall through to the
+                # completed result below, misreporting a cancelled run as completed.
+                # Re-consult here so this path agrees with the top-of-loop check above
+                # on status and shape.
+                if self._cancel_check is not None and self._cancel_check():
+                    return WorkflowResult(
+                        status="cancelled", final_output=final_output, runs=runs,
+                        run_id=run_id, final_output_node=final_output_node,
+                    )
 
             elif isinstance(node, ParallelNode):
                 if node.worker is not None:
@@ -716,6 +819,11 @@ class WorkflowEngine:
                         workflow, node, task, run_id, iteration, root_session_key,
                         upstream_output, runs, work_dir=work_dir)
                 runs.append(NodeRun(node_id=node.id, iteration=iteration, output=merged))
+                # Branches/workers run concurrently in their own (possibly forked,
+                # possibly shared) folders, so a per-branch diff here would be racy or
+                # meaningless; the parallel node's own aggregate entry is diffed once
+                # its branches have finished and reconciled, sequentially on this thread.
+                runs[-1].artifacts = sorted(_work_snapshot() - before_files)[:20]
                 if abort is not None:
                     return WorkflowResult(
                         status="aborted", final_output=abort, runs=runs, run_id=run_id
@@ -735,21 +843,9 @@ class WorkflowEngine:
                 except OSError:
                     pass
             if self._progress_emit is not None:
-                nodes = [
-                    {
-                        "id": r.node_id,
-                        "label": node_label(workflow.nodes[r.node_id]) if r.node_id in workflow.nodes else r.node_id,
-                        "status": (
-                            "failed"
-                            if r.status in ("node_failed", "persist_failed")
-                            else "done"
-                        ),
-                        "route_label": r.route_label,
-                        "iteration": r.iteration,
-                        "budget": r.budget,
-                    }
-                    for r in runs
-                ]
+                from durin.workflow.progress import finished_frames
+
+                nodes = finished_frames(workflow, runs)
                 try:
                     self._progress_emit({"run_id": run_id, "nodes": nodes, "done": False})
                 except Exception:  # noqa: BLE001 - progress is best-effort; never break the run
@@ -943,13 +1039,9 @@ class WorkflowEngine:
             annotated with a snapshot of each branch's live status."""
             if self._progress_emit is None:
                 return
-            prior = [
-                {"id": r.node_id,
-                 "label": node_label(workflow.nodes[r.node_id]) if r.node_id in workflow.nodes else r.node_id,
-                 "status": ("failed" if r.status in ("node_failed", "persist_failed") else "done"),
-                 "route_label": r.route_label}
-                for r in runs
-            ]
+            from durin.workflow.progress import finished_frames
+
+            prior = finished_frames(workflow, runs)
             with _branch_lock:
                 branch_list = [
                     {"id": bid, "label": node_label(workflow.nodes[bid]) if bid in workflow.nodes else bid, "status": st}

@@ -93,3 +93,12 @@ it("calls openWorkPanel from context when no external prop provided", () => {
   fireEvent.click(screen.getByRole("button"));
   expect(openWorkPanel).toHaveBeenCalledTimes(1);
 });
+
+it("names the active node next to the workflow", () => {
+  render(<WorkChip event={{
+    phase: "running", call_id: "workflow:r1", name: "workflow_progress",
+    arguments: { workflow: "ticket-stage1-context" },
+    nodes: [{ id: "consolidate", label: "Consolidate", status: "running", started_at: 1700 }],
+  }} />);
+  expect(screen.getByRole("button").textContent).toContain("Consolidate");
+});

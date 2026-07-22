@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -132,6 +132,15 @@ export function RunsView() {
   const [manifestLoading, setManifestLoading] = useState(false);
   const [resumingId, setResumingId] = useState<string | null>(null);
 
+  // Latest selection/manifest, read from inside the poll interval below without
+  // making that interval's own effect depend on either — both change far more
+  // often (every row click, every manifest refresh) than the interval itself
+  // should be torn down and rebuilt.
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
+  const manifestRef = useRef(manifest);
+  manifestRef.current = manifest;
+
   const refresh = useCallback(async () => {
     setError(null);
     try {
@@ -144,9 +153,49 @@ export function RunsView() {
     }
   }, [token]);
 
+  // Re-fetches the currently-open run's manifest in place so its node rows,
+  // durations and artifacts advance while the user is watching — but only while
+  // that specific run is still "running". Skips entirely when no detail is open
+  // or the last fetch already came back terminal, so an open detail on a
+  // finished run settles into making no further requests.
+  const refreshOpenManifest = useCallback(async () => {
+    const entry = selectedRef.current;
+    if (!entry || manifestRef.current?.status !== "running") return;
+    try {
+      const got = await getWorkflowRunManifest(token, entry.workflow, entry.run_id);
+      // The selection can change while this request is in flight (the user
+      // clicks a different run before this poll tick's fetch resolves). Apply
+      // the response only if the fetched run is still the one selected —
+      // otherwise it's a stale reply that would overwrite a newer selection's
+      // data.
+      if (selectedRef.current?.run_id !== entry.run_id) return;
+      setManifest(got);
+    } catch (e) {
+      setError(errMsg(e));
+    }
+  }, [token]);
+
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  const anyRunning = useMemo(() => runs.some((r) => r.status === "running"), [runs]);
+
+  // While any listed run is still "running", poll the feed every 4 seconds — the
+  // same cadence useWorkState already uses, so the side panel and this screen never
+  // disagree about how fresh they are. The interval is torn down the moment a poll
+  // finds nothing running, so a screen left open on an all-finished feed doesn't
+  // keep polling forever. The same tick also refreshes an open run's manifest
+  // (see refreshOpenManifest) so an expanded detail advances in place instead of
+  // freezing at whatever it showed when the row was clicked.
+  useEffect(() => {
+    if (!anyRunning) return;
+    const id = setInterval(() => {
+      void refresh();
+      void refreshOpenManifest();
+    }, 4000);
+    return () => clearInterval(id);
+  }, [anyRunning, refresh, refreshOpenManifest]);
 
   const tray = useMemo(() => strandedRuns(runs), [runs]);
 
@@ -192,11 +241,16 @@ export function RunsView() {
       setError(null);
       try {
         const got = await getWorkflowRunManifest(token, entry.workflow, entry.run_id);
-        setManifest(got);
+        // A later click on a different row can resolve before this one. Apply
+        // the result only while it's still for the selected run — otherwise
+        // it's a stale reply for a run the user has since left, and applying
+        // it would clobber that other run's already-loaded (or still-loading)
+        // detail.
+        if (selectedRef.current?.run_id === entry.run_id) setManifest(got);
       } catch (e) {
         setError(errMsg(e));
       } finally {
-        setManifestLoading(false);
+        if (selectedRef.current?.run_id === entry.run_id) setManifestLoading(false);
       }
     },
     [token],

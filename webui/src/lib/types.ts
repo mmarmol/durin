@@ -104,10 +104,24 @@ export interface ToolProgressEvent {
   nodes?: Array<{
     id: string;
     label?: string;
-    status: "running" | "done" | "failed";
+    status: "running" | "done" | "failed" | "pending";
     route_label?: string | null;
     iteration?: number | null;
     budget?: number | null;
+    /** Epoch seconds this node began; the clock is derived from it, not counted. */
+    started_at?: number | null;
+    /** Seconds the node took, once finished. */
+    duration_s?: number | null;
+    /** Agent round inside the node — distinct from `iteration`, the node's visit count. */
+    round?: number | null;
+    /** Denominator for `round` (e.g. "round 3 of 10"); distinct from `budget`,
+     *  the node's visit budget across loop iterations. */
+    max_rounds?: number | null;
+    activity?: WorkActivity | null;
+    /** One-line description of what this node does, from the workflow definition. */
+    description?: string | null;
+    /** Id of the sub-workflow node this node runs under, when nested. */
+    parent_node?: string | null;
     branches?: Array<{ id: string; label?: string; status: "running" | "done" | "failed" }>;
   }>;
 }
@@ -115,6 +129,15 @@ export interface ToolProgressEvent {
 // ---------------------------------------------------------------------------
 // Work-panel types (useWorkState hook)
 // ---------------------------------------------------------------------------
+
+/** What a running workflow node is doing right now. Structured, not a rendered
+ *  sentence: each surface composes the phrase in the viewer's language. */
+export interface WorkActivity {
+  tool: string;
+  target?: string;
+  /** Epoch seconds the tool was invoked. */
+  at: number;
+}
 
 export interface WorkBranch {
   id: string;
@@ -125,12 +148,27 @@ export interface WorkBranch {
 export interface WorkNode {
   id: string;
   label?: string;
+  /** One-line description of what this node does, from the workflow definition. */
+  description?: string;
   status: "running" | "done" | "failed" | "pending";
   branches?: WorkBranch[];
   /** This node's current pass number, when it has a known visit budget. */
   iteration?: number;
   /** The node's effective visit budget (undefined when not applicable, e.g. parallel units). */
   budget?: number;
+  /** Epoch seconds this node began; the clock is derived from it, not counted. */
+  startedAt?: number;
+  /** Seconds the node took, once finished. */
+  durationS?: number;
+  /** Agent round inside the node — distinct from `iteration`, the node's visit count. */
+  round?: number;
+  /** Denominator for `round` (e.g. "round 3 of 10"); distinct from `budget`,
+   *  the node's visit budget across loop iterations. */
+  maxRounds?: number;
+  activity?: WorkActivity;
+  /** Id of the sub-workflow node this node runs under, when nested — the node
+   *  belongs to a nested run, not to this run's own graph. */
+  parentNode?: string;
 }
 
 export interface WorkItem {
@@ -146,7 +184,10 @@ export interface WorkItem {
   task?: string;
   /** The gate's questions when status=="needs_input"; absent otherwise. */
   needsInputDetail?: string;
+  /** Epoch milliseconds (matches `Date.now()`) — unlike WorkNode.startedAt, which is
+   *  epoch seconds. Both producers in useWorkState.ts normalize to this unit. */
   startedAt: number;
+  /** Epoch milliseconds; null while still running. */
   endedAt: number | null;
 }
 
