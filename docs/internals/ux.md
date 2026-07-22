@@ -349,7 +349,9 @@ with a click back to the overview; Esc navigates back to the overview but
 honors `event.defaultPrevented` from any popover that has already handled the
 key. The type-filter popover closes itself and calls `preventDefault()` when
 Esc is pressed while it is open, so a single keypress closes only that popover,
-not the neighborhood layer beneath it.
+not the neighborhood layer beneath it. Esc is a no-op while the search panel or
+edge popover is open — neither closes on Escape today and the layer stays put,
+independent of the defaultPrevented handshake.
 
 **Click contract.** A bubble click enters its cluster; a hub or loose-node
 click enters that node's ego-subgraph; a node click inside a neighborhood
