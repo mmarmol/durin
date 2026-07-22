@@ -8,6 +8,7 @@ from durin.workflow.spec import (
     WorkNode,
     _first_sentence,
     _prettify_id,
+    node_description,
     node_label,
 )
 
@@ -69,9 +70,18 @@ def test_node_label_title_wins():
     assert node_label(node) == "Break the question into angles"
 
 
-def test_node_label_prompt_first_sentence_when_no_title():
+def test_node_label_ignores_the_prompt_when_no_title():
+    # node_label does not fall back to the prompt — a WorkNode with no title or
+    # command/script reads as its prettified id, not prose from its prompt.
     node = WorkNode(id="plan", prompt="Research the topic carefully. Then synthesize.")
-    assert node_label(node) == "Research the topic carefully"
+    assert node_label(node) == "Plan"
+
+
+def test_node_description_is_the_prompt_first_sentence():
+    # The prompt-derived text still exists for hover text: node_description
+    # (not node_label, which prefers the node id) returns it.
+    node = WorkNode(id="plan", prompt="Research the topic carefully. Then synthesize.")
+    assert node_description(node) == "Research the topic carefully"
 
 
 def test_node_label_prettified_id_when_no_title_no_prompt():
@@ -99,9 +109,9 @@ def test_node_label_parallel_with_title():
     assert node_label(node) == "Gather from multiple sources"
 
 
-def test_node_label_title_blank_falls_through_to_prompt():
+def test_node_label_title_blank_falls_through_to_prettified_id():
     node = WorkNode(id="plan", title="   ", prompt="Plan the work.")
-    assert node_label(node) == "Plan the work"
+    assert node_label(node) == "Plan"
 
 
 def test_node_label_title_parsed_from_workflow():

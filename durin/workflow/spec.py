@@ -37,18 +37,26 @@ def _prettify_id(node_id: str) -> str:
 
 
 def node_label(node: Any) -> str:
-    """Human label for a node: author title, else the first sentence of its role
-    prompt, else a prettified id. Used by the live progress emit and the tasks API."""
+    """Short name for a node: author title, else its command, else its id.
+
+    The id is the name the author already chose ('consolidate', 'resolve-org'),
+    so it reads as a label. The prompt's first sentence does not — it is prose
+    that happens to start a paragraph, and it wraps to three lines in a 288px
+    panel. That sentence is still useful context: node_description returns it
+    for hover text.
+    """
     title = (getattr(node, "title", "") or "").strip()
     if title:
         return title
-    sent = _first_sentence(getattr(node, "prompt", "") or "")
-    if sent:
-        return sent
     cmd = (getattr(node, "command", "") or "").strip() or (getattr(node, "script", "") or "").strip()
     if cmd:
         return cmd if len(cmd) <= 80 else cmd[:80].rsplit(" ", 1)[0] + "…"
     return _prettify_id(node.id)
+
+
+def node_description(node: Any) -> str:
+    """The first sentence of a node's role prompt — hover text, not a label."""
+    return _first_sentence(getattr(node, "prompt", "") or "")
 
 # Reserved multi-way routing target: a node whose matched case routes here ends the
 # run asking the caller for more information (status "needs_input", the node's output

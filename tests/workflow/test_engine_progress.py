@@ -134,7 +134,8 @@ def test_parallel_node_emits_branch_progress():
 
 def test_engine_progress_nodes_carry_label():
     """Each node dict in progress frames must carry a 'label' key derived from the
-    node's title or prompt or prettified id."""
+    node's title, else its command/script, else its prettified id (never the prompt —
+    see node_label)."""
     calls = []
     wf = parse_workflow({
         "name": "labels-test", "start": "plan",
@@ -161,7 +162,7 @@ def test_engine_progress_nodes_carry_label():
     last = calls[-1]
     by_id = {n["id"]: n for n in last["nodes"]}
     assert by_id["plan"]["label"] == "Break into angles"
-    assert by_id["gather"]["label"] == "Collect the results"
+    assert by_id["gather"]["label"] == "Gather"  # no title -> prettified id, not the prompt
 
 
 def test_engine_progress_frames_carry_iteration_and_budget_for_looping_node():
@@ -260,4 +261,4 @@ def test_parallel_branches_carry_label():
         if node.get("branches"):
             branch_by_id = {b["id"]: b for b in node["branches"]}
             assert branch_by_id["br1"]["label"] == "Search angle A"
-            assert branch_by_id["br2"]["label"] == "Search from B perspective"
+            assert branch_by_id["br2"]["label"] == "Br2"  # no title -> prettified id, not the prompt

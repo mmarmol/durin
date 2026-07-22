@@ -170,7 +170,7 @@ async def test_node_tree_label_from_workflow_def(tmp_path):
     wf = [t for t in res.tasks if t.kind == "workflow"][0]
     by_id = {n["id"]: n for n in wf.nodes}
     assert by_id["plan"]["label"] == "Break into research angles"
-    assert by_id["gather"]["label"] == "Collect and synthesize results"
+    assert by_id["gather"]["label"] == "Gather"  # no title -> prettified id, not the prompt
 
 
 @pytest.mark.asyncio

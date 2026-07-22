@@ -644,3 +644,36 @@ def test_output_artifacts_rejects_duplicate_paths():
         parse_workflow(_artifacts_wf({"artifacts": [
             {"path": "context.json"}, {"path": "context.json"},
         ]}))
+
+
+# ---------------------------------------------------------------------------
+# node_label / node_description precedence
+# ---------------------------------------------------------------------------
+
+from types import SimpleNamespace
+
+from durin.workflow.spec import node_description, node_label
+
+
+def test_node_label_prefers_the_id_over_the_prompt():
+    node = SimpleNamespace(id="draft-note", title="", prompt="You are the note drafter. Write it.",
+                           command="", script="")
+    assert node_label(node) == "Draft note"
+
+
+def test_node_label_still_prefers_an_author_title():
+    node = SimpleNamespace(id="draft-note", title="Draft the note", prompt="You are the drafter.",
+                           command="", script="")
+    assert node_label(node) == "Draft the note"
+
+
+def test_node_label_of_a_script_node_is_its_command():
+    node = SimpleNamespace(id="structure-check", title="", prompt="", command="",
+                           script="check-note-structure.sh")
+    assert node_label(node) == "check-note-structure.sh"
+
+
+def test_node_description_carries_the_prompt_sentence():
+    node = SimpleNamespace(id="judge", title="", prompt="You are the JUDGE. Be strict.",
+                           command="", script="")
+    assert node_description(node) == "You are the JUDGE"
