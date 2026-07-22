@@ -155,6 +155,19 @@ class CompactionPreemptiveTriggerEvent(TypedDict):
     ratio: float
 
 
+class SessionArchivedEvent(TypedDict):
+    """The session file cap trimmed the live prefix and the trimmed messages
+    were appended to the session's archive segments instead of being
+    destroyed. ``pruned_segments`` counts oldest segments deleted to hold the
+    per-session disk cap."""
+    session_key: str
+    messages: int
+    bytes_written: int
+    segment: str
+    total_bytes: int
+    pruned_segments: int
+
+
 class CompactionDeferredEvent(TypedDict):
     """A rough estimate over the trigger was vetoed by the provider's own
     token accounting, so no consolidation ran this turn.
@@ -1636,6 +1649,7 @@ EVENTS: dict[str, type] = {
     # Compaction
     "compaction.preemptive_trigger": CompactionPreemptiveTriggerEvent,
     "compaction.deferred": CompactionDeferredEvent,
+    "session.archived": SessionArchivedEvent,
     "compaction.completed": CompactionCompletedEvent,
     "compaction.grace_extended": CompactionGraceExtendedEvent,
     "compaction.lock_timeout": CompactionLockTimeoutEvent,

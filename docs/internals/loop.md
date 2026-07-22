@@ -555,6 +555,25 @@ append-only message list plus `metadata` and a `last_consolidated` cursor.
 header (mode, todos, plan path, channel ownership), and the rest are messages.
 Writes are atomic (`tmpfile` + `os.replace`) under a cross-process lock.
 
+**The live file is bounded; the history is not destroyed.** Every save rewrites
+the whole `.jsonl` (and regenerates the `.md` projection), and the full message
+list lives in RAM — so the live file must stay bounded, which is what
+`enforce_file_cap` does when the list crosses its message limit. The trimmed
+prefix is not deleted, though: it is appended to per-session **archive
+segments** (`sessions/archive/<key>.NNNNNN.jsonl`, plain message lines in the
+live file's serialization). Segments are append-only and never rewritten, so
+retention costs disk only — no per-turn cost. They rotate at a size bound and
+the per-session total is capped as insurance, pruning oldest-first but never
+the segment just written. Writes are serialized under a per-session
+cross-process lock (segment selection is a read-modify-write; two processes
+can legally own turns of the same workspace). The sink is best-effort: if the
+archive write fails, the trim still proceeds — the availability of the live
+session outranks retention, and a disk that fails the archive is failing
+`save()` too. `session_search` transparently continues from the live list into
+these segments (newest first, byte-budgeted, off the event loop), labelling
+archived hits with their timestamp instead of a live index, since indexes are
+rebased on every trim.
+
 Two metadata splits matter:
 
 - **Derived vs identity.** `_DERIVED_METADATA_KEYS` (LLM-projected state —
@@ -775,5 +794,6 @@ value, so a model switch only affects turns that start after it.
 transcript as append-only and immutable means an interrupted turn, a crash, or a
 recovery read always has the full raw history to fall back on. The model sees a
 compacted view through `get_history`, but the truth on disk is never destroyed —
-which is also what lets the memory subsystem reconstruct everything from the
-markdown source of truth.
+the file cap moves old prefixes into append-only archive segments rather than
+deleting them (see [Sessions](#sessions)) — which is also what lets the memory
+subsystem reconstruct everything from the markdown source of truth.
