@@ -380,3 +380,60 @@ def _clear_all() -> None:
     with _lock:
         _cache.clear()
         _overview_cache.clear()
+
+
+def build_cluster_subgraph(
+    workspace: Path,
+    ref: str,
+    max_members: int = 150,
+) -> dict[str, Any]:
+    """Members-of-bubble subgraph for the neighborhood layer.
+
+    Keyed by the bubble id (representative ref, or OTHERS_ID). Raises
+    KeyError when the ref is not a bubble in the current overview — the
+    caller maps that to a 404 and the client falls back to the overview.
+    """
+    ws = workspace.resolve()
+    overview = build_overview(ws)
+    members = overview.get("members", {}).get(ref)
+    if members is None:
+        raise KeyError(ref)
+    payload = get_full_graph_cached(ws)
+    by_id = {n["id"]: n for n in payload["nodes"]}
+    member_set = set(members)
+    kept_members = sorted(
+        member_set,
+        key=lambda m: (-int(by_id[m]["weight"]), m),
+    )[:max_members]
+    kept = set(kept_members)
+    for e in payload["edges"]:
+        a, b = e["source"], e["target"]
+        if a in kept and b not in member_set and b in by_id:
+            n = by_id[b]
+            if n.get("phantom") or n["type"] == "session":
+                kept.add(b)
+        elif b in kept and a not in member_set and a in by_id:
+            n = by_id[a]
+            if n.get("phantom") or n["type"] == "session":
+                kept.add(a)
+    nodes = [by_id[nid] for nid in sorted(kept)]
+    edges = [
+        e
+        for e in payload["edges"]
+        if e["source"] in kept and e["target"] in kept
+    ]
+    return {
+        "focus": ref,
+        "nodes": nodes,
+        "edges": edges,
+        "total_members": len(member_set),
+        "stats": {
+            "node_count": len(nodes),
+            "edge_count": len(edges),
+            "phantom_count": sum(1 for n in nodes if n.get("phantom")),
+            "session_count": sum(1 for n in nodes if n["type"] == "session"),
+            "truncated_nodes": len(member_set) > max_members,
+            "truncated_edges": False,
+            "types": sorted({n["type"] for n in nodes}),
+        },
+    }

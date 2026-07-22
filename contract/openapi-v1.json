@@ -3556,6 +3556,13 @@
         "title": "MemoryGraphQuery",
         "type": "object"
       },
+      "MemoryOverviewQuery": {
+        "additionalProperties": false,
+        "description": "No inputs \u2014 returns the clustered overview of the entity graph.",
+        "properties": {},
+        "title": "MemoryOverviewQuery",
+        "type": "object"
+      },
       "MemoryResult": {
         "description": "Carries a raw graph-api payload dict (escape hatch).",
         "properties": {
@@ -3616,6 +3623,7 @@
       },
       "MemorySubgraphQuery": {
         "additionalProperties": false,
+        "description": "Ego- or cluster-scoped neighborhood around a ref.",
         "properties": {
           "hops": {
             "default": 1,
@@ -3624,6 +3632,15 @@
           },
           "ref": {
             "title": "Ref",
+            "type": "string"
+          },
+          "scope": {
+            "default": "ego",
+            "enum": [
+              "ego",
+              "cluster"
+            ],
+            "title": "Scope",
             "type": "string"
           }
         },
@@ -9823,6 +9840,35 @@
           }
         },
         "summary": "Entity-centric memory as nodes + edges (graph view)",
+        "x-required-scope": "memory:read"
+      }
+    },
+    "/api/v1/memory/graph/overview": {
+      "get": {
+        "operationId": "memory_graph_overview",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemoryOverviewQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Clustered overview: bubbles + semantic hubs + aggregated edges",
         "x-required-scope": "memory:read"
       }
     },

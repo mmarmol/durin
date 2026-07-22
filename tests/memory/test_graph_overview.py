@@ -362,3 +362,53 @@ def test_refreshing_existing_workspace_does_not_evict_others(tmp_path, monkeypat
     get_full_graph_cached(ws_b)
     assert ws_a.resolve() in graph_overview._cache
     assert len(graph_overview._cache) == 2
+
+
+from durin.memory.graph_overview import build_cluster_subgraph
+
+
+def _clustered_workspace(tmp_path: Path) -> str:
+    """Real workspace with one bubble-sized community; returns its rep ref."""
+    n = BUBBLE_MIN_MEMBERS + 2
+    for i in range(n):
+        _write_page(tmp_path, "topic", f"m{i}")
+    for i in range(n - 1):
+        store_memory(
+            tmp_path,
+            content=f"m{i} with m{i + 1} and m0",
+            entities=[f"topic:m{i}", f"topic:m{i + 1}", "topic:m0"],
+            valid_from=datetime.date(2026, 5, 3),
+        )
+    out = build_overview(tmp_path)
+    assert out["mode"] == "clustered"
+    return out["bubbles"][0]["id"]
+
+
+def test_cluster_subgraph_returns_members_with_focus(tmp_path):
+    rep = _clustered_workspace(tmp_path)
+    sub = build_cluster_subgraph(tmp_path, rep)
+    ids = {n["id"] for n in sub["nodes"]}
+    assert rep in ids
+    assert sub["focus"] == rep
+    # m0 co-mentions every other member, so its weight (n - 1) clears the hub
+    # floor and it is extracted as a hub rather than joining the bubble — the
+    # bubble itself holds the remaining BUBBLE_MIN_MEMBERS + 1 members.
+    assert sub["total_members"] == BUBBLE_MIN_MEMBERS + 1
+    for n in sub["nodes"]:
+        member = n["id"].startswith("topic:m")
+        scaffolding = bool(n.get("phantom")) or n["type"] == "session"
+        assert member or scaffolding
+
+
+def test_cluster_subgraph_unknown_ref_raises(tmp_path):
+    _clustered_workspace(tmp_path)
+    with pytest.raises(KeyError):
+        build_cluster_subgraph(tmp_path, "topic:not-a-bubble")
+
+
+def test_cluster_subgraph_caps_and_reports_total(tmp_path):
+    rep = _clustered_workspace(tmp_path)
+    sub = build_cluster_subgraph(tmp_path, rep, max_members=5)
+    member_nodes = [n for n in sub["nodes"] if not n.get("phantom") and n["type"] != "session"]
+    assert len(member_nodes) <= 5
+    assert sub["total_members"] == BUBBLE_MIN_MEMBERS + 1

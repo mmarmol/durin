@@ -461,6 +461,7 @@ def build_entity_subgraph(
     *,
     hops: int = 1,
     max_neighbours: int = 150,
+    payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Ego-graph for one node: ``ref`` + everything within ``hops`` edges.
 
@@ -475,9 +476,12 @@ def build_entity_subgraph(
     suppressed by policy), the result is the single node — correct: it
     genuinely connects to nothing yet. When ``ref`` isn't a real node at
     all, a synthetic placeholder is returned so the panel still opens.
+
+    ``payload`` lets a caller that already holds a fresh uncapped graph
+    (e.g. the overview module's cached payload) skip rebuilding it here.
     """
-    full = build_memory_graph(
-        workspace, max_nodes=100_000, max_edges=400_000,
+    full = payload if payload is not None else build_memory_graph(
+        workspace, max_nodes=100_000, max_edges=400_000
     )
     nodes_by_id: dict[str, dict[str, Any]] = {n["id"]: n for n in full["nodes"]}
     edges = full["edges"]

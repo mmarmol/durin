@@ -1207,6 +1207,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/memory/graph/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Clustered overview: bubbles + semantic hubs + aggregated edges */
+        get: operations["memory_graph_overview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/memory/search": {
         parameters: {
             query?: never;
@@ -4135,6 +4152,11 @@ export interface components {
          */
         MemoryGraphQuery: Record<string, never>;
         /**
+         * MemoryOverviewQuery
+         * @description No inputs — returns the clustered overview of the entity graph.
+         */
+        MemoryOverviewQuery: Record<string, never>;
+        /**
          * MemoryResult
          * @description Carries a raw graph-api payload dict (escape hatch).
          */
@@ -4169,7 +4191,10 @@ export interface components {
             /** Stem */
             stem: string;
         };
-        /** MemorySubgraphQuery */
+        /**
+         * MemorySubgraphQuery
+         * @description Ego- or cluster-scoped neighborhood around a ref.
+         */
         MemorySubgraphQuery: {
             /**
              * Hops
@@ -4178,6 +4203,12 @@ export interface components {
             hops: number;
             /** Ref */
             ref: string;
+            /**
+             * Scope
+             * @default ego
+             * @enum {string}
+             */
+            scope: "ego" | "cluster";
         };
         /** ModeDeleteCommand */
         ModeDeleteCommand: {
@@ -7908,6 +7939,30 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["MemoryGraphQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemoryResult"];
+                };
+            };
+        };
+    };
+    memory_graph_overview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MemoryOverviewQuery"];
             };
         };
         responses: {
