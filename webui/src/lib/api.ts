@@ -2023,9 +2023,10 @@ export interface MemoryOverviewPayload {
   };
 }
 
-export interface MemoryClusterPayload extends MemoryGraphPayload {
+export interface MemoryClusterPayload extends Omit<MemoryGraphPayload, "stats"> {
   focus: string;
   total_members: number;
+  stats: MemoryGraphPayload["stats"] & { session_count: number };
 }
 
 export async function fetchMemoryGraph(
