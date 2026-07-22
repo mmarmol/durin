@@ -13,8 +13,13 @@ and the qualifying count is always capped at HUB_COUNT.
 
 from __future__ import annotations
 
+import threading
 from collections import defaultdict
+from pathlib import Path
 from typing import Any
+
+from durin.memory.graph import build_memory_graph
+from durin.memory.paths import walk_class
 
 HUB_COUNT = 20
 BUBBLE_MIN_MEMBERS = 15
@@ -22,6 +27,16 @@ BUBBLE_DISPLAY_CAP = 30
 LOOSE_DISPLAY_CAP = 30
 
 OTHERS_ID = "__others__"
+
+_UNCAPPED_NODES = 100_000
+_UNCAPPED_EDGES = 400_000
+_CACHE_MAX = 4
+
+_cache: dict[Path, tuple[int, dict[str, Any]]] = {}
+_overview_cache: dict[Path, tuple[int, dict[str, Any]]] = {}
+_lock = threading.Lock()
+
+_ENTRY_CLASSES = ("episodic", "stable", "corpus")
 
 
 def _semantic_view(
@@ -272,3 +287,79 @@ def assemble_overview(payload: dict[str, Any]) -> dict[str, Any]:
         "members": members_map,
         "stats": stats,
     }
+
+
+def _tree_signature(workspace: Path) -> int:
+    """Cheap stat-walk over everything the graph is built from.
+
+    A stat per file (no reads, no parsing): any write bumps mtime_ns/size
+    and misses the cache. Sessions are included because the full payload
+    carries session nodes/edges even though structure ignores them.
+    """
+    items: list[tuple[str, int, int]] = []
+    for class_name in ("entities", *_ENTRY_CLASSES):
+        for p in walk_class(workspace, class_name):
+            st = p.stat()
+            items.append((str(p), st.st_mtime_ns, st.st_size))
+    for extra_dir in (
+        workspace / "memory" / "references",
+        workspace / "sessions",
+    ):
+        if extra_dir.is_dir():
+            for p in sorted(extra_dir.iterdir()):
+                if p.is_file():
+                    st = p.stat()
+                    items.append((str(p), st.st_mtime_ns, st.st_size))
+    return hash(tuple(sorted(items)))
+
+
+def _evict_oldest(cache: dict[Path, Any]) -> None:
+    while len(cache) >= _CACHE_MAX:
+        del cache[next(iter(cache))]
+
+
+def get_full_graph_cached(workspace: Path) -> dict[str, Any]:
+    """Uncapped graph payload, rebuilt only when the memory tree changed.
+
+    Synchronous and disk-heavy — event-loop callers must hop through
+    ``asyncio.to_thread``.
+    """
+    ws = workspace.resolve()
+    sig = _tree_signature(ws)
+    with _lock:
+        hit = _cache.get(ws)
+        if hit is not None and hit[0] == sig:
+            return hit[1]
+    payload = build_memory_graph(
+        ws,
+        max_nodes=_UNCAPPED_NODES,
+        max_edges=_UNCAPPED_EDGES,
+        include_sessions=True,
+    )
+    with _lock:
+        _evict_oldest(_cache)
+        _cache[ws] = (sig, payload)
+    return payload
+
+
+def build_overview(workspace: Path) -> dict[str, Any]:
+    """Overview payload for the workspace, cached at both levels."""
+    ws = workspace.resolve()
+    payload = get_full_graph_cached(ws)
+    key = id(payload)
+    with _lock:
+        hit = _overview_cache.get(ws)
+        if hit is not None and hit[0] == key:
+            return hit[1]
+    overview = assemble_overview(payload)
+    with _lock:
+        _evict_oldest(_overview_cache)
+        _overview_cache[ws] = (key, overview)
+    return overview
+
+
+def _clear_all() -> None:
+    """Reset both caches. Test isolation only."""
+    with _lock:
+        _cache.clear()
+        _overview_cache.clear()

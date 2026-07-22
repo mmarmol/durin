@@ -2,13 +2,35 @@
 
 from __future__ import annotations
 
+import datetime
 import pytest
+from pathlib import Path
 
+from durin.memory.aliases_cache import _clear_all as _clear_alias_cache
+from durin.memory.entity_page import EntityPage
+from durin.memory.store import store_memory
+from durin.memory import graph_overview
 from durin.memory.graph_overview import (
     HUB_COUNT,
     _extract_hubs,
     _semantic_view,
+    build_overview,
+    get_full_graph_cached,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_alias_cache():
+    _clear_alias_cache()
+    yield
+    _clear_alias_cache()
+
+
+@pytest.fixture(autouse=True)
+def _reset_overview_cache():
+    graph_overview._clear_all()
+    yield
+    graph_overview._clear_all()
 
 
 def _node(nid: str, *, weight: int = 1, phantom: bool = False, ntype: str | None = None):
@@ -254,3 +276,49 @@ def test_others_bubble_merges_bubble_and_loose_overflow():
     expected = 2 * (BUBBLE_MIN_MEMBERS + 1) + 5
     assert others[0]["count"] == expected
     assert len(out["members"][OTHERS_ID]) == expected
+
+
+def _write_page(ws: Path, type_: str, slug: str) -> None:
+    page = EntityPage(type=type_, name=slug.title())
+    page.save(ws / "memory" / "entities" / type_ / f"{slug}.md")
+
+
+def test_cached_payload_rebuilds_only_on_tree_change(tmp_path, monkeypatch):
+    _write_page(tmp_path, "person", "alice")
+    store_memory(
+        tmp_path,
+        content="alice did a thing",
+        entities=["person:alice"],
+        valid_from=datetime.date(2026, 5, 1),
+    )
+    calls = {"n": 0}
+    real = graph_overview.build_memory_graph
+
+    def counting(*a, **kw):
+        calls["n"] += 1
+        return real(*a, **kw)
+
+    monkeypatch.setattr(graph_overview, "build_memory_graph", counting)
+    first = get_full_graph_cached(tmp_path)
+    again = get_full_graph_cached(tmp_path)
+    assert calls["n"] == 1
+    assert again is first
+
+    _write_page(tmp_path, "person", "bob")
+    changed = get_full_graph_cached(tmp_path)
+    assert calls["n"] == 2
+    assert {n["id"] for n in changed["nodes"]} >= {"person:alice", "person:bob"}
+
+
+def test_build_overview_smoke_on_real_workspace(tmp_path):
+    for i in range(3):
+        _write_page(tmp_path, "topic", f"t{i}")
+    store_memory(
+        tmp_path,
+        content="t0 and t1 together",
+        entities=["topic:t0", "topic:t1"],
+        valid_from=datetime.date(2026, 5, 2),
+    )
+    out = build_overview(tmp_path)
+    assert out["mode"] == "flat"
+    assert out["stats"]["entity_count"] == 3
