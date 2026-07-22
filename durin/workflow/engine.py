@@ -533,6 +533,22 @@ class WorkflowEngine:
             except Exception:  # noqa: BLE001 - observability write; never break the run
                 pass
 
+            # The shared working folder is one folder for every sequential node, so
+            # nothing on disk records which node wrote what — a before/after listing
+            # around this node's turn is the only way to attribute a file to it.
+            # Best-effort like the rest of this block: an unreadable folder yields an
+            # empty set rather than raising, so a snapshot failure never breaks the run.
+            def _work_snapshot() -> set[str]:
+                if work_dir is None:
+                    return set()
+                root = Path(work_dir)
+                try:
+                    return {str(p.relative_to(root)) for p in root.rglob("*") if p.is_file()}
+                except OSError:
+                    return set()
+
+            before_files = _work_snapshot()
+
             if self._progress_emit is not None:
                 from durin.workflow.progress import finished_frames, running_frame
 
@@ -644,6 +660,7 @@ class WorkflowEngine:
                                         status="node_failed", error=str(exc.cause),
                                         exit_code=getattr(exc, "exit_code", None),
                                         duration_s=round(time.monotonic() - node_t0, 3)))
+                    runs[-1].artifacts = sorted(_work_snapshot() - before_files)[:20]
                     if update_manifest is not None:
                         update_manifest()
                     raise
@@ -662,6 +679,7 @@ class WorkflowEngine:
                                     status="persist_failed" if resp.persist_failed else "ok",
                                     exit_code=getattr(resp, "exit_code", None),
                                     duration_s=round(time.monotonic() - node_t0, 3)))
+                runs[-1].artifacts = sorted(_work_snapshot() - before_files)[:20]
                 if isinstance(node, WorkNode) and node.context == "shared":
                     shared_context.extend(resp.messages)
                     if len(shared_context) > _SHARED_CONTEXT_MAX_MESSAGES:
@@ -755,6 +773,11 @@ class WorkflowEngine:
                     parent_node_id=node.id,
                 )
                 runs.append(NodeRun(node_id=node.id, iteration=iteration, output=output))
+                # The nested run shares this same work_dir (see SubworkflowRunner's
+                # work_dir_override) and runs synchronously on this thread, so the
+                # diff here is deterministic and credits the sub-workflow as a whole —
+                # its own manifest separately attributes files to its inner nodes.
+                runs[-1].artifacts = sorted(_work_snapshot() - before_files)[:20]
                 upstream_output = output
                 final_output = output
                 final_output_node = node.id
@@ -784,6 +807,11 @@ class WorkflowEngine:
                         workflow, node, task, run_id, iteration, root_session_key,
                         upstream_output, runs, work_dir=work_dir)
                 runs.append(NodeRun(node_id=node.id, iteration=iteration, output=merged))
+                # Branches/workers run concurrently in their own (possibly forked,
+                # possibly shared) folders, so a per-branch diff here would be racy or
+                # meaningless; the parallel node's own aggregate entry is diffed once
+                # its branches have finished and reconciled, sequentially on this thread.
+                runs[-1].artifacts = sorted(_work_snapshot() - before_files)[:20]
                 if abort is not None:
                     return WorkflowResult(
                         status="aborted", final_output=abort, runs=runs, run_id=run_id

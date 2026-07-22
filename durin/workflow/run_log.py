@@ -62,6 +62,9 @@ def _node_records(result) -> list[dict]:
             # the evidence the improve pass's script-repair lane reads. Capped so a
             # pathological error cannot bloat every manifest rewrite.
             "error": (r.error or "")[:2000] or None,
+            # Files this node added to the run's shared working folder — the folder
+            # is shared, so attribution only exists if it is captured per node.
+            "artifacts": list(getattr(r, "artifacts", []) or []),
         }
         for r in result.runs
     ]

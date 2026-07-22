@@ -27,6 +27,7 @@ class NodeRun:
     error: str | None = None         # failure detail when status is "node_failed"/"persist_failed" (None otherwise)
     exit_code: int | None = None     # script nodes: the subprocess exit code (None for agent nodes)
     duration_s: float | None = None  # wall-clock seconds this pass took (None where not measured)
+    artifacts: list[str] = field(default_factory=list)  # new files (relative paths) this node added to the run's shared working folder
 
 
 @dataclass
