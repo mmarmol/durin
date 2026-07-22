@@ -7397,6 +7397,87 @@
         "title": "WorkflowScriptsResult",
         "type": "object"
       },
+      "WorkflowSeedApplyCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "WorkflowSeedApplyCommand",
+        "type": "object"
+      },
+      "WorkflowSeedApplyResult": {
+        "properties": {
+          "applied": {
+            "title": "Applied",
+            "type": "boolean"
+          },
+          "error": {
+            "default": "",
+            "title": "Error",
+            "type": "string"
+          }
+        },
+        "required": [
+          "applied"
+        ],
+        "title": "WorkflowSeedApplyResult",
+        "type": "object"
+      },
+      "WorkflowSeedDismissCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "WorkflowSeedDismissCommand",
+        "type": "object"
+      },
+      "WorkflowSeedDismissResult": {
+        "properties": {
+          "dismissed": {
+            "title": "Dismissed",
+            "type": "boolean"
+          },
+          "error": {
+            "default": "",
+            "title": "Error",
+            "type": "string"
+          }
+        },
+        "required": [
+          "dismissed"
+        ],
+        "title": "WorkflowSeedDismissResult",
+        "type": "object"
+      },
+      "WorkflowSeedSuggestionsResult": {
+        "properties": {
+          "suggestions": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Suggestions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "suggestions"
+        ],
+        "title": "WorkflowSeedSuggestionsResult",
+        "type": "object"
+      },
       "WorkflowSessionRunsQuery": {
         "additionalProperties": false,
         "properties": {
@@ -12155,6 +12236,83 @@
           }
         },
         "summary": "Create or replace a script file (the editor's script create/edit action).",
+        "x-required-scope": "workflows:write"
+      }
+    },
+    "/api/v1/workflows/seed-suggestions": {
+      "get": {
+        "operationId": "workflows_seed_suggestions",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowSeedSuggestionsResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Pending builtin-workflow seed updates (edited seeds the seeder will not overwrite).",
+        "x-required-scope": "workflows:read"
+      }
+    },
+    "/api/v1/workflows/seed-suggestions/apply": {
+      "post": {
+        "operationId": "workflows_seed_apply",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowSeedApplyCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowSeedApplyResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Apply a pending seed update: overwrite the workflow with the new builtin template.",
+        "x-required-scope": "workflows:write"
+      }
+    },
+    "/api/v1/workflows/seed-suggestions/dismiss": {
+      "post": {
+        "operationId": "workflows_seed_dismiss",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowSeedDismissCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowSeedDismissResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Dismiss a pending seed update for this template version (a newer version will ask again).",
         "x-required-scope": "workflows:write"
       }
     },

@@ -357,11 +357,14 @@ def test_node_persona_defaults_none():
     assert a.persona is None
 
 
-def test_parallel_max_concurrency_defaults_2_and_parses():
+def test_parallel_max_concurrency_defaults_to_global_caps_and_parses():
+    # Absent = None: the engine applies the global per-kind caps from config
+    # (workflow.parallel_llm_concurrency / parallel_script_concurrency). An
+    # explicit value is a uniform per-node override.
     fan = parse_workflow({"name": "w", "start": "f", "nodes": [
         {"id": "f", "kind": "parallel", "branches": ["a"], "next": None},
         {"id": "a", "kind": "work"}]}).nodes["f"]
-    assert fan.max_concurrency == 2
+    assert fan.max_concurrency is None
     fan2 = parse_workflow({"name": "w", "start": "f", "nodes": [
         {"id": "f", "kind": "parallel", "branches": ["a"], "max_concurrency": 5, "next": None},
         {"id": "a", "kind": "work"}]}).nodes["f"]

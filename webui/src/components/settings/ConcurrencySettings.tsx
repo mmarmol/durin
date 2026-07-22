@@ -14,17 +14,22 @@ interface Caps {
   interactive: number;
   ceiling: number;
   subagents: number;
+  workflowLlm: number;
+  workflowScript: number;
 }
 
 function readCaps(config: Record<string, unknown> | null): Caps {
   const agents = config?.agents as { defaults?: Record<string, unknown> } | undefined;
   const d = agents?.defaults ?? {};
+  const wf = (config?.workflow ?? {}) as Record<string, unknown>;
   const num = (v: unknown, fallback: number) =>
     typeof v === "number" && Number.isFinite(v) ? v : fallback;
   return {
     interactive: num(d.max_concurrent_interactive, 4),
     ceiling: num(d.concurrency_ceiling, 12),
     subagents: num(d.max_concurrent_subagents, 3),
+    workflowLlm: num(wf.parallel_llm_concurrency, 2),
+    workflowScript: num(wf.parallel_script_concurrency, 4),
   };
 }
 
@@ -119,6 +124,26 @@ export function ConcurrencySettings({ token }: { token: string }) {
             value={caps.subagents}
             saving={savingPath === "agents.defaults.max_concurrent_subagents"}
             onSave={(n) => void onSave("agents.defaults.max_concurrent_subagents", n)}
+          />
+        </SettingsGroup>
+      </section>
+
+      <section>
+        <SettingsSectionTitle>{t("settings.concurrency.sections.workflows")}</SettingsSectionTitle>
+        <SettingsGroup>
+          <CapRow
+            title={t("settings.concurrency.rows.workflowLlm")}
+            description={t("settings.concurrency.help.workflowLlm")}
+            value={caps.workflowLlm}
+            saving={savingPath === "workflow.parallel_llm_concurrency"}
+            onSave={(n) => void onSave("workflow.parallel_llm_concurrency", n)}
+          />
+          <CapRow
+            title={t("settings.concurrency.rows.workflowScript")}
+            description={t("settings.concurrency.help.workflowScript")}
+            value={caps.workflowScript}
+            saving={savingPath === "workflow.parallel_script_concurrency"}
+            onSave={(n) => void onSave("workflow.parallel_script_concurrency", n)}
           />
         </SettingsGroup>
       </section>

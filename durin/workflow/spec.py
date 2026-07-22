@@ -184,7 +184,7 @@ class ParallelNode:
     reconcile: Literal["read", "choose", "union"] = "read"
     criteria: str = ""                   # for 'choose': how the judge picks the winner
     judge_model: str | None = None       # optional model for the 'choose' judge
-    max_concurrency: int = 2             # max simultaneous branch/worker runners (>= 1)
+    max_concurrency: int | None = None   # None = the global per-kind caps (config); int = uniform override (>= 1)
     worker: str | None = None            # dynamic mode: worker-template node id
     list_from: str | None = None         # dynamic mode: node whose output is the runtime list
     branches_from: str | None = None     # runtime-selected mode: node whose output names the branch ids
@@ -557,8 +557,12 @@ def _build_node(raw: dict[str, Any]) -> Node:
             raise WorkflowError(
                 f"node {node_id!r}: a 'choose' parallel node needs 'criteria' for the judge"
             )
-        max_concurrency = raw.get("max_concurrency", 2)
-        if isinstance(max_concurrency, bool) or not isinstance(max_concurrency, int) or max_concurrency < 1:
+        # Absent = the engine's global per-kind caps (LLM branches vs script
+        # branches, from config). An explicit value is a uniform override.
+        max_concurrency = raw.get("max_concurrency")
+        if max_concurrency is not None and (
+            isinstance(max_concurrency, bool) or not isinstance(max_concurrency, int) or max_concurrency < 1
+        ):
             raise WorkflowError(
                 f"node {node_id!r}: max_concurrency must be an int >= 1, got {max_concurrency!r}"
             )

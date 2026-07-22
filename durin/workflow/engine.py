@@ -265,6 +265,8 @@ class WorkflowEngine:
         progress_emit: Callable[[dict], None] | None = None,
         cancel_check: Callable[[], bool] | None = None,
         prune_keep: int = 20,
+        parallel_llm_concurrency: int = 2,
+        parallel_script_concurrency: int = 4,
     ) -> None:
         self._node_runner = node_runner
         self._script_runner = script_runner
@@ -285,6 +287,11 @@ class WorkflowEngine:
         # cancelled from outside (CLI/test callers).
         self._cancel_check = cancel_check
         self._prune_keep = prune_keep
+        # Global per-kind parallel caps (config): script branches are cheap and run
+        # wider than LLM branches. A node's explicit max_concurrency overrides both
+        # with the old uniform behavior.
+        self._parallel_llm_cap = max(1, parallel_llm_concurrency)
+        self._parallel_script_cap = max(1, parallel_script_concurrency)
 
     def run(
         self,
@@ -1189,7 +1196,9 @@ class WorkflowEngine:
             return "", None
 
         worker_node = workflow.nodes[node.worker]
-        workers = max(1, min(len(subtasks), node.max_concurrency))
+        # Dynamic workers are agent turns — the LLM cap unless the node overrides.
+        cap = node.max_concurrency if node.max_concurrency is not None else self._parallel_llm_cap
+        workers = max(1, min(len(subtasks), cap))
 
         def _run_worker(args):
             # A worker that raises must not take down the whole fan-out: catch it and
@@ -1324,7 +1333,32 @@ class WorkflowEngine:
         # branch_ids overrides the static list for a branches_from node — the branch
         # set was resolved (and validated) from the source node's output this pass.
         branches = tuple(branch_ids) if branch_ids is not None else node.branches
-        workers = max(1, min(len(branches), node.max_concurrency))
+        if node.max_concurrency is not None:
+            # Explicit node cap: the old uniform behavior across every branch kind.
+            workers = max(1, min(len(branches), node.max_concurrency))
+            _kind_gate = None
+        else:
+            # Global per-kind caps: script branches acquire their own (wider) gate so
+            # they never queue behind LLM branches. The pool is sized for both lanes
+            # at full width; the gates do the per-kind bounding.
+            _llm_gate = threading.Semaphore(self._parallel_llm_cap)
+            _script_gate = threading.Semaphore(self._parallel_script_cap)
+
+            def _kind_gate(bid: str):
+                is_script = getattr(workflow.nodes[bid], "kind", "work") == "script"
+                return _script_gate if is_script else _llm_gate
+
+            workers = max(1, min(len(branches),
+                                 self._parallel_llm_cap + self._parallel_script_cap))
+
+        def _gated(bid, body):
+            """Run a branch body under its kind's gate (queue wait excluded from
+            the branch's own timing — the body starts its clock after acquire)."""
+            gate = _kind_gate(bid) if _kind_gate is not None else None
+            if gate is None:
+                return body(bid)
+            with gate:
+                return body(bid)
         # Writing branches (choose/union) fork the run's SHARED WORKING FOLDER, not
         # the durin workspace: the folder is where sequential nodes collaborate and
         # is therefore the write surface a branch legitimately owns. Forking the
@@ -1389,7 +1423,7 @@ class WorkflowEngine:
                     _emit_branches()
                     return bid, "", None, str(exc), False, round(time.monotonic() - t0, 3), None
             with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
-                results = list(ex.map(_run, branches))
+                results = list(ex.map(lambda bid: _gated(bid, _run), branches))
             self._record_branches(runs, results, iteration)
             if all(error for _bid, _out, _key, error, _pf, _d, _ec in results):
                 return "", f"parallel node {node.id!r}: every branch failed"
@@ -1426,7 +1460,7 @@ class WorkflowEngine:
 
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
-                results = list(ex.map(_run, branches))
+                results = list(ex.map(lambda bid: _gated(bid, _run), branches))
             self._record_branches(
                 runs, [(bid, out, key, None, False, None, ec) for bid, out, key, ec, _ in results],
                 iteration)

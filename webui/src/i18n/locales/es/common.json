@@ -1115,17 +1115,22 @@
       "description": "Cuántos turnos y sub-agentes se ejecutan a la vez. Los cambios se aplican de inmediato, sin reiniciar.",
       "sections": {
         "caps": "Límites",
-        "live": "En vivo"
+        "live": "En vivo",
+        "workflows": "Ramas de workflows"
       },
       "rows": {
         "interactive": "Turnos interactivos",
         "ceiling": "Techo global",
-        "subagents": "Sub-agentes"
+        "subagents": "Sub-agentes",
+        "workflowLlm": "Ramas LLM en paralelo",
+        "workflowScript": "Ramas de script en paralelo"
       },
       "help": {
         "interactive": "Máximo de turnos interactivos ejecutándose a la vez en todas las sesiones.",
         "ceiling": "Máximo de trabajo concurrente en total — turnos interactivos más sub-agentes.",
-        "subagents": "Máximo de sub-agentes ejecutándose a la vez."
+        "subagents": "Máximo de sub-agentes ejecutándose a la vez.",
+        "workflowLlm": "Ramas de agente simultáneas dentro de un nodo parallel de workflow (limitadas por el rate limit del proveedor).",
+        "workflowScript": "Ramas de script simultáneas dentro de un nodo parallel de workflow — baratas, seguras de correr más anchas que las LLM."
       },
       "live": {
         "interactive": "Interactivos",
@@ -2226,6 +2231,17 @@
       "aborted": "abortada",
       "crashed": "caída",
       "cancelled": "cancelada"
+    },
+    "seedBanner": {
+      "title": "Actualizaciones de workflows integrados",
+      "intro": "Estos workflows integrados tienen una versión nueva incluida, pero tus copias fueron editadas. Revisá las diferencias y actualizá, o descartá esta versión.",
+      "reasonEdited": "editado localmente",
+      "reasonUnknown": "la copia local difiere (origen desconocido)",
+      "viewDiff": "Ver diferencias",
+      "hideDiff": "Ocultar diferencias",
+      "apply": "Actualizar al integrado",
+      "dismiss": "Descartar",
+      "noDiff": "(sin diferencias disponibles)"
     }
   },
   "runs": {

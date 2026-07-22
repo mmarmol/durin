@@ -63,7 +63,6 @@
       "kind": "parallel",
       "worker": "critic",
       "list_from": "frame_review",
-      "max_concurrency": 3,
       "next": "revise"
     },
     {

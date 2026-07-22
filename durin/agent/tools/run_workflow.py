@@ -386,6 +386,8 @@ class RunWorkflowTool(Tool, ContextAware):
         judge_runner = AgentJudgeRunner(runner, default_model=provider.get_default_model())
         subworkflow_runner = SubworkflowRunner(
             self._workspace, node_runner, judge_runner, script_runner=script_runner,
+            parallel_llm_concurrency=self._app_config.workflow.parallel_llm_concurrency,
+            parallel_script_concurrency=self._app_config.workflow.parallel_script_concurrency,
         )
         bus = self._bus
         run_chat_id = self._chat_id.get()
@@ -440,6 +442,8 @@ class RunWorkflowTool(Tool, ContextAware):
             progress_emit=progress_emit,
             cancel_check=lambda: _is_cancelled(run_id),
             prune_keep=self._app_config.workflow.keep_runs,
+            parallel_llm_concurrency=self._app_config.workflow.parallel_llm_concurrency,
+            parallel_script_concurrency=self._app_config.workflow.parallel_script_concurrency,
         )
         root_session_key = self._session_key.get()
         inject_target = {
