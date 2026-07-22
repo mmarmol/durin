@@ -181,11 +181,43 @@ private workspace copy and a judge picks one (needs `criteria`). Use `"union"` t
 }
 ```
 
+## Runtime-selected branches (`branches_from`)
+
+When different runs need different branch SUBSETS — "run only the analyzers that apply to
+this input" — a routing script emits the branch ids (a JSON array, or a comma-separated
+last line) and ONE parallel node runs exactly those. Without it, every branch combination
+needs its own static parallel block (2^N nodes for N optional analyzers). Every resolved
+id must name a declared `work` node; an empty list is valid (nothing applies — the walk
+continues to `next`).
+
+```json
+{
+  "name": "typed-analysis",
+  "start": "route",
+  "nodes": [
+    { "id": "route", "kind": "script", "script": "route-analyzers.py", "next": "fan" },
+    { "id": "fan", "kind": "parallel", "branches_from": "route",
+      "max_concurrency": 2, "next": "merge" },
+    { "id": "analyze_logs", "kind": "work", "mode": "read", "tools": "default",
+      "prompt": "Analyze only the log files in the working folder." },
+    { "id": "analyze_images", "kind": "work", "mode": "read", "tools": "default",
+      "prompt": "Analyze only the image files (interpret_image per file)." },
+    { "id": "merge", "kind": "script", "script": "consolidate.py", "next": null }
+  ]
+}
+```
+
+`route-analyzers.py` inspects the working folder and prints e.g.
+`analyze_logs, analyze_images` (or `["analyze_logs"]`, or `[]`) as its last line.
+
 ## Subworkflow composition (`kind: "subworkflow"`)
 
 Run another named workflow as one step and use its output. The nested run works in the
 parent's shared working folder, so a file the parent produced is readable by the child's
-nodes and vice versa — composition passes files, not just text.
+nodes and vice versa — composition passes files, not just text. The child's terminal
+status propagates: a child that pauses (`needs_input`) pauses the parent resumably at
+this node, a cancelled child cancels it, and a failed child aborts it naming the child —
+a pipeline never "completes" past a stage that did not actually run.
 
 ```json
 {
