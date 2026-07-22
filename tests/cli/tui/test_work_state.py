@@ -263,3 +263,71 @@ def test_running_node_activity_target_escapes_markup():
     })
     markup = store.render_markup()
     assert r"TODO\[urgent]" in markup
+
+
+def test_running_node_elapsed_advances_against_an_injected_clock():
+    """A running node's clock is a live diff of `started_at` against `now` — the
+    test passes `now` explicitly (rather than sleeping) so the advance is
+    deterministic: the same node, rendered at two different instants, shows two
+    different elapsed values."""
+    store = WorkStore()
+    store.ingest({
+        "name": "workflow_progress", "phase": "running", "call_id": "workflow:r5",
+        "arguments": {"workflow": "wf"},
+        "nodes": [{"id": "n", "label": "N", "status": "running", "started_at": 1000.0}],
+    })
+    just_started = store.render_markup(now=1000.0)
+    four_minutes_later = store.render_markup(now=1261.0)
+    assert "0:00" in just_started
+    assert "4:21" in four_minutes_later
+    assert just_started != four_minutes_later
+
+
+def test_finished_node_renders_duration_s():
+    """A finished node's `duration_s` is already a span of seconds, not a
+    timestamp — it is formatted as-is, with no dependency on the current clock."""
+    store = WorkStore()
+    store.ingest({
+        "name": "workflow_progress", "phase": "running", "call_id": "workflow:r6",
+        "arguments": {"workflow": "wf"},
+        "nodes": [
+            {"id": "a", "label": "A", "status": "done", "duration_s": 125},
+            {"id": "b", "label": "B", "status": "running"},
+        ],
+    })
+    markup = store.render_markup()
+    assert "2:05" in markup
+
+
+def test_node_with_neither_time_field_renders_no_time_segment():
+    """A node reporting neither `started_at` nor `duration_s` (not yet started,
+    or from an older emitter) renders no time segment at all, and does not
+    crash — exactly as before these fields existed."""
+    store = WorkStore()
+    store.ingest({
+        "name": "workflow_progress", "phase": "running", "call_id": "workflow:r7",
+        "arguments": {"workflow": "wf"},
+        "nodes": [
+            {"id": "a", "label": "A", "status": "done"},
+            {"id": "b", "label": "B", "status": "running"},
+        ],
+    })
+    markup = store.render_markup()
+    assert "A" in markup and "B" in markup
+    assert ":" not in markup  # no elapsed segment anywhere (would read like "m:ss")
+
+
+def test_elapsed_format_rolls_over_to_hours():
+    """Past sixty minutes the format extends to h:mm:ss rather than overflowing
+    the minutes field."""
+    store = WorkStore()
+    store.ingest({
+        "name": "workflow_progress", "phase": "running", "call_id": "workflow:r8",
+        "arguments": {"workflow": "wf"},
+        "nodes": [
+            {"id": "a", "label": "A", "status": "done", "duration_s": 3661},
+            {"id": "b", "label": "B", "status": "running"},
+        ],
+    })
+    markup = store.render_markup()
+    assert "1:01:01" in markup

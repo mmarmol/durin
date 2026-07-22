@@ -9,6 +9,7 @@ markup. Kept free of Textual imports so it is unit-testable in isolation.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 
 from rich.markup import escape
@@ -23,6 +24,21 @@ _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 def _running_glyph(spin: int) -> str:
     return _SPINNER[spin % len(_SPINNER)]
+
+
+def _format_elapsed(total_seconds: float) -> str:
+    """Format a duration the way a stopwatch reads: ``m:ss``, extending to
+    ``h:mm:ss`` once it runs past an hour. Matches the output shape of the web
+    UI's ``formatElapsed`` (``webui/src/lib/work-format.ts``) so a duration
+    reads the same on both surfaces.
+    """
+    total = max(0, int(total_seconds))
+    s = total % 60
+    m = (total // 60) % 60
+    h = total // 3600
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+
 _NODE_CLASS = {
     "running": "work-running",
     "done": "work-done",
@@ -109,10 +125,18 @@ class WorkStore:
     def is_empty(self) -> bool:
         return not self._order
 
-    def render_markup(self, spin: int = 0) -> str:
-        """Render the WORK section. ``spin`` advances the running-node spinner."""
+    def render_markup(self, spin: int = 0, now: float | None = None) -> str:
+        """Render the WORK section. ``spin`` advances the running-node spinner.
+
+        ``now`` is the instant per-node elapsed time is measured against. It
+        defaults to the real current time — resolved once here so every node in
+        this render sees the same instant — and is only overridden by tests that
+        need a fixed clock instead of the wall clock.
+        """
         if self.is_empty():
             return ""
+        if now is None:
+            now = time.time()
         # A needs_input run belongs with the active items: it is waiting for
         # the user, not finished — parking it under "Finished" would hide it.
         active = [
@@ -134,17 +158,19 @@ class WorkStore:
             f"[work-header]WORK[/] [work-count]({' · '.join(counts)})[/]"
         ]
         for item in active:
-            lines.extend(self._render_item(item, spin=spin))
+            lines.extend(self._render_item(item, spin=spin, now=now))
         if finished:
             lines.append(f"[work-finished-header]Finished ({len(finished)})[/]")
             for item in finished:
-                lines.extend(self._render_item(item, spin=spin, compact=True))
+                lines.extend(self._render_item(item, spin=spin, compact=True, now=now))
         return "\n".join(lines)
 
     def _glyph(self, status: str, spin: int) -> str:
         return _running_glyph(spin) if status == "running" else _GLYPH.get(status, "○")
 
-    def _render_item(self, item: _Item, *, spin: int = 0, compact: bool = False) -> list[str]:
+    def _render_item(
+        self, item: _Item, *, spin: int = 0, compact: bool = False, now: float
+    ) -> list[str]:
         cls = _NODE_CLASS.get(item.status, "work-pending")
         glyph = self._glyph(item.status, spin)
         head = f"[{cls}]{glyph} {item.label}[/]"
@@ -160,23 +186,43 @@ class WorkStore:
                 out.append(f"  [work-count]{first}[/]")
         if not compact and item.kind == "workflow":
             for node in item.nodes:
-                out.extend(self._render_node(node, indent=1, spin=spin))
+                out.extend(self._render_node(node, indent=1, spin=spin, now=now))
         return out
 
-    def _render_node(self, node: dict, indent: int, spin: int = 0) -> list[str]:
+    def _render_node(self, node: dict, indent: int, spin: int = 0, *, now: float) -> list[str]:
         """Render one workflow node, recursing into nested parallel ``branches``."""
         n_status = str(node.get("status") or "running")
         n_cls = _NODE_CLASS.get(n_status, "work-pending")
         n_glyph = self._glyph(n_status, spin)
         route = node.get("route_label")
         suffix = f" [work-count]{route}[/]" if route else ""
+        elapsed = self._node_elapsed(node, n_status, now)
+        if elapsed:
+            suffix += f" [work-count]· {elapsed}[/]"
         if n_status == "running":
             suffix += self._render_running_detail(node)
         pad = "  " * indent
         out = [f"{pad}[{n_cls}]{n_glyph} {node.get('label', '?')}[/]{suffix}"]
         for branch in node.get("branches") or []:
-            out.extend(self._render_node(branch, indent + 1, spin=spin))
+            out.extend(self._render_node(branch, indent + 1, spin=spin, now=now))
         return out
+
+    def _node_elapsed(self, node: dict, status: str, now: float) -> str:
+        """The elapsed-time text for one node, or ``""`` when there is nothing to show.
+
+        A running node's clock is a live diff of ``started_at`` against ``now`` —
+        it keeps advancing on every re-render, not just when a new event arrives,
+        since ``now`` is the real wall clock by default. A finished node's
+        ``duration_s`` is already a span of seconds, not a timestamp, and is
+        formatted as-is. A node reporting neither (not yet started, or from an
+        older emitter) shows no time segment at all — unchanged from before these
+        fields existed.
+        """
+        if status == "running":
+            started_at = node.get("started_at")
+            return _format_elapsed(now - started_at) if started_at is not None else ""
+        duration_s = node.get("duration_s")
+        return _format_elapsed(duration_s) if duration_s is not None else ""
 
     def _render_running_detail(self, node: dict) -> str:
         """Round and current-activity suffix for a running node.
