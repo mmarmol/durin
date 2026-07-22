@@ -550,7 +550,7 @@ class WorkflowEngine:
             before_files = _work_snapshot()
 
             if self._progress_emit is not None:
-                from durin.workflow.progress import finished_frames, running_frame
+                from durin.workflow.progress import finished_frames, pending_frames, running_frame
 
                 started = finished_frames(workflow, runs)
                 started.append(running_frame(
@@ -558,6 +558,7 @@ class WorkflowEngine:
                     budget=budget if isinstance(node, (WorkNode, ScriptNode)) else None,
                     started_at=node_started_at,
                 ))
+                started.extend(pending_frames(workflow, node.id))
                 try:
                     self._progress_emit({"run_id": run_id, "nodes": started, "done": False})
                 except Exception:  # noqa: BLE001 - best-effort
@@ -585,7 +586,7 @@ class WorkflowEngine:
                 _activity.update(update)
                 if self._progress_emit is None:
                     return
-                from durin.workflow.progress import finished_frames, running_frame
+                from durin.workflow.progress import finished_frames, pending_frames, running_frame
 
                 frames = finished_frames(workflow, runs)
                 frames.append(running_frame(
@@ -596,6 +597,7 @@ class WorkflowEngine:
                     round_=_activity["round"],
                     max_rounds=_activity["max_rounds"],
                 ))
+                frames.extend(pending_frames(workflow, _node.id))
                 try:
                     self._progress_emit({"run_id": run_id, "nodes": frames, "done": False})
                 except Exception:  # noqa: BLE001 - best-effort

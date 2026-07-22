@@ -67,6 +67,36 @@ def finished_frames(workflow: Any, runs: list[Any]) -> list[dict]:
     ]
 
 
+def pending_frames(workflow: Any, from_node_id: str) -> list[dict]:
+    """The nodes certain to run after ``from_node_id``, greyed in every surface.
+
+    Walks forward only while each node has exactly one successor. A routing node
+    ends the walk: which branch it takes is not known until it runs, so listing
+    its targets would show a path that may never happen. Loops end the walk on
+    revisit — a node already listed is not listed twice.
+    """
+    def _pending(node: Any) -> dict:
+        return {"id": node.id, "label": node_label(node), "status": "pending",
+                "route_label": None, "iteration": None, "budget": None}
+
+    frames: list[dict] = []
+    seen = {from_node_id}
+    current = getattr(workflow.nodes.get(from_node_id), "next", None)
+    while current and current in workflow.nodes and current not in seen:
+        node = workflow.nodes[current]
+        seen.add(current)
+        frames.append(_pending(node))
+        # A routing node ends the walk: which branch it takes is unknown until
+        # it runs, so it is the last node that is certain to be visited. The
+        # ``routes`` property is the node's own definition of that condition
+        # (binary on_pass/on_fail or multi-way cases) — reusing it here means
+        # this check cannot drift out of sync with what actually routes.
+        if getattr(node, "routes", False):
+            break
+        current = getattr(node, "next", None)
+    return frames
+
+
 def running_frame(node: Any, *, iteration: int, budget: int | None,
                   started_at: float | None = None,
                   activity: dict | None = None,
