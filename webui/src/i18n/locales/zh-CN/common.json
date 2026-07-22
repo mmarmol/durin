@@ -2012,7 +2012,7 @@
     "staleCluster": "该分组自地图构建后已发生变化——已返回总览。",
     "mapChanged": "地图已变化——已更新。",
     "emptyTitle": "这里还没有内容",
-    "emptyBody": "这张地图会随着 durin 的记忆不断生长：你对话中的实体、项目和人物会在每次 dream 之后出现在这里。",
+    "emptyBody": "这张地图会随着 durin 的记忆不断生长：你对话中的实体、项目和人物会在每次 Dream 之后出现在这里。",
     "showAll": "显示全部",
     "noMatches": "没有匹配项。",
     "filterTypes": "类型",
