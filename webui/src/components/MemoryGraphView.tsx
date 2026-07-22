@@ -1125,8 +1125,12 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
         hoverRef.current = node;
         evt.currentTarget.style.cursor = hit ? "pointer" : "default";
 
-        // Debounced hover preview for entity nodes (sessions excluded).
-        const hid = node && node.type !== "session" ? node.id : null;
+        // Debounced hover preview for entity nodes (sessions and bubbles
+        // excluded — a bubble is a container, not a fetchable entity).
+        const hid =
+          node && node.type !== "session" && node.kind !== "bubble"
+            ? node.id
+            : null;
         if (hid !== hoverIdRef.current) {
           hoverIdRef.current = hid;
           if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
@@ -1198,7 +1202,11 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
         const moved = Math.hypot(sx - press.x, sy - press.y);
         if (drag && drag.id === press.id && moved < 5) {
           if (drag.kind === "bubble") {
-            void layers.enterCluster(drag.id, drag.name);
+            const name =
+              drag.name === "__others__"
+                ? t("memoryGraph.clusterOthers")
+                : drag.name;
+            void layers.enterCluster(drag.id, name);
           } else {
             void layers.enterEgo(drag.id, drag.name);
           }

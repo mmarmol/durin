@@ -48,7 +48,11 @@ export function useGraphLayers(
     setLoading(true);
     try {
       const payload = await fetchMemoryGraphOverview(token);
-      const json = JSON.stringify(payload.stats) + payload.mode;
+      // Fingerprint the whole payload, not just stats+mode — the overview
+      // is bounded (~100 elements), so stringifying it in full is cheap and
+      // catches any change (bubble membership, edges, ...) that stats alone
+      // would miss.
+      const json = JSON.stringify(payload);
       const prior = overviewJson.current;
       const changed = prior !== null && prior !== json;
       overviewJson.current = json;

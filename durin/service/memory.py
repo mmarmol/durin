@@ -418,10 +418,14 @@ class MemoryService:
                     f"no current cluster is keyed by {query.ref!r}"
                 ) from None
             return MemoryResult(data=payload)
-        full = await asyncio.to_thread(get_full_graph_cached, ws)
-        payload = build_entity_subgraph(
-            ws, query.ref, hops=max(1, min(query.hops, 3)), payload=full
-        )
+
+        def _ego() -> dict[str, Any]:
+            full = get_full_graph_cached(ws)
+            return build_entity_subgraph(
+                ws, query.ref, hops=max(1, min(query.hops, 3)), payload=full
+            )
+
+        payload = await asyncio.to_thread(_ego)
         return MemoryResult(data=payload)
 
     @route(

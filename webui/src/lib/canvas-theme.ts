@@ -50,7 +50,10 @@ export function readCanvasTheme(): CanvasTheme {
       line: resolveToken(probe, "--muted-foreground", FALLBACK.line),
       surface: resolveToken(probe, "--card", FALLBACK.surface),
       border: resolveToken(probe, "--border", FALLBACK.border),
-      accent: resolveToken(probe, "--accent", FALLBACK.accent),
+      // The brand accent is `--primary`; `--accent` in this token set is a
+      // muted surface tint (~96% lightness in light mode), not a usable
+      // stroke/highlight colour.
+      accent: resolveToken(probe, "--primary", FALLBACK.accent),
       background: resolveToken(probe, "--background", FALLBACK.background),
     };
   } finally {
