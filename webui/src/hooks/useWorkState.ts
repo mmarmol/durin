@@ -235,8 +235,13 @@ export function useWorkState(
             ...(r.task != null ? { task: r.task } : {}),
             ...(r.needs_input_detail != null ? { needsInputDetail: r.needs_input_detail } : {}),
             ...(r.typical_total_s != null ? { typicalTotalS: r.typical_total_s } : {}),
-            startedAt: r.started_at,
-            endedAt: r.ended_at,
+            // The API sends epoch seconds (Python time.time()); WorkItem.startedAt/
+            // endedAt are epoch milliseconds everywhere else (the live WS path below
+            // sets them from Date.now()) — convert here, at the boundary, so a
+            // polled-only item (e.g. right after a page reload) doesn't mix units
+            // with a live one.
+            startedAt: r.started_at * 1000,
+            endedAt: r.ended_at != null ? r.ended_at * 1000 : null,
             nodes: toWorkNodes(r.nodes),
           }));
           setPolled(items);

@@ -193,7 +193,10 @@ export interface WorkItem {
   needsInputDetail?: string;
   /** Summed per-node medians from prior runs; absent when the workflow has no history. */
   typicalTotalS?: number;
+  /** Epoch milliseconds (matches `Date.now()`) — unlike WorkNode.startedAt, which is
+   *  epoch seconds. Both producers in useWorkState.ts normalize to this unit. */
   startedAt: number;
+  /** Epoch milliseconds; null while still running. */
   endedAt: number | null;
 }
 

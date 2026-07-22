@@ -539,4 +539,94 @@ describe("useWorkState", () => {
     expect(node.description).toBe("Drafts the report");
     expect(node.parentNode).toBe("gather");
   });
+
+  // -------------------------------------------------------------------------
+  // Item-level startedAt/endedAt unit: the polled path must convert the API's
+  // epoch-seconds fields to epoch milliseconds, matching the live WS path
+  // (which sets startedAt/endedAt from Date.now()).
+  // -------------------------------------------------------------------------
+
+  it("converts a polled item's startedAt from epoch seconds to epoch milliseconds", async () => {
+    const { result } = await renderHookWithPolled([
+      {
+        kind: "subagent",
+        id: "polled-ms",
+        label: "polled task",
+        status: "running",
+        started_at: 1700000000,
+        ended_at: null,
+        session_key: null,
+      },
+    ]);
+
+    const item = result.current.active.find((w) => w.id === "polled-ms");
+    expect(item).toBeDefined();
+    expect(item!.startedAt).toBe(1700000000 * 1000);
+  });
+
+  it("keeps endedAt null for a still-running polled item, instead of coercing to 0", async () => {
+    const { result } = await renderHookWithPolled([
+      {
+        kind: "subagent",
+        id: "polled-running",
+        label: "polled task",
+        status: "running",
+        started_at: 1700000000,
+        ended_at: null,
+        session_key: null,
+      },
+    ]);
+
+    const item = result.current.active.find((w) => w.id === "polled-running");
+    expect(item).toBeDefined();
+    expect(item!.endedAt).toBeNull();
+  });
+
+  it("sorts a live item and a polled item correctly by ended-at instant (mixed units)", async () => {
+    // The polled row's ended_at is epoch SECONDS, set far enough in the future
+    // (relative to real "now") that this item truly ends after the live item
+    // below (whose endedAt is Date.now(), i.e. real epoch milliseconds) once
+    // both are compared in the same unit. Before the fix, the polled item's
+    // raw (unconverted) seconds value is ~1000x smaller than any real
+    // millisecond epoch, so it would always sort as "older" than a live item
+    // regardless of the true chronological order — the scenario here is
+    // engineered to flip the correct order if that bug is present.
+    const futureSeconds = Math.floor(Date.now() / 1000) + 10_000_000;
+    const { client, emit } = makeFakeClient();
+    mockUseClient.mockReturnValue({
+      client: client as unknown as ReturnType<typeof useClient>["client"],
+      token: "tok",
+      modelName: null,
+      modelPreset: null,
+    });
+    mockListBackgroundTasks.mockResolvedValue([
+      {
+        kind: "workflow",
+        id: "polled-later",
+        label: "flow-polled-later",
+        status: "done",
+        started_at: futureSeconds - 100,
+        ended_at: futureSeconds,
+        session_key: null,
+      },
+    ]);
+
+    const { result } = renderHook(() => useWorkState("c1", "websocket:c1"));
+
+    await waitFor(() => {
+      expect(result.current.finished.find((w) => w.id === "polled-later")).toBeDefined();
+    });
+
+    // Live item ends "now" — chronologically before the polled item above.
+    act(() => {
+      emit(workflowProgressFrame("live-earlier", [{ id: "n1", status: "done" }], "end"));
+    });
+
+    await waitFor(() => {
+      expect(result.current.finished.find((w) => w.id === "live-earlier")).toBeDefined();
+    });
+
+    const ids = result.current.finished.map((w) => w.id);
+    expect(ids.indexOf("polled-later")).toBeLessThan(ids.indexOf("live-earlier"));
+  });
 });
