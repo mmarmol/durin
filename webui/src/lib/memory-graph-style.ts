@@ -30,6 +30,27 @@ export function colorForType(type: string): string {
   return `hsl(${hue} 65% 55%)`;
 }
 
+// Lives here (not MemoryTypeFilter, which imports it back) because
+// groupTypeLegend needs the type and this is the lower module.
+export interface TypeLegendItem {
+  type: string;
+  color: string;
+  count: number;
+}
+
+/** Split a type legend into the top `max` by count (shown individually) and
+ *  the remainder (grouped behind a single "others" row) — keeps the filter
+ *  popover to ~8 distinguishable swatches regardless of how many open-
+ *  vocabulary entity types a workspace has accumulated. */
+export function groupTypeLegend(
+  items: TypeLegendItem[],
+  max = 8,
+): { shown: TypeLegendItem[]; tail: TypeLegendItem[] } {
+  const sorted = [...items].sort((a, b) => b.count - a.count || a.type.localeCompare(b.type));
+  if (sorted.length <= max) return { shown: sorted, tail: [] };
+  return { shown: sorted.slice(0, max), tail: sorted.slice(max) };
+}
+
 export type EntitySortKey = "recent" | "mentions" | "name";
 
 export interface BrowseOptions {

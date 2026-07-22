@@ -99,3 +99,87 @@ describe("MemoryTypeFilter", () => {
     expect(container).toBeEmptyDOMElement();
   });
 });
+
+describe("MemoryTypeFilter — legend tail", () => {
+  const TAIL: TypeLegendItem[] = [
+    { type: "reference", color: "#D97706", count: 3 },
+    { type: "practice", color: "#14B8A6", count: 1 },
+  ];
+
+  it("counts tail types toward the visible total and renders one grouped row", async () => {
+    const user = userEvent.setup();
+    setup({ tail: TAIL });
+    // 3 shown types + phantom + 2 tail types, none hidden = 6 visible
+    expect(screen.getByRole("button", { name: /types/i })).toHaveTextContent("6 visible");
+
+    await user.click(screen.getByRole("button", { name: /types/i }));
+    expect(screen.getByText("others (2)")).toBeInTheDocument();
+    // Individual tail types don't get their own row — only the grouped one.
+    expect(screen.queryByText("reference")).toBeNull();
+    expect(screen.queryByText("practice")).toBeNull();
+  });
+
+  it("toggling the grouped row calls onToggle for every tail type", async () => {
+    const user = userEvent.setup();
+    const props = setup({ tail: TAIL });
+    await user.click(screen.getByRole("button", { name: /types/i }));
+    await user.click(screen.getByText("others (2)"));
+    expect(props.onToggle).toHaveBeenCalledWith("reference");
+    expect(props.onToggle).toHaveBeenCalledWith("practice");
+    expect(props.onToggle).toHaveBeenCalledTimes(2);
+  });
+
+  it("is pressed only when every tail type is visible, not on a mixed state", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <MemoryTypeFilter
+        types={TYPES}
+        tail={TAIL}
+        phantomCount={4}
+        hidden={new Set()}
+        onToggle={vi.fn()}
+        onShowAll={vi.fn()}
+        onHideAll={vi.fn()}
+        onSolo={vi.fn()}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: /types/i }));
+    expect(screen.getByText("others (2)").closest("button")).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    rerender(
+      <MemoryTypeFilter
+        types={TYPES}
+        tail={TAIL}
+        phantomCount={4}
+        hidden={new Set(["practice"])}
+        onToggle={vi.fn()}
+        onShowAll={vi.fn()}
+        onHideAll={vi.fn()}
+        onSolo={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("others (2)").closest("button")).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  });
+
+  it("renders the popover even with no shown types when only a tail exists", () => {
+    const { container } = render(
+      <MemoryTypeFilter
+        types={[]}
+        tail={TAIL}
+        phantomCount={0}
+        hidden={new Set()}
+        onToggle={vi.fn()}
+        onShowAll={vi.fn()}
+        onHideAll={vi.fn()}
+        onSolo={vi.fn()}
+      />,
+    );
+    expect(container).not.toBeEmptyDOMElement();
+  });
+});

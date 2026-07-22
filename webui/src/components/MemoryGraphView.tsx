@@ -22,6 +22,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { DocumentsShelf } from "@/components/DocumentsShelf";
+import { useGraphLayers } from "@/hooks/useGraphLayers";
 import { useMemoryGraph } from "@/hooks/useMemoryGraph";
 import { useClient } from "@/providers/ClientProvider";
 import MarkdownTextRenderer from "@/components/MarkdownTextRenderer";
@@ -32,7 +33,6 @@ import {
   fetchMemoryEntity,
   fetchMemoryEntry,
   fetchMemorySession,
-  fetchMemorySubgraph,
   forgetMemoryEntry,
   searchMemoryApi,
   type MemoryBacklinksPayload,
@@ -40,7 +40,6 @@ import {
   type MemoryEntityDetail,
   type MemoryEntryDetail,
   type MemoryGraphNode,
-  type MemoryGraphPayload,
   type MemorySearchPayload,
   type MemorySearchResult,
   type MemorySessionDetail,
@@ -48,8 +47,18 @@ import {
 import { cn } from "@/lib/utils";
 import {
   colorForType,
+  groupTypeLegend,
   type EntitySortKey,
 } from "@/lib/memory-graph-style";
+import {
+  labelBudget,
+  overviewToGraph,
+  radiusForBubble,
+  radiusForNode,
+  visibleLabels,
+  type LabelCandidate,
+} from "@/lib/memory-graph-layout";
+import { readCanvasTheme, watchTheme, type CanvasTheme } from "@/lib/canvas-theme";
 import { MemoryEntityCards } from "@/components/MemoryEntityCards";
 import { MemoryEntityTable } from "@/components/MemoryEntityTable";
 import { MemoryTypeFilter } from "@/components/MemoryTypeFilter";
@@ -66,6 +75,11 @@ interface SimNode extends MemoryGraphNode {
   vx: number;
   vy: number;
   pinned: boolean;
+  // Overview-layer-only fields (see OverviewNode in memory-graph-layout.ts):
+  // a bubble stands in for a whole cluster, `count` is its member count.
+  // Optional because normal (non-overview) nodes never carry them.
+  kind?: "bubble";
+  count?: number;
 }
 
 interface SimEdge {
@@ -104,8 +118,24 @@ function reservedRightWidth(): number {
   return p ? Math.round((p as HTMLElement).getBoundingClientRect().width) : 0;
 }
 
-function radiusForWeight(weight: number): number {
-  return 5 + Math.sqrt(Math.max(0, weight)) * 2.2;
+// Bubbles size by member count (falling back to weight if count is somehow
+// absent); every other node (including sessions, handled inside
+// radiusForNode) sizes by weight/type.
+function nodeRadius(n: SimNode): number {
+  return n.kind === "bubble"
+    ? radiusForBubble(n.count ?? n.weight)
+    : radiusForNode(n.weight, n.type);
+}
+
+// prefers-reduced-motion is read once per RAF-effect mount rather than once
+// per animation frame — the check is cheap, but there is no reason to poll
+// it 60x/sec, and a fresh read per mount still picks up an OS setting change
+// made while the graph view was unmounted.
+function prefersReducedMotion(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
 }
 
 /** Cap a node label to a sensible visual length without dropping the
@@ -209,11 +239,6 @@ type SessionTabName = "info" | "messages" | "events" | "memory_ops" | "entries";
 export function MemoryGraphView(_props: MemoryGraphViewProps) {
   const { t } = useTranslation();
   const { data: rawData, loading, error, refresh } = useMemoryGraph(_props.active);
-  // Focus mode (Obsidian local graph): when set, the canvas renders this
-  // ego-graph (a node + its neighbourhood, fetched uncapped) instead of the
-  // global overview, so the node is centred even if the cap dropped it.
-  const [focusGraph, setFocusGraph] = useState<MemoryGraphPayload | null>(null);
-  const data = focusGraph ?? rawData;
   // Reference docs (memory/references/*) aren't graph nodes; clicking a
   // reference search hit opens its content in this side panel.
   const [referenceDetail, setReferenceDetail] = useState<MemoryEntryDetail | null>(null);
@@ -257,6 +282,13 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
   const alphaRef = useRef(1);
   const rafRef = useRef<number | null>(null);
   const draggingRef = useRef<SimNode | null>(null);
+  // Overview layer only: a press on a bubble/hub/loose node starts a drag
+  // (see onPointerDown) rather than navigating immediately, so the click-vs-
+  // drag decision is made on release — screen coords of the press, compared
+  // against release position, distinguish "drilled in" from "repositioned".
+  const overviewPressRef = useRef<{ id: string; x: number; y: number } | null>(
+    null,
+  );
   const hoverRef = useRef<SimNode | null>(null);
   // Camera over the sim's world coordinates: screen = world * k + (tx, ty).
   // Auto-fit continuously frames the visible nodes (smoothed each frame,
@@ -353,63 +385,19 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
     });
   }, []);
 
-  // Navigate to the session a fact came from (provenance source_ref →
-  // `session:<stem>` node). Selecting the node opens the session detail
-  // panel via the existing `selected` effect. No-op when the session node
-  // isn't in the graph payload (e.g. its .jsonl was removed).
-  const selectSessionByStem = useCallback(
-    (stem: string, targetTs?: string | null) => {
-      const id = `session:${stem}`;
-      const node =
-        simNodesRef.current.find((n) => n.id === id) ??
-        data?.nodes.find((n) => n.id === id);
-      if (!node) return;
-      setSelected(node as MemoryGraphNode);
-      if (targetTs) {
-        // Came from a provenance event: open the thread and scroll to the
-        // moment that fact was recorded.
-        setSessionTab("messages");
-        setSessionScrollTs(targetTs);
-      } else {
-        setSessionTab("info");
-      }
-    },
-    [data],
-  );
-
   // Caso 0: re-fit the graph whenever the content panel opens/closes/resizes —
   // the canvas shrinks to the leftover width and the sim reheats to re-centre.
   useEffect(() => {
     refitGraph();
   }, [selected?.id, !!referenceDetail, panelExpanded]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Switch the canvas to a node's ego-graph (uncapped neighbourhood) at the
-  // given depth. Entered from the panel's isolate button, the depth control,
-  // and search hits for nodes the global cap dropped; "back to full" exits.
-  const isolateNode = useCallback((ref: string, hops: number) => {
-    if (!tokenRef.current) return;
-    void (async () => {
-      try {
-        const g = await fetchMemorySubgraph(tokenRef.current!, ref, { hops });
-        setFocusGraph(g);
-        setIsolatedRef(ref);
-        setIsolateHops(hops);
-      } catch {
-        /* ego fetch failed — stay on the current graph */
-      }
-    })();
-  }, []);
-
-  const exitIsolation = useCallback(() => {
-    setFocusGraph(null);
-    setIsolatedRef(null);
-    setIsolateHops(1);
-  }, []);
-
-  // Set of node types the user has toggled OFF in the legend. Default
-  // empty = show all. Clicking a legend chip flips inclusion. Phantom
-  // is treated as its own pseudo-type for the toggle.
-  const [hiddenTypes, setHiddenTypes] = useState<Set<string>>(new Set());
+  // Set of node types the user has toggled OFF in the legend. Default hides
+  // phantom (unconsolidated noise) and session (scaffolding, not an entity)
+  // so a fresh view opens on real, consolidated entities. Clicking a legend
+  // chip flips inclusion. Phantom is treated as its own pseudo-type.
+  const [hiddenTypes, setHiddenTypes] = useState<Set<string>>(
+    new Set(["phantom", "session"]),
+  );
 
   function toggleType(type: string): void {
     setHiddenTypes((prev) => {
@@ -460,6 +448,141 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
   const [edgePopup, setEdgePopup] = useState<{
     x: number; y: number; detail: MemoryEdgeDetail | null; loading: boolean;
   } | null>(null);
+
+  // Two-layer graph (overview bubbles/hubs/loose → drill into a cluster or
+  // an ego neighbourhood). The hook owns the layer state machine; this view
+  // only has to plug its result into the existing data seam and drill
+  // functions below, kept under their pre-existing names so every call site
+  // (depth buttons, the panel's focus button, handleOpenEntity, search hits)
+  // keeps working unchanged.
+  const layers = useGraphLayers(
+    _props.active && effectiveView === "graph",
+    () => tokenRef.current,
+  );
+  // The overview only replaces the canvas payload in clustered mode; a flat
+  // workspace (too small to bubble) has nothing to translate, so the canvas
+  // falls back to today's capped graph instead.
+  const overviewGraph = useMemo(
+    () =>
+      layers.overview && layers.overview.mode === "clustered"
+        ? overviewToGraph(layers.overview)
+        : null,
+    [layers.overview],
+  );
+  // THE SEAM: graph view only — a cluster/ego drill wins, then the clustered
+  // overview, then today's raw graph. Cards/table never look at the overview
+  // OR a drill: they present the full entity list rather than a navigable
+  // bubble map, so a drill entered from the canvas must not truncate their
+  // grid down to the focused subgraph.
+  const data =
+    effectiveView === "graph" ? layers.focusGraph ?? overviewGraph ?? rawData : rawData;
+
+  // Navigate to the session a fact came from (provenance source_ref →
+  // `session:<stem>` node). Selecting the node opens the session detail
+  // panel via the existing `selected` effect. No-op when the session node
+  // isn't in the graph payload (e.g. its .jsonl was removed).
+  const selectSessionByStem = useCallback(
+    (stem: string, targetTs?: string | null) => {
+      const id = `session:${stem}`;
+      const node =
+        simNodesRef.current.find((n) => n.id === id) ??
+        data?.nodes.find((n) => n.id === id);
+      if (!node) return;
+      setSelected(node as MemoryGraphNode);
+      if (targetTs) {
+        // Came from a provenance event: open the thread and scroll to the
+        // moment that fact was recorded.
+        setSessionTab("messages");
+        setSessionScrollTs(targetTs);
+      } else {
+        setSessionTab("info");
+      }
+    },
+    [data],
+  );
+
+  // Switch the canvas to a node's ego-graph (uncapped neighbourhood) at the
+  // given depth — a thin wrapper over the shared layer state machine so
+  // isolating a node also updates the breadcrumb. Entered from the panel's
+  // isolate button, the depth control, and search hits for nodes the global
+  // cap dropped; "back to full" / the breadcrumb / Esc all exit it.
+  const isolateNode = useCallback(
+    (ref: string, hops: number) => {
+      setIsolateHops(hops);
+      const name =
+        data?.nodes.find((n) => n.id === ref)?.name ??
+        ref.replace(/^[a-z_]+:/, "");
+      void layers.enterEgo(ref, name, hops);
+    },
+    [data, layers],
+  );
+
+  const exitIsolation = useCallback(() => {
+    layers.backToOverview();
+  }, [layers]);
+
+  // isolatedRef mirrors the hook's layer so the canvas can keep ring-
+  // highlighting the isolated node; it's only meaningful for an ego drill.
+  useEffect(() => {
+    setIsolatedRef(layers.layer.kind === "ego" ? layers.layer.ref : null);
+  }, [layers.layer]);
+
+  // Esc backs out one layer (cluster/ego → overview) — but not while the
+  // search panel or the edge popover is up, so Escape closes those first.
+  // Listens on `window` (rather than `document`): in the bubble phase,
+  // `document`-level listeners fire before `window`-level ones, so a
+  // popover that listens on `document` — e.g. MemoryTypeFilter's own Escape
+  // handler — always gets first refusal on the same keypress. It calls
+  // `preventDefault()` when it actually closes; checking that here means
+  // one Escape closes only the top-most layer instead of cascading through
+  // both at once.
+  useEffect(() => {
+    if (layers.layer.kind === "overview") return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (e.defaultPrevented) return;
+      if (searchOpen || edgePopup) return;
+      layers.backToOverview();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [layers, searchOpen, edgePopup]);
+
+  // Local dismissal for the stale-cluster pill (contract c). The hook nulls
+  // `notice` at the start of every enterCluster/enterEgo call before ever
+  // re-setting it, so a fresh staleness event is always a null→"staleCluster"
+  // transition — re-arming here on that transition means a dismissed pill
+  // comes back for a *new* stale hit instead of staying hidden forever.
+  const [staleDismissed, setStaleDismissed] = useState(false);
+  useEffect(() => {
+    if (layers.notice === "staleCluster") setStaleDismissed(false);
+  }, [layers.notice]);
+
+  // Map-changed toast (contract d): re-check the overview when the tab
+  // regains focus, but only while sitting at the top layer — drilled into a
+  // cluster/ego, the visible canvas isn't the overview anyway, and
+  // re-laying-out bubbles under the user mid-interaction is exactly what
+  // this must not do. Passive: refreshOverview() already applies the new
+  // payload; the toast only announces that it happened.
+  const [mapChanged, setMapChanged] = useState(false);
+  useEffect(() => {
+    if (!_props.active || effectiveView !== "graph") return;
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      if (layers.layer.kind !== "overview") return;
+      void layers.refreshOverview().then((changed) => {
+        if (changed) setMapChanged(true);
+      });
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [_props.active, effectiveView, layers]);
+
+  useEffect(() => {
+    if (!mapChanged) return;
+    const id = setTimeout(() => setMapChanged(false), 4000);
+    return () => clearTimeout(id);
+  }, [mapChanged]);
 
   // Build simulation arrays from data
   const { simNodes, simEdges } = useMemo(() => {
@@ -536,6 +659,15 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
     return refs.size > 0 ? refs : null;
   }, [searchResults]);
 
+  // Canvas chrome (edges, rings, label text) tracks durin's active colour
+  // tokens instead of hardcoded literals, so a palette or light/dark change
+  // repaints the graph too. Resolved once up front and re-resolved only on
+  // a theme change (watchTheme), not per frame — resolving a CSS custom
+  // property is a synchronous style read, too costly to repeat 60x/sec.
+  const themeRef = useRef<CanvasTheme | null>(null);
+  if (themeRef.current === null) themeRef.current = readCanvasTheme();
+  useEffect(() => watchTheme(() => { themeRef.current = readCanvasTheme(); }), []);
+
   // RAF render loop — graph view only (the canvas is unmounted otherwise).
   useEffect(() => {
     if (!_props.active || effectiveView !== "graph") return;
@@ -546,6 +678,9 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
     if (!ctx) return;
 
     let stopped = false;
+    // Read once per mount rather than inside frame(), which runs every
+    // animation frame (see prefersReducedMotion).
+    const ease = prefersReducedMotion() ? 1 : 0.08;
 
     function resize() {
       if (!canvas || !wrap) return;
@@ -633,7 +768,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
         let maxY = -Infinity;
         for (const n of nodes) {
           if (!isVisible(n)) continue;
-          const r = radiusForWeight(n.weight) + 18;
+          const r = nodeRadius(n) + 18;
           if (n.x - r < minX) minX = n.x - r;
           if (n.x + r > maxX) maxX = n.x + r;
           if (n.y - r < minY) minY = n.y - r;
@@ -647,9 +782,9 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
           const ttx = w / 2 - ((minX + maxX) / 2) * tk;
           const tty = h / 2 - ((minY + maxY) / 2) * tk;
           const cam = cameraRef.current;
-          cam.k += (tk - cam.k) * 0.08;
-          cam.tx += (ttx - cam.tx) * 0.08;
-          cam.ty += (tty - cam.ty) * 0.08;
+          cam.k += (tk - cam.k) * ease;
+          cam.tx += (ttx - cam.tx) * ease;
+          cam.ty += (tty - cam.ty) * ease;
         }
       }
 
@@ -663,7 +798,11 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
       // while there are no matched nodes to highlight. Once searchMatchSet
       // exists, the per-node dimming (matches lit, rest faint) IS the signal;
       // a uniform veil on top would grey out the very nodes the search found.
-      ctx.globalAlpha = recedeRef.current && !searchMatchSet ? 0.18 : 1;
+      // Named (not just left in ctx.globalAlpha) because every themed element
+      // below restores to it, not to 1, after its own temporary alpha
+      // override — the veil must keep applying to whatever draws next.
+      const veil = recedeRef.current && !searchMatchSet ? 0.18 : 1;
+      ctx.globalAlpha = veil;
 
       // Hover highlight (Obsidian's graph hover): while the pointer rests on
       // a node, that node + its direct connections light up and the rest
@@ -691,58 +830,128 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
         // Hidden endpoints → don't draw the edge at all.
         if (!isVisible(e.source) || !isVisible(e.target)) continue;
         const lit = isHighlighted(e.source.id) && isHighlighted(e.target.id);
-        ctx.strokeStyle = lit
-          ? `rgba(120,120,140,${Math.min(0.55, 0.18 + e.weight * 0.06)})`
-          : "rgba(120,120,140,0.08)";
+        // themeRef.current.line resolves to an opaque colour, so the lit/dim
+        // distinction (previously baked into the rgba alpha channel) now
+        // goes through globalAlpha instead.
+        ctx.globalAlpha = veil * (lit ? Math.min(0.55, 0.18 + e.weight * 0.06) : 0.08);
+        ctx.strokeStyle = themeRef.current!.line;
         ctx.lineWidth = Math.min(3, 0.8 + Math.log(1 + e.weight));
         ctx.beginPath();
         ctx.moveTo(e.source.x, e.source.y);
         ctx.lineTo(e.target.x, e.target.y);
         ctx.stroke();
       }
+      ctx.globalAlpha = veil;
 
       for (const n of nodes) {
         if (!isVisible(n)) continue;
-        const r = radiusForWeight(n.weight);
+        const r = nodeRadius(n);
         const lit = isHighlighted(n.id);
-        const fill = colorForType(n.type);
-        ctx.beginPath();
-        ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
-        ctx.fillStyle = lit ? fill : `${fill}33`;
-        ctx.fill();
+        if (n.kind === "bubble") {
+          // A bubble stands in for a whole cluster — drawn hollow so it
+          // reads as a container around member entities, not as one more
+          // entity itself.
+          ctx.beginPath();
+          ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
+          ctx.fillStyle = themeRef.current!.surface;
+          ctx.fill();
+          ctx.strokeStyle = lit ? themeRef.current!.accent : themeRef.current!.border;
+          ctx.lineWidth = 1.4;
+          ctx.stroke();
+        } else if (n.type === "session") {
+          ctx.beginPath();
+          ctx.rect(n.x - r, n.y - r, r * 2, r * 2);
+          ctx.fillStyle = lit ? colorForType("session") : `${colorForType("session")}33`;
+          ctx.fill();
+        } else {
+          const fill = colorForType(n.type);
+          ctx.beginPath();
+          ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
+          ctx.fillStyle = lit ? fill : `${fill}33`;
+          ctx.fill();
+        }
         if (n.phantom) {
           ctx.setLineDash([3, 3]);
-          ctx.strokeStyle = lit ? "rgba(0,0,0,0.4)" : "rgba(0,0,0,0.15)";
+          ctx.globalAlpha = veil * (lit ? 0.4 : 0.15);
+          ctx.strokeStyle = themeRef.current!.textMuted;
           ctx.lineWidth = 1;
           ctx.stroke();
           ctx.setLineDash([]);
+          ctx.globalAlpha = veil;
         }
         if (
           selected?.id === n.id ||
           hoverRef.current?.id === n.id ||
           isolatedRef === n.id
         ) {
+          const isolating = isolatedRef === n.id;
           ctx.beginPath();
           ctx.arc(n.x, n.y, r + 3, 0, Math.PI * 2);
-          ctx.strokeStyle =
-            isolatedRef === n.id ? "rgba(20,40,200,0.75)" : "rgba(0,0,0,0.55)";
+          ctx.globalAlpha = veil * (isolating ? 0.75 : 0.55);
+          ctx.strokeStyle = isolating ? themeRef.current!.accent : themeRef.current!.text;
           ctx.lineWidth = 1.6;
           ctx.stroke();
+          ctx.globalAlpha = veil;
         }
       }
 
+      // Label pass runs in screen space with a constant font size — resetting
+      // the transform here (instead of keeping the camera's world-space
+      // transform the edge/node passes drew under) means label text never
+      // scales with zoom the way node/edge geometry does.
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.font = "11px ui-sans-serif, system-ui, -apple-system";
       ctx.textBaseline = "top";
       ctx.textAlign = "center";
+      // A label anchors below its node's circle, except bubbles: their
+      // name + count line render centered inside the hollow circle instead.
+      const labelSy = (n: SimNode, r: number): number =>
+        n.kind === "bubble"
+          ? n.y * cam.k + cam.ty - 8
+          : (n.y + r) * cam.k + cam.ty + 2;
+      const cands: LabelCandidate[] = [];
       for (const n of nodes) {
         if (!isVisible(n)) continue;
-        const r = radiusForWeight(n.weight);
+        const r = nodeRadius(n);
+        cands.push({
+          id: n.id,
+          sx: n.x * cam.k + cam.tx,
+          sy: labelSy(n, r),
+          weight: n.weight,
+          priority:
+            n.kind === "bubble" ||
+            hoverSet?.has(n.id) === true ||
+            selected?.id === n.id ||
+            isolatedRef === n.id,
+        });
+      }
+      const show = visibleLabels(cands, { w, h }, labelBudget(cam.k));
+      for (const n of nodes) {
+        if (!show.has(n.id)) continue;
+        const r = nodeRadius(n);
+        const sx = n.x * cam.k + cam.tx;
+        const sy = labelSy(n, r);
         const lit = isHighlighted(n.id);
-        const shouldLabel =
-          r > 9 || lit || selected?.id === n.id || isolatedRef === n.id;
-        if (!shouldLabel) continue;
-        ctx.fillStyle = lit ? "rgba(0,0,0,0.75)" : "rgba(0,0,0,0.30)";
-        ctx.fillText(shortLabel(n.name), n.x, n.y + r + 2);
+        if (n.kind === "bubble") {
+          const sr = r * cam.k;
+          const displayName =
+            n.name === "__others__" ? t("memoryGraph.clusterOthers") : n.name;
+          ctx.font = "500 13px ui-sans-serif, system-ui, -apple-system";
+          ctx.fillStyle = themeRef.current!.text;
+          ctx.fillText(shortLabel(displayName), sx, sy);
+          ctx.font = "11px ui-sans-serif, system-ui, -apple-system";
+          if (sr >= 28) {
+            ctx.fillStyle = themeRef.current!.textMuted;
+            ctx.fillText(
+              t("memoryGraph.bubbleEntities", { count: n.count ?? 0 }),
+              sx,
+              sy + 15,
+            );
+          }
+        } else {
+          ctx.fillStyle = lit ? themeRef.current!.text : themeRef.current!.textMuted;
+          ctx.fillText(shortLabel(n.name), sx, sy);
+        }
       }
 
       ctx.globalAlpha = 1;
@@ -767,7 +976,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
       const n = nodes[i];
       if (hiddenTypes.has(n.type)) continue;
       if (n.phantom && hiddenTypes.has("phantom")) continue;
-      const r = radiusForWeight(n.weight) + 4;
+      const r = nodeRadius(n) + 4;
       const dx = x - n.x;
       const dy = y - n.y;
       if (dx * dx + dy * dy <= r * r) return n;
@@ -805,6 +1014,29 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
       const sy = evt.clientY - rect.top;
       const { x, y } = toWorld(sx, sy);
       const hit = hitTestNode(x, y);
+      // Overview mode: a press on a node starts a drag exactly like the
+      // normal path below (pin, draggingRef, pointer capture) — it must NOT
+      // navigate immediately, or the node could never be repositioned.
+      // Whether this turns out to be a click (drill into the bubble's
+      // cluster, or straight into an ego neighbourhood for a hub/loose node)
+      // or a real drag is decided on release, by comparing the pointer's
+      // screen position then vs. now (see onPointerUp). Once a cluster/ego
+      // is entered the canvas shows a real (non-overview) graph and clicks
+      // fall through to the existing select behavior below.
+      if (
+        hit &&
+        layers.layer.kind === "overview" &&
+        overviewGraph != null &&
+        layers.focusGraph == null
+      ) {
+        hit.pinned = true;
+        hit.vx = 0;
+        hit.vy = 0;
+        draggingRef.current = hit;
+        overviewPressRef.current = { id: hit.id, x: sx, y: sy };
+        evt.currentTarget.setPointerCapture(evt.pointerId);
+        return;
+      }
       if (hit) {
         hit.pinned = true;
         hit.vx = 0;
@@ -858,7 +1090,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
       panRef.current = { lastX: sx, lastY: sy, moved: 0 };
       evt.currentTarget.setPointerCapture(evt.pointerId);
     },
-    [hitTestNode, hitTestEdge, toWorld],
+    [hitTestNode, hitTestEdge, toWorld, layers, overviewGraph],
   );
 
   const onPointerMove = useCallback(
@@ -893,8 +1125,12 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
         hoverRef.current = node;
         evt.currentTarget.style.cursor = hit ? "pointer" : "default";
 
-        // Debounced hover preview for entity nodes (sessions excluded).
-        const hid = node && node.type !== "session" ? node.id : null;
+        // Debounced hover preview for entity nodes (sessions and bubbles
+        // excluded — a bubble is a container, not a fetchable entity).
+        const hid =
+          node && node.type !== "session" && node.kind !== "bubble"
+            ? node.id
+            : null;
         if (hid !== hoverIdRef.current) {
           hoverIdRef.current = hid;
           if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
@@ -947,14 +1183,37 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
         return;
       }
       const drag = draggingRef.current;
+      const press = overviewPressRef.current;
       if (drag) {
         drag.pinned = false;
         draggingRef.current = null;
         alphaRef.current = Math.max(alphaRef.current, 0.3);
         evt.currentTarget.releasePointerCapture(evt.pointerId);
       }
+      if (press) {
+        overviewPressRef.current = null;
+        // Click-vs-drag: only route (drill in) when the released node is
+        // the one we pressed AND the pointer barely moved. Movement past
+        // the threshold is a real drag — the node keeps its new position
+        // (already applied live in onPointerMove) and nothing navigates.
+        const rect = evt.currentTarget.getBoundingClientRect();
+        const sx = evt.clientX - rect.left;
+        const sy = evt.clientY - rect.top;
+        const moved = Math.hypot(sx - press.x, sy - press.y);
+        if (drag && drag.id === press.id && moved < 5) {
+          if (drag.kind === "bubble") {
+            const name =
+              drag.name === "__others__"
+                ? t("memoryGraph.clusterOthers")
+                : drag.name;
+            void layers.enterCluster(drag.id, name);
+          } else {
+            void layers.enterEgo(drag.id, drag.name);
+          }
+        }
+      }
     },
-    [],
+    [layers],
   );
 
   // Fetch detail whenever the selection changes — branch by type.
@@ -1062,6 +1321,14 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
     }));
   }, [data]);
 
+  // Cap the filter popover to the top N types by count; the rest collapse
+  // into a single "others (N)" row (see groupTypeLegend) instead of growing
+  // the list unboundedly as a workspace's open-vocabulary type set expands.
+  const { shown: shownTypesLegend, tail: tailTypesLegend } = useMemo(
+    () => groupTypeLegend(typesLegend),
+    [typesLegend],
+  );
+
   // Hide every type at once (the "start from nothing, reveal one" flow the
   // subtractive chip row couldn't express); phantom is a pseudo-type toggle.
   const hideAllTypes = useCallback(() => {
@@ -1081,6 +1348,48 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
     },
     [data],
   );
+
+  // The clustered overview has nothing to filter by type: the server
+  // already excluded phantoms/sessions before bubbling, and a bubble isn't
+  // itself a type. The filter comes back once there's a real per-type node
+  // set to browse — a cluster/ego drill, flat mode, or the cards/table
+  // presentations (which always read the full entity list).
+  const showTypeFilter =
+    effectiveView !== "graph" || layers.focusGraph != null || overviewGraph == null;
+
+  // Real (non-scaffolding) node count in the current drill — phantom and
+  // session nodes are kept in a cluster's focusGraph only as scaffolding
+  // around the real members, so they're excluded before comparing against
+  // the server's uncapped totalMembers. Computed once and shared by both
+  // the breadcrumb's "and N more" gate and the number it prints, so the two
+  // can't drift apart.
+  const realShown =
+    data?.nodes.filter((n) => !n.phantom && n.type !== "session").length ?? 0;
+
+  // First-load skeleton (contract c2): nothing has ever resolved yet for
+  // either the raw graph or the overview. `!error` defers to the pre-existing
+  // raw-error overlay below instead of papering over it with a placeholder.
+  const showFirstLoadSkeleton =
+    effectiveView === "graph" &&
+    !error &&
+    layers.loading &&
+    layers.overview == null &&
+    rawData == null;
+
+  // Teaching empty state (contract a): the raw list AND the overview both
+  // confirm zero entities — a genuinely empty workspace, not just an
+  // unloaded or drilled-empty view. `focusGraph == null` keeps this from
+  // ever covering an active cluster/ego drill still showing its own (real)
+  // content. Supersedes the generic "no entity pages" overlay below for
+  // this specific case (see its own guard).
+  const showTeachingEmpty =
+    effectiveView === "graph" &&
+    !error &&
+    !loading &&
+    layers.focusGraph == null &&
+    rawData != null &&
+    rawData.nodes.length === 0 &&
+    (layers.overview?.stats.entity_count ?? 0) === 0;
 
   // Select an entity from the cards grid or the table — same panel wiring as
   // a graph-canvas click, minus the canvas-only concerns (pinning, drag).
@@ -1149,10 +1458,23 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
           <>
         {data && !compact ? (
           <span className="text-xs text-muted-foreground">
-            {t("memoryGraph.stats", {
-              nodesLabel: t("memoryGraph.nodesCount", { count: data.stats.node_count }),
-              edgesLabel: t("memoryGraph.edgesCount", { count: data.stats.edge_count }),
-            })}
+            {effectiveView === "graph" && overviewGraph != null && layers.focusGraph == null && layers.overview ? (
+              // Clustered overview, no drill, graph view: report the
+              // workspace's honest totals (from the overview's own stats)
+              // instead of the canvas's capped bubble/hub/loose node count.
+              // Gated on graph view too, or Cards/Table (which always show
+              // the full rawData list) would inherit this graph-only count.
+              <>
+                {t("memoryGraph.entitiesTotal", { count: layers.overview.stats.entity_count })}
+                {" · "}
+                {t("memoryGraph.groupsCount", { count: layers.overview.stats.bubble_count })}
+              </>
+            ) : (
+              t("memoryGraph.stats", {
+                nodesLabel: t("memoryGraph.nodesCount", { count: data.stats.node_count }),
+                edgesLabel: t("memoryGraph.edgesCount", { count: data.stats.edge_count }),
+              })
+            )}
             {data.stats.phantom_count > 0
               ? ` · ${t("memoryGraph.statsPhantom", { count: data.stats.phantom_count })}`
               : ""}
@@ -1161,7 +1483,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
               : ""}
           </span>
         ) : null}
-        {focusGraph && effectiveView === "graph" ? (
+        {layers.focusGraph && effectiveView === "graph" ? (
           <>
             <button
               type="button"
@@ -1235,7 +1557,13 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
             variant="ghost"
             size="icon"
             aria-label={t("memoryGraph.refresh")}
-            onClick={() => void refresh()}
+            onClick={() => {
+              void refresh();
+              // Graph view is driven by the two-layer overview/focus data,
+              // not the raw list — refresh that too, or the canvas would
+              // sit stale while only the (invisible) raw list updated.
+              if (effectiveView === "graph") void layers.refreshOverview();
+            }}
             disabled={loading}
             className="h-7 w-7"
           >
@@ -1292,18 +1620,22 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
               <Table2 className="h-3 w-3" /> {t("memoryGraph.viewTable")}
             </button>
           </div>
-          {typesLegend.length > 0 || (data?.stats.phantom_count ?? 0) > 0 ? (
+          {showTypeFilter &&
+          (typesLegend.length > 0 || (data?.stats.phantom_count ?? 0) > 0) ? (
             <span className="mx-0.5 h-4 w-px bg-border/60" aria-hidden />
           ) : null}
-          <MemoryTypeFilter
-            types={typesLegend}
-            phantomCount={data?.stats.phantom_count ?? 0}
-            hidden={hiddenTypes}
-            onToggle={toggleType}
-            onShowAll={() => setHiddenTypes(new Set())}
-            onHideAll={hideAllTypes}
-            onSolo={soloType}
-          />
+          {showTypeFilter ? (
+            <MemoryTypeFilter
+              types={shownTypesLegend}
+              tail={tailTypesLegend}
+              phantomCount={data?.stats.phantom_count ?? 0}
+              hidden={hiddenTypes}
+              onToggle={toggleType}
+              onShowAll={() => setHiddenTypes(new Set())}
+              onHideAll={hideAllTypes}
+              onSolo={soloType}
+            />
+          ) : null}
           {effectiveView === "cards" ? (
             <label className="ml-auto flex items-center gap-1 text-muted-foreground">
               <ArrowDownUp className="h-3 w-3" aria-hidden />
@@ -1328,6 +1660,80 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
           onOpenEntity={handleOpenEntity}
         />
       ) : (
+      <>
+        {/* Breadcrumb: shown only while drilled into a cluster/ego layer —
+            the clustered overview IS the top level, so it gets no crumb of
+            its own. A normal flow row (not an overlay) so the canvas below
+            re-fits into the remaining height via wrapRef's flex-1, the same
+            way the toolbar row above it already does. */}
+        {effectiveView === "graph" && layers.layer.kind !== "overview" ? (
+          <div className="flex shrink-0 items-center gap-2 border-b border-border/40 px-3 py-1.5 text-sm">
+            <button
+              type="button"
+              onClick={() => layers.backToOverview()}
+              className="text-primary hover:underline"
+            >
+              {t("memoryGraph.title")}
+            </button>
+            <span className="text-muted-foreground">›</span>
+            <span className="font-medium">{layers.layer.name}</span>
+            {layers.layer.kind === "cluster" &&
+            layers.totalMembers != null &&
+            realShown < layers.totalMembers ? (
+              // realShown already excludes phantom/session scaffolding nodes
+              // (see its definition above) — reusing it here for the number
+              // keeps the gate and the printed count from drifting apart.
+              <span className="ml-auto text-xs text-muted-foreground">
+                {t("memoryGraph.andMore", { count: layers.totalMembers - realShown })}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
+        {/* Stale-cluster notice: a drill 404'd (the cluster changed shape
+            since the overview was built) — the hook already fell back to
+            overview and kicked off a background refresh; this just tells the
+            user why they landed back here. Locally dismissible; re-armed by
+            the effect above whenever a fresh staleness event lands. */}
+        {effectiveView === "graph" && layers.notice === "staleCluster" && !staleDismissed ? (
+          <div
+            role="status"
+            aria-live="polite"
+            className="flex shrink-0 items-center gap-2 border-b border-border/40 bg-muted/40 px-3 py-1.5 text-xs text-muted-foreground"
+          >
+            <span className="flex-1">{t("memoryGraph.staleCluster")}</span>
+            <button
+              type="button"
+              aria-label={t("memoryGraph.close")}
+              onClick={() => setStaleDismissed(true)}
+              className="rounded p-0.5 hover:bg-muted"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        ) : null}
+        {/* Overview call failed but there's still something on screen — either
+            the last good overview payload, or (when the overview has never
+            succeeded) the raw graph loaded independently via useMemoryGraph.
+            Either way, keep the canvas showing it (below) and just flag the
+            failure instead of blanking a working view. */}
+        {effectiveView === "graph" &&
+        layers.error != null &&
+        (layers.overview != null || rawData != null) ? (
+          <div
+            role="alert"
+            className="flex shrink-0 items-center gap-2 border-b border-border/40 bg-destructive/10 px-3 py-1.5 text-xs text-destructive"
+          >
+            <span className="flex-1">{t("memoryGraph.loadError")}</span>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-6 px-2 text-[11px]"
+              onClick={() => void layers.refreshOverview()}
+            >
+              {t("memoryGraph.retry")}
+            </Button>
+          </div>
+        ) : null}
       <div ref={wrapRef} className="relative min-h-0 flex-1">
         {error ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm text-destructive">
@@ -1337,12 +1743,39 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
             </Button>
           </div>
         ) : null}
-        {loading && !data ? (
+        {/* Nothing has ever loaded on either endpoint and the overview call
+            is the one failing — the slim banner above can't show (it needs
+            a last-good overview), so fail the whole canvas area instead of
+            leaving it blank. */}
+        {effectiveView === "graph" && !error && layers.error != null && layers.overview == null && rawData == null ? (
+          <div
+            role="alert"
+            className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm text-destructive"
+          >
+            <span>{t("memoryGraph.loadError")}</span>
+            <Button variant="outline" size="sm" onClick={() => void layers.refreshOverview()}>
+              {t("memoryGraph.retry")}
+            </Button>
+          </div>
+        ) : null}
+        {showFirstLoadSkeleton ? (
+          <div className="absolute inset-0 p-4">
+            <div className="h-full w-full animate-pulse rounded-lg bg-muted/60" />
+          </div>
+        ) : null}
+        {!showFirstLoadSkeleton && loading && !data ? (
           <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
             {t("memoryGraph.loadingGraph")}
           </div>
         ) : null}
-        {data && data.nodes.length === 0 ? (
+        {showTeachingEmpty ? (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-8 text-center">
+            <Network className="h-10 w-10 text-muted-foreground/40" aria-hidden />
+            <p className="text-sm font-medium text-foreground">{t("memoryGraph.emptyTitle")}</p>
+            <p className="max-w-sm text-xs text-muted-foreground">{t("memoryGraph.emptyBody")}</p>
+          </div>
+        ) : null}
+        {!showTeachingEmpty && data && data.nodes.length === 0 ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 text-sm text-muted-foreground">
             <span>{t("memoryGraph.empty")}</span>
             <span className="text-xs">
@@ -1351,6 +1784,15 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                 components={{ code: <code className="rounded bg-muted px-1" /> }}
               />
             </span>
+          </div>
+        ) : null}
+        {/* Drill load: a depth change or a new cluster/ego fetch is in
+            flight while the canvas already has something to show — keep
+            rendering it and just flag the fetch with a thin bar instead of
+            blanking or skeleton-ing over a working view. */}
+        {effectiveView === "graph" && layers.loading && layers.overview != null ? (
+          <div className="absolute inset-x-0 top-0 z-10 h-0.5 overflow-hidden bg-primary/15">
+            <div className="h-full w-full animate-pulse bg-primary/60" />
           </div>
         ) : null}
         {effectiveView === "graph" ? (
@@ -1379,6 +1821,18 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
           >
             <Scan className="h-3 w-3" /> {t("memoryGraph.fitView")}
           </Button>
+        ) : null}
+        {/* Passive map-changed toast (contract d) — announces a background
+            overview refresh triggered by the tab regaining focus; the new
+            payload is already applied by the time this shows. */}
+        {effectiveView === "graph" && mapChanged ? (
+          <div
+            role="status"
+            aria-live="polite"
+            className="absolute right-3 top-3 z-10 rounded-md border border-border/50 bg-card/95 px-3 py-1.5 text-[11px] shadow-lg backdrop-blur"
+          >
+            {t("memoryGraph.mapChanged")}
+          </div>
         ) : null}
         {effectiveView !== "graph" ? (
           // Cards / table presentations. When the desktop compact detail
@@ -1488,19 +1942,27 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                       const target = isCanon ? id : (r.entities ?? [])[0];
                       if (!target) return;
                       setReferenceDetail(null);
-                      // Isolate only off-cap nodes (not in the current
-                      // graph) — an in-graph hit just opens its panel.
-                      if (!simNodesRef.current.some((n) => n.id === target)) {
+                      const name = (isCanon ? r.headline || target : target).replace(
+                        /^[a-z_]+:/,
+                        "",
+                      );
+                      if (isCanon) {
+                        // An entity_page hit IS that entity's own page —
+                        // always drill the canvas to its ego neighbourhood
+                        // (not just when off-cap), so search doubles as
+                        // "jump to this node" the way a canvas click would.
+                        void layers.enterEgo(target, name);
+                      } else if (!simNodesRef.current.some((n) => n.id === target)) {
+                        // Fragment hit: isolate only off-cap nodes (not in
+                        // the current graph) — an in-graph hit just opens
+                        // its panel.
                         isolateNode(target, 1);
                       }
                       const node =
                         simNodesRef.current.find((n) => n.id === target) ?? {
                           id: target,
                           type: target.split(":")[0] || "unknown",
-                          name: (isCanon ? r.headline || target : target).replace(
-                            /^[a-z_]+:/,
-                            "",
-                          ),
+                          name,
                           weight: 0,
                           aliases: [],
                           phantom: false,
@@ -2118,6 +2580,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
           </div>
         ) : null}
       </div>
+      </>
       )}
     </div>
   );

@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from durin.memory import graph_overview as _graph_overview
 from durin.service.memory import (
     ForgetResult,
     MemoryDocumentQuery,
@@ -21,9 +22,11 @@ from durin.service.memory import (
     MemoryEntityQuery,
     MemoryEntryQuery,
     MemoryForgetCommand,
+    MemoryOverviewQuery,
     MemoryResult,
     MemorySearchQuery,
     MemoryService,
+    MemorySubgraphQuery,
 )
 from durin.service.principal import Principal
 from durin.service.types import ForbiddenError, NotFoundError, ValidationFailedError
@@ -238,3 +241,69 @@ async def test_forget_requires_memory_write(tmp_path: Path) -> None:
     svc = _service(tmp_path)
     with pytest.raises(ForbiddenError):
         await svc.forget(MemoryForgetCommand(uri="memory/episodic/x"), restricted)
+
+
+# ---------------------------------------------------------------------------
+# Read: graph overview + subgraph scope (ego vs cluster)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _reset_overview_cache():
+    _graph_overview._clear_all()
+    yield
+    _graph_overview._clear_all()
+
+
+@pytest.mark.asyncio
+async def test_graph_overview_returns_flat_mode_for_tiny_workspace(tmp_path):
+    _seed_entry(
+        tmp_path,
+        class_name="episodic",
+        entry_id="obs-ov",
+        entities=("person:alice", "person:bob"),
+    )
+    svc = _service(tmp_path)
+    result = await svc.graph_overview(MemoryOverviewQuery(), Principal.local())
+    assert isinstance(result, MemoryResult)
+    assert result.data["mode"] == "flat"
+    assert "members" not in result.data
+
+
+@pytest.mark.asyncio
+async def test_graph_overview_requires_memory_read(tmp_path):
+    svc = _service(tmp_path)
+    nobody = Principal.remote(subject="t1", scopes=frozenset())
+    with pytest.raises(ForbiddenError):
+        await svc.graph_overview(MemoryOverviewQuery(), nobody)
+
+
+@pytest.mark.asyncio
+async def test_subgraph_cluster_scope_unknown_ref_404(tmp_path):
+    _seed_entry(
+        tmp_path,
+        class_name="episodic",
+        entry_id="obs-cl",
+        entities=("person:alice",),
+    )
+    svc = _service(tmp_path)
+    with pytest.raises(NotFoundError):
+        await svc.subgraph(
+            MemorySubgraphQuery(ref="person:alice", scope="cluster"),
+            Principal.local(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_subgraph_ego_scope_unchanged(tmp_path):
+    _seed_entry(
+        tmp_path,
+        class_name="episodic",
+        entry_id="obs-ego",
+        entities=("person:alice", "person:bob"),
+    )
+    svc = _service(tmp_path)
+    result = await svc.subgraph(
+        MemorySubgraphQuery(ref="person:alice"), Principal.local()
+    )
+    assert result.data["focus"] == "person:alice"

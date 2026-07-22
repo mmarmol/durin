@@ -411,6 +411,84 @@ future re-enable starts from a correct implementation.
 
 ---
 
+### Graph overview (clustered)
+
+The webui's Entities graph canvas (see "Webui surfaces" below) opens on a
+two-layer view of the entity graph: a clustered **overview** first, then a
+**neighborhood** — a cluster's members, or a single node's ego-subgraph — on
+drill-in. `GET /api/v1/memory/graph/overview` serves the overview (the
+response strips the server-internal bubble-membership map before it reaches
+the client); `GET /api/v1/memory/subgraph?scope=ego|cluster` serves either
+neighborhood kind, keyed the same way the overview keys its bubbles.
+
+**Structure is semantic-only.** `assemble_overview` (`durin/memory/graph_overview.py`)
+computes clustering, hub ranking, and bubble sizing from entity↔entity
+co-mention edges and typed relations between consolidated pages only.
+Session and phantom nodes never enter that computation: a session's weight
+is a mechanical message count, not a semantic signal, and with few sessions
+a session-driven community would degenerate into "whatever that one session
+touched" rather than a real topic cluster. Sessions remain in the
+underlying payload as provenance and phantom entities as unconsolidated
+mentions — both are drawable, just not structural.
+
+**Hubs are outliers, not a fixed top-N.** A node qualifies as a hub only
+when its semantic weight is at least twice the median weight among
+non-reference entities, with a small absolute floor on top so a
+near-zero median can't qualify everything — and the qualifying set is then
+capped at a fixed hub budget. A uniform or young workspace — where nothing
+stands out — therefore surfaces zero hubs. Hubs are extracted before
+clustering because a true mega-connector would otherwise bridge every
+community into one blob; reference nodes hold real content but are
+consultation material, not connectors, so they are never hub-eligible.
+
+**The remainder clusters by deterministic label propagation.** Every source
+of nondeterminism in the textbook algorithm is pinned — nodes iterate in
+sorted-id order, each starting labeled with its own id, and neighbor-label
+ties break lexicographically — so the same input always yields the same
+partition. A community that reaches the bubble-size threshold collapses
+into a bubble identified by its representative ref, the heaviest member.
+Communities under the threshold stay as loose nodes, display-capped by
+weight; anything the caps drop — overflow bubbles and overflow loose nodes
+alike — folds into one `__others__` bubble, itself drillable like any
+other. When no community reaches the threshold at all, the payload reports
+mode `"flat"` and the client falls back to the plain graph; the (bounded)
+hubs list still populates in flat mode, since hub extraction runs before
+the clustering attempt.
+
+**Two-level cache, one tree signature.** Both the uncapped graph payload
+(`get_full_graph_cached`) and the derived overview (`build_overview`) are
+cached keyed by a cheap stat-walk signature over everything the graph is
+built from (entity pages, the episodic/stable/corpus classes, references,
+sessions — mtime and size per file, no reads). A write anywhere in that
+tree invalidates both caches on the next call; eviction only happens on
+growth past the cache's capacity, so refreshing a key already cached never
+evicts a different workspace. `build_cluster_subgraph` fetches one
+(signature, payload) snapshot and reuses it for both a bubble's member list
+and the node lookup, rather than two independent stat-walks that a
+concurrent write could land between and desync. It rides along
+scaffolding — phantom entities and session nodes one edge from a kept
+member — non-transitively: that check runs only against the capped member
+set, so a scaffolding node can never itself pull in a second one. A ref
+that no longer keys a current bubble (the tree changed shape since the
+overview was built) raises `KeyError`, which the service maps to a 404; the
+client falls back to the overview and refreshes it.
+
+**Member display cap.** `build_cluster_subgraph` returns a
+neighborhood payload with a display-capped member list (sorted by
+descending weight, deterministic tie-break by id) and a separate
+`total_members` count that always reports the true pre-cap member count —
+this true count backs the client's "and N more" affordance when the
+display budget is exhausted. The returned stats flag indicates when
+truncation occurred.
+
+The `ego` branch of the subgraph route feeds the existing (pre-clustering)
+ego-subgraph builder from `get_full_graph_cached`'s payload instead of
+re-walking the disk; the `cluster` branch calls `build_cluster_subgraph`.
+All three functions are synchronous and disk-heavy — the service runs them
+via `asyncio.to_thread` rather than blocking the event loop.
+
+---
+
 ## Key types and entry points
 
 | Symbol | File | Role |
@@ -467,7 +545,9 @@ The web dashboard exposes three memory controls under **Settings → Memory**:
   of the same node set (the Obsidian-Bases view model) behind a toolbar
   switcher: a **graph** canvas (nodes = entity pages, edges = relations,
   co-mentions, `derived_from` document links, and session→entity links
-  harvested from entity-page `provenance` events; capped payload), a
+  harvested from entity-page `provenance` events; capped payload — see
+  "Graph overview" above for the clustered layer the canvas actually opens
+  on), a
   **cards** grid (reading-oriented: type,
   name, body excerpt, mention/recency/source counts), and a sortable
   **table** (audit-oriented: same fields as columns). Search, the
@@ -533,6 +613,9 @@ agent tools and never accept mutations.
 | `list_reference_documents()` | `durin/memory/graph_api.py` | The Library shelf: ingested reference documents (title, source, ingest time, chunk count, `distilled`). |
 | `get_reference_detail(slug)` | `durin/memory/graph_api.py` | One document's full raw body + distilled outline + entities seeded from it + a bounded chunk preview. |
 | Graph canvas data | `durin/memory/graph.py::build_memory_graph` | Builds `{nodes, edges}` for the entity canvas. Caps at 500 nodes / 2 000 edges. |
+| `build_overview(workspace)` | `durin/memory/graph_overview.py` | Clustered overview: semantic hubs + community bubbles + loose nodes, cached at two levels and keyed off a stat-walk tree signature. Falls back to flat mode when nothing clusters. |
+| `build_cluster_subgraph(workspace, ref)` | `durin/memory/graph_overview.py` | Members-of-bubble neighborhood for a drilled-in cluster, keyed by the bubble's representative ref (or the `__others__` bucket). Raises on a stale ref so the caller can 404 and fall back to the overview. |
+| `get_full_graph_cached(workspace)` | `durin/memory/graph_overview.py` | The uncapped graph payload backing both the overview and the ego-subgraph branch of the subgraph route, rebuilt only when the tree signature changes. |
 
 ---
 

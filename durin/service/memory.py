@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from durin.service.principal import Principal, Scope
 from durin.service.registry import route
@@ -131,9 +131,16 @@ class MemoryGraphQuery(Query):
     """No inputs — returns the full entity graph."""
 
 
+class MemoryOverviewQuery(Query):
+    """No inputs — returns the clustered overview of the entity graph."""
+
+
 class MemorySubgraphQuery(Query):
+    """Ego- or cluster-scoped neighborhood around a ref."""
+
     ref: str
     hops: int = 1
+    scope: Literal["ego", "cluster"] = "ego"
 
 
 class MemoryEntityQuery(Query):
@@ -360,6 +367,27 @@ class MemoryService:
 
     @route(
         "GET",
+        "/api/v1/memory/graph/overview",
+        scope=Scope.MEMORY_READ.value,
+        request_model=MemoryOverviewQuery,
+        response_model=MemoryResult,
+        summary="Clustered overview: bubbles + semantic hubs + aggregated edges",
+    )
+    async def graph_overview(
+        self, query: MemoryOverviewQuery, principal: Principal
+    ) -> MemoryResult:
+        principal.require(Scope.MEMORY_READ)
+        import asyncio
+
+        from durin.memory.graph_overview import build_overview
+
+        ws = self._workspace_resolver()
+        payload = await asyncio.to_thread(build_overview, ws)
+        data = {k: v for k, v in payload.items() if k != "members"}
+        return MemoryResult(data=data)
+
+    @route(
+        "GET",
         "/api/v1/memory/subgraph",
         scope=Scope.MEMORY_READ.value,
         request_model=MemorySubgraphQuery,
@@ -370,10 +398,34 @@ class MemoryService:
         self, query: MemorySubgraphQuery, principal: Principal
     ) -> MemoryResult:
         principal.require(Scope.MEMORY_READ)
+        import asyncio
+
         from durin.memory.graph import build_entity_subgraph
+        from durin.memory.graph_overview import (
+            build_cluster_subgraph,
+            get_full_graph_cached,
+        )
+        from durin.service.types import NotFoundError
 
         ws = self._workspace_resolver()
-        payload = build_entity_subgraph(ws, query.ref, hops=max(1, min(query.hops, 3)))
+        if query.scope == "cluster":
+            try:
+                payload = await asyncio.to_thread(
+                    build_cluster_subgraph, ws, query.ref
+                )
+            except KeyError:
+                raise NotFoundError(
+                    f"no current cluster is keyed by {query.ref!r}"
+                ) from None
+            return MemoryResult(data=payload)
+
+        def _ego() -> dict[str, Any]:
+            full = get_full_graph_cached(ws)
+            return build_entity_subgraph(
+                ws, query.ref, hops=max(1, min(query.hops, 3)), payload=full
+            )
+
+        payload = await asyncio.to_thread(_ego)
         return MemoryResult(data=payload)
 
     @route(
