@@ -206,6 +206,19 @@ depth-cap, and missing-workflow errors take the aborted path too — an unrunnab
 stops the run instead of threading an error string downstream as if it were output. The
 sub-workflow node's wall-clock `duration_s` is recorded in the parent's trace like any
 other node's.
+A work or script node may be **detached** (`detached: true`): the walk launches it on a
+small per-run executor and continues immediately along its `next` — the upstream edge text
+passes THROUGH unchanged (the detached node and the next node both receive it), its output
+never rides an edge and never becomes `final_output`. It exists for side effects (persist
+to memory, notify, archive) that must not sit on the critical path. Every terminal return
+path **joins** pending detached nodes before the manifest is finalized, and finished ones
+are drained into the trace at each per-node manifest refresh (in-flight visibility). A
+detached node that fails records `node_failed` WITHOUT changing the run status — a side
+effect must not sink the deliverable (the same philosophy as `persist_failed`). Parse-time
+constraints: linear `next` only (no routing — its verdict could never reach the walk), no
+`context: "shared"`, never a parallel branch/worker, and never the target of a routing
+edge (a loop-back into a possibly-still-running node is undefined). Detached nodes should
+read and persist, not produce files the main path consumes — nothing downstream reads them.
 **A node's "runs as" is a single choice:** either a specific model (or omitted ⇒ default) or
 a **Persona** (a named SOUL + its model, mutually exclusive with `model`). Setting `persona`
 on a node injects the SOUL body into the node's system prompt and selects the persona's model.

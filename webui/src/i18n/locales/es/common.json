@@ -2087,6 +2087,7 @@
     "session_persistent": "persistente (recuerda entre pasadas del loop)",
     "prompt": "prompt",
     "routes": "rutea",
+    "detached": "detached (lanza y sigue)",
     "routingShape": "tipo de ruteo",
     "routingShapeBinary": "binario (pass / fail)",
     "routingShapeMultiway": "múltiple (etiquetas personalizadas)",

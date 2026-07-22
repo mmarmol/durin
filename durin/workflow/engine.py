@@ -147,6 +147,58 @@ def build_resume_state(manifest: dict, answers: str) -> ResumeState:
 # prompt for every later node; keep only the most recent N messages.
 _SHARED_CONTEXT_MAX_MESSAGES = 200
 
+# Simultaneous detached side-effect nodes per run. Detached nodes are rare
+# (persist/notify/archive) — a small pool bounds their concurrency the same way
+# max_concurrency bounds parallel branches.
+_DETACHED_MAX_WORKERS = 4
+
+
+class _DetachedTracker:
+    """The launched detached nodes of ONE run: a small executor, the pending
+    futures, and a completion queue. The walk drains finished records at its
+    per-node manifest refresh (in-flight visibility); ``run()`` joins the rest at
+    every terminal path so the manifest is complete before it is finalized. The
+    submitted callables capture their own failures and return a NodeRun — a
+    future here never raises."""
+
+    def __init__(self) -> None:
+        self._executor: concurrent.futures.ThreadPoolExecutor | None = None
+        self._futures: list[concurrent.futures.Future] = []
+        self._done: list[concurrent.futures.Future] = []
+        import threading
+        self._lock = threading.Lock()
+
+    def launch(self, fn: Callable[[], NodeRun]) -> None:
+        if self._executor is None:
+            self._executor = concurrent.futures.ThreadPoolExecutor(
+                max_workers=_DETACHED_MAX_WORKERS, thread_name_prefix="durin-wf-detached")
+        fut = self._executor.submit(fn)
+        self._futures.append(fut)
+
+        def _mark(f: concurrent.futures.Future) -> None:
+            with self._lock:
+                self._done.append(f)
+
+        fut.add_done_callback(_mark)
+
+    def drain(self) -> list[NodeRun]:
+        """Records of detached nodes that finished since the last drain."""
+        with self._lock:
+            done, self._done = self._done, []
+        return [f.result() for f in done]
+
+    def join(self) -> list[NodeRun]:
+        """Wait for every launched node still running and return the undrained
+        records. Idempotent; shuts the executor down."""
+        if self._futures:
+            concurrent.futures.wait(self._futures)
+            self._futures = []
+        records = self.drain()
+        if self._executor is not None:
+            self._executor.shutdown(wait=False)
+            self._executor = None
+        return records
+
 
 class WorkflowConfigError(RuntimeError):
     """The workflow is wired wrong (e.g. a subworkflow node but no subworkflow runner). A
@@ -280,6 +332,10 @@ class WorkflowEngine:
         def _update() -> None:
             self._update_manifest(workflow, run_id, runs)
 
+        # One tracker per run for launch-and-continue (detached) nodes. Every exit
+        # from the try below joins it before the manifest is finalized, so a run
+        # never reports terminal with a side-effect node silently still running.
+        detached_tracker = _DetachedTracker()
         try:
             result = self._walk(
                 workflow, self._frame_task(workflow, task, output_format), run_id, runs,
@@ -291,11 +347,13 @@ class WorkflowEngine:
                 initial_upstream=resume.upstream if resume else None,
                 work_dir=work_dir,
                 own_work_dir=work_dir_override is None,
+                detached_tracker=detached_tracker,
             )
         except WorkflowConfigError as exc:
             # A config/wiring error is fatal and re-raised, but finalize the manifest first
             # so it does not linger as a stale 'running' record — otherwise the crash sweep
             # would later mislabel a deterministic config bug as 'crashed'.
+            runs.extend(detached_tracker.join())
             self._finalize_manifest(
                 workflow,
                 WorkflowResult(status="aborted", final_output=f"workflow config error: {exc}",
@@ -325,6 +383,10 @@ class WorkflowEngine:
                 status="aborted", final_output=f"workflow error: {exc}",
                 runs=runs, run_id=run_id,
             )
+        # Terminal join: pending detached nodes finish (their failures are records,
+        # never aborts) and land in the trace the manifest is finalized with —
+        # `result.runs` aliases this same list.
+        runs.extend(detached_tracker.join())
         self._finalize_manifest(workflow, result, effective_root, started_at, parent_run_id)
         return result
 
@@ -485,6 +547,7 @@ class WorkflowEngine:
         initial_upstream: str | None = None,
         work_dir: str | None = None,
         own_work_dir: bool = True,
+        detached_tracker: "_DetachedTracker | None" = None,
     ) -> WorkflowResult:
         shared_context: list[dict] = []
         visits: dict[str, int] = dict(initial_visits or {})
@@ -617,7 +680,19 @@ class WorkflowEngine:
                 except Exception:  # noqa: BLE001 - best-effort
                     logger.opt(exception=True).debug("workflow node progress re-emit failed (suppressed)")
 
-            if isinstance(node, (WorkNode, ScriptNode)):
+            if isinstance(node, (WorkNode, ScriptNode)) and node.detached:
+                # Launch-and-continue: the side-effect node runs on the tracker's
+                # executor while the walk moves on. The edge text passes THROUGH
+                # unchanged (the detached node and the next node both see the same
+                # upstream), its output never becomes final_output, and its record
+                # joins the trace when it finishes (or at the run's terminal join).
+                if detached_tracker is not None:
+                    self._launch_detached(
+                        detached_tracker, node, task, upstream_output, run_id,
+                        iteration, root_session_key, work_dir)
+                current = node.next
+
+            elif isinstance(node, (WorkNode, ScriptNode)):
                 if isinstance(node, ScriptNode) and self._script_runner is None:
                     raise WorkflowConfigError(
                         f"node {node.id!r} is a script node but the engine has no script_runner"
@@ -883,7 +958,11 @@ class WorkflowEngine:
                 current = node.next
 
             # The node's record(s) are now appended — refresh the live manifest so an
-            # in-flight run is observable before the next node starts.
+            # in-flight run is observable before the next node starts. Detached nodes
+            # that finished since the last refresh join the trace here, so an
+            # in-flight run shows them without waiting for the terminal join.
+            if detached_tracker is not None:
+                runs.extend(detached_tracker.drain())
             if update_manifest is not None:
                 update_manifest()
             if work_dir is not None and own_work_dir:
@@ -918,6 +997,37 @@ class WorkflowEngine:
             output_dir=terminal_output_dir, output_files=output_files,
             final_output_node=final_output_node, missing_artifacts=missing,
         )
+
+    def _launch_detached(self, tracker, node, task, upstream, run_id, iteration,
+                         root_key, work_dir):
+        """Submit a detached node to the run's tracker. The callable mirrors branch
+        execution (same kind dispatch, working-folder anchoring) but captures every
+        failure into the returned NodeRun: a side effect must never sink the run."""
+        def _execute() -> NodeRun:
+            t0 = time.monotonic()
+            try:
+                resp = self._run_one_branch(
+                    node, task, upstream, run_id, iteration, root_key,
+                    None, out_dir=work_dir)
+                return NodeRun(
+                    node_id=node.id, iteration=iteration, output=resp.output,
+                    session_key=resp.session_key,
+                    status="persist_failed" if resp.persist_failed else "ok",
+                    exit_code=getattr(resp, "exit_code", None),
+                    duration_s=round(time.monotonic() - t0, 3))
+            except NodeExecutionError as exc:
+                return NodeRun(
+                    node_id=node.id, iteration=iteration, output="",
+                    session_key=exc.session_key, status="node_failed",
+                    error=str(exc.cause), exit_code=getattr(exc, "exit_code", None),
+                    duration_s=round(time.monotonic() - t0, 3))
+            except Exception as exc:  # noqa: BLE001 - a detached failure is a record, not an abort
+                return NodeRun(
+                    node_id=node.id, iteration=iteration, output="",
+                    status="node_failed", error=str(exc),
+                    duration_s=round(time.monotonic() - t0, 3))
+
+        tracker.launch(_execute)
 
     def _run_one_branch(self, branch, task, upstream, run_id, iteration, root_key,
                         workspace_override, out_dir=None):

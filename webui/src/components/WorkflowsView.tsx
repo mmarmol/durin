@@ -360,19 +360,22 @@ function RoutingFields({
   const routes = routingShape !== "none";
 
   function switchRoutingShape(shape: "none" | "binary" | "multiway") {
-    // Always clear all three shapes first, then apply the selected one.
+    // Always clear all three shapes first, then apply the selected one. Routing and
+    // detached are mutually exclusive (a detached node's verdict never reaches the
+    // walk), so enabling routing also clears the detached flag.
     const clear: Partial<WorkflowNodeDef> = { on_pass: undefined, on_fail: undefined, cases: undefined, next: undefined };
     if (shape === "none") {
       patch({ ...clear, next: null });
     } else if (shape === "binary") {
-      patch({ ...clear, on_pass: null, on_fail: null, ...routingExtras });
+      patch({ ...clear, detached: undefined, on_pass: null, on_fail: null, ...routingExtras });
     } else {
       // multiway: start with one empty case row
-      patch({ ...clear, cases: { "case1": null }, ...routingExtras });
+      patch({ ...clear, detached: undefined, cases: { "case1": null }, ...routingExtras });
     }
   }
 
   const routingToggleId = `routing-toggle-${node.id}`;
+  const detachedToggleId = `detached-toggle-${node.id}`;
 
   return (
     <>
@@ -393,6 +396,24 @@ function RoutingFields({
           {t("workflows.routes")}
         </label>
       </div>
+
+      {!routes && (
+        <div className="flex items-center gap-2">
+          <input
+            id={detachedToggleId}
+            type="checkbox"
+            className="h-4 w-4 cursor-pointer accent-primary"
+            checked={node.detached === true}
+            onChange={(e) => patch({ detached: e.target.checked ? true : undefined })}
+          />
+          <label
+            htmlFor={detachedToggleId}
+            className="cursor-pointer select-none text-xs text-muted-foreground"
+          >
+            {t("workflows.detached")}
+          </label>
+        </div>
+      )}
 
       {routes && (
         <Field label={t("workflows.routingShape")}>
