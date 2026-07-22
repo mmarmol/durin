@@ -99,6 +99,18 @@
             ],
             "default": null,
             "title": "Task"
+          },
+          "typical_total_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Typical Total S"
           }
         },
         "required": [

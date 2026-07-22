@@ -1,5 +1,6 @@
 """The shared background-task merge (consumed by the HTTP service AND the tasks tool)."""
 
+import json
 import time
 
 from durin.agent.background_tasks import collect_tasks
@@ -95,3 +96,77 @@ def test_needs_input_questions_capped_at_500_chars(tmp_path, monkeypatch):
 
     wf = next(r for r in rows if r["id"] == "r3")
     assert wf["needs_input_detail"] == "q" * 500
+
+
+def test_a_running_node_appears_in_the_node_tree(tmp_path):
+    """Reloading mid-node must still show which node is in flight — the live WS
+    frames are gone after a reload, so this polled path is the only source."""
+    from durin.agent.background_tasks import collect_tasks
+    from durin.workflow import run_log
+
+    run_log.start_run(tmp_path, "wf", "r1", root_session_key="websocket:c", started_at=100.0)
+    run_log.mark_node_started(tmp_path, "wf", "r1", node_id="consolidate",
+                              label="Consolidate", started_at=140.0)
+
+    row = next(t for t in collect_tasks(tmp_path, session_key="websocket:c") if t["kind"] == "workflow")
+    running = [n for n in row["nodes"] if n["status"] == "running"]
+    assert [n["id"] for n in running] == ["consolidate"]
+    assert running[0]["started_at"] == 140.0
+    assert running[0]["label"] == "Consolidate"
+
+
+def test_finished_nodes_carry_duration_artifacts_and_typical(tmp_path):
+    from durin.agent.background_tasks import collect_tasks
+    from durin.workflow import run_log
+
+    run_log.start_run(tmp_path, "wf", "r2", root_session_key="websocket:c",
+                      started_at=100.0, typical_s={"consolidate": 360.0})
+    path = run_log._record_path(tmp_path, "wf", "r2")
+    rec = run_log.read_manifest(tmp_path, "wf", "r2")
+    rec["runs"] = [{"node_id": "consolidate", "iteration": 1, "status": "ok",
+                    "duration_s": 361.5, "artifacts": ["context.json"]}]
+    path.write_text(json.dumps(rec), encoding="utf-8")
+
+    row = next(t for t in collect_tasks(tmp_path, session_key="websocket:c")
+               if t["kind"] == "workflow")
+    node = next(n for n in row["nodes"] if n["id"] == "consolidate")
+    assert node["duration_s"] == 361.5
+    assert node["artifacts"] == ["context.json"]
+    assert node["typical_s"] == 360.0
+    assert row["typical_total_s"] == 360.0
+
+
+def test_typical_total_is_absent_without_history(tmp_path):
+    """A first-ever run must show no estimate rather than an estimate of zero."""
+    from durin.agent.background_tasks import collect_tasks
+    from durin.workflow import run_log
+
+    run_log.start_run(tmp_path, "wf", "r3", root_session_key="websocket:c", started_at=100.0)
+    row = next(t for t in collect_tasks(tmp_path, session_key="websocket:c")
+               if t["kind"] == "workflow")
+    assert row["typical_total_s"] is None
+
+
+def test_running_revisit_of_a_completed_node_collapses_to_one_row(tmp_path):
+    """A looping workflow can revisit a node that already completed at least once.
+    The manifest's active_node then names an id already present in the completed
+    ``runs`` rows — the merged tree must still show exactly ONE row for that id,
+    now reporting it as running, never two rows for the same node."""
+    from durin.agent.background_tasks import collect_tasks
+    from durin.workflow import run_log
+
+    run_log.start_run(tmp_path, "wf", "r4", root_session_key="websocket:c", started_at=100.0)
+    path = run_log._record_path(tmp_path, "wf", "r4")
+    rec = run_log.read_manifest(tmp_path, "wf", "r4")
+    rec["runs"] = [{"node_id": "search", "iteration": 1, "status": "ok",
+                    "duration_s": 12.0, "artifacts": ["hits.json"]}]
+    path.write_text(json.dumps(rec), encoding="utf-8")
+    run_log.mark_node_started(tmp_path, "wf", "r4", node_id="search",
+                              label="Search", started_at=250.0)
+
+    row = next(t for t in collect_tasks(tmp_path, session_key="websocket:c")
+               if t["kind"] == "workflow")
+    matches = [n for n in row["nodes"] if n["id"] == "search"]
+    assert len(matches) == 1
+    assert matches[0]["status"] == "running"
+    assert matches[0]["started_at"] == 250.0

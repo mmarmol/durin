@@ -2558,6 +2558,11 @@ export interface components {
              * @default null
              */
             task: string | null;
+            /**
+             * Typical Total S
+             * @default null
+             */
+            typical_total_s: number | null;
         };
         /** ChannelStartCommand */
         ChannelStartCommand: {

@@ -132,6 +132,30 @@ async def test_workflow_task_none_when_absent(tmp_path):
     assert wf.task is None
 
 
+@pytest.mark.asyncio
+async def test_workflow_task_carries_typical_total_s(tmp_path):
+    """typical_total_s must survive the pydantic BackgroundTask wrapping, not just
+    the collect_tasks dict — Result does not forbid extra fields, so a field
+    missing from the response model would be silently dropped here rather than
+    raising, and only a test that goes through TasksService.list() would notice."""
+    run_log.start_run(
+        tmp_path, 'my-wf', 'r_typ', root_session_key='websocket:ctyp',
+        started_at=1.0, typical_s={'a': 42.0},
+    )
+    result = WorkflowResult(
+        status='completed', final_output='done', run_id='r_typ',
+        runs=[NodeRun(node_id='a', iteration=0, output='x', session_key='sk', status='ok')],
+    )
+    run_log.finalize_run(
+        tmp_path, 'my-wf', result,
+        root_session_key='websocket:ctyp', started_at=1.0, finished_at=2.0,
+    )
+    svc = TasksService(workspace=tmp_path)
+    res = await svc.list(TasksListQuery(session='websocket:ctyp'), _principal())
+    wf = [t for t in res.tasks if t.kind == 'workflow'][0]
+    assert wf.typical_total_s == 42.0
+
+
 # ---------------------------------------------------------------------------
 # Node label tests
 # ---------------------------------------------------------------------------

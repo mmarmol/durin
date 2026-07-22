@@ -9,10 +9,13 @@ persisted sub-agent lineage so history survives a gateway restart.
 Returns plain dicts with a stable shape — ``kind`` ("subagent" | "workflow"),
 ``id``, ``label``, ``status`` ("running" | "needs_input" | "done" | "failed" |
 "cancelled"), ``started_at`` (wall-clock epoch), ``ended_at``, ``session_key``,
-and for workflows a ``nodes`` tree, the run ``task``, and (only when the run's
-status is ``needs_input``) ``needs_input_detail`` — the gate's questions, capped
-at 500 chars. The service wraps these into its pydantic ``BackgroundTask``
-response model; the tool renders them.
+and for workflows a ``nodes`` tree (each entry carrying ``duration_s``,
+``artifacts``, and ``typical_s``, plus a trailing running entry when a node is
+in flight), the run ``task``, ``typical_total_s`` (summed per-node medians,
+absent with no history), and (only when the run's status is ``needs_input``)
+``needs_input_detail`` — the gate's questions, capped at 500 chars. The service
+wraps these into its pydantic ``BackgroundTask`` response model; the tool
+renders them.
 """
 
 from __future__ import annotations
@@ -65,10 +68,22 @@ def _node_run_status(s: str) -> str:
     return "failed" if s in ("node_failed", "persist_failed") else "done"
 
 
-def _node_tree(node_runs: list[dict], label_map: dict[str, str] | None = None) -> list[dict]:
+def _node_tree(node_runs: list[dict], label_map: dict[str, str] | None = None,
+               typical: dict[str, float] | None = None,
+               active_node: dict | None = None) -> list[dict]:
     """Group manifest node runs by node id (first-seen order). A node id that
     recurs across iterations collapses to one entry showing its latest status.
-    label_map maps node id → human label; absent ids fall back to a prettified id."""
+    label_map maps node id → human label; absent ids fall back to a prettified id.
+
+    ``active_node`` appends the node currently in flight. The live frames only
+    reach a client that was connected when they were emitted; a reload or a late
+    arrival has nothing but this, so the running node must come off the manifest.
+    A node id already present from a completed iteration (a looping node revisited)
+    is overwritten in place rather than appended a second time — the same
+    "recurs → one entry, latest status" rule above applies, and here the running
+    state is the latest state, so it wins over the stale completed row at that
+    id's first-seen position.
+    """
     from durin.workflow.spec import _prettify_id
 
     order: list[str] = []
@@ -78,7 +93,26 @@ def _node_tree(node_runs: list[dict], label_map: dict[str, str] | None = None) -
         if nid not in latest:
             order.append(nid)
         label = (label_map or {}).get(nid) or _prettify_id(nid)
-        latest[nid] = {"id": nid, "label": label, "status": _node_run_status(r.get("status", "ok")), "branches": None}
+        latest[nid] = {
+            "id": nid, "label": label,
+            "status": _node_run_status(r.get("status", "ok")),
+            "branches": None,
+            "duration_s": r.get("duration_s"),
+            "artifacts": list(r.get("artifacts") or []),
+            "typical_s": (typical or {}).get(nid),
+        }
+    if active_node and active_node.get("node_id"):
+        nid = active_node["node_id"]
+        if nid not in latest:
+            order.append(nid)
+        latest[nid] = {
+            "id": nid,
+            "label": active_node.get("label") or (label_map or {}).get(nid) or _prettify_id(nid),
+            "status": "running", "branches": None,
+            "started_at": active_node.get("started_at"),
+            "duration_s": None, "artifacts": [],
+            "typical_s": (typical or {}).get(nid),
+        }
     return [latest[nid] for nid in order]
 
 
@@ -122,6 +156,8 @@ def collect_tasks(
         needs_input_detail = None
         if rec.get("status") == "needs_input":
             needs_input_detail = (rec.get("final_output") or "")[:500] or None
+        typical = rec.get("typical_s") or {}
+        typical_total = sum(typical.values()) if typical else None
         tasks.append({
             "kind": "workflow", "id": rec.get("run_id", ""),
             "label": wf_name,
@@ -129,9 +165,10 @@ def collect_tasks(
             "started_at": float(rec.get("started_at") or 0.0),
             "ended_at": rec.get("finished_at"),
             "session_key": drill,
-            "nodes": _node_tree(node_runs, label_map),
+            "nodes": _node_tree(node_runs, label_map, typical, rec.get("active_node")),
             "task": rec.get("task"),
             "needs_input_detail": needs_input_detail,
+            "typical_total_s": typical_total,
         })
 
     # Reconstruct finished sub-agents from persisted session lineage so the history
