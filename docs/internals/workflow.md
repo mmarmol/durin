@@ -281,7 +281,7 @@ Every run with a workspace produces a durable **run manifest** at
 `<workspace>/workflows-runs/<name>/<run_id>.json`. The manifest is a live record, not
 a post-run summary:
 
-1. **Before the walk** — `start_run` writes `{status: "running", root_session_key, started_at, runs: [], typical_s}`.
+1. **Before the walk** — `start_run` writes `{status: "running", root_session_key, started_at, runs: [], typical_s, typical_total_s}`.
 2. **When a node begins** — `mark_node_started` sets `active_node`, so a node that runs for minutes is not invisible on disk for its whole duration.
 3. **After each node** — `update_run` rewrites the file with the accumulated per-node trace, clears `active_node`, and keeps `status: "running"`, so an in-flight run is observable by reading the file.
 4. **On every exit path** (normal completion, exhaustion, abort, cancellation, or config error) — `finalize_run` writes the terminal status (`completed`/`exhausted`/`aborted`/`cancelled`), `finished_at`, and the full trace.
@@ -309,13 +309,14 @@ The per-node entries in the manifest's `runs` array carry:
 The manifest also carries top-level fields. From the very first (`running`) write:
 `work_dir` — the run's shared working folder, recorded at start so an in-flight
 run's artifacts are findable by any observer (the `tasks` tool renders it plus a
-capped listing of the folder's current files); and `typical_s` — median per-node
-seconds computed once here from the workflow's prior completed runs (§4g), so every
-reader shows the same baseline for the life of the run instead of recomputing it.
+capped listing of the folder's current files); and `typical_s` / `typical_total_s`
+— median per-node and median whole-run seconds, computed once here from the
+workflow's prior completed runs (§4g), so every reader shows the same baseline for
+the life of the run instead of recomputing it.
 **While a node is executing**, `active_node` — `{node_id, label, started_at}` — names
-it: `mark_node_started` writes this the instant a node begins (a no-op when the run
-has no manifest at all, e.g. a workspace-less engine used in tests, rather than
-fabricating a partial record), so a reader arriving mid-node — a reloaded page, a
+it: `mark_node_started` writes this the instant a node begins (skipped entirely by a
+workspace-less engine, and a no-op when the run has no manifest at all, e.g. a nested
+run, rather than fabricating a partial record), so a reader arriving mid-node — a reloaded page, a
 late-attaching panel, the `tasks` tool — knows what is running and since when, not
 only what has already finished. The next `update_run` (the node's own completion)
 clears it, and a run whose `status` is no longer `"running"` never reports one — a
@@ -545,12 +546,10 @@ finished, so a multi-minute node was invisible in the tool's answer for its
 whole duration. `tasks(action='stop', id=…)` requests cancellation. The same
 merge of sub-agents and workflow runs that backs `GET /api/v1/tasks`
 (`durin/agent/background_tasks.py::collect_tasks`) is what `tasks` renders —
-and for the HTTP surface specifically (the web UI's Work panel and Runs pane,
-the TUI sidebar) each node entry additionally carries its own `duration_s`,
-`artifacts`, and `typical_s`, plus a `typical_total_s` on the run itself
-(summed per-node medians, absent rather than zero with no history): richer
-than the tool's plain-text summary, which reports the working folder's files
-in aggregate rather than crediting them to the node that produced them. For a
+and for the HTTP surface specifically (the web UI's Work panel) each node entry
+additionally carries its own `duration_s`. Duration *estimates* and per-node
+artifacts are deliberately not on this list: they belong to the wide executions
+surface, which reads the run manifest directly. For a
 run that ends `needs_input`, this same surface carries the gate's questions so
 panels (like the web UI's Work panel) can show what is being asked.
 
@@ -629,7 +628,9 @@ it walks forward from the running node while each has exactly one successor,
 and stops at the first node that routes (`on_pass`/`on_fail` or `cases`) —
 which branch a router takes is unknown until it runs, so listing its targets
 would show a path that may never happen; a loop ends the walk the same way (a
-node already listed is not listed twice). A pending frame carries only
+node already listed is not listed twice, and neither is one the run has
+already executed — after a loop-back the node that just finished would
+otherwise appear in the same frame set twice, `done` and `pending` at once). A pending frame carries only
 `id`/`label`/`status: "pending"` — no timing, no description, no verdict — a
 greyed preview, not a promise.
 
@@ -639,9 +640,18 @@ duration per node id — the median rather than the mean, so one pathological
 run does not skew the number a user reads as "normal"; a node with no recorded
 duration (a gate, a router) is simply absent rather than shown as zero. The
 engine computes this once, at `start_run`, and stores it on the manifest as
-`typical_s` (§4a), so every reader — the work panel, the Runs pane, the
-`tasks` tool — shows the same baseline for the run's whole life instead of
-each recomputing it from history.
+`typical_s` (§4a), so every reader shows the same baseline for the run's whole
+life instead of each recomputing it from history.
+
+**The typical run total** (`run_log.typical_total_duration`, stored alongside as
+`typical_total_s`) is measured separately, never summed from `typical_s`. Each
+prior completed run contributes its OWN total — the sum of its node durations,
+the same quantity a surface sums to show a run's actual elapsed — and the
+estimate is the median of those. Summing the per-node medians instead would sum
+the union of the paths those runs took: a router with mutually exclusive
+branches has a median for every branch any prior run visited, while a single run
+walks one of them, and a node visited three times would contribute a single
+median rather than three passes.
 
 **Node labels.** Every frame's `label` comes from `node_label`
 (`durin/workflow/spec.py`): the author's `title` if set, else the node's
@@ -691,7 +701,12 @@ it runs (`SubworkflowRunner.__call__`), tagging every frame the nested run
 emits with `parent_node` — the id of the subworkflow node in the *outer*
 graph — so a surface can render the nested run's nodes under their parent
 instead of flattening them into the top level (multi-level nesting keeps the
-innermost parent via `setdefault`). Forwarding `cancel_check` means `/stop`
+innermost parent via `setdefault`). Each forwarded frame is also **re-keyed
+onto the caller's `run_id`**: surfaces key a work item by the frame's run id
+and the terminal frame is emitted for the caller's run only, so a frame
+carrying the nested engine's own id would open a second work item that nothing
+ever closes. Only the emitted payload is re-keyed — the nested run keeps its
+own id for its own manifest. Forwarding `cancel_check` means `/stop`
 reaches inside a running sub-workflow instead of only taking effect at the
 outer graph's next node boundary. Cancelling while the sub-workflow is the
 parent's **last** node still reports the run as `cancelled` rather than
@@ -711,11 +726,13 @@ manifest on the same cadence as the run list rather than sitting frozen once
 opened. Completed nodes show their measured duration, the files they
 produced, and, once the workflow has completed runs to learn from, a typical
 duration to compare against — a workflow with no history yet omits the
-typical-duration figures rather than showing a misleading zero. Whichever
-node is currently active appears as its own row with a live-ticking elapsed
-clock, and the run header sums actual elapsed time (completed nodes plus the
-active node's running delta) alongside the typical total, so the two read as
-a direct comparison.
+typical-duration figures rather than showing a misleading zero. While the run
+is still running its active node appears as its own row with a live-ticking
+elapsed clock — gated on the run's own status, so a crashed run's last
+in-flight node is not rendered as one still going — and the run header sums
+actual elapsed time (completed nodes plus the active node's running delta)
+alongside the run's recorded `typical_total_s`, so the two read as a direct
+comparison of like quantities.
 
 ## 5. How it works
 
@@ -772,7 +789,7 @@ End-to-end for a single `run_workflow` call:
 | `RunWorkflowTool` | `durin/agent/tools/run_workflow.py` | The `run_workflow` LLM tool (core scope) that loads, runs, summarizes a workflow, and records its run. |
 | `ListWorkflowsTool` | `durin/agent/tools/list_workflows.py` | The `list_workflows` LLM tool (core scope, read-only) that lists the workspace's workflows with their `description` and I/O for discovery; an optional `query` filters by name/description. |
 | `WorkflowWriteTool` | `durin/agent/tools/workflow_write.py` | The `workflow_write` LLM tool (core scope): validates a definition via `parse_workflow` before persisting, refuses overwriting an existing name, defaults `improvement_mode` to `manual`, and commits through the version store. The agent's sanctioned authoring path (also given to the dream's skill-extract sub-agent, so a skill can delegate to a workflow it authored). |
-| `start_run`, `mark_node_started`, `update_run`, `finalize_run`, `typical_node_durations`, `read_manifest`, `runs_for_session`, `reconcile_running`, `read_runs_since` | `durin/workflow/run_log.py` | The live run manifest (running→terminal, including the in-flight `active_node` marker and the once-per-run `typical_s` baseline), per-run diagnostic records, crash reconciliation, and the self-improvement signal source. `read_runs_since` callers that need terminal runs should skip records with `status in {"running","crashed"}`. |
+| `start_run`, `mark_node_started`, `update_run`, `finalize_run`, `typical_node_durations`, `typical_total_duration`, `read_manifest`, `runs_for_session`, `reconcile_running`, `read_runs_since` | `durin/workflow/run_log.py` | The live run manifest (running→terminal, including the in-flight `active_node` marker and the once-per-run `typical_s`/`typical_total_s` baselines), per-run diagnostic records, crash reconciliation, and the self-improvement signal source. `read_runs_since` callers that need terminal runs should skip records with `status in {"running","crashed"}`. |
 | `NodeExecutionError` | `durin/workflow/engine.py` | Typed error raised by the node runner when an agent turn or a script node's process fails or times out; carries `node_id`, `iteration`, and `session_key` (`None` for a script node) so the engine can record an attributable `NodeRun` before aborting. |
 | `compute_diagnostics` | `durin/workflow/diagnostics.py` | Reduces run records to recurring per-node trouble (loop-backs, gate fails, script failures with sample error strings) → improvement candidates. |
 | `run_workflow_improve_pass` | `durin/workflow/workflow_improve_dream.py` | The dream pass: observes all workflows' runs since its cursor, proposes one edit — a node's `prompt`, a script node's `command`, or a `script_file`'s content, the latter two gated by recurring failure evidence and a deterministic pre-apply check; manual (or `manual_only`) → recommend, auto → apply + hold pending validation (auto-revert on a worsened diagnostic), out-of-scope → structural escalation. |

@@ -14,9 +14,10 @@ previous tag — highlights first, then changes grouped by area.
   the terminal UI all now name the node currently active, how long it has
   been running, which round of tool use it is on, and what it is doing right
   now (which tool, on what file or query) — the same picture on every
-  surface. Once a workflow has completed runs to learn from, the work panel
-  and the executions view also show each node's typical duration next to how
-  long this pass actually took, and which files a node produced.
+  surface. Once a workflow has completed runs to learn from, the executions
+  view also shows each node's typical duration next to how long this pass
+  actually took, which files a node produced, and how long a whole run of
+  this workflow usually takes.
 - **A run's progress is never lost.** Reload the page mid-run and the active
   node, its elapsed time, and its round are exactly where you left them. If
   the gateway itself restarts partway through a node, the rounds that node
