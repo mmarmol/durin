@@ -129,9 +129,25 @@ export interface BackgroundTask {
   started_at: number;
   ended_at: number | null;
   session_key: string | null;
-  nodes?: Array<{ id: string; label?: string; status: string; branches?: Array<{ id: string; label?: string; status: string }> | null }> | null;
+  nodes?: Array<{
+    id: string;
+    label?: string;
+    status: string;
+    started_at?: number | null;
+    duration_s?: number | null;
+    typical_s?: number | null;
+    round?: number | null;
+    max_rounds?: number | null;
+    activity?: { tool: string; target?: string; at: number } | null;
+    artifacts?: string[] | null;
+    description?: string | null;
+    parent_node?: string | null;
+    branches?: Array<{ id: string; label?: string; status: string }> | null;
+  }> | null;
   task?: string | null;
   needs_input_detail?: string | null;
+  /** Summed per-node medians from prior runs; null when the workflow has no history. */
+  typical_total_s?: number | null;
 }
 
 export async function listBackgroundTasks(
