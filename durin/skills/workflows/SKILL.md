@@ -68,6 +68,9 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   pipelines; the child's terminal status propagates: a child that pauses for input pauses
   the parent resumably, a cancelled child cancels it, and a failed child aborts it naming
   the child — a sub-workflow can never silently read as "completed" text).
+- A work or script node may be **detached** (`detached: true`): launched off the critical
+  path — the walk continues immediately, the edge passes through, its output never becomes
+  the result, and its failure never sinks the run (side effects: persist, notify, archive).
 - **Routing** is opt-in on a `work` or `script` node, never a separate node type: **binary**
   (`on_pass`/`on_fail`) or **multi-way** (`cases` — a map of labels to targets; a `null`
   target ends the run). The node ends with its verdict and the engine follows the matching

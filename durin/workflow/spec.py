@@ -95,6 +95,7 @@ class WorkNode:
     cases: dict[str, str | None] | None = None  # multi-way routing: label -> target node id (null = end)
     max_visits: int | None = None        # per-node loop cap (None = inherit workflow default)
     max_turns: int | None = None         # agentic tool-round budget for this node (None = global default)
+    detached: bool = False               # launch and continue: side-effect node off the critical path
     kind: Literal["work"] = "work"
 
     @property
@@ -132,6 +133,7 @@ class ScriptNode:
     on_fail: str | None = None
     cases: dict[str, str | None] | None = None
     max_visits: int | None = None
+    detached: bool = False               # launch and continue: side-effect node off the critical path
     kind: Literal["script"] = "script"
 
     @property
@@ -211,6 +213,23 @@ def _str_list(value: Any, node_id: str, field: str) -> tuple[str, ...]:
             f"node {node_id!r}: {field} must be a list of strings, got {value!r}"
         )
     return tuple(value)
+
+
+def _parse_detached(raw: dict[str, Any], node_id: str, *, routes: bool) -> bool:
+    """Validate the shared ``detached`` flag of a work/script node. A detached node
+    is launched and the walk continues immediately — its output never rides an edge,
+    so a verdict from it could never route: detached and routing are incompatible."""
+    detached = raw.get("detached", False)
+    if not isinstance(detached, bool):
+        raise WorkflowError(
+            f"node {node_id!r}: detached must be true or false, got {detached!r}"
+        )
+    if detached and routes:
+        raise WorkflowError(
+            f"node {node_id!r}: a detached node cannot route (its verdict never "
+            "reaches the walk) — drop 'on_pass'/'on_fail'/'cases' or 'detached'"
+        )
+    return detached
 
 
 def _parse_routing(raw: dict[str, Any], node_id: str) -> tuple[str | None, str | None, str | None, dict[str, str | None] | None]:
@@ -315,6 +334,13 @@ def _build_node(raw: dict[str, Any]) -> Node:
         mcps = _str_list(raw.get("mcps", []), node_id, "mcps")
         next_node, on_pass, on_fail, cases = _parse_routing(raw, node_id)
         routes = on_pass is not None or on_fail is not None or cases is not None
+        detached = _parse_detached(raw, node_id, routes=routes)
+        # A detached node runs beside the walk; the shared buffer is a sequential
+        # continuity mechanism and a concurrent writer would race it.
+        if detached and context == "shared":
+            raise WorkflowError(
+                f"node {node_id!r}: a detached node cannot use context='shared'"
+            )
         # A routing node emits an independent verdict on its own output; a shared
         # context buffer would feed it sibling conversations and bias that verdict,
         # so the two are mutually exclusive.
@@ -357,6 +383,7 @@ def _build_node(raw: dict[str, Any]) -> Node:
             cases=cases,
             max_visits=node_max_visits,
             max_turns=node_max_turns,
+            detached=detached,
         )
     if kind == "script":
         command = raw.get("command", "")
@@ -404,10 +431,12 @@ def _build_node(raw: dict[str, Any]) -> Node:
                     f"node {node_id!r}: max_visits must be an int >= 1, got {node_max_visits!r}"
                 )
         next_node, on_pass, on_fail, cases = _parse_routing(raw, node_id)
+        script_routes = on_pass is not None or on_fail is not None or cases is not None
+        detached = _parse_detached(raw, node_id, routes=script_routes)
         return ScriptNode(
             id=node_id, title=raw.get("title", ""), command=command.strip(), script=script,
             timeout=timeout, env=env, secrets=secrets, next=next_node, on_pass=on_pass,
-            on_fail=on_fail, cases=cases, max_visits=node_max_visits,
+            on_fail=on_fail, cases=cases, max_visits=node_max_visits, detached=detached,
         )
     if kind == "subworkflow":
         workflow = raw.get("workflow", "")
@@ -582,6 +611,27 @@ def parse_workflow(data: dict[str, Any]) -> Workflow:
                 raise WorkflowError(
                     f"node {node.id!r}: branches_from references unknown node {node.branches_from!r}"
                 )
+            for ref in (*node.branches, node.worker):
+                target = nodes.get(ref) if ref else None
+                if target is not None and getattr(target, "detached", False):
+                    raise WorkflowError(
+                        f"node {node.id!r}: parallel unit {ref!r} cannot be detached "
+                        "(branches already run concurrently and their outputs merge)"
+                    )
+
+    # A detached node may only be reached by a linear `next` edge: a routing edge
+    # into one is undefined (a loop-back could re-enter a node that is still
+    # running from the previous launch).
+    for node in nodes.values():
+        if isinstance(node, (WorkNode, ScriptNode)) and node.routes:
+            targets = list(node.cases.values()) if node.cases is not None else [node.on_pass, node.on_fail]
+            for target in targets:
+                t = nodes.get(target) if target else None
+                if t is not None and getattr(t, "detached", False):
+                    raise WorkflowError(
+                        f"node {node.id!r}: routing target {target!r} is detached — "
+                        "a detached node may only be reached by a linear 'next' edge"
+                    )
 
     for node in nodes.values():
         if isinstance(node, ParallelNode):

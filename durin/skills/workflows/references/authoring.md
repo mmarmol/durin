@@ -61,6 +61,7 @@ follows `next` or **routes** on a verdict.
 | `cases` | object | none | **Multi-way routing.** `{ "LABEL": "target-node-id-or-null", ... }`. The node ends with one label; the engine follows that edge. |
 | `max_visits` | int ≥ 1 \| null | inherit envelope | Per-node loop cap override. |
 | `max_turns` | int ≥ 1 \| null | global default | Tool-use rounds budget *within* one execution of this node (distinct from `max_visits`). |
+| `detached` | bool | `false` | **Launch and continue.** The walk starts this node and moves on along `next` immediately; the edge text passes through unchanged, the node's output never becomes the run result, and its failure records `node_failed` without sinking the run. For side effects (persist, notify, archive) off the critical path. Requires linear `next` (no routing, no `context: "shared"`); may not be a parallel unit or a routing target. |
 
 **Edge exclusivity — pick exactly one shape:** `next` **xor** `on_pass`/`on_fail` **xor**
 `cases`. Setting more than one is a parse error.
@@ -109,6 +110,7 @@ buffer (the buffer passes through it untouched).
 | `secrets` | list of names | `[]` | Stored secrets to inject as env vars (e.g. `["ZENDESK_API_TOKEN"]`). Each must exist in the secret store **and allow the `exec` scope** — an unknown or denied name aborts the run pre-flight, naming the node. Values are redacted out of the node's stdout/stderr before they enter run records. |
 | `next` / `on_pass`-`on_fail` / `cases` | — | — | Same three edge shapes and exclusivity as a `work` node. |
 | `max_visits` | int ≥ 1 \| null | inherit envelope | Per-node loop cap override. |
+| `detached` | bool | `false` | Same launch-and-continue contract as a work node's `detached` (see above); the script's exit code still lands in its trace record. |
 
 **Routing semantics (all deterministic):**
 - **Binary** (`on_pass`/`on_fail`): **exit 0 = PASS, non-zero = FAIL**; on FAIL the loop-back
@@ -182,6 +184,8 @@ The parser rejects a definition (with a clear message) when:
 - `session: "persistent"` is combined with `context: "shared"` (two competing continuity
   mechanisms), or set on a node referenced as a parallel `branches` member or `worker`.
 - Two `cases` labels normalize to the same form.
+- A `detached` node routes, uses `context: "shared"`, is a parallel branch/worker, or is
+  the target of a routing edge (only a linear `next` may reach it).
 - A `parallel` branch id points to a node that is neither `work` nor `script` (parallel
   and subworkflow nodes cannot be branches), or the dynamic `worker` id points to a
   non-`work` node (the worker template stays agent-only on purpose: a script iterates

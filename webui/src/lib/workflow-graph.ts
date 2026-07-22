@@ -20,6 +20,8 @@ export type WorkflowNodeDef = {
   list_from?: string | null;
   // parallel runtime-selected mode: node whose output names the branch ids to run
   branches_from?: string | null;
+  // work/script: launch-and-continue side-effect node (off the critical path)
+  detached?: boolean;
   max_concurrency?: number;
   reconcile?: "read" | "choose" | "union";
   // work node: per-node visit budget (blank/undefined = inherit workflow default)

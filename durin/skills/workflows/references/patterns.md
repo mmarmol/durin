@@ -217,6 +217,29 @@ continues to `next`).
 `route-analyzers.py` inspects the working folder and prints e.g.
 `analyze_logs, analyze_images` (or `["analyze_logs"]`, or `[]`) as its last line.
 
+## Detached side-effect (`detached: true`)
+
+A side-effect node (persist, notify, archive) launched off the critical path: the walk
+continues immediately, the edge text passes through unchanged, and the node's failure is
+recorded without sinking the run. The run still joins it before finishing, so the trace is
+complete. Requires a linear `next`; its output never becomes the run result.
+
+```json
+{
+  "name": "answer-then-persist",
+  "start": "answer",
+  "nodes": [
+    { "id": "answer", "kind": "work", "mode": "build", "tools": "default",
+      "prompt": "Produce the deliverable.", "next": "persist" },
+    { "id": "persist", "kind": "work", "mode": "build", "tools": "default", "detached": true,
+      "prompt": "Read the deliverable in the working folder and upsert the entities it names into memory (memory_search first; never duplicate).",
+      "next": "report" },
+    { "id": "report", "kind": "work", "mode": "read",
+      "prompt": "Summarize the deliverable for the caller.", "next": null }
+  ]
+}
+```
+
 ## Subworkflow composition (`kind: "subworkflow"`)
 
 Run another named workflow as one step and use its output. The nested run works in the
