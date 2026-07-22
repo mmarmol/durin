@@ -412,3 +412,44 @@ def test_cluster_subgraph_caps_and_reports_total(tmp_path):
     member_nodes = [n for n in sub["nodes"] if not n.get("phantom") and n["type"] != "session"]
     assert len(member_nodes) <= 5
     assert sub["total_members"] == BUBBLE_MIN_MEMBERS + 1
+
+
+def test_cluster_scaffolding_does_not_cascade(tmp_path):
+    # Ghost type is "vendor" (not "person"): build_memory_graph sorts edges
+    # by (-weight, source, target), and both new edges share source
+    # "vendor:ghost-a" once "topic:m1" outranks it alphabetically as a
+    # source — that ordering puts the member-adjacent edge before the
+    # ghost-to-ghost edge in the single iteration pass, which is what lets
+    # the pre-fix code's mutate-while-iterating bug actually cascade.
+    rep = _clustered_workspace(tmp_path)
+    store_memory(
+        tmp_path,
+        content="member with ghost one",
+        entities=["topic:m1", "vendor:ghost-a"],
+        valid_from=datetime.date(2026, 5, 10),
+    )
+    store_memory(
+        tmp_path,
+        content="ghost one with ghost two",
+        entities=["vendor:ghost-a", "vendor:ghost-b"],
+        valid_from=datetime.date(2026, 5, 11),
+    )
+    sub = build_cluster_subgraph(tmp_path, rep)
+    ids = {n["id"] for n in sub["nodes"]}
+    assert "vendor:ghost-a" in ids
+    assert "vendor:ghost-b" not in ids
+
+
+def test_cluster_subgraph_uses_single_tree_snapshot(tmp_path, monkeypatch):
+    rep = _clustered_workspace(tmp_path)
+    graph_overview._clear_all()
+    calls = {"n": 0}
+    real = graph_overview._tree_signature
+
+    def counting(ws):
+        calls["n"] += 1
+        return real(ws)
+
+    monkeypatch.setattr(graph_overview, "_tree_signature", counting)
+    build_cluster_subgraph(tmp_path, rep)
+    assert calls["n"] == 1

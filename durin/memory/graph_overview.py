@@ -356,15 +356,20 @@ def get_full_graph_cached(workspace: Path) -> dict[str, Any]:
     return _cached_payload(workspace)[1]
 
 
-def build_overview(workspace: Path) -> dict[str, Any]:
-    """Overview payload for the workspace, cached at both levels.
+def _overview_from(ws: Path, sig: int, payload: dict[str, Any]) -> dict[str, Any]:
+    """Overview for an already-fetched (signature, payload) snapshot.
+
+    Split out of `build_overview` so a caller that also needs the payload
+    itself (`build_cluster_subgraph`) can fetch it once via `_cached_payload`
+    and hand both pieces here, instead of calling `build_overview` and
+    `get_full_graph_cached` separately — two independent stat-walks that a
+    concurrent write could land between, desyncing the overview's members
+    from the payload's node lookup.
 
     Both cache levels key on the same tree signature, so the overview cache
     invalidates exactly when the underlying payload would be rebuilt — no
     separate identity to fall out of sync with it.
     """
-    ws = workspace.resolve()
-    sig, payload = _cached_payload(ws)
     with _lock:
         hit = _overview_cache.get(ws)
         if hit is not None and hit[0] == sig:
@@ -373,6 +378,13 @@ def build_overview(workspace: Path) -> dict[str, Any]:
     with _lock:
         _put(_overview_cache, ws, (sig, overview))
     return overview
+
+
+def build_overview(workspace: Path) -> dict[str, Any]:
+    """Overview payload for the workspace, cached at both levels."""
+    ws = workspace.resolve()
+    sig, payload = _cached_payload(ws)
+    return _overview_from(ws, sig, payload)
 
 
 def _clear_all() -> None:
@@ -390,32 +402,47 @@ def build_cluster_subgraph(
     """Members-of-bubble subgraph for the neighborhood layer.
 
     Keyed by the bubble id (representative ref, or OTHERS_ID). Raises
-    KeyError when the ref is not a bubble in the current overview — the
+    KeyError when ``ref`` is not a bubble in the current overview — the
     caller maps that to a 404 and the client falls back to the overview.
+
+    Members are capped at ``max_members``, kept by descending weight with
+    a deterministic tie-break on id; ``total_members`` always reports the
+    full pre-cap member count, capped or not. Phantom entities and session
+    nodes count as scaffolding — context around the members, toggleable
+    in the client — when they sit directly on an edge to a KEPT member;
+    that check runs against the capped member set only, so a scaffolding
+    node can never itself unlock a second one purely by association —
+    inclusion never cascades past one hop from a real member.
+
+    Overview and payload come from one shared (signature, payload)
+    snapshot — a single tree stat-walk — so a member can never point at a
+    node id the payload doesn't have.
     """
     ws = workspace.resolve()
-    overview = build_overview(ws)
+    sig, payload = _cached_payload(ws)
+    overview = _overview_from(ws, sig, payload)
     members = overview.get("members", {}).get(ref)
     if members is None:
         raise KeyError(ref)
-    payload = get_full_graph_cached(ws)
     by_id = {n["id"]: n for n in payload["nodes"]}
     member_set = set(members)
     kept_members = sorted(
         member_set,
         key=lambda m: (-int(by_id[m]["weight"]), m),
     )[:max_members]
-    kept = set(kept_members)
+    kept_member_ids = set(kept_members)
+    scaffold: set[str] = set()
     for e in payload["edges"]:
         a, b = e["source"], e["target"]
-        if a in kept and b not in member_set and b in by_id:
+        if a in kept_member_ids and b not in member_set and b in by_id:
             n = by_id[b]
             if n.get("phantom") or n["type"] == "session":
-                kept.add(b)
-        elif b in kept and a not in member_set and a in by_id:
+                scaffold.add(b)
+        elif b in kept_member_ids and a not in member_set and a in by_id:
             n = by_id[a]
             if n.get("phantom") or n["type"] == "session":
-                kept.add(a)
+                scaffold.add(a)
+    kept = kept_member_ids | scaffold
     nodes = [by_id[nid] for nid in sorted(kept)]
     edges = [
         e
