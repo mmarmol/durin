@@ -1999,6 +1999,35 @@ export interface MemoryGraphPayload {
   };
 }
 
+export interface MemoryOverviewBubble {
+  id: string;
+  name: string;
+  count: number;
+  types: string[];
+  top: { id: string; name: string; type: string; weight: number }[];
+}
+
+export interface MemoryOverviewPayload {
+  mode: "clustered" | "flat";
+  bubbles: MemoryOverviewBubble[];
+  hubs: MemoryGraphNode[];
+  loose: MemoryGraphNode[];
+  edges: MemoryGraphEdge[];
+  stats: {
+    entity_count: number;
+    reference_count: number;
+    bubble_count: number;
+    loose_count: number;
+    phantom_count: number;
+    session_count: number;
+  };
+}
+
+export interface MemoryClusterPayload extends MemoryGraphPayload {
+  focus: string;
+  total_members: number;
+}
+
 export async function fetchMemoryGraph(
   token: string,
   base: string = "",
@@ -2023,6 +2052,33 @@ export async function fetchMemorySubgraph(
     token,
   );
   return res.data;
+}
+
+export async function fetchMemoryGraphOverview(
+  token: string,
+  base: string = "",
+): Promise<MemoryOverviewPayload> {
+  const res = await request<{ data: MemoryOverviewPayload }>(
+    `${base}/api/v1/memory/graph/overview`,
+    token,
+  );
+  return res.data;
+}
+
+export async function fetchClusterSubgraph(
+  token: string,
+  ref: string,
+  base: string = "",
+): Promise<MemoryClusterPayload | null> {
+  const params = new URLSearchParams({ ref, scope: "cluster" });
+  const res = await fetchWithReauth(
+    `${base}/api/v1/memory/subgraph?${params}`,
+    token,
+  );
+  if (res.status === 404) return null;
+  if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status}`);
+  const body = (await res.json()) as { data: MemoryClusterPayload };
+  return body.data;
 }
 
 export interface MemoryEntityDetail {
