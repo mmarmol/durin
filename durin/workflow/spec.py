@@ -96,6 +96,9 @@ class WorkNode:
     max_visits: int | None = None        # per-node loop cap (None = inherit workflow default)
     max_turns: int | None = None         # agentic tool-round budget for this node (None = global default)
     detached: bool = False               # launch and continue: side-effect node off the critical path
+    inputs_from: tuple[str, ...] = ()    # named sources composed (labeled) into this node's input
+    output_schema: dict | None = None    # JSON Schema the node's output must satisfy (forced deliver tool)
+    output_file: str = ""                # engine-written file (in the working folder) holding the validated payload
     kind: Literal["work"] = "work"
 
     @property
@@ -134,6 +137,7 @@ class ScriptNode:
     cases: dict[str, str | None] | None = None
     max_visits: int | None = None
     detached: bool = False               # launch and continue: side-effect node off the critical path
+    inputs_from: tuple[str, ...] = ()    # named sources composed (labeled) onto this script's stdin
     kind: Literal["script"] = "script"
 
     @property
@@ -213,6 +217,49 @@ def _str_list(value: Any, node_id: str, field: str) -> tuple[str, ...]:
             f"node {node_id!r}: {field} must be a list of strings, got {value!r}"
         )
     return tuple(value)
+
+
+def _parse_output_contract(raw: dict[str, Any], node_id: str, *, routes: bool) -> tuple[dict | None, str]:
+    """Validate ``output_schema`` (a JSON Schema the runner enforces via a forced
+    deliver tool) and ``output_file`` (an engine-written file holding the validated
+    payload). A routing node's structured surface is its verdict tool — the two are
+    mutually exclusive; a tool-parameter schema root must be an object."""
+    schema = raw.get("output_schema")
+    output_file = raw.get("output_file", "")
+    if schema is not None:
+        if not isinstance(schema, dict):
+            raise WorkflowError(
+                f"node {node_id!r}: output_schema must be a JSON Schema object, got {schema!r}"
+            )
+        if routes:
+            raise WorkflowError(
+                f"node {node_id!r}: output_schema cannot be combined with routing "
+                "(a routing node's structured output is its verdict)"
+            )
+        try:
+            import jsonschema
+            jsonschema.Draft202012Validator.check_schema(schema)
+        except Exception as exc:  # noqa: BLE001 - surface the schema error verbatim
+            raise WorkflowError(
+                f"node {node_id!r}: output_schema is not a valid JSON Schema: {exc}"
+            ) from exc
+    if output_file:
+        if not isinstance(output_file, str):
+            raise WorkflowError(
+                f"node {node_id!r}: output_file must be a string, got {output_file!r}"
+            )
+        if schema is None:
+            raise WorkflowError(
+                f"node {node_id!r}: output_file requires output_schema (the engine writes "
+                "the VALIDATED payload — without a schema there is nothing validated to write)"
+            )
+        pf = Path(output_file)
+        if pf.is_absolute() or ".." in pf.parts:
+            raise WorkflowError(
+                f"node {node_id!r}: output_file must be a relative path inside the "
+                f"working folder, got {output_file!r}"
+            )
+    return schema, output_file or ""
 
 
 def _parse_detached(raw: dict[str, Any], node_id: str, *, routes: bool) -> bool:
@@ -332,9 +379,11 @@ def _build_node(raw: dict[str, Any]) -> Node:
             )
         skills = _str_list(raw.get("skills", []), node_id, "skills")
         mcps = _str_list(raw.get("mcps", []), node_id, "mcps")
+        inputs_from = _str_list(raw.get("inputs_from", []), node_id, "inputs_from")
         next_node, on_pass, on_fail, cases = _parse_routing(raw, node_id)
         routes = on_pass is not None or on_fail is not None or cases is not None
         detached = _parse_detached(raw, node_id, routes=routes)
+        output_schema, output_file = _parse_output_contract(raw, node_id, routes=routes)
         # A detached node runs beside the walk; the shared buffer is a sequential
         # continuity mechanism and a concurrent writer would race it.
         if detached and context == "shared":
@@ -384,6 +433,9 @@ def _build_node(raw: dict[str, Any]) -> Node:
             max_visits=node_max_visits,
             max_turns=node_max_turns,
             detached=detached,
+            inputs_from=inputs_from,
+            output_schema=output_schema,
+            output_file=output_file,
         )
     if kind == "script":
         command = raw.get("command", "")
@@ -433,10 +485,12 @@ def _build_node(raw: dict[str, Any]) -> Node:
         next_node, on_pass, on_fail, cases = _parse_routing(raw, node_id)
         script_routes = on_pass is not None or on_fail is not None or cases is not None
         detached = _parse_detached(raw, node_id, routes=script_routes)
+        script_inputs_from = _str_list(raw.get("inputs_from", []), node_id, "inputs_from")
         return ScriptNode(
             id=node_id, title=raw.get("title", ""), command=command.strip(), script=script,
             timeout=timeout, env=env, secrets=secrets, next=next_node, on_pass=on_pass,
             on_fail=on_fail, cases=cases, max_visits=node_max_visits, detached=detached,
+            inputs_from=script_inputs_from,
         )
     if kind == "subworkflow":
         workflow = raw.get("workflow", "")
@@ -618,6 +672,25 @@ def parse_workflow(data: dict[str, Any]) -> Workflow:
                         f"node {node.id!r}: parallel unit {ref!r} cannot be detached "
                         "(branches already run concurrently and their outputs merge)"
                     )
+
+    # inputs_from sources must be real nodes, not the node itself, and not detached
+    # (a detached node's output never rides an edge — there is nothing to compose).
+    for node in nodes.values():
+        for src in getattr(node, "inputs_from", ()):
+            if src == node.id:
+                raise WorkflowError(
+                    f"node {node.id!r}: inputs_from cannot reference itself"
+                )
+            target = nodes.get(src)
+            if target is None:
+                raise WorkflowError(
+                    f"node {node.id!r}: inputs_from references unknown node {src!r}"
+                )
+            if getattr(target, "detached", False):
+                raise WorkflowError(
+                    f"node {node.id!r}: inputs_from references detached node {src!r} "
+                    "(a detached node's output never rides an edge)"
+                )
 
     # A detached node may only be reached by a linear `next` edge: a routing edge
     # into one is undefined (a loop-back could re-enter a node that is still

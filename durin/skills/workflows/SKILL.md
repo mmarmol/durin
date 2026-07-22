@@ -68,6 +68,12 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   pipelines; the child's terminal status propagates: a child that pauses for input pauses
   the parent resumably, a cancelled child cancels it, and a failed child aborts it naming
   the child — a sub-workflow can never silently read as "completed" text).
+- **Named inputs & structured outputs**: `inputs_from` composes a node's input from the
+  labeled outputs of named earlier nodes (plus the current edge as `[upstream]`) — no more
+  courier files when a script chain sits between producer and consumer. `output_schema`
+  (work nodes) forces a schema-validated delivery with immediate in-node retry on a
+  malformed payload, and `output_file` has the ENGINE write the validated JSON into the
+  working folder — prefer these over prose contracts plus downstream validation gates.
 - A work or script node may be **detached** (`detached: true`): launched off the critical
   path — the walk continues immediately, the edge passes through, its output never becomes
   the result, and its failure never sinks the run (side effects: persist, notify, archive).

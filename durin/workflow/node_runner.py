@@ -402,6 +402,19 @@ class AgentNodeRunner:
         elif getattr(req.node, "routes", False):
             route_label = self._derive_route_label(all_messages, ["PASS", "FAIL"], model)
 
+        # A schema'd node delivers its output through a forced tool call validated
+        # against the declared JSON Schema — retried IMMEDIATELY with the exact
+        # validation error, so a malformed payload costs seconds inside this node
+        # instead of a full downstream loop-back. No fallback: after the attempts
+        # the node fails (and the run's failure-resume can retry it).
+        node_schema = getattr(req.node, "output_schema", None)
+        if node_schema is not None:
+            try:
+                payload = self._derive_structured_output(all_messages, node_schema, model)
+            except Exception as exc:  # noqa: BLE001 - typed node failure, engine aborts naming us
+                raise self._on_failure(req, all_messages, exc)
+            final_output = json.dumps(payload, ensure_ascii=False, indent=2)
+
         # The node's OWN contribution: its user turn + everything generated after.
         # The engine extends the shared buffer with this — returning the full
         # conversation here would re-add the system prompt and the inherited
@@ -452,6 +465,62 @@ class AgentNodeRunner:
         except Exception:  # noqa: BLE001 - any failure → fall back to text-parse in the engine
             logger.opt(exception=True).debug("route-tool verdict failed; falling back to text parse")
         return None
+
+    _STRUCTURED_OUTPUT_ATTEMPTS = 3
+
+    def _derive_structured_output(self, messages: list[dict], schema: dict,
+                                  model: str | None) -> dict:
+        """The node's validated payload via a forced ``deliver`` tool call whose
+        parameters ARE the declared schema (the same machinery as the ``route``
+        verdict). Providers don't reliably enforce JSON Schema, so every payload is
+        validated server-side; an invalid one is retried immediately with the exact
+        validation error as feedback. Raises after the attempt budget — a schema'd
+        node with no valid payload has failed, there is no text fallback."""
+        import jsonschema
+
+        tool = {"type": "function", "function": {
+            "name": "deliver",
+            "description": "Deliver this step's final output as structured data "
+                           "matching the required schema.",
+            "parameters": schema}}
+        convo = list(messages) + [{
+            "role": "user",
+            "content": ("Deliver your final output now by calling the `deliver` tool. "
+                        "The tool's parameters are the required output schema."),
+        }]
+        last_error = "the model made no deliver tool call"
+        for _ in range(self._STRUCTURED_OUTPUT_ATTEMPTS):
+            resp = asyncio.run(self.runner.provider.chat(
+                messages=convo, tools=[tool], tool_choice="required", model=model))
+            args = None
+            for tc in (getattr(resp, "tool_calls", None) or []):
+                args = getattr(tc, "arguments", None)
+                if args is None:
+                    args = getattr(tc, "input", None) or getattr(tc, "args", None)
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except json.JSONDecodeError:
+                        args = None
+                if args is not None:
+                    break
+            if args is None:
+                last_error = "the model made no deliver tool call"
+            else:
+                try:
+                    jsonschema.validate(args, schema)
+                    return args
+                except jsonschema.ValidationError as ve:
+                    path = "/".join(str(p) for p in ve.absolute_path) or "(root)"
+                    last_error = f"at {path}: {ve.message}"
+            convo.append({
+                "role": "user",
+                "content": (f"That payload did not satisfy the output schema — {last_error}. "
+                            "Call `deliver` again with a corrected payload."),
+            })
+        raise RuntimeError(
+            f"structured output failed schema validation after "
+            f"{self._STRUCTURED_OUTPUT_ATTEMPTS} attempts: {last_error}")
 
     def _persist(self, req: NodeRunRequest, messages: list[dict]) -> str | None:
         key = self._session_key(req)

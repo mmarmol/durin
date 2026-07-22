@@ -4,8 +4,14 @@
   "start": "clarify",
   "max_visits": 3,
   "improvement_mode": "manual",
-  "input": {"text": true, "description": "a task or idea to think through before building"},
-  "output": {"text": true, "description": "a clear design spec: the chosen approach, requirements, and open questions"},
+  "input": {
+    "text": true,
+    "description": "a task or idea to think through before building"
+  },
+  "output": {
+    "text": true,
+    "description": "a clear design spec: the chosen approach, requirements, and open questions"
+  },
   "nodes": [
     {
       "id": "clarify",
@@ -13,15 +19,36 @@
       "mode": "read",
       "tools": "default",
       "prompt": "You are about to brainstorm a design for the given task. FIRST decide whether you understand it well enough to explore productively, or whether something ESSENTIAL is genuinely ambiguous or missing — the real goal, who it is for, a hard constraint, or what 'done' means. Read whatever context is available (files, code) to answer your own questions before asking the user. Only the user can resolve a true blocker.\n\nEnd your reply with EXACTLY one of these labels on its own final line:\nREADY     — the task is clear enough to start exploring.\nNEED_INFO — something essential is ambiguous or missing. BEFORE the label, list the SPECIFIC questions the user must answer (2-4, concrete, each one whose answer would actually change the design). Do not ask for nice-to-haves or anything you could reasonably decide yourself — only genuine blockers.",
-      "cases": {"READY": "frame", "NEED_INFO": "__needs_input__"}
+      "cases": {
+        "READY": "frame",
+        "NEED_INFO": "__needs_input__"
+      }
     },
     {
       "id": "frame",
       "kind": "work",
       "mode": "read",
       "tools": "none",
-      "prompt": "Frame the brainstorm. Break the task into 3-4 INDEPENDENT angles worth exploring in parallel, each written as a self-contained instruction that names the specific subject so it stands on its own. Cover distinct lenses, for example: the real user intent and the underlying goal; the requirements and hard constraints; the alternative approaches worth weighing; and the risks, edge cases and unknowns. Output ONLY a JSON array of these instruction strings — nothing else.",
-      "next": "explore"
+      "prompt": "Frame the brainstorm. Break the task into 3-4 INDEPENDENT angles worth exploring in parallel, each written as a self-contained instruction that names the specific subject so it stands on its own. Cover distinct lenses, for example: the real user intent and the underlying goal; the requirements and hard constraints; the alternative approaches worth weighing; and the risks, edge cases and unknowns. Deliver the instructions as the items list of your structured output.",
+      "next": "explore",
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 8
+            },
+            "minItems": 3,
+            "maxItems": 4,
+            "description": "Self-contained exploration instructions, one per angle."
+          }
+        }
+      }
     },
     {
       "id": "explore",

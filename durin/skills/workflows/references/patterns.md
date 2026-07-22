@@ -217,6 +217,46 @@ continues to `next`).
 `route-analyzers.py` inspects the working folder and prints e.g.
 `analyze_logs, analyze_images` (or `["analyze_logs"]`, or `[]`) as its last line.
 
+## Named inputs + structured output (`inputs_from`, `output_schema`, `output_file`)
+
+The edge carries ONE text and a linear script replaces it — a consolidator three steps
+later would no longer see the analysis. `inputs_from` composes the node's input from named
+sources (labeled blocks, plus `[upstream]` with the current edge). `output_schema` makes a
+node deliver a validated payload via a forced tool call (invalid → immediate in-node retry
+with the exact error); with `output_file` the ENGINE writes the validated JSON into the
+working folder — downstream structural gates become unnecessary.
+
+```json
+{
+  "name": "analyze-fetch-consolidate",
+  "start": "analyze",
+  "nodes": [
+    { "id": "analyze", "kind": "work", "mode": "read", "tools": "default",
+      "prompt": "Analyze the request in the working folder.",
+      "output_schema": { "type": "object", "required": ["summary", "domains"],
+        "properties": { "summary": {"type": "string"},
+                        "domains": {"type": "array", "items": {"type": "string"}} } },
+      "output_file": "analysis.json", "next": "fetch" },
+    { "id": "fetch", "kind": "script", "script": "fetch-details.py", "next": "consolidate" },
+    { "id": "consolidate", "kind": "script", "script": "consolidate.py",
+      "inputs_from": ["analyze", "fetch"], "next": null }
+  ]
+}
+```
+
+`consolidate.py` receives on stdin:
+
+```
+[analyze]
+{"summary": "...", "domains": ["acme.com"]}
+
+[fetch]
+RESOLVED: acme-corp
+
+[upstream]
+RESOLVED: acme-corp
+```
+
 ## Detached side-effect (`detached: true`)
 
 A side-effect node (persist, notify, archive) launched off the critical path: the walk

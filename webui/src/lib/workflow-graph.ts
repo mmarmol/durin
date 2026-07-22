@@ -22,6 +22,12 @@ export type WorkflowNodeDef = {
   branches_from?: string | null;
   // work/script: launch-and-continue side-effect node (off the critical path)
   detached?: boolean;
+  // named inputs: sources whose labeled outputs compose this node's input
+  inputs_from?: string[];
+  // work: JSON Schema the node's output must satisfy (forced deliver tool)
+  output_schema?: Record<string, unknown> | null;
+  // work: engine-written file holding the validated payload (requires output_schema)
+  output_file?: string;
   max_concurrency?: number;
   reconcile?: "read" | "choose" | "union";
   // work node: per-node visit budget (blank/undefined = inherit workflow default)

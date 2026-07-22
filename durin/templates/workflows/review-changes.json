@@ -2,8 +2,15 @@
   "name": "review-changes",
   "description": "Review a diff across the lenses that matter — one independent reviewer per lens — and synthesize a severity-grouped review.",
   "improvement_mode": "manual",
-  "input": {"text": true, "files": true, "description": "a set of changes to review (a diff, or the changed files), plus optional context on intent"},
-  "output": {"text": true, "description": "a prioritized review: confirmed findings grouped by severity, each with file, why it matters, and a suggested fix"},
+  "input": {
+    "text": true,
+    "files": true,
+    "description": "a set of changes to review (a diff, or the changed files), plus optional context on intent"
+  },
+  "output": {
+    "text": true,
+    "description": "a prioritized review: confirmed findings grouped by severity, each with file, why it matters, and a suggested fix"
+  },
   "start": "frame",
   "nodes": [
     {
@@ -11,8 +18,26 @@
       "kind": "work",
       "mode": "read",
       "tools": "default",
-      "prompt": "Read the changes under review and decide which review LENSES actually matter for this diff — only the ones with real surface area here. Choose from correctness, security, performance, error-handling, tests, API/contract, readability — or name a more specific one. Output ONLY a JSON array of self-contained strings, each naming one lens and what to scrutinize for it in THESE changes. Nothing else.",
-      "next": "reviews"
+      "prompt": "Read the changes under review and decide which review LENSES actually matter for this diff — only the ones with real surface area here. Choose from correctness, security, performance, error-handling, tests, API/contract, readability — or name a more specific one. Deliver one self-contained string per chosen lens — the lens and what to scrutinize for it in THESE changes — as the items list of your structured output.",
+      "next": "reviews",
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 8
+            },
+            "minItems": 1,
+            "maxItems": 7,
+            "description": "One string per chosen lens: the lens and what to scrutinize in THESE changes."
+          }
+        }
+      }
     },
     {
       "id": "reviews",

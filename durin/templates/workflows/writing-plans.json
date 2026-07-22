@@ -4,8 +4,14 @@
   "start": "intake",
   "max_visits": 3,
   "improvement_mode": "manual",
-  "input": {"text": true, "description": "a design spec or brief to turn into a detailed, verifiable plan"},
-  "output": {"text": true, "description": "a /build-ready implementation plan with a ## Verification section"},
+  "input": {
+    "text": true,
+    "description": "a design spec or brief to turn into a detailed, verifiable plan"
+  },
+  "output": {
+    "text": true,
+    "description": "a /build-ready implementation plan with a ## Verification section"
+  },
   "nodes": [
     {
       "id": "intake",
@@ -13,7 +19,10 @@
       "mode": "read",
       "tools": "default",
       "prompt": "You are about to write a detailed implementation plan from the given spec or brief. FIRST decide whether it is concrete enough to plan against, or whether something ESSENTIAL is missing — the scope, which area or files the work touches, what 'done' looks like, or a hard constraint. Read available context (code, files) to resolve what you can yourself before asking.\n\nEnd your reply with EXACTLY one of these labels on its own final line:\nREADY     — the spec is concrete enough to plan.\nNEED_INFO — something essential is missing. BEFORE the label, list 2-4 SPECIFIC blocking questions the user must answer — only genuine blockers, not things you could decide yourself.",
-      "cases": {"READY": "draft", "NEED_INFO": "__needs_input__"}
+      "cases": {
+        "READY": "draft",
+        "NEED_INFO": "__needs_input__"
+      }
     },
     {
       "id": "draft",
@@ -28,8 +37,26 @@
       "kind": "work",
       "mode": "read",
       "tools": "none",
-      "prompt": "You are setting up an independent review of the draft plan above. Produce 3-4 review lenses, each a self-contained instruction to critique the plan from one distinct angle — for example: missing or out-of-order steps and unstated assumptions; risks, edge cases and failure modes; whether every step is genuinely VERIFIABLE (has a real check); and over-scope / speculative work that should be cut (YAGNI). Output ONLY a JSON array of these instruction strings — nothing else.",
-      "next": "review"
+      "prompt": "You are setting up an independent review of the draft plan above. Produce 3-4 review lenses, each a self-contained instruction to critique the plan from one distinct angle — for example: missing or out-of-order steps and unstated assumptions; risks, edge cases and failure modes; whether every step is genuinely VERIFIABLE (has a real check); and over-scope / speculative work that should be cut (YAGNI). Deliver the instructions as the items list of your structured output.",
+      "next": "review",
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 8
+            },
+            "minItems": 3,
+            "maxItems": 4,
+            "description": "Self-contained critique instructions, one per review lens."
+          }
+        }
+      }
     },
     {
       "id": "review",
@@ -62,7 +89,10 @@
       "mode": "read",
       "tools": "none",
       "prompt": "Check the revised plan, not all-or-nothing. A good plan is one whose steps are ordered, concrete, and each has a real way to be checked, with a `## Verification` section for the whole. Tolerate minor polish. Give a one-line reason, then end with EXACTLY one of these labels on its own final line:\nREADY  — the plan is actionable and verifiable; it is ready for the user to approve and build.\nGAPS   — one or more substantive steps are missing, unverifiable, or out of order. Name specifically which, so they can be fixed.",
-      "cases": {"READY": null, "GAPS": "revise"}
+      "cases": {
+        "READY": null,
+        "GAPS": "revise"
+      }
     }
   ]
 }
