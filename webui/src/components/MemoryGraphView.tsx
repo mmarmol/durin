@@ -902,8 +902,8 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
           ctx.font = "500 13px ui-sans-serif, system-ui, -apple-system";
           ctx.fillStyle = themeRef.current!.text;
           ctx.fillText(shortLabel(displayName), sx, sy);
+          ctx.font = "11px ui-sans-serif, system-ui, -apple-system";
           if (sr >= 28) {
-            ctx.font = "11px ui-sans-serif, system-ui, -apple-system";
             ctx.fillStyle = themeRef.current!.textMuted;
             ctx.fillText(
               t("memoryGraph.bubbleEntities", { count: n.count ?? 0 }),
