@@ -64,3 +64,46 @@ def test_extract_hubs_deterministic_tie_break():
     nodes = [_node("topic:b", weight=5), _node("topic:a", weight=5)]
     hubs, _rest = _extract_hubs(nodes, [], top_n=1)
     assert [h["id"] for h in hubs] == ["topic:a"]
+
+
+from durin.memory.graph_overview import _communities, _label_propagation
+
+
+def _adj(edges: list[tuple[str, str, float]]) -> dict[str, list[tuple[str, float]]]:
+    out: dict[str, list[tuple[str, float]]] = {}
+    for a, b, w in edges:
+        out.setdefault(a, []).append((b, w))
+        out.setdefault(b, []).append((a, w))
+    return out
+
+
+def _two_cliques() -> tuple[list[str], dict[str, list[tuple[str, float]]]]:
+    left = [f"topic:l{i}" for i in range(4)]
+    right = [f"topic:r{i}" for i in range(4)]
+    edges = []
+    for grp in (left, right):
+        for i in range(len(grp)):
+            for j in range(i + 1, len(grp)):
+                edges.append((grp[i], grp[j], 3.0))
+    edges.append((left[0], right[0], 0.5))
+    return left + right, _adj(edges)
+
+
+def test_label_propagation_separates_two_cliques():
+    ids, adj = _two_cliques()
+    labels = _label_propagation(ids, adj)
+    comms = _communities(labels)
+    sizes = sorted(len(m) for m in comms.values())
+    assert sizes == [4, 4]
+
+
+def test_label_propagation_is_deterministic_under_input_order():
+    ids, adj = _two_cliques()
+    a = _label_propagation(ids, adj)
+    b = _label_propagation(list(reversed(ids)), adj)
+    assert a == b
+
+
+def test_label_propagation_isolated_nodes_stay_singleton():
+    labels = _label_propagation(["topic:lone"], {})
+    assert labels == {"topic:lone": "topic:lone"}

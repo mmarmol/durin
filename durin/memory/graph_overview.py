@@ -10,6 +10,7 @@ count, sessions edge into everything they touched, and with few sessions the
 
 from __future__ import annotations
 
+from collections import defaultdict
 from typing import Any
 
 HUB_COUNT = 20
@@ -61,3 +62,41 @@ def _extract_hubs(
     hub_ids = {n["id"] for n in hubs}
     rest = [n for n in nodes if n["id"] not in hub_ids]
     return hubs, rest
+
+
+def _label_propagation(
+    node_ids: list[str],
+    adj: dict[str, list[tuple[str, float]]],
+    max_rounds: int = 20,
+) -> dict[str, str]:
+    """Weighted label propagation, fully deterministic.
+
+    Every source of nondeterminism in the textbook algorithm is pinned:
+    nodes iterate in sorted-id order, each label starts as the node's own
+    id, and neighbour-label ties break lexicographically. Same input ⇒
+    same partition, regardless of input list order.
+    """
+    order = sorted(node_ids)
+    labels = {nid: nid for nid in order}
+    for _ in range(max_rounds):
+        changed = False
+        for nid in order:
+            counts: dict[str, float] = defaultdict(float)
+            for other, weight in adj.get(nid, ()):  # noqa: B909 — read-only
+                counts[labels[other]] += float(weight)
+            if not counts:
+                continue
+            best = min(counts.items(), key=lambda kv: (-kv[1], kv[0]))[0]
+            if best != labels[nid]:
+                labels[nid] = best
+                changed = True
+        if not changed:
+            break
+    return labels
+
+
+def _communities(labels: dict[str, str]) -> dict[str, list[str]]:
+    out: dict[str, list[str]] = defaultdict(list)
+    for nid, label in labels.items():
+        out[label].append(nid)
+    return {label: sorted(members) for label, members in out.items()}
