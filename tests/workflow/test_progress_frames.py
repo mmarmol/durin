@@ -39,6 +39,24 @@ def test_finished_frames_treat_persist_failed_as_failed():
     assert finished_frames(_wf(), runs)[0]["status"] == "failed"
 
 
+def test_finished_frames_carry_duration_s():
+    """The frame's duration_s is the run row's measured wall-clock time — the
+    value both rendering surfaces format as an already-finished node's elapsed."""
+    runs = [SimpleNamespace(node_id="scan", status="ok", route_label=None,
+                            iteration=1, budget=None, duration_s=155.0)]
+    assert finished_frames(_wf(), runs)[0]["duration_s"] == 155.0
+
+
+def test_finished_frames_duration_s_is_none_when_unmeasured():
+    """A run row from a node type that never measures its own duration (e.g. a
+    subworkflow or parallel aggregate row) has no duration_s attribute at all.
+    The frame must carry None there, not silently coerce the missing
+    measurement into a 0-second duration."""
+    runs = [SimpleNamespace(node_id="scan", status="ok", route_label=None,
+                            iteration=1, budget=None)]
+    assert finished_frames(_wf(), runs)[0]["duration_s"] is None
+
+
 def test_running_frame_marks_the_node_running():
     node = SimpleNamespace(id="judge", title="Judge", prompt="", command="", script="")
     frame = running_frame(node, iteration=2, budget=5)

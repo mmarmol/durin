@@ -62,6 +62,10 @@ def finished_frames(workflow: Any, runs: list[Any]) -> list[dict]:
             "route_label": getattr(r, "route_label", None),
             "iteration": r.iteration,
             "budget": getattr(r, "budget", None),
+            # A subworkflow/parallel aggregate row never measures its own
+            # duration (the time is spent inside nested runs/branches), so this
+            # stays None there rather than becoming a misleading 0 seconds.
+            "duration_s": getattr(r, "duration_s", None),
         }
         for r in runs
     ]
