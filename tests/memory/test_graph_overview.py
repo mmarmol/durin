@@ -112,6 +112,7 @@ def test_label_propagation_isolated_nodes_stay_singleton():
 from durin.memory.graph_overview import (
     BUBBLE_DISPLAY_CAP,
     BUBBLE_MIN_MEMBERS,
+    LOOSE_DISPLAY_CAP,
     OTHERS_ID,
     assemble_overview,
 )
@@ -225,3 +226,31 @@ def test_tiered_weights_extract_only_true_outliers():
     out = assemble_overview(payload)
     assert [h["id"] for h in out["hubs"]] == ["company:hub0"]
     assert len(out["bubbles"]) == 2
+
+
+def test_loose_nodes_are_display_capped_with_overflow_in_others():
+    payload = _community_payload(1, BUBBLE_MIN_MEMBERS + 1)
+    payload["nodes"] += [
+        _node(f"topic:iso{i:03d}", weight=2) for i in range(LOOSE_DISPLAY_CAP + 25)
+    ]
+    out = assemble_overview(payload)
+    assert out["mode"] == "clustered"
+    assert len(out["loose"]) == LOOSE_DISPLAY_CAP
+    others = [b for b in out["bubbles"] if b["id"] == OTHERS_ID]
+    assert len(others) == 1
+    assert others[0]["count"] == 25
+    assert len(out["members"][OTHERS_ID]) == 25
+    assert out["stats"]["loose_count"] == LOOSE_DISPLAY_CAP + 25
+
+
+def test_others_bubble_merges_bubble_and_loose_overflow():
+    payload = _community_payload(BUBBLE_DISPLAY_CAP + 2, BUBBLE_MIN_MEMBERS + 1)
+    payload["nodes"] += [
+        _node(f"topic:iso{i:03d}", weight=2) for i in range(LOOSE_DISPLAY_CAP + 5)
+    ]
+    out = assemble_overview(payload)
+    others = [b for b in out["bubbles"] if b["id"] == OTHERS_ID]
+    assert len(others) == 1
+    expected = 2 * (BUBBLE_MIN_MEMBERS + 1) + 5
+    assert others[0]["count"] == expected
+    assert len(out["members"][OTHERS_ID]) == expected

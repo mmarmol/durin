@@ -19,6 +19,7 @@ from typing import Any
 HUB_COUNT = 20
 BUBBLE_MIN_MEMBERS = 15
 BUBBLE_DISPLAY_CAP = 30
+LOOSE_DISPLAY_CAP = 30
 
 OTHERS_ID = "__others__"
 
@@ -124,7 +125,9 @@ def assemble_overview(payload: dict[str, Any]) -> dict[str, Any]:
     3), and the qualifying count is capped at HUB_COUNT — so uniform or
     young graphs extract no hubs at all. Label propagation then runs on the
     rest; communities >= BUBBLE_MIN_MEMBERS become bubbles keyed by their
-    heaviest member; the rest stay as loose nodes. Edges are summed between
+    heaviest member; the rest stay as loose nodes, display-capped at
+    LOOSE_DISPLAY_CAP by weight, with any overflow folded into the same
+    others bubble that absorbs bubble overflow. Edges are summed between
     containers. mode="flat" when no community reaches the threshold — small
     or young workspaces render the plain graph instead, though hubs (found
     before clustering is attempted) still populate when present.
@@ -194,6 +197,12 @@ def assemble_overview(payload: dict[str, Any]) -> dict[str, Any]:
             "stats": stats,
         }
 
+    loose_by_weight = sorted(
+        loose_ids, key=lambda nid: (-int(by_id[nid]["weight"]), nid)
+    )
+    displayed_loose_ids = loose_by_weight[:LOOSE_DISPLAY_CAP]
+    loose_overflow_ids = loose_by_weight[LOOSE_DISPLAY_CAP:]
+
     shown, overflow = sized[:BUBBLE_DISPLAY_CAP], sized[BUBBLE_DISPLAY_CAP:]
     members_map: dict[str, list[str]] = {}
     bubbles: list[dict[str, Any]] = []
@@ -227,9 +236,10 @@ def assemble_overview(payload: dict[str, Any]) -> dict[str, Any]:
     for members in shown:
         rep = _rep(members)
         bubbles.append(_bubble(rep, by_id[rep]["name"], members))
-    if overflow:
-        merged = sorted(nid for members in overflow for nid in members)
-        bubbles.append(_bubble(OTHERS_ID, "__others__", merged))
+    overflow_members = sorted(nid for members in overflow for nid in members)
+    others_members = sorted(overflow_members + loose_overflow_ids)
+    if others_members:
+        bubbles.append(_bubble(OTHERS_ID, "__others__", others_members))
     stats["bubble_count"] = len(bubbles)
 
     container_of: dict[str, str] = {}
@@ -238,7 +248,7 @@ def assemble_overview(payload: dict[str, Any]) -> dict[str, Any]:
             container_of[m] = bid
     for hid in hub_ids:
         container_of[hid] = hid
-    for nid in loose_ids:
+    for nid in displayed_loose_ids:
         container_of[nid] = nid
 
     agg: dict[tuple[str, str], float] = defaultdict(float)
@@ -257,7 +267,7 @@ def assemble_overview(payload: dict[str, Any]) -> dict[str, Any]:
         "mode": "clustered",
         "bubbles": bubbles,
         "hubs": hubs,
-        "loose": [by_id[nid] for nid in loose_ids],
+        "loose": [by_id[nid] for nid in displayed_loose_ids],
         "edges": edges,
         "members": members_map,
         "stats": stats,
