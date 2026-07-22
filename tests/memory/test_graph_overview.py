@@ -107,3 +107,97 @@ def test_label_propagation_is_deterministic_under_input_order():
 def test_label_propagation_isolated_nodes_stay_singleton():
     labels = _label_propagation(["topic:lone"], {})
     assert labels == {"topic:lone": "topic:lone"}
+
+
+from durin.memory.graph_overview import (
+    BUBBLE_DISPLAY_CAP,
+    BUBBLE_MIN_MEMBERS,
+    OTHERS_ID,
+    assemble_overview,
+)
+
+
+def _community_payload(n_communities: int, size: int, *, hubs: int = 0):
+    """Synthetic payload: n cliques of `size`, plus optional mega-hubs
+    connected to every node (weight high enough to rank first)."""
+    nodes, edges = [], []
+    for c in range(n_communities):
+        ids = [f"topic:c{c}n{i}" for i in range(size)]
+        nodes += [_node(i, weight=2) for i in ids]
+        for i in range(size):
+            for j in range(i + 1, size):
+                edges.append(_edge(ids[i], ids[j], 3))
+    for h in range(hubs):
+        hid = f"company:hub{h}"
+        nodes.append(_node(hid, weight=1000))
+        edges += [_edge(hid, n["id"], 1) for n in nodes if n["id"] != hid]
+    return {"nodes": nodes, "edges": edges, "stats": {}}
+
+
+def test_assemble_clustered_mode_with_bubbles_and_members():
+    payload = _community_payload(3, BUBBLE_MIN_MEMBERS + 1)
+    out = assemble_overview(payload)
+    assert out["mode"] == "clustered"
+    assert len(out["bubbles"]) == 3
+    for b in out["bubbles"]:
+        assert b["count"] == BUBBLE_MIN_MEMBERS + 1
+        assert b["id"] in out["members"]
+        assert len(out["members"][b["id"]]) == b["count"]
+        assert b["id"] in out["members"][b["id"]]
+
+
+def test_assemble_flat_mode_when_no_community_reaches_threshold():
+    payload = _community_payload(4, max(2, BUBBLE_MIN_MEMBERS - 1))
+    out = assemble_overview(payload)
+    assert out["mode"] == "flat"
+    assert out["bubbles"] == []
+
+
+def test_hubs_extracted_before_clustering_prevent_blob():
+    payload = _community_payload(2, BUBBLE_MIN_MEMBERS + 2, hubs=1)
+    out = assemble_overview(payload)
+    assert [h["id"] for h in out["hubs"]][0] == "company:hub0"
+    assert len(out["bubbles"]) == 2
+
+
+def test_aggregated_edges_reference_container_ids():
+    payload = _community_payload(2, BUBBLE_MIN_MEMBERS + 1, hubs=1)
+    out = assemble_overview(payload)
+    containers = (
+        {b["id"] for b in out["bubbles"]}
+        | {h["id"] for h in out["hubs"]}
+        | {n["id"] for n in out["loose"]}
+    )
+    assert out["edges"], "hub touches every community: aggregated edges expected"
+    for e in out["edges"]:
+        assert e["source"] in containers and e["target"] in containers
+        assert e["source"] != e["target"]
+
+
+def test_bubble_display_cap_overflows_into_others():
+    payload = _community_payload(BUBBLE_DISPLAY_CAP + 3, BUBBLE_MIN_MEMBERS + 1)
+    out = assemble_overview(payload)
+    assert len(out["bubbles"]) == BUBBLE_DISPLAY_CAP + 1
+    others = [b for b in out["bubbles"] if b["id"] == OTHERS_ID]
+    assert len(others) == 1
+    assert others[0]["count"] == 3 * (BUBBLE_MIN_MEMBERS + 1)
+    assert len(out["members"][OTHERS_ID]) == others[0]["count"]
+
+
+def test_assemble_empty_payload_is_flat_with_zero_stats():
+    out = assemble_overview({"nodes": [], "edges": [], "stats": {}})
+    assert out["mode"] == "flat"
+    assert out["stats"]["entity_count"] == 0
+    assert out["bubbles"] == [] and out["hubs"] == [] and out["loose"] == []
+
+
+def test_session_and_phantom_totals_survive_in_stats():
+    payload = _community_payload(1, BUBBLE_MIN_MEMBERS + 1)
+    payload["nodes"] += [
+        _node("session:s1", weight=400, ntype="session"),
+        _node("topic:ghost", weight=1, phantom=True),
+    ]
+    out = assemble_overview(payload)
+    assert out["stats"]["session_count"] == 1
+    assert out["stats"]["phantom_count"] == 1
+    assert out["stats"]["entity_count"] == BUBBLE_MIN_MEMBERS + 1
