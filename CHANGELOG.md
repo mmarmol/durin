@@ -5,10 +5,36 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
-## Unreleased
+## 0.4.0 — 2026-07-22
 
 ### Highlights
 
+- **The workflow engine grew up as a pipeline engine.** Six improvements, all
+  sourced from a real four-stage support-ticket pipeline running in
+  production: a sub-workflow child's terminal status now reaches the parent
+  (a pipeline can no longer "complete" past a stage that never ran — a child
+  that pauses for input pauses the whole run resumably, a failed child aborts
+  it naming the stage) (#431); a parallel node can select its branches at
+  RUN time from a routing script's output (`branches_from`), ending the
+  one-static-block-per-combination workaround (#431); script nodes may run
+  as parallel branches, so a deterministic fetch can overlap an LLM analysis
+  instead of serializing behind it (#433); a work or script node can be
+  `detached` — launched off the critical path for side effects like
+  persisting to memory, joined before the run finishes, and unable to sink
+  the run if it fails (#435); and an aborted run can RESUME at its failed
+  node with the exact input it had — a transient API error at one node no
+  longer costs the whole pipeline again (#436).
+- **Nodes now have real I/O contracts.** `inputs_from` composes a node's
+  input from the labeled outputs of named earlier nodes (plus the current
+  edge), so a script chain between producer and consumer no longer needs
+  courier files; `output_schema` makes a node deliver a schema-validated
+  payload through a forced tool call — a malformed payload is retried
+  immediately inside the node with the exact validation error instead of
+  costing a full downstream loop-back — and `output_file` has the ENGINE
+  write the validated JSON into the working folder, so the file cannot be
+  malformed. The bundled seed workflows' fan-out list producers all declare
+  schemas now, ending the prose-wrapped-JSON-array bug class at the source.
+  (#437)
 - **A running workflow shows its work, live.** The chat's work strip and
   in-thread pill, the web UI's work panel, the Runs (executions) view, and
   the terminal UI all now name the node currently active, how long it has
@@ -23,6 +49,39 @@ previous tag — highlights first, then changes grouped by area.
   the gateway itself restarts partway through a node, the rounds that node
   had already completed are preserved in its session instead of vanishing
   with the process. (#428)
+- **Context compaction actually fires now — and shows its work.** The
+  compaction trigger, its measured savings, and the resulting context state
+  are visible instead of silent; trimmed session files become append-only
+  archive history that stays searchable in-session instead of disappearing.
+  (#425, #426, #427)
+
+### Changes
+
+- **Workflows** — child status propagation + sub-workflow `duration_s` in the
+  parent trace (#431); `branches_from` runtime-selected parallel branches
+  (#431); script nodes as parallel branches, with per-branch `exit_code` in
+  the trace (#433); choose/union branch forks copy the run's working folder
+  only — never the durin workspace around it (#432); `detached: true`
+  launch-and-continue nodes (#435); failure resume: aborted manifests store
+  the failed node and the exact upstream it received, and `resume_run_id`
+  retries that node alone (#436); `inputs_from`, `output_schema` (forced
+  `deliver` tool, server-side jsonschema validation, in-node retry) and
+  engine-written `output_file` (#437); `input_files` land under their
+  original basename — documented everywhere agents read (#431).
+- **Seed workflows** — the five fan-out list producers (research-to-answer,
+  brainstorming, review-changes, writing-plans, build-specs) declare
+  `output_schema` (#437).
+- **Web UI (workflow editor)** — third parallel mode (runtime-selected
+  branches), script nodes selectable as branches, `detached` toggle,
+  `inputs_from` checklist, `output_schema` editor with parse-on-blur and an
+  `output_file` field; run-visibility surfaces from #428 across chat, panel
+  and executions.
+- **Sessions** — compaction trigger reachable, measured, and visible (#425);
+  index-rebase-safe park (#426); file-cap trims become append-only archive
+  history, searchable in-session (#427).
+- **Dependencies** — `jsonschema` promoted from transitive to explicit core
+  dependency (#437); pillow 12.3.0 (#424), setuptools 83.0.0 (#434), CI
+  actions group (#430).
 
 ### Fixes
 
@@ -33,6 +92,7 @@ previous tag — highlights first, then changes grouped by area.
   from under it. Runs that are still executing (or paused waiting for input,
   which resume into the same folder) are now exempt from pruning and don't
   consume retention slots, matching the protection run manifests already had.
+  (#429)
 
 ## 0.3.4 — 2026-07-21
 
