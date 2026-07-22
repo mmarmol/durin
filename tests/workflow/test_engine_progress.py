@@ -222,6 +222,39 @@ def test_engine_progress_frames_carry_iteration_and_budget_for_looping_node():
     assert all(n.get("budget") == 2 for n in second_pass_finished), second_pass_finished
 
 
+def test_a_loop_does_not_list_a_finished_node_as_pending():
+    """The pending tail is walked forward from the running node. On a loop back
+    that walk reaches nodes the run has already executed — so a single frame set
+    would carry the same node twice, 'done' from its completed pass and 'pending'
+    from the tail, which reads as contradictory in every surface."""
+    calls = []
+    outputs = iter(["produced", "FAIL retry", "produced again", "PASS"])
+    wf = parse_workflow({
+        "name": "loop-pending", "start": "produce", "max_visits": 3,
+        "nodes": [
+            {"id": "produce", "kind": "work", "next": "gate"},
+            {"id": "gate", "kind": "work", "on_pass": None, "on_fail": "produce"},
+        ],
+    })
+
+    def runner(req: NodeRunRequest) -> NodeRunResponse:
+        return NodeRunResponse(output=next(outputs), session_key=None, messages=[])
+
+    eng = WorkflowEngine(
+        node_runner=runner,
+        run_id_factory=lambda: "r-loop-pending",
+        progress_emit=lambda p: calls.append(p),
+    )
+    assert eng.run(wf, "do it").status == "completed"
+
+    for frame in calls:
+        pending = {n["id"] for n in frame["nodes"] if n["status"] == "pending"}
+        other = {n["id"] for n in frame["nodes"] if n["status"] != "pending"}
+        assert not (pending & other), (
+            f"node listed as pending and as {other & pending} in the same frame: {frame['nodes']}"
+        )
+
+
 def test_parallel_branches_carry_label():
     """Branch dicts inside parallel nodes must carry a 'label' key."""
     frames = []

@@ -39,3 +39,16 @@ def test_a_loop_does_not_repeat_forever():
 def test_the_last_node_has_no_tail():
     wf = _wf([{"id": "a", "kind": "work", "next": None}])
     assert pending_frames(wf, "a") == []
+
+
+def test_an_already_visited_node_is_not_listed_as_pending():
+    """On a loop back the run re-enters `produce`, whose tail is `gate` — but
+    `gate` already ran. Listing it as pending puts it in the same frame set
+    twice, done and pending at once."""
+    wf = _wf([
+        {"id": "produce", "kind": "work", "next": "gate"},
+        {"id": "gate", "kind": "work", "on_pass": None, "on_fail": "produce"},
+    ])
+    assert [f["id"] for f in pending_frames(wf, "produce", ["produce", "gate"])] == []
+    # First pass: the gate has not run yet, so it is still a certain next step.
+    assert [f["id"] for f in pending_frames(wf, "produce", ["produce"])] == ["gate"]

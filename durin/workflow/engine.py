@@ -558,7 +558,8 @@ class WorkflowEngine:
                     budget=budget if isinstance(node, (WorkNode, ScriptNode)) else None,
                     started_at=node_started_at,
                 ))
-                started.extend(pending_frames(workflow, node.id))
+                started.extend(pending_frames(workflow, node.id,
+                                             [r.node_id for r in runs]))
                 try:
                     self._progress_emit({"run_id": run_id, "nodes": started, "done": False})
                 except Exception:  # noqa: BLE001 - best-effort
@@ -597,7 +598,8 @@ class WorkflowEngine:
                     round_=_activity["round"],
                     max_rounds=_activity["max_rounds"],
                 ))
-                frames.extend(pending_frames(workflow, _node.id))
+                frames.extend(pending_frames(workflow, _node.id,
+                                             [r.node_id for r in runs]))
                 try:
                     self._progress_emit({"run_id": run_id, "nodes": frames, "done": False})
                 except Exception:  # noqa: BLE001 - best-effort
