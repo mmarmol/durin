@@ -1,7 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { activeNode, formatElapsed, useTicker } from "@/lib/work-format";
+import { activeNode, formatElapsed, touchedNodeCount, useTicker } from "@/lib/work-format";
 
 describe("formatElapsed", () => {
   it("renders minutes and seconds zero-padded", () => {
@@ -26,6 +26,31 @@ describe("activeNode", () => {
     const item = { kind: "workflow", id: "r", label: "wf", status: "done",
       startedAt: 0, endedAt: null, nodes: [{ id: "a", status: "done" }] } as never;
     expect(activeNode(item)).toBeUndefined();
+  });
+});
+
+describe("touchedNodeCount", () => {
+  it("excludes the pending tail from the count", () => {
+    const item = { kind: "workflow", id: "r", label: "wf", status: "running",
+      startedAt: 0, endedAt: null,
+      nodes: [
+        { id: "a", status: "done" },
+        { id: "b", status: "running" },
+        { id: "c", status: "pending" },
+        { id: "d", status: "pending" },
+      ] } as never;
+    expect(touchedNodeCount(item)).toBe(2);
+  });
+  it("counts every node when none are pending", () => {
+    const item = { kind: "workflow", id: "r", label: "wf", status: "done",
+      startedAt: 0, endedAt: null,
+      nodes: [{ id: "a", status: "done" }, { id: "b", status: "failed" }] } as never;
+    expect(touchedNodeCount(item)).toBe(2);
+  });
+  it("returns 0 when there is no node list", () => {
+    const item = { kind: "workflow", id: "r", label: "wf", status: "running",
+      startedAt: 0, endedAt: null } as never;
+    expect(touchedNodeCount(item)).toBe(0);
   });
 });
 

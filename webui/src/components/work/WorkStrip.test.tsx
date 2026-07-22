@@ -123,3 +123,20 @@ it("falls back to the status text when the item has nodes but none are running",
   render(wrap(<WorkStrip active={[withDoneNodes]} finished={[]} onOpen={() => {}} />));
   expect(screen.getByText(/in progress/)).toBeInTheDocument();
 });
+
+it("counts only the nodes the run has touched, excluding the pending tail", () => {
+  vi.setSystemTime(new Date(2024, 0, 1, 0, 0, 0));
+  const startedAt = Math.floor(Date.now() / 1000);
+  const withPending = item({
+    nodes: [
+      { id: "gather", status: "done" },
+      { id: "consolidate", label: "Consolidate", status: "running", startedAt },
+      { id: "report", status: "pending" },
+      { id: "notify", status: "pending" },
+    ],
+  });
+  render(wrap(<WorkStrip active={[withPending]} finished={[]} onOpen={() => {}} />));
+  // Two touched (done + running); the two-node pending tail is not counted.
+  expect(screen.getByText(/Consolidate · 0:00 · 2 nodes/)).toBeInTheDocument();
+  expect(screen.queryByText(/4 nodes/)).not.toBeInTheDocument();
+});

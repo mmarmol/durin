@@ -19,6 +19,14 @@ export function activeNode(item: WorkItem): WorkNode | undefined {
   return item.nodes?.filter((n) => n.status === "running").at(-1);
 }
 
+/** Count of nodes a run has actually touched — i.e. excluding the pending
+ *  tail the engine appends for nodes certain to run next but not yet
+ *  started. Never "N of M": the total is unknowable while routers can still
+ *  pick a branch, and a false denominator is worse than none. */
+export function touchedNodeCount(item: WorkItem): number {
+  return item.nodes?.filter((n) => n.status !== "pending").length ?? 0;
+}
+
 /** Epoch milliseconds, refreshed every second while `active`. Clocks tick from
  *  this rather than from their own timers so one interval drives every clock. */
 export function useTicker(active: boolean): number {

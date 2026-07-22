@@ -3,7 +3,7 @@ import { Check, HelpCircle, Loader2, PanelRight, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { cn } from "@/lib/utils";
-import { activeNode, formatElapsed, useTicker } from "@/lib/work-format";
+import { activeNode, formatElapsed, touchedNodeCount, useTicker } from "@/lib/work-format";
 import type { WorkItem } from "@/lib/types";
 
 /** How long the finished/failed flash stays up after the last active item ends. */
@@ -94,7 +94,7 @@ export function WorkStrip({
       node && node.startedAt != null
         ? `${node.label ?? node.id} · ${formatElapsed(node.startedAt * 1000, now)} · ${t(
             "work.strip.nodes",
-            { count: active[0].nodes?.length ?? 0 },
+            { count: touchedNodeCount(active[0]) },
           )}`
         : t("work.strip.statusRunning");
     body =
