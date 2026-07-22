@@ -78,7 +78,7 @@ jobs:
             echo "run=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         if: steps.filter.outputs.run == 'true'
         with:
           python-version: "3.11"
