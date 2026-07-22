@@ -527,13 +527,19 @@ class WorkflowEngine:
             # appears as "running".  Best-effort only — a crashing emit must never
             # abort the run.
             node_started_at = time.time()
-            try:
-                run_log.mark_node_started(
-                    self._workspace, workflow.name, run_id,
-                    node_id=node.id, label=node_label(node), started_at=node_started_at,
-                )
-            except Exception:  # noqa: BLE001 - observability write; never break the run
-                pass
+            # Guarded like every other manifest write in this class: without a
+            # workspace there is no manifest to mark, and calling through would
+            # raise on every node of every workspace-less run — an exception the
+            # handler below would then swallow on a purely normal path, hiding
+            # any real write failure among the noise.
+            if self._workspace is not None:
+                try:
+                    run_log.mark_node_started(
+                        self._workspace, workflow.name, run_id,
+                        node_id=node.id, label=node_label(node), started_at=node_started_at,
+                    )
+                except Exception:  # noqa: BLE001 - observability write; never break the run
+                    logger.exception("workflow node start marker failed for {}", workflow.name)
 
             # The shared working folder is one folder for every sequential node, so
             # nothing on disk records which node wrote what — a before/after listing
