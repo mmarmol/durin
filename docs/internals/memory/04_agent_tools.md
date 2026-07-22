@@ -473,7 +473,13 @@ that no longer keys a current bubble (the tree changed shape since the
 overview was built) raises `KeyError`, which the service maps to a 404; the
 client falls back to the overview and refreshes it.
 
-**Member display cap and scaffolding.** `build_cluster_subgraph` returns a neighborhood payload with a display-capped member list (sorted by descending weight, deterministic tie-break by id) and a separate `total_members` count that always reports the true pre-cap member count — this true count backs the client's "and N more" affordance when the display budget is exhausted. The returned stats flag indicates when truncation occurred. Phantom entities and session nodes one edge away from a kept member ride along non-transitively: the scaffolding check runs only against the capped member set, so a scaffolding node can never itself pull in a further scaffolding node.
+**Member display cap and scaffolding.** `build_cluster_subgraph` returns a
+neighborhood payload with a display-capped member list (sorted by
+descending weight, deterministic tie-break by id) and a separate
+`total_members` count that always reports the true pre-cap member count —
+this true count backs the client's "and N more" affordance when the
+display budget is exhausted. The returned stats flag indicates when
+truncation occurred.
 
 The `ego` branch of the subgraph route feeds the existing (pre-clustering)
 ego-subgraph builder from `get_full_graph_cached`'s payload instead of

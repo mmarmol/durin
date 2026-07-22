@@ -2009,7 +2009,7 @@
     "loadingGraph": "載入中…",
     "retry": "重試",
     "loadError": "無法重新整理圖譜。",
-    "staleCluster": "該群組自地圖建立後已變更——已返回總覽。",
+    "staleCluster": "該分組自地圖建立後已變更——已返回總覽。",
     "mapChanged": "地圖已變更——已更新。",
     "emptyTitle": "這裡還沒有內容",
     "emptyBody": "這張地圖會隨著 durin 的記憶不斷成長：你對話中的實體、專案和人物會在每次 Dream 之後出現在這裡。",

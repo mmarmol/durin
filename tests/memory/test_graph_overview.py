@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import datetime
-import pytest
 from pathlib import Path
 
+import pytest
+
+from durin.memory import graph_overview
 from durin.memory.aliases_cache import _clear_all as _clear_alias_cache
 from durin.memory.entity_page import EntityPage
-from durin.memory.store import store_memory
-from durin.memory import graph_overview
 from durin.memory.graph_overview import (
     HUB_COUNT,
     _extract_hubs,
@@ -17,6 +17,7 @@ from durin.memory.graph_overview import (
     build_overview,
     get_full_graph_cached,
 )
+from durin.memory.store import store_memory
 
 
 @pytest.fixture(autouse=True)
@@ -77,14 +78,14 @@ def test_extract_hubs_takes_top_weight_entities_only():
         _node("reference:handbook", weight=99, ntype="reference"),
         _node("topic:minor", weight=1),
     ]
-    hubs, rest = _extract_hubs(nodes, [], top_n=2)
+    hubs, rest = _extract_hubs(nodes, top_n=2)
     assert [h["id"] for h in hubs] == ["company:mxhero", "person:marcelo"]
     assert {n["id"] for n in rest} == {"reference:handbook", "topic:minor"}
 
 
 def test_extract_hubs_deterministic_tie_break():
     nodes = [_node("topic:b", weight=5), _node("topic:a", weight=5)]
-    hubs, _rest = _extract_hubs(nodes, [], top_n=1)
+    hubs, _rest = _extract_hubs(nodes, top_n=1)
     assert [h["id"] for h in hubs] == ["topic:a"]
 
 

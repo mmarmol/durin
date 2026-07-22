@@ -64,7 +64,6 @@ def _semantic_view(
 
 def _extract_hubs(
     nodes: list[dict[str, Any]],
-    edges: list[dict[str, Any]],
     top_n: int = HUB_COUNT,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Top entities by semantic weight, removed before clustering.
@@ -160,9 +159,7 @@ def assemble_overview(payload: dict[str, Any]) -> dict[str, Any]:
         median = weights[len(weights) // 2]
         floor = max(3, 2 * median)
         qualifying = sum(1 for n in non_ref_nodes if int(n["weight"]) >= floor)
-        hubs, rest = _extract_hubs(
-            sem_nodes, sem_edges, top_n=min(HUB_COUNT, qualifying)
-        )
+        hubs, rest = _extract_hubs(sem_nodes, top_n=min(HUB_COUNT, qualifying))
     else:
         hubs, rest = [], sem_nodes
     hub_ids = {n["id"] for n in hubs}
@@ -352,7 +349,10 @@ def _cached_payload(workspace: Path) -> tuple[int, dict[str, Any]]:
 
 
 def get_full_graph_cached(workspace: Path) -> dict[str, Any]:
-    """Uncapped graph payload, rebuilt only when the memory tree changed."""
+    """Uncapped graph payload, rebuilt only when the memory tree changed.
+
+    Synchronous and disk-heavy — event-loop callers hop through `asyncio.to_thread`.
+    """
     return _cached_payload(workspace)[1]
 
 
@@ -381,7 +381,10 @@ def _overview_from(ws: Path, sig: int, payload: dict[str, Any]) -> dict[str, Any
 
 
 def build_overview(workspace: Path) -> dict[str, Any]:
-    """Overview payload for the workspace, cached at both levels."""
+    """Overview payload for the workspace, cached at both levels.
+
+    Synchronous and disk-heavy — event-loop callers hop through `asyncio.to_thread`.
+    """
     ws = workspace.resolve()
     sig, payload = _cached_payload(ws)
     return _overview_from(ws, sig, payload)
@@ -417,6 +420,8 @@ def build_cluster_subgraph(
     Overview and payload come from one shared (signature, payload)
     snapshot — a single tree stat-walk — so a member can never point at a
     node id the payload doesn't have.
+
+    Synchronous and disk-heavy — event-loop callers hop through `asyncio.to_thread`.
     """
     ws = workspace.resolve()
     sig, payload = _cached_payload(ws)
