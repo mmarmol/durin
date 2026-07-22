@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -132,6 +132,15 @@ export function RunsView() {
   const [manifestLoading, setManifestLoading] = useState(false);
   const [resumingId, setResumingId] = useState<string | null>(null);
 
+  // Latest selection/manifest, read from inside the poll interval below without
+  // making that interval's own effect depend on either — both change far more
+  // often (every row click, every manifest refresh) than the interval itself
+  // should be torn down and rebuilt.
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
+  const manifestRef = useRef(manifest);
+  manifestRef.current = manifest;
+
   const refresh = useCallback(async () => {
     setError(null);
     try {
@@ -141,6 +150,22 @@ export function RunsView() {
       setError(errMsg(e));
     } finally {
       setLoading(false);
+    }
+  }, [token]);
+
+  // Re-fetches the currently-open run's manifest in place so its node rows,
+  // durations and artifacts advance while the user is watching — but only while
+  // that specific run is still "running". Skips entirely when no detail is open
+  // or the last fetch already came back terminal, so an open detail on a
+  // finished run settles into making no further requests.
+  const refreshOpenManifest = useCallback(async () => {
+    const entry = selectedRef.current;
+    if (!entry || manifestRef.current?.status !== "running") return;
+    try {
+      const got = await getWorkflowRunManifest(token, entry.workflow, entry.run_id);
+      setManifest(got);
+    } catch (e) {
+      setError(errMsg(e));
     }
   }, [token]);
 
@@ -154,14 +179,17 @@ export function RunsView() {
   // same cadence useWorkState already uses, so the side panel and this screen never
   // disagree about how fresh they are. The interval is torn down the moment a poll
   // finds nothing running, so a screen left open on an all-finished feed doesn't
-  // keep polling forever.
+  // keep polling forever. The same tick also refreshes an open run's manifest
+  // (see refreshOpenManifest) so an expanded detail advances in place instead of
+  // freezing at whatever it showed when the row was clicked.
   useEffect(() => {
     if (!anyRunning) return;
     const id = setInterval(() => {
       void refresh();
+      void refreshOpenManifest();
     }, 4000);
     return () => clearInterval(id);
-  }, [anyRunning, refresh]);
+  }, [anyRunning, refresh, refreshOpenManifest]);
 
   const tray = useMemo(() => strandedRuns(runs), [runs]);
 

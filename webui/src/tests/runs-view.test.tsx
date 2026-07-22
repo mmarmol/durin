@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { I18nextProvider } from "react-i18next";
@@ -240,6 +240,127 @@ describe("RunsView", () => {
     await vi.advanceTimersByTimeAsync(5000);
 
     expect(listSpy.mock.calls.length).toBe(after);
+    vi.useRealTimers();
+  });
+
+  it("refreshes an open running run's manifest on each poll and reflects the newer nodes", async () => {
+    vi.useFakeTimers();
+    // Both are vi.fn()s from vi.mock()'s factory, which this file's afterEach
+    // (vi.restoreAllMocks()) never resets — clear explicitly so call counts left
+    // over from earlier tests can't leak into these assertions.
+    const listSpy = vi.mocked(listAllWorkflowRuns);
+    const manifestSpy = vi.mocked(api.getWorkflowRunManifest);
+    listSpy.mockClear();
+    manifestSpy.mockClear();
+    listSpy.mockResolvedValue([
+      { workflow: "wf", run_id: "r1", status: "running", started_at: 1, task: "watch me" },
+    ] as never);
+    manifestSpy
+      .mockResolvedValueOnce({
+        status: "running",
+        final_output: "",
+        run_id: "r1",
+        runs: [
+          { node_id: "step-one", iteration: 1, passed: null, session_key: null, worker_index: null, status: "ok", route_label: null },
+        ],
+      })
+      .mockResolvedValue({
+        status: "running",
+        final_output: "",
+        run_id: "r1",
+        runs: [
+          { node_id: "step-one", iteration: 1, passed: null, session_key: null, worker_index: null, status: "ok", route_label: null },
+          { node_id: "step-two", iteration: 1, passed: null, session_key: null, worker_index: null, status: "ok", route_label: null },
+        ],
+      });
+
+    render(wrap(<RunsView />));
+    await act(async () => {});
+    fireEvent.click(screen.getByText("watch me"));
+    await act(async () => {});
+
+    expect(manifestSpy).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/step-one/)).toBeInTheDocument();
+    expect(screen.queryByText(/step-two/)).not.toBeInTheDocument();
+
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(manifestSpy.mock.calls.length).toBeGreaterThan(1);
+    expect(screen.getByText(/step-two/)).toBeInTheDocument();
+    vi.useRealTimers();
+  });
+
+  it("does not re-fetch a finished run's manifest even while the poll keeps ticking for other runs", async () => {
+    vi.useFakeTimers();
+    const listSpy = vi.mocked(listAllWorkflowRuns);
+    const manifestSpy = vi.mocked(api.getWorkflowRunManifest);
+    listSpy.mockClear();
+    manifestSpy.mockClear();
+    // r1 (opened below) is already finished; r2 is still running, so the shared
+    // poll interval stays alive and keeps ticking regardless of r1's own detail.
+    listSpy.mockResolvedValue([
+      { workflow: "wf", run_id: "r1", status: "completed", started_at: 1, task: "already done" },
+      { workflow: "wf", run_id: "r2", status: "running", started_at: 2, task: "still going" },
+    ] as never);
+    manifestSpy.mockResolvedValue({
+      status: "completed",
+      final_output: "final",
+      run_id: "r1",
+      runs: [
+        { node_id: "only-step", iteration: 1, passed: null, session_key: null, worker_index: null, status: "ok", route_label: null },
+      ],
+    });
+
+    render(wrap(<RunsView />));
+    await act(async () => {});
+    fireEvent.click(screen.getByText("already done"));
+    await act(async () => {});
+
+    expect(manifestSpy).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(9000);
+
+    // The list poll genuinely fired (proving the interval is alive)...
+    expect(listSpy.mock.calls.length).toBeGreaterThan(1);
+    // ...but the finished run's manifest was not touched again.
+    expect(manifestSpy).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  it("stops refreshing an open run's manifest after unmount", async () => {
+    vi.useFakeTimers();
+    const listSpy = vi.mocked(listAllWorkflowRuns);
+    const manifestSpy = vi.mocked(api.getWorkflowRunManifest);
+    listSpy.mockClear();
+    manifestSpy.mockClear();
+    listSpy.mockResolvedValue([
+      { workflow: "wf", run_id: "r1", status: "running", started_at: 1, task: "watch me" },
+    ] as never);
+    manifestSpy.mockResolvedValue({
+      status: "running",
+      final_output: "",
+      run_id: "r1",
+      runs: [
+        { node_id: "step-one", iteration: 1, passed: null, session_key: null, worker_index: null, status: "ok", route_label: null },
+      ],
+    });
+
+    const { unmount } = render(wrap(<RunsView />));
+    await act(async () => {});
+    fireEvent.click(screen.getByText("watch me"));
+    await act(async () => {});
+    await vi.advanceTimersByTimeAsync(4000);
+
+    const listCallsBeforeUnmount = listSpy.mock.calls.length;
+    const manifestCallsBeforeUnmount = manifestSpy.mock.calls.length;
+    expect(listCallsBeforeUnmount).toBeGreaterThan(1);
+    expect(manifestCallsBeforeUnmount).toBeGreaterThan(1);
+
+    unmount();
+    await vi.advanceTimersByTimeAsync(20000);
+
+    expect(listSpy.mock.calls.length).toBe(listCallsBeforeUnmount);
+    expect(manifestSpy.mock.calls.length).toBe(manifestCallsBeforeUnmount);
     vi.useRealTimers();
   });
 });
