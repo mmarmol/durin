@@ -2035,6 +2035,7 @@
     "hideAll": "Hide all",
     "onlyType": "Only",
     "searchTypesPlaceholder": "Search type…",
+    "typesOthers": "others ({{count}})",
     "entriesReferencing": "Entries referencing",
     "noAbsorptions": "No absorptions for this entity.",
     "noSourceLinkedEntries": "No episodic entries linked back to this session via source_refs.",

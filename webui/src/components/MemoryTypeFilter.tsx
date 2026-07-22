@@ -3,16 +3,17 @@ import { useTranslation } from "react-i18next";
 import { ChevronDown, Eye, EyeOff, Filter, Search as SearchIcon } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { type TypeLegendItem } from "@/lib/memory-graph-style";
 
-export interface TypeLegendItem {
-  type: string;
-  color: string;
-  count: number;
-}
+// Re-exported so existing importers (this type used to live here) keep working.
+export type { TypeLegendItem };
 
 interface MemoryTypeFilterProps {
   /** Real entity types, already sorted, with their color + node count. */
   types: TypeLegendItem[];
+  /** Long-tail types grouped behind one "others (N)" row (see
+   *  `groupTypeLegend`); each still toggles individually via `onToggle`. */
+  tail?: TypeLegendItem[];
   /** Phantom node count; when > 0 a `phantom` pseudo-type row is offered. */
   phantomCount: number;
   /** Currently hidden types (may include the `phantom` pseudo-type). */
@@ -30,6 +31,7 @@ interface MemoryTypeFilterProps {
  *  grows, and it is where "hide everything, then reveal one" lives. */
 export function MemoryTypeFilter({
   types,
+  tail = [],
   phantomCount,
   hidden,
   onToggle,
@@ -71,6 +73,7 @@ export function MemoryTypeFilter({
   const hasPhantom = phantomCount > 0;
   const visibleCount =
     types.filter((tl) => !hidden.has(tl.type)).length +
+    tail.filter((tl) => !hidden.has(tl.type)).length +
     (hasPhantom && !hidden.has("phantom") ? 1 : 0);
 
   const needle = query.trim().toLowerCase();
@@ -80,7 +83,7 @@ export function MemoryTypeFilter({
   );
   const showPhantomRow = hasPhantom && (!needle || "phantom".includes(needle));
 
-  if (types.length === 0 && !hasPhantom) return null;
+  if (types.length === 0 && tail.length === 0 && !hasPhantom) return null;
 
   function row(
     type: string,
@@ -135,6 +138,42 @@ export function MemoryTypeFilter({
     );
   }
 
+  // Single row standing in for every grouped tail type: a neutral (dashed,
+  // colorless) swatch since it spans several real types, and one toggle
+  // that flips all of them at once. No "Only" button — soloing a group of
+  // types isn't a defined action here. `aria-pressed` reflects "all tail
+  // types are currently visible"; a mixed state (some hidden, some not)
+  // reads as not-pressed the same as fully hidden — there's no third,
+  // partial visual state.
+  function tailRow() {
+    const allVisible = tail.every((tl) => !hidden.has(tl.type));
+    return (
+      <div key="__tail__" className="group flex items-center gap-1 rounded pr-1 hover:bg-muted">
+        <button
+          type="button"
+          onClick={() => tail.forEach((tl) => onToggle(tl.type))}
+          aria-pressed={allVisible}
+          className="flex flex-1 items-center gap-2 rounded px-1.5 py-1 text-left"
+        >
+          <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full border border-dashed border-foreground/50" />
+          <span
+            className={cn(
+              "flex-1 truncate",
+              !allVisible && "text-muted-foreground line-through",
+            )}
+          >
+            {t("memoryGraph.typesOthers", { count: tail.length })}
+          </span>
+          {allVisible ? (
+            <Eye className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
+          ) : (
+            <EyeOff className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
+          )}
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div ref={rootRef} className="relative">
       <button
@@ -173,13 +212,16 @@ export function MemoryTypeFilter({
             />
           </div>
           <div className="max-h-56 overflow-y-auto">
-            {filtered.length === 0 && !showPhantomRow ? (
+            {filtered.length === 0 && !showPhantomRow && tail.length === 0 ? (
               <div className="px-1.5 py-2 text-center text-muted-foreground">
                 {t("memoryGraph.noMatches")}
               </div>
             ) : (
               <>
                 {filtered.map((tl) => row(tl.type, tl.color, tl.count))}
+                {/* Not subject to the search box: the tail is a fixed
+                    summary row, not an individually-searchable type. */}
+                {tail.length > 0 ? tailRow() : null}
                 {showPhantomRow ? row("phantom", null, phantomCount) : null}
               </>
             )}

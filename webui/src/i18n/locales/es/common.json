@@ -1839,6 +1839,7 @@
     "hideAll": "Ocultar todo",
     "onlyType": "Solo",
     "searchTypesPlaceholder": "Buscar tipo…",
+    "typesOthers": "otros ({{count}})",
     "entriesReferencing": "Entradas que referencian",
     "noAbsorptions": "Sin absorciones para esta entidad.",
     "noSourceLinkedEntries": "Ninguna entrada episódica enlaza con esta sesión via source_refs.",

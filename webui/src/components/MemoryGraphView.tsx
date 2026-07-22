@@ -47,6 +47,7 @@ import {
 import { cn } from "@/lib/utils";
 import {
   colorForType,
+  groupTypeLegend,
   type EntitySortKey,
 } from "@/lib/memory-graph-style";
 import {
@@ -1312,6 +1313,14 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
     }));
   }, [data]);
 
+  // Cap the filter popover to the top N types by count; the rest collapse
+  // into a single "others (N)" row (see groupTypeLegend) instead of growing
+  // the list unboundedly as a workspace's open-vocabulary type set expands.
+  const { shown: shownTypesLegend, tail: tailTypesLegend } = useMemo(
+    () => groupTypeLegend(typesLegend),
+    [typesLegend],
+  );
+
   // Hide every type at once (the "start from nothing, reveal one" flow the
   // subtractive chip row couldn't express); phantom is a pseudo-type toggle.
   const hideAllTypes = useCallback(() => {
@@ -1609,7 +1618,8 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
           ) : null}
           {showTypeFilter ? (
             <MemoryTypeFilter
-              types={typesLegend}
+              types={shownTypesLegend}
+              tail={tailTypesLegend}
               phantomCount={data?.stats.phantom_count ?? 0}
               hidden={hiddenTypes}
               onToggle={toggleType}
