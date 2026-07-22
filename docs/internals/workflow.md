@@ -212,12 +212,12 @@ on a node injects the SOUL body into the node's system prompt and selects the pe
 The persona is resolved via `durin/workflow/persona_resolve.py` (shared with the agent loop).
 
 A **parallel** node runs branches concurrently and merges their text outputs into the next
-node's input. It has three shapes — **static** (a fixed `branches` list of work-node ids, each
+node's input. It has three shapes — **static** (a fixed `branches` list of work- or script-node ids, each
 with its own prompt, all seeing the same input), **dynamic** (a `worker` template node +
 `list_from` pointing to the upstream node whose output is parsed as a runtime list: one worker
 per item, each getting its own list item as input; the list is emitted by the upstream node as
 a JSON array, with a newline-split fallback), and **runtime-selected** (`branches_from` names
-the node — typically a routing script — whose output lists which DECLARED work-node ids run
+the node — typically a routing script — whose output lists which DECLARED work- or script-node ids run
 this pass, as a JSON array or a comma-separated last line; heterogeneous branches chosen per
 run, so "run only the analyzers that apply" is one parallel node instead of one static block
 per branch combination). Runtime-resolved ids are held to the same rules as static branches

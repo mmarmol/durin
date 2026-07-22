@@ -567,9 +567,12 @@ def parse_workflow(data: dict[str, Any]) -> Workflow:
     for node in nodes.values():
         if isinstance(node, ParallelNode):
             for branch in node.branches:
-                if not isinstance(nodes[branch], WorkNode):
+                # Work AND script nodes may run as branches — a deterministic fetch
+                # beside an LLM analysis is the whole point of mixing them. Parallel
+                # and subworkflow nodes stay rejected (a branch is one execution unit).
+                if not isinstance(nodes[branch], (WorkNode, ScriptNode)):
                     raise WorkflowError(
-                        f"node {node.id!r}: parallel branch {branch!r} must be a work node"
+                        f"node {node.id!r}: parallel branch {branch!r} must be a work or script node"
                     )
             if node.worker is not None and not isinstance(nodes[node.worker], WorkNode):
                 raise WorkflowError(

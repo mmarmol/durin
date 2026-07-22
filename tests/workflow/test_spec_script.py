@@ -78,12 +78,15 @@ def test_env_rejects_other_values():
         parse_workflow(_wf([{"id": "s", "kind": "script", "command": "x", "env": "full"}]))
 
 
-def test_script_node_rejected_in_parallel_positions():
-    with pytest.raises(WorkflowError, match="must be a work node"):
-        parse_workflow(_wf([
-            {"id": "s", "kind": "parallel", "branches": ["b"], "next": None},
-            {"id": "b", "kind": "script", "command": "x"},
-        ]))
+def test_script_node_accepted_as_branch_but_not_as_worker():
+    # A script may run BESIDE agent branches (deterministic fetch ∥ LLM analysis).
+    wf = parse_workflow(_wf([
+        {"id": "s", "kind": "parallel", "branches": ["b"], "next": None},
+        {"id": "b", "kind": "script", "command": "x"},
+    ]))
+    assert wf.nodes["s"].branches == ("b",)
+    # The dynamic worker template stays agent-only: a script iterates over a list
+    # internally in one execution, so mapping one subprocess per item adds nothing.
     with pytest.raises(WorkflowError, match="must be a work node"):
         parse_workflow(_wf([
             {"id": "s", "kind": "parallel", "worker": "w", "list_from": "s", "next": None},
