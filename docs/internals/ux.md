@@ -331,6 +331,87 @@ active goal, drawn from the `goal_state` blob carried on turn-end frames and
 on the dedicated goal-state sync push (`_goal_state_sync`). The banner is
 hidden when there is no active goal.
 
+### Memory graph (WebUI)
+
+The Entities graph canvas in the memory browser (clustering rules and API
+surface in `memory/04_agent_tools.md`) renders in two layers rather than one
+flat force-directed graph.
+
+**Layers.** The **overview** is the landing layer: community bubbles draw
+neutral and hollow (a container, not an entity in its own right), semantic
+hubs and any loose nodes draw colored by type, and the totals shown come
+from the overview's own stats rather than from whatever subset happens to
+be on screen. Clicking a bubble or a node moves to the **neighborhood**
+layer — a cluster's members, or a single node's ego-subgraph — which draws
+with full per-type coloring and exposes the phantom/session visibility
+chips. A breadcrumb sits above the canvas whenever a neighborhood is open,
+with a click back to the overview; Esc does the same but yields first to an
+open search panel or edge popover — both listen for the same key and call
+`preventDefault()` when they actually close something, so one keypress
+closes only the top-most layer.
+
+**Click contract.** A bubble click enters its cluster; a hub or loose-node
+click enters that node's ego-subgraph; a node click inside a neighborhood
+opens the detail panel, unchanged from the single-layer canvas. Click and
+drag are told apart by movement: a press-release pair that barely moved
+navigates, anything past a small movement threshold is treated as
+repositioning the node instead, and the repositioned node keeps its new
+place.
+
+**Visual encoding.** Entity node radius is a capped log-scale of its
+weight; bubble radius is a separate, wider log-scale band of its member
+count. Session nodes are a fixed size regardless of message count — message
+count is panel metadata for a session, never a signal the canvas sizes by.
+
+**Semantic zoom.** Node and edge geometry scale with the camera, but labels
+do not — they draw in screen space at a constant size at any zoom level. A
+zoom-dependent budget plus grid-based collision culling decides which
+labels are visible: zooming in raises the budget, and no two labels
+sharing a screen-space cell both render. A bubble's own label, and a
+hovered, selected, or isolated node's label, are exempt from the budget
+(though still dropped if actually off-screen); a bubble's member-count
+line additionally hides once the bubble is too small on screen to hold it
+legibly.
+
+**Theming.** Canvas colors are resolved from durin's design tokens at
+runtime rather than hardcoded: a hidden probe element asks the browser to
+resolve each token through `getComputedStyle`, and a `MutationObserver` on
+the document root's class and palette attributes triggers a re-resolve on
+a palette or light/dark switch — so the canvas always matches the
+surrounding surface across all three palettes (ithildin/forge/mithril) and
+both modes.
+
+**Defaults and legend.** Phantom entities and session nodes are hidden by
+default wherever the visibility chips appear. Those chips live only in a
+neighborhood or in the pre-clustering flat graph — the clustered overview
+has none, because the server already excluded both kinds before clustering
+ever runs. The type legend groups the open-vocabulary type long tail
+behind a single "others" row past a fixed number of shown types, so an
+idiosyncratic workspace's type list can't overflow the toolbar.
+
+**States and error contract.** A first load shows a skeleton placeholder; a
+workspace confirmed empty on both the flat and the overview fetch shows a
+teaching empty state instead of a bare canvas. A failed overview fetch
+never blanks a canvas that already has something to show — the last good
+overview, or the flat graph loaded independently — it only adds a slim
+retry banner; the full-frame error replaces the canvas solely when nothing
+has ever loaded on either path. A stale cluster reference — the tree
+changed shape since the overview was built — 404s; the client falls back
+to the overview with a dismissible notice and refreshes it in the
+background. Refocusing the browser tab while sitting at the overview
+re-checks it silently, and a toast announces it only if something actually
+changed — because the overview object is only replaced when its content
+differs, an unchanged refresh preserves object identity, so the layout and
+any pinned node positions survive it untouched. A cluster or ego drill in
+flight over an already-visible canvas shows a thin loading bar rather than
+blanking or re-skeletoning the view.
+
+**Data seam.** The two-layer overview/neighborhood contract applies to the
+graph canvas only. The Cards and Table presentations of the same Entities
+tab always browse the full flat entity list — never the clustered overview
+or a drilled neighborhood — so switching to Cards mid-drill never truncates
+the grid down to whatever the canvas had focused.
+
 ### Config flow
 
 `load_config()` detects the layout (split directory or legacy monolith) and
