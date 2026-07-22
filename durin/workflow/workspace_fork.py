@@ -1,8 +1,8 @@
-"""Per-branch workspace isolation + reconciliation for writing-in-parallel.
+"""Per-branch folder isolation + reconciliation for writing-in-parallel.
 
-A writing parallel branch runs against a private COPY of the workspace so concurrent
-branches don't clobber each other's file writes. After the branches finish, their
-changes are reconciled back into the real workspace:
+A writing parallel branch runs against a private COPY of the run's shared working
+folder so concurrent branches don't clobber each other's file writes. After the
+branches finish, their changes are reconciled back into the real folder:
 
 - ``choose``: keep one branch's changes (a judge picks the winner), discard the rest.
 - ``union``: apply every branch's changes; a same-file conflict (two branches touched
@@ -42,48 +42,40 @@ def _hash(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
-def _walk(root: Path, extra_include: str | None = None) -> dict[str, Path]:
+def _walk(root: Path) -> dict[str, Path]:
     """Relative-path -> absolute-path for every file under *root*, excluding heavy
-    dirs. *extra_include* (a root-relative POSIX path) exempts one subtree from the
-    exclusion — the run's shared working folder, which IS branch output."""
+    dirs."""
     out: dict[str, Path] = {}
     for p in root.rglob("*"):
         if not p.is_file():
             continue
         rel = p.relative_to(root)
         if any(part in _EXCLUDE for part in rel.parts):
-            rel_s = rel.as_posix()
-            if extra_include is None or not (
-                rel_s == extra_include or rel_s.startswith(extra_include + "/")
-            ):
-                continue
+            continue
         out[str(rel)] = p
     return out
 
 
-def snapshot(workspace: str | Path, extra_include: str | None = None) -> dict[str, str]:
+def snapshot(root: str | Path) -> dict[str, str]:
     """Capture the base state as relative-path -> content hash."""
-    return {
-        rel: _hash(p.read_bytes())
-        for rel, p in _walk(Path(workspace), extra_include=extra_include).items()
-    }
+    return {rel: _hash(p.read_bytes()) for rel, p in _walk(Path(root)).items()}
 
 
-def fork(workspace: str | Path, extra_include: str | None = None) -> Path:
-    """Copy the workspace into a fresh temp directory (excluding heavy dirs) so a
-    branch can write into it in isolation. The caller owns cleanup (see ``cleanup``)."""
-    src = Path(workspace)
+def fork(root: str | Path) -> Path:
+    """Copy *root* into a fresh temp directory (excluding heavy dirs) so a branch
+    can write into it in isolation. The caller owns cleanup (see ``cleanup``)."""
+    src = Path(root)
     dst = Path(tempfile.mkdtemp(prefix="durin_wf_branch_"))
-    for rel, p in _walk(src, extra_include=extra_include).items():
+    for rel, p in _walk(src).items():
         target = dst / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(p, target)
     return dst
 
 
-def diff(base: dict[str, str], fork_dir: str | Path, extra_include: str | None = None) -> ChangeSet:
+def diff(base: dict[str, str], fork_dir: str | Path) -> ChangeSet:
     """Compute what changed in *fork_dir* relative to the *base* snapshot."""
-    now = _walk(Path(fork_dir), extra_include=extra_include)
+    now = _walk(Path(fork_dir))
     created: dict[str, bytes] = {}
     modified: dict[str, bytes] = {}
     for rel, p in now.items():
@@ -111,9 +103,9 @@ def conflicts(changesets: list[ChangeSet]) -> set[str]:
     return {path for path, seen in variants.items() if len(seen) > 1}
 
 
-def apply(cs: ChangeSet, workspace: str | Path) -> None:
-    """Apply a branch's changes to the real workspace."""
-    ws = Path(workspace)
+def apply(cs: ChangeSet, root: str | Path) -> None:
+    """Apply a branch's changes back to the real folder the fork copied."""
+    ws = Path(root)
     for rel, content in {**cs.created, **cs.modified}.items():
         target = ws / rel
         target.parent.mkdir(parents=True, exist_ok=True)
