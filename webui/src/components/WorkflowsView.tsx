@@ -985,14 +985,19 @@ function NodeConfigPanel({
       )}
 
       {node.kind === "parallel" && (() => {
-        const isDynamic = typeof node.worker === "string" && node.worker !== "";
-        const parallelMode = isDynamic ? "dynamic" : "static";
+        // Mode by key PRESENCE (an in-flight null still means "this mode is selected,
+        // target not picked yet" — value checks would flip the selector back).
+        const isFromNode = node.branches_from !== undefined;
+        const isDynamic = !isFromNode && node.worker !== undefined;
+        const parallelMode = isFromNode ? "fromNode" : isDynamic ? "dynamic" : "static";
 
-        function handleParallelModeChange(mode: "static" | "dynamic") {
+        function handleParallelModeChange(mode: "static" | "dynamic" | "fromNode") {
           if (mode === "dynamic") {
-            onChange({ worker: null, list_from: null, branches: undefined });
+            onChange({ worker: null, list_from: null, branches: undefined, branches_from: undefined });
+          } else if (mode === "fromNode") {
+            onChange({ branches_from: null, branches: undefined, worker: undefined, list_from: undefined });
           } else {
-            onChange({ branches: [], worker: undefined, list_from: undefined });
+            onChange({ branches: [], worker: undefined, list_from: undefined, branches_from: undefined });
           }
         }
 
@@ -1019,14 +1024,25 @@ function NodeConfigPanel({
               <select
                 className={selectCls}
                 value={parallelMode}
-                onChange={(e) => handleParallelModeChange(e.target.value as "static" | "dynamic")}
+                onChange={(e) => handleParallelModeChange(e.target.value as "static" | "dynamic" | "fromNode")}
               >
                 <option value="static">{t("workflows.parallelStatic")}</option>
                 <option value="dynamic">{t("workflows.parallelDynamic")}</option>
+                <option value="fromNode">{t("workflows.parallelFromNode")}</option>
               </select>
             </Field>
 
-            {parallelMode === "static" ? (
+            {parallelMode === "fromNode" && (
+              <Field label={t("workflows.parallelBranchesFrom")}>
+                <TargetSelect
+                  value={node.branches_from as string | null}
+                  options={others}
+                  onChange={(v) => onChange({ branches_from: v })}
+                />
+              </Field>
+            )}
+
+            {parallelMode === "static" && (
               <Field label={t("workflows.parallelBranches")}>
                 <div className="flex flex-col gap-1">
                   {workNodeIds.length === 0 ? (
@@ -1046,7 +1062,8 @@ function NodeConfigPanel({
                   )}
                 </div>
               </Field>
-            ) : (
+            )}
+            {parallelMode === "dynamic" && (
               <>
                 <Field label={t("workflows.parallelWorker")}>
                   <TargetSelect
@@ -1067,11 +1084,15 @@ function NodeConfigPanel({
 
             {(parallelMode === "static"
               ? branchList.length === 0
-              : !(node.worker && node.list_from)) && (
+              : parallelMode === "dynamic"
+                ? !(node.worker && node.list_from)
+                : !node.branches_from) && (
               <span className="text-xs text-amber-600">
                 {parallelMode === "static"
                   ? t("workflows.parallelNeedBranch")
-                  : t("workflows.parallelNeedWorkerList")}
+                  : parallelMode === "dynamic"
+                    ? t("workflows.parallelNeedWorkerList")
+                    : t("workflows.parallelNeedBranchesFrom")}
               </span>
             )}
 
@@ -1094,7 +1115,7 @@ function NodeConfigPanel({
               />
             </Field>
 
-            {parallelMode === "static" && (
+            {(parallelMode === "static" || parallelMode === "fromNode") && (
               <Field label={t("workflows.parallelReconcile")}>
                 <select
                   className={selectCls}

@@ -58,10 +58,16 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   the run's task on stdin; a script that must **authenticate** declares the stored secrets
   it needs in `secrets: ["NAME"]` — injected as env vars when each allows the `exec` scope,
   with output redacted, so an authenticated `curl` stays a zero-token script step instead
-  of becoming an agent turn); `parallel` (concurrent branches — a *static* `branches` list, or
-  *dynamic* fan-out: a `worker` template mapped over a runtime list named by `list_from`,
-  bounded by `max_concurrency`); `subworkflow` (run another named workflow as one step —
-  this is how you compose pipelines).
+  of becoming an agent turn); `parallel` (concurrent branches — a *static* `branches` list;
+  *dynamic* fan-out: a `worker` template mapped over a runtime list named by `list_from`; or
+  *runtime-selected*: `branches_from` names the node — typically a routing script — whose
+  output lists which declared work-node ids run this pass, as a JSON array or a
+  comma-separated last line, so "run only the branches that apply" is ONE parallel node
+  instead of one static block per combination; all bounded by `max_concurrency`);
+  `subworkflow` (run another named workflow as one step — this is how you compose
+  pipelines; the child's terminal status propagates: a child that pauses for input pauses
+  the parent resumably, a cancelled child cancels it, and a failed child aborts it naming
+  the child — a sub-workflow can never silently read as "completed" text).
 - **Routing** is opt-in on a `work` or `script` node, never a separate node type: **binary**
   (`on_pass`/`on_fail`) or **multi-way** (`cases` — a map of labels to targets; a `null`
   target ends the run). The node ends with its verdict and the engine follows the matching
@@ -103,7 +109,9 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   its description and I/O — before picking one to run (or to confirm one already exists).
 - **Run:** `run_workflow(name, task)` — optionally `output_format` to shape this call's
   result, and `input_files` (a list of absolute paths) to hand the workflow files to work on:
-  each is seeded into the run's shared working folder before the start node runs, so every node
+  each is seeded into the run's shared working folder before the start node runs — **under its
+  original basename**, so a workflow whose nodes expect `context.json` must be handed a file
+  *named* `context.json` (rename your copy first if needed) — and every node
   (including a dynamic fan-out of one worker per file) reads them there — use this instead of
   pasting file contents into `task`. Provided paths are validated before anything runs: a
   missing file or two files with the same name abort with a clear message, and a workflow

@@ -51,7 +51,9 @@ a delivery instruction for THIS call — "a bulleted list", "JSON with fields x,
 summary" — that overrides the workflow's default output description in the framing, so one
 workflow can deliver its result in whatever shape the caller needs without being edited. The
 same callers may pass **`input_files`** (absolute paths) — seeded into the run's shared working
-folder before the start node runs — and read the terminal **`output_dir`** back from the result;
+folder before the start node runs, each **under its original basename**: a workflow whose nodes
+expect `context.json` must be handed a file *named* `context.json`, not a renamed copy — and
+read the terminal **`output_dir`** back from the result;
 both the `run_workflow` tool and the HTTP run surface accept files in and report the folder out.
 The run result also reports the relative list of files in the shared folder, so the invoking agent
 sees what deliverables were produced and where to copy them from.
@@ -194,18 +196,36 @@ detected: A -> B -> A"`) rather than recursing; (3) a `max_depth` counter is the
 for deep non-cyclic chains, returning an error at the limit. A sub-workflow runs in the
 **parent run's shared working folder** — its nodes read and extend the same fileset as
 the parent's sequential nodes (text still travels the edge; files never needed copying).
+**The child's terminal status propagates to the parent.** The runner returns the child's
+full result, and the parent maps it: `completed` threads the output onward; `needs_input`
+pauses the *parent* run the same way, keyed to the sub-workflow node — resuming re-enters
+there and re-runs the child with the framed answers as its task (its prior files persist
+in the shared folder); `cancelled` mirrors; `aborted`/`exhausted` abort the parent with a
+message naming the child and its reason, and the node records `node_failed`. Cycle,
+depth-cap, and missing-workflow errors take the aborted path too — an unrunnable child
+stops the run instead of threading an error string downstream as if it were output. The
+sub-workflow node's wall-clock `duration_s` is recorded in the parent's trace like any
+other node's.
 **A node's "runs as" is a single choice:** either a specific model (or omitted ⇒ default) or
 a **Persona** (a named SOUL + its model, mutually exclusive with `model`). Setting `persona`
 on a node injects the SOUL body into the node's system prompt and selects the persona's model.
 The persona is resolved via `durin/workflow/persona_resolve.py` (shared with the agent loop).
 
 A **parallel** node runs branches concurrently and merges their text outputs into the next
-node's input. It has two shapes — **static** (a fixed `branches` list of work-node ids, each
-with its own prompt, all seeing the same input) and **dynamic** (a `worker` template node +
+node's input. It has three shapes — **static** (a fixed `branches` list of work-node ids, each
+with its own prompt, all seeing the same input), **dynamic** (a `worker` template node +
 `list_from` pointing to the upstream node whose output is parsed as a runtime list: one worker
 per item, each getting its own list item as input; the list is emitted by the upstream node as
-a JSON array, with a newline-split fallback). **`max_concurrency`** (default 2) bounds both
-shapes — at most this many runners execute simultaneously; excess items queue and run in
+a JSON array, with a newline-split fallback), and **runtime-selected** (`branches_from` names
+the node — typically a routing script — whose output lists which DECLARED work-node ids run
+this pass, as a JSON array or a comma-separated last line; heterogeneous branches chosen per
+run, so "run only the analyzers that apply" is one parallel node instead of one static block
+per branch combination). Runtime-resolved ids are held to the same rules as static branches
+(declared work nodes, no persistent sessions) — an id that fails aborts the run naming it,
+since it is an authoring bug in the emitting node; an *empty* resolved list is a legitimate
+"nothing applies" pass that records empty output and continues to `next`.
+**`max_concurrency`** (default 2) bounds every
+shape — at most this many runners execute simultaneously; excess items queue and run in
 waves (anti-rate-limit backpressure). Fan-in collects all branch/worker text outputs into the
 `next` node's input. For **static** branches, `reconcile` decides how branch *writes* come
 back together (`durin/workflow/workspace_fork.py`): `read` = read/analysis branches, no
