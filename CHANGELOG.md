@@ -5,6 +5,24 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## Unreleased
+
+### Highlights
+
+- **A running workflow shows its work, live.** The chat's work strip and
+  in-thread pill, the web UI's work panel, the Runs (executions) view, and
+  the terminal UI all now name the node currently active, how long it has
+  been running, which round of tool use it is on, and what it is doing right
+  now (which tool, on what file or query) — the same picture on every
+  surface. Once a workflow has completed runs to learn from, the work panel
+  and the executions view also show each node's typical duration next to how
+  long this pass actually took, and which files a node produced.
+- **A run's progress is never lost.** Reload the page mid-run and the active
+  node, its elapsed time, and its round are exactly where you left them. If
+  the gateway itself restarts partway through a node, the rounds that node
+  had already completed are preserved in its session instead of vanishing
+  with the process.
+
 ## 0.3.4 — 2026-07-21
 
 ### Highlights

@@ -115,7 +115,9 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   follow-up wakes you, and the user watches live per-node progress in the Work panel.
   Reach for `tasks(action="status", id=<run id>)` only when the user asks for an update or
   you need a mid-run look at the run's work dir and files (status reports both, plus
-  per-node durations); `tasks(action="stop", ...)` cancels. Pass `background=false` ONLY
+  per-node durations, and — while a node is still executing — names it as the
+  currently-running entry so you know what the workflow is doing right now, not only
+  what it has already finished); `tasks(action="stop", ...)` cancels. Pass `background=false` ONLY
   when you need the result to keep reasoning in the same turn (the call then blocks and
   returns the result directly).
   **Getting files back:** when the workflow declares it outputs files
