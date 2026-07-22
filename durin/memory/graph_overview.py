@@ -5,7 +5,10 @@ edges and typed relations between consolidated pages (plus reference
 ``derived_from`` links). Sessions and phantoms never enter clustering input,
 hub ranking, or size computation — session weight is a mechanical message
 count, sessions edge into everything they touched, and with few sessions the
-"communities" would degenerate into "what session A touched".
+"communities" would degenerate into "what session A touched". A node
+qualifies as a hub only when it is a clear outlier — at least twice the
+median semantic weight — so uniform or young graphs surface no hubs at all,
+and the qualifying count is always capped at HUB_COUNT.
 """
 
 from __future__ import annotations
@@ -116,36 +119,32 @@ def _build_adjacency(
 def assemble_overview(payload: dict[str, Any]) -> dict[str, Any]:
     """Aggregate the full uncapped graph payload into the overview shape.
 
-    Hubs come out first (they bridge everything); label propagation runs on
-    the rest; communities >= BUBBLE_MIN_MEMBERS become bubbles keyed by
-    their heaviest member; the rest stay as loose nodes. Edges are summed
-    between containers. mode="flat" when no community reaches the
-    threshold — small or young workspaces render the plain graph instead.
+    Hubs come out first (they bridge everything): an entity qualifies only
+    when its weight is at least twice the median semantic weight (floor of
+    3), and the qualifying count is capped at HUB_COUNT — so uniform or
+    young graphs extract no hubs at all. Label propagation then runs on the
+    rest; communities >= BUBBLE_MIN_MEMBERS become bubbles keyed by their
+    heaviest member; the rest stay as loose nodes. Edges are summed between
+    containers. mode="flat" when no community reaches the threshold — small
+    or young workspaces render the plain graph instead, though hubs (found
+    before clustering is attempted) still populate when present.
     """
     sem_nodes, sem_edges = _semantic_view(payload)
     by_id = {n["id"]: n for n in sem_nodes}
 
-    # Extract hubs only when there are nodes with significantly higher weight.
-    # Find the largest weight gap and extract only nodes above that gap.
+    # Hub qualification: a hub is an entity clearly heavier than the typical
+    # node — at least twice the median semantic weight (and never below 3).
+    # Uniform or young graphs therefore extract no hubs at all (nothing is
+    # an outlier), and the count is hard-capped so the overview stays small.
     non_ref_nodes = [n for n in sem_nodes if n["type"] != "reference"]
     if non_ref_nodes:
-        weights_sorted = sorted(set(n["weight"] for n in non_ref_nodes), reverse=True)
-        if len(weights_sorted) <= 1:
-            # All weights equal → no hubs
-            hubs, rest = [], sem_nodes
-        else:
-            # Find the largest gap between consecutive weight levels
-            gaps = [
-                (weights_sorted[i], weights_sorted[i + 1], weights_sorted[i] - weights_sorted[i + 1])
-                for i in range(len(weights_sorted) - 1)
-            ]
-            max_gap_idx = max(range(len(gaps)), key=lambda i: gaps[i][2])
-            cutoff_weight = gaps[max_gap_idx][1]  # Extract all nodes with weight > cutoff
-            # Only extract as hubs the nodes strictly above the cutoff
-            hub_count = sum(
-                1 for n in non_ref_nodes if n["weight"] > cutoff_weight
-            )
-            hubs, rest = _extract_hubs(sem_nodes, sem_edges, top_n=hub_count)
+        weights = sorted(int(n["weight"]) for n in non_ref_nodes)
+        median = weights[len(weights) // 2]
+        floor = max(3, 2 * median)
+        qualifying = sum(1 for n in non_ref_nodes if int(n["weight"]) >= floor)
+        hubs, rest = _extract_hubs(
+            sem_nodes, sem_edges, top_n=min(HUB_COUNT, qualifying)
+        )
     else:
         hubs, rest = [], sem_nodes
     hub_ids = {n["id"] for n in hubs}
@@ -188,7 +187,7 @@ def assemble_overview(payload: dict[str, Any]) -> dict[str, Any]:
         return {
             "mode": "flat",
             "bubbles": [],
-            "hubs": [],
+            "hubs": hubs,
             "loose": [],
             "edges": [],
             "members": {},

@@ -201,3 +201,27 @@ def test_session_and_phantom_totals_survive_in_stats():
     assert out["stats"]["session_count"] == 1
     assert out["stats"]["phantom_count"] == 1
     assert out["stats"]["entity_count"] == BUBBLE_MIN_MEMBERS + 1
+
+
+def test_hub_extraction_is_capped_at_hub_count():
+    nodes = [_node(f"person:h{i:02d}", weight=100) for i in range(HUB_COUNT + 10)]
+    nodes += [_node(f"topic:t{i:02d}", weight=2) for i in range(40)]
+    out = assemble_overview({"nodes": nodes, "edges": [], "stats": {}})
+    assert len(out["hubs"]) == HUB_COUNT
+
+
+def test_uniform_communities_with_noise_floor_keep_all_bubbles():
+    payload = _community_payload(6, BUBBLE_MIN_MEMBERS + 1)
+    payload["nodes"] += [_node(f"topic:stray{i}", weight=1) for i in range(5)]
+    out = assemble_overview(payload)
+    assert out["mode"] == "clustered"
+    assert len(out["bubbles"]) == 6
+    assert out["hubs"] == []
+
+
+def test_tiered_weights_extract_only_true_outliers():
+    payload = _community_payload(2, BUBBLE_MIN_MEMBERS + 2, hubs=1)
+    payload["nodes"] += [_node(f"topic:mid{i}", weight=3) for i in range(4)]
+    out = assemble_overview(payload)
+    assert [h["id"] for h in out["hubs"]] == ["company:hub0"]
+    assert len(out["bubbles"]) == 2
