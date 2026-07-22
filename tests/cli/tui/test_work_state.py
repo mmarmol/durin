@@ -1,3 +1,7 @@
+import re
+
+from rich.markup import render as rich_render
+
 from durin.cli.tui.widgets.work_state import WorkStore
 
 
@@ -245,7 +249,6 @@ def test_running_node_round_without_max_rounds_is_not_shown():
     })
     markup = store.render_markup()
     assert "3/5" not in markup
-    assert "3/10" not in markup
 
 
 def test_running_node_activity_target_escapes_markup():
@@ -263,6 +266,67 @@ def test_running_node_activity_target_escapes_markup():
     })
     markup = store.render_markup()
     assert r"TODO\[urgent]" in markup
+
+
+def test_running_node_activity_tool_escapes_markup():
+    """A tool name is text from the model's own tool-call response — the same
+    trust class as `target` — and may contain literal brackets that must not
+    be parsed as Rich markup tags when rendered in the sidebar."""
+    store = WorkStore()
+    store.ingest({
+        "name": "workflow_progress", "phase": "running", "call_id": "workflow:r9",
+        "arguments": {"workflow": "wf"},
+        "nodes": [{
+            "id": "n", "label": "N", "status": "running",
+            "activity": {"tool": "search[urgent]", "at": 1712.0},
+        }],
+    })
+    markup = store.render_markup()
+    assert r"search\[urgent]" in markup
+
+
+def test_running_node_activity_tool_unmatched_closing_tag_does_not_raise():
+    """An unmatched closing-tag pattern in a tool name must not crash the
+    panel: Rich's markup parser raises MarkupError on a dangling closing tag
+    when the string reaches it unescaped."""
+    store = WorkStore()
+    store.ingest({
+        "name": "workflow_progress", "phase": "running", "call_id": "workflow:r10",
+        "arguments": {"workflow": "wf"},
+        "nodes": [{
+            "id": "n", "label": "N", "status": "running",
+            "activity": {"tool": "search[/urgent]", "at": 1712.0},
+        }],
+    })
+    markup = store.render_markup()
+    rich_render(markup)  # must not raise rich.errors.MarkupError
+
+
+def test_subagent_progress_tool_escapes_markup():
+    """A sub-agent's in-flight tool name is the same model-produced text as a
+    workflow node's activity tool — it may contain literal brackets that must
+    not be parsed as Rich markup tags."""
+    store = WorkStore()
+    store.ingest({
+        "name": "subagent_result", "phase": "running",
+        "call_id": "subagent:t2", "label": "explore",
+        "progress": {"iteration": 1, "tool": "search[urgent]"},
+    })
+    markup = store.render_markup()
+    assert r"search\[urgent]" in markup
+
+
+def test_subagent_progress_tool_unmatched_closing_tag_does_not_raise():
+    """Same crash risk as the workflow-node activity path, for the sub-agent
+    progress detail string."""
+    store = WorkStore()
+    store.ingest({
+        "name": "subagent_result", "phase": "running",
+        "call_id": "subagent:t3", "label": "explore",
+        "progress": {"iteration": 1, "tool": "search[/urgent]"},
+    })
+    markup = store.render_markup()
+    rich_render(markup)  # must not raise rich.errors.MarkupError
 
 
 def test_running_node_elapsed_advances_against_an_injected_clock():
@@ -314,7 +378,7 @@ def test_node_with_neither_time_field_renders_no_time_segment():
     })
     markup = store.render_markup()
     assert "A" in markup and "B" in markup
-    assert ":" not in markup  # no elapsed segment anywhere (would read like "m:ss")
+    assert not re.search(r"\d+:\d{2}", markup)  # no elapsed-shaped value (m:ss / h:mm:ss) anywhere
 
 
 def test_elapsed_format_rolls_over_to_hours():

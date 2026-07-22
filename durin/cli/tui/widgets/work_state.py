@@ -104,8 +104,13 @@ class WorkStore:
             else:
                 prog = event.get("progress") or {}
                 status = "running"
+                # ``tool`` is text carried straight from the model's tool-call
+                # response (the same trust class as a workflow node's activity
+                # tool, see ``_render_running_detail`` below) and may contain
+                # literal brackets Rich would otherwise parse as markup tags,
+                # so it is escaped before entering this detail string.
                 detail = (
-                    f"iter {prog.get('iteration')} · {prog.get('tool')}"
+                    f"iter {prog.get('iteration')} · {escape(str(prog.get('tool')))}"
                     if prog else ""
                 )
             item = _Item(
@@ -243,10 +248,15 @@ class WorkStore:
         tool = activity.get("tool")
         if tool:
             target = activity.get("target")
-            # ``target`` is arbitrary text from the run (a path, a shell command,
-            # a search query) and may contain literal brackets Rich would
-            # otherwise parse as markup tags.
-            segments.append(f"{tool} {escape(target)}" if target else str(tool))
+            # Both ``tool`` and ``target`` are text carried straight from the
+            # model's tool-call response, not a fixed set of internal names —
+            # an unknown or hallucinated tool name reaches here before the
+            # runner's own loop guard has a chance to catch it (that guard
+            # only trips after the name repeats past a threshold). Either may
+            # contain literal brackets Rich would otherwise parse as markup
+            # tags, so both are escaped before entering this string.
+            tool_text = escape(str(tool))
+            segments.append(f"{tool_text} {escape(target)}" if target else tool_text)
         if not segments:
             return ""
         return " [work-count]· " + " · ".join(segments) + "[/]"
