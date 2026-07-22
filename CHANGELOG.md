@@ -5,6 +5,53 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.4.1 — 2026-07-23
+
+### Highlights
+
+- **Builtin workflows now follow upgrades.** Bundled workflow seeds used to
+  freeze at install day; now they reconcile on every start with provenance
+  tracking: a seed you never edited updates itself (committed to the workflow
+  version history, so it is revertible), and a seed you customized surfaces a
+  reviewable suggestion — a banner on the Workflows screen with the diff and
+  apply/dismiss, plus a `durin doctor` notice — never a silent overwrite.
+  Existing installs are adopted in place: untouched copies become tracked,
+  diverged ones ask once. (#441)
+- **Workflow parallelism is now a global setting, split by branch kind.**
+  Settings → Concurrency gains a "Workflow branches" group: LLM branches
+  (default 2, provider-bound) and script branches (default 4 — cheap, and
+  they run under their own lane so they never queue behind LLM branches). A
+  node-level `max_concurrency` remains honored as a uniform override, but
+  templates and the editor no longer set one — width is configuration, not
+  authoring. (#441)
+- **The Executions screen was rebuilt as a master-detail view.** Runs on the
+  left, the selected run's per-node detail on the right, nested sub-workflow
+  runs expand inline, and node output renders as markdown. (#439)
+- **The memory graph got a two-layer view built for scale.** A server-side
+  clustered overview (semantic-only structure with outlier hubs and a bounded
+  payload) replaces the single force-directed canvas that capped out on real
+  workspaces, and the client drills from overview into cluster and
+  neighborhood views with semantic zoom and constant-size labels — verified
+  at 30x today's graph size. (#440)
+
+### Memory
+
+- New `GET /api/v1/memory/graph/overview`: uncapped aggregation, deterministic
+  communities, display caps with a drillable overflow bubble, tree-signature
+  cache. Sessions and phantoms never shape the structure. (#440)
+
+### Workflows
+
+- Seeding metadata files (`.seeds.json`, suggestions, tombstones) are
+  invisible to workflow listings and the improvement pass. (#441)
+- New API surface for seed suggestions: list, apply, dismiss. (#441)
+
+### WebUI
+
+- Executions: master-detail split with nested sub-runs and markdown output. (#439)
+- Concurrency settings: workflow branch caps, editable live (en/es). (#441)
+- Workflows screen: builtin-update banner with per-item diff. (#441)
+
 ## 0.4.0 — 2026-07-22
 
 ### Highlights
