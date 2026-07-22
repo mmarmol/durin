@@ -281,8 +281,8 @@ def test_parallel_without_branches_raises():
         ]})
 
 
-def test_parallel_branch_must_be_work_node():
-    with pytest.raises(WorkflowError, match="work node"):
+def test_parallel_branch_must_be_work_or_script_node():
+    with pytest.raises(WorkflowError, match="work or script node"):
         parse_workflow({"name": "d", "start": "fan", "nodes": [
             {"id": "fan", "kind": "parallel", "branches": ["sub"], "next": None},
             {"id": "sub", "kind": "subworkflow", "workflow": "inner"},

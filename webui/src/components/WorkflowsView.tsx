@@ -1010,12 +1010,16 @@ function NodeConfigPanel({
           onChange({ branches: next });
         }
 
-        // The backend parser only accepts WorkNode targets in a parallel node's
-        // branches/worker positions (script/subworkflow/parallel nodes are rejected),
-        // so both pickers are restricted to kind "work". A branch/worker id from an
-        // older definition that no longer resolves to a work node is simply not
-        // rendered as an option — it isn't dropped from the definition itself.
+        // Branches accept work AND script nodes (a deterministic fetch beside an LLM
+        // analysis); the dynamic worker template stays agent-only, so its picker keeps
+        // the "work" filter. An id from an older definition that no longer resolves to
+        // an eligible node is simply not rendered as an option — it isn't dropped from
+        // the definition itself.
         const workNodeIds = others.filter((id) => allNodes.find((n) => n.id === id)?.kind === "work");
+        const branchNodeIds = others.filter((id) => {
+          const kind = allNodes.find((n) => n.id === id)?.kind;
+          return kind === "work" || kind === "script";
+        });
 
         return (
           <>
@@ -1045,10 +1049,10 @@ function NodeConfigPanel({
             {parallelMode === "static" && (
               <Field label={t("workflows.parallelBranches")}>
                 <div className="flex flex-col gap-1">
-                  {workNodeIds.length === 0 ? (
+                  {branchNodeIds.length === 0 ? (
                     <span className="text-xs text-muted-foreground">(no other nodes)</span>
                   ) : (
-                    workNodeIds.map((id) => (
+                    branchNodeIds.map((id) => (
                       <label key={id} className="flex items-center gap-2 text-xs">
                         <input
                           type="checkbox"

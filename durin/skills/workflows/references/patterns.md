@@ -164,6 +164,12 @@ private copy of the run's shared working folder and a judge picks one (needs `cr
 Use `"union"` to apply all
 (aborts on a same-path conflict) or `"read"` for analysis-only branches.
 
+Branches may MIX kinds: a `script` branch runs its deterministic job (fetch, convert,
+check) beside the agent branches — stdin is the parallel's input, stdout is its branch
+output, cwd is the working folder (a private fork of it under choose/union), and a
+non-zero exit fails only that branch while the others complete. Use a script branch to
+overlap slow deterministic I/O with an LLM analysis instead of serializing them.
+
 ```json
 {
   "name": "two-approaches",
@@ -188,7 +194,7 @@ When different runs need different branch SUBSETS — "run only the analyzers th
 this input" — a routing script emits the branch ids (a JSON array, or a comma-separated
 last line) and ONE parallel node runs exactly those. Without it, every branch combination
 needs its own static parallel block (2^N nodes for N optional analyzers). Every resolved
-id must name a declared `work` node; an empty list is valid (nothing applies — the walk
+id must name a declared `work` or `script` node; an empty list is valid (nothing applies — the walk
 continues to `next`).
 
 ```json

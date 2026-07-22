@@ -142,7 +142,7 @@ shapes:
 | Field | Type | Default | Notes |
 |---|---|---|---|
 | `kind` | `"parallel"` | — | Required to select this node type. |
-| `branches` | array of strings | `()` | **Static only.** Non-empty list of `work`-node ids. Each must be a `work` node. |
+| `branches` | array of strings | `()` | **Static only.** Non-empty list of branch node ids. Each must be a `work` or `script` node — a deterministic script (fetch, convert, check) may run BESIDE agent branches; its stdin is the parallel's input, its stdout is its branch output, and a non-zero exit fails only that branch. |
 | `worker` | string \| null | none | **Dynamic only.** Id of the `work` node used as the per-item template. |
 | `list_from` | string \| null | none | **Dynamic only.** Id of the upstream node whose output is the runtime list. Required when `worker` is set. |
 | `branches_from` | string \| null | none | **Runtime-selected only.** Id of the node whose output names the branch ids to run this pass. Must reference a declared node. |
@@ -182,10 +182,12 @@ The parser rejects a definition (with a clear message) when:
 - `session: "persistent"` is combined with `context: "shared"` (two competing continuity
   mechanisms), or set on a node referenced as a parallel `branches` member or `worker`.
 - Two `cases` labels normalize to the same form.
-- A `parallel` branch or `worker` id points to a node that is not a `work` node (script
-  nodes are rejected there on purpose: a script iterates or parallelizes *inside* the
-  script — `for`, `xargs -P` — so fan-out adds nothing; a script node CAN be the
-  `list_from` source, which makes the fan-out list deterministic).
+- A `parallel` branch id points to a node that is neither `work` nor `script` (parallel
+  and subworkflow nodes cannot be branches), or the dynamic `worker` id points to a
+  non-`work` node (the worker template stays agent-only on purpose: a script iterates
+  over a list *inside* one execution — `for`, `xargs -P` — so mapping one subprocess per
+  item adds nothing; a script node CAN be a static branch beside agent branches, the
+  `branches_from` router, or the `list_from` source).
 - A `script` node sets both or neither of `command`/`script`, uses an absolute or
   `..`-escaping `script` path, sets any agent-only field, or declares a `secrets` name
   that is not env-var-safe (`A-Z`, `0-9`, `_`, starting with a letter). (Whether each
