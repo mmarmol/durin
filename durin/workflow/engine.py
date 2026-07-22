@@ -187,7 +187,7 @@ class WorkflowEngine:
         *,
         script_runner: NodeRunner | None = None,
         run_id_factory: Callable[[], str] | None = None,
-        subworkflow_runner: Callable[..., str] | None = None,  # (name, task, root_session_key, work_dir=None, parent_run_id=None, progress_emit=None, cancel_check=None, parent_node_id=None) -> str
+        subworkflow_runner: Callable[..., "WorkflowResult | str"] | None = None,  # (name, task, root_session_key, work_dir=None, parent_run_id=None, progress_emit=None, cancel_check=None, parent_node_id=None) -> child WorkflowResult (a plain str still means "completed with this output")
         workspace: str | None = None,
         pick_runner: Callable[[str, list[str], "str | None"], int] | None = None,
         max_node_visits: int = 1000,
@@ -782,31 +782,65 @@ class WorkflowEngine:
                     raise WorkflowConfigError(
                         f"node {node.id!r} is a subworkflow but the engine has no subworkflow_runner"
                     )
-                output = self._subworkflow_runner(
+                sub_t0 = time.monotonic()
+                outcome = self._subworkflow_runner(
                     node.workflow, upstream_output or task, root_session_key,
                     work_dir=work_dir, parent_run_id=run_id,
                     progress_emit=self._progress_emit, cancel_check=self._cancel_check,
                     parent_node_id=node.id,
                 )
-                runs.append(NodeRun(node_id=node.id, iteration=iteration, output=output))
+                sub_duration = round(time.monotonic() - sub_t0, 3)
+                # The runner returns the child's WorkflowResult so its terminal status
+                # reaches this run. A plain string (legacy runner or test double) keeps
+                # meaning "completed with this output".
+                if isinstance(outcome, str):
+                    child_status, output = "completed", outcome
+                else:
+                    child_status, output = outcome.status, (outcome.final_output or "")
+                runs.append(NodeRun(node_id=node.id, iteration=iteration, output=output,
+                                    duration_s=sub_duration))
                 # The nested run shares this same work_dir (see SubworkflowRunner's
                 # work_dir_override) and runs synchronously on this thread, so the
                 # diff here is deterministic and credits the sub-workflow as a whole —
                 # its own manifest separately attributes files to its inner nodes.
                 runs[-1].artifacts = sorted(_work_snapshot() - before_files)[:20]
+                if child_status == "needs_input":
+                    # The child stopped to ask: pause THIS run the same way, keyed to
+                    # this node — resume re-enters here and re-runs the child with the
+                    # framed answers as its task (its prior files persist in the shared
+                    # working folder).
+                    return WorkflowResult(
+                        status="needs_input", final_output=output, runs=runs,
+                        run_id=run_id, needs_input_node=node.id,
+                        final_output_node=node.id,
+                    )
+                if child_status == "cancelled":
+                    return WorkflowResult(
+                        status="cancelled", final_output=output or final_output,
+                        runs=runs, run_id=run_id, final_output_node=node.id,
+                    )
+                if child_status != "completed":   # aborted / exhausted / anything else
+                    msg = f"sub-workflow {node.workflow!r} {child_status}"
+                    if output:
+                        msg = f"{msg}: {output}"
+                    runs[-1].status = "node_failed"
+                    runs[-1].error = msg
+                    return WorkflowResult(
+                        status="aborted", final_output=msg, runs=runs, run_id=run_id,
+                        failed_node=node.id, failed_iteration=iteration,
+                        final_output_node=node.id,
+                    )
                 upstream_output = output
                 final_output = output
                 final_output_node = node.id
                 current = node.next
-                # A nested run can be cancelled entirely inside this call: the nested
-                # engine notices and stops itself, but SubworkflowRunner.__call__ returns
-                # a plain string (other callers depend on that shape), so no status
-                # crosses back with it. Ordinarily the next loop iteration's cancel_check
-                # at the top would catch it — but when this was the last node, there is
-                # no next iteration, and the walk would otherwise fall through to the
-                # completed result below, misreporting a cancelled run as completed.
-                # Re-consult here so this path agrees with the top-of-loop check above
-                # on status and shape.
+                # A cancel can land while the child ran without the child noticing
+                # (e.g. between its last node and its return). Ordinarily the next
+                # loop iteration's cancel_check at the top would catch it — but when
+                # this was the last node, there is no next iteration, and the walk
+                # would otherwise fall through to the completed result below,
+                # misreporting a cancelled run as completed. Re-consult here so this
+                # path agrees with the top-of-loop check above on status and shape.
                 if self._cancel_check is not None and self._cancel_check():
                     return WorkflowResult(
                         status="cancelled", final_output=final_output, runs=runs,
@@ -818,6 +852,17 @@ class WorkflowEngine:
                     merged, abort = self._run_dynamic_parallel(
                         workflow, node, task, run_id, iteration, root_session_key,
                         upstream_output, runs, work_dir=work_dir)
+                elif node.branches_from is not None:
+                    resolved, abort = self._resolve_runtime_branches(
+                        workflow, node, runs, upstream_output)
+                    # An empty resolved list is a legitimate "nothing applies" pass:
+                    # record the node with empty output and continue to `next`.
+                    merged = ""
+                    if abort is None and resolved:
+                        merged, abort = self._run_parallel(
+                            workflow, node, task, run_id, iteration, root_session_key,
+                            upstream_output, runs, work_dir=work_dir,
+                            branch_ids=resolved)
                 else:
                     merged, abort = self._run_parallel(
                         workflow, node, task, run_id, iteration, root_session_key,
@@ -1003,7 +1048,74 @@ class WorkflowEngine:
         )
         return merged, None
 
-    def _run_parallel(self, workflow, node, task, run_id, iteration, root_key, upstream, runs, work_dir=None):
+    @staticmethod
+    def _parse_branch_ids(text: str) -> list[str] | None:
+        """Parse a runtime branch-id list from the branches_from node's output.
+
+        Two accepted forms, both deterministic-script friendly: a JSON array of id
+        strings anywhere in the text (fenced, bracketed span, or the whole text), or
+        — when no JSON array parses — the LAST non-empty line as comma-separated ids
+        (the same last-line contract `cases` routing uses). Returns None when the
+        text yields nothing to even attempt (empty), else the parsed list — which
+        may legitimately be empty (an explicit ``[]`` means "no branches apply").
+        """
+        import json
+        import re
+        candidate = text.strip()
+        if not candidate:
+            return None
+        attempts: list[str] = []
+        fence = re.search(r"```(?:json)?\s*([\s\S]*?)```", candidate)
+        if fence:
+            attempts.append(fence.group(1).strip())
+        arr = re.search(r"\[[\s\S]*\]", candidate)
+        if arr:
+            attempts.append(arr.group(0))
+        attempts.append(candidate)
+        for block in attempts:
+            try:
+                parsed = json.loads(block)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if isinstance(parsed, list):
+                return [str(x).strip() for x in parsed if str(x).strip()][:50]
+        last_line = candidate.splitlines()[-1]
+        return [tok.strip().strip("'\"") for tok in last_line.split(",") if tok.strip()][:50]
+
+    def _resolve_runtime_branches(self, workflow, node, runs, upstream):
+        """Resolve a ``branches_from`` parallel node's branch ids for this pass.
+
+        Reads the most recent recorded output of the source node (falling back to the
+        upstream edge text), parses the id list, dedupes preserving order, and holds
+        every id to the same rules as a static branch: it must name a declared
+        WorkNode without a persistent session. An id that fails is an authoring bug
+        in the emitting node — abort naming it rather than guessing.
+        Returns ``(ids, abort_message)``.
+        """
+        source_text: str | None = None
+        for recorded in reversed(runs):
+            if recorded.node_id == node.branches_from:
+                source_text = recorded.output
+                break
+        if source_text is None:
+            source_text = upstream or ""
+
+        parsed = self._parse_branch_ids(source_text)
+        ids: list[str] = []
+        for bid in parsed or []:
+            if bid not in ids:
+                ids.append(bid)
+        for bid in ids:
+            target = workflow.nodes.get(bid)
+            if not isinstance(target, WorkNode):
+                return [], (f"parallel node {node.id!r}: branches_from resolved unknown or "
+                            f"non-work branch {bid!r} (from node {node.branches_from!r})")
+            if target.session == "persistent":
+                return [], (f"parallel node {node.id!r}: branch {bid!r} cannot use "
+                            "session='persistent' (concurrent units have per-unit sessions)")
+        return ids, None
+
+    def _run_parallel(self, workflow, node, task, run_id, iteration, root_key, upstream, runs, work_dir=None, branch_ids=None):
         """Run a parallel node's branches concurrently and reconcile their writes.
 
         Returns ``(merged_output, abort_message)``; ``abort_message`` is None on
@@ -1022,7 +1134,9 @@ class WorkflowEngine:
         """
         import threading
 
-        branches = node.branches
+        # branch_ids overrides the static list for a branches_from node — the branch
+        # set was resolved (and validated) from the source node's output this pass.
+        branches = tuple(branch_ids) if branch_ids is not None else node.branches
         workers = max(1, min(len(branches), node.max_concurrency))
         # The run's shared working folder, expressed relative to the workspace, so it
         # can be exempted from the fork/diff exclusion — the folder IS branch output,

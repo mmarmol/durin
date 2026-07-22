@@ -2,11 +2,13 @@
 
 A subworkflow node delegates to this. It loads the named workflow and runs a nested
 WorkflowEngine reusing the same node and branch-pick runners, so nodes inside a sub-workflow
-behave exactly as at the top level. Cycles (a workflow that includes itself) are caught
-precisely on re-entry by a call-stack guard. ``max_depth`` is the backstop for deeply
-nested but non-cyclic workflows: beyond that limit it returns an error string instead of
-recursing. A missing workflow returns an error string rather than raising, so one bad
-reference does not abort the whole run.
+behave exactly as at the top level. It returns the child's full ``WorkflowResult`` so the
+parent engine sees the child's terminal status — a child that pauses (needs_input), is
+cancelled, or fails must not read as a completed node whose "output" is an error message.
+Cycles (a workflow that includes itself) are caught precisely on re-entry by a call-stack
+guard; ``max_depth`` is the backstop for deeply nested but non-cyclic workflows; a missing
+workflow name is the same authoring-error class. All three return an aborted result rather
+than raising, so the parent ends with a clear message instead of a traceback.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from typing import Any, Callable
 
 from durin.workflow.engine import WorkflowEngine
 from durin.workflow.loader import WorkflowNotFound, load_workflow
+from durin.workflow.result import WorkflowResult
 
 
 class SubworkflowRunner:
@@ -41,16 +44,22 @@ class SubworkflowRunner:
     def __call__(self, name: str, task: str, root_session_key: str | None = None,
                 work_dir: str | None = None, parent_run_id: str | None = None,
                 progress_emit: Any = None, cancel_check: Any = None,
-                parent_node_id: str | None = None) -> str:
+                parent_node_id: str | None = None) -> WorkflowResult:
+        def _config_abort(message: str) -> WorkflowResult:
+            # An unrunnable sub-workflow reference (cycle / depth / missing name) is an
+            # authoring error: surface it as an aborted child result so the parent run
+            # stops with the message, instead of threading it downstream as edge text.
+            return WorkflowResult(status="aborted", final_output=message, runs=[], run_id="")
+
         if name in self._stack:
             chain = " -> ".join(self._stack + (name,))
-            return f"Error: workflow cycle detected: {chain}"
+            return _config_abort(f"Error: workflow cycle detected: {chain}")
         if self._depth >= self.max_depth:
-            return f"Error: sub-workflow nesting exceeded max depth {self.max_depth}"
+            return _config_abort(f"Error: sub-workflow nesting exceeded max depth {self.max_depth}")
         try:
             workflow = load_workflow(self.workspace, name)
         except WorkflowNotFound as exc:
-            return f"Error: {exc}"
+            return _config_abort(f"Error: {exc}")
         nested = SubworkflowRunner(
             self.workspace, self.node_runner, self.judge_runner,
             script_runner=self.script_runner,
@@ -88,6 +97,5 @@ class SubworkflowRunner:
         )
         # Anchor the sub-workflow's node sessions to the invoking conversation too,
         # so nested work is navigable under it (no orphan subtrees).
-        result = engine.run(workflow, task, root_session_key=root_session_key,
-                            work_dir_override=work_dir, parent_run_id=parent_run_id)
-        return result.final_output or ""
+        return engine.run(workflow, task, root_session_key=root_session_key,
+                          work_dir_override=work_dir, parent_run_id=parent_run_id)
