@@ -57,7 +57,7 @@ import {
   visibleLabels,
   type LabelCandidate,
 } from "@/lib/memory-graph-layout";
-import { readCanvasTheme, watchTheme } from "@/lib/canvas-theme";
+import { readCanvasTheme, watchTheme, type CanvasTheme } from "@/lib/canvas-theme";
 import { MemoryEntityCards } from "@/components/MemoryEntityCards";
 import { MemoryEntityTable } from "@/components/MemoryEntityTable";
 import { MemoryTypeFilter } from "@/components/MemoryTypeFilter";
@@ -627,7 +627,8 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
   // repaints the graph too. Resolved once up front and re-resolved only on
   // a theme change (watchTheme), not per frame — resolving a CSS custom
   // property is a synchronous style read, too costly to repeat 60x/sec.
-  const themeRef = useRef(readCanvasTheme());
+  const themeRef = useRef<CanvasTheme | null>(null);
+  if (themeRef.current === null) themeRef.current = readCanvasTheme();
   useEffect(() => watchTheme(() => { themeRef.current = readCanvasTheme(); }), []);
 
   // RAF render loop — graph view only (the canvas is unmounted otherwise).
@@ -796,7 +797,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
         // distinction (previously baked into the rgba alpha channel) now
         // goes through globalAlpha instead.
         ctx.globalAlpha = veil * (lit ? Math.min(0.55, 0.18 + e.weight * 0.06) : 0.08);
-        ctx.strokeStyle = themeRef.current.line;
+        ctx.strokeStyle = themeRef.current!.line;
         ctx.lineWidth = Math.min(3, 0.8 + Math.log(1 + e.weight));
         ctx.beginPath();
         ctx.moveTo(e.source.x, e.source.y);
@@ -815,14 +816,16 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
           // entity itself.
           ctx.beginPath();
           ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
-          ctx.fillStyle = themeRef.current.surface;
+          ctx.fillStyle = themeRef.current!.surface;
           ctx.fill();
-          ctx.strokeStyle = lit ? themeRef.current.accent : themeRef.current.border;
+          ctx.strokeStyle = lit ? themeRef.current!.accent : themeRef.current!.border;
           ctx.lineWidth = 1.4;
           ctx.stroke();
         } else if (n.type === "session") {
+          ctx.beginPath();
+          ctx.rect(n.x - r, n.y - r, r * 2, r * 2);
           ctx.fillStyle = lit ? colorForType("session") : `${colorForType("session")}33`;
-          ctx.fillRect(n.x - r, n.y - r, r * 2, r * 2);
+          ctx.fill();
         } else {
           const fill = colorForType(n.type);
           ctx.beginPath();
@@ -833,7 +836,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
         if (n.phantom) {
           ctx.setLineDash([3, 3]);
           ctx.globalAlpha = veil * (lit ? 0.4 : 0.15);
-          ctx.strokeStyle = themeRef.current.textMuted;
+          ctx.strokeStyle = themeRef.current!.textMuted;
           ctx.lineWidth = 1;
           ctx.stroke();
           ctx.setLineDash([]);
@@ -848,7 +851,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
           ctx.beginPath();
           ctx.arc(n.x, n.y, r + 3, 0, Math.PI * 2);
           ctx.globalAlpha = veil * (isolating ? 0.75 : 0.55);
-          ctx.strokeStyle = isolating ? themeRef.current.accent : themeRef.current.text;
+          ctx.strokeStyle = isolating ? themeRef.current!.accent : themeRef.current!.text;
           ctx.lineWidth = 1.6;
           ctx.stroke();
           ctx.globalAlpha = veil;
@@ -893,20 +896,23 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
         const sy = labelSy(n, r);
         const lit = isHighlighted(n.id);
         if (n.kind === "bubble") {
+          const sr = r * cam.k;
           const displayName =
             n.name === "__others__" ? t("memoryGraph.clusterOthers") : n.name;
           ctx.font = "500 13px ui-sans-serif, system-ui, -apple-system";
-          ctx.fillStyle = themeRef.current.text;
+          ctx.fillStyle = themeRef.current!.text;
           ctx.fillText(shortLabel(displayName), sx, sy);
-          ctx.font = "11px ui-sans-serif, system-ui, -apple-system";
-          ctx.fillStyle = themeRef.current.textMuted;
-          ctx.fillText(
-            t("memoryGraph.bubbleEntities", { count: n.count ?? 0 }),
-            sx,
-            sy + 15,
-          );
+          if (sr >= 28) {
+            ctx.font = "11px ui-sans-serif, system-ui, -apple-system";
+            ctx.fillStyle = themeRef.current!.textMuted;
+            ctx.fillText(
+              t("memoryGraph.bubbleEntities", { count: n.count ?? 0 }),
+              sx,
+              sy + 15,
+            );
+          }
         } else {
-          ctx.fillStyle = lit ? themeRef.current.text : themeRef.current.textMuted;
+          ctx.fillStyle = lit ? themeRef.current!.text : themeRef.current!.textMuted;
           ctx.fillText(shortLabel(n.name), sx, sy);
         }
       }
