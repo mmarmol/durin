@@ -17,12 +17,12 @@ previous tag — highlights first, then changes grouped by area.
   surface. Once a workflow has completed runs to learn from, the executions
   view also shows each node's typical duration next to how long this pass
   actually took, which files a node produced, and how long a whole run of
-  this workflow usually takes.
+  this workflow usually takes. (#428)
 - **A run's progress is never lost.** Reload the page mid-run and the active
   node, its elapsed time, and its round are exactly where you left them. If
   the gateway itself restarts partway through a node, the rounds that node
   had already completed are preserved in its session instead of vanishing
-  with the process.
+  with the process. (#428)
 
 ## 0.3.4 — 2026-07-21
 
