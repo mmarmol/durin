@@ -412,10 +412,15 @@ class WorkflowsService:
         resume = None
         if resume_run_id:
             manifest = run_log.read_manifest(self._workspace, name, resume_run_id)
-            if manifest is None or manifest.get("status") != "needs_input" or not manifest.get("needs_input_node"):
+            paused = (manifest is not None and manifest.get("status") == "needs_input"
+                      and manifest.get("needs_input_node"))
+            failed = (manifest is not None and manifest.get("status") == "aborted"
+                      and manifest.get("failed_node"))
+            if not paused and not failed:
                 raise ValidationFailedError(
                     f"run {resume_run_id!r} of workflow {name!r} cannot be resumed — "
-                    "only a needs_input run can."
+                    "only a needs_input run (with the answers as task) or an aborted "
+                    "run (retried at its failed node) can."
                 )
             resume = build_resume_state(manifest, task)
             task = manifest.get("task") or task

@@ -42,5 +42,6 @@ class WorkflowResult:
     failed_node: str | None = None  # set when a node's agent turn raised: the node that failed
     failed_iteration: int | None = None  # the iteration of the failed node (with failed_node)
     needs_input_node: str | None = None  # set when status=="needs_input": the node that asked
+    resume_upstream: str | None = None  # aborted runs: the exact upstream text the failed node received (for failure resume)
     output_files: list[str] = field(default_factory=list)  # relative paths in output_dir (completed runs)
     missing_artifacts: list[str] = field(default_factory=list)  # declared output.artifacts paths absent at completion (warning, not failure)

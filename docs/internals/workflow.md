@@ -365,6 +365,11 @@ clears it, and a run whose `status` is no longer `"running"` never reports one �
 crashed run's last in-flight node does not linger as a phantom "still running" entry.
 On finalization: `needs_input_node` — the node
 that routed to `__needs_input__` (`null` otherwise), the resume re-entry point;
+`failed_node` + `resume_upstream` — on an aborted run, the node whose execution raised
+and the EXACT upstream text it received (verbatim, capped), the failure-resume anchors:
+`resume_run_id` on such a run retries the failed node with the same input — completed
+nodes never re-run, and no retry framing pollutes the replayed text (a retried script
+parses its stdin);
 `final_output_node` — which node's output became `final_output` (`null` when no node
 contributed, e.g. an aborted run); `output_files`: the relative paths (within the
 run's output folder) a completed run produced, empty for a run that ended any other

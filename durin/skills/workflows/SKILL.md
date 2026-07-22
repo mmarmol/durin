@@ -141,7 +141,9 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   run id; answer them (from your own context when you can, otherwise ask the user), then call
   `run_workflow` again with `resume_run_id=<that id>` and the answers as `task`. That resumes
   the SAME run — same working folder, node sessions, and loop counters — at the node that
-  asked, instead of restarting from scratch.
+  asked, instead of restarting from scratch. **An aborted run resumes the same way** when the
+  failure looks transient (a network/API error at one node): `resume_run_id=<that id>`
+  retries the FAILED node with the exact input it had — completed nodes never re-run.
 - **Author:** call `workflow_write(name, definition, rationale)` — it validates the graph
   before anything lands (schema errors come back verbatim), refuses to overwrite an existing
   name, and records the change in the workflow version history. A successful save may still

@@ -41,6 +41,12 @@ SCHEMA = 2
 # was 52 minutes old at the post-crash boot, far under any sane age bound).
 RECONCILE_AGE_S = 6 * 3600
 
+# Cap for the stored ``resume_upstream`` text on an aborted manifest: the exact
+# input the failed node received, kept so a resume can replay it verbatim. Far
+# above any sane edge text; a pathological upstream is truncated, and a resume
+# of THAT run degrades gracefully (the node sees the capped text).
+RESUME_UPSTREAM_MAX_CHARS = 16_000
+
 
 def _node_records(result) -> list[dict]:
     """The per-node trace each manifest write embeds: every field an auditor or the
@@ -208,6 +214,14 @@ def finalize_run(
         "final_output": (result.final_output or "")[:8000],
         "final_output_node": getattr(result, "final_output_node", None),
         "needs_input_node": getattr(result, "needs_input_node", None),
+        # Failure-resume anchors: which node aborted the run and the EXACT upstream
+        # text it received (verbatim — a retried script parses its stdin, so no
+        # framing may pollute it). Only present on aborted runs that name a node.
+        "failed_node": getattr(result, "failed_node", None),
+        "resume_upstream": (
+            (getattr(result, "resume_upstream", None) or "")[:RESUME_UPSTREAM_MAX_CHARS]
+            if getattr(result, "resume_upstream", None) is not None else None
+        ),
         "output_files": list(getattr(result, "output_files", []) or []),
         "missing_artifacts": list(getattr(result, "missing_artifacts", []) or []),
         "runs": _node_records(result),

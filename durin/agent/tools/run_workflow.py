@@ -102,9 +102,11 @@ _PARAMETERS = {
             "type": "string",
             "description": (
                 "Optional. The run_id of a prior run of THIS workflow that ended asking for "
-                "more information (needs_input). Pass the user's answers as 'task': the run "
-                "resumes at the node that asked — same working folder, sessions and visit "
-                "counts — instead of restarting from scratch."
+                "more information (needs_input) OR aborted at a named node. For needs_input, "
+                "pass the user's answers as 'task': the run resumes at the node that asked. "
+                "For an aborted run (e.g. a transient API failure), the failed node is "
+                "retried with the exact input it had. Both keep the same working folder, "
+                "sessions and visit counts — nothing completed re-runs."
             ),
         },
     },
@@ -147,6 +149,14 @@ def _format_result(result: Any, output_files: bool = False) -> str:
                 f"resume_run_id='{result.run_id}' and the answers as the task."
             )
     elif result.status != "completed":
+        if result.status == "aborted" and getattr(result, "failed_node", None):
+            lines.append(
+                f"The run aborted at node '{result.failed_node}'. If the failure looks "
+                "transient (a network/API error), call this tool again with "
+                f"resume_run_id='{result.run_id}' to retry that node with the exact input "
+                "it had — completed nodes will not re-run."
+            )
+
         if result.status == "exhausted" and result.exhausted_node:
             lines.append(
                 f"The workflow did not complete: node '{result.exhausted_node}' was retried "
@@ -336,10 +346,13 @@ class RunWorkflowTool(Tool, ContextAware):
             manifest = run_log.read_manifest(self._workspace, name, resume_run_id)
             if manifest is None:
                 return f"Error: no run '{resume_run_id}' recorded for workflow '{name}'."
-            if manifest.get("status") != "needs_input" or not manifest.get("needs_input_node"):
+            paused = manifest.get("status") == "needs_input" and manifest.get("needs_input_node")
+            failed = manifest.get("status") == "aborted" and manifest.get("failed_node")
+            if not paused and not failed:
                 return (f"Error: run '{resume_run_id}' has status "
                         f"'{manifest.get('status')}' and cannot be resumed — only a "
-                        f"needs_input run can.")
+                        f"needs_input run (with the answers as task) or an aborted run "
+                        f"(retried at its failed node) can.")
             resume = build_resume_state(manifest, task)
             task = manifest.get("task") or task
 
