@@ -158,6 +158,17 @@ def collect_tasks(
             needs_input_detail = (rec.get("final_output") or "")[:500] or None
         typical = rec.get("typical_s") or {}
         typical_total = sum(typical.values()) if typical else None
+        # active_node is only trustworthy while the run is actually "running": crash
+        # reconciliation (reconcile_running / reconcile_one) flips a dead run's status
+        # to "crashed" without clearing it (only a normal completion, via update_run,
+        # does that), so a stale marker would otherwise survive the run's own death.
+        # Gating here — the sole place a manifest's active_node is read — covers every
+        # non-running status uniformly, including any future one that forgets to clear
+        # the marker itself. A "needs_input" run is paused rather than dead, but it has
+        # nothing in flight either: the node that triggered the pause already finished
+        # its own turn, and the manifest's dedicated needs_input_detail (not active_node)
+        # is what should surface for it.
+        active_node = rec.get("active_node") if rec.get("status") == "running" else None
         tasks.append({
             "kind": "workflow", "id": rec.get("run_id", ""),
             "label": wf_name,
@@ -165,7 +176,7 @@ def collect_tasks(
             "started_at": float(rec.get("started_at") or 0.0),
             "ended_at": rec.get("finished_at"),
             "session_key": drill,
-            "nodes": _node_tree(node_runs, label_map, typical, rec.get("active_node")),
+            "nodes": _node_tree(node_runs, label_map, typical, active_node),
             "task": rec.get("task"),
             "needs_input_detail": needs_input_detail,
             "typical_total_s": typical_total,

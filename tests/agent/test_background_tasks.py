@@ -170,3 +170,33 @@ def test_running_revisit_of_a_completed_node_collapses_to_one_row(tmp_path):
     assert len(matches) == 1
     assert matches[0]["status"] == "running"
     assert matches[0]["started_at"] == 250.0
+
+
+def test_a_crashed_run_reports_no_running_node(tmp_path):
+    """Crash reconciliation (reconcile_one / reconcile_running) flips a dead run's
+    status to "crashed" but does not touch active_node — only a normal completion
+    (update_run) clears that marker. Without a status gate at the reader, a run
+    that died mid-node would report that node as "running" forever."""
+    from durin.agent.background_tasks import collect_tasks
+    from durin.workflow import run_log
+
+    run_log.start_run(tmp_path, "wf", "r5", root_session_key="websocket:c", started_at=100.0)
+    run_log.mark_node_started(tmp_path, "wf", "r5", node_id="search",
+                              label="Search", started_at=140.0)
+    # Simulate the owning process having died mid-node, then run the real
+    # crash-reconciliation path against it — the same one the gateway runs at
+    # boot and the one the tasks tool runs when a user pokes a stale run.
+    path = run_log._record_path(tmp_path, "wf", "r5")
+    rec = run_log.read_manifest(tmp_path, "wf", "r5")
+    rec["owner"] = {"pid": 2**22 + 54321, "started": "never"}
+    path.write_text(json.dumps(rec), encoding="utf-8")
+    assert run_log.reconcile_one(tmp_path, "wf", "r5") is True
+
+    manifest = run_log.read_manifest(tmp_path, "wf", "r5")
+    assert manifest["status"] == "crashed"
+    assert manifest["active_node"]["node_id"] == "search"   # reconcile leaves it set
+
+    row = next(t for t in collect_tasks(tmp_path, session_key="websocket:c")
+               if t["kind"] == "workflow")
+    assert row["status"] == "failed"
+    assert not any(n["status"] == "running" for n in row["nodes"])
