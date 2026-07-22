@@ -124,13 +124,20 @@ buffer (the buffer passes through it untouched).
 
 ### `parallel` — concurrent branches
 
-Runs branches concurrently and merges their text outputs into the `next` node's input. Two
+Runs branches concurrently and merges their text outputs into the `next` node's input. Three
 shapes:
 
 - **Static:** a fixed `branches` list of `work`-node ids, all seeing the same input.
 - **Dynamic fan-out:** a `worker` (a `work`-node template) mapped over a runtime list named
   by `list_from` (an upstream node whose output is a JSON array, newline-split as fallback);
   one worker per item.
+- **Runtime-selected:** `branches_from` names the node — typically a routing script — whose
+  output lists which DECLARED `work`-node ids run this pass (a JSON array like
+  `["search-history", "analyze-images"]`, or a comma-separated LAST stdout line like
+  `search-history, analyze-images`). Use it when different runs need different branch
+  subsets: one parallel node replaces one static block per combination. An id that names an
+  undeclared/non-`work`/persistent-session node aborts the run (fix the emitting node); an
+  empty list is valid — the node records empty output and the walk continues to `next`.
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
@@ -138,13 +145,15 @@ shapes:
 | `branches` | array of strings | `()` | **Static only.** Non-empty list of `work`-node ids. Each must be a `work` node. |
 | `worker` | string \| null | none | **Dynamic only.** Id of the `work` node used as the per-item template. |
 | `list_from` | string \| null | none | **Dynamic only.** Id of the upstream node whose output is the runtime list. Required when `worker` is set. |
+| `branches_from` | string \| null | none | **Runtime-selected only.** Id of the node whose output names the branch ids to run this pass. Must reference a declared node. |
 | `max_concurrency` | int ≥ 1 | `2` | Max simultaneous branch/worker runners; excess queue in waves. |
 | `reconcile` | `"read"` \| `"choose"` \| `"union"` | `"read"` | How **static** branch *file writes* merge: `read` = no writes applied; `choose` = each branch writes a private copy, a judge picks one; `union` = apply all, abort on a same-path content conflict. Writing branches fork the run's shared working folder along with the workspace — a branch starts from the folder's current files and its folder writes reconcile back the same way. (Dynamic workers and `read` branches are handed the shared folder directly; `reconcile` has no effect on dynamic fan-out.) |
 | `criteria` | string | `""` | **Required when `reconcile` is `choose`** — how the judge picks the winner. |
 | `judge_model` | string \| null | none | Optional model for the `choose` judge. |
 | `next` | string \| null | none | Where the merged output flows. |
 
-`branches` and `worker`/`list_from` are mutually exclusive (static xor dynamic).
+`branches`, `worker`/`list_from`, and `branches_from` are mutually exclusive — exactly one
+parallel mode per node.
 
 ### `subworkflow` — run another workflow as one step
 
@@ -153,6 +162,13 @@ shapes:
 | `kind` | `"subworkflow"` | — | Required. |
 | `workflow` | string | — | **Required.** Name of the workflow to run as a nested run (depth-capped; cycles rejected). The nested run works in the **parent run's shared working folder**, so files flow through composition in both directions. |
 | `next` | string \| null | none | Where the nested run's output flows. |
+
+The child's terminal status **propagates**: `completed` threads its output to `next`;
+`needs_input` pauses the parent run resumably at this node (resume re-runs the child with
+the answers as its task — its prior files persist in the shared folder); `cancelled`
+cancels the parent; `aborted`/`exhausted` (and cycle / depth / missing-name errors) abort
+the parent naming the child. A composed pipeline therefore never "completes" past a stage
+that did not actually run.
 
 ## Validation rules that bite
 

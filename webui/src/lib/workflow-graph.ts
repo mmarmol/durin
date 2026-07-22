@@ -18,6 +18,8 @@ export type WorkflowNodeDef = {
   // parallel dynamic mode fields
   worker?: string | null;
   list_from?: string | null;
+  // parallel runtime-selected mode: node whose output names the branch ids to run
+  branches_from?: string | null;
   max_concurrency?: number;
   reconcile?: "read" | "choose" | "union";
   // work node: per-node visit budget (blank/undefined = inherit workflow default)
@@ -67,7 +69,7 @@ const ROW = 110;
 
 function targetsOf(n: WorkflowNodeDef): string[] {
   const out: string[] = [];
-  for (const t of [n.next, n.on_pass, n.on_fail, n.worker, n.list_from, ...(n.branches ?? [])]) {
+  for (const t of [n.next, n.on_pass, n.on_fail, n.worker, n.list_from, n.branches_from, ...(n.branches ?? [])]) {
     if (typeof t === "string") out.push(t);
   }
   if (n.cases) {
@@ -240,10 +242,16 @@ export function workflowToFlow(def: WorkflowDef): { nodes: Node[]; edges: Edge[]
       add(n.id, n.on_fail, "fail");
     } else if (n.kind === "parallel") {
       const isDynamic = typeof n.worker === "string";
+      const isFromNode = typeof n.branches_from === "string";
       if (isDynamic) {
         // Dynamic parallel: list_from → parallel (edge from list source), parallel → worker, parallel → next
         add(n.id, n.list_from, "list");
         add(n.id, n.worker, "worker");
+        add(n.id, n.next);
+      } else if (isFromNode) {
+        // Runtime-selected parallel: the source node's output names the branches at
+        // run time, so only the source relationship and the merge edge are drawable.
+        add(n.id, n.branches_from, "branches");
         add(n.id, n.next);
       } else {
         // Static parallel: fan out to branches, merge to next

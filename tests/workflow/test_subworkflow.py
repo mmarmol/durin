@@ -25,13 +25,15 @@ def test_runs_named_workflow_and_returns_final_output(tmp_path):
                                "nodes": [{"id": "a", "kind": "work", "next": None}]})
     runner = SubworkflowRunner(tmp_path, _node_runner("child-result"), judge_runner=None)
     out = runner("child", "do the child")
-    assert out == "child-result"
+    assert out.status == "completed"
+    assert out.final_output == "child-result"
 
 
 def test_missing_subworkflow_returns_error_not_raise(tmp_path):
     runner = SubworkflowRunner(tmp_path, _node_runner("x"), judge_runner=None)
     out = runner("ghost", "t")
-    assert "ghost" in out or "Error" in out
+    assert out.status == "aborted"
+    assert "ghost" in (out.final_output or "") or "Error" in (out.final_output or "")
 
 
 def test_depth_cap_stops_deep_non_cyclic_nesting(tmp_path):
@@ -47,7 +49,8 @@ def test_depth_cap_stops_deep_non_cyclic_nesting(tmp_path):
                            "nodes": [{"id": "s", "kind": "work", "next": None}]})
     runner = SubworkflowRunner(tmp_path, _node_runner("x"), judge_runner=None, max_depth=2)
     out = runner("A", "t")
-    assert "depth" in out.lower()
+    assert out.status == "aborted"
+    assert "depth" in (out.final_output or "").lower()
 
 
 def test_subworkflow_cycle_is_detected(tmp_path):
@@ -57,8 +60,9 @@ def test_subworkflow_cycle_is_detected(tmp_path):
                            "nodes": [{"id": "call", "kind": "subworkflow", "workflow": "A", "next": None}]})
     runner = SubworkflowRunner(tmp_path, _node_runner("x"), judge_runner=None)
     out = runner("A", task="go")
-    assert "cycle detected" in out
-    assert "A -> A" in out
+    assert out.status == "aborted"
+    assert "cycle detected" in (out.final_output or "")
+    assert "A -> A" in (out.final_output or "")
 
 
 def test_parent_run_id_forwarded_to_nested_manifest(tmp_path):
@@ -106,7 +110,7 @@ def test_subworkflow_runs_script_nodes(tmp_path):
         judge_runner=None,
         script_runner=ScriptNodeRunner(tmp_path),
     )
-    assert runner("child", "abc").strip() == "ABC"
+    assert (runner("child", "abc").final_output or "").strip() == "ABC"
 
 
 def test_nested_nodes_work_in_the_parent_folder(tmp_path):
@@ -121,7 +125,7 @@ def test_nested_nodes_work_in_the_parent_folder(tmp_path):
     parent_work = tmp_path / "parent-work"
     parent_work.mkdir()
     out = SubworkflowRunner(tmp_path, node_runner)("child", "task", None, work_dir=str(parent_work))
-    assert out == "child-out"
+    assert out.final_output == "child-out"
     assert seen["c"] == str(parent_work)
 
 
@@ -179,7 +183,7 @@ def test_nested_progress_is_silent_when_the_parent_is_not_listening(tmp_path):
                                "nodes": [{"id": "a", "kind": "work", "next": None}]})
     runner = SubworkflowRunner(tmp_path, _node_runner("x"), judge_runner=None)
     # No progress_emit: must run normally, not construct a tagging wrapper.
-    assert runner("child", "t") == "x"
+    assert runner("child", "t").final_output == "x"
 
 
 def test_cancelling_the_parent_stops_the_nested_run(tmp_path):

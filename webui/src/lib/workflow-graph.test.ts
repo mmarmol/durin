@@ -195,6 +195,25 @@ describe("workflowToFlow", () => {
     expect((workerNode?.data as Record<string, unknown>).dynamicWorker).toBe(true);
   });
 
+  it("a runtime-selected parallel (branches_from=route, next=done) emits the source and merge edges without static branch edges", () => {
+    const { edges } = workflowToFlow({
+      name: "rfan",
+      start: "route",
+      nodes: [
+        { id: "route", kind: "work", next: "fan" },
+        { id: "fan", kind: "parallel", branches_from: "route", next: "done" },
+        { id: "b1", kind: "work" },
+        { id: "done", kind: "work" },
+      ],
+    });
+    const sourceEdge = edges.find((e) => e.source === "fan" && e.target === "route" && e.label === "branches");
+    expect(sourceEdge).toBeDefined();
+    const mergeEdge = edges.find((e) => e.source === "fan" && e.target === "done");
+    expect(mergeEdge).toBeDefined();
+    // runtime branches are not statically drawable — no branch edge and no output edge for b1
+    expect(edges.find((e) => e.target === "b1" || e.source === "b1")).toBeUndefined();
+  });
+
   it("connects OUTPUT from a routing node that ends on pass but loops on fail (evaluator-optimizer)", () => {
     const { edges } = workflowToFlow({
       name: "eo",

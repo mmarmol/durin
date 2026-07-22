@@ -159,10 +159,16 @@ class ParallelNode:
     branch writes in its own copy, a judge picks one to apply; 'union' = apply every
     branch's writes, failing on a same-file conflict.
 
-    Static mode: ``branches`` is non-empty, ``worker``/``list_from`` are None.
+    Static mode: ``branches`` is non-empty, ``worker``/``list_from``/``branches_from``
+    are None.
     Dynamic mode: ``worker`` names a work node to run per item; ``list_from`` names
     the upstream node whose output is parsed as the runtime list; ``branches`` is
-    empty.  Bounded by ``max_concurrency`` in both modes.
+    empty.
+    Runtime-selected mode: ``branches_from`` names the node whose output lists the
+    DECLARED work-node ids to run this pass (a routing script emitting a JSON array
+    or comma-separated ids) — heterogeneous branches chosen per run, without one
+    static parallel node per branch combination.
+    Bounded by ``max_concurrency`` in every mode.
     """
 
     id: str
@@ -175,6 +181,7 @@ class ParallelNode:
     max_concurrency: int = 2             # max simultaneous branch/worker runners (>= 1)
     worker: str | None = None            # dynamic mode: worker-template node id
     list_from: str | None = None         # dynamic mode: node whose output is the runtime list
+    branches_from: str | None = None     # runtime-selected mode: node whose output names the branch ids
     kind: Literal["parallel"] = "parallel"
 
 
@@ -412,10 +419,27 @@ def _build_node(raw: dict[str, Any]) -> Node:
     if kind == "parallel":
         worker = raw.get("worker")
         list_from = raw.get("list_from")
+        branches_from = raw.get("branches_from")
         branches_raw = raw.get("branches", [])
         is_dynamic = worker is not None
 
-        if is_dynamic:
+        if branches_from is not None:
+            # Runtime-selected branches: exactly one mode per parallel node.
+            if branches_raw:
+                raise WorkflowError(
+                    f"node {node_id!r}: 'branches_from' must not also set static 'branches'"
+                )
+            if is_dynamic or list_from is not None:
+                raise WorkflowError(
+                    f"node {node_id!r}: 'branches_from' must not be combined with "
+                    "'worker'/'list_from' (pick one parallel mode)"
+                )
+            if not isinstance(branches_from, str) or not branches_from:
+                raise WorkflowError(
+                    f"node {node_id!r}: branches_from must be a non-empty string, got {branches_from!r}"
+                )
+            branches: tuple[str, ...] = ()
+        elif is_dynamic:
             if branches_raw:
                 raise WorkflowError(
                     f"node {node_id!r}: a dynamic parallel node (worker set) must not also set 'branches'"
@@ -432,7 +456,7 @@ def _build_node(raw: dict[str, Any]) -> Node:
                 raise WorkflowError(
                     f"node {node_id!r}: list_from must be a non-empty string, got {list_from!r}"
                 )
-            branches: tuple[str, ...] = ()
+            branches = ()
         else:
             if not isinstance(branches_raw, list) or not branches_raw:
                 raise WorkflowError(
@@ -459,6 +483,7 @@ def _build_node(raw: dict[str, Any]) -> Node:
             id=node_id, title=raw.get("title", ""), branches=branches, next=raw.get("next"),
             reconcile=reconcile, criteria=criteria, judge_model=raw.get("judge_model"),
             max_concurrency=max_concurrency, worker=worker, list_from=list_from,
+            branches_from=branches_from,
         )
     raise WorkflowError(f"node {node_id!r}: unknown kind {kind!r}")
 
@@ -549,6 +574,10 @@ def parse_workflow(data: dict[str, Any]) -> Workflow:
             if node.worker is not None and not isinstance(nodes[node.worker], WorkNode):
                 raise WorkflowError(
                     f"node {node.id!r}: parallel worker {node.worker!r} must be a work node"
+                )
+            if node.branches_from is not None and node.branches_from not in nodes:
+                raise WorkflowError(
+                    f"node {node.id!r}: branches_from references unknown node {node.branches_from!r}"
                 )
 
     for node in nodes.values():

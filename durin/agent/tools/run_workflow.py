@@ -81,7 +81,9 @@ _PARAMETERS = {
             "items": {"type": "string"},
             "description": (
                 "Optional. Absolute paths of files to hand the workflow as input. Each is copied "
-                "into the run's shared working folder before the start node runs, so every node "
+                "into the run's shared working folder before the start node runs — UNDER ITS "
+                "ORIGINAL BASENAME, so a workflow expecting context.json must be given a file "
+                "named context.json (rename your copy first if needed) — and every node "
                 "(including tool-less ones, and a dynamic fan-out of one worker per file) can read "
                 "them there. Use this instead of pasting file contents into 'task'."
             ),
