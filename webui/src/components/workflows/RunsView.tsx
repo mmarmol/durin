@@ -163,6 +163,12 @@ export function RunsView() {
     if (!entry || manifestRef.current?.status !== "running") return;
     try {
       const got = await getWorkflowRunManifest(token, entry.workflow, entry.run_id);
+      // The selection can change while this request is in flight (the user
+      // clicks a different run before this poll tick's fetch resolves). Apply
+      // the response only if the fetched run is still the one selected —
+      // otherwise it's a stale reply that would overwrite a newer selection's
+      // data.
+      if (selectedRef.current?.run_id !== entry.run_id) return;
       setManifest(got);
     } catch (e) {
       setError(errMsg(e));
@@ -235,11 +241,16 @@ export function RunsView() {
       setError(null);
       try {
         const got = await getWorkflowRunManifest(token, entry.workflow, entry.run_id);
-        setManifest(got);
+        // A later click on a different row can resolve before this one. Apply
+        // the result only while it's still for the selected run — otherwise
+        // it's a stale reply for a run the user has since left, and applying
+        // it would clobber that other run's already-loaded (or still-loading)
+        // detail.
+        if (selectedRef.current?.run_id === entry.run_id) setManifest(got);
       } catch (e) {
         setError(errMsg(e));
       } finally {
-        setManifestLoading(false);
+        if (selectedRef.current?.run_id === entry.run_id) setManifestLoading(false);
       }
     },
     [token],

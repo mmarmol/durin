@@ -201,12 +201,12 @@ export function RunDetail({
   const [answers, setAnswers] = useState("");
   const continues = continuesSessionFlags(result.runs);
   const outputFiles = result.output_files ?? [];
-  const activeNode = result.active_node;
+  const activeNodeInfo = result.active_node;
 
   // Ticks only while a node is actually in flight, so the header's elapsed total
   // (below) advances live for a running run and freezes once there's nothing left
   // for it to count up from.
-  const now = useTicker(activeNode != null);
+  const now = useTicker(activeNodeInfo != null);
 
   // The run header's totals: actual elapsed (completed nodes' durations, plus the
   // active node's live delta while one is running) alongside the typical total from
@@ -214,7 +214,7 @@ export function RunDetail({
   // (rendered as absent, not 0) when there is nothing to sum: an older manifest with
   // no duration data, or a workflow with no completed-run history yet.
   const completedS = sumKnown(result.runs.map((r) => r.duration_s));
-  const activeS = activeNode != null ? Math.max(0, now / 1000 - activeNode.started_at) : null;
+  const activeS = activeNodeInfo != null ? Math.max(0, now / 1000 - activeNodeInfo.started_at) : null;
   const elapsedTotalS = completedS != null || activeS != null ? (completedS ?? 0) + (activeS ?? 0) : null;
   const typicalTotalS = sumKnown(Object.values(result.typical_s ?? {}));
 
@@ -317,15 +317,15 @@ export function RunDetail({
             typicalS={result.typical_s?.[run.node_id]}
           />
         ))}
-        {activeNode && (
+        {activeNodeInfo && (
           <div className="flex flex-wrap items-center gap-1.5 rounded border border-amber-500/50 bg-amber-500/5 px-2 py-1.5">
             <Loader2 className="h-3 w-3 shrink-0 animate-spin text-amber-600" aria-hidden />
-            <span className="font-mono text-[11px] font-medium">{activeNode.label}</span>
+            <span className="font-mono text-[11px] font-medium">{activeNodeInfo.label}</span>
             <span className="rounded bg-amber-500/10 px-1 py-0.5 text-[10px] text-amber-700 dark:text-amber-400">
               {t("workflows.runStatus.running", "running")}
             </span>
             <span className="ml-auto shrink-0 tabular-nums text-[10px] text-muted-foreground">
-              {formatElapsed(activeNode.started_at * 1000, now)}
+              {formatElapsed(activeNodeInfo.started_at * 1000, now)}
             </span>
           </div>
         )}

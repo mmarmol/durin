@@ -363,6 +363,144 @@ describe("RunsView", () => {
     expect(manifestSpy.mock.calls.length).toBe(manifestCallsBeforeUnmount);
     vi.useRealTimers();
   });
+
+  it("keeps a newly selected run's manifest when a previous run's poll refresh resolves late", async () => {
+    vi.useFakeTimers();
+    const listSpy = vi.mocked(listAllWorkflowRuns);
+    const manifestSpy = vi.mocked(api.getWorkflowRunManifest);
+    listSpy.mockClear();
+    manifestSpy.mockClear();
+    listSpy.mockResolvedValue([
+      { workflow: "wf", run_id: "r1", status: "running", started_at: 1, task: "run A" },
+      { workflow: "wf", run_id: "r2", status: "running", started_at: 2, task: "run B" },
+    ] as never);
+
+    const aInitial: api.WorkflowRunResult = {
+      status: "running",
+      final_output: "",
+      run_id: "r1",
+      runs: [
+        { node_id: "a-step", iteration: 1, passed: null, session_key: null, worker_index: null, status: "ok", route_label: null },
+      ],
+    };
+    const bManifest: api.WorkflowRunResult = {
+      status: "running",
+      final_output: "",
+      run_id: "r2",
+      runs: [
+        { node_id: "b-step", iteration: 1, passed: null, session_key: null, worker_index: null, status: "ok", route_label: null },
+      ],
+    };
+    // What A's poll re-fetch eventually resolves to — distinguishable from
+    // bManifest so an incorrect overwrite is detectable.
+    const aStaleLate: api.WorkflowRunResult = {
+      status: "running",
+      final_output: "",
+      run_id: "r1",
+      runs: [
+        { node_id: "a-step", iteration: 1, passed: null, session_key: null, worker_index: null, status: "ok", route_label: null },
+        { node_id: "a-step-late", iteration: 1, passed: null, session_key: null, worker_index: null, status: "ok", route_label: null },
+      ],
+    };
+
+    // Resolved by hand below, after B is already selected — simulating a poll
+    // tick's re-fetch of A that takes longer than the user's next click.
+    let resolveAPoll!: (v: api.WorkflowRunResult) => void;
+    const aPollPromise = new Promise<api.WorkflowRunResult>((res) => {
+      resolveAPoll = res;
+    });
+
+    manifestSpy
+      .mockResolvedValueOnce(aInitial) // 1: click on A
+      .mockImplementationOnce(() => aPollPromise) // 2: poll tick's re-fetch of A, held open
+      .mockResolvedValueOnce(bManifest); // 3: click on B
+
+    render(wrap(<RunsView />));
+    await act(async () => {});
+
+    fireEvent.click(screen.getByText("run A"));
+    await act(async () => {});
+    expect(screen.getByText(/a-step/)).toBeInTheDocument();
+
+    // Poll tick fires: refreshOpenManifest re-fetches A's manifest (mock call
+    // #2 above) and leaves it unresolved for now.
+    await vi.advanceTimersByTimeAsync(4000);
+
+    // Before that re-fetch resolves, the user switches to run B.
+    fireEvent.click(screen.getByText("run B"));
+    await act(async () => {});
+    expect(screen.getByText(/b-step/)).toBeInTheDocument();
+
+    // A's stale poll response finally arrives.
+    resolveAPoll(aStaleLate);
+    await act(async () => {});
+
+    // It must not have clobbered B's already-rendered detail.
+    expect(screen.getByText(/b-step/)).toBeInTheDocument();
+    expect(screen.queryByText(/a-step-late/)).not.toBeInTheDocument();
+    vi.useRealTimers();
+  });
+
+  it("keeps a newly selected run's manifest when a previous run's own fetch resolves late", async () => {
+    // No polling involved here — this isolates the click-driven path
+    // (onSelectEntry) from the poll-driven one covered above, so both rows
+    // are already-finished runs and no interval is ever created.
+    const listSpy = vi.mocked(listAllWorkflowRuns);
+    const manifestSpy = vi.mocked(api.getWorkflowRunManifest);
+    listSpy.mockClear();
+    manifestSpy.mockClear();
+    listSpy.mockResolvedValue([
+      { workflow: "wf", run_id: "r1", status: "completed", started_at: 1, task: "run A" },
+      { workflow: "wf", run_id: "r2", status: "completed", started_at: 2, task: "run B" },
+    ] as never);
+
+    const bManifest: api.WorkflowRunResult = {
+      status: "completed",
+      final_output: "b done",
+      run_id: "r2",
+      runs: [
+        { node_id: "b-step", iteration: 1, passed: null, session_key: null, worker_index: null, status: "ok", route_label: null },
+      ],
+    };
+    const aLate: api.WorkflowRunResult = {
+      status: "completed",
+      final_output: "a done",
+      run_id: "r1",
+      runs: [
+        { node_id: "a-step", iteration: 1, passed: null, session_key: null, worker_index: null, status: "ok", route_label: null },
+      ],
+    };
+
+    // Resolved by hand below, after B is already selected — simulating A's
+    // own click-driven fetch taking longer than the user's next click.
+    let resolveA!: (v: api.WorkflowRunResult) => void;
+    const aPromise = new Promise<api.WorkflowRunResult>((res) => {
+      resolveA = res;
+    });
+
+    manifestSpy
+      .mockImplementationOnce(() => aPromise) // 1: click on A, held open
+      .mockResolvedValueOnce(bManifest); // 2: click on B, resolves first
+
+    render(wrap(<RunsView />));
+    await act(async () => {});
+
+    fireEvent.click(screen.getByText("run A"));
+    await act(async () => {});
+    // A's own fetch is still pending — nothing to assert yet.
+
+    fireEvent.click(screen.getByText("run B"));
+    await act(async () => {});
+    expect(screen.getByText(/b-step/)).toBeInTheDocument();
+
+    // A's abandoned fetch finally resolves.
+    resolveA(aLate);
+    await act(async () => {});
+
+    // It must not have clobbered B's already-rendered detail.
+    expect(screen.getByText(/b-step/)).toBeInTheDocument();
+    expect(screen.queryByText(/a-step/)).not.toBeInTheDocument();
+  });
 });
 
 describe("RunNodeRow", () => {
