@@ -303,7 +303,6 @@ The per-node entries in the manifest's `runs` array carry:
 | `exit_code` | a script node's subprocess exit code (`null` for agent nodes, which have no exit code) |
 | `error` | failure detail (stderr tail / exception text, capped) for `node_failed`/`persist_failed` rows — the evidence the improve pass's script-repair lane reads (`null` otherwise) |
 | `duration_s` | wall-clock seconds this pass took (`null` where not measured — e.g. choose/union branches) |
-| `artifacts` | new files (relative paths, sorted, capped at 20) present in the run's shared working folder after this node that were not there before — a before/after listing is the only way to attribute a file to its writer, since every node shares the one folder. Captured for work/script nodes (both the completed and `node_failed` paths), a subworkflow node's own entry (its nested run shares the same folder), and a parallel node's own aggregate entry — not the individual branch/worker rows, whose concurrent and possibly-forked folders would make a per-unit diff racy or misleading |
 
 The manifest also carries top-level fields. From the very first (`running`) write:
 `work_dir` — the run's shared working folder, recorded at start so an in-flight
