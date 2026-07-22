@@ -2176,6 +2176,8 @@
     "historyRetention": "el historial y las carpetas de trabajo conservan los runs más recientes (workflow.keep_runs)",
     "copySession": "copiar clave de sesión",
     "sessionCopied": "clave de sesión copiada",
+    "copyOutput": "copiar salida final",
+    "outputCopied": "salida final copiada",
     "workerLabel": "worker {{index}}",
     "branchLabel": "rama {{id}}",
     "needsInputTitle": "Esperando tu respuesta",
@@ -2202,7 +2204,14 @@
       "ok": "ok",
       "no_session": "sin sesión",
       "persist_failed": "fallo al guardar",
-      "node_failed": "falló"
+      "node_failed": "falló",
+      "completed": "completada",
+      "running": "en ejecución",
+      "needs_input": "espera respuesta",
+      "exhausted": "reintentos agotados",
+      "aborted": "abortada",
+      "crashed": "caída",
+      "cancelled": "cancelada"
     }
   },
   "runs": {
@@ -2216,7 +2225,12 @@
     "empty": "Ningún run coincide con este filtro.",
     "subOf": "sub-run de {{id}}",
     "countLabel_one": "{{count}} ejecución",
-    "countLabel_other": "{{count}} ejecuciones"
+    "countLabel_other": "{{count}} ejecuciones",
+    "selectPrompt": "Selecciona una ejecución",
+    "selectHint": "Aquí verás su traza de nodos, tiempos, sub-ejecuciones y salida final.",
+    "subRuns": "sub-ejecuciones",
+    "partOf": "parte de {{workflow}}",
+    "backToList": "volver a ejecuciones"
   },
   "tasks": {
     "status": {

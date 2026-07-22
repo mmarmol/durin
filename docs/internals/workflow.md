@@ -774,23 +774,37 @@ branch checks it again directly on the way out.
 
 **The web UI's Runs pane** (a top-level pane inside the Workflows section,
 alongside the editor) reads the global feed (§4f) to show every run across all
-origins (sessions, HTTP, cron, editor) in one place, with a tray of stranded
-`needs_input` runs on top — each with its questions and a direct resume form —
-so a paused run started from any surface can be found and answered without
-knowing which session or workflow it came from. The sidebar's Workflows button
-carries a badge with the stranded-run count so it stays visible from any view.
-While a run is in progress the pane follows it — refreshing the open run's
-manifest on the same cadence as the run list rather than sitting frozen once
-opened. Completed nodes show their measured duration, the files they
-produced, and, once the workflow has completed runs to learn from, a typical
-duration to compare against — a workflow with no history yet omits the
-typical-duration figures rather than showing a misleading zero. While the run
-is still running its active node appears as its own row with a live-ticking
-elapsed clock — gated on the run's own status, so a crashed run's last
-in-flight node is not rendered as one still going — and the run header sums
-actual elapsed time (completed nodes plus the active node's running delta)
-alongside the run's recorded `typical_total_s`, so the two read as a direct
-comparison of like quantities.
+origins (sessions, HTTP, cron, editor) in one place. The pane is a
+master–detail split: a fixed-width list column (filters, count, the feed) next
+to a detail pane that takes the remaining width; below the desktop breakpoint
+the list is the whole view and selecting a run swaps in the detail full-width
+with a back affordance. In the list, runs whose `parent_run_id` names another
+listed run are nested under that caller behind an indent rail — recursively,
+so a sub-workflow's own sub-runs nest again — and within a group children sort
+oldest-first so a pipeline reads in execution order even though the feed
+arrives newest-first; a sub-run whose caller is outside the fetched window (or
+removed by the active filters) stays top-level with a "sub of" marker instead.
+A tray of stranded `needs_input` runs sits on top — compact entries showing
+what each run is waiting on; selecting one opens its detail, where the
+questions and the resume form live. The sidebar's Workflows button carries a
+badge with the stranded-run count so it stays visible from any view. The
+detail pane opens with the run's identity (status, workflow, copyable run id,
+the task input clamped behind a click-to-expand), walks the node trace, then
+lists the run's own sub-runs as rows that navigate to the child's detail — and
+a child's header carries a "part of" breadcrumb back to its caller — and ends
+with the final output rendered as markdown with a copy affordance, the output
+folder and files. While a run is in progress the pane follows it — refreshing
+the open run's manifest on the same cadence as the run list rather than
+sitting frozen once opened. Completed nodes show their measured duration, the
+files they produced, and, once the workflow has completed runs to learn from,
+a typical duration to compare against — a workflow with no history yet omits
+the typical-duration figures rather than showing a misleading zero. While the
+run is still running its active node appears as its own row with a
+live-ticking elapsed clock — gated on the run's own status, so a crashed run's
+last in-flight node is not rendered as one still going — and the run header
+sums actual elapsed time (completed nodes plus the active node's running
+delta) alongside the run's recorded `typical_total_s`, so the two read as a
+direct comparison of like quantities.
 
 ## 5. How it works
 

@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { I18nextProvider } from "react-i18next";
@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import i18n from "@/i18n";
 import { RunDetail, RunNodeRow } from "@/components/workflows/RunDetail";
-import { RunsView, strandedRuns } from "@/components/workflows/RunsView";
+import { groupRuns, RunsView, strandedRuns } from "@/components/workflows/RunsView";
 import * as api from "@/lib/api";
 import { listAllWorkflowRuns } from "@/lib/api";
 import { ClientProvider } from "@/providers/ClientProvider";
@@ -76,6 +76,39 @@ const LEGACY_NEEDS_INPUT: api.WorkflowGlobalRun = {
   needs_input_node: null,
 };
 
+// A parent pipeline and the two sub-runs it spawned. The feed delivers them
+// newest-first — children ABOVE their parent, the exact interleaving the
+// grouped tree exists to undo.
+const PARENT: api.WorkflowGlobalRun = {
+  workflow: "pipeline",
+  run_id: "p1",
+  status: "completed",
+  started_at: 1000,
+  finished_at: 4000,
+  task: "the pipeline task",
+  needs_input_node: null,
+};
+const CHILD_OLD: api.WorkflowGlobalRun = {
+  workflow: "stage-one",
+  run_id: "c1",
+  status: "completed",
+  started_at: 1100,
+  finished_at: 1200,
+  task: "first stage",
+  needs_input_node: null,
+  parent_run_id: "p1",
+};
+const CHILD_NEW: api.WorkflowGlobalRun = {
+  workflow: "stage-two",
+  run_id: "c2",
+  status: "completed",
+  started_at: 1300,
+  finished_at: 1400,
+  task: "second stage",
+  needs_input_node: null,
+  parent_run_id: "p1",
+};
+
 describe("strandedRuns", () => {
   it("filters to only needs_input entries", () => {
     expect(strandedRuns([NEEDS_INPUT, COMPLETED]).map((r) => r.run_id)).toEqual(["run-waiting"]);
@@ -92,19 +125,63 @@ describe("strandedRuns", () => {
   });
 });
 
+describe("groupRuns", () => {
+  it("nests children under their parent, oldest first", () => {
+    const tree = groupRuns([CHILD_NEW, CHILD_OLD, PARENT]);
+    expect(tree).toHaveLength(1);
+    expect(tree[0].entry.run_id).toBe("p1");
+    expect(tree[0].children.map((c) => c.entry.run_id)).toEqual(["c1", "c2"]);
+  });
+
+  it("keeps a run whose parent is not in the list at the top level", () => {
+    const tree = groupRuns([{ ...CHILD_OLD, parent_run_id: "gone" }]);
+    expect(tree).toHaveLength(1);
+    expect(tree[0].entry.run_id).toBe("c1");
+    expect(tree[0].children).toEqual([]);
+  });
+
+  it("supports nested sub-runs (a child that is itself a parent)", () => {
+    const grandchild: api.WorkflowGlobalRun = {
+      ...CHILD_NEW,
+      run_id: "g1",
+      parent_run_id: "c1",
+      started_at: 1150,
+    };
+    const tree = groupRuns([grandchild, CHILD_OLD, PARENT]);
+    expect(tree[0].entry.run_id).toBe("p1");
+    expect(tree[0].children[0].entry.run_id).toBe("c1");
+    expect(tree[0].children[0].children[0].entry.run_id).toBe("g1");
+  });
+
+  it("survives a self-referencing parent id", () => {
+    const selfie = { ...COMPLETED, parent_run_id: COMPLETED.run_id };
+    const tree = groupRuns([selfie]);
+    expect(tree).toHaveLength(1);
+    expect(tree[0].entry.run_id).toBe(COMPLETED.run_id);
+  });
+});
+
 describe("RunsView", () => {
-  it("renders the tray with questions and posts a resume with {workflow, answers, run_id}", async () => {
+  it("surfaces a stranded run in the tray and resumes it from its detail", async () => {
     vi.mocked(api.listAllWorkflowRuns).mockResolvedValue([NEEDS_INPUT, COMPLETED]);
+    vi.mocked(api.getWorkflowRunManifest).mockResolvedValue({
+      status: "needs_input",
+      final_output: "Which environment — staging or prod?",
+      needs_input_node: "ask",
+      run_id: "run-waiting",
+      runs: [],
+    });
     vi.mocked(api.runWorkflow).mockResolvedValue({
       status: "completed", final_output: "done", run_id: "run-waiting", runs: [],
     });
     const user = userEvent.setup();
     render(wrap(<RunsView />));
 
-    await screen.findByText("set up the account");
-    expect(screen.getByText(/Which environment — staging or prod\?/)).toBeInTheDocument();
-
-    const textarea = screen.getByPlaceholderText(/Type your answers/i);
+    // The tray entry shows what the run is waiting on…
+    await screen.findByText(/Which environment — staging or prod\?/);
+    // …and clicking it opens the detail, which carries the resume form.
+    await user.click(screen.getByRole("button", { name: /paused/i }));
+    const textarea = await screen.findByPlaceholderText(/Type your answers/i);
     await user.type(textarea, "prod");
     await user.click(screen.getByRole("button", { name: /Resume run/i }));
 
@@ -113,12 +190,14 @@ describe("RunsView", () => {
     );
   });
 
-  it("renders the feed with status chips for every run", async () => {
+  it("renders a row per run with its status exposed to assistive tech", async () => {
     vi.mocked(api.listAllWorkflowRuns).mockResolvedValue([NEEDS_INPUT, COMPLETED]);
     render(wrap(<RunsView />));
 
     await screen.findByText("summarize the week");
     expect(screen.getByText("set up the account")).toBeInTheDocument();
+    expect(screen.getAllByText("completed").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("waiting for input").length).toBeGreaterThan(0);
   });
 
   it("filters the feed by status", async () => {
@@ -144,7 +223,7 @@ describe("RunsView", () => {
     expect(screen.queryByText("set up the account")).not.toBeInTheDocument();
   });
 
-  it("fetches and shows a run's manifest detail when a feed entry is clicked", async () => {
+  it("shows a run's manifest in the detail pane when its row is clicked", async () => {
     vi.mocked(api.listAllWorkflowRuns).mockResolvedValue([COMPLETED]);
     vi.mocked(api.getWorkflowRunManifest).mockResolvedValue({
       status: "completed",
@@ -155,22 +234,65 @@ describe("RunsView", () => {
     const user = userEvent.setup();
     render(wrap(<RunsView />));
 
-    await screen.findByText("summarize the week");
-    await user.click(screen.getByText("summarize the week"));
+    // Before any selection the detail pane teaches what it is for.
+    expect(await screen.findByText(/Select a run/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /summarize the week/ }));
 
     expect(await screen.findByText("the weekly digest")).toBeInTheDocument();
     expect(api.getWorkflowRunManifest).toHaveBeenCalledWith("tok", "digest", "run-done");
 
-    // The detail expands INLINE under the clicked row (same wrapper element),
-    // not at the bottom of the whole feed — a long list must not hide it below
-    // the fold where a click appears to do nothing.
-    const row = screen.getByText("summarize the week").closest("div[class*='flex-col']");
-    expect(row).not.toBeNull();
-    expect(row!.textContent).toContain("the weekly digest");
-
-    // Clicking the active row again collapses the detail (accordion toggle).
-    await user.click(screen.getByText("summarize the week"));
+    // Clicking the (now active) row again closes the detail.
+    await user.click(screen.getByRole("button", { current: true }));
     expect(screen.queryByText("the weekly digest")).not.toBeInTheDocument();
+    expect(screen.getByText(/Select a run/i)).toBeInTheDocument();
+  });
+
+  it("nests sub-runs under their parent in execution order, without 'sub of' captions", async () => {
+    vi.mocked(api.listAllWorkflowRuns).mockResolvedValue([CHILD_NEW, CHILD_OLD, PARENT]);
+    render(wrap(<RunsView />));
+
+    await screen.findByText("the pipeline task");
+    const rows = screen.getAllByRole("button").map((b) => b.textContent ?? "");
+    const iParent = rows.findIndex((r) => r.includes("the pipeline task"));
+    const iOld = rows.findIndex((r) => r.includes("stage-one"));
+    const iNew = rows.findIndex((r) => r.includes("stage-two"));
+    expect(iParent).toBeGreaterThanOrEqual(0);
+    // The feed arrived children-first (newest-first); the tree re-orders it to
+    // parent first, then sub-runs oldest → newest.
+    expect(iOld).toBeGreaterThan(iParent);
+    expect(iNew).toBeGreaterThan(iOld);
+    // A nested row's rail already shows lineage; no textual marker needed.
+    expect(screen.queryByText(/sub of/i)).not.toBeInTheDocument();
+  });
+
+  it("lists sub-runs in the parent's detail and navigates child → parent", async () => {
+    vi.mocked(api.listAllWorkflowRuns).mockResolvedValue([CHILD_NEW, CHILD_OLD, PARENT]);
+    vi.mocked(api.getWorkflowRunManifest).mockImplementation(
+      async (_tok: string, _wf: string, runId: string) =>
+        ({ status: "completed", final_output: `output of ${runId}`, run_id: runId, runs: [] }),
+    );
+    const user = userEvent.setup();
+    render(wrap(<RunsView />));
+
+    await screen.findByText("the pipeline task");
+    await user.click(screen.getByRole("button", { name: /the pipeline task/ }));
+    await screen.findByText("output of p1");
+
+    // The detail lists both sub-runs in execution order.
+    const section = screen.getByText(/sub-runs · 2/i).parentElement as HTMLElement;
+    const subRows = within(section).getAllByRole("button").map((b) => b.textContent ?? "");
+    expect(subRows[0]).toContain("stage-one");
+    expect(subRows[1]).toContain("stage-two");
+
+    // Clicking a sub-run opens ITS manifest…
+    await user.click(within(section).getByRole("button", { name: /stage-one/ }));
+    await screen.findByText("output of c1");
+    expect(api.getWorkflowRunManifest).toHaveBeenCalledWith("tok", "stage-one", "c1");
+
+    // …and the breadcrumb walks back up to the parent run.
+    await user.click(screen.getByRole("button", { name: /part of pipeline/i }));
+    await screen.findByText("output of p1");
   });
 
   it("marks a sub-run whose parent is not in the list with a 'sub of' marker", async () => {
@@ -196,9 +318,9 @@ describe("RunsView", () => {
     await screen.findByText("set up the account");
     expect(screen.getByText("old paused run")).toBeInTheDocument();
 
-    // Tray (built from strandedRuns) surfaces only the resumable one: its resume
-    // form/textarea appears exactly once, not twice.
-    expect(screen.getAllByPlaceholderText(/Type your answers/i)).toHaveLength(1);
+    // Tray (built from strandedRuns) surfaces only the resumable one: exactly
+    // one entry carries the tray's "paused …" affordance.
+    expect(screen.getAllByText(/paused .*ago/i)).toHaveLength(1);
   });
 
   it("polls while a run is still running", async () => {
@@ -554,6 +676,19 @@ describe("RunDetail", () => {
   it("omits the typical total for a workflow with no completed-run history", () => {
     renderDetail({ status: "completed", final_output: "", run_id: "r3", runs: [] });
     expect(screen.queryByText(/prior runs/)).not.toBeInTheDocument();
+  });
+
+  it("renders the final output as markdown and offers a copy affordance", async () => {
+    renderDetail({
+      status: "completed",
+      final_output: "## Verdict\n\nAll good.",
+      run_id: "r4",
+      runs: [],
+    });
+    // The markdown body (or its plain-text fallback while the renderer lazy-loads)
+    // carries the output text.
+    expect(await screen.findByText(/All good\./)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /copy final output/i })).toBeInTheDocument();
   });
 });
 
