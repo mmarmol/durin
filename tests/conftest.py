@@ -94,6 +94,29 @@ def _isolate_durin_home(tmp_path_factory, monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _isolate_telemetry_dir(tmp_path_factory):
+    """Point session telemetry at a throwaway directory, suite-wide.
+
+    ``get_session_logger`` defaults to ``~/.cache/durin/telemetry`` — a REAL
+    directory shared with any durin running on this machine. Tests that bind a
+    session logger (the loop does, and consolidation binds its own) were
+    appending event files for fixture sessions (``cli_test``, ``cli_c1``,
+    ``cli_amp-test``, …) into the live telemetry directory on every suite run.
+    Mirrors ``_isolate_durin_home``: the suite must never write outside its
+    sandbox. Session-scoped so the whole run shares one directory; a test that
+    cares about the destination passes ``base_dir`` explicitly.
+    """
+    import durin.telemetry.logger as _tlogger
+
+    original = _tlogger._DEFAULT_DIR
+    _tlogger._DEFAULT_DIR = tmp_path_factory.mktemp("telemetry")
+    try:
+        yield
+    finally:
+        _tlogger._DEFAULT_DIR = original
+
+
 @pytest.fixture(autouse=True)
 def _test_default_author_scope():
     with author_scope("agent_created"):

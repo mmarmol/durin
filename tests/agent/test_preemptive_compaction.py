@@ -497,3 +497,27 @@ async def test_replay_window_compaction_also_parks_real_usage(tmp_path, monkeypa
 
     assert session.key in c._awaiting_real_usage
     assert c._defer_to_real_usage(session, trigger + 60, trigger) == "post_compaction"
+
+
+def test_park_clears_when_the_file_cap_rebases_indexes(tmp_path):
+    """The post-compaction park stores the message-list length at arm time and
+    compares anchor INDEXES against it. enforce_file_cap trims the consolidated
+    prefix and rebases every index (retain_recent_legal_suffix), which would
+    leave the park comparing rebased indexes against a stale watermark — vetoing
+    consolidation for several turns on any session living near the cap."""
+    loop = _make_loop(tmp_path, context_window_tokens=200)
+    c = loop.consolidator
+    trigger = c._preemptive_trigger_tokens
+    session = _session_with_usage(loop, 10, usage=trigger - 50)
+
+    # Arm at the current length, as _post_compaction_hooks does.
+    c._awaiting_real_usage[session.key] = len(session.messages)
+
+    # File cap trims the prefix: indexes rebase, the list shrinks.
+    session.messages = session.messages[8:]
+
+    # The stale watermark must not read the (fresh, rebased) anchor as
+    # pre-compaction. With the park dropped, normal accounting resumes —
+    # here the provider's real count is under the trigger, so provider_fit.
+    assert c._defer_to_real_usage(session, trigger + 40, trigger) != "post_compaction"
+    assert session.key not in c._awaiting_real_usage

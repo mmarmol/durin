@@ -679,6 +679,17 @@ class Consolidator:
         """
         key = session.key
         watermark = self._awaiting_real_usage.get(key)
+        if watermark is not None and len(session.messages) < watermark:
+            # The message list shrank below the arm point — the session file
+            # cap trimmed the consolidated prefix and rebased every index
+            # (retain_recent_legal_suffix), so the positional comparison below
+            # is meaningless. Drop the park rather than risk it sticking: for a
+            # session living near the cap (trims of ~dozens of messages every
+            # few turns), a stale watermark would keep vetoing consolidation
+            # for several turns. Clearing early costs at most one extra
+            # compaction.
+            self._awaiting_real_usage.pop(key, None)
+            watermark = None
         anchor = latest_prompt_tokens_anchor(session.messages)
         if watermark is not None:
             if anchor is None or anchor[0] < watermark:
