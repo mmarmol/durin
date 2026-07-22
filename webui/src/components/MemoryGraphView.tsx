@@ -547,6 +547,42 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
     return () => window.removeEventListener("keydown", onKey);
   }, [layers, searchOpen, edgePopup]);
 
+  // Local dismissal for the stale-cluster pill (contract c). The hook nulls
+  // `notice` at the start of every enterCluster/enterEgo call before ever
+  // re-setting it, so a fresh staleness event is always a null→"staleCluster"
+  // transition — re-arming here on that transition means a dismissed pill
+  // comes back for a *new* stale hit instead of staying hidden forever.
+  const [staleDismissed, setStaleDismissed] = useState(false);
+  useEffect(() => {
+    if (layers.notice === "staleCluster") setStaleDismissed(false);
+  }, [layers.notice]);
+
+  // Map-changed toast (contract d): re-check the overview when the tab
+  // regains focus, but only while sitting at the top layer — drilled into a
+  // cluster/ego, the visible canvas isn't the overview anyway, and
+  // re-laying-out bubbles under the user mid-interaction is exactly what
+  // this must not do. Passive: refreshOverview() already applies the new
+  // payload; the toast only announces that it happened.
+  const [mapChanged, setMapChanged] = useState(false);
+  useEffect(() => {
+    if (!_props.active || effectiveView !== "graph") return;
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      if (layers.layer.kind !== "overview") return;
+      void layers.refreshOverview().then((changed) => {
+        if (changed) setMapChanged(true);
+      });
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [_props.active, effectiveView, layers]);
+
+  useEffect(() => {
+    if (!mapChanged) return;
+    const id = setTimeout(() => setMapChanged(false), 4000);
+    return () => clearTimeout(id);
+  }, [mapChanged]);
+
   // Build simulation arrays from data
   const { simNodes, simEdges } = useMemo(() => {
     if (!data) return { simNodes: [] as SimNode[], simEdges: [] as SimEdge[] };
@@ -1313,6 +1349,31 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
   const realShown =
     data?.nodes.filter((n) => !n.phantom && n.type !== "session").length ?? 0;
 
+  // First-load skeleton (contract c2): nothing has ever resolved yet for
+  // either the raw graph or the overview. `!error` defers to the pre-existing
+  // raw-error overlay below instead of papering over it with a placeholder.
+  const showFirstLoadSkeleton =
+    effectiveView === "graph" &&
+    !error &&
+    layers.loading &&
+    layers.overview == null &&
+    rawData == null;
+
+  // Teaching empty state (contract a): the raw list AND the overview both
+  // confirm zero entities — a genuinely empty workspace, not just an
+  // unloaded or drilled-empty view. `focusGraph == null` keeps this from
+  // ever covering an active cluster/ego drill still showing its own (real)
+  // content. Supersedes the generic "no entity pages" overlay below for
+  // this specific case (see its own guard).
+  const showTeachingEmpty =
+    effectiveView === "graph" &&
+    !error &&
+    !loading &&
+    layers.focusGraph == null &&
+    rawData != null &&
+    rawData.nodes.length === 0 &&
+    (layers.overview?.stats.entity_count ?? 0) === 0;
+
   // Select an entity from the cards grid or the table — same panel wiring as
   // a graph-canvas click, minus the canvas-only concerns (pinning, drag).
   const selectEntity = useCallback((n: MemoryGraphNode) => {
@@ -1479,7 +1540,13 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
             variant="ghost"
             size="icon"
             aria-label={t("memoryGraph.refresh")}
-            onClick={() => void refresh()}
+            onClick={() => {
+              void refresh();
+              // Graph view is driven by the two-layer overview/focus data,
+              // not the raw list — refresh that too, or the canvas would
+              // sit stale while only the (invisible) raw list updated.
+              if (effectiveView === "graph") void layers.refreshOverview();
+            }}
             disabled={loading}
             className="h-7 w-7"
           >
@@ -1604,6 +1671,40 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
             ) : null}
           </div>
         ) : null}
+        {/* Stale-cluster notice: a drill 404'd (the cluster changed shape
+            since the overview was built) — the hook already fell back to
+            overview and kicked off a background refresh; this just tells the
+            user why they landed back here. Locally dismissible; re-armed by
+            the effect above whenever a fresh staleness event lands. */}
+        {effectiveView === "graph" && layers.notice === "staleCluster" && !staleDismissed ? (
+          <div className="flex shrink-0 items-center gap-2 border-b border-border/40 bg-muted/40 px-3 py-1.5 text-xs text-muted-foreground">
+            <span className="flex-1">{t("memoryGraph.staleCluster")}</span>
+            <button
+              type="button"
+              aria-label={t("memoryGraph.close")}
+              onClick={() => setStaleDismissed(true)}
+              className="rounded p-0.5 hover:bg-muted"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        ) : null}
+        {/* Overview refresh failed but we still have the last good payload —
+            keep the canvas showing it (below) and just flag the failure,
+            rather than blanking a working view. */}
+        {effectiveView === "graph" && layers.error != null && layers.overview != null ? (
+          <div className="flex shrink-0 items-center gap-2 border-b border-border/40 bg-destructive/10 px-3 py-1.5 text-xs text-destructive">
+            <span className="flex-1">{t("memoryGraph.loadError")}</span>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-6 px-2 text-[11px]"
+              onClick={() => void layers.refreshOverview()}
+            >
+              {t("memoryGraph.retry")}
+            </Button>
+          </div>
+        ) : null}
       <div ref={wrapRef} className="relative min-h-0 flex-1">
         {error ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm text-destructive">
@@ -1613,12 +1714,36 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
             </Button>
           </div>
         ) : null}
-        {loading && !data ? (
+        {/* Nothing has ever loaded on either endpoint and the overview call
+            is the one failing — the slim banner above can't show (it needs
+            a last-good overview), so fail the whole canvas area instead of
+            leaving it blank. */}
+        {effectiveView === "graph" && !error && layers.error != null && layers.overview == null && rawData == null ? (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm text-destructive">
+            <span>{t("memoryGraph.loadError")}</span>
+            <Button variant="outline" size="sm" onClick={() => void layers.refreshOverview()}>
+              {t("memoryGraph.retry")}
+            </Button>
+          </div>
+        ) : null}
+        {showFirstLoadSkeleton ? (
+          <div className="absolute inset-0 p-4">
+            <div className="h-full w-full animate-pulse rounded-lg bg-muted/60" />
+          </div>
+        ) : null}
+        {!showFirstLoadSkeleton && loading && !data ? (
           <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
             {t("memoryGraph.loadingGraph")}
           </div>
         ) : null}
-        {data && data.nodes.length === 0 ? (
+        {showTeachingEmpty ? (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-8 text-center">
+            <Network className="h-10 w-10 text-muted-foreground/40" aria-hidden />
+            <p className="text-sm font-medium text-foreground">{t("memoryGraph.emptyTitle")}</p>
+            <p className="max-w-sm text-xs text-muted-foreground">{t("memoryGraph.emptyBody")}</p>
+          </div>
+        ) : null}
+        {!showTeachingEmpty && data && data.nodes.length === 0 ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 text-sm text-muted-foreground">
             <span>{t("memoryGraph.empty")}</span>
             <span className="text-xs">
@@ -1627,6 +1752,15 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                 components={{ code: <code className="rounded bg-muted px-1" /> }}
               />
             </span>
+          </div>
+        ) : null}
+        {/* Drill load: a depth change or a new cluster/ego fetch is in
+            flight while the canvas already has something to show — keep
+            rendering it and just flag the fetch with a thin bar instead of
+            blanking or skeleton-ing over a working view. */}
+        {effectiveView === "graph" && layers.loading && layers.overview != null ? (
+          <div className="absolute inset-x-0 top-0 z-10 h-0.5 overflow-hidden bg-primary/15">
+            <div className="h-full w-full animate-pulse bg-primary/60" />
           </div>
         ) : null}
         {effectiveView === "graph" ? (
@@ -1655,6 +1789,14 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
           >
             <Scan className="h-3 w-3" /> {t("memoryGraph.fitView")}
           </Button>
+        ) : null}
+        {/* Passive map-changed toast (contract d) — announces a background
+            overview refresh triggered by the tab regaining focus; the new
+            payload is already applied by the time this shows. */}
+        {effectiveView === "graph" && mapChanged ? (
+          <div className="absolute right-3 top-3 z-10 rounded-md border border-border/50 bg-card/95 px-3 py-1.5 text-[11px] shadow-lg backdrop-blur">
+            {t("memoryGraph.mapChanged")}
+          </div>
         ) : null}
         {effectiveView !== "graph" ? (
           // Cards / table presentations. When the desktop compact detail
@@ -1764,19 +1906,27 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                       const target = isCanon ? id : (r.entities ?? [])[0];
                       if (!target) return;
                       setReferenceDetail(null);
-                      // Isolate only off-cap nodes (not in the current
-                      // graph) — an in-graph hit just opens its panel.
-                      if (!simNodesRef.current.some((n) => n.id === target)) {
+                      const name = (isCanon ? r.headline || target : target).replace(
+                        /^[a-z_]+:/,
+                        "",
+                      );
+                      if (isCanon) {
+                        // An entity_page hit IS that entity's own page —
+                        // always drill the canvas to its ego neighbourhood
+                        // (not just when off-cap), so search doubles as
+                        // "jump to this node" the way a canvas click would.
+                        void layers.enterEgo(target, name);
+                      } else if (!simNodesRef.current.some((n) => n.id === target)) {
+                        // Fragment hit: isolate only off-cap nodes (not in
+                        // the current graph) — an in-graph hit just opens
+                        // its panel.
                         isolateNode(target, 1);
                       }
                       const node =
                         simNodesRef.current.find((n) => n.id === target) ?? {
                           id: target,
                           type: target.split(":")[0] || "unknown",
-                          name: (isCanon ? r.headline || target : target).replace(
-                            /^[a-z_]+:/,
-                            "",
-                          ),
+                          name,
                           weight: 0,
                           aliases: [],
                           phantom: false,
