@@ -120,26 +120,38 @@ class ResumeState:
 
 
 def build_resume_state(manifest: dict, answers: str) -> ResumeState:
-    """The ResumeState for re-entering a needs_input run, built from its manifest.
-    The caller validates the manifest first (status == "needs_input" and a
-    needs_input_node present); this only folds the mechanical parts: max iteration
-    per node as the consumed visit counts, and the answers framed against the
-    questions the run ended with."""
+    """The ResumeState for re-entering a paused or failed run, built from its manifest.
+    The caller validates resumability first (``needs_input`` with a ``needs_input_node``,
+    or ``aborted`` with a ``failed_node``); this only folds the mechanical parts: max
+    iteration per node as the consumed visit counts, and the re-entry upstream.
+
+    Two distinct upstream contracts: a ``needs_input`` node ASKED, so it receives the
+    answers framed against its questions; a FAILED node receives the exact upstream
+    text it had the first time, verbatim — a retried script parses its stdin, so no
+    retry framing may pollute it."""
     visits: dict[str, int] = {}
     for r in manifest.get("runs", []):
         nid, it = r.get("node_id"), r.get("iteration", 1)
         if nid:
             visits[nid] = max(visits.get(nid, 0), int(it))
-    questions = manifest.get("final_output") or ""
+    needs_input_node = manifest.get("needs_input_node")
+    if needs_input_node:
+        questions = manifest.get("final_output") or ""
+        return ResumeState(
+            run_id=manifest["run_id"],
+            start_at=needs_input_node,
+            visits=visits,
+            upstream=(
+                "This run previously stopped to ask for more information.\n\n"
+                f"--- Your questions were ---\n{questions}\n\n"
+                f"--- The user's answers ---\n{answers}\n\nContinue from here."
+            ),
+        )
     return ResumeState(
         run_id=manifest["run_id"],
-        start_at=manifest["needs_input_node"],
+        start_at=manifest["failed_node"],
         visits=visits,
-        upstream=(
-            "This run previously stopped to ask for more information.\n\n"
-            f"--- Your questions were ---\n{questions}\n\n"
-            f"--- The user's answers ---\n{answers}\n\nContinue from here."
-        ),
+        upstream=manifest.get("resume_upstream"),
     )
 
 # Upper bound on messages carried in the running shared-context buffer. A long
@@ -371,12 +383,14 @@ class WorkflowEngine:
                 )
             else:
                 # A named node failure: the walk already appended its node_failed NodeRun.
-                # Carry the node identity into the aborted result so the abort names it.
+                # Carry the node identity into the aborted result so the abort names it,
+                # and the node's exact upstream so the manifest can anchor a resume.
                 result = WorkflowResult(
                     status="aborted",
                     final_output=f"workflow aborted: node {exc.node_id!r} (iteration {exc.iteration}) failed: {exc.cause}",
                     runs=runs, run_id=run_id,
                     failed_node=exc.node_id, failed_iteration=exc.iteration,
+                    resume_upstream=getattr(exc, "resume_upstream", None),
                 )
         except Exception as exc:  # noqa: BLE001 - a node failure becomes a typed aborted result
             result = WorkflowResult(
@@ -744,7 +758,10 @@ class WorkflowEngine:
                 except NodeExecutionError as exc:
                     # The node's turn raised: record an attributable node_failed run
                     # (with the persisted session key) so the manifest captures it,
-                    # then re-raise to abort the walk — run() names the node.
+                    # then re-raise to abort the walk — run() names the node. The
+                    # upstream the node received rides along so the manifest can
+                    # anchor a failure resume with the exact same input.
+                    exc.resume_upstream = upstream_output
                     runs.append(NodeRun(node_id=node.id, iteration=iteration,
                                         output="", session_key=exc.session_key,
                                         budget=budget,
