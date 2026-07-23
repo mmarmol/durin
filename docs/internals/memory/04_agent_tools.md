@@ -421,39 +421,55 @@ response strips the server-internal bubble-membership map before it reaches
 the client); `GET /api/v1/memory/subgraph?scope=ego|cluster` serves either
 neighborhood kind, keyed the same way the overview keys its bubbles.
 
-**Structure is semantic-only.** `assemble_overview` (`durin/memory/graph_overview.py`)
-computes clustering, hub ranking, and bubble sizing from entity↔entity
-co-mention edges and typed relations between consolidated pages only.
-Session and phantom nodes never enter that computation: a session's weight
-is a mechanical message count, not a semantic signal, and with few sessions
-a session-driven community would degenerate into "whatever that one session
-touched" rather than a real topic cluster. Sessions remain in the
-underlying payload as provenance and phantom entities as unconsolidated
+**Clustering topology is semantic-only.** `assemble_overview`
+(`durin/memory/graph_overview.py`) decides which entities group into the
+same bubble purely from entity↔entity co-mention edges and typed relations
+between consolidated pages. Session and phantom nodes never enter that
+computation: a session edges into everything it touched, and with few
+sessions a session-driven community would degenerate into "whatever that
+one session touched" rather than a real topic cluster. Sessions remain in
+the underlying payload as provenance and phantom entities as unconsolidated
 mentions — both are drawable, just not structural.
 
+**Hub ranking and node sizing run on an importance score, not a raw
+mention count.** Real workspaces carry no episodic/stable/corpus entries,
+so the legacy per-entry mention count is zero everywhere and cannot drive
+anything. The score instead combines each entity's relation/derived-from
+degree — the dream's deliberate structure — with a log-damped count of the
+distinct sessions whose evidence touched it, so high-churn operational
+entities (support tickets, test runs) don't drown the semantic structure
+as session volume grows. Session evidence only ever contributes this
+per-entity scalar on top of a node already placed by semantic structure —
+it never becomes an edge, so it can't pull unrelated entities into the
+same cluster or bridge communities together. The overview's emitted
+`weight` field on hub, loose, and bubble-preview nodes carries this score
+(rounded) rather than the legacy count; the client already treats `weight`
+as an opaque magnitude for radius and label-priority, so nothing there
+changes.
+
 **Hubs are outliers, not a fixed top-N.** A node qualifies as a hub only
-when its semantic weight is at least twice the median weight among
-non-reference entities, with a small absolute floor on top so a
-near-zero median can't qualify everything — and the qualifying set is then
-capped at a fixed hub budget. A uniform or young workspace — where nothing
-stands out — therefore surfaces zero hubs. Hubs are extracted before
-clustering because a true mega-connector would otherwise bridge every
-community into one blob; reference nodes hold real content but are
-consultation material, not connectors, so they are never hub-eligible.
+when its score is at least twice the median score among non-reference
+entities, with a small absolute floor on top so a near-zero median can't
+qualify everything — and the qualifying set is then capped at a fixed hub
+budget. A uniform or young workspace — where nothing stands out —
+therefore surfaces zero hubs. Hubs are extracted before clustering because
+a true mega-connector would otherwise bridge every community into one
+blob; reference nodes hold real content but are consultation material, not
+connectors, so they are never hub-eligible.
 
 **The remainder clusters by deterministic label propagation.** Every source
 of nondeterminism in the textbook algorithm is pinned — nodes iterate in
 sorted-id order, each starting labeled with its own id, and neighbor-label
 ties break lexicographically — so the same input always yields the same
 partition. A community that reaches the bubble-size threshold collapses
-into a bubble identified by its representative ref, the heaviest member.
-Communities under the threshold stay as loose nodes, display-capped by
-weight; anything the caps drop — overflow bubbles and overflow loose nodes
-alike — folds into one `__others__` bubble, itself drillable like any
-other. When no community reaches the threshold at all, the payload reports
-mode `"flat"` and the client falls back to the plain graph; the (bounded)
-hubs list still populates in flat mode, since hub extraction runs before
-the clustering attempt.
+into a bubble identified by its representative ref, the highest-scoring
+member. Communities under the threshold stay as loose nodes, display-capped
+by score; anything the caps drop — overflow bubbles and overflow loose
+nodes alike — folds into one `__others__` bubble, itself drillable like
+any other. When no community reaches the threshold at all, the payload
+reports mode `"flat"` and the client falls back to the plain graph; the
+(bounded) hubs list still populates in flat mode, since hub extraction
+runs before the clustering attempt.
 
 **Two-level cache, one tree signature.** Both the uncapped graph payload
 (`get_full_graph_cached`) and the derived overview (`build_overview`) are
@@ -475,7 +491,7 @@ client falls back to the overview and refreshes it.
 
 **Member display cap.** `build_cluster_subgraph` returns a
 neighborhood payload with a display-capped member list (sorted by
-descending weight, deterministic tie-break by id) and a separate
+descending importance score, deterministic tie-break by id) and a separate
 `total_members` count that always reports the true pre-cap member count —
 this true count backs the client's "and N more" affordance when the
 display budget is exhausted. The returned stats flag indicates when
