@@ -244,7 +244,10 @@ a JSON array, with a newline-split fallback), and **runtime-selected** (`branche
 the node — typically a routing script — whose output lists which DECLARED work- or script-node ids run
 this pass, as a JSON array or a comma-separated last line; heterogeneous branches chosen per
 run, so "run only the analyzers that apply" is one parallel node instead of one static block
-per branch combination). Runtime-resolved ids are held to the same rules as static branches
+per branch combination). Declaring `branches` alongside `branches_from` names the candidate
+POOL: resolved ids must be pool members (a tighter contract with the routing node) and the
+editor draws the candidates connected. Runtime-resolved ids are otherwise held to the same
+rules as static branches
 (declared work nodes, no persistent sessions) — an id that fails aborts the run naming it,
 since it is an authoring bug in the emitting node; an *empty* resolved list is a legitimate
 "nothing applies" pass that records empty output and continues to `next`.

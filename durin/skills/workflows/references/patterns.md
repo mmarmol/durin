@@ -204,6 +204,7 @@ continues to `next`).
   "nodes": [
     { "id": "route", "kind": "script", "script": "route-analyzers.py", "next": "fan" },
     { "id": "fan", "kind": "parallel", "branches_from": "route",
+      "branches": ["analyze_logs", "analyze_images"],
       "next": "merge" },
     { "id": "analyze_logs", "kind": "work", "mode": "read", "tools": "default",
       "prompt": "Analyze only the log files in the working folder." },

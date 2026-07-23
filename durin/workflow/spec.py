@@ -507,11 +507,12 @@ def _build_node(raw: dict[str, Any]) -> Node:
         is_dynamic = worker is not None
 
         if branches_from is not None:
-            # Runtime-selected branches: exactly one mode per parallel node.
-            if branches_raw:
-                raise WorkflowError(
-                    f"node {node_id!r}: 'branches_from' must not also set static 'branches'"
-                )
+            # Runtime-selected branches. `branches` alongside is OPTIONAL and
+            # declares the candidate POOL: the ids the routing node may name.
+            # Declaring it tightens validation (resolved ids must be pool
+            # members) and lets the editor draw the runtime branches connected
+            # instead of as floating nodes. Without it, any work/script node
+            # remains selectable (the original permissive behavior).
             if is_dynamic or list_from is not None:
                 raise WorkflowError(
                     f"node {node_id!r}: 'branches_from' must not be combined with "
@@ -521,7 +522,12 @@ def _build_node(raw: dict[str, Any]) -> Node:
                 raise WorkflowError(
                     f"node {node_id!r}: branches_from must be a non-empty string, got {branches_from!r}"
                 )
-            branches: tuple[str, ...] = ()
+            if branches_raw and (not isinstance(branches_raw, list)
+                                 or not all(isinstance(b, str) and b for b in branches_raw)):
+                raise WorkflowError(
+                    f"node {node_id!r}: the candidate pool 'branches' must be a list of node ids"
+                )
+            branches: tuple[str, ...] = tuple(branches_raw or ())
         elif is_dynamic:
             if branches_raw:
                 raise WorkflowError(

@@ -2265,6 +2265,20 @@
       "apply": "Actualizar al integrado",
       "dismiss": "Descartar",
       "noDiff": "(sin diferencias disponibles)"
+    },
+    "parallelCandidatePool": "Ramas candidatas (pool)",
+    "runtimeUpTo": "hasta {{n}} · runtime",
+    "runtimeBranches": "ramas en runtime",
+    "showDataEdges": "Flujo de datos",
+    "openSubworkflow": "Abrir workflow \"{{name}}\"",
+    "badge": {
+      "detached": "segundo plano",
+      "schema": "schema",
+      "persistent": "sesión persistente",
+      "skills_one": "1 skill",
+      "skills_other": "{{n}} skills",
+      "secrets_one": "1 secreto",
+      "secrets_other": "{{n}} secretos"
     }
   },
   "runs": {

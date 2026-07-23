@@ -461,3 +461,61 @@ describe("renameNode", () => {
     expect("worker" in other).toBe(false);
   });
 });
+
+describe("canvas v2 edge taxonomy", () => {
+  it("draws dashed runtime edges to the declared candidate pool", () => {
+    const { edges } = workflowToFlow({
+      name: "w", start: "route",
+      nodes: [
+        { id: "route", kind: "work", next: "fan" },
+        { id: "fan", kind: "parallel", branches_from: "route",
+          branches: ["a", "b"], next: "join" },
+        { id: "a", kind: "work" },
+        { id: "b", kind: "script", script: "x.py" },
+        { id: "join", kind: "work", next: null },
+      ],
+    });
+    const runtime = edges.filter((e) => e.data?.edgeKind === "runtime");
+    expect(runtime.map((e) => e.target).sort()).toEqual(["a", "b"]);
+    expect(runtime[0].label).toBe("runtime");
+  });
+
+  it("without a pool the runtime branches stay undrawn (legacy defs)", () => {
+    const { edges } = workflowToFlow({
+      name: "w", start: "route",
+      nodes: [
+        { id: "route", kind: "work", next: "fan" },
+        { id: "fan", kind: "parallel", branches_from: "route", next: null },
+        { id: "a", kind: "work" },
+      ],
+    });
+    expect(edges.filter((e) => e.data?.edgeKind === "runtime")).toEqual([]);
+  });
+
+  it("draws animated data edges for inputs_from", () => {
+    const { edges } = workflowToFlow({
+      name: "w", start: "a",
+      nodes: [
+        { id: "a", kind: "work", next: "b" },
+        { id: "b", kind: "work", next: "c" },
+        { id: "c", kind: "script", script: "x.py", inputs_from: ["a", "b"], next: null },
+      ],
+    });
+    const data = edges.filter((e) => e.data?.edgeKind === "data");
+    expect(data.map((e) => `${e.source}->${e.target}`).sort()).toEqual(["a->c", "b->c"]);
+    expect(data.every((e) => e.animated)).toBe(true);
+  });
+
+  it("restyles control edges into detached nodes as background", () => {
+    const { edges } = workflowToFlow({
+      name: "w", start: "a",
+      nodes: [
+        { id: "a", kind: "work", next: "persist" },
+        { id: "persist", kind: "work", detached: true, next: null },
+      ],
+    });
+    const e = edges.find((x) => x.target === "persist");
+    expect(e?.data?.edgeKind).toBe("detached");
+    expect(e?.label).toBe("background");
+  });
+});
