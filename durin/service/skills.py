@@ -708,6 +708,18 @@ class SkillsService:
         action = rec["action"]
         res = sg.apply_suggestion(self._workspace, action)
         if res.get("error"):
+            name = action.get("name") or action.get("target") or ""
+            qdir = Path(self._workspace) / ".durin" / "import-quarantine" / name
+            if name and (qdir / "SKILL.md").is_file():
+                # The skill was swept into the import quarantine after this
+                # suggestion was queued — the suggestion stays pending and
+                # becomes applicable again once the skill is approved.
+                raise ConflictError(
+                    f"skill {name!r} is awaiting review in the import "
+                    "quarantine — approve or reject it in Skills first, "
+                    "then retry this suggestion",
+                    details={**res, "reason": "skill_quarantined",
+                             "skill": name})
             raise ConflictError(str(res["error"]), details=res)
         sg.remove_suggestion(self._workspace, cmd.id)
         _emit("skill.suggestion_resolved",

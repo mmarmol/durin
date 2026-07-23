@@ -2198,6 +2198,7 @@
       "reject": "Rejeter",
       "rejectHint": "un rejet la masque pendant environ 30 jours",
       "suggestionError": "Impossible d’appliquer la suggestion — elle a peut-être déjà été traitée. Actualisez pour voir l’état actuel.",
+      "suggestionQuarantined": "Impossible d’appliquer — « {{skill}} » est en attente de révision dans la quarantaine d’importation. Approuvez-la ou rejetez-la dans Skills, puis réessayez.",
       "action": {
         "evolve": "améliorer",
         "create": "skill proposé",

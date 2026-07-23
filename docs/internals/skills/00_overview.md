@@ -449,6 +449,20 @@ drop) to `.durin/import-quarantine/`, prepends an `unverified_origin` finding
 to the scan report, and makes it inert for the agent. Approve re-gates through
 `install_imported_skill`; reject deletes.
 
+**Broken frontmatter is not "no provenance".** A YAML typo in the hand-written
+fields (an unquoted `:` in a plain multi-line description is the classic) makes
+the whole frontmatter unparseable, which used to read as "no provenance" and
+expel a legitimately-gated skill — destroying its original provenance on
+re-import. `_durin_blob` now falls back to a metadata-only parse
+(`skills_frontmatter.recover_metadata`): the `metadata.durin` blob is
+machine-written and parses on its own even when the prose above it is broken,
+so mode and provenance survive the typo. The sweep additionally logs one OPEN
+`correction` observation naming the unparseable frontmatter (deduplicated —
+never re-logged or bumped per sweep), so the breakage surfaces for repair
+instead of failing silently. A broken-frontmatter skill with **no** recoverable
+provenance is still quarantined: deliberately corrupt YAML must not become a
+sweep bypass, and presence-of-provenance is all the sweep ever checked.
+
 **Attributed backstop.** Before quarantining, the sweep tries to identify who
 produced the skill: it reads the skill's own path-scoped git log
 (`GitStore.log(path=name)` — the same path-scoping `skill_history` and

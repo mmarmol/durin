@@ -30,10 +30,18 @@ export class ApiError extends Error {
   // The server's problem+json "detail" when the error body could be parsed
   // (best-effort; undefined for a non-JSON or unreadable body).
   detail?: string;
-  constructor(status: number, message: string, detail?: string) {
+  // The problem+json "details" extension member (domain payload), when present.
+  details?: Record<string, unknown>;
+  constructor(
+    status: number,
+    message: string,
+    detail?: string,
+    details?: Record<string, unknown>,
+  ) {
     super(message);
     this.status = status;
     this.detail = detail;
+    this.details = details;
     this.name = "ApiError";
   }
 }
@@ -47,13 +55,17 @@ async function request<T>(
   const res = await fetchWithReauth(url, token, init, retryOn401);
   if (!res.ok) {
     let detail: string | undefined;
+    let details: Record<string, unknown> | undefined;
     try {
       const body = await res.clone().json();
       if (typeof body?.detail === "string") detail = body.detail;
+      if (body?.details && typeof body.details === "object") {
+        details = body.details as Record<string, unknown>;
+      }
     } catch {
       // Non-JSON or unreadable body — leave detail undefined.
     }
-    throw new ApiError(res.status, `HTTP ${res.status}`, detail);
+    throw new ApiError(res.status, `HTTP ${res.status}`, detail, details);
   }
   return (await res.json()) as T;
 }

@@ -23,7 +23,13 @@ from pathlib import Path
 import yaml
 
 from durin.agent.skills import BUILTIN_SKILLS_DIR, SkillsLoader
-from durin.agent.skills_frontmatter import ensure_durin, join_frontmatter, split_frontmatter
+from durin.agent.skills_frontmatter import (
+    ensure_durin,
+    frontmatter_broken,
+    join_frontmatter,
+    recover_metadata,
+    split_frontmatter,
+)
 from durin.utils.gitstore import GitStore
 
 logger = logging.getLogger(__name__)
@@ -101,6 +107,11 @@ def _update_md(path: Path, mutate) -> None:
 def _durin_blob(text: str) -> dict:
     data, _ = split_frontmatter(text)
     meta = data.get("metadata")
+    if not data and frontmatter_broken(text):
+        # A YAML typo in the hand-written fields (name/description) must not
+        # erase the machine-written durin blob — mode and provenance drive the
+        # security sweep and curation, so fall back to a metadata-only parse.
+        meta = recover_metadata(text)
     durin = meta.get("durin") if isinstance(meta, dict) else None
     return durin if isinstance(durin, dict) else {}
 
@@ -300,10 +311,14 @@ def _skill_md_integrity(content: str) -> str | None:
     string, or None when the body is sound.
 
     Scoped to WHOLE-body writes: a bounded ``apply_skill_edit`` (single-occurrence
-    old→new replace on an already-valid file) does NOT pass through here, because
-    it cannot turn a valid SKILL.md into a broken one."""
+    old→new replace on an already-valid file) does NOT pass through here — it
+    carries its own frontmatter-break check, the one way a bounded replace can
+    corrupt a valid file (an unquoted ':' slipped into a YAML scalar)."""
     if not content.strip():
         return "SKILL.md body is empty"
+    if frontmatter_broken(content):
+        return ("SKILL.md frontmatter is not valid YAML — quote scalars that "
+                "contain ': ' (e.g. a description with a colon)")
     if not (_frontmatter_description(content) or _derive_description(content)):
         return "SKILL.md has no derivable description (truncated or malformed body)"
     return None
@@ -683,6 +698,13 @@ def apply_skill_edit(
                               "frontmatter description and the body; include "
                               "surrounding lines to pin one occurrence")}
         updated = content.replace(old, new, 1)
+
+    if (file == "SKILL.md" and frontmatter_broken(updated)
+            and not frontmatter_broken(content)):
+        # e.g. the replacement slipped an unquoted ':' into the description —
+        # persisting would hide the skill's name/description/provenance.
+        return {"error": "edit would break the SKILL.md YAML frontmatter — "
+                         "quote scalars that contain ': '"}
 
     if mode == "manual" and not confirm:
         return {

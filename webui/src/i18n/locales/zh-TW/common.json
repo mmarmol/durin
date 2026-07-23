@@ -2198,6 +2198,7 @@
       "reject": "拒絕",
       "rejectHint": "拒絕後約 30 天內不會再次提出",
       "suggestionError": "無法套用此建議——可能已經處理過了。請重新整理以查看目前狀態。",
+      "suggestionQuarantined": "無法套用——「{{skill}}」正在匯入隔離區等待審核。請先在 Skills 中核准或拒絕它，然後重試。",
       "action": {
         "evolve": "改進",
         "create": "提議的技能",
