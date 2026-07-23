@@ -1547,6 +1547,34 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
     setEdgePopup(null);
   }, []);
 
+  // An open panel follows the ego focus: some drill paths (the overview hub
+  // click, most notably) recentre the ego without ever touching `selected`,
+  // so the panel is left showing whatever was open before — the user had to
+  // click the node again to sync. Once the drilled payload lands, swap the
+  // panel to the focus entity via the same bookkeeping a click would use.
+  // A closed panel (`selected == null`) is left alone — focusing must never
+  // auto-open one; that stays the canvas/cards click's job.
+  //
+  // `followedEgoRef` records the last ego ref this effect has already acted
+  // on, so it reacts once per layer arrival instead of on every render while
+  // the user keeps browsing that ego — in particular, manually selecting a
+  // different node afterward changes `selected` but not the layer, and must
+  // not be reverted. It clears whenever the layer leaves "ego" (overview or
+  // cluster), so returning to the same ref later counts as a fresh arrival.
+  const followedEgoRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (layers.layer.kind !== "ego") {
+      followedEgoRef.current = null;
+      return;
+    }
+    const ref = layers.layer.ref;
+    if (followedEgoRef.current === ref) return;
+    followedEgoRef.current = ref;
+    if (selected == null || selected.id === ref) return;
+    const focusNode = layers.focusGraph?.nodes.find((n) => n.id === ref);
+    if (focusNode) selectEntity(focusNode);
+  }, [layers.layer, layers.focusGraph, selected, selectEntity]);
+
   // From the Documents shelf back into the graph: open a doc-derived entity's
   // page (isolate it if the global cap dropped it, then select).
   const handleOpenEntity = useCallback(

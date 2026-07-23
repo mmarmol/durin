@@ -95,6 +95,44 @@ const EGO_FOCUS = {
   },
 };
 
+// Clustered overview with a single bubble (no hubs/loose) for testing
+// cluster drills with a deterministic click target.
+const BUBBLE_ONLY_OVERVIEW = {
+  mode: "clustered" as const,
+  bubbles: [{ id: "topic:emailsync", name: "emailsync", count: 5, types: ["topic"], top: [] }],
+  hubs: [],
+  loose: [],
+  edges: [],
+  stats: {
+    entity_count: 5,
+    reference_count: 0,
+    bubble_count: 1,
+    loose_count: 0,
+    phantom_count: 0,
+    session_count: 0,
+  },
+};
+
+// A cluster subgraph payload (sample cluster members).
+const CLUSTER_PAYLOAD = {
+  nodes: [
+    { id: "doc:email1", type: "doc", name: "Email 1", aliases: [], weight: 2 },
+    { id: "doc:email2", type: "doc", name: "Email 2", aliases: [], weight: 1 },
+  ],
+  edges: [{ source: "doc:email1", target: "doc:email2", weight: 1 }],
+  focus: "topic:emailsync",
+  total_members: 2,
+  stats: {
+    node_count: 2,
+    edge_count: 1,
+    phantom_count: 0,
+    truncated_nodes: false,
+    truncated_edges: false,
+    types: ["doc"],
+    session_count: 0,
+  },
+};
+
 describe("MemoryGraphView layered", () => {
   beforeEach(() => {
     // The view switcher persists to localStorage (see setViewPersisted) —
@@ -616,5 +654,201 @@ describe("MemoryGraphView layered", () => {
     // neighbour, Ada — its presence confirms the mini-graph actually
     // fetched and rendered, not just the section header.
     expect(await screen.findByText("Ada")).toBeInTheDocument();
+  });
+
+  // --- Panel follows ego focus --------------------------------------------
+  // Some drills recentre the ego without ever touching `selected` — the
+  // overview hub click, most notably (unlike the panel's own isolate button
+  // or a search hit, both of which set `selected` themselves as part of the
+  // same click). Pre-fix, an already-open panel is left showing whatever was
+  // selected before, out of sync with the new breadcrumb.
+
+  // A single-hub overview (no bubbles/loose), mirroring the stale-cluster
+  // test's single-bubble fixture above — deterministic click target, but a
+  // hub so the click-to-drill lands on enterEgo instead of enterCluster.
+  const HUB_ONLY_OVERVIEW = {
+    mode: "clustered" as const,
+    bubbles: [],
+    hubs: [{ id: "person:ada", type: "person", name: "Ada", aliases: [], weight: 12 }],
+    loose: [],
+    edges: [],
+    stats: {
+      entity_count: 12,
+      reference_count: 0,
+      bubble_count: 0,
+      loose_count: 0,
+      phantom_count: 0,
+      session_count: 0,
+    },
+  };
+
+  // The hub's ego-drill payload — deliberately a fuller name ("Ada
+  // Lovelace") than the overview hub's bare "Ada", so a panel showing this
+  // exact name can only have come from the drilled focus payload (i.e. the
+  // follow effect), not the breadcrumb (prints the hub's own name) or a
+  // stale prior selection.
+  const ADA_FOCUS = {
+    nodes: [{ id: "person:ada", type: "person", name: "Ada Lovelace", aliases: [], weight: 12 }],
+    edges: [],
+    stats: {
+      node_count: 1,
+      edge_count: 0,
+      phantom_count: 0,
+      truncated_nodes: false,
+      truncated_edges: false,
+      types: ["person"],
+    },
+  };
+
+  /** Dispatch the click-to-drill gesture at the sole overview node's
+   *  deterministic position (see the stale-cluster test above for why (40,
+   *  0) hits it reliably under happy-dom) — triggers the overview hub-click
+   *  path (onPointerUp), which calls layers.enterEgo without ever touching
+   *  `selected`. */
+  async function clickTheOverviewHub() {
+    const canvas = document.querySelector("canvas");
+    if (!canvas) throw new Error("canvas not found");
+    for (const type of ["pointerdown", "pointerup"]) {
+      const evt = new Event(type, { bubbles: true, cancelable: true }) as PointerEvent & {
+        clientX: number;
+        clientY: number;
+        pointerId: number;
+      };
+      Object.assign(evt, { clientX: 40, clientY: 0, pointerId: 1, button: 0 });
+      canvas.dispatchEvent(evt);
+    }
+    // enterEgo's fetch resolves on a microtask — flush it (same reasoning
+    // as selectAuroraAndIsolate above).
+    await act(async () => {});
+  }
+
+  /** From a fresh render: select Aurora in Cards (opens her panel), switch
+   *  to Graph, then click the sole overview hub. Leaves the panel following
+   *  the hub's ego focus once the drilled payload resolves. */
+  async function openAuroraThenClickHub(
+    user: ReturnType<typeof userEvent.setup>,
+  ) {
+    localStorage.setItem("durin.memoryGraph.graphMode", "structure");
+    render(wrap(<MemoryGraphView active />));
+    await waitFor(() => expect(screen.getByText(/12 entities/)).toBeInTheDocument());
+
+    await user.click(screen.getByRole("button", { name: /cards/i }));
+    await waitFor(() => expect(screen.getByText("Aurora")).toBeInTheDocument());
+    await user.click(screen.getByText("Aurora"));
+    await screen.findByRole("button", { name: /isolate neighbourhood/i });
+
+    await user.click(screen.getByRole("button", { name: /^graph$/i }));
+    await clickTheOverviewHub();
+  }
+
+  it("switches an already-open panel to the ego focus after a hub click", async () => {
+    vi.mocked(api.fetchMemoryGraphOverview).mockResolvedValue(HUB_ONLY_OVERVIEW);
+    vi.mocked(api.fetchMemoryGraph).mockResolvedValue(RAW_DATA);
+    vi.mocked(api.fetchMemorySubgraph).mockResolvedValue(ADA_FOCUS);
+    const user = userEvent.setup();
+
+    await openAuroraThenClickHub(user);
+
+    expect(vi.mocked(api.fetchMemorySubgraph)).toHaveBeenCalledWith(
+      "tok",
+      "person:ada",
+      { hops: 1 },
+    );
+    // Scoped to the panel header's own class (see the "font-semibold" vs
+    // "font-medium" disambiguation used throughout this file) — Aurora's
+    // name is gone, replaced by the drilled focus entity's.
+    expect(
+      await screen.findByText("Ada Lovelace", { selector: ".font-semibold" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Aurora", { selector: ".font-semibold" })).toBeNull();
+  });
+
+  it("does not open a detail panel when a hub click drills the ego with no panel open", async () => {
+    vi.mocked(api.fetchMemoryGraphOverview).mockResolvedValue(HUB_ONLY_OVERVIEW);
+    vi.mocked(api.fetchMemorySubgraph).mockResolvedValue(ADA_FOCUS);
+    localStorage.setItem("durin.memoryGraph.graphMode", "structure");
+    render(wrap(<MemoryGraphView active />));
+    await waitFor(() => expect(screen.getByText(/12 entities/)).toBeInTheDocument());
+
+    await clickTheOverviewHub();
+
+    expect(vi.mocked(api.fetchMemorySubgraph)).toHaveBeenCalledWith(
+      "tok",
+      "person:ada",
+      { hops: 1 },
+    );
+    // Focusing must never auto-open a closed panel — that stays the canvas/
+    // cards click's job. No panel chrome at all, drilled or not.
+    expect(screen.queryByRole("button", { name: /isolate neighbourhood/i })).toBeNull();
+    expect(screen.queryByText("Ada Lovelace")).toBeNull();
+  });
+
+  it("does not revert a manual selection made after the panel already followed the ego focus", async () => {
+    vi.mocked(api.fetchMemoryGraphOverview).mockResolvedValue(HUB_ONLY_OVERVIEW);
+    vi.mocked(api.fetchMemoryGraph).mockResolvedValue(RAW_DATA);
+    vi.mocked(api.fetchMemorySubgraph).mockResolvedValue(ADA_FOCUS);
+    const user = userEvent.setup();
+
+    await openAuroraThenClickHub(user);
+    await screen.findByText("Ada Lovelace", { selector: ".font-semibold" });
+
+    // The layer is still ego:person:ada — manually select a different node
+    // (Borealis, from Cards) with no further drill. The follow effect only
+    // reacts to the layer's ref changing, not to `selected` changing on its
+    // own, so this manual pick must stick.
+    await user.click(screen.getByRole("button", { name: /cards/i }));
+    await user.click(screen.getByText("Borealis"));
+    await act(async () => {});
+
+    expect(
+      screen.getByText("Borealis", { selector: ".font-semibold" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Ada Lovelace", { selector: ".font-semibold" }),
+    ).toBeNull();
+  });
+
+  it("does not switch the detail panel when a cluster drill is clicked with a panel already open", async () => {
+    vi.mocked(api.fetchMemoryGraphOverview).mockResolvedValue(BUBBLE_ONLY_OVERVIEW);
+    vi.mocked(api.fetchMemoryGraph).mockResolvedValue(RAW_DATA);
+    vi.mocked(api.fetchClusterSubgraph).mockResolvedValue(CLUSTER_PAYLOAD);
+    const user = userEvent.setup();
+
+    localStorage.setItem("durin.memoryGraph.graphMode", "structure");
+    render(wrap(<MemoryGraphView active />));
+    await waitFor(() => expect(screen.getByText(/5 entities/)).toBeInTheDocument());
+
+    // Open Aurora's panel via Cards.
+    await user.click(screen.getByRole("button", { name: /cards/i }));
+    await waitFor(() => expect(screen.getByText("Aurora")).toBeInTheDocument());
+    await user.click(screen.getByText("Aurora"));
+    await screen.findByRole("button", { name: /isolate neighbourhood/i });
+
+    // Switch to Graph and verify Aurora is still shown.
+    await user.click(screen.getByRole("button", { name: /^graph$/i }));
+    await waitFor(() =>
+      expect(screen.getByText("Aurora", { selector: ".font-semibold" })).toBeInTheDocument(),
+    );
+
+    // Click the bubble to drill the cluster — uses same coordinate (40, 0)
+    // as the hub-click pattern since happy-dom places all overview nodes
+    // deterministically at that point.
+    const canvas = document.querySelector("canvas");
+    if (!canvas) throw new Error("canvas not found");
+    for (const type of ["pointerdown", "pointerup"]) {
+      const evt = new Event(type, { bubbles: true, cancelable: true }) as PointerEvent & {
+        clientX: number;
+        clientY: number;
+        pointerId: number;
+      };
+      Object.assign(evt, { clientX: 40, clientY: 0, pointerId: 1, button: 0 });
+      canvas.dispatchEvent(evt);
+    }
+
+    // Cluster drill never opens or switches a panel — Aurora's name stays.
+    expect(
+      await screen.findByText("Aurora", { selector: ".font-semibold" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Email 1", { selector: ".font-semibold" })).toBeNull();
   });
 });
