@@ -172,7 +172,6 @@ def test_status_resolves_secret_ref_web_token(config: Config, fake_home: Path) -
 
         store = SecretStore().load()
         store.put("WS_TOKEN", value="resolved-secret-value", service="channel:websocket")
-        store.save()
         get_secret_store(reload=True)
 
         rows = _status_sections(config, _config_path(fake_home), None)

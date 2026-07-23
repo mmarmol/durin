@@ -23,7 +23,6 @@ def _add(home: str, key: str, val: str) -> None:
 
     store = SecretStore()
     store.put(key, value=val, service="test")
-    store.save()
 
 
 def test_two_processes_no_lost_secret(tmp_path: Path) -> None:

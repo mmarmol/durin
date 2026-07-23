@@ -50,7 +50,6 @@ def test_secret_set_updates_existing(secrets_path) -> None:
     (the write now flows through SecretsService.store_entry)."""
     store = SecretStore(path=secrets_path)
     store.put("ATLASSIAN_WORK", value="old-value", service="atlassian", scope=["exec"])
-    store.save()
     result = runner.invoke(
         app,
         ["secret", "set", "ATLASSIAN_WORK", "--service", "atlassian", "--scope", "exec"],
@@ -65,7 +64,6 @@ def test_secret_set_updates_existing(secrets_path) -> None:
 def test_secret_list_masks_values(secrets_path) -> None:
     store = SecretStore(path=secrets_path)
     store.put("OPENAI_MAIN", value="sk-supersecret-value", service="provider:openai")
-    store.save()
     result = runner.invoke(app, ["secret", "list"])
     assert result.exit_code == 0
     assert "OPENAI_MAIN" in result.output
@@ -77,7 +75,6 @@ def test_secret_list_masks_values(secrets_path) -> None:
 def test_secret_show_hides_value_by_default_reveals_with_flag(secrets_path) -> None:
     store = SecretStore(path=secrets_path)
     store.put("K", value="plaintext-secret", service="atlassian")
-    store.save()
 
     hidden = runner.invoke(app, ["secret", "show", "K"])
     assert hidden.exit_code == 0
@@ -91,7 +88,6 @@ def test_secret_show_hides_value_by_default_reveals_with_flag(secrets_path) -> N
 def test_secret_rm(secrets_path) -> None:
     store = SecretStore(path=secrets_path)
     store.put("K", value="v", service="x")
-    store.save()
     result = runner.invoke(app, ["secret", "rm", "K"])
     assert result.exit_code == 0
     assert SecretStore(path=secrets_path).load().get("K") is None
@@ -106,7 +102,6 @@ def test_secret_rm_unknown_errors(secrets_path) -> None:
 def test_secret_grant_and_revoke(secrets_path) -> None:
     store = SecretStore(path=secrets_path)
     store.put("K", value="v", service="x", scope=["exec"])
-    store.save()
 
     granted = runner.invoke(app, ["secret", "grant", "K", "--to", "skill:deploy"])
     assert granted.exit_code == 0
@@ -121,7 +116,6 @@ def test_secret_set_without_service_rotates_value_only(secrets_path) -> None:
     store = SecretStore(path=secrets_path)
     store.put("GH", value="old-value", service="github",
               scope=["exec", "channel:telegram"], description="gh token")
-    store.save()
     result = runner.invoke(app, ["secret", "set", "GH"], input="new-value-456\n")
     assert result.exit_code == 0, result.output
     entry = SecretStore(path=secrets_path).load().get("GH")

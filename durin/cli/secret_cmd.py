@@ -71,7 +71,7 @@ def cmd_set(
         console.print("[yellow]Empty value — nothing stored.[/yellow]")
         raise typer.Exit(1)
     # The write goes through the service layer's single source of truth
-    # (validation + put/save/reload) — same path as the webui, the websocket
+    # (validation + put/reload) — same path as the webui, the websocket
     # need-secret frame, and the TUI prompt. No --service on an existing
     # secret = value-only rotation (metadata preserved).
     from durin.service.secrets import SecretsService
@@ -160,7 +160,6 @@ def cmd_rm(
     if not store.remove(name):
         console.print(f"[red]✗[/red] No secret named '{name}'.")
         raise typer.Exit(1)
-    store.save()
     console.print(f"[green]✓[/green] Removed secret [bold]{name}[/bold].")
 
 

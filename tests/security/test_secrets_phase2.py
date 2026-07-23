@@ -60,7 +60,6 @@ def test_redact_secrets_uses_the_store(store_at) -> None:
 
     store = SecretStore(path=store_at)
     store.put("API", value="live-key-abcdefgh", service="atlassian")
-    store.save()
 
     out = redact_secrets("calling with live-key-abcdefgh now")
     assert "live-key-abcdefgh" not in out
@@ -76,7 +75,6 @@ def test_exec_scoped_secrets_only_returns_exec_scope(store_at) -> None:
               scope=["exec"])
     store.put("OPENAI_KEY", value="provider-secret-1", service="provider:openai",
               scope=["provider:openai"])
-    store.save()
 
     from durin.agent.tools.shell import ExecTool
 
@@ -89,7 +87,6 @@ def test_build_env_includes_exec_secrets_excludes_provider(store_at) -> None:
     store.put("DEPLOY_TOKEN", value="deploy-secret-1", service="x", scope=["exec"])
     store.put("OPENAI_KEY", value="provider-secret-1", service="provider:openai",
               scope=["provider:openai"])
-    store.save()
 
     from durin.agent.tools.shell import ExecTool
 
@@ -121,7 +118,6 @@ def test_doctor_secret_refs_ok_when_reference_resolves(store_at) -> None:
 
     store = SecretStore(path=store_at)
     store.put("OPENAI_KEY", value="sk-real", service="provider:openai")
-    store.save()
     _write_config(store_at, {"providers": {"openai": {"apiKey": "${secret:OPENAI_KEY}"}}})
 
     result = check_secret_refs()

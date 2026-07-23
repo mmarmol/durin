@@ -122,7 +122,6 @@ def disconnect() -> bool:
 
         store = SecretStore().load()
         if store.remove(_COPILOT_SECRET_NAME):
-            store.save()
             get_secret_store(reload=True)
             removed = True
     except Exception as exc:  # noqa: BLE001

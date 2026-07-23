@@ -30,7 +30,6 @@ async def test_list_secrets_shows_metadata_never_values(store_at) -> None:
     store = SecretStore(path=store_at)
     store.put("ATLASSIAN_WORK", value="tok-supersecret-value", service="atlassian",
               account="work", scope=["exec"], description="work jira")
-    store.save()
 
     out = await ListSecretsTool().execute()
     assert "ATLASSIAN_WORK" in out
@@ -43,7 +42,6 @@ async def test_list_secrets_shows_metadata_never_values(store_at) -> None:
 async def test_request_secret_existing_exec_scoped(store_at) -> None:
     store = SecretStore(path=store_at)
     store.put("GH", value="ghp-secret", service="github", scope=["exec"])
-    store.save()
 
     out = await RequestSecretTool().execute(name="GH", service="github")
     assert "already exists" in out
@@ -54,7 +52,6 @@ async def test_request_secret_existing_exec_scoped(store_at) -> None:
 async def test_request_secret_existing_not_exec_scoped(store_at) -> None:
     store = SecretStore(path=store_at)
     store.put("GH", value="ghp-secret", service="github", scope=["provider:x"])
-    store.save()
 
     out = await RequestSecretTool().execute(name="GH", service="github")
     assert "already exists" in out
@@ -64,7 +61,6 @@ async def test_request_secret_existing_not_exec_scoped(store_at) -> None:
 async def test_request_secret_same_service_other_name(store_at) -> None:
     store = SecretStore(path=store_at)
     store.put("GH_PERSONAL", value="ghp-1", service="github", scope=["exec"])
-    store.save()
 
     out = await RequestSecretTool().execute(name="GH_WORK", service="github")
     assert "GH_PERSONAL" in out
@@ -119,7 +115,6 @@ async def test_secret_tools_are_discovered_by_the_loader() -> None:
 async def test_request_secret_existing_hints_update_flag(store_at) -> None:
     store = SecretStore(path=store_at)
     store.put("GH", value="x", service="github", scope=["exec"])
-    store.save()
 
     out = await RequestSecretTool().execute(name="GH", service="github")
     assert "already exists" in out
@@ -129,7 +124,6 @@ async def test_request_secret_existing_hints_update_flag(store_at) -> None:
 async def test_request_secret_update_yields_replace_block(store_at) -> None:
     store = SecretStore(path=store_at)
     store.put("GH", value="x", service="github", scope=["exec", "channel:telegram"])
-    store.save()
 
     out = await RequestSecretTool().execute(name="GH", service="github", update=True)
     assert "REPLACE" in out
@@ -153,7 +147,6 @@ async def test_request_secret_update_sets_pending_flag(store_at, tmp_path) -> No
 
     store = SecretStore(path=store_at)
     store.put("GH", value="x", service="github", scope=["exec"])
-    store.save()
 
     sm = SessionManager(tmp_path / "sessions")
     tool = RequestSecretTool(sessions=sm)

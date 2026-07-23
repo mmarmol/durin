@@ -143,7 +143,6 @@ def disconnect() -> bool:
 
             store = SecretStore().load()
             if store.remove(_SECRET_NAME):
-                store.save()
                 get_secret_store(reload=True)
     except Exception as exc:  # noqa: BLE001
         logger.warning("could not disconnect openrouter: {}", exc)

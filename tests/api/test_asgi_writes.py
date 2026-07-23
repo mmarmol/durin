@@ -49,7 +49,6 @@ def secrets_store(tmp_path, monkeypatch):
         scope=["provider:svc"],
         origin="test",
     )
-    store.save()
     return tmp_path
 
 

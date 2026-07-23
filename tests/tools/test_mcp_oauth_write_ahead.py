@@ -39,7 +39,6 @@ def isolated_secrets(tmp_path, monkeypatch):
         service="mcp:isolation-check",
         scope=["mcp:isolation-check"],
     )
-    store.save()
     assert secrets_file.exists()
 
     yield secrets_file
