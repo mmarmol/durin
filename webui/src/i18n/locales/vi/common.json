@@ -1557,7 +1557,8 @@
       "confirmDangerous": "Skill này có phát hiện NGUY HIỂM. Vẫn đánh dấu đã duyệt và an toàn?",
       "confirmAction": "Đánh dấu đã duyệt và an toàn",
       "notePlaceholder": "Ghi chú (không bắt buộc) — vì sao skill này an toàn?",
-      "reviewedAt": "Đã duyệt · {{by}} · {{at}}"
+      "reviewedAt": "Đã duyệt · {{by}} · {{at}}",
+      "showFindings": "Xem phát hiện ({{count}})"
     },
     "import": {
       "placeholder": "Nhập một skill: đường dẫn, https://…/SKILL.md, hoặc github:owner/repo",

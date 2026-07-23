@@ -1606,7 +1606,8 @@
       "confirmDangerous": "This skill has a DANGEROUS finding. Mark it reviewed and safe anyway?",
       "confirmAction": "Mark reviewed and safe",
       "notePlaceholder": "Optional note (why is this safe?)",
-      "reviewedAt": "Reviewed · {{by}} · {{at}}"
+      "reviewedAt": "Reviewed · {{by}} · {{at}}",
+      "showFindings": "Show findings ({{count}})"
     },
     "import": {
       "placeholder": "Import a skill: path, https://…/SKILL.md, or github:owner/repo",

@@ -213,11 +213,17 @@ not matching the allowlist require explicit human confirmation; safe allowlisted
 skills install without a confirmation step.
 
 **Skill reviews** (`durin/security/skill_reviews.py`): a user or the LLM judge
-can mark an active flagged skill as reviewed. The review stores a `content_hash`
-(SHA-256 over `SKILL.md` and all script files) and a set of finding fingerprints.
-`get_review()` returns a stored review only when both the content hash and the
-acked finding fingerprints match the current scan results — a content edit or a
-new scanner finding invalidates the review.
+can mark an active flagged skill as reviewed. Each acked finding is stored as
+its fingerprint (`category|where|detail`) paired with a SHA-256 of the file it
+anchors to. `get_review()` returns a stored review only while every current
+finding was acked and its anchor file is unchanged — a new finding, or an edit
+to a file that carries an acked finding, reopens the review; edits elsewhere in
+the skill (a new script, an instruction tweak) leave it standing. Findings that
+do not anchor to a real file (synthetic ones such as `import_verdict`) ack by
+fingerprint alone. Entries written by the pre-v2 store (a whole-directory
+`content_hash` plus a fingerprint list) keep their original all-or-nothing
+semantics until re-recorded. In the web UI a valid review collapses the
+security section to a neutral state with the acked findings behind a toggle.
 
 **Provenance-pinned verdicts** (`apply_provenance_verdict()` in
 `durin/agent/skills_surface.py`): the verdict recorded at import can be stricter
@@ -228,7 +234,13 @@ review endpoint, the LLM audit path) pins the stricter provenance verdict and
 prepends a synthetic `import_verdict` finding naming its origin, so the security
 report explains the warning badge and the review store has a fingerprint to ack.
 A weaker provenance verdict never lowers the live scan's verdict — the scanner's
-current view of the content wins.
+current view of the content wins. A user review adopts the skill: the review
+endpoint stamps `provenance.verdict_cleared = {by, at}` into `SKILL.md`
+(committed to the skills store; the original `verdict` stays as the audit
+trail), which disables the pin permanently — only an explicit user review
+clears it, the LLM audit path never does. The deterministic scanner keeps
+running on every listing regardless, so new or edited content is still judged
+on its own.
 
 ### Shell execution policy
 
@@ -386,7 +398,7 @@ only callers with system-write authority can manage other tokens.
 | `ApiTokenStore` | `durin/security/api_tokens.py` | File-backed hashed token store (mode 0600); `issue()` returns plaintext once; `resolve()` uses HMAC timing-safe compare |
 | `SSRFGuardTransport` | `durin/security/network.py` | `httpx.AsyncHTTPTransport` subclass; resolves + validates hostname per request, pins connection to IP, re-validates on redirects |
 | `resolve_and_validate` | `durin/security/network.py` | Resolves host to public IP; raises `SSRFError` for private/unresolvable targets |
-| `skill_reviews` (module) | `durin/security/skill_reviews.py` | Per-workspace review overrides: keyed by `content_hash` + acked finding fingerprints; invalidated by any content change or new finding |
+| `skill_reviews` (module) | `durin/security/skill_reviews.py` | Per-workspace review overrides: per-finding acks (fingerprint + anchor-file hash); reopened by a new finding or an edit to a file carrying an acked finding |
 
 ## 6 Configuration and surfaces
 

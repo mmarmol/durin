@@ -1557,7 +1557,8 @@
       "confirmDangerous": "このスキルには「危険」の指摘があります。それでもレビュー済み・安全としてマークしますか？",
       "confirmAction": "レビュー済み・安全としてマーク",
       "notePlaceholder": "任意のメモ（なぜ安全と言えるか）",
-      "reviewedAt": "レビュー済み · {{by}} · {{at}}"
+      "reviewedAt": "レビュー済み · {{by}} · {{at}}",
+      "showFindings": "検出項目を表示（{{count}}）"
     },
     "import": {
       "placeholder": "スキルをインポート: パス、https://…/SKILL.md、または github:owner/repo",
