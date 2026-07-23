@@ -2063,6 +2063,8 @@
     "tabEntities": "엔티티",
     "viewCards": "카드",
     "viewTable": "테이블",
+    "modeClusters": "그룹",
+    "modeAll": "전체",
     "sortRecent": "최근 활동",
     "sortMentions": "언급 수",
     "sortName": "이름",

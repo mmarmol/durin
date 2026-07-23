@@ -333,9 +333,15 @@ hidden when there is no active goal.
 
 ### Memory graph (WebUI)
 
-The Entities graph canvas in the memory browser (clustering rules and API
-surface in `memory/04_agent_tools.md`) renders in two layers rather than one
-flat force-directed graph.
+The Entities tab offers three presentations of the same node set — Table,
+Cards, and Graph, in that switcher order. A fresh session with no stored
+preference lands on Table, sorted by recent activity by default, so the
+list of what changed most recently is the first thing a visitor sees; Graph
+is one click away. A stored preference always wins over that default.
+
+The graph canvas itself (clustering rules and API surface in
+`memory/04_agent_tools.md`) renders in two layers rather than one flat
+force-directed graph.
 
 **Layers.** The **overview** is the landing layer: community bubbles draw
 neutral and hollow (a container, not an entity in its own right), semantic
@@ -351,7 +357,13 @@ key. The type-filter popover closes itself and calls `preventDefault()` when
 Esc is pressed while it is open, so a single keypress closes only that popover,
 not the neighborhood layer beneath it. Esc is a no-op while the search panel or
 edge popover is open — neither closes on Escape today and the layer stays put,
-independent of the defaultPrevented handshake.
+independent of the defaultPrevented handshake. A secondary Groups/Everything
+toggle beside the type filter lets the overview escape its own bubbling
+without leaving this layer: Everything swaps the bubble summary for the same
+flat, per-type-colored graph a too-small-to-cluster workspace already falls
+back to, chips and all, while Groups returns to the bubbles. The toggle
+itself only appears at the overview layer with an actual clustered payload
+to switch between — a neighborhood drill has nothing to toggle.
 
 **Click contract.** A bubble click enters its cluster; a hub or loose-node
 click enters that node's ego-subgraph; a node click inside a neighborhood
@@ -365,16 +377,21 @@ place.
 weight; bubble radius is a separate, wider log-scale band of its member
 count. Session nodes are a fixed size regardless of message count — message
 count is panel metadata for a session, never a signal the canvas sizes by.
+When the canvas shows the flat graph directly instead of the bubble summary
+— Everything mode or a workspace too flat to cluster — nodes the overview
+flagged as hubs keep a minimum radius on top of that scale, so the entities
+the clustering considered most central stay visually prominent even without
+the bubbles around them.
 
 **Semantic zoom.** Node and edge geometry scale with the camera, but labels
 do not — they draw in screen space at a constant size at any zoom level. A
 zoom-dependent budget plus grid-based collision culling decides which
 labels are visible: zooming in raises the budget, and no two labels
-sharing a screen-space cell both render. A bubble's own label, and a
-hovered, selected, or isolated node's label, are exempt from the budget
-(though still dropped if actually off-screen); a bubble's member-count
-line additionally hides once the bubble is too small on screen to hold it
-legibly.
+sharing a screen-space cell both render. A bubble's own label, a hovered,
+selected, or isolated node's label, and — in that same hub-emphasis case —
+a hub node's label are exempt from the budget (though still dropped if
+actually off-screen); a bubble's member-count line additionally hides once
+the bubble is too small on screen to hold it legibly.
 
 **Theming.** Canvas colors are resolved from durin's design tokens at
 runtime rather than hardcoded: a hidden probe element asks the browser to
@@ -386,9 +403,10 @@ both modes.
 
 **Defaults and legend.** Phantom entities and session nodes are hidden by
 default wherever the visibility chips appear. Those chips live only in a
-neighborhood or in the pre-clustering flat graph — the clustered overview
-has none, because the server already excluded both kinds before clustering
-ever runs. The type legend groups the open-vocabulary type long tail
+neighborhood, in the pre-clustering flat graph, or in the overview's
+Everything sub-mode — the bubble summary itself (Groups) has none, because
+the server already excluded both kinds before clustering ever runs. The
+type legend groups the open-vocabulary type long tail
 behind a single "others" row past a fixed number of shown types, so an
 idiosyncratic workspace's type list can't overflow the toolbar.
 

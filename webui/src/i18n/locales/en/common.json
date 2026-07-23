@@ -2112,6 +2112,8 @@
     "tabEntities": "Entities",
     "viewCards": "Cards",
     "viewTable": "Table",
+    "modeClusters": "Groups",
+    "modeAll": "Everything",
     "sortRecent": "Recent activity",
     "sortMentions": "Mentions",
     "sortName": "Name",

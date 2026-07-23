@@ -101,6 +101,12 @@ describe("MemoryGraphView layered", () => {
     // clear it so one test's view choice can't leak into the next test's
     // initial render.
     localStorage.clear();
+    // Table is the first-run default (no stored preference) as of Change 1 —
+    // covered by its own test below, which clears this back out. Every other
+    // test here exercises graph-view-specific behaviour (the clustered
+    // overview, canvas drills, breadcrumb, ...), so seed the stored
+    // preference as if the user had already chosen Graph.
+    localStorage.setItem("durin.memoryGraph.view", "graph");
     vi.mocked(api.fetchMemoryGraph).mockReset().mockResolvedValue(EMPTY_GRAPH);
     vi.mocked(api.fetchMemoryGraphOverview)
       .mockReset()
@@ -369,5 +375,56 @@ describe("MemoryGraphView layered", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /close/i }));
     expect(screen.queryByText(/changed since the map was built/i)).toBeNull();
+  });
+
+  // --- Change 1/2: list-first default, Groups/Everything toggle ----------
+
+  it("defaults to the table/list view when no view preference is stored", async () => {
+    // Override the shared beforeEach's seeded "graph" preference — this is
+    // the one test in the file that must see the true first-run default.
+    localStorage.clear();
+    vi.mocked(api.fetchMemoryGraph).mockResolvedValue(RAW_DATA);
+    render(wrap(<MemoryGraphView active />));
+    await waitFor(() => expect(screen.getByText("Aurora")).toBeInTheDocument());
+    // No canvas ever mounts for the table presentation.
+    expect(document.querySelector("canvas")).toBeNull();
+  });
+
+  it("still opens in the graph view when \"graph\" is the stored preference", async () => {
+    localStorage.setItem("durin.memoryGraph.view", "graph");
+    render(wrap(<MemoryGraphView active />));
+    await waitFor(() => expect(document.querySelector("canvas")).not.toBeNull());
+  });
+
+  it("toggles the graph between the clustered overview and the flat graph via Groups/Everything", async () => {
+    vi.mocked(api.fetchMemoryGraph).mockResolvedValue(RAW_DATA);
+    const user = userEvent.setup();
+    render(wrap(<MemoryGraphView active />));
+    await waitFor(() =>
+      expect(screen.getByText(/1[.,]?238/)).toBeInTheDocument(),
+    );
+
+    expect(screen.getByRole("button", { name: "Groups" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Everything" }));
+
+    // RAW_DATA is 2 nodes / 0 edges — the same flat-mode rendering the
+    // "shows the type filter in flat mode" test above relies on.
+    await waitFor(() => expect(screen.getByText(/2 nodes/)).toBeInTheDocument());
+    expect(screen.queryByText(/1[.,]?238/)).toBeNull();
+  });
+
+  it("orders the view switcher Table, Cards, Graph", async () => {
+    render(wrap(<MemoryGraphView active />));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^table$/i })).toBeInTheDocument(),
+    );
+    const buttons = screen.getAllByRole("button", {
+      name: /^(table|cards|graph)$/i,
+    });
+    expect(buttons.map((b) => b.textContent?.trim())).toEqual([
+      "Table",
+      "Cards",
+      "Graph",
+    ]);
   });
 });
