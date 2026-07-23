@@ -47,3 +47,32 @@ def test_dangerous_blocks(tmp_path, monkeypatch):
     row = next(r for r in rows if r["name"] == "demo")
     assert row["needs"] == "block"
     assert "verdict_dangerous" in _codes(row)
+
+
+def test_invalid_skill_surfaces_validation_errors(tmp_path, monkeypatch):
+    # Broken frontmatter (unquoted ": " in a plain multi-line scalar): the row
+    # must carry the validation errors so the UI gates approve and offers
+    # repair, plus a plain-language reason.
+    q = tmp_path / ".durin" / "import-quarantine" / "broken"
+    q.mkdir(parents=True)
+    (q / "SKILL.md").write_text(
+        "---\nname: broken\ndescription: use when drafting a note: claims need\n"
+        "  exhibits here.\n---\nbody\n",
+        encoding="utf-8",
+    )
+    (q / ".scan.json").write_text(
+        json.dumps({"source": "unverified:workspace", "verdict": "caution",
+                    "findings": []}), encoding="utf-8")
+    monkeypatch.setattr("durin.agent.skills_store._import_allowlist", lambda: [])
+    rows = web_quarantine(tmp_path)
+    row = next(r for r in rows if r["name"] == "broken")
+    assert row["validation_errors"]
+    assert "invalid_skill" in _codes(row)
+
+
+def test_valid_skill_has_no_validation_errors(tmp_path, monkeypatch):
+    ws = _q(tmp_path, "demo")
+    monkeypatch.setattr("durin.agent.skills_store._import_allowlist", lambda: [])
+    rows = web_quarantine(ws)
+    row = next(r for r in rows if r["name"] == "demo")
+    assert row["validation_errors"] == []
