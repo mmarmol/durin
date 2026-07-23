@@ -1380,7 +1380,8 @@
       "confirmDangerous": "Esta skill tiene un hallazgo PELIGROSO. ¿Marcarla revisada y segura igual?",
       "confirmAction": "Marcar revisada y segura",
       "notePlaceholder": "Nota opcional (¿por qué es segura?)",
-      "reviewedAt": "Revisada · {{by}} · {{at}}"
+      "reviewedAt": "Revisada · {{by}} · {{at}}",
+      "showFindings": "Ver hallazgos ({{count}})"
     },
     "import": {
       "placeholder": "Importar skill: ruta, https://…/SKILL.md o github:owner/repo",

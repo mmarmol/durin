@@ -33,18 +33,60 @@ def test_review_user_records_and_unreview_clears(tmp_path):
 
 def test_review_clears_provenance_pinned_verdict(tmp_path):
     """A clean-scanning skill whose verdict is pinned by provenance (e.g. the
-    unverified-origin sweep): marking it reviewed must ack the synthetic
-    `import_verdict` finding too, so skills_inventory surfaces the review."""
+    unverified-origin sweep): a user review permanently clears the pin, so the
+    inventory drops the synthetic `import_verdict` finding and reports the
+    live scan's verdict."""
     from durin.agent.skills_surface import skills_inventory
 
     _skill(tmp_path, "pinned", body="Do the task.\n",
            source="unverified:workspace", verdict="caution")
     status, payload = ss.web_skill_review_user(tmp_path, "pinned", note="ok")
-    assert status == 200 and payload["verdict"] == "caution"
-    assert any(f["category"] == "import_verdict" for f in payload["findings"])
+    assert status == 200 and payload["verdict"] == "safe"
+    assert not any(f["category"] == "import_verdict" for f in payload["findings"])
 
     row = next(r for r in skills_inventory(tmp_path) if r["name"] == "pinned")
     assert row.get("review") and row["review"]["by"] == "user"
+    assert row["verdict"] == "safe"
+    assert not any(f["category"] == "import_verdict" for f in row["findings"])
+
+
+def test_review_stamps_verdict_cleared_in_provenance(tmp_path):
+    """The clear is written into SKILL.md provenance (verdict_cleared), keeping
+    the original verdict for audit."""
+    d = _skill(tmp_path, "pinned", body="Do the task.\n",
+               source="unverified:workspace", verdict="caution")
+    status, _ = ss.web_skill_review_user(tmp_path, "pinned", note="ok")
+    assert status == 200
+    prov = ss._durin_blob((d / "SKILL.md").read_text()).get("provenance")
+    assert prov["verdict"] == "caution"  # audit trail preserved
+    cleared = prov.get("verdict_cleared")
+    assert cleared and cleared["by"] == "user" and cleared.get("at")
+
+
+def test_cleared_pin_survives_content_edits(tmp_path):
+    """Once cleared, the pin never comes back — even after the skill's content
+    changes (which may reopen the review itself)."""
+    from durin.agent.skills_surface import skills_inventory
+
+    d = _skill(tmp_path, "pinned", body="Do the task.\n",
+               source="unverified:workspace", verdict="caution")
+    assert ss.web_skill_review_user(tmp_path, "pinned")[0] == 200
+    md = d / "SKILL.md"
+    md.write_text(md.read_text() + "\nMore instructions.\n")
+    row = next(r for r in skills_inventory(tmp_path) if r["name"] == "pinned")
+    assert row["verdict"] == "safe"
+    assert not any(f["category"] == "import_verdict" for f in row["findings"])
+
+
+def test_review_acks_live_findings_with_pin_cleared(tmp_path):
+    """A skill whose live scan is itself non-safe: the review acks those
+    deterministic findings (verdict stays the live one), and the pin is gone."""
+    _skill(tmp_path, "evil", source="unverified:workspace", verdict="caution")
+    status, payload = ss.web_skill_review_user(tmp_path, "evil", note="ok")
+    assert status == 200
+    assert not any(f["category"] == "import_verdict" for f in payload["findings"])
+    assert payload["findings"]  # the live deterministic findings remain
+    assert payload["review"]["by"] == "user"
 
 
 def test_review_user_404_unknown(tmp_path):

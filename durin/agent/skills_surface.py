@@ -44,6 +44,10 @@ def apply_provenance_verdict(skill_dir, verdict: str,
     Every surface that feeds the review store (inventory, user review, LLM
     audit) must apply this to its scan result, so the acked fingerprints match
     what the inventory reports and the review stays valid.
+
+    A `provenance.verdict_cleared` stamp (a user explicitly reviewed the skill)
+    disables the pin permanently: the live scan's verdict stands on its own.
+    The original `verdict` stays in provenance as the audit trail.
     """
     skill_dir = Path(skill_dir)
     prov = {}
@@ -52,6 +56,8 @@ def apply_provenance_verdict(skill_dir, verdict: str,
             "provenance") or {}
     except OSError:
         pass
+    if prov.get("verdict_cleared"):
+        return verdict, findings
     pv = str(prov.get("verdict") or "")
     if _VERDICT_ORDER.get(pv, 0) <= _VERDICT_ORDER.get(verdict, 0):
         return verdict, findings

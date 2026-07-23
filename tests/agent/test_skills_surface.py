@@ -97,6 +97,22 @@ def test_provenance_verdict_pins_and_synthesizes_finding(tmp_path):
     assert "unverified:workspace" in pin[0]["detail"]
 
 
+def test_provenance_verdict_cleared_disables_pin(tmp_path):
+    """A human cleared the import verdict (provenance.verdict_cleared): the pin
+    stops — the live scan's verdict stands on its own, no synthetic finding."""
+    d = tmp_path / "skills" / "adopted"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text(
+        "---\nname: adopted\ndescription: d\n"
+        "metadata:\n  durin:\n    provenance:\n"
+        '      source: "unverified:workspace"\n      verdict: "caution"\n'
+        '      verdict_cleared:\n        by: "user"\n        at: "2026-07-23"\n'
+        "---\nDo the task.\n")
+    row = next(r for r in skills_inventory(tmp_path) if r["name"] == "adopted")
+    assert row["verdict"] == "safe"
+    assert not any(f["category"] == "import_verdict" for f in row["findings"])
+
+
 def test_provenance_verdict_never_lowers_live_verdict(tmp_path):
     """A weaker provenance verdict must not mask what the scanner sees NOW
     (e.g. the skill was edited after import)."""

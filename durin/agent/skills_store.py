@@ -1589,9 +1589,34 @@ def _active_findings(rep) -> list[dict]:
              "where": f.where, "detail": f.detail} for f in rep.findings]
 
 
+def _clear_provenance_pin(workspace: Path, name: str, skill_dir: Path) -> None:
+    """Stamp `provenance.verdict_cleared` into SKILL.md: a user explicitly
+    reviewed this skill, so the verdict recorded at import stops pinning the
+    inventory forever. The original `verdict` is kept as the audit trail.
+    Workspace skills only — an unforked builtin lives in the read-only package
+    dir (and is never pinned anyway). Idempotent; committed to the store."""
+    skills_root = _skills_dir(Path(workspace)).resolve()
+    skill_dir = Path(skill_dir).resolve()
+    if skills_root not in skill_dir.parents:
+        return
+    md = skill_dir / "SKILL.md"
+    prov = _durin_blob(md.read_text(encoding="utf-8")).get("provenance")
+    if not isinstance(prov, dict) or not prov.get("verdict") or prov.get("verdict_cleared"):
+        return
+
+    def _stamp(data: dict) -> None:
+        ensure_durin(data)["provenance"]["verdict_cleared"] = {
+            "by": "user", "at": _today()}
+
+    _update_md(md, _stamp)
+    _store_init(Path(workspace)).auto_commit(
+        f"skill({name}): user review cleared import verdict [{prov['verdict']}]")
+
+
 def web_skill_review_user(workspace: Path, name: str, note: str = "") -> tuple[int, dict]:
     """`POST /api/v1/skills/{name}/review` — user marks an ACTIVE skill reviewed
-    (override to safe). Persists a review keyed by content hash + findings."""
+    (override to safe). Clears the provenance verdict pin permanently, then
+    persists a review acking the live findings."""
     from durin.agent.skills_surface import _skill_dirs, apply_provenance_verdict
     from durin.security.skill_reviews import record_review
     from durin.security.skill_scan import scan_skill
@@ -1599,9 +1624,13 @@ def web_skill_review_user(workspace: Path, name: str, note: str = "") -> tuple[i
     d = _skill_dirs(Path(workspace)).get(name)
     if d is None or not (d / "SKILL.md").is_file():
         return 404, {"error": f"skill not found: {name}"}
+    # Clear the pin BEFORE scanning/recording: the stamp edits SKILL.md, and
+    # the review must key on the post-stamp content to stay valid.
+    _clear_provenance_pin(Path(workspace), name, d)
     rep = scan_skill(d)
-    # Ack what the inventory reports, not the raw scan: a provenance-pinned
-    # verdict adds a synthetic finding the review must cover to stay valid.
+    # Ack what the inventory reports, not the raw scan (a still-pinned verdict
+    # — e.g. on a builtin path the stamp skips — adds a synthetic finding the
+    # review must cover to stay valid).
     verdict, findings = apply_provenance_verdict(d, rep.verdict, _active_findings(rep))
     review = record_review(Path(workspace), name, d, by="user", verdict="safe",
                            original=verdict, findings=findings, note=note)

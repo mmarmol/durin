@@ -2,10 +2,15 @@
 
 A user (or the LLM judge) can clear a flagged ACTIVE skill to a "Revisada"
 state. The override is stored per-workspace (builtins live in the read-only
-package dir, so the store must NOT be a sidecar in the skill dir). It is keyed
-by a content hash AND the set of acked finding fingerprints: a review is valid
-only while the content is unchanged AND no NEW finding appeared. Either a
-content edit or a newly-detected finding (e.g. a scanner upgrade) re-opens it.
+package dir, so the store must NOT be a sidecar in the skill dir). Each acked
+finding is keyed by its fingerprint PLUS a hash of the file it anchors to: a
+review is valid only while every current finding was acked AND its anchor file
+is unchanged. A new finding, or an edit to a file carrying an acked finding,
+re-opens the review; edits elsewhere in the skill (a new script, an
+instruction tweak) leave it standing. Findings that do not anchor to a real
+file (synthetic ones like `import_verdict`) ack by fingerprint alone. Entries
+written by the pre-v2 store (whole-dir `content_hash` + fingerprint list) keep
+their original all-or-nothing semantics until re-recorded.
 """
 from __future__ import annotations
 
@@ -17,7 +22,7 @@ from pathlib import Path
 from durin.utils.atomic_write import atomic_write_text
 from durin.utils.file_lock import cross_process_lock
 
-_VERSION = 1
+_VERSION = 2
 
 
 def _store_path(workspace) -> Path:
@@ -25,7 +30,8 @@ def _store_path(workspace) -> Path:
 
 
 def content_hash(skill_dir) -> str:
-    """SHA-256 over the same surface scan_skill reads: SKILL.md + scripts/*."""
+    """SHA-256 over the same surface scan_skill reads: SKILL.md + scripts/*.
+    Only pre-v2 store entries are still validated against it."""
     skill_dir = Path(skill_dir)
     h = hashlib.sha256()
     md = skill_dir / "SKILL.md"
@@ -47,6 +53,23 @@ def fingerprint(finding) -> str:
     return f"{finding.category}|{finding.where}|{finding.detail}"
 
 
+def _where(finding) -> str:
+    return str(finding["where"] if isinstance(finding, dict) else finding.where)
+
+
+def _anchor_hash(skill_dir, where: str) -> str:
+    """SHA-256 of the file a finding anchors to; '' when `where` is not a real
+    file inside the skill dir (synthetic findings, or a path escaping it)."""
+    root = Path(skill_dir).resolve()
+    try:
+        p = (root / where).resolve()
+        if not p.is_relative_to(root) or not p.is_file():
+            return ""
+        return hashlib.sha256(p.read_bytes()).hexdigest()
+    except (OSError, ValueError):
+        return ""
+
+
 def load_reviews(workspace) -> dict:
     p = _store_path(workspace)
     if not p.is_file():
@@ -66,15 +89,21 @@ def _write(workspace, reviews: dict) -> None:
 
 
 def get_review(workspace, name, skill_dir, current_findings) -> dict | None:
-    """Return the stored review for ``name`` only if it is still valid: the
-    skill content is unchanged AND every current finding was already acked."""
+    """Return the stored review for ``name`` only if it is still valid: every
+    current finding was acked AND the file it anchors to is unchanged."""
     entry = load_reviews(workspace).get(name)
     if not isinstance(entry, dict):
         return None
+    acked = entry.get("acked")
+    if isinstance(acked, dict):  # v2: {fingerprint: anchor-file hash}
+        for f in current_findings:
+            if acked.get(fingerprint(f)) != _anchor_hash(skill_dir, _where(f)):
+                return None
+        return entry
+    # Pre-v2 entry: whole-dir content hash + fingerprint list.
     if entry.get("content_hash") != content_hash(skill_dir):
         return None
-    acked = set(entry.get("acked") or [])
-    if not {fingerprint(f) for f in current_findings}.issubset(acked):
+    if not {fingerprint(f) for f in current_findings}.issubset(set(acked or [])):
         return None
     return entry
 
@@ -88,8 +117,8 @@ def record_review(workspace, name, skill_dir, *, by, verdict, original,
     with cross_process_lock(p):
         reviews = load_reviews(workspace)
         reviews[name] = {
-            "content_hash": content_hash(skill_dir),
-            "acked": sorted({fingerprint(f) for f in findings}),
+            "acked": {fingerprint(f): _anchor_hash(skill_dir, _where(f))
+                      for f in findings},
             "by": by,
             "verdict": verdict,
             "original": original,

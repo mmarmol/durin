@@ -1560,7 +1560,8 @@
       "confirmDangerous": "Ce skill présente un constat DANGEREUX. Le marquer comme vérifié et sûr quand même ?",
       "confirmAction": "Marquer comme vérifié et sûr",
       "notePlaceholder": "Remarque optionnelle (pourquoi est-ce sûr ?)",
-      "reviewedAt": "Vérifié · {{by}} · {{at}}"
+      "reviewedAt": "Vérifié · {{by}} · {{at}}",
+      "showFindings": "Voir les signalements ({{count}})"
     },
     "import": {
       "placeholder": "Importer un skill : chemin, https://…/SKILL.md, ou github:owner/repo",

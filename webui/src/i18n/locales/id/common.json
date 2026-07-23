@@ -1560,7 +1560,8 @@
       "confirmDangerous": "Skill ini punya temuan BERBAHAYA. Tetap tandai ditinjau dan aman?",
       "confirmAction": "Tandai ditinjau dan aman",
       "notePlaceholder": "Catatan opsional (mengapa ini aman?)",
-      "reviewedAt": "Ditinjau · {{by}} · {{at}}"
+      "reviewedAt": "Ditinjau · {{by}} · {{at}}",
+      "showFindings": "Tampilkan temuan ({{count}})"
     },
     "import": {
       "placeholder": "Impor skill: path, https://…/SKILL.md, atau github:owner/repo",

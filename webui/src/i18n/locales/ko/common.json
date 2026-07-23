@@ -1560,7 +1560,8 @@
       "confirmDangerous": "이 스킬에는 위험 발견 사항이 있습니다. 그래도 검토 완료 및 안전으로 표시할까요?",
       "confirmAction": "검토 완료 및 안전으로 표시",
       "notePlaceholder": "메모 (선택, 왜 안전한가요?)",
-      "reviewedAt": "검토됨 · {{by}} · {{at}}"
+      "reviewedAt": "검토됨 · {{by}} · {{at}}",
+      "showFindings": "발견 항목 보기 ({{count}})"
     },
     "import": {
       "placeholder": "스킬 가져오기: 경로, https://…/SKILL.md, 또는 github:owner/repo",

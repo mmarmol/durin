@@ -1560,7 +1560,8 @@
       "confirmDangerous": "此技能存在「危险」级别的发现。仍要将其标记为已审核且安全吗？",
       "confirmAction": "标记为已审核且安全",
       "notePlaceholder": "备注（可选，说明为何安全）",
-      "reviewedAt": "已审核 · {{by}} · {{at}}"
+      "reviewedAt": "已审核 · {{by}} · {{at}}",
+      "showFindings": "查看发现项（{{count}}）"
     },
     "import": {
       "placeholder": "导入技能：路径、https://…/SKILL.md 或 github:owner/repo",

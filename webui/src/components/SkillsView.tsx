@@ -1719,14 +1719,14 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
                 </div>
 
                 {skillRow && skillRow.verdict !== "safe" && skillRow.findings && skillRow.findings.length > 0 ? (
-                  <div className="shrink-0 border-b border-border/30 bg-amber-500/5 px-4 py-3 sm:px-6">
-                    <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                      {t("skills.security")}
-                    </p>
-                    <FindingsList findings={skillRow.findings} />
-
-                    {skillRow.review ? (
-                      <div className="mt-3 flex flex-wrap items-center gap-2">
+                  skillRow.review ? (
+                    // Reviewed: the findings were acknowledged — collapse them
+                    // behind a toggle and drop the warning tint.
+                    <div className="shrink-0 border-b border-border/30 bg-emerald-500/5 px-4 py-3 sm:px-6">
+                      <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        {t("skills.security")}
+                      </p>
+                      <div className="flex flex-wrap items-center gap-2">
                         <span className="text-[12px] text-muted-foreground">
                           {t("skills.review.reviewedAt", {
                             by:
@@ -1741,7 +1741,23 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
                           {t("skills.review.reopen")}
                         </Button>
                       </div>
-                    ) : reviewConfirm ? (
+                      <details className="mt-2">
+                        <summary className="cursor-pointer select-none text-[12px] text-muted-foreground hover:text-foreground">
+                          {t("skills.review.showFindings", { count: skillRow.findings.length })}
+                        </summary>
+                        <div className="mt-2">
+                          <FindingsList findings={skillRow.findings} />
+                        </div>
+                      </details>
+                    </div>
+                  ) : (
+                  <div className="shrink-0 border-b border-border/30 bg-amber-500/5 px-4 py-3 sm:px-6">
+                    <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      {t("skills.security")}
+                    </p>
+                    <FindingsList findings={skillRow.findings} />
+
+                    {reviewConfirm ? (
                       <div className="mt-3 flex flex-col gap-2 rounded-[8px] border border-border/60 bg-muted/40 p-3">
                         <p className="text-[12px] text-foreground">
                           {skillRow.verdict === "dangerous"
@@ -1785,6 +1801,7 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
                       </div>
                     )}
                   </div>
+                  )
                 ) : null}
 
                 {(skillRow?.open_observations ?? 0) > 0 ? (

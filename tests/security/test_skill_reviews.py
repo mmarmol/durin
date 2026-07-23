@@ -65,6 +65,60 @@ def test_get_review_valid_with_fewer_findings(tmp_path):
     assert sr.get_review(ws, "demo", d, [_finding()]) is not None
 
 
+def test_review_survives_unrelated_edits(tmp_path):
+    """Per-file acks: adding a new script or editing SKILL.md must NOT reopen
+    a review whose acked findings live in an untouched file."""
+    d = _skill(tmp_path)
+    ws = tmp_path / "ws"
+    sr.record_review(ws, "demo", d, by="user", verdict="safe",
+                     original="caution", findings=[_finding()])
+    (d / "scripts" / "b.py").write_text("print('new')\n", encoding="utf-8")
+    (d / "SKILL.md").write_text("---\nname: demo\n---\nedited\n", encoding="utf-8")
+    assert sr.get_review(ws, "demo", d, [_finding()]) is not None
+
+
+def test_synthetic_finding_acks_by_fingerprint(tmp_path):
+    """A finding whose `where` is not a file (e.g. import_verdict anchors at
+    metadata.durin.provenance) acks by fingerprint alone and survives edits."""
+    d = _skill(tmp_path)
+    ws = tmp_path / "ws"
+    synth = {"category": "import_verdict", "severity": "caution",
+             "where": "metadata.durin.provenance", "detail": "pinned"}
+    sr.record_review(ws, "demo", d, by="user", verdict="safe",
+                     original="caution", findings=[synth])
+    (d / "SKILL.md").write_text("---\nname: demo\n---\nedited\n", encoding="utf-8")
+    assert sr.get_review(ws, "demo", d, [synth]) is not None
+
+
+def test_traversal_where_is_treated_as_synthetic(tmp_path):
+    d = _skill(tmp_path)
+    ws = tmp_path / "ws"
+    outside = {"category": "x", "severity": "caution",
+               "where": "../../etc/passwd", "detail": "z"}
+    sr.record_review(ws, "demo", d, by="user", verdict="safe",
+                     original="caution", findings=[outside])
+    assert sr.get_review(ws, "demo", d, [outside]) is not None
+
+
+def test_legacy_v1_entry_keeps_whole_dir_semantics(tmp_path):
+    """A store written before per-file acks (content_hash + fingerprint list)
+    stays valid while the dir is unchanged and dies on ANY edit."""
+    import json
+
+    d = _skill(tmp_path)
+    ws = tmp_path / "ws"
+    (ws / ".durin").mkdir(parents=True)
+    entry = {"content_hash": sr.content_hash(d),
+             "acked": [sr.fingerprint(_finding())],
+             "by": "user", "verdict": "safe", "original": "caution",
+             "note": "", "at": "2026-07-01"}
+    (ws / ".durin" / "skill-reviews.json").write_text(
+        json.dumps({"version": 1, "reviews": {"demo": entry}}), encoding="utf-8")
+    assert sr.get_review(ws, "demo", d, [_finding()]) is not None
+    (d / "scripts" / "b.py").write_text("print('new')\n", encoding="utf-8")
+    assert sr.get_review(ws, "demo", d, [_finding()]) is None
+
+
 def test_corrupt_store_is_empty(tmp_path):
     ws = tmp_path / "ws"
     (ws / ".durin").mkdir(parents=True)
