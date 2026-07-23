@@ -304,6 +304,59 @@ def test_others_bubble_merges_bubble_and_loose_overflow():
     assert len(out["members"][OTHERS_ID]) == expected
 
 
+# ---------------------------------------------------------------------------
+# group_by: "type" partitions the remainder by node type instead of
+# label-propagation communities. Hub extraction runs identically first.
+# ---------------------------------------------------------------------------
+
+
+def test_type_grouping_partitions_remainder_by_type_field():
+    topics = [_node(f"topic:t{i}", weight=2) for i in range(BUBBLE_MIN_MEMBERS + 1)]
+    vendors = [_node(f"vendor:v{i}", weight=2) for i in range(BUBBLE_MIN_MEMBERS + 2)]
+    tickets = [_node(f"ticket:k{i}", weight=2) for i in range(2)]
+    payload = {"nodes": topics + vendors + tickets, "edges": [], "stats": {}}
+
+    out = assemble_overview(payload, group_by="type")
+
+    assert out["mode"] == "clustered"
+    bubble_ids = {b["id"] for b in out["bubbles"]}
+    assert bubble_ids == {"type:topic", "type:vendor"}
+    for b in out["bubbles"]:
+        name = b["id"].split(":", 1)[1]
+        assert b["name"] == name
+        assert b["types"] == [name]
+        assert b["id"] in out["members"]
+        assert len(out["members"][b["id"]]) == b["count"]
+    loose_ids = {n["id"] for n in out["loose"]}
+    assert {"ticket:k0", "ticket:k1"} <= loose_ids
+
+
+def test_hubs_are_identical_regardless_of_group_by():
+    # Same fixture (one mega-hub + two cliques) assembled both ways: hub
+    # extraction happens before the grouping choice is even consulted, so
+    # the hub list must not depend on it.
+    payload = _community_payload(2, BUBBLE_MIN_MEMBERS + 2, hubs=1)
+    by_community = assemble_overview(payload, group_by="community")
+    by_type = assemble_overview(payload, group_by="type")
+    assert by_community["hubs"] == by_type["hubs"]
+    assert by_community["hubs"][0]["id"] == "company:hub0"
+
+
+def test_assemble_overview_unknown_group_by_raises():
+    payload = _community_payload(1, BUBBLE_MIN_MEMBERS + 1)
+    with pytest.raises(ValueError):
+        assemble_overview(payload, group_by="bogus")
+
+
+def test_type_grouping_flat_mode_when_no_type_reaches_threshold():
+    # Same flat-mode rule as community grouping: nothing reaches
+    # BUBBLE_MIN_MEMBERS, so the payload falls back to the plain graph.
+    small = [_node(f"topic:t{i}", weight=1) for i in range(BUBBLE_MIN_MEMBERS - 1)]
+    out = assemble_overview({"nodes": small, "edges": [], "stats": {}}, group_by="type")
+    assert out["mode"] == "flat"
+    assert out["bubbles"] == []
+
+
 def _write_page(ws: Path, type_: str, slug: str) -> None:
     page = EntityPage(type=type_, name=slug.title())
     page.save(ws / "memory" / "entities" / type_ / f"{slug}.md")
@@ -361,9 +414,9 @@ def test_build_overview_is_cached_and_invalidates_on_tree_change(tmp_path, monke
     calls = {"n": 0}
     real = graph_overview.assemble_overview
 
-    def counting(payload):
+    def counting(payload, group_by="community"):
         calls["n"] += 1
-        return real(payload)
+        return real(payload, group_by=group_by)
 
     monkeypatch.setattr(graph_overview, "assemble_overview", counting)
     first = build_overview(tmp_path)
@@ -373,6 +426,37 @@ def test_build_overview_is_cached_and_invalidates_on_tree_change(tmp_path, monke
     _write_page(tmp_path, "person", "bob")
     build_overview(tmp_path)
     assert calls["n"] == 2
+
+
+def test_build_overview_caches_each_group_by_independently(tmp_path, monkeypatch):
+    _write_page(tmp_path, "person", "alice")
+    store_memory(
+        tmp_path,
+        content="alice did a thing",
+        entities=["person:alice"],
+        valid_from=datetime.date(2026, 5, 4),
+    )
+    calls = {"n": 0}
+    real = graph_overview.assemble_overview
+
+    def counting(payload, group_by="community"):
+        calls["n"] += 1
+        return real(payload, group_by=group_by)
+
+    monkeypatch.setattr(graph_overview, "assemble_overview", counting)
+
+    community_first = build_overview(tmp_path, group_by="community")
+    community_again = build_overview(tmp_path, group_by="community")
+    assert calls["n"] == 1
+    assert community_again is community_first
+
+    # A different group_by is a cache miss, not a hit on community's slot —
+    # and its own repeat call hits its own cache rather than recomputing.
+    type_first = build_overview(tmp_path, group_by="type")
+    type_again = build_overview(tmp_path, group_by="type")
+    assert calls["n"] == 2
+    assert type_again is type_first
+    assert type_first is not community_first
 
 
 def test_refreshing_existing_workspace_does_not_evict_others(tmp_path, monkeypatch):
@@ -480,6 +564,27 @@ def test_cluster_subgraph_uses_single_tree_snapshot(tmp_path, monkeypatch):
     monkeypatch.setattr(graph_overview, "_tree_signature", counting)
     build_cluster_subgraph(tmp_path, rep)
     assert calls["n"] == 1
+
+
+def _typed_workspace(tmp_path: Path) -> str:
+    """Real workspace with one same-typed group above the bubble threshold;
+    returns its type-bubble id (`type:topic`). No relations needed — a type
+    group is a plain field partition, not a co-mention community."""
+    n = BUBBLE_MIN_MEMBERS + 2
+    for i in range(n):
+        _write_page(tmp_path, "topic", f"g{i}")
+    out = build_overview(tmp_path, group_by="type")
+    assert out["mode"] == "clustered"
+    return next(b["id"] for b in out["bubbles"] if b["id"] == "type:topic")
+
+
+def test_cluster_subgraph_drills_into_a_type_bubble(tmp_path):
+    bubble_id = _typed_workspace(tmp_path)
+    sub = build_cluster_subgraph(tmp_path, bubble_id, group_by="type")
+    assert sub["focus"] == bubble_id
+    assert sub["total_members"] == BUBBLE_MIN_MEMBERS + 2
+    ids = {n["id"] for n in sub["nodes"]}
+    assert all(nid.startswith("topic:g") for nid in ids)
 
 
 def test_scores_rank_by_degree_and_damp_session_churn_not_dead_weight():

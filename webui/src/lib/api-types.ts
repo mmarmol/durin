@@ -4204,9 +4204,20 @@ export interface components {
         MemoryGraphQuery: Record<string, never>;
         /**
          * MemoryOverviewQuery
-         * @description No inputs — returns the clustered overview of the entity graph.
+         * @description Clustered overview of the entity graph.
+         *
+         *     ``group_by`` chooses how non-hub nodes are grouped into bubbles:
+         *     "community" (default) by semantic clustering, "type" by the entity's own
+         *     type field. See ``durin.memory.graph_overview.assemble_overview``.
          */
-        MemoryOverviewQuery: Record<string, never>;
+        MemoryOverviewQuery: {
+            /**
+             * Group By
+             * @default community
+             * @enum {string}
+             */
+            group_by: "community" | "type";
+        };
         /**
          * MemoryResult
          * @description Carries a raw graph-api payload dict (escape hatch).
@@ -4245,8 +4256,19 @@ export interface components {
         /**
          * MemorySubgraphQuery
          * @description Ego- or cluster-scoped neighborhood around a ref.
+         *
+         *     ``group_by`` only matters for ``scope="cluster"``: it must match the
+         *     grouping mode the overview built ``ref`` under (see
+         *     ``MemoryOverviewQuery``), since the two modes partition the graph
+         *     differently and a bubble ref only resolves under its own mode.
          */
         MemorySubgraphQuery: {
+            /**
+             * Group By
+             * @default community
+             * @enum {string}
+             */
+            group_by: "community" | "type";
             /**
              * Hops
              * @default 1

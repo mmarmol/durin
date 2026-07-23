@@ -13,6 +13,12 @@ A node qualifies as a hub only when its score is a clear outlier — at
 least twice the median score among entities — so uniform or young graphs
 surface no hubs at all, and the qualifying count is always capped at
 HUB_COUNT.
+
+Grouping the remainder below the hubs is a caller choice (``group_by``):
+"community" (default) runs the label-propagation clustering described
+above; "type" skips it and partitions the same remaining nodes by their
+own ``type`` field instead. Hub extraction never depends on this choice —
+it always runs first, against the full semantic node set.
 """
 
 from __future__ import annotations
@@ -21,7 +27,7 @@ import math
 import threading
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from durin.memory.graph import build_memory_graph
 from durin.memory.paths import walk_class
@@ -37,12 +43,22 @@ SESSION_LOG_FACTOR = 2.0
 
 OTHERS_ID = "__others__"
 
+# Valid `group_by` values for `assemble_overview`/`build_overview`. "community"
+# clusters via label propagation (the default); "type" partitions by the
+# node's own `type` field instead. See `assemble_overview`.
+GROUP_BY_VALUES = ("community", "type")
+
 _UNCAPPED_NODES = 100_000
 _UNCAPPED_EDGES = 400_000
 _CACHE_MAX = 4
 
+_K = TypeVar("_K")
+
 _cache: dict[Path, tuple[int, dict[str, Any]]] = {}
-_overview_cache: dict[Path, tuple[int, dict[str, Any]]] = {}
+# Keyed by (workspace, group_by): the two grouping modes partition the same
+# payload differently, so a community-mode overview must never be served for
+# a type-mode request or vice versa.
+_overview_cache: dict[tuple[Path, str], tuple[int, dict[str, Any]]] = {}
 _lock = threading.Lock()
 
 _ENTRY_CLASSES = ("episodic", "stable", "corpus")
@@ -165,6 +181,18 @@ def _communities(labels: dict[str, str]) -> dict[str, list[str]]:
     return {label: sorted(members) for label, members in out.items()}
 
 
+def _type_groups(
+    node_ids: list[str], by_id: dict[str, dict[str, Any]]
+) -> dict[str, list[str]]:
+    """Partition ids by their node's own `type` field — `group_by="type"`'s
+    stand-in for `_communities`. Same shape (group key -> sorted member ids)
+    so the rest of `assemble_overview` treats both grouping modes alike."""
+    out: dict[str, list[str]] = defaultdict(list)
+    for nid in node_ids:
+        out[by_id[nid]["type"]].append(nid)
+    return {t: sorted(members) for t, members in out.items()}
+
+
 def _build_adjacency(
     edges: list[dict[str, Any]],
 ) -> dict[str, list[tuple[str, float]]]:
@@ -176,22 +204,32 @@ def _build_adjacency(
     return adj
 
 
-def assemble_overview(payload: dict[str, Any]) -> dict[str, Any]:
+def assemble_overview(
+    payload: dict[str, Any], group_by: str = "community"
+) -> dict[str, Any]:
     """Aggregate the full uncapped graph payload into the overview shape.
 
     Hubs come out first (they bridge everything): an entity qualifies only
     when its importance score (see ``_entity_scores``) is at least twice
     the median score among entities (floor 3.0), and the qualifying count
     is capped at HUB_COUNT — so uniform or young graphs extract no hubs at
-    all. Label propagation then runs on the rest; communities >=
-    BUBBLE_MIN_MEMBERS become bubbles keyed by their highest-scoring
-    member; the rest stay as loose nodes, display-capped at
-    LOOSE_DISPLAY_CAP by score, with any overflow folded into the same
-    others bubble that absorbs bubble overflow. Edges are summed between
-    containers. mode="flat" when no community reaches the threshold — small
-    or young workspaces render the plain graph instead, though hubs (found
-    before clustering is attempted) still populate when present.
+    all. This step never depends on ``group_by``.
+
+    What happens to the rest depends on ``group_by``. ``"community"``
+    (default) runs label propagation and groups >= BUBBLE_MIN_MEMBERS become
+    bubbles keyed by their highest-scoring member. ``"type"`` skips
+    propagation and partitions the same nodes by their own ``type`` field
+    instead; a type's bubble is keyed ``"type:<typename>"`` and named
+    ``<typename>``. Either way, groups under the threshold stay as loose
+    nodes, display-capped at LOOSE_DISPLAY_CAP by score, with any overflow
+    folded into the same others bubble that absorbs bubble overflow; edges
+    are summed between containers; mode="flat" when no group reaches the
+    threshold — small or young workspaces render the plain graph instead,
+    though hubs (found before grouping is attempted) still populate when
+    present. Any other ``group_by`` value raises ``ValueError``.
     """
+    if group_by not in GROUP_BY_VALUES:
+        raise ValueError(f"unknown group_by: {group_by!r}")
     sem_nodes, sem_edges = _semantic_view(payload)
     by_id = {n["id"]: n for n in sem_nodes}
     scores = _entity_scores(payload, sem_nodes, sem_edges)
@@ -215,20 +253,36 @@ def assemble_overview(payload: dict[str, Any]) -> dict[str, Any]:
     # score, but the cached node dict's own weight field is left untouched.
     hubs_out = [{**n, "weight": round(scores[n["id"]], 1)} for n in hubs]
     rest_ids = [n["id"] for n in rest]
-    rest_edges = [
-        e
-        for e in sem_edges
-        if e["source"] not in hub_ids and e["target"] not in hub_ids
-    ]
-    labels = _label_propagation(rest_ids, _build_adjacency(rest_edges))
-    comms = _communities(labels)
+
+    if group_by == "type":
+        comms = _type_groups(rest_ids, by_id)
+    else:
+        rest_edges = [
+            e
+            for e in sem_edges
+            if e["source"] not in hub_ids and e["target"] not in hub_ids
+        ]
+        labels = _label_propagation(rest_ids, _build_adjacency(rest_edges))
+        comms = _communities(labels)
 
     def _rep(members: list[str]) -> str:
         return min(members, key=lambda m: (-scores[m], m))
 
+    def _identity(key: str, members: list[str]) -> tuple[str, str]:
+        """Bubble (id, name) for one group: a type group is named after the
+        type itself; a community is named after its highest-scoring member."""
+        if group_by == "type":
+            return f"type:{key}", key
+        rep = _rep(members)
+        return rep, by_id[rep]["name"]
+
     sized = sorted(
-        (members for members in comms.values() if len(members) >= BUBBLE_MIN_MEMBERS),
-        key=lambda m: (-len(m), _rep(m)),
+        (
+            (key, members)
+            for key, members in comms.items()
+            if len(members) >= BUBBLE_MIN_MEMBERS
+        ),
+        key=lambda kv: (-len(kv[1]), kv[0] if group_by == "type" else _rep(kv[1])),
     )
     loose_ids = sorted(
         nid
@@ -294,10 +348,10 @@ def assemble_overview(payload: dict[str, Any]) -> dict[str, Any]:
             ],
         }
 
-    for members in shown:
-        rep = _rep(members)
-        bubbles.append(_bubble(rep, by_id[rep]["name"], members))
-    overflow_members = sorted(nid for members in overflow for nid in members)
+    for key, members in shown:
+        bid, name = _identity(key, members)
+        bubbles.append(_bubble(bid, name, members))
+    overflow_members = sorted(nid for _key, members in overflow for nid in members)
     others_members = sorted(overflow_members + loose_overflow_ids)
     if others_members:
         bubbles.append(_bubble(OTHERS_ID, "__others__", others_members))
@@ -363,18 +417,20 @@ def _tree_signature(workspace: Path) -> int:
 
 
 def _put(
-    cache: dict[Path, tuple[int, dict[str, Any]]],
-    ws: Path,
+    cache: dict[_K, tuple[int, dict[str, Any]]],
+    key: _K,
     value: tuple[int, dict[str, Any]],
 ) -> None:
     """Insert/update under the caller's lock; evict oldest only on growth.
 
-    Refreshing a key already in the cache must never evict anything else —
-    eviction only makes room for a workspace the cache hasn't seen before.
+    Generic over the key shape: `_cache` keys on the workspace path alone,
+    `_overview_cache` keys on (workspace, group_by). Refreshing a key already
+    in the cache must never evict anything else — eviction only makes room
+    for a key the cache hasn't seen before.
     """
-    if ws not in cache and len(cache) >= _CACHE_MAX:
+    if key not in cache and len(cache) >= _CACHE_MAX:
         del cache[next(iter(cache))]
-    cache[ws] = value
+    cache[key] = value
 
 
 def _cached_payload(workspace: Path) -> tuple[int, dict[str, Any]]:
@@ -408,7 +464,9 @@ def get_full_graph_cached(workspace: Path) -> dict[str, Any]:
     return _cached_payload(workspace)[1]
 
 
-def _overview_from(ws: Path, sig: int, payload: dict[str, Any]) -> dict[str, Any]:
+def _overview_from(
+    ws: Path, sig: int, payload: dict[str, Any], group_by: str = "community"
+) -> dict[str, Any]:
     """Overview for an already-fetched (signature, payload) snapshot.
 
     Split out of `build_overview` so a caller that also needs the payload
@@ -418,28 +476,34 @@ def _overview_from(ws: Path, sig: int, payload: dict[str, Any]) -> dict[str, Any
     concurrent write could land between, desyncing the overview's members
     from the payload's node lookup.
 
-    Both cache levels key on the same tree signature, so the overview cache
-    invalidates exactly when the underlying payload would be rebuilt — no
-    separate identity to fall out of sync with it.
+    Cached under (ws, group_by): the two grouping modes partition the same
+    payload differently, so each gets its own slot rather than one mode's
+    result being served for the other. Both cache levels key on the same
+    tree signature, so the overview cache invalidates exactly when the
+    underlying payload would be rebuilt — no separate identity to fall out
+    of sync with it.
     """
+    cache_key = (ws, group_by)
     with _lock:
-        hit = _overview_cache.get(ws)
+        hit = _overview_cache.get(cache_key)
         if hit is not None and hit[0] == sig:
             return hit[1]
-    overview = assemble_overview(payload)
+    overview = assemble_overview(payload, group_by=group_by)
     with _lock:
-        _put(_overview_cache, ws, (sig, overview))
+        _put(_overview_cache, cache_key, (sig, overview))
     return overview
 
 
-def build_overview(workspace: Path) -> dict[str, Any]:
+def build_overview(workspace: Path, group_by: str = "community") -> dict[str, Any]:
     """Overview payload for the workspace, cached at both levels.
 
-    Synchronous and disk-heavy — event-loop callers hop through `asyncio.to_thread`.
+    ``group_by`` selects how non-hub nodes are grouped into bubbles — see
+    `assemble_overview`. Synchronous and disk-heavy — event-loop callers hop
+    through `asyncio.to_thread`.
     """
     ws = workspace.resolve()
     sig, payload = _cached_payload(ws)
-    return _overview_from(ws, sig, payload)
+    return _overview_from(ws, sig, payload, group_by=group_by)
 
 
 def _clear_all() -> None:
@@ -453,12 +517,17 @@ def build_cluster_subgraph(
     workspace: Path,
     ref: str,
     max_members: int = 150,
+    group_by: str = "community",
 ) -> dict[str, Any]:
     """Members-of-bubble subgraph for the neighborhood layer.
 
-    Keyed by the bubble id (representative ref, or OTHERS_ID). Raises
-    KeyError when ``ref`` is not a bubble in the current overview — the
-    caller maps that to a 404 and the client falls back to the overview.
+    Keyed by the bubble id (representative ref, or OTHERS_ID) — for
+    ``group_by="type"`` that id is ``"type:<typename>"``. Raises KeyError
+    when ``ref`` is not a bubble in the current overview — the caller maps
+    that to a 404 and the client falls back to the overview. ``group_by``
+    must match the grouping mode the ref was drawn from: the two modes
+    partition the same payload differently, so a ref only resolves under
+    the overview it came from (see `assemble_overview`).
 
     Members are capped at ``max_members``, kept by descending importance
     score (see ``_entity_scores``) with a deterministic tie-break on id;
@@ -478,7 +547,7 @@ def build_cluster_subgraph(
     """
     ws = workspace.resolve()
     sig, payload = _cached_payload(ws)
-    overview = _overview_from(ws, sig, payload)
+    overview = _overview_from(ws, sig, payload, group_by=group_by)
     members = overview.get("members", {}).get(ref)
     if members is None:
         raise KeyError(ref)

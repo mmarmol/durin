@@ -457,28 +457,44 @@ a true mega-connector would otherwise bridge every community into one
 blob; reference nodes hold real content but are consultation material, not
 connectors, so they are never hub-eligible.
 
-**The remainder clusters by deterministic label propagation.** Every source
-of nondeterminism in the textbook algorithm is pinned — nodes iterate in
-sorted-id order, each starting labeled with its own id, and neighbor-label
-ties break lexicographically — so the same input always yields the same
-partition. A community that reaches the bubble-size threshold collapses
-into a bubble identified by its representative ref, the highest-scoring
-member. Communities under the threshold stay as loose nodes, display-capped
-by score; anything the caps drop — overflow bubbles and overflow loose
-nodes alike — folds into one `__others__` bubble, itself drillable like
-any other. When no community reaches the threshold at all, the payload
-reports mode `"flat"` and the client falls back to the plain graph; the
-(bounded) hubs list still populates in flat mode, since hub extraction
-runs before the clustering attempt.
+**The remainder clusters by deterministic label propagation — the default
+grouping.** Every source of nondeterminism in the textbook algorithm is
+pinned — nodes iterate in sorted-id order, each starting labeled with its
+own id, and neighbor-label ties break lexicographically — so the same
+input always yields the same partition. A community that reaches the
+bubble-size threshold collapses into a bubble identified by its
+representative ref, the highest-scoring member. Communities under the
+threshold stay as loose nodes, display-capped by score; anything the caps
+drop — overflow bubbles and overflow loose nodes alike — folds into one
+`__others__` bubble, itself drillable like any other. When no community
+reaches the threshold at all, the payload reports mode `"flat"` and the
+client falls back to the plain graph; the (bounded) hubs list still
+populates in flat mode, since hub extraction runs before the clustering
+attempt.
+
+**Grouping is a caller choice: `group_by`.** The paragraph above describes
+`group_by="community"` (the default). `group_by="type"` skips label
+propagation entirely and partitions the same remaining nodes by their own
+`type` field instead: a type's bubble is keyed `"type:<typename>"` and
+named `<typename>`, and the bubble-size threshold, display caps, and
+`__others__` overflow all apply exactly as they do for a community. Hub
+extraction never depends on this choice — it runs first, against the full
+semantic node set, so the hubs list is identical either way. `GET
+/api/v1/memory/graph/overview` takes `group_by` as a query parameter; the
+`cluster` scope of `GET /api/v1/memory/subgraph` also takes it, and it must
+match the mode the ref's overview was built under, since a bubble id from
+one mode is not a bubble id in the other.
 
 **Two-level cache, one tree signature.** Both the uncapped graph payload
 (`get_full_graph_cached`) and the derived overview (`build_overview`) are
 cached keyed by a cheap stat-walk signature over everything the graph is
 built from (entity pages, the episodic/stable/corpus classes, references,
-sessions — mtime and size per file, no reads). A write anywhere in that
-tree invalidates both caches on the next call; eviction only happens on
-growth past the cache's capacity, so refreshing a key already cached never
-evicts a different workspace. `build_cluster_subgraph` fetches one
+sessions — mtime and size per file, no reads); the overview cache keys
+additionally on `group_by`, so the two grouping modes never share or
+evict each other's slot. A write anywhere in that tree invalidates both
+caches on the next call; eviction only happens on growth past the cache's
+capacity, so refreshing a key already cached never evicts a different
+workspace. `build_cluster_subgraph` fetches one
 (signature, payload) snapshot and reuses it for both a bubble's member list
 and the node lookup, rather than two independent stat-walks that a
 concurrent write could land between and desync. It rides along
@@ -629,8 +645,8 @@ agent tools and never accept mutations.
 | `list_reference_documents()` | `durin/memory/graph_api.py` | The Library shelf: ingested reference documents (title, source, ingest time, chunk count, `distilled`). |
 | `get_reference_detail(slug)` | `durin/memory/graph_api.py` | One document's full raw body + distilled outline + entities seeded from it + a bounded chunk preview. |
 | Graph canvas data | `durin/memory/graph.py::build_memory_graph` | Builds `{nodes, edges}` for the entity canvas. Caps at 500 nodes / 2 000 edges. |
-| `build_overview(workspace)` | `durin/memory/graph_overview.py` | Clustered overview: semantic hubs + community bubbles + loose nodes, cached at two levels and keyed off a stat-walk tree signature. Falls back to flat mode when nothing clusters. |
-| `build_cluster_subgraph(workspace, ref)` | `durin/memory/graph_overview.py` | Members-of-bubble neighborhood for a drilled-in cluster, keyed by the bubble's representative ref (or the `__others__` bucket). Raises on a stale ref so the caller can 404 and fall back to the overview. |
+| `build_overview(workspace, group_by="community")` | `durin/memory/graph_overview.py` | Clustered overview: semantic hubs + community-or-type bubbles + loose nodes, cached at two levels (the overview level keyed by `(workspace, group_by)`) off a stat-walk tree signature. Falls back to flat mode when nothing clusters. |
+| `build_cluster_subgraph(workspace, ref, group_by="community")` | `durin/memory/graph_overview.py` | Members-of-bubble neighborhood for a drilled-in cluster, keyed by the bubble's representative ref (or the `__others__` bucket, or `type:<typename>` under `group_by="type"`). Raises on a stale ref so the caller can 404 and fall back to the overview. |
 | `get_full_graph_cached(workspace)` | `durin/memory/graph_overview.py` | The uncapped graph payload backing both the overview and the ego-subgraph branch of the subgraph route, rebuilt only when the tree signature changes. |
 
 ---

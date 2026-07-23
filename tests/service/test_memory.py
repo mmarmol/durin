@@ -307,3 +307,56 @@ async def test_subgraph_ego_scope_unchanged(tmp_path):
         MemorySubgraphQuery(ref="person:alice"), Principal.local()
     )
     assert result.data["focus"] == "person:alice"
+
+
+# ---------------------------------------------------------------------------
+# group_by: overview grouping choice (community vs type), wire alias + drill
+# ---------------------------------------------------------------------------
+
+
+def _write_entity_page(ws: Path, type_: str, slug: str) -> None:
+    from durin.memory.entity_page import EntityPage
+
+    EntityPage(type=type_, name=slug.title()).save(
+        ws / "memory" / "entities" / type_ / f"{slug}.md"
+    )
+
+
+def test_memory_overview_query_accepts_camel_case_group_by():
+    q = MemoryOverviewQuery.model_validate({"groupBy": "type"})
+    assert q.group_by == "type"
+
+
+def test_memory_subgraph_query_accepts_camel_case_group_by():
+    q = MemorySubgraphQuery.model_validate(
+        {"ref": "type:topic", "scope": "cluster", "groupBy": "type"}
+    )
+    assert q.group_by == "type"
+
+
+@pytest.mark.asyncio
+async def test_graph_overview_type_grouping_strips_members(tmp_path):
+    n = _graph_overview.BUBBLE_MIN_MEMBERS + 2
+    for i in range(n):
+        _write_entity_page(tmp_path, "topic", f"g{i}")
+    svc = _service(tmp_path)
+    result = await svc.graph_overview(
+        MemoryOverviewQuery(group_by="type"), Principal.local()
+    )
+    assert result.data["mode"] == "clustered"
+    assert any(b["id"] == "type:topic" for b in result.data["bubbles"])
+    assert "members" not in result.data
+
+
+@pytest.mark.asyncio
+async def test_subgraph_cluster_scope_resolves_type_bubble(tmp_path):
+    n = _graph_overview.BUBBLE_MIN_MEMBERS + 2
+    for i in range(n):
+        _write_entity_page(tmp_path, "topic", f"g{i}")
+    svc = _service(tmp_path)
+    result = await svc.subgraph(
+        MemorySubgraphQuery(ref="type:topic", scope="cluster", group_by="type"),
+        Principal.local(),
+    )
+    assert result.data["focus"] == "type:topic"
+    assert result.data["total_members"] == n
