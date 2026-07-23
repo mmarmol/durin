@@ -11,6 +11,7 @@ import json
 import shutil
 from pathlib import Path
 
+from durin.agent.skills_frontmatter import frontmatter_broken
 from durin.agent.skills_store import _bundled_file_count, _durin_blob
 from durin.security.skill_scan import scan_skill
 
@@ -48,6 +49,31 @@ def _attributed_source(workspace: Path, skill_name: str) -> str:
     return "unverified:workspace"
 
 
+_BROKEN_FM_ISSUE = (
+    "SKILL.md frontmatter is not valid YAML — hand-written fields like the "
+    "description likely contain an unquoted colon, so name/description (and "
+    "possibly provenance) cannot be read."
+)
+
+
+def _observe_broken_frontmatter(workspace: Path, name: str) -> None:
+    """Log one OPEN observation about the unparseable frontmatter. The sweep
+    runs on every skills listing, so skip when the same observation is already
+    open — never bump/commit per sweep. Never raises."""
+    try:
+        from durin.agent.skill_observations import log_observation, open_observations
+        if any(r.get("issue") == _BROKEN_FM_ISSUE
+               for r in open_observations(workspace, name)):
+            return
+        log_observation(
+            workspace, skill=name, kind="correction", issue=_BROKEN_FM_ISSUE,
+            improvement="Repair the frontmatter YAML (quote scalars containing "
+                        "':') so the skill's name, description, mode and "
+                        "provenance parse again.")
+    except Exception:  # noqa: BLE001 — observability must not break the sweep
+        pass
+
+
 def sweep_unverified_skills(workspace) -> list[str]:
     """Relocate no-provenance workspace skills to the import quarantine. Returns
     the names relocated. Idempotent (a second call finds nothing)."""
@@ -64,6 +90,11 @@ def sweep_unverified_skills(workspace) -> list[str]:
             text = (d / "SKILL.md").read_text(encoding="utf-8")
         except OSError:
             continue
+        if frontmatter_broken(text):
+            # The YAML is unparseable, so provenance may exist but be hidden
+            # (_durin_blob already tries a metadata-only recovery). Surface the
+            # breakage as an observation either way — the file needs repair.
+            _observe_broken_frontmatter(workspace, d.name)
         prov = _durin_blob(text).get("provenance")
         if isinstance(prov, dict) and prov:
             continue  # has provenance → gated import / dream / forked builtin → keep

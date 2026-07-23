@@ -2250,6 +2250,7 @@
       "reject": "Reject",
       "rejectHint": "rejecting silences it for ~30 days",
       "suggestionError": "Could not apply the suggestion — it may have already been processed. Refresh to see the current state.",
+      "suggestionQuarantined": "Could not apply — \"{{skill}}\" is awaiting review in the import quarantine. Approve or reject it in Skills, then retry.",
       "action": {
         "evolve": "improve",
         "create": "proposed skill",

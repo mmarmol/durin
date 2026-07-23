@@ -201,12 +201,16 @@ error, or an unparseable reply all accept — infrastructure trouble must never
 cost a skill.
 
 Before either gate runs, both `dream_create_skill` and `publish_draft_skill`
-apply the same body/description integrity floor — an empty body, or one with
-no derivable description, is refused outright (`_skill_md_integrity` for
-publish; the equivalent inline check for create), draft or fresh content left
-untouched. The iterative ramp does not get to skip a check the quick one
+apply the same body/description integrity floor — an empty body, one with
+no derivable description, or a frontmatter block that fails to parse as YAML
+(an unquoted `:` in a plain scalar) is refused outright (`_skill_md_integrity`
+for publish; the equivalent inline check for create), draft or fresh content
+left untouched. The iterative ramp does not get to skip a check the quick one
 enforces just because the body was assembled over several tool calls instead
-of one.
+of one. Bounded edits (`apply_skill_edit`) bypass the whole-body floor but
+carry the one check a single-occurrence replace still needs: an edit whose
+result breaks a previously-valid SKILL.md frontmatter is refused before
+anything is written.
 
 Who may override differs by door. The in-session `SkillWriteTool` runs in
 `override` mode: after a rejection, the agent surfaces the reason, and if the
@@ -478,7 +482,14 @@ manual mode means the skill is the user's to control. Instead:
    Bandeja for the user to accept or reject.
 
 Accepting a suggestion replays the recorded action against the live skill
-(`skill_suggestions.apply_suggestion`) and removes it from the queue.
+(`skill_suggestions.apply_suggestion`) and removes it from the queue. A failed
+replay leaves the suggestion queued (retriable) and surfaces the concrete
+reason as a 409 whose `detail` the webui shows verbatim. One failure mode gets
+a machine-readable shape: when the suggestion's skill has meanwhile been swept
+into the import quarantine, the accept endpoint answers with
+`details.reason = "skill_quarantined"` and the webui renders a localized
+"approve or reject it in Skills first, then retry" message — the suggestion
+becomes applicable again the moment the skill is approved back in.
 Rejecting writes an entry to `.suggestion_tombstones.json` with a
 **`DEFAULT_TTL_DAYS`-day expiry** (`skill_suggestions.py`) — a fixed window
 after which the same conclusion may be re-proposed, distinct from the refine

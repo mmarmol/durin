@@ -58,6 +58,29 @@ async def test_list_accept_reject_roundtrip(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_accept_for_quarantined_skill_explains_the_block(tmp_path):
+    # The suggestion's skill was swept into the import quarantine after the
+    # suggestion was queued: accepting must say WHY (approve the skill first),
+    # not a generic conflict — and the suggestion must stay queued.
+    ws = tmp_path
+    qdir = ws / ".durin" / "import-quarantine" / "x"
+    qdir.mkdir(parents=True)
+    (qdir / "SKILL.md").write_text("---\nname: x\n---\nbody\n", encoding="utf-8")
+    action = {"type": "evolve", "name": "x", "old": "old body",
+              "new": "new body", "rationale": "improve"}
+    rec = sg.add_suggestion(ws, action)
+
+    svc = SkillsService(workspace=ws)
+    pr = Principal.local()
+
+    from durin.service.types import ConflictError
+    with pytest.raises(ConflictError) as ei:
+        await svc.accept_suggestion(AcceptSuggestionCommand(id=rec["id"]), pr)
+    assert "quarantine" in str(ei.value.message)
+    assert len(sg.read_suggestions(ws)) == 1  # still pending, retriable
+
+
+@pytest.mark.asyncio
 async def test_accept_and_reject_emit_suggestion_resolved_events(tmp_path, monkeypatch):
     import durin.agent.tools._telemetry as tel
 

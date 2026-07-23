@@ -2201,6 +2201,7 @@
       "reject": "Tolak",
       "rejectHint": "menolak akan membisukannya selama ~30 hari",
       "suggestionError": "Tidak dapat menerapkan saran — mungkin sudah diproses. Segarkan untuk melihat state saat ini.",
+      "suggestionQuarantined": "Tidak dapat menerapkan — \"{{skill}}\" sedang menunggu tinjauan di karantina impor. Setujui atau tolak di Skills, lalu coba lagi.",
       "action": {
         "evolve": "tingkatkan",
         "create": "skill yang diusulkan",

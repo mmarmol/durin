@@ -2201,6 +2201,7 @@
       "reject": "拒绝",
       "rejectHint": "拒绝后将在约 30 天内不再提示",
       "suggestionError": "无法应用该建议——它可能已经被处理过了。请刷新以查看当前状态。",
+      "suggestionQuarantined": "无法应用——“{{skill}}”正在导入隔离区等待审核。请先在 Skills 中批准或拒绝它，然后重试。",
       "action": {
         "evolve": "改进",
         "create": "新增技能",

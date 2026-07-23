@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { DreamDrawer, type DrawerTarget } from "@/components/DreamDrawer";
 import {
+  ApiError,
   fetchDreamDigest,
   fetchFlaggedPairs,
   fetchSkillSuggestions,
@@ -321,8 +322,17 @@ export function SkillSuggestionsSection({
           onCountChange(next.length);
           return next;
         });
-      } catch {
-        setError(t("dream.bandeja.suggestionError"));
+      } catch (e) {
+        // Prefer the server's reason over the generic already-processed guess:
+        // a machine-readable reason localizes; otherwise show the raw detail.
+        if (e instanceof ApiError && e.details?.reason === "skill_quarantined") {
+          setError(t("dream.bandeja.suggestionQuarantined", {
+            skill: String(e.details.skill ?? ""),
+          }));
+        } else {
+          const detail = e instanceof ApiError ? e.detail : undefined;
+          setError(detail || t("dream.bandeja.suggestionError"));
+        }
       } finally {
         setBusy((p) => {
           const n = new Set(p);

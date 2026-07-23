@@ -32,4 +32,33 @@ describe("SkillSuggestionsSection", () => {
     // Item must still be in the list — not removed on failure
     expect(screen.getByText("commit-helper")).toBeInTheDocument();
   });
+
+  it("shows the server's detail when the ApiError carries one", async () => {
+    vi.spyOn(api, "acceptSkillSuggestion").mockRejectedValue(
+      new api.ApiError(409, "HTTP 409", "old text not found"),
+    );
+    render(<SkillSuggestionsSection token="tok" onCountChange={() => {}} />);
+    expect(await screen.findByText("commit-helper")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /accept/i }));
+    await waitFor(() =>
+      expect(screen.getByText("old text not found")).toBeInTheDocument(),
+    );
+  });
+
+  it("explains the quarantine block with a localized message", async () => {
+    vi.spyOn(api, "acceptSkillSuggestion").mockRejectedValue(
+      new api.ApiError(409, "HTTP 409", "skill 'commit-helper' is awaiting review", {
+        reason: "skill_quarantined",
+        skill: "commit-helper",
+      }),
+    );
+    render(<SkillSuggestionsSection token="tok" onCountChange={() => {}} />);
+    expect(await screen.findByText("commit-helper")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /accept/i }));
+    await waitFor(() =>
+      expect(
+        screen.getByText(/awaiting review in the import quarantine/i),
+      ).toBeInTheDocument(),
+    );
+  });
 });

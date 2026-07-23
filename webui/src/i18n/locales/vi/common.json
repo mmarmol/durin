@@ -2201,6 +2201,7 @@
       "reject": "Từ chối",
       "rejectHint": "từ chối sẽ ẩn đề xuất này trong khoảng 30 ngày",
       "suggestionError": "Không thể áp dụng đề xuất — có thể đã được xử lý rồi. Hãy làm mới để xem trạng thái hiện tại.",
+      "suggestionQuarantined": "Không thể áp dụng — \"{{skill}}\" đang chờ xem xét trong khu cách ly nhập. Hãy phê duyệt hoặc từ chối nó trong Skills, rồi thử lại.",
       "action": {
         "evolve": "cải thiện",
         "create": "skill đề xuất",

@@ -49,6 +49,33 @@ def test_bounded_edit_unaffected(tmp_path):
     assert r.get("ok") is True
 
 
+def test_save_skill_file_rejects_broken_frontmatter_yaml(tmp_path):
+    # An unquoted ": " in the description breaks the whole YAML frontmatter;
+    # the body still yields a derivable description, so only an explicit
+    # frontmatter check catches it.
+    ws = tmp_path / "ws"
+    _mk_auto(ws, "demo")
+    broken = ("---\nname: demo\ndescription: use when drafting a note: claims "
+              "need exhibits.\n---\n# Demo\n\nbody prose here.\n")
+    r = ss.save_skill_file(ws, "demo", "SKILL.md", broken, rationale="edit")
+    assert "error" in r and "YAML" in r["error"]
+
+
+def test_bounded_edit_rejects_frontmatter_break(tmp_path):
+    # A bounded replace inside the description CAN break the YAML (unquoted
+    # colon) — refuse it instead of persisting an unparseable frontmatter.
+    ws = tmp_path / "ws"
+    _mk_auto(ws, "demo")
+    r = ss.apply_skill_edit(
+        ws, "demo", old="description: demo skill",
+        new="description: demo skill — use when drafting a note: claims need exhibits",
+        rationale="tweak")
+    assert "error" in r and "YAML" in r["error"]
+    # nothing persisted
+    text = (ws / "skills" / "demo" / "SKILL.md").read_text(encoding="utf-8")
+    assert "exhibits" not in text
+
+
 def test_fuse_rejects_broken_merged_body(tmp_path):
     ws = tmp_path / "ws"
     _mk_auto(ws, "a")
