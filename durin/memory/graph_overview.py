@@ -1,18 +1,23 @@
 """Overview builder: cluster bubbles + semantic hubs for the memory graph.
 
-Structure is computed from SEMANTIC evidence only: entity-entity co-mention
-edges and typed relations between consolidated pages (plus reference
-``derived_from`` links). Sessions and phantoms never enter clustering input,
-hub ranking, or size computation — session weight is a mechanical message
-count, sessions edge into everything they touched, and with few sessions the
-"communities" would degenerate into "what session A touched". A node
-qualifies as a hub only when it is a clear outlier — at least twice the
-median semantic weight — so uniform or young graphs surface no hubs at all,
-and the qualifying count is always capped at HUB_COUNT.
+Clustering topology is computed from SEMANTIC evidence only: entity-entity
+co-mention edges and typed relations between consolidated pages (plus
+reference ``derived_from`` links). Sessions and phantoms never enter
+clustering input — a session edges into everything it touched, and with
+few sessions the "communities" would degenerate into "what session A
+touched" rather than a real topic cluster. Session evidence does feed the
+per-entity importance score (see ``_entity_scores``) as a scalar on top of
+a node already placed by semantic structure — real workspaces carry no
+other signal of what matters — but it never becomes an edge between nodes.
+A node qualifies as a hub only when its score is a clear outlier — at
+least twice the median score among entities — so uniform or young graphs
+surface no hubs at all, and the qualifying count is always capped at
+HUB_COUNT.
 """
 
 from __future__ import annotations
 
+import math
 import threading
 from collections import defaultdict
 from pathlib import Path
@@ -22,9 +27,13 @@ from durin.memory.graph import build_memory_graph
 from durin.memory.paths import walk_class
 
 HUB_COUNT = 20
-BUBBLE_MIN_MEMBERS = 15
+BUBBLE_MIN_MEMBERS = 8
 BUBBLE_DISPLAY_CAP = 30
 LOOSE_DISPLAY_CAP = 30
+# Damping on distinct-session evidence in the importance score (see
+# `_entity_scores`) — keeps high-churn operational entities from drowning
+# the semantic structure as session volume grows.
+SESSION_LOG_FACTOR = 2.0
 
 OTHERS_ID = "__others__"
 
@@ -64,9 +73,10 @@ def _semantic_view(
 
 def _extract_hubs(
     nodes: list[dict[str, Any]],
+    scores: dict[str, float],
     top_n: int = HUB_COUNT,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Top entities by semantic weight, removed before clustering.
+    """Top entities by importance score, removed before clustering.
 
     Mega-connectors bridge every community and would merge them into one
     blob, so they are drawn individually instead. References hold real
@@ -74,12 +84,47 @@ def _extract_hubs(
     """
     eligible = sorted(
         (n for n in nodes if n["type"] != "reference"),
-        key=lambda n: (-int(n["weight"]), n["id"]),
+        key=lambda n: (-scores[n["id"]], n["id"]),
     )
     hubs = eligible[:top_n]
     hub_ids = {n["id"] for n in hubs}
     rest = [n for n in nodes if n["id"] not in hub_ids]
     return hubs, rest
+
+
+def _entity_scores(
+    payload: dict[str, Any],
+    sem_nodes: list[dict[str, Any]],
+    sem_edges: list[dict[str, Any]],
+) -> dict[str, float]:
+    """Overview importance score per semantic node.
+
+    Real workspaces carry no per-entry mention counts (the legacy entry
+    classes are empty), so raw ``weight`` is a dead signal. Importance is
+    instead: relation/derived degree — dream's deliberate structure — plus
+    a log-damped count of distinct sessions whose evidence touched the
+    node. The damping keeps high-churn operational entities (support
+    tickets, test cases) from drowning the semantic structure as session
+    volume grows.
+    """
+    degree: dict[str, int] = defaultdict(int)
+    for e in sem_edges:
+        degree[e["source"]] += 1
+        degree[e["target"]] += 1
+    session_touches: dict[str, int] = defaultdict(int)
+    for e in payload["edges"]:
+        source, target = e["source"], e["target"]
+        source_is_session = source.startswith("session:")
+        target_is_session = target.startswith("session:")
+        if source_is_session and not target_is_session:
+            session_touches[target] += 1
+        elif target_is_session and not source_is_session:
+            session_touches[source] += 1
+    return {
+        n["id"]: degree.get(n["id"], 0)
+        + SESSION_LOG_FACTOR * math.log1p(session_touches.get(n["id"], 0))
+        for n in sem_nodes
+    }
 
 
 def _label_propagation(
@@ -135,12 +180,13 @@ def assemble_overview(payload: dict[str, Any]) -> dict[str, Any]:
     """Aggregate the full uncapped graph payload into the overview shape.
 
     Hubs come out first (they bridge everything): an entity qualifies only
-    when its weight is at least twice the median semantic weight (floor of
-    3), and the qualifying count is capped at HUB_COUNT — so uniform or
-    young graphs extract no hubs at all. Label propagation then runs on the
-    rest; communities >= BUBBLE_MIN_MEMBERS become bubbles keyed by their
-    heaviest member; the rest stay as loose nodes, display-capped at
-    LOOSE_DISPLAY_CAP by weight, with any overflow folded into the same
+    when its importance score (see ``_entity_scores``) is at least twice
+    the median score among entities (floor 3.0), and the qualifying count
+    is capped at HUB_COUNT — so uniform or young graphs extract no hubs at
+    all. Label propagation then runs on the rest; communities >=
+    BUBBLE_MIN_MEMBERS become bubbles keyed by their highest-scoring
+    member; the rest stay as loose nodes, display-capped at
+    LOOSE_DISPLAY_CAP by score, with any overflow folded into the same
     others bubble that absorbs bubble overflow. Edges are summed between
     containers. mode="flat" when no community reaches the threshold — small
     or young workspaces render the plain graph instead, though hubs (found
@@ -148,21 +194,26 @@ def assemble_overview(payload: dict[str, Any]) -> dict[str, Any]:
     """
     sem_nodes, sem_edges = _semantic_view(payload)
     by_id = {n["id"]: n for n in sem_nodes}
+    scores = _entity_scores(payload, sem_nodes, sem_edges)
 
-    # Hub qualification: a hub is an entity clearly heavier than the typical
-    # node — at least twice the median semantic weight (and never below 3).
+    # Hub qualification: a hub is an entity clearly higher-scoring than the
+    # typical node — at least twice the median score (and never below 3).
     # Uniform or young graphs therefore extract no hubs at all (nothing is
     # an outlier), and the count is hard-capped so the overview stays small.
     non_ref_nodes = [n for n in sem_nodes if n["type"] != "reference"]
     if non_ref_nodes:
-        weights = sorted(int(n["weight"]) for n in non_ref_nodes)
-        median = weights[len(weights) // 2]
-        floor = max(3, 2 * median)
-        qualifying = sum(1 for n in non_ref_nodes if int(n["weight"]) >= floor)
-        hubs, rest = _extract_hubs(sem_nodes, top_n=min(HUB_COUNT, qualifying))
+        node_scores = sorted(scores[n["id"]] for n in non_ref_nodes)
+        median = node_scores[len(node_scores) // 2]
+        floor = max(3.0, 2 * median)
+        qualifying = sum(1 for n in non_ref_nodes if scores[n["id"]] >= floor)
+        hubs, rest = _extract_hubs(sem_nodes, scores, top_n=min(HUB_COUNT, qualifying))
     else:
         hubs, rest = [], sem_nodes
     hub_ids = {n["id"] for n in hubs}
+    # Copies, not mutation: `payload` (and therefore `sem_nodes`) may be a
+    # cached object shared across calls — the emitted "weight" carries the
+    # score, but the cached node dict's own weight field is left untouched.
+    hubs_out = [{**n, "weight": round(scores[n["id"]], 1)} for n in hubs]
     rest_ids = [n["id"] for n in rest]
     rest_edges = [
         e
@@ -173,7 +224,7 @@ def assemble_overview(payload: dict[str, Any]) -> dict[str, Any]:
     comms = _communities(labels)
 
     def _rep(members: list[str]) -> str:
-        return min(members, key=lambda m: (-int(by_id[m]["weight"]), m))
+        return min(members, key=lambda m: (-scores[m], m))
 
     sized = sorted(
         (members for members in comms.values() if len(members) >= BUBBLE_MIN_MEMBERS),
@@ -202,25 +253,23 @@ def assemble_overview(payload: dict[str, Any]) -> dict[str, Any]:
         return {
             "mode": "flat",
             "bubbles": [],
-            "hubs": hubs,
+            "hubs": hubs_out,
             "loose": [],
             "edges": [],
             "members": {},
             "stats": stats,
         }
 
-    loose_by_weight = sorted(
-        loose_ids, key=lambda nid: (-int(by_id[nid]["weight"]), nid)
-    )
-    displayed_loose_ids = loose_by_weight[:LOOSE_DISPLAY_CAP]
-    loose_overflow_ids = loose_by_weight[LOOSE_DISPLAY_CAP:]
+    loose_by_score = sorted(loose_ids, key=lambda nid: (-scores[nid], nid))
+    displayed_loose_ids = loose_by_score[:LOOSE_DISPLAY_CAP]
+    loose_overflow_ids = loose_by_score[LOOSE_DISPLAY_CAP:]
 
     shown, overflow = sized[:BUBBLE_DISPLAY_CAP], sized[BUBBLE_DISPLAY_CAP:]
     members_map: dict[str, list[str]] = {}
     bubbles: list[dict[str, Any]] = []
 
     def _bubble(bid: str, name: str, members: list[str]) -> dict[str, Any]:
-        top = sorted(members, key=lambda m: (-int(by_id[m]["weight"]), m))[:5]
+        top = sorted(members, key=lambda m: (-scores[m], m))[:5]
         type_counts: dict[str, int] = defaultdict(int)
         for m in members:
             type_counts[by_id[m]["type"]] += 1
@@ -239,7 +288,7 @@ def assemble_overview(payload: dict[str, Any]) -> dict[str, Any]:
                     "id": m,
                     "name": by_id[m]["name"],
                     "type": by_id[m]["type"],
-                    "weight": by_id[m]["weight"],
+                    "weight": round(scores[m], 1),
                 }
                 for m in top
             ],
@@ -278,8 +327,11 @@ def assemble_overview(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "mode": "clustered",
         "bubbles": bubbles,
-        "hubs": hubs,
-        "loose": [by_id[nid] for nid in displayed_loose_ids],
+        "hubs": hubs_out,
+        "loose": [
+            {**by_id[nid], "weight": round(scores[nid], 1)}
+            for nid in displayed_loose_ids
+        ],
         "edges": edges,
         "members": members_map,
         "stats": stats,
@@ -408,14 +460,15 @@ def build_cluster_subgraph(
     KeyError when ``ref`` is not a bubble in the current overview — the
     caller maps that to a 404 and the client falls back to the overview.
 
-    Members are capped at ``max_members``, kept by descending weight with
-    a deterministic tie-break on id; ``total_members`` always reports the
-    full pre-cap member count, capped or not. Phantom entities and session
-    nodes count as scaffolding — context around the members, toggleable
-    in the client — when they sit directly on an edge to a KEPT member;
-    that check runs against the capped member set only, so a scaffolding
-    node can never itself unlock a second one purely by association —
-    inclusion never cascades past one hop from a real member.
+    Members are capped at ``max_members``, kept by descending importance
+    score (see ``_entity_scores``) with a deterministic tie-break on id;
+    ``total_members`` always reports the full pre-cap member count, capped
+    or not. Phantom entities and session nodes count as scaffolding —
+    context around the members, toggleable in the client — when they sit
+    directly on an edge to a KEPT member; that check runs against the
+    capped member set only, so a scaffolding node can never itself unlock
+    a second one purely by association — inclusion never cascades past
+    one hop from a real member.
 
     Overview and payload come from one shared (signature, payload)
     snapshot — a single tree stat-walk — so a member can never point at a
@@ -430,10 +483,12 @@ def build_cluster_subgraph(
     if members is None:
         raise KeyError(ref)
     by_id = {n["id"]: n for n in payload["nodes"]}
+    sem_nodes, sem_edges = _semantic_view(payload)
+    scores = _entity_scores(payload, sem_nodes, sem_edges)
     member_set = set(members)
     kept_members = sorted(
         member_set,
-        key=lambda m: (-int(by_id[m]["weight"]), m),
+        key=lambda m: (-scores[m], m),
     )[:max_members]
     kept_member_ids = set(kept_members)
     scaffold: set[str] = set()
@@ -448,7 +503,12 @@ def build_cluster_subgraph(
             if n.get("phantom") or n["type"] == "session":
                 scaffold.add(a)
     kept = kept_member_ids | scaffold
-    nodes = [by_id[nid] for nid in sorted(kept)]
+    nodes = [
+        {**by_id[nid], "weight": round(scores[nid], 1)}
+        if nid in kept_member_ids
+        else by_id[nid]
+        for nid in sorted(kept)
+    ]
     edges = [
         e
         for e in payload["edges"]
