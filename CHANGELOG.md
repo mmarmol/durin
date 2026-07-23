@@ -5,6 +5,40 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.4.4 — 2026-07-23
+
+### Highlights
+
+- **Screens stop resetting under you.** Every few minutes the dashboard would
+  silently reload whatever you were looking at — lists refetched, the selected
+  item snapped back to the first one, and unsaved edits in the workflow editor
+  were discarded. The bootstrap token is re-minted ahead of expiry, and that
+  rotation was flowing through the view tree, remounting every screen's data
+  on each cycle. The token now lives in the API layer, so a rotation is
+  invisible to the interface. (#457)
+- **Secrets survive concurrent writers.** A `durin secret rm` racing the
+  gateway storing an OAuth token could silently lose one of the two writes:
+  saving a secret store re-wrote an in-memory snapshot taken outside the
+  cross-process lock. Saving is now reachable only from the locked mutators,
+  so the lost update is structurally impossible rather than merely avoided.
+  (#456)
+
+### WebUI
+
+- The freshest bootstrap token is held in the HTTP layer and substituted on
+  every authenticated call, instead of being passed down as view state; the
+  proactive pre-expiry refresh and the 401 re-auth path both update it. (#457)
+
+### Security
+
+- `SecretStore.save()` is no longer public: the five mutators persist inside
+  the cross-process lock, and the seven call sites that re-saved a stale
+  snapshot afterwards are gone. (#456)
+
+### Dependencies
+
+- `pypdf` 6.13.3 → 6.14.2. (#455)
+
 ## 0.4.3 — 2026-07-23
 
 ### Highlights
