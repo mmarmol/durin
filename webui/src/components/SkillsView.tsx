@@ -37,6 +37,8 @@ import {
   listSkillFiles,
   listSkills,
   rejectSkill,
+  repairSkill,
+  type SkillRepairResult,
   removeSkill,
   resolveSkillObservation,
   reviewSkill,
@@ -699,6 +701,27 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
       }
     },
     [token, refresh, t],
+  );
+
+  // Repair preview for an invalid quarantined skill: preview (diff) first,
+  // then apply + refresh so the cleared validation re-enables approve.
+  const [repairPreview, setRepairPreview] = useState<(SkillRepairResult & { name: string }) | null>(null);
+  const runRepair = useCallback(
+    async (name: string, apply: boolean) => {
+      setActing(name);
+      try {
+        const res = await repairSkill(token, name, apply);
+        if (apply) {
+          setRepairPreview(null);
+          await refresh();
+        } else {
+          setRepairPreview({ ...res, name });
+        }
+      } finally {
+        setActing(null);
+      }
+    },
+    [token, refresh],
   );
 
   const triageApprove = (name: string) => {
@@ -1548,9 +1571,20 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
                     </div>
                   ) : (
                     <div className="mt-4 flex flex-wrap gap-2">
+                      {(triageRow.validation_errors?.length ?? 0) > 0 ? (
+                        <Button
+                          size="sm"
+                          disabled={acting === triageRow.name}
+                          onClick={() => void runRepair(triageRow.name, false)}
+                        >
+                          {t("skills.repair.button")}
+                        </Button>
+                      ) : null}
                       <Button
                         size="sm"
-                        disabled={acting === triageRow.name}
+                        variant={(triageRow.validation_errors?.length ?? 0) > 0 ? "outline" : "default"}
+                        disabled={acting === triageRow.name || (triageRow.validation_errors?.length ?? 0) > 0}
+                        title={(triageRow.validation_errors?.length ?? 0) > 0 ? t("skills.repair.approveGated") : undefined}
                         onClick={() => triageApprove(triageRow.name)}
                       >
                         {t("skills.import.approve")}
@@ -1584,6 +1618,37 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
                       </Button>
                     </div>
                   )}
+
+                  {repairPreview && repairPreview.name === triageRow.name ? (
+                    <div className="mt-4 rounded-md border border-border/50 p-3" data-testid="repair-preview">
+                      <p className="text-[12px] font-semibold">{t("skills.repair.previewTitle")}</p>
+                      <ul className="mt-1 list-disc pl-4 text-[12px] text-muted-foreground">
+                        {repairPreview.changes.map((c) => (
+                          <li key={c}>{c}</li>
+                        ))}
+                      </ul>
+                      {repairPreview.errors_after.length > 0 ? (
+                        <p className="mt-1 text-[12px] text-destructive">
+                          {t("skills.repair.stillInvalid", { errors: repairPreview.errors_after.join("; ") })}
+                        </p>
+                      ) : null}
+                      <pre className="mt-2 max-h-64 overflow-auto rounded bg-muted p-2 text-[11px] leading-tight">
+                        {repairPreview.diff}
+                      </pre>
+                      <div className="mt-2 flex gap-2">
+                        <Button
+                          size="sm"
+                          disabled={acting === triageRow.name || !repairPreview.repaired || repairPreview.errors_after.length > 0}
+                          onClick={() => void runRepair(triageRow.name, true)}
+                        >
+                          {t("skills.repair.apply")}
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={() => setRepairPreview(null)}>
+                          {t("skills.repair.cancel")}
+                        </Button>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               )
             ) : !detail ? (

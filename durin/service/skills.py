@@ -225,6 +225,11 @@ class SkillApproveCommand(Command):
     install_deps: bool = False
 
 
+class SkillRepairCommand(Command):
+    name: str
+    apply: bool = False   # False = preview (diff only); True = rewrite the quarantined file
+
+
 class AcceptSuggestionCommand(Command):
     """Apply a suggestion (replays the curation action), then dequeue it."""
 
@@ -601,6 +606,24 @@ class SkillsService:
         status, payload = await asyncio.to_thread(
             ss.web_import_fetch, self._workspace, cmd.source, replace=cmd.replace)
         return _skills_result(status, payload)
+
+    @route(
+        "POST",
+        "/api/v1/skills/{name}/repair",
+        scope=Scope.SKILLS_WRITE.value,
+        request_model=SkillRepairCommand,
+        response_model=SkillsResult,
+        summary="Deterministically repair an invalid quarantined skill (preview or apply)",
+    )
+    async def repair(self, cmd: SkillRepairCommand, principal: Principal) -> SkillsResult:
+        principal.require(Scope.SKILLS_WRITE)
+        from durin.agent.skills_import import repair_quarantined
+
+        out = await asyncio.to_thread(
+            repair_quarantined, self._workspace, cmd.name, apply=cmd.apply)
+        status = 404 if out.get("error", "").startswith("not in quarantine") else (
+            400 if "error" in out else 200)
+        return _skills_result(status, out)
 
     @route(
         "POST",

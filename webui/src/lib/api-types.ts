@@ -2218,6 +2218,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/skills/{name}/repair": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Deterministically repair an invalid quarantined skill (preview or apply) */
+        post: operations["skills_repair"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/skills/{name}/review": {
         parameters: {
             query?: never;
@@ -5378,6 +5395,16 @@ export interface components {
         };
         /** SkillRemoveCommand */
         SkillRemoveCommand: {
+            /** Name */
+            name: string;
+        };
+        /** SkillRepairCommand */
+        SkillRepairCommand: {
+            /**
+             * Apply
+             * @default false
+             */
+            apply: boolean;
             /** Name */
             name: string;
         };
@@ -9635,6 +9662,30 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["SkillRejectCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillsResult"];
+                };
+            };
+        };
+    };
+    skills_repair: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkillRepairCommand"];
             };
         };
         responses: {

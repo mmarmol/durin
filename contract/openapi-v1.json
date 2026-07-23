@@ -6042,6 +6042,25 @@
         "title": "SkillRemoveCommand",
         "type": "object"
       },
+      "SkillRepairCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "apply": {
+            "default": false,
+            "title": "Apply",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "SkillRepairCommand",
+        "type": "object"
+      },
       "SkillReviewCommand": {
         "additionalProperties": false,
         "properties": {
@@ -11848,6 +11867,35 @@
           }
         },
         "summary": "Discard a quarantined skill",
+        "x-required-scope": "skills:write"
+      }
+    },
+    "/api/v1/skills/{name}/repair": {
+      "post": {
+        "operationId": "skills_repair",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillRepairCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillsResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Deterministically repair an invalid quarantined skill (preview or apply)",
         "x-required-scope": "skills:write"
       }
     },

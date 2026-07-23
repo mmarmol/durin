@@ -185,6 +185,20 @@ existing approve/reject surfaces review it. Self-authored prose is trusted;
 self-authored *code* earns the same gate as third-party code, regardless of
 which ramp produced it.
 
+A quarantined skill whose `SKILL.md` is itself **invalid** (unparseable YAML
+frontmatter — classically an unquoted `": "` inside a plain multi-line
+description — or a missing `name`/`description`) gates the approve action:
+installing a file the loader cannot parse fixes nothing. The quarantine
+listing carries `validation_errors`, the dashboard card disables approve and
+offers **repair** instead (`repair_quarantined`,
+`durin/agent/skills_import.py`; `POST /api/v1/skills/{name}/repair`). Repair
+is strictly deterministic — salvage and re-serialize the broken frontmatter,
+derive a missing name from the directory, extract a missing description from
+the body's first paragraph — previewed as a diff before anything is written,
+and never invents content: an unparseable nested block is dropped with a
+note, not guessed at. Once repaired and valid, the normal approve gate takes
+over.
+
 Prompts are guidance; the **composition gate** (`judge_composition`,
 `durin/agent/skills_doctrine.py`) is the enforced invariant — the same pattern
 as the plan-verification lint and the import scan gate. At create time
