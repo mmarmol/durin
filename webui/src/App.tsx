@@ -21,6 +21,7 @@ import { useSessions } from "@/hooks/useSessions";
 import { useTheme } from "@/hooks/useTheme";
 import { cn } from "@/lib/utils";
 import { listAllLoopRuns, listAllWorkflowRuns, setApiReauthHandler } from "@/lib/api";
+import { setCurrentToken } from "@/lib/http";
 import { deriveWsUrl, fetchBootstrap, signout } from "@/lib/bootstrap";
 import { DurinClient } from "@/lib/durin-client";
 import { ClientProvider, useClient } from "@/providers/ClientProvider";
@@ -144,6 +145,7 @@ export default function App() {
             },
           });
           client.connect();
+          setCurrentToken(boot.token);
           setState({
             status: "ready",
             client,
@@ -190,7 +192,9 @@ export default function App() {
         for (let attempt = 0; attempt < 5; attempt++) {
           try {
             const boot = await fetchBootstrap("", "");
-            setState((s) => (s.status === "ready" ? { ...s, token: boot.token } : s));
+            // Module-level store, not React state: a state-held token would
+            // re-fire every [token]-keyed effect in every view on rotation.
+            setCurrentToken(boot.token);
             return boot.token;
           } catch {
             if (attempt < 4) {
@@ -214,7 +218,7 @@ export default function App() {
   const refreshToken = useCallback(async () => {
     try {
       const boot = await fetchBootstrap("", "");
-      setState((s) => (s.status === "ready" ? { ...s, token: boot.token } : s));
+      setCurrentToken(boot.token);
     } catch {
       // Ignore: the reactive 401 handler still recovers if this refresh missed.
     }
@@ -277,6 +281,7 @@ export default function App() {
     if (state.status === "ready") {
       state.client.close();
     }
+    setCurrentToken(null);
     void signout();
     setState({ status: "auth" });
   };
