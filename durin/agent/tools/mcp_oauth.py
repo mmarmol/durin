@@ -31,6 +31,7 @@ import base64
 import hashlib
 import html
 import http.server
+import json
 import os
 import re
 import socket
@@ -371,6 +372,92 @@ def _seed_static_client(
 _EXPIRED_SENTINEL = 1.0
 
 
+# Backoff for transient invalid_grant on the authorization-code exchange.
+# Sized to Cloudflare KV's documented worst-case cross-edge propagation (~60s):
+# providers built on workers-oauth-provider (e.g. mcp.atlassian.com) write the
+# grant at the edge serving the USER'S consent and durin's exchange reads from
+# the edge serving the GATEWAY — a miss answers 400 invalid_grant "Grant not
+# found or authorization code expired" even though the code is fresh.
+_EXCHANGE_RETRY_DELAYS: tuple[float, ...] = (2.0, 4.0, 8.0, 16.0, 30.0)
+
+
+def _is_code_exchange_request(request: Any) -> bool:
+    """True only for the RFC 6749 authorization-code token exchange POST.
+
+    Requires the form content type: an MCP JSON payload that merely contains
+    the literal ``grant_type=authorization_code`` must not match."""
+    if request.method != "POST":
+        return False
+    if "application/x-www-form-urlencoded" not in request.headers.get("content-type", ""):
+        return False
+    try:
+        fields = urllib.parse.parse_qs(request.content.decode("utf-8", "replace"))
+    except Exception:  # noqa: BLE001 — unreadable body: not our request
+        return False
+    return fields.get("grant_type") == ["authorization_code"]
+
+
+async def _is_transient_invalid_grant(response: Any) -> bool:
+    """400 + ``error == invalid_grant`` on a just-issued code.
+
+    A failed grant *lookup* does not consume the single-use code (providers
+    reject replay with a distinct error only after finding the grant), so a
+    first-exchange invalid_grant is near-certainly an eventual-consistency
+    artifact — the code cannot be expired (just issued) or already used
+    (never sent before). Any genuinely-dead grant fails identically after the
+    retries with the same final error, costing only time in a background flow.
+    """
+    if response.status_code != 400:
+        return False
+    try:
+        body = await response.aread()
+        return json.loads(body).get("error") == "invalid_grant"
+    except Exception:  # noqa: BLE001 — non-JSON error body: not retryable
+        return False
+
+
+async def retry_transient_exchange_flow(
+    inner: Any,
+    *,
+    delays: tuple[float, ...] = _EXCHANGE_RETRY_DELAYS,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+) -> Any:
+    """httpx auth-flow combinator: re-send the code-exchange on transient failure.
+
+    Wraps the SDK's ``async_auth_flow`` generator at the httpx protocol level
+    (yield request → receive response), so no SDK internals are duplicated.
+    When the authorization-code exchange draws a transient ``invalid_grant``,
+    the IDENTICAL request is re-yielded after a backoff — the code/verifier
+    pair stays valid until the provider actually finds and consumes the grant.
+    The final response (success or exhausted failure) is forwarded to the SDK
+    flow, which owns raising ``OAuthTokenError`` on a real failure.
+    """
+    response: Any = None
+    while True:
+        try:
+            request = await (
+                inner.__anext__() if response is None else inner.asend(response)
+            )
+        except StopAsyncIteration:
+            return
+        response = yield request
+        if response is not None and _is_code_exchange_request(request):
+            for attempt, delay in enumerate(delays, start=1):
+                if not await _is_transient_invalid_grant(response):
+                    break
+                logger.info(
+                    "MCP OAuth code exchange got transient invalid_grant "
+                    "(attempt {}/{}); retrying in {}s — provider grant store "
+                    "likely not yet consistent: {}",
+                    attempt,
+                    len(delays),
+                    delay,
+                    response.text[:200],
+                )
+                await sleep(delay)
+                response = yield request
+
+
 class WriteAheadOAuthProvider(OAuthClientProvider):
     """SDK provider + write-ahead marker + restart-safe expiry restore.
 
@@ -423,6 +510,13 @@ class WriteAheadOAuthProvider(OAuthClientProvider):
         except Exception:  # noqa: BLE001
             logger.exception("write-ahead marker failed (refresh proceeds)")
         return await super()._refresh_token()
+
+    def async_auth_flow(self, request: Any) -> Any:
+        """Route the SDK flow through the transient-exchange retry combinator.
+
+        Plain method (not an async generator function) returning the wrapped
+        generator — httpx only needs an async iterator back."""
+        return retry_transient_exchange_flow(super().async_auth_flow(request))
 
 
 def build_oauth_provider(
