@@ -22,11 +22,19 @@ export function radiusForBubble(count: number): number {
   return Math.min(BUBBLE_RADIUS_MAX, r);
 }
 
-export function labelBudget(zoomK: number): number {
-  if (zoomK < 0.75) return 14;
-  if (zoomK < 1.5) return 40;
+// Grid cell size (screen px) for label collision culling, keyed by zoom.
+// Decreases as the camera zooms in: fewer, more widely-spaced cells at
+// zoomed-out scales (where many nodes overlap on screen) and progressively
+// smaller cells as zoom gives labels more room to breathe. This replaces a
+// global numeric label cap: culling is purely local (one label per cell),
+// so a region of same-score nodes never shows an id-ordered arbitrary subset
+// — every node not sharing a cell with a higher-priority neighbor gets its
+// label.
+export function labelCellSize(zoomK: number): number {
+  if (zoomK < 0.75) return 150;
+  if (zoomK < 1.5) return 115;
   if (zoomK < 2.5) return 90;
-  return 250;
+  return 70;
 }
 
 export interface LabelCandidate {
@@ -40,8 +48,7 @@ export interface LabelCandidate {
 export function visibleLabels(
   cands: LabelCandidate[],
   viewport: { w: number; h: number },
-  budget: number,
-  cell = 90,
+  cell: number,
 ): Set<string> {
   const margin = 40;
   const inView = cands.filter(
@@ -57,14 +64,11 @@ export function visibleLabels(
   });
   const taken = new Set<string>();
   const out = new Set<string>();
-  let spent = 0;
   for (const c of ordered) {
     const key = `${Math.round(c.sx / cell)}:${Math.round(c.sy / cell)}`;
     if (taken.has(key)) continue;
-    if (!c.priority && spent >= budget) continue;
     taken.add(key);
     out.add(c.id);
-    if (!c.priority) spent++;
   }
   return out;
 }

@@ -52,7 +52,7 @@ import {
   type EntitySortKey,
 } from "@/lib/memory-graph-style";
 import {
-  labelBudget,
+  labelCellSize,
   overviewToGraph,
   radiusForBubble,
   radiusForNode,
@@ -247,12 +247,28 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
   // list (table, sorted by recent activity by default) is the first-run
   // default — Graph is one click away in the switcher; a stored preference
   // always wins over this default.
+  //
+  // Versioned key + one-time migration: pre-redesign installs stored "graph"
+  // under the legacy key as the OLD DEFAULT that shipped before list-first —
+  // on disk that value is indistinguishable from a deliberate choice, so
+  // reading it at face value would keep reopening those users on the graph
+  // forever. The v2 key only ever holds genuine choices: a legacy "table" or
+  // "cards" really was chosen, so it carries over as-is; a legacy "graph" (or
+  // no legacy value at all, or something unparseable) seeds v2 with "table"
+  // instead. Seeding writes v2 immediately, so the reset happens once — from
+  // then on this reads the v2 branch and a later real choice of "graph"
+  // persists normally.
   const [view, setView] = useState<"graph" | "cards" | "table">(() => {
     try {
-      const stored = localStorage.getItem("durin.memoryGraph.view");
-      if (stored === "graph" || stored === "cards" || stored === "table") {
-        return stored;
+      const v2 = localStorage.getItem("durin.memoryGraph.view.v2");
+      if (v2 === "graph" || v2 === "cards" || v2 === "table") {
+        return v2;
       }
+      const legacy = localStorage.getItem("durin.memoryGraph.view");
+      const seeded: "graph" | "cards" | "table" =
+        legacy === "table" || legacy === "cards" ? legacy : "table";
+      localStorage.setItem("durin.memoryGraph.view.v2", seeded);
+      return seeded;
     } catch {
       /* localStorage unavailable */
     }
@@ -261,7 +277,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
   const setViewPersisted = useCallback((v: "graph" | "cards" | "table") => {
     setView(v);
     try {
-      localStorage.setItem("durin.memoryGraph.view", v);
+      localStorage.setItem("durin.memoryGraph.view.v2", v);
     } catch {
       /* localStorage unavailable: ephemeral choice is fine */
     }
@@ -1027,7 +1043,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
             (renderingRawGraph && hubIds.has(n.id)),
         });
       }
-      const show = visibleLabels(cands, { w, h }, labelBudget(cam.k));
+      const show = visibleLabels(cands, { w, h }, labelCellSize(cam.k));
       for (const n of nodes) {
         if (!show.has(n.id)) continue;
         const r = hubAwareRadius(n);

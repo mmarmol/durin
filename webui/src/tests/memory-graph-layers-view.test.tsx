@@ -104,9 +104,11 @@ describe("MemoryGraphView layered", () => {
     // Table is the first-run default (no stored preference) as of Change 1 —
     // covered by its own test below, which clears this back out. Every other
     // test here exercises graph-view-specific behaviour (the clustered
-    // overview, canvas drills, breadcrumb, ...), so seed the stored
-    // preference as if the user had already chosen Graph.
-    localStorage.setItem("durin.memoryGraph.view", "graph");
+    // overview, canvas drills, breadcrumb, ...), so seed the v2 preference
+    // key directly, as if the user had already made a genuine post-migration
+    // choice of Graph — seeding the legacy key instead would just be reset
+    // back to table by the one-time migration (covered separately below).
+    localStorage.setItem("durin.memoryGraph.view.v2", "graph");
     vi.mocked(api.fetchMemoryGraph).mockReset().mockResolvedValue(EMPTY_GRAPH);
     vi.mocked(api.fetchMemoryGraphOverview)
       .mockReset()
@@ -395,8 +397,9 @@ describe("MemoryGraphView layered", () => {
   // --- Change 1/2: list-first default, group-by selector ------------------
 
   it("defaults to the table/list view when no view preference is stored", async () => {
-    // Override the shared beforeEach's seeded "graph" preference — this is
-    // the one test in the file that must see the true first-run default.
+    // Override the shared beforeEach's seeded v2 preference — this is the
+    // one test in the file that must see the true first-run default (no
+    // keys at all, so the migration seeds v2 with "table").
     localStorage.clear();
     vi.mocked(api.fetchMemoryGraph).mockResolvedValue(RAW_DATA);
     render(wrap(<MemoryGraphView active />));
@@ -405,8 +408,37 @@ describe("MemoryGraphView layered", () => {
     expect(document.querySelector("canvas")).toBeNull();
   });
 
-  it("still opens in the graph view when \"graph\" is the stored preference", async () => {
+  it('resets a legacy "graph" preference to table instead of honoring it', async () => {
+    // Pre-list-first-redesign installs stored "graph" under the legacy key
+    // as the OLD DEFAULT, not a deliberate choice — on disk it is
+    // indistinguishable from one, so the one-time migration resets it to
+    // the new list-first default rather than reopening these users on the
+    // graph forever.
+    localStorage.clear();
     localStorage.setItem("durin.memoryGraph.view", "graph");
+    vi.mocked(api.fetchMemoryGraph).mockResolvedValue(RAW_DATA);
+    render(wrap(<MemoryGraphView active />));
+    await waitFor(() => expect(screen.getByText("Aurora")).toBeInTheDocument());
+    expect(document.querySelector("canvas")).toBeNull();
+  });
+
+  it('migrates a legacy "cards" preference to v2 and shows cards', async () => {
+    // Unlike legacy "graph", a legacy "table"/"cards" value really was a
+    // deliberate choice — it carries over to v2 verbatim instead of
+    // resetting.
+    localStorage.clear();
+    localStorage.setItem("durin.memoryGraph.view", "cards");
+    vi.mocked(api.fetchMemoryGraph).mockResolvedValue(RAW_DATA);
+    render(wrap(<MemoryGraphView active />));
+    await waitFor(() => expect(screen.getByText("Aurora")).toBeInTheDocument());
+    expect(document.querySelector("canvas")).toBeNull();
+    expect(document.querySelector("table")).toBeNull();
+    expect(localStorage.getItem("durin.memoryGraph.view.v2")).toBe("cards");
+  });
+
+  it('honors a v2 "graph" preference as a genuine post-migration choice', async () => {
+    localStorage.clear();
+    localStorage.setItem("durin.memoryGraph.view.v2", "graph");
     render(wrap(<MemoryGraphView active />));
     await waitFor(() => expect(document.querySelector("canvas")).not.toBeNull());
   });
