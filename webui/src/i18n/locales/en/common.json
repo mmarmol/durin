@@ -1350,6 +1350,20 @@
       "apply": "Update to builtin",
       "dismiss": "Dismiss",
       "noDiff": "(no diff available)"
+    },
+    "parallelCandidatePool": "Candidate branches (pool)",
+    "runtimeUpTo": "up to {{n}} · runtime",
+    "runtimeBranches": "runtime branches",
+    "showDataEdges": "Data flow",
+    "openSubworkflow": "Open workflow \"{{name}}\"",
+    "badge": {
+      "detached": "background",
+      "schema": "schema",
+      "persistent": "persistent session",
+      "skills_one": "1 skill",
+      "skills_other": "{{n}} skills",
+      "secrets_one": "1 secret",
+      "secrets_other": "{{n}} secrets"
     }
   },
   "runs": {

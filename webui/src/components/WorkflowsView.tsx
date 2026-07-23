@@ -102,11 +102,49 @@ export function kindLabelKey(kind: string): string {
   return kind; // "script" | "parallel"
 }
 
-function nodeSummary(node: WorkflowNodeDef): string {
+function nodeSummary(node: WorkflowNodeDef, t: (k: string, o?: Record<string, unknown>) => string): string {
   if (node.kind === "script") return String(node.command || node.script || "");
-  if (node.kind === "parallel") return node.worker ? "dynamic · ×N" : `${((node.branches as string[]) ?? []).length} branches`;
+  if (node.kind === "parallel") {
+    const rec = node.reconcile && node.reconcile !== "read" ? ` · ${node.reconcile}` : "";
+    if (node.worker) return `dynamic · ×N${rec}`;
+    if (node.branches_from) {
+      const pool = (node.branches as string[]) ?? [];
+      return (pool.length > 0
+        ? t("workflows.runtimeUpTo", { n: pool.length })
+        : t("workflows.runtimeBranches")) + rec;
+    }
+    return `${((node.branches as string[]) ?? []).length} branches${rec}`;
+  }
   if (node.kind === "subworkflow") return String(node.workflow ?? "");
-  return `${(node.mode as string) ?? "build"} · ${(node.model as string) ?? "default"}`;
+  return `${(node.mode as string) ?? "build"} · ${(node.persona as string) ?? (node.model as string) ?? "default"}`;
+}
+
+function NodeBadges({ node, t }: { node: WorkflowNodeDef; t: (k: string, o?: Record<string, unknown>) => string }) {
+  const badges: { key: string; text: string; title?: string }[] = [];
+  if (node.detached === true) badges.push({ key: "detached", text: t("workflows.badge.detached") });
+  if (node.output_schema) badges.push({ key: "schema", text: t("workflows.badge.schema") });
+  if (node.output_file) badges.push({ key: "file", text: String(node.output_file) });
+  const skills = (node.skills as string[]) ?? [];
+  if (skills.length > 0)
+    badges.push({ key: "skills", text: t("workflows.badge.skills", { n: skills.length, count: skills.length }), title: skills.join(", ") });
+  const secrets = (node.secrets as string[]) ?? [];
+  if (secrets.length > 0)
+    badges.push({ key: "secrets", text: t("workflows.badge.secrets", { n: secrets.length, count: secrets.length }), title: secrets.join(", ") });
+  if (node.session === "persistent") badges.push({ key: "session", text: t("workflows.badge.persistent") });
+  if (badges.length === 0) return null;
+  return (
+    <div className="mt-1 flex flex-wrap gap-1">
+      {badges.map((b) => (
+        <span
+          key={b.key}
+          title={b.title}
+          className="rounded bg-muted px-1 py-0.5 text-[9px] font-medium text-muted-foreground"
+        >
+          {b.text}
+        </span>
+      ))}
+    </div>
+  );
 }
 
 function NodeCard({ data, selected }: NodeProps) {
@@ -134,8 +172,10 @@ function NodeCard({ data, selected }: NodeProps) {
           </span>
         )}
       </div>
-      <div className="text-sm font-medium">{node.id}</div>
-      <div className="text-xs text-muted-foreground">{nodeSummary(node)}</div>
+      <div className="text-sm font-medium">{(node.title as string) || node.id}</div>
+      {node.title ? <div className="text-[10px] text-muted-foreground/70">{node.id}</div> : null}
+      <div className="text-xs text-muted-foreground">{nodeSummary(node, t)}</div>
+      <NodeBadges node={node} t={t} />
       <Handle type="source" position={Position.Right} />
     </div>
   );
@@ -891,6 +931,7 @@ function NodeConfigPanel({
   onRename,
   onMakeStart,
   onDelete,
+  onOpenWorkflow,
 }: {
   node: WorkflowNodeDef;
   nodeIds: string[];
@@ -905,6 +946,7 @@ function NodeConfigPanel({
   onRename: (newId: string) => void;
   onMakeStart: () => void;
   onDelete: () => void;
+  onOpenWorkflow?: (name: string) => void;
 }) {
   const { t } = useTranslation();
   const [promptModalOpen, setPromptModalOpen] = useState(false);
@@ -1217,8 +1259,10 @@ function NodeConfigPanel({
               </Field>
             )}
 
-            {parallelMode === "static" && (
-              <Field label={t("workflows.parallelBranches")}>
+            {(parallelMode === "static" || parallelMode === "fromNode") && (
+              <Field label={parallelMode === "fromNode"
+                ? t("workflows.parallelCandidatePool")
+                : t("workflows.parallelBranches")}>
                 <div className="flex flex-col gap-1">
                   {branchNodeIds.length === 0 ? (
                     <span className="text-xs text-muted-foreground">(no other nodes)</span>
@@ -1323,6 +1367,15 @@ function NodeConfigPanel({
                 onChange={(v) => onChange({ next: v })}
               />
             </Field>
+            {typeof node.workflow === "string" && node.workflow ? (
+              <button
+                type="button"
+                className="self-start text-xs text-primary underline-offset-2 hover:underline"
+                onClick={() => onOpenWorkflow?.(String(node.workflow))}
+              >
+                {t("workflows.openSubworkflow", { name: node.workflow })}
+              </button>
+            ) : null}
           </>
         );
       })()}
@@ -1619,11 +1672,14 @@ export function WorkflowsView() {
   // here with the stored position so the node stays put.
   const [rfNodes, setRfNodes, onNodesChange] = useNodesState<Node>([]);
   const [rfEdges, setRfEdges, onEdgesChange] = useEdgesState<Edge>([]);
+  // Data-flow (inputs_from) edges are informative but busy — on by default,
+  // hideable without touching the definition.
+  const [showDataEdges, setShowDataEdges] = useState(true);
   useEffect(() => {
     const f = def ? workflowToFlow(def) : { nodes: [], edges: [] };
     setRfNodes(f.nodes);
-    setRfEdges(f.edges);
-  }, [def, setRfNodes, setRfEdges]);
+    setRfEdges(showDataEdges ? f.edges : f.edges.filter((e) => e.data?.edgeKind !== "data"));
+  }, [def, showDataEdges, setRfNodes, setRfEdges]);
 
   const mutate = useCallback((fn: (d: WorkflowDef) => WorkflowDef) => {
     setDef((d) => (d ? fn(d) : d));
@@ -2324,6 +2380,16 @@ export function WorkflowsView() {
                   <Button size="sm" variant="ghost" className="h-7 gap-1 px-2" onClick={addScriptNode}>
                     <Plus className="h-3.5 w-3.5" /> {t("workflows.addScript")}
                   </Button>
+                  <span className="h-4 w-px bg-border" />
+                  <label className="flex cursor-pointer items-center gap-1.5 px-1 text-[11px] text-muted-foreground">
+                    <input
+                      type="checkbox"
+                      className="h-3 w-3 cursor-pointer accent-primary"
+                      checked={showDataEdges}
+                      onChange={(e) => setShowDataEdges(e.target.checked)}
+                    />
+                    {t("workflows.showDataEdges")}
+                  </label>
                   {!def.input && (
                     <>
                       <span className="h-4 w-px bg-border" />
@@ -2599,6 +2665,7 @@ export function WorkflowsView() {
               onRename={renameSelectedNode}
               onMakeStart={() => mutate((d) => ({ ...d, start: selectedNode.id }))}
               onDelete={() => deleteNode(selectedNode.id)}
+              onOpenWorkflow={(name) => { if (names.includes(name)) setSelected(name); }}
             />
           </aside>
         )}

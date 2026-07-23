@@ -288,9 +288,20 @@ export function workflowToFlow(def: WorkflowDef): { nodes: Node[]; edges: Edge[]
         add(n.id, n.worker, "worker");
         add(n.id, n.next);
       } else if (isFromNode) {
-        // Runtime-selected parallel: the source node's output names the branches at
-        // run time, so only the source relationship and the merge edge are drawable.
+        // Runtime-selected parallel: the source node's output names the branches
+        // at run time. A declared candidate pool (`branches` alongside) draws
+        // each candidate connected with a dashed "runtime" edge — without it the
+        // candidates are unknowable statically and float unconnected.
         add(n.id, n.branches_from, "branches");
+        for (const b of n.branches ?? []) {
+          if (byId.has(b)) {
+            edges.push({
+              id: `${n.id}->${b}:runtime`, source: n.id, target: b,
+              label: "runtime", data: { edgeKind: "runtime" },
+              style: { strokeDasharray: "6 3" },
+            });
+          }
+        }
         add(n.id, n.next);
       } else {
         // Static parallel: fan out to branches, merge to next
@@ -299,6 +310,32 @@ export function workflowToFlow(def: WorkflowDef): { nodes: Node[]; edges: Edge[]
       }
     } else {
       add(n.id, n.next);
+    }
+  }
+
+  // Data-flow edges: inputs_from composes a node's input from named earlier
+  // nodes' outputs — a dependency invisible in control flow. Drawn as a
+  // distinct animated edge class the view can toggle off.
+  for (const n of def.nodes) {
+    for (const src of (n.inputs_from ?? [])) {
+      if (byId.has(src) && src !== n.id) {
+        edges.push({
+          id: `${src}=>${n.id}:data`, source: src, target: n.id,
+          label: "data", animated: true, data: { edgeKind: "data" },
+          style: { strokeDasharray: "2 4" },
+        });
+      }
+    }
+  }
+
+  // Detached targets run off the critical path: restyle every control edge
+  // INTO a detached node so it cannot read as the walk continuing there.
+  const detachedIds = new Set(def.nodes.filter((n) => n.detached === true).map((n) => n.id));
+  for (const e of edges) {
+    if (detachedIds.has(e.target) && !e.data?.edgeKind) {
+      e.data = { ...e.data, edgeKind: "detached" };
+      e.label = e.label ?? "background";
+      e.style = { ...(e.style ?? {}), strokeDasharray: "8 4", opacity: 0.6 };
     }
   }
 

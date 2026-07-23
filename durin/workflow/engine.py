@@ -1301,6 +1301,13 @@ class WorkflowEngine:
             if bid not in ids:
                 ids.append(bid)
         for bid in ids:
+            # A declared candidate pool (node.branches alongside branches_from)
+            # is the contract with the routing node: ids outside it are an
+            # authoring bug in the emitter, aborted by name — not run on trust.
+            if node.branches and bid not in node.branches:
+                pool = ", ".join(node.branches)
+                return [], (f"parallel node {node.id!r}: branches_from resolved {bid!r}, "
+                            f"which is not in the declared candidate pool ({pool})")
             target = workflow.nodes.get(bid)
             if not isinstance(target, (WorkNode, ScriptNode)):
                 return [], (f"parallel node {node.id!r}: branches_from resolved unknown or "

@@ -42,13 +42,17 @@ def _runner(route_output, seen=None):
 
 # ── spec ──
 
-def test_branches_from_is_exclusive_with_static_branches():
-    with pytest.raises(WorkflowError, match="branches_from"):
-        parse_workflow({"name": "w", "start": "p", "nodes": [
-            {"id": "p", "kind": "parallel", "branches": ["a"], "branches_from": "r"},
-            {"id": "a", "kind": "work"},
-            {"id": "r", "kind": "work"},
-        ]})
+def test_branches_alongside_branches_from_declares_the_candidate_pool():
+    # No longer exclusive: `branches` with `branches_from` is the declared
+    # candidate pool (runtime ids validated against it; the editor draws the
+    # candidates connected). See TestDeclaredCandidatePool below.
+    wf = parse_workflow({"name": "w", "start": "p", "nodes": [
+        {"id": "p", "kind": "parallel", "branches": ["a"], "branches_from": "r", "next": None},
+        {"id": "a", "kind": "work"},
+        {"id": "r", "kind": "work"},
+    ]})
+    assert wf.nodes["p"].branches == ("a",)
+    assert wf.nodes["p"].branches_from == "r"
 
 
 def test_branches_from_is_exclusive_with_dynamic_worker():
@@ -152,3 +156,81 @@ def test_persistent_session_branch_is_rejected_at_runtime():
     res = eng.run(wf, "t")
     assert res.status == "aborted"
     assert "persistent" in (res.final_output or "")
+
+
+class TestDeclaredCandidatePool:
+    """`branches` alongside `branches_from` declares the candidate pool: the
+    editor can draw the runtime branches connected, and the engine validates
+    resolved ids against the pool instead of accepting any work/script node."""
+
+    def _wf(self, pool):
+        from durin.workflow.spec import parse_workflow
+        nodes = [
+            {"id": "route", "kind": "work", "next": "fan"},
+            {"id": "fan", "kind": "parallel", "branches_from": "route",
+             **({"branches": pool} if pool is not None else {}),
+             "reconcile": "read", "next": "join"},
+            {"id": "a", "kind": "work"},
+            {"id": "b", "kind": "work"},
+            {"id": "c", "kind": "work"},
+            {"id": "join", "kind": "work", "next": None},
+        ]
+        return parse_workflow({"name": "d", "start": "route", "nodes": nodes})
+
+    def test_pool_parses_alongside_branches_from(self):
+        wf = self._wf(["a", "b"])
+        assert wf.nodes["fan"].branches == ("a", "b")
+        assert wf.nodes["fan"].branches_from == "route"
+
+    def test_pool_members_must_exist_and_be_branchable(self):
+        import pytest
+
+        from durin.workflow.spec import WorkflowError, parse_workflow
+        with pytest.raises(WorkflowError):
+            parse_workflow({"name": "d", "start": "route", "nodes": [
+                {"id": "route", "kind": "work", "next": "fan"},
+                {"id": "fan", "kind": "parallel", "branches_from": "route",
+                 "branches": ["ghost"], "reconcile": "read", "next": None},
+            ]})
+
+    def test_resolved_ids_outside_the_pool_abort_the_run(self, tmp_path):
+        from durin.workflow.engine import NodeRunResponse, WorkflowEngine
+
+        def node_runner(req):
+            if req.node.id == "route":
+                return NodeRunResponse(output='["a", "c"]', session_key=None, messages=[])
+            return NodeRunResponse(output=f"{req.node.id}-out", session_key=None, messages=[])
+
+        engine = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1",
+                                workspace=str(tmp_path))
+        res = engine.run(self._wf(["a", "b"]), "t")
+        assert res.status == "aborted"
+        assert "c" in (res.final_output or "") and "pool" in (res.final_output or "").lower()
+
+    def test_resolved_ids_inside_the_pool_run(self, tmp_path):
+        from durin.workflow.engine import NodeRunResponse, WorkflowEngine
+
+        def node_runner(req):
+            if req.node.id == "route":
+                return NodeRunResponse(output='["a", "b"]', session_key=None, messages=[])
+            return NodeRunResponse(output=f"{req.node.id}-out", session_key=None, messages=[])
+
+        engine = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1",
+                                workspace=str(tmp_path))
+        res = engine.run(self._wf(["a", "b"]), "t")
+        assert res.status == "completed"
+        fan = next(r for r in res.runs if r.node_id == "fan")
+        assert "[a]" in fan.output and "[b]" in fan.output
+
+    def test_without_pool_current_behavior_stands(self, tmp_path):
+        from durin.workflow.engine import NodeRunResponse, WorkflowEngine
+
+        def node_runner(req):
+            if req.node.id == "route":
+                return NodeRunResponse(output='["a", "c"]', session_key=None, messages=[])
+            return NodeRunResponse(output=f"{req.node.id}-out", session_key=None, messages=[])
+
+        engine = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1",
+                                workspace=str(tmp_path))
+        res = engine.run(self._wf(None), "t")
+        assert res.status == "completed"
