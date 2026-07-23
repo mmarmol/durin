@@ -4,6 +4,7 @@ import {
   formatArtifactLines,
   parseArtifactLines,
   parseSecretNames,
+  renameNode,
   safeSubflowTargets,
   workflowToFlow,
   type WorkflowDef,
@@ -402,5 +403,61 @@ describe("artifact lines", () => {
       { path: "evidence.json" },
     ];
     expect(parseArtifactLines(formatArtifactLines(artifacts))).toEqual(artifacts);
+  });
+});
+
+describe("renameNode", () => {
+  const def: WorkflowDef = {
+    name: "wf",
+    start: "old",
+    nodes: [
+      { id: "old", kind: "work", next: "fan" },
+      {
+        id: "fan", kind: "parallel", branches: ["old", "other"],
+        worker: "old", list_from: "old", branches_from: "old", next: "gate",
+      },
+      {
+        id: "gate", kind: "work", on_pass: "old", on_fail: null,
+        inputs_from: ["old", "other"],
+      },
+      { id: "multi", kind: "work", cases: { yes: "old", no: null } },
+      { id: "other", kind: "work", next: "old" },
+    ],
+    ui: { positions: { old: { x: 10, y: 20 }, other: { x: 1, y: 2 } } },
+  };
+
+  it("renames the node, the start pointer, and every reference", () => {
+    const out = renameNode(def, "old", "new");
+    expect(out.start).toBe("new");
+    expect(out.nodes.map((n) => n.id)).toEqual(["new", "fan", "gate", "multi", "other"]);
+    const fan = out.nodes[1];
+    expect(fan.branches).toEqual(["new", "other"]);
+    expect(fan.worker).toBe("new");
+    expect(fan.list_from).toBe("new");
+    expect(fan.branches_from).toBe("new");
+    const gate = out.nodes[2];
+    expect(gate.on_pass).toBe("new");
+    expect(gate.on_fail).toBeNull();
+    expect(gate.inputs_from).toEqual(["new", "other"]);
+    expect(out.nodes[3].cases).toEqual({ yes: "new", no: null });
+    expect(out.nodes[4].next).toBe("new");
+  });
+
+  it("moves the stored canvas position to the new id", () => {
+    const out = renameNode(def, "old", "new");
+    expect(out.ui?.positions).toEqual({ other: { x: 1, y: 2 }, new: { x: 10, y: 20 } });
+  });
+
+  it("does not mutate the input definition", () => {
+    const before = JSON.stringify(def);
+    renameNode(def, "old", "new");
+    expect(JSON.stringify(def)).toBe(before);
+  });
+
+  it("leaves unset routing keys unset (no undefined keys materialized)", () => {
+    const out = renameNode(def, "old", "new");
+    const other = out.nodes[4];
+    expect("on_pass" in other).toBe(false);
+    expect("worker" in other).toBe(false);
   });
 });

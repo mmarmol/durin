@@ -2530,6 +2530,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workflows/{name}/rename": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Rename a workflow: moves its definition, run history, and updates sub-flow references. */
+        post: operations["workflows_rename"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workflows/{name}/run": {
         parameters: {
             query?: never;
@@ -5833,6 +5850,18 @@ export interface components {
             recommendations: {
                 [key: string]: unknown;
             }[];
+        };
+        /** WorkflowRenameCommand */
+        WorkflowRenameCommand: {
+            /** Name */
+            name: string;
+            /** Target */
+            target: string;
+        };
+        /** WorkflowRenameResult */
+        WorkflowRenameResult: {
+            /** Name */
+            name: string;
         };
         /** WorkflowRunCommand */
         WorkflowRunCommand: {
@@ -10213,6 +10242,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkflowRecApplyResult"];
+                };
+            };
+        };
+    };
+    workflows_rename: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowRenameCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowRenameResult"];
                 };
             };
         };

@@ -7110,6 +7110,38 @@
         "title": "WorkflowRecsResult",
         "type": "object"
       },
+      "WorkflowRenameCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "target": {
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "target"
+        ],
+        "title": "WorkflowRenameCommand",
+        "type": "object"
+      },
+      "WorkflowRenameResult": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "WorkflowRenameResult",
+        "type": "object"
+      },
       "WorkflowRunCommand": {
         "additionalProperties": false,
         "properties": {
@@ -12512,6 +12544,35 @@
           }
         },
         "summary": "Dismiss a recommendation (terminal; an identical repeat proposal stays pinned to it).",
+        "x-required-scope": "workflows:write"
+      }
+    },
+    "/api/v1/workflows/{name}/rename": {
+      "post": {
+        "operationId": "workflows_rename",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowRenameCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowRenameResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Rename a workflow: moves its definition, run history, and updates sub-flow references.",
         "x-required-scope": "workflows:write"
       }
     },

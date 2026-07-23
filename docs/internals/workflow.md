@@ -913,7 +913,11 @@ End-to-end for a single `run_workflow` call:
   (save validates via `parse_workflow` and writes atomically under the version lock — the
   same lock target the version store snapshots under, beside the dir, so a write and a
   snapshot never interleave); **duplicate** (`…/{name}/duplicate` — copy a definition to a
-  new name to use as a starting point); **run** (`…/{name}/run` — executes the workflow on a task and
+  new name to use as a starting point); **rename** (`…/{name}/rename` — move the definition
+  to a new name; carries the run-history directory (manifests, recommendations, dream
+  cursor) along best-effort, rewrites the moved manifests' inner `workflow` field, and
+  repoints `subworkflow` nodes in every other definition so callers do not silently
+  break); **run** (`…/{name}/run` — executes the workflow on a task and
   returns the per-node trace); the **recommendations** queue (`…/recommendations`,
   `…/recommendations/{id}/apply`, `…/recommendations/{id}/dismiss`); and `GET
   /api/v1/workflows/scripts`, which lists the filenames under

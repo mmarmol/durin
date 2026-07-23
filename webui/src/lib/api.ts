@@ -364,6 +364,21 @@ export async function duplicateWorkflow(
   return body.name;
 }
 
+/** Rename a workflow (moves its run history and repoints sub-flow callers). Returns the new name. */
+export async function renameWorkflow(
+  token: string,
+  name: string,
+  target: string,
+  base: string = "",
+): Promise<string> {
+  const body = await post<{ name: string }>(
+    `${base}/api/v1/workflows/${encodeURIComponent(name)}/rename`,
+    token,
+    { target },
+  );
+  return body.name;
+}
+
 // One per-node entry in a run's trace. The attribution fields make a run auditable:
 // session_key points at the fresh session that produced the row; worker_index/branch_id
 // identify a fan-out worker or a static parallel branch so concurrent units stay legible;
