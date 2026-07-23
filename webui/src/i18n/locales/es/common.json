@@ -1352,7 +1352,8 @@
       "carries_code": "Trae código ejecutable ({{detail}}) — revisá antes de aprobar.",
       "declared_deps": "Declara dependencias (no se ejecutan solas): {{detail}}.",
       "verdict_caution": "El escaneo de seguridad la marcó como precaución.",
-      "verdict_dangerous": "El escaneo de seguridad la marcó como peligrosa."
+      "verdict_dangerous": "El escaneo de seguridad la marcó como peligrosa.",
+      "invalid_skill": "El SKILL.md es inválido: {{detail}}"
     },
     "audit": {
       "running": "Auditando con IA…",
@@ -1442,6 +1443,14 @@
     "preview": {
       "back": "← Volver a resultados",
       "unavailable": "Vista previa no disponible — igual podés importar."
+    },
+    "repair": {
+      "button": "Reparar",
+      "apply": "Aplicar reparación",
+      "cancel": "Cancelar",
+      "previewTitle": "Reparación propuesta (todavía no se escribió nada)",
+      "stillInvalid": "Sigue inválida tras la reparación: {{errors}}",
+      "approveGated": "El SKILL.md de esta skill es inválido — reparalo primero."
     }
   },
   "chat": {

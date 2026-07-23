@@ -1176,6 +1176,8 @@ export interface QuarantineRow {
   /** Why approval is required, in structured form (rendered as plain language). */
   reasons?: { code: string; detail?: string }[];
   requirements?: SkillRequirements | null;
+  /** Non-empty = the SKILL.md itself is invalid: approve is gated, repair is the path. */
+  validation_errors?: string[];
 }
 
 export interface SkillDetail {
@@ -1347,6 +1349,29 @@ export async function installSkillDeps(
   const envelope = await res.json();
   // 2xx → data; a 4xx is problem+json with the payload under details.
   return envelope.details ?? envelope.data ?? envelope;
+}
+
+export interface SkillRepairResult {
+  repaired: boolean;
+  changes: string[];
+  diff: string;
+  errors_before: string[];
+  errors_after: string[];
+  error?: string;
+}
+
+export async function repairSkill(
+  token: string,
+  name: string,
+  apply: boolean,
+  base: string = "",
+): Promise<SkillRepairResult> {
+  const res = await post<{ data?: SkillRepairResult }>(
+    `${base}/api/v1/skills/${encodeURIComponent(name)}/repair`,
+    token,
+    { name, apply },
+  );
+  return (res.data ?? res) as SkillRepairResult;
 }
 
 export async function approveSkill(

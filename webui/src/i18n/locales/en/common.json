@@ -1581,7 +1581,8 @@
       "carries_code": "It carries executable code ({{detail}}) — review before approving.",
       "declared_deps": "It declares dependencies (not run automatically): {{detail}}.",
       "verdict_caution": "The security scan flagged it as caution.",
-      "verdict_dangerous": "The security scan flagged it as dangerous."
+      "verdict_dangerous": "The security scan flagged it as dangerous.",
+      "invalid_skill": "The SKILL.md is invalid: {{detail}}"
     },
     "audit": {
       "running": "Auditing with AI…",
@@ -1671,7 +1672,15 @@
       "acquireExplainer": "Public-registry skills. Importing drops a skill into Pending for your approval.",
       "importByRef": "Import by reference"
     },
-    "title": "Skills"
+    "title": "Skills",
+    "repair": {
+      "button": "Repair",
+      "apply": "Apply repair",
+      "cancel": "Cancel",
+      "previewTitle": "Proposed repair (nothing written yet)",
+      "stillInvalid": "Still invalid after repair: {{errors}}",
+      "approveGated": "This skill's SKILL.md is invalid — repair it first."
+    }
   },
   "chat": {
     "fallbackTitle": "Chat {{id}}",

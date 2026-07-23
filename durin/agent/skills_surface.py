@@ -209,6 +209,12 @@ def quarantined_skills(workspace) -> list[dict]:
         if entry["install_specs"]:
             reasons.append({"code": "declared_deps",
                             "detail": ", ".join(entry["install_specs"])})
+        if vr.errors:
+            reasons.append({"code": "invalid_skill", "detail": "; ".join(vr.errors)})
         entry["reasons"] = reasons
+        # Validation errors gate the approve action in the UI: approving a skill
+        # whose SKILL.md cannot even be parsed installs something broken —
+        # repair (deterministic fixes with a diff) is the offered path instead.
+        entry["validation_errors"] = vr.errors
         out.append(entry)
     return out

@@ -419,6 +419,143 @@ def install_imported_skill(workspace: Path, quarantine_dir: Path, *, source: str
     return {"ok": True, "name": name, "verdict": verdict, "commit": sha}
 
 
+def _salvage_frontmatter(raw_fm: str) -> tuple[dict, list[str]]:
+    """Best-effort recovery of top-level keys from frontmatter whose YAML does
+    not parse (the classic case: an unquoted ": " inside a plain multi-line
+    description invalidates the whole document). Scalar keys collect their
+    indented continuation lines as one flowed string; nested mapping blocks
+    (metadata:) are re-parsed standalone and kept when they parse alone,
+    dropped with a note when they don't."""
+    import yaml as _yaml
+
+    changes: list[str] = []
+    data: dict = {}
+    lines = raw_fm.splitlines()
+    i = 0
+    while i < len(lines):
+        m = re.match(r"^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$", lines[i])
+        if not m:
+            i += 1
+            continue
+        key, val = m.group(1), m.group(2)
+        block: list[str] = []
+        j = i + 1
+        while j < len(lines) and (not lines[j].strip() or lines[j].startswith((" ", "\t"))):
+            block.append(lines[j])
+            j += 1
+        if block and not val.strip():
+            sub = "\n".join([f"{key}:"] + block)
+            try:
+                parsed = _yaml.safe_load(sub)
+                if not (isinstance(parsed, dict) and key in parsed):
+                    raise ValueError("block did not parse to a mapping")
+                data[key] = parsed[key]
+            except Exception:  # noqa: BLE001 - unparseable block: drop, don't guess
+                changes.append(f"dropped unparseable {key!r} block")
+        else:
+            text = " ".join([val] + [b.strip() for b in block if b.strip()]).strip()
+            text = re.sub(r"^[>|][+-]?\s*", "", text)   # half-used fold indicator
+            data[key] = text
+        i = j
+    return data, changes
+
+
+def _description_from_body(body: str) -> str:
+    """First real paragraph of the body (headings skipped), flowed and capped."""
+    para: list[str] = []
+    for line in body.splitlines():
+        s = line.strip()
+        if not s:
+            if para:
+                break
+            continue
+        if s.startswith("#"):
+            continue
+        para.append(s)
+    return " ".join(para)[:500].strip()
+
+
+def repair_quarantined(workspace: Path, name: str, *, apply: bool = False) -> dict:
+    """Deterministically repair an invalid quarantined skill's SKILL.md.
+
+    Fixes only what a machine can fix without inventing content: broken YAML
+    frontmatter is salvaged and re-serialized, a missing name derives from the
+    directory, a missing description from the body's first paragraph. Preview
+    by default (returns the unified diff, writes nothing); ``apply=True``
+    rewrites the quarantined file so the normal approve gate can install it.
+    """
+    import difflib
+
+    import yaml as _yaml
+
+    from durin.agent import skills_frontmatter as _fm
+
+    out: dict = {"repaired": False, "changes": [], "diff": "",
+                 "errors_before": [], "errors_after": []}
+    if not _safe_qname(name):
+        out["error"] = "invalid name"
+        return out
+    qdir = Path(workspace) / ".durin" / "import-quarantine" / name
+    md = qdir / "SKILL.md"
+    if not md.is_file():
+        out["error"] = f"not in quarantine: {name}"
+        return out
+
+    original = md.read_text(encoding="utf-8")
+    out["errors_before"] = validate_skill(qdir).errors
+    changes: list[str] = []
+
+    fm_match = _fm._FM_RE.match(original)
+    if fm_match:
+        raw_fm, body = fm_match.group(1), original[fm_match.end():]
+        try:
+            data = _yaml.safe_load(raw_fm)
+            if not isinstance(data, dict):
+                raise _yaml.YAMLError("frontmatter is not a mapping")
+        except _yaml.YAMLError:
+            data, salvage_notes = _salvage_frontmatter(raw_fm)
+            changes.append("re-serialized broken YAML frontmatter")
+            changes.extend(salvage_notes)
+    else:
+        data, body = {}, original
+        changes.append("synthesized missing frontmatter")
+
+    if not str(data.get("name") or "").strip():
+        data["name"] = qdir.name
+        changes.append(f"name set from directory: {qdir.name!r}")
+    if not str(data.get("description") or "").strip():
+        desc = _description_from_body(body)
+        if desc:
+            data["description"] = desc
+            changes.append("description extracted from the body's first paragraph")
+
+    ordered = {k: data[k] for k in ("name", "description") if k in data}
+    ordered.update({k: v for k, v in data.items() if k not in ordered})
+    new_text = _fm.join_frontmatter(ordered, body)
+
+    if not changes or new_text == original:
+        out["errors_after"] = out["errors_before"]
+        return out
+
+    # Validate the candidate on a staged copy so preview never mutates state.
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        stage = Path(td) / qdir.name
+        stage.mkdir()
+        (stage / "SKILL.md").write_text(new_text, encoding="utf-8")
+        out["errors_after"] = validate_skill(stage).errors
+
+    out["changes"] = changes
+    out["repaired"] = True
+    out["diff"] = "".join(difflib.unified_diff(
+        original.splitlines(keepends=True), new_text.splitlines(keepends=True),
+        fromfile="SKILL.md (current)", tofile="SKILL.md (repaired)"))
+    if apply:
+        md.write_text(new_text, encoding="utf-8")
+    return out
+
+
 def reject_quarantined(workspace: Path, name: str) -> dict:
     """Discard a quarantined skill (delete its dir). The opposite of approve."""
     if not _safe_qname(name):
