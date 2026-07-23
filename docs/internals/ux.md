@@ -388,7 +388,9 @@ opens the detail panel, unchanged from the single-layer canvas. Click and
 drag are told apart by movement: a press-release pair that barely moved
 navigates, anything past a small movement threshold is treated as
 repositioning the node instead, and the repositioned node keeps its new
-place.
+place. Any drill that recentres the ego focus — a hub click, isolate, or a
+search hit — carries an already-open detail panel along to the new focus
+entity; it never opens a panel that was closed to begin with.
 
 **Visual encoding.** Entity node radius is a capped log-scale of its
 weight; bubble radius is a separate, wider log-scale band of its member
