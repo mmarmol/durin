@@ -35,6 +35,41 @@ describe("useGraphLayers", () => {
     expect(result.current.layer.kind).toBe("overview");
   });
 
+  it("passes groupBy through to the overview fetch, and refetches when it changes", async () => {
+    const { result, rerender } = renderHook(
+      ({ groupBy }: { groupBy: "community" | "type" }) =>
+        useGraphLayers(true, () => "tok", groupBy),
+      { initialProps: { groupBy: "community" as const } },
+    );
+    await waitFor(() => expect(result.current.overview).not.toBeNull());
+    expect(api.fetchMemoryGraphOverview).toHaveBeenCalledWith(
+      "tok",
+      undefined,
+      "community",
+    );
+
+    rerender({ groupBy: "type" });
+    await waitFor(() =>
+      expect(api.fetchMemoryGraphOverview).toHaveBeenLastCalledWith(
+        "tok",
+        undefined,
+        "type",
+      ),
+    );
+  });
+
+  it("enterCluster passes the current groupBy through to fetchClusterSubgraph", async () => {
+    const { result } = renderHook(() => useGraphLayers(true, () => "tok", "type"));
+    await waitFor(() => expect(result.current.overview).not.toBeNull());
+    await act(() => result.current.enterCluster("type:person", "person"));
+    expect(api.fetchClusterSubgraph).toHaveBeenCalledWith(
+      "tok",
+      "type:person",
+      undefined,
+      "type",
+    );
+  });
+
   it("enterCluster drills and backToOverview returns", async () => {
     const { result } = renderHook(() => useGraphLayers(true, () => "tok"));
     await waitFor(() => expect(result.current.overview).not.toBeNull());

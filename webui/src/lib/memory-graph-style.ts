@@ -51,6 +51,16 @@ export function groupTypeLegend(
   return { shown: sorted.slice(0, max), tail: sorted.slice(max) };
 }
 
+/** Cap a node label to a sensible visual length without dropping the
+ *  identifying suffix. Sessions can have long UUID-ish names; we
+ *  ellipsise the middle so both ends stay readable. */
+export function shortLabel(label: string, max = 22): string {
+  if (label.length <= max) return label;
+  const headLen = Math.max(8, Math.floor(max * 0.55));
+  const tailLen = Math.max(4, max - headLen - 1);
+  return `${label.slice(0, headLen)}…${label.slice(-tailLen)}`;
+}
+
 export type EntitySortKey = "recent" | "mentions" | "name";
 
 export interface BrowseOptions {

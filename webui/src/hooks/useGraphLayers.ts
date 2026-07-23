@@ -30,6 +30,7 @@ export interface GraphLayers {
 export function useGraphLayers(
   enabled: boolean,
   getToken: () => string | null,
+  groupBy: "community" | "type" = "community",
 ): GraphLayers {
   const [layer, setLayer] = useState<GraphLayer>({ kind: "overview" });
   const [overview, setOverview] = useState<MemoryOverviewPayload | null>(null);
@@ -47,7 +48,7 @@ export function useGraphLayers(
     if (token == null) return false;
     setLoading(true);
     try {
-      const payload = await fetchMemoryGraphOverview(token);
+      const payload = await fetchMemoryGraphOverview(token, undefined, groupBy);
       // Fingerprint the whole payload, not just stats+mode — the overview
       // is bounded (~100 elements), so stringifying it in full is cheap and
       // catches any change (bubble membership, edges, ...) that stats alone
@@ -71,8 +72,11 @@ export function useGraphLayers(
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [groupBy]);
 
+  // Re-fires whenever `groupBy` changes: a fresh `loadOverview` identity
+  // (it depends on `groupBy`, above) makes this effect re-run even though
+  // `enabled` itself didn't change.
   useEffect(() => {
     if (enabled) void loadOverview();
   }, [enabled, loadOverview]);
@@ -91,7 +95,7 @@ export function useGraphLayers(
       setLoading(true);
       setNotice(null);
       try {
-        const payload = await fetchClusterSubgraph(token, ref);
+        const payload = await fetchClusterSubgraph(token, ref, undefined, groupBy);
         if (payload === null) {
           backToOverview();
           setNotice("staleCluster");
@@ -108,7 +112,7 @@ export function useGraphLayers(
         setLoading(false);
       }
     },
-    [backToOverview, loadOverview],
+    [backToOverview, loadOverview, groupBy],
   );
 
   const enterEgo = useCallback(

@@ -183,3 +183,32 @@ describe("MemoryTypeFilter — legend tail", () => {
     expect(container).not.toBeEmptyDOMElement();
   });
 });
+
+describe("MemoryTypeFilter — disconnected pseudo-type", () => {
+  it("renders a synthetic row with the i18n label and count, counted in the visible total", async () => {
+    const user = userEvent.setup();
+    setup({ disconnectedCount: 3 });
+    // 3 real types + phantom + disconnected, none hidden = 5 visible.
+    expect(screen.getByRole("button", { name: /types/i })).toHaveTextContent("5 visible");
+
+    await user.click(screen.getByRole("button", { name: /types/i }));
+    const row = screen.getByText("no connections").closest("button");
+    expect(row).not.toBeNull();
+    expect(row).toHaveTextContent("3");
+  });
+
+  it("toggles the disconnected row like any other type", async () => {
+    const user = userEvent.setup();
+    const props = setup({ disconnectedCount: 3 });
+    await user.click(screen.getByRole("button", { name: /types/i }));
+    await user.click(screen.getByText("no connections"));
+    expect(props.onToggle).toHaveBeenCalledWith("disconnected");
+  });
+
+  it("omits the row entirely when disconnectedCount is 0 (the default)", async () => {
+    const user = userEvent.setup();
+    setup();
+    await user.click(screen.getByRole("button", { name: /types/i }));
+    expect(screen.queryByText("no connections")).toBeNull();
+  });
+});
