@@ -5,6 +5,32 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.4.3 — 2026-07-23
+
+### Highlights
+
+- **The workflow canvas now speaks the full engine model.** Runtime-resolved
+  branch candidates draw as dashed edges (no more floating disconnected
+  nodes), data-flow edges from `inputs_from` render with their own toggle,
+  and cards surface titles, runtime-aware parallel summaries, personas, and
+  badges for schemas, files, skills, and secrets. Routing nodes can declare a
+  candidate pool that the runtime is contractually held to. (#451)
+- **Memory-view polish from live use.** Graph labels are now chosen by local
+  density — one per spatial cell, evenly spaced at every zoom, and a sparse
+  region labels everything — instead of a global cap that picked a
+  seemingly arbitrary subset in uniform regions. An open entity panel now
+  follows the ego focus: drilling to another entity carries the panel along
+  instead of leaving it stuck on the previous one. (#452, #453)
+
+### WebUI
+
+- Memory view preference migrated to a versioned key: a stored graph default
+  from before the list-first redesign resets to the list once; choices made
+  after the migration (including the graph) persist. (#452)
+- A search-result click still deliberately opens the entity panel
+  (jump-to-node); hub and loose-node drills never open a closed panel; a
+  manual selection inside an ego is never overridden. (#453)
+
 ## 0.4.2 — 2026-07-23
 
 ### Highlights
