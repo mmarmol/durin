@@ -42,6 +42,10 @@ export function useGraphLayers(
   const overviewJson = useRef<string | null>(null);
   const getTokenRef = useRef(getToken);
   getTokenRef.current = getToken;
+  // The groupBy this hook last fetched under — lets the effect below tell a
+  // genuine dimension switch apart from a same-dimension refresh (both reach
+  // loadOverview through the same effect/callback identity change).
+  const prevGroupByRef = useRef(groupBy);
 
   const loadOverview = useCallback(async (): Promise<boolean> => {
     const token = getTokenRef.current();
@@ -76,10 +80,23 @@ export function useGraphLayers(
 
   // Re-fires whenever `groupBy` changes: a fresh `loadOverview` identity
   // (it depends on `groupBy`, above) makes this effect re-run even though
-  // `enabled` itself didn't change.
+  // `enabled` itself didn't change. A genuine dimension switch (not the
+  // initial mount, and not a same-dimension refreshOverview() call) throws
+  // away the previous dimension's overview *before* kicking off the new
+  // fetch — first-load semantics — so the view shows its loading state
+  // instead of the wrong dimension's map while the new one is in flight.
+  // `overviewJson` resets alongside it so the resolved payload lands as a
+  // first load rather than a same-dimension refresh, which would otherwise
+  // preserve the old object reference (see the identity guard above) even
+  // though it now describes a different dimension.
   useEffect(() => {
+    if (prevGroupByRef.current !== groupBy) {
+      prevGroupByRef.current = groupBy;
+      setOverview(null);
+      overviewJson.current = null;
+    }
     if (enabled) void loadOverview();
-  }, [enabled, loadOverview]);
+  }, [enabled, loadOverview, groupBy]);
 
   const backToOverview = useCallback(() => {
     setLayer({ kind: "overview" });

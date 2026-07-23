@@ -1474,13 +1474,18 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
     overviewGraph == null ||
     graphMode === "all";
 
-  // Change 2: the group-by selector (Ungrouped/Structure/Type) only makes
-  // sense while sitting at the overview layer with an actual clustered
-  // payload to switch between — a drill or a flat workspace has nothing to
-  // toggle (the seam above already falls back to the raw graph on its own
-  // in that case).
+  // The group-by selector (Ungrouped/Structure/Type) is visible whenever the
+  // canvas is at layer 1 (no cluster/ego drill) with something to show —
+  // deliberately independent of whether the *current* dimension's overview
+  // actually came back clustered. A grouped mode can still land flat under
+  // one dimension (e.g. "Type" when every entity shares a single type), and
+  // the user needs a way back to Ungrouped without the selector itself
+  // disappearing out from under them. When the overview is flat, the seam
+  // above (`data`) already falls back to the raw graph on its own, so there
+  // is still content on screen for the (still-interactive) selector to sit
+  // above.
   const showGraphModeToggle =
-    effectiveView === "graph" && overviewGraph != null && layers.focusGraph == null;
+    effectiveView === "graph" && layers.focusGraph == null && rawData != null;
 
   // Real (non-scaffolding) node count in the current drill — phantom and
   // session nodes are kept in a cluster's focusGraph only as scaffolding
@@ -1708,10 +1713,11 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
 
       {/* Entities toolbar — the view switcher (three presentations of the
           same node set, Obsidian-Bases style, Table/Cards/Graph in that
-          order), the Groups/Everything graph-mode toggle (Change 2, graph
-          view's clustered overview only), the type filter chips (shared
-          by all three views; previously a graph-only floating legend), and
-          the sort control for the cards/table grids. */}
+          order), the Ungrouped/Structure/Type group-by selector (graph
+          view's layer-1 canvas only, see showGraphModeToggle), the type
+          filter chips (shared by all three views; previously a graph-only
+          floating legend), and the sort control for the cards/table
+          grids. */}
       {mode === "entities" ? (
         <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-border/40 px-3 py-1.5 text-[11px]">
           <div className="flex items-center gap-0.5 rounded-md border border-border/50 p-0.5">
@@ -1793,7 +1799,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
               types={shownTypesLegend}
               tail={tailTypesLegend}
               phantomCount={data?.stats.phantom_count ?? 0}
-              disconnectedCount={disconnectedIds.size}
+              disconnectedCount={renderingRawGraph ? disconnectedIds.size : 0}
               hidden={hiddenTypes}
               onToggle={toggleType}
               onShowAll={() => setHiddenTypes(new Set())}

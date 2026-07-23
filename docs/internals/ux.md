@@ -369,9 +369,13 @@ it (on the Structure dimension) so hub emphasis keeps working without an
 extra round trip if the user does switch. Changing the dimension re-fetches
 the overview under that grouping and, for a cluster drill, resolves the
 bubble ref against the matching mode — a bubble id from one grouping is not
-a bubble id in the other. The selector itself only appears at the overview
-layer with an actual clustered payload to switch between — a neighborhood
-drill has nothing to toggle.
+a bubble id in the other. The selector stays visible at layer 1 regardless
+of whether the current dimension's overview actually came back clustered —
+a workspace can bubble under Structure but resolve flat under Type (or vice
+versa), and the user still needs a way back to Ungrouped; only a
+neighborhood drill hides it. When the current dimension resolves flat, the
+canvas falls back to the same flat graph Ungrouped shows, with the selector
+still there to try another dimension.
 
 **Click contract.** A bubble click enters its cluster; a hub or loose-node
 click enters that node's ego-subgraph; a node click inside a neighborhood
@@ -417,10 +421,15 @@ dust once a workspace has enough of it. The chips live only in a
 neighborhood, in the pre-clustering flat graph, or in the overview's
 Ungrouped sub-mode — a grouped bubble summary (Structure or Type) has none,
 because the server already excluded phantoms and sessions before clustering
-ever runs, and "zero edges" isn't a property a bubble has. Cards and Table
-never hide disconnected entities regardless of the canvas chip's state —
-decluttering the force-directed layout is a canvas concern, not a claim that
-the entity doesn't belong in the list. The type legend groups the
+ever runs, and "zero edges" isn't a property a bubble has. The disconnected
+row specifically is narrower still: it is offered only while the canvas is
+actually rendering that flat graph (the pre-clustering flat graph or
+Ungrouped) — a neighborhood drill and the Cards/Table presentations never
+show it, since there is nothing there for it to affect. Cards and Table
+separately never hide disconnected entities from their own list no matter
+what the toggle is set to elsewhere — decluttering the force-directed layout
+is a canvas concern, not a claim that the entity doesn't belong in the list.
+The type legend groups the
 open-vocabulary type long tail behind a single "others" row past a fixed
 number of shown types, so an idiosyncratic workspace's type list can't
 overflow the toolbar.

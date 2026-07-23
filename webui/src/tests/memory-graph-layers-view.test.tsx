@@ -462,6 +462,35 @@ describe("MemoryGraphView layered", () => {
     );
   });
 
+  it("keeps the group-by selector visible and usable when a grouped mode's overview reports flat", async () => {
+    // "Structure" is picked, but this dimension's overview comes back flat
+    // (too small/homogeneous to bubble) — overviewGraph is null even though
+    // graphMode isn't "all". Pre-fix, showGraphModeToggle required
+    // overviewGraph != null, so the selector vanished with no in-app way
+    // back to Ungrouped.
+    localStorage.setItem("durin.memoryGraph.graphMode", "structure");
+    vi.mocked(api.fetchMemoryGraph).mockResolvedValue(RAW_DATA);
+    vi.mocked(api.fetchMemoryGraphOverview).mockResolvedValue({
+      ...CLUSTERED_OVERVIEW,
+      mode: "flat",
+    });
+    const user = userEvent.setup();
+    render(wrap(<MemoryGraphView active />));
+    // The seam already falls back to the raw graph when the overview is
+    // flat — RAW_DATA's flat counts confirm content actually rendered.
+    await waitFor(() => expect(screen.getByText(/2 nodes/)).toBeInTheDocument());
+
+    const structureBtn = screen.getByRole("button", { name: "Structure" });
+    expect(structureBtn).toBeInTheDocument();
+    expect(structureBtn).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(screen.getByRole("button", { name: "Ungrouped" }));
+    expect(screen.getByRole("button", { name: "Ungrouped" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
   it("orders the view switcher Table, Cards, Graph", async () => {
     render(wrap(<MemoryGraphView active />));
     await waitFor(() =>
@@ -479,7 +508,7 @@ describe("MemoryGraphView layered", () => {
 
   // --- Change 2: disconnected pseudo-filter -------------------------------
 
-  it('shows a "no connections" pseudo-row in the type filter, hidden by default', async () => {
+  it('shows a "no connections" pseudo-row in the type filter, hidden by default, but never in Cards view', async () => {
     // 2 connected (an edge between them) + 3 isolated nodes.
     vi.mocked(api.fetchMemoryGraph).mockResolvedValue({
       nodes: [
@@ -512,6 +541,15 @@ describe("MemoryGraphView layered", () => {
 
     await user.click(row!);
     expect(row).toHaveAttribute("aria-pressed", "true");
+
+    // Cards has no connectivity awareness at all — disconnectedIds is a
+    // raw-graph-canvas concept (gated on renderingRawGraph). The pseudo-row
+    // must not follow the shared toolbar into Cards, where toggling it would
+    // visibly do nothing.
+    await user.click(screen.getByRole("button", { name: /cards/i }));
+    await waitFor(() => expect(screen.getByText("Aurora")).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: /types/i }));
+    expect(screen.queryByText("no connections")).toBeNull();
   });
 
   // --- Change 3: Related mini-graph panel integration ---------------------

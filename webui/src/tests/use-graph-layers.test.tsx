@@ -39,7 +39,11 @@ describe("useGraphLayers", () => {
     const { result, rerender } = renderHook(
       ({ groupBy }: { groupBy: "community" | "type" }) =>
         useGraphLayers(true, () => "tok", groupBy),
-      { initialProps: { groupBy: "community" as const } },
+      // Widen the literal to match the callback's own `{ groupBy: "community"
+      // | "type" }` annotation — otherwise TS infers Props from this object
+      // alone (`{ groupBy: "community" }`) and rejects the `"type"` rerender
+      // below.
+      { initialProps: { groupBy: "community" as "community" | "type" } },
     );
     await waitFor(() => expect(result.current.overview).not.toBeNull());
     expect(api.fetchMemoryGraphOverview).toHaveBeenCalledWith(
@@ -56,6 +60,33 @@ describe("useGraphLayers", () => {
         "type",
       ),
     );
+  });
+
+  it("clears the overview on a groupBy change before the new payload resolves, instead of flashing the old dimension's map", async () => {
+    const { result, rerender } = renderHook(
+      ({ groupBy }: { groupBy: "community" | "type" }) =>
+        useGraphLayers(true, () => "tok", groupBy),
+      { initialProps: { groupBy: "community" as "community" | "type" } },
+    );
+    await waitFor(() => expect(result.current.overview).not.toBeNull());
+    const communityOverview = result.current.overview;
+
+    // Hold the "type" fetch open so the null-in-between state is observable
+    // instead of racing straight to the resolved payload.
+    let resolveType: (value: typeof OVERVIEW) => void = () => {};
+    api.fetchMemoryGraphOverview.mockReturnValue(
+      new Promise((resolve) => {
+        resolveType = resolve;
+      }),
+    );
+
+    rerender({ groupBy: "type" });
+    await waitFor(() => expect(result.current.overview).toBeNull());
+
+    resolveType({ ...OVERVIEW, mode: "flat" });
+    await waitFor(() => expect(result.current.overview).not.toBeNull());
+    expect(result.current.overview).not.toBe(communityOverview);
+    expect(result.current.overview?.mode).toBe("flat");
   });
 
   it("enterCluster passes the current groupBy through to fetchClusterSubgraph", async () => {
