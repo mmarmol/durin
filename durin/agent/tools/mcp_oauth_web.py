@@ -40,6 +40,22 @@ async def _drive_auth(provider: Any, cfg: Any) -> None:
     await drive_oauth_handshake(provider, cfg)
 
 
+def leaf_errors(exc: BaseException) -> list[BaseException]:
+    """Flatten (possibly nested) ExceptionGroups to their leaf exceptions.
+
+    The MCP session layers run in anyio task groups, so a failed handshake
+    surfaces as ``ExceptionGroup: unhandled errors in a TaskGroup (1
+    sub-exception)`` — a log line that hides the actual cause (e.g. the token
+    endpoint's invalid_grant body) unless the leaves are named."""
+    subs = getattr(exc, "exceptions", None)
+    if not subs:
+        return [exc]
+    leaves: list[BaseException] = []
+    for sub in subs:
+        leaves.extend(leaf_errors(sub))
+    return leaves
+
+
 class PendingFlow:
     def __init__(self, task: asyncio.Task, callback: Any) -> None:
         self.task = task
@@ -296,8 +312,11 @@ class McpOauthFlows:
                 except Exception as exc:  # noqa: BLE001
                     flow_errors.append(exc)
                     logger.warning(
-                        "MCP '{}' OAuth sign-in failed: {}: {}",
-                        server, type(exc).__name__, exc,
+                        "MCP '{}' OAuth sign-in failed: {}",
+                        server,
+                        "; ".join(
+                            f"{type(e).__name__}: {e}" for e in leaf_errors(exc)
+                        ),
                     )
                 finally:
                     callback.stop()
