@@ -146,7 +146,6 @@ def test_redact_secrets_applies_both_layers(store_at) -> None:
 
     store = SecretStore(path=store_at)
     store.put("STORED", value="stored-value-abcdef", service="x")
-    store.save()
 
     text = "stored=stored-value-abcdef ambient=ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
     out = redact_secrets(text)

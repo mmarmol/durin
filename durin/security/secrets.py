@@ -180,8 +180,16 @@ class SecretStore:
         if not self._loaded:
             self.load()
 
-    def save(self) -> None:
-        """Persist the store, always with mode ``0600`` (plaintext)."""
+    def _save(self) -> None:
+        """Raw unlocked write of the in-memory snapshot, mode ``0600`` (plaintext).
+
+        Must only be called while holding ``cross_process_lock`` — the locked
+        mutators below do this. Calling it outside the lock rewrites
+        secrets.json from a possibly-stale in-memory snapshot, clobbering any
+        concurrent writer. Callers outside this class must use the mutators
+        (``put``, ``remove``, ``set_scope_locked``, ``grant_consumer_locked``,
+        ``revoke_consumer_locked``), never this method directly.
+        """
         self._path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "_version": 1,
@@ -258,7 +266,7 @@ class SecretStore:
                 origin=origin,
                 created_at=existing.created_at if existing else _now(),
             )
-            self.save()
+            self._save()
 
     def remove(self, name: str) -> bool:
         """Delete a secret. Returns True when something was removed.
@@ -271,7 +279,7 @@ class SecretStore:
             self.load()
             removed = self._entries.pop(name, None) is not None
             if removed:
-                self.save()
+                self._save()
         return removed
 
     def set_scope(self, name: str, scope: list[str]) -> bool:
@@ -300,7 +308,7 @@ class SecretStore:
             if entry is None:
                 return False
             entry.scope = list(scope)
-            self.save()
+            self._save()
         return True
 
     def grant_consumer_locked(self, name: str, consumer: str) -> bool | None:
@@ -319,7 +327,7 @@ class SecretStore:
             if consumer in entry.scope:
                 return False
             entry.scope = [*entry.scope, consumer]
-            self.save()
+            self._save()
         return True
 
     def revoke_consumer_locked(self, name: str, consumer: str) -> bool | None:
@@ -338,7 +346,7 @@ class SecretStore:
             if consumer not in entry.scope:
                 return False
             entry.scope = [tag for tag in entry.scope if tag != consumer]
-            self.save()
+            self._save()
         return True
 
     # -- resolution -------------------------------------------------------

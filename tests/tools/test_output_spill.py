@@ -152,7 +152,6 @@ class TestExecToolSpillRedactionIntegration:
         secret_val = "deploytokenSUPERsecretvalue123456"
         store = SecretStore(path=tmp_path / "secrets.json")
         store.put("DEPLOY_TOKEN", value=secret_val, service="x", scope=["exec"])
-        store.save()
         _secrets.get_secret_store(reload=True)
 
         script = tmp_path / "leak.py"

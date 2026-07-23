@@ -108,7 +108,11 @@ flowchart TD
 live in `secrets.json` at mode 0600 alongside the config file; plaintext never
 enters the config tree. Every mutation — put, remove, scope change — is wrapped in
 a `cross_process_lock` that performs a full load-mutate-save cycle to prevent
-concurrent writers from losing each other's changes.
+concurrent writers from losing each other's changes. The disk write itself is a
+private method reachable only from inside that lock — there is no public raw-write
+method, so a caller cannot persist a snapshot outside the lock and clobber a
+concurrent writer's changes; every write to disk goes through one of the locked
+mutators.
 
 All user-facing writes funnel through `SecretsService.store_entry`
 (`durin/service/secrets.py`) — the CLI, the webui panel, the TUI prompt, and the

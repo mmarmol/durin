@@ -31,7 +31,6 @@ def secrets_store(tmp_path, monkeypatch):
         scope=["provider:foo"],
         origin="webui",
     )
-    store.save()
     return tmp_path
 
 

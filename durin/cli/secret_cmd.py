@@ -160,7 +160,6 @@ def cmd_rm(
     if not store.remove(name):
         console.print(f"[red]✗[/red] No secret named '{name}'.")
         raise typer.Exit(1)
-    store.save()
     console.print(f"[green]✓[/green] Removed secret [bold]{name}[/bold].")
 
 

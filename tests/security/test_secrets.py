@@ -59,7 +59,7 @@ def test_scope_allows_exact_and_wildcard() -> None:
 # -- store round-trip --------------------------------------------------------
 
 
-def test_store_put_save_load_round_trip(tmp_path) -> None:
+def test_store_put_load_round_trip(tmp_path) -> None:
     path = tmp_path / "secrets.json"
     store = SecretStore(path=path)
     store.put(
@@ -71,7 +71,6 @@ def test_store_put_save_load_round_trip(tmp_path) -> None:
         scope=["exec", "skill:*"],
         origin="user",
     )
-    store.save()
 
     reloaded = SecretStore(path=path).load()
     entry = reloaded.get("ATLASSIAN_WORK")
@@ -87,9 +86,43 @@ def test_store_file_is_mode_600(tmp_path) -> None:
     path = tmp_path / "secrets.json"
     store = SecretStore(path=path)
     store.put("K", value="v", service="provider:openai")
-    store.save()
     mode = stat.S_IMODE(path.stat().st_mode)
     assert mode == 0o600, f"expected 0600, got {oct(mode)}"
+
+
+def test_store_exposes_no_public_save(tmp_path) -> None:
+    """The store must not offer an unlocked raw write.
+
+    ``save()`` used to be public and callable outside ``cross_process_lock`` —
+    a caller could rewrite secrets.json from a stale in-memory snapshot and
+    clobber a concurrent writer's changes (a proven lost-update hazard). The
+    mutators (``put``, ``remove``, ``set_scope_locked``, ...) persist under
+    the lock internally via the private ``_save``; there must be no public
+    raw-write surface for callers to bypass that.
+    """
+    store = SecretStore(path=tmp_path / "secrets.json")
+    assert not hasattr(store, "save")
+
+
+def test_put_persists_without_a_separate_save_call(tmp_path) -> None:
+    """put() alone is durable: a FRESH store reading from disk sees the entry.
+
+    Proves the trailing ``store.save()`` calls removed from callers across the
+    codebase were redundant — ``put()`` already persists inside the lock.
+    """
+    path = tmp_path / "secrets.json"
+    SecretStore(path=path).put("K", value="v", service="x")
+    assert SecretStore(path=path).load().get("K") is not None
+    assert SecretStore(path=path).load().get("K").value == "v"
+
+
+def test_remove_persists_without_a_separate_save_call(tmp_path) -> None:
+    """remove() alone is durable: a FRESH store reading from disk sees the deletion."""
+    path = tmp_path / "secrets.json"
+    store = SecretStore(path=path)
+    store.put("K", value="v", service="x")
+    assert store.remove("K") is True
+    assert SecretStore(path=path).load().get("K") is None
 
 
 def test_store_rejects_invalid_name(tmp_path) -> None:

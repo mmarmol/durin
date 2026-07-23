@@ -107,7 +107,6 @@ class SecretsService:
         store = SecretStore().load()
         if not store.remove(cmd.name):
             raise NotFoundError("no such secret", details={"name": cmd.name})
-        store.save()
         get_secret_store(reload=True)
         return SecretDeleteResult(ok=True)
 
@@ -127,7 +126,7 @@ class SecretsService:
 
         Called by the HTTP route (:meth:`store`), the websocket
         ``secret_store`` frame handler, and the TUI secret prompt — so the
-        put/save/reload sequence and the validation rules live in exactly one
+        put/reload sequence and the validation rules live in exactly one
         place. Synchronous on purpose: in-process callers (the TUI) must not be
         forced onto the event loop just to write a credential.
 
@@ -193,7 +192,6 @@ class SecretsService:
                 scope=[s.strip() for s in (scope or []) if s.strip()],
                 origin=existing.origin if existing else origin,
             )
-            store.save()
         except SecretError as exc:
             # Defensive: the name is pre-validated above, so put() should not
             # raise today — but any future SecretError on a write is a 422, not

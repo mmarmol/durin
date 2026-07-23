@@ -164,7 +164,6 @@ def forget_github_token() -> bool:
     store = SecretStore().load()
     removed = store.remove(SHARED_SECRET_NAME)
     if removed:
-        store.save()
         get_secret_store(reload=True)
         logger.info("github device flow: shared {} secret removed", SHARED_SECRET_NAME)
     return removed
