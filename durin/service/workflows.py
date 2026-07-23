@@ -13,6 +13,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from loguru import logger
+
 from durin.service.principal import Principal, Scope
 from durin.service.registry import route
 from durin.service.types import (
@@ -97,6 +99,15 @@ class WorkflowDuplicateCommand(Command):
 
 class WorkflowDuplicateResult(Result):
     name: str      # the name of the created copy
+
+
+class WorkflowRenameCommand(Command):
+    name: str      # the workflow to rename (path param)
+    target: str    # the new workflow name (must not already exist)
+
+
+class WorkflowRenameResult(Result):
+    name: str      # the workflow's new name
 
 
 class WorkflowSeedSuggestionsResult(Result):
@@ -420,6 +431,67 @@ class WorkflowsService:
                 raise ValidationFailedError(f"workflow {target!r} already exists")
             atomic_write_text(dest, json.dumps(definition, indent=2, ensure_ascii=False))
         return WorkflowDuplicateResult(name=target)
+
+    @route(
+        "POST", "/api/v1/workflows/{name}/rename",
+        scope=Scope.WORKFLOWS_WRITE.value,
+        request_model=WorkflowRenameCommand, response_model=WorkflowRenameResult,
+        summary="Rename a workflow: moves its definition, run history, and updates sub-flow references.",
+    )
+    async def rename(self, cmd: WorkflowRenameCommand, principal: Principal) -> WorkflowRenameResult:
+        principal.require(Scope.WORKFLOWS_WRITE)
+        target = cmd.target.strip()
+        if not target:
+            raise ValidationFailedError("a rename needs a non-empty target name")
+        src = self._dir() / f"{cmd.name}.json"
+        if not src.is_file():
+            raise NotFoundError(f"workflow {cmd.name!r} not found")
+        try:
+            definition = json.loads(src.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValidationFailedError(f"workflow {cmd.name!r} is unreadable: {exc}")
+        definition["name"] = target          # keep the inner name consistent with the file name
+        parse_workflow(definition)            # the renamed graph must still be valid
+        dest = self._dir() / f"{target}.json"
+        with cross_process_lock(self._lock_target()):
+            if dest.exists():
+                raise ValidationFailedError(f"workflow {target!r} already exists")
+            atomic_write_text(dest, json.dumps(definition, indent=2, ensure_ascii=False))
+            src.unlink()
+            # Repoint sub-flow nodes in every other definition so the rename does not
+            # silently break callers.
+            for sibling in self._dir().glob("*.json"):
+                if sibling.name.startswith(".") or sibling == dest:
+                    continue
+                try:
+                    sib_def = json.loads(sibling.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    continue                  # an unreadable sibling is not this rename's problem
+                changed = False
+                for node in sib_def.get("nodes", []):
+                    if node.get("kind") == "subworkflow" and node.get("workflow") == cmd.name:
+                        node["workflow"] = target
+                        changed = True
+                if changed:
+                    atomic_write_text(sibling, json.dumps(sib_def, indent=2, ensure_ascii=False))
+        # Carry the run history (manifests, recommendations, dream cursor) to the new
+        # name. Best-effort: a failure here never undoes the definition rename.
+        src_runs = run_log.runs_root(self._workspace) / cmd.name
+        dest_runs = run_log.runs_root(self._workspace) / target
+        try:
+            if src_runs.is_dir() and not dest_runs.exists():
+                src_runs.rename(dest_runs)
+                for manifest in dest_runs.glob("*.json"):
+                    try:
+                        data = json.loads(manifest.read_text(encoding="utf-8"))
+                        if data.get("workflow") == cmd.name:
+                            data["workflow"] = target
+                            atomic_write_text(manifest, json.dumps(data, ensure_ascii=False))
+                    except (OSError, json.JSONDecodeError):
+                        continue
+        except OSError:
+            logger.exception("workflow rename could not move run history for {}", cmd.name)
+        return WorkflowRenameResult(name=target)
 
     @route(
         "POST", "/api/v1/workflows/{name}/run",

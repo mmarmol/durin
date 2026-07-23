@@ -12,6 +12,7 @@ from durin.service.types import NotFoundError, ValidationFailedError
 from durin.service.workflows import (
     WorkflowDeleteCommand,
     WorkflowDuplicateCommand,
+    WorkflowRenameCommand,
     WorkflowGetQuery,
     WorkflowRunCommand,
     WorkflowRunResult,
@@ -122,6 +123,78 @@ async def test_duplicate_rejects_an_empty_target(tmp_path):
     await svc.save(WorkflowSaveCommand(name="wf", definition=_VALID), p)
     with pytest.raises(ValidationFailedError):
         await svc.duplicate(WorkflowDuplicateCommand(name="wf", target="  "), p)
+
+
+@pytest.mark.asyncio
+async def test_rename_moves_the_definition_and_updates_the_inner_name(tmp_path):
+    svc, p = _svc(tmp_path), Principal.local()
+    await svc.save(WorkflowSaveCommand(name="wf", definition=_VALID), p)
+    res = await svc.rename(WorkflowRenameCommand(name="wf", target="wf-new"), p)
+    assert res.name == "wf-new"
+    assert (await svc.list(WorkflowsListQuery(), p)).workflows == ["wf-new"]
+    got = await svc.get(WorkflowGetQuery(name="wf-new"), p)
+    assert got.definition["name"] == "wf-new"      # inner name follows the file name
+    assert got.definition["start"] == "a"          # the rest of the graph moved verbatim
+    with pytest.raises(NotFoundError):
+        await svc.get(WorkflowGetQuery(name="wf"), p)
+
+
+@pytest.mark.asyncio
+async def test_rename_moves_the_run_history_and_rewrites_manifests(tmp_path):
+    svc, p = _svc(tmp_path), Principal.local()
+    await svc.save(WorkflowSaveCommand(name="wf", definition=_VALID), p)
+    runs_dir = tmp_path / "workflows-runs" / "wf"
+    runs_dir.mkdir(parents=True)
+    (runs_dir / "r1.json").write_text('{"run_id": "r1", "workflow": "wf", "status": "completed"}')
+    (runs_dir / ".recommendations.jsonl").write_text("")
+    await svc.rename(WorkflowRenameCommand(name="wf", target="wf-new"), p)
+    moved = tmp_path / "workflows-runs" / "wf-new"
+    assert not runs_dir.exists() and moved.is_dir()
+    assert (moved / ".recommendations.jsonl").exists()
+    import json as _json
+    assert _json.loads((moved / "r1.json").read_text())["workflow"] == "wf-new"
+
+
+@pytest.mark.asyncio
+async def test_rename_repoints_subworkflow_references_in_siblings(tmp_path):
+    svc, p = _svc(tmp_path), Principal.local()
+    await svc.save(WorkflowSaveCommand(name="wf", definition=_VALID), p)
+    caller = {
+        "name": "caller", "start": "call",
+        "nodes": [{"id": "call", "kind": "subworkflow", "workflow": "wf", "next": None}],
+    }
+    await svc.save(WorkflowSaveCommand(name="caller", definition=caller), p)
+    await svc.rename(WorkflowRenameCommand(name="wf", target="wf-new"), p)
+    got = await svc.get(WorkflowGetQuery(name="caller"), p)
+    assert got.definition["nodes"][0]["workflow"] == "wf-new"
+
+
+@pytest.mark.asyncio
+async def test_rename_does_not_overwrite_an_existing_target(tmp_path):
+    svc, p = _svc(tmp_path), Principal.local()
+    await svc.save(WorkflowSaveCommand(name="wf", definition=_VALID), p)
+    await svc.save(WorkflowSaveCommand(name="taken", definition={**_VALID, "name": "taken"}), p)
+    with pytest.raises(ValidationFailedError):
+        await svc.rename(WorkflowRenameCommand(name="wf", target="taken"), p)
+    # both stay untouched
+    assert (await svc.get(WorkflowGetQuery(name="wf"), p)).definition["name"] == "wf"
+    assert (await svc.get(WorkflowGetQuery(name="taken"), p)).definition["name"] == "taken"
+
+
+@pytest.mark.asyncio
+async def test_rename_missing_source_raises_not_found(tmp_path):
+    with pytest.raises(NotFoundError):
+        await _svc(tmp_path).rename(
+            WorkflowRenameCommand(name="ghost", target="x"), Principal.local()
+        )
+
+
+@pytest.mark.asyncio
+async def test_rename_rejects_an_empty_target(tmp_path):
+    svc, p = _svc(tmp_path), Principal.local()
+    await svc.save(WorkflowSaveCommand(name="wf", definition=_VALID), p)
+    with pytest.raises(ValidationFailedError):
+        await svc.rename(WorkflowRenameCommand(name="wf", target="  "), p)
 
 
 @pytest.mark.asyncio

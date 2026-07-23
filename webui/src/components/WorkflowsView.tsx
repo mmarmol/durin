@@ -18,6 +18,7 @@ import {
   Copy,
   Lightbulb,
   Loader2,
+  Pencil,
   Play,
   Plus,
   Sparkles,
@@ -48,6 +49,7 @@ import {
   listWorkflows,
   listWorkflowScripts,
   listPersonas,
+  renameWorkflow,
   runWorkflow,
   saveWorkflow,
   saveWorkflowScript,
@@ -61,6 +63,7 @@ import {
   formatArtifactLines,
   parseArtifactLines,
   parseSecretNames,
+  renameNode,
   safeSubflowTargets,
   workflowToFlow,
   type FlowNodeData,
@@ -885,6 +888,7 @@ function NodeConfigPanel({
   workflowMaxVisits,
   token,
   onChange,
+  onRename,
   onMakeStart,
   onDelete,
 }: {
@@ -898,12 +902,23 @@ function NodeConfigPanel({
   workflowMaxVisits?: number;
   token: string;
   onChange: (patch: Partial<WorkflowNodeDef>) => void;
+  onRename: (newId: string) => void;
   onMakeStart: () => void;
   onDelete: () => void;
 }) {
   const { t } = useTranslation();
   const [promptModalOpen, setPromptModalOpen] = useState(false);
+  // Inline node-rename affordance: null = not renaming, else the draft name.
+  const [renameDraft, setRenameDraft] = useState<string | null>(null);
   const others = nodeIds.filter((id) => id !== node.id);
+
+  function commitRename() {
+    const next = (renameDraft ?? "").trim();
+    setRenameDraft(null);
+    if (!next || next === node.id) return;
+    if (nodeIds.includes(next)) return; // duplicate ids would corrupt the graph
+    onRename(next);
+  }
 
   // Mode options come from the registry (built-ins plus the user's custom
   // modes — a custom mode's tool allowlist is how a node gets a tailored
@@ -969,7 +984,32 @@ function NodeConfigPanel({
         <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] uppercase">
           {t("workflows.kind." + kindLabelKey(node.kind))}
         </span>
-        <span className="text-sm font-medium">{node.id}</span>
+        {renameDraft === null ? (
+          <>
+            <span className="text-sm font-medium">{node.id}</span>
+            <button
+              type="button"
+              className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+              title={t("workflows.renameNode")}
+              aria-label={t("workflows.renameNode")}
+              onClick={() => setRenameDraft(node.id)}
+            >
+              <Pencil className="h-3 w-3" />
+            </button>
+          </>
+        ) : (
+          <Input
+            autoFocus
+            value={renameDraft}
+            onChange={(e) => setRenameDraft(e.target.value)}
+            onBlur={commitRename}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commitRename();
+              if (e.key === "Escape") setRenameDraft(null);
+            }}
+            className="h-7 w-40 text-sm"
+          />
+        )}
         {!isStart && (
           <button
             type="button"
@@ -980,6 +1020,12 @@ function NodeConfigPanel({
           </button>
         )}
       </div>
+      {renameDraft !== null
+        && renameDraft.trim() !== ""
+        && renameDraft.trim() !== node.id
+        && nodeIds.includes(renameDraft.trim()) && (
+        <span className="text-xs text-destructive">{t("workflows.nodeNameExists")}</span>
+      )}
 
       {node.kind === "work" && (
         <>
@@ -1526,6 +1572,9 @@ export function WorkflowsView() {
   const [inputPaths, setInputPaths] = useState("");
   const [outFmt, setOutFmt] = useState("");
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  // Inline sidebar rename: the workflow being renamed and the draft name.
+  const [renamingWf, setRenamingWf] = useState<string | null>(null);
+  const [renameWfValue, setRenameWfValue] = useState("");
   const [runnerOpen, setRunnerOpen] = useState(false);
 
   useEffect(() => {
@@ -1589,6 +1638,17 @@ export function WorkflowsView() {
         ...d,
         nodes: d.nodes.map((n) => (n.id === selectedNodeId ? { ...n, ...patch } : n)),
       }));
+    },
+    [selectedNodeId, mutate],
+  );
+
+  // Rename the selected node's id across the whole definition (references included)
+  // and follow the selection to the new id so the config panel stays open.
+  const renameSelectedNode = useCallback(
+    (newId: string) => {
+      if (!selectedNodeId) return;
+      mutate((d) => renameNode(d, selectedNodeId, newId));
+      setSelectedNodeId(newId);
     },
     [selectedNodeId, mutate],
   );
@@ -1717,6 +1777,38 @@ export function WorkflowsView() {
       setSaving(false);
     }
   }, [dupName, selected, names, token, t]);
+
+  // Rename a workflow on the server (definition, run history, and sub-flow callers move
+  // with it), then follow the rename in the list and the selection.
+  const onRenameWorkflow = useCallback(async () => {
+    const source = renamingWf;
+    const target = renameWfValue.trim();
+    if (!source || !target || target === source) {
+      setRenamingWf(null);
+      setRenameWfValue("");
+      return;
+    }
+    if (names.includes(target)) {
+      setError(t("workflows.nameExists"));
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      // Unsaved edits to the renamed workflow would be lost by the post-rename
+      // reload — persist them first.
+      if (dirty && def && selected === source) await saveWorkflow(token, source, def);
+      const created = await renameWorkflow(token, source, target);
+      setNames((ns) => ns.map((x) => (x === source ? created : x)).sort());
+      setRenamingWf(null);
+      setRenameWfValue("");
+      if (selected === source) setSelected(created); // the [selected] effect reloads it
+    } catch (e) {
+      setError(errMsg(e));
+    } finally {
+      setSaving(false);
+    }
+  }, [renamingWf, renameWfValue, names, dirty, def, selected, token, t]);
 
   const deleteNode = useCallback(
     (id: string) => {
@@ -2054,6 +2146,23 @@ export function WorkflowsView() {
                 selected === n && "bg-accent",
               )}
             >
+              {renamingWf === n ? (
+                <Input
+                  autoFocus
+                  value={renameWfValue}
+                  onChange={(e) => setRenameWfValue(e.target.value)}
+                  disabled={saving}
+                  onBlur={() => void onRenameWorkflow()}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void onRenameWorkflow();
+                    if (e.key === "Escape") {
+                      setRenamingWf(null);
+                      setRenameWfValue("");
+                    }
+                  }}
+                  className="mx-1 my-0.5 h-7 min-w-0 flex-1 text-sm"
+                />
+              ) : (
               <button
                 type="button"
                 onClick={() => setSelected(n)}
@@ -2064,6 +2173,22 @@ export function WorkflowsView() {
               >
                 {n}
               </button>
+              )}
+              {renamingWf !== n && confirmDelete !== n && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRenamingWf(n);
+                    setRenameWfValue(n);
+                    setConfirmDelete(null);
+                  }}
+                  title={t("workflows.renameWorkflow")}
+                  aria-label={t("workflows.renameWorkflow")}
+                  className="shrink-0 rounded p-1 text-muted-foreground opacity-0 hover:text-foreground focus:opacity-100 group-hover:opacity-100"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </button>
+              )}
               {confirmDelete === n ? (
                 <span className="flex shrink-0 items-center gap-1 text-xs">
                   <button
@@ -2081,7 +2206,7 @@ export function WorkflowsView() {
                     {t("workflows.cancel")}
                   </button>
                 </span>
-              ) : (
+              ) : renamingWf === n ? null : (
                 <button
                   type="button"
                   onClick={() => setConfirmDelete(n)}
@@ -2471,6 +2596,7 @@ export function WorkflowsView() {
               workflowMaxVisits={def?.max_visits}
               token={token}
               onChange={updateNode}
+              onRename={renameSelectedNode}
               onMakeStart={() => mutate((d) => ({ ...d, start: selectedNode.id }))}
               onDelete={() => deleteNode(selectedNode.id)}
             />

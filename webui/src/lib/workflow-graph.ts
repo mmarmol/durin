@@ -188,6 +188,37 @@ export function parseSecretNames(input: string): string[] | undefined {
   return names.length ? names : undefined;
 }
 
+// Rename a node id across the whole definition: the node itself, the start pointer,
+// every reference from other nodes (next / on_pass / on_fail / cases targets /
+// branches / worker / list_from / branches_from / inputs_from), and the stored
+// canvas position. Returns a new definition; the input is not mutated.
+export function renameNode(def: WorkflowDef, oldId: string, newId: string): WorkflowDef {
+  const ref = (t: string | null | undefined) => (t === oldId ? newId : t);
+  const nodes = def.nodes.map((n) => {
+    const out: WorkflowNodeDef = { ...n, id: n.id === oldId ? newId : n.id };
+    if (out.next !== undefined) out.next = ref(out.next);
+    if (out.on_pass !== undefined) out.on_pass = ref(out.on_pass);
+    if (out.on_fail !== undefined) out.on_fail = ref(out.on_fail);
+    if (out.worker !== undefined) out.worker = ref(out.worker);
+    if (out.list_from !== undefined) out.list_from = ref(out.list_from);
+    if (out.branches_from !== undefined) out.branches_from = ref(out.branches_from);
+    if (Array.isArray(out.branches)) out.branches = out.branches.map((b) => (b === oldId ? newId : b));
+    if (Array.isArray(out.inputs_from)) out.inputs_from = out.inputs_from.map((s) => (s === oldId ? newId : s));
+    if (out.cases != null) {
+      const cases: Record<string, string | null> = {};
+      for (const [label, target] of Object.entries(out.cases)) cases[label] = ref(target) ?? null;
+      out.cases = cases;
+    }
+    return out;
+  });
+  const next: WorkflowDef = { ...def, nodes, start: def.start === oldId ? newId : def.start };
+  if (def.ui?.positions && oldId in def.ui.positions) {
+    const { [oldId]: pos, ...rest } = def.ui.positions;
+    next.ui = { ...def.ui, positions: { ...rest, [newId]: pos } };
+  }
+  return next;
+}
+
 export function safeSubflowTargets(current: string, refs: Record<string, string[]>): string[] {
   const reachesCurrent = new Set<string>();
   const all = Object.keys(refs);
