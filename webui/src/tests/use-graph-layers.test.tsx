@@ -35,6 +35,72 @@ describe("useGraphLayers", () => {
     expect(result.current.layer.kind).toBe("overview");
   });
 
+  it("passes groupBy through to the overview fetch, and refetches when it changes", async () => {
+    const { result, rerender } = renderHook(
+      ({ groupBy }: { groupBy: "community" | "type" }) =>
+        useGraphLayers(true, () => "tok", groupBy),
+      // Widen the literal to match the callback's own `{ groupBy: "community"
+      // | "type" }` annotation — otherwise TS infers Props from this object
+      // alone (`{ groupBy: "community" }`) and rejects the `"type"` rerender
+      // below.
+      { initialProps: { groupBy: "community" as "community" | "type" } },
+    );
+    await waitFor(() => expect(result.current.overview).not.toBeNull());
+    expect(api.fetchMemoryGraphOverview).toHaveBeenCalledWith(
+      "tok",
+      undefined,
+      "community",
+    );
+
+    rerender({ groupBy: "type" });
+    await waitFor(() =>
+      expect(api.fetchMemoryGraphOverview).toHaveBeenLastCalledWith(
+        "tok",
+        undefined,
+        "type",
+      ),
+    );
+  });
+
+  it("clears the overview on a groupBy change before the new payload resolves, instead of flashing the old dimension's map", async () => {
+    const { result, rerender } = renderHook(
+      ({ groupBy }: { groupBy: "community" | "type" }) =>
+        useGraphLayers(true, () => "tok", groupBy),
+      { initialProps: { groupBy: "community" as "community" | "type" } },
+    );
+    await waitFor(() => expect(result.current.overview).not.toBeNull());
+    const communityOverview = result.current.overview;
+
+    // Hold the "type" fetch open so the null-in-between state is observable
+    // instead of racing straight to the resolved payload.
+    let resolveType: (value: typeof OVERVIEW) => void = () => {};
+    api.fetchMemoryGraphOverview.mockReturnValue(
+      new Promise((resolve) => {
+        resolveType = resolve;
+      }),
+    );
+
+    rerender({ groupBy: "type" });
+    await waitFor(() => expect(result.current.overview).toBeNull());
+
+    resolveType({ ...OVERVIEW, mode: "flat" });
+    await waitFor(() => expect(result.current.overview).not.toBeNull());
+    expect(result.current.overview).not.toBe(communityOverview);
+    expect(result.current.overview?.mode).toBe("flat");
+  });
+
+  it("enterCluster passes the current groupBy through to fetchClusterSubgraph", async () => {
+    const { result } = renderHook(() => useGraphLayers(true, () => "tok", "type"));
+    await waitFor(() => expect(result.current.overview).not.toBeNull());
+    await act(() => result.current.enterCluster("type:person", "person"));
+    expect(api.fetchClusterSubgraph).toHaveBeenCalledWith(
+      "tok",
+      "type:person",
+      undefined,
+      "type",
+    );
+  });
+
   it("enterCluster drills and backToOverview returns", async () => {
     const { result } = renderHook(() => useGraphLayers(true, () => "tok"));
     await waitFor(() => expect(result.current.overview).not.toBeNull());

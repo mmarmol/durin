@@ -132,15 +132,29 @@ class MemoryGraphQuery(Query):
 
 
 class MemoryOverviewQuery(Query):
-    """No inputs — returns the clustered overview of the entity graph."""
+    """Clustered overview of the entity graph.
+
+    ``group_by`` chooses how non-hub nodes are grouped into bubbles:
+    "community" (default) by semantic clustering, "type" by the entity's own
+    type field. See ``durin.memory.graph_overview.assemble_overview``.
+    """
+
+    group_by: Literal["community", "type"] = "community"
 
 
 class MemorySubgraphQuery(Query):
-    """Ego- or cluster-scoped neighborhood around a ref."""
+    """Ego- or cluster-scoped neighborhood around a ref.
+
+    ``group_by`` only matters for ``scope="cluster"``: it must match the
+    grouping mode the overview built ``ref`` under (see
+    ``MemoryOverviewQuery``), since the two modes partition the graph
+    differently and a bubble ref only resolves under its own mode.
+    """
 
     ref: str
     hops: int = 1
     scope: Literal["ego", "cluster"] = "ego"
+    group_by: Literal["community", "type"] = "community"
 
 
 class MemoryEntityQuery(Query):
@@ -382,7 +396,7 @@ class MemoryService:
         from durin.memory.graph_overview import build_overview
 
         ws = self._workspace_resolver()
-        payload = await asyncio.to_thread(build_overview, ws)
+        payload = await asyncio.to_thread(build_overview, ws, query.group_by)
         data = {k: v for k, v in payload.items() if k != "members"}
         return MemoryResult(data=data)
 
@@ -411,7 +425,7 @@ class MemoryService:
         if query.scope == "cluster":
             try:
                 payload = await asyncio.to_thread(
-                    build_cluster_subgraph, ws, query.ref
+                    build_cluster_subgraph, ws, query.ref, group_by=query.group_by
                 )
             except KeyError:
                 raise NotFoundError(

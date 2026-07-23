@@ -1,39 +1,64 @@
 """Overview builder: cluster bubbles + semantic hubs for the memory graph.
 
-Structure is computed from SEMANTIC evidence only: entity-entity co-mention
-edges and typed relations between consolidated pages (plus reference
-``derived_from`` links). Sessions and phantoms never enter clustering input,
-hub ranking, or size computation — session weight is a mechanical message
-count, sessions edge into everything they touched, and with few sessions the
-"communities" would degenerate into "what session A touched". A node
-qualifies as a hub only when it is a clear outlier — at least twice the
-median semantic weight — so uniform or young graphs surface no hubs at all,
-and the qualifying count is always capped at HUB_COUNT.
+Clustering topology is computed from SEMANTIC evidence only: entity-entity
+co-mention edges and typed relations between consolidated pages (plus
+reference ``derived_from`` links). Sessions and phantoms never enter
+clustering input — a session edges into everything it touched, and with
+few sessions the "communities" would degenerate into "what session A
+touched" rather than a real topic cluster. Session evidence does feed the
+per-entity importance score (see ``_entity_scores``) as a scalar on top of
+a node already placed by semantic structure — real workspaces carry no
+other signal of what matters — but it never becomes an edge between nodes.
+A node qualifies as a hub only when its score is a clear outlier — at
+least twice the median score among entities — so uniform or young graphs
+surface no hubs at all, and the qualifying count is always capped at
+HUB_COUNT.
+
+Grouping the remainder below the hubs is a caller choice (``group_by``):
+"community" (default) runs the label-propagation clustering described
+above; "type" skips it and partitions the same remaining nodes by their
+own ``type`` field instead. Hub extraction never depends on this choice —
+it always runs first, against the full semantic node set.
 """
 
 from __future__ import annotations
 
+import math
 import threading
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from durin.memory.graph import build_memory_graph
 from durin.memory.paths import walk_class
 
 HUB_COUNT = 20
-BUBBLE_MIN_MEMBERS = 15
+BUBBLE_MIN_MEMBERS = 8
 BUBBLE_DISPLAY_CAP = 30
 LOOSE_DISPLAY_CAP = 30
+# Damping on distinct-session evidence in the importance score (see
+# `_entity_scores`) — keeps high-churn operational entities from drowning
+# the semantic structure as session volume grows.
+SESSION_LOG_FACTOR = 2.0
 
 OTHERS_ID = "__others__"
+
+# Valid `group_by` values for `assemble_overview`/`build_overview`. "community"
+# clusters via label propagation (the default); "type" partitions by the
+# node's own `type` field instead. See `assemble_overview`.
+GROUP_BY_VALUES = ("community", "type")
 
 _UNCAPPED_NODES = 100_000
 _UNCAPPED_EDGES = 400_000
 _CACHE_MAX = 4
 
+_K = TypeVar("_K")
+
 _cache: dict[Path, tuple[int, dict[str, Any]]] = {}
-_overview_cache: dict[Path, tuple[int, dict[str, Any]]] = {}
+# Keyed by (workspace, group_by): the two grouping modes partition the same
+# payload differently, so a community-mode overview must never be served for
+# a type-mode request or vice versa.
+_overview_cache: dict[tuple[Path, str], tuple[int, dict[str, Any]]] = {}
 _lock = threading.Lock()
 
 _ENTRY_CLASSES = ("episodic", "stable", "corpus")
@@ -64,9 +89,10 @@ def _semantic_view(
 
 def _extract_hubs(
     nodes: list[dict[str, Any]],
+    scores: dict[str, float],
     top_n: int = HUB_COUNT,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Top entities by semantic weight, removed before clustering.
+    """Top entities by importance score, removed before clustering.
 
     Mega-connectors bridge every community and would merge them into one
     blob, so they are drawn individually instead. References hold real
@@ -74,12 +100,47 @@ def _extract_hubs(
     """
     eligible = sorted(
         (n for n in nodes if n["type"] != "reference"),
-        key=lambda n: (-int(n["weight"]), n["id"]),
+        key=lambda n: (-scores[n["id"]], n["id"]),
     )
     hubs = eligible[:top_n]
     hub_ids = {n["id"] for n in hubs}
     rest = [n for n in nodes if n["id"] not in hub_ids]
     return hubs, rest
+
+
+def _entity_scores(
+    payload: dict[str, Any],
+    sem_nodes: list[dict[str, Any]],
+    sem_edges: list[dict[str, Any]],
+) -> dict[str, float]:
+    """Overview importance score per semantic node.
+
+    Real workspaces carry no per-entry mention counts (the legacy entry
+    classes are empty), so raw ``weight`` is a dead signal. Importance is
+    instead: relation/derived degree — dream's deliberate structure — plus
+    a log-damped count of distinct sessions whose evidence touched the
+    node. The damping keeps high-churn operational entities (support
+    tickets, test cases) from drowning the semantic structure as session
+    volume grows.
+    """
+    degree: dict[str, int] = defaultdict(int)
+    for e in sem_edges:
+        degree[e["source"]] += 1
+        degree[e["target"]] += 1
+    session_touches: dict[str, int] = defaultdict(int)
+    for e in payload["edges"]:
+        source, target = e["source"], e["target"]
+        source_is_session = source.startswith("session:")
+        target_is_session = target.startswith("session:")
+        if source_is_session and not target_is_session:
+            session_touches[target] += 1
+        elif target_is_session and not source_is_session:
+            session_touches[source] += 1
+    return {
+        n["id"]: degree.get(n["id"], 0)
+        + SESSION_LOG_FACTOR * math.log1p(session_touches.get(n["id"], 0))
+        for n in sem_nodes
+    }
 
 
 def _label_propagation(
@@ -120,6 +181,18 @@ def _communities(labels: dict[str, str]) -> dict[str, list[str]]:
     return {label: sorted(members) for label, members in out.items()}
 
 
+def _type_groups(
+    node_ids: list[str], by_id: dict[str, dict[str, Any]]
+) -> dict[str, list[str]]:
+    """Partition ids by their node's own `type` field — `group_by="type"`'s
+    stand-in for `_communities`. Same shape (group key -> sorted member ids)
+    so the rest of `assemble_overview` treats both grouping modes alike."""
+    out: dict[str, list[str]] = defaultdict(list)
+    for nid in node_ids:
+        out[by_id[nid]["type"]].append(nid)
+    return {t: sorted(members) for t, members in out.items()}
+
+
 def _build_adjacency(
     edges: list[dict[str, Any]],
 ) -> dict[str, list[tuple[str, float]]]:
@@ -131,53 +204,85 @@ def _build_adjacency(
     return adj
 
 
-def assemble_overview(payload: dict[str, Any]) -> dict[str, Any]:
+def assemble_overview(
+    payload: dict[str, Any], group_by: str = "community"
+) -> dict[str, Any]:
     """Aggregate the full uncapped graph payload into the overview shape.
 
     Hubs come out first (they bridge everything): an entity qualifies only
-    when its weight is at least twice the median semantic weight (floor of
-    3), and the qualifying count is capped at HUB_COUNT — so uniform or
-    young graphs extract no hubs at all. Label propagation then runs on the
-    rest; communities >= BUBBLE_MIN_MEMBERS become bubbles keyed by their
-    heaviest member; the rest stay as loose nodes, display-capped at
-    LOOSE_DISPLAY_CAP by weight, with any overflow folded into the same
-    others bubble that absorbs bubble overflow. Edges are summed between
-    containers. mode="flat" when no community reaches the threshold — small
-    or young workspaces render the plain graph instead, though hubs (found
-    before clustering is attempted) still populate when present.
+    when its importance score (see ``_entity_scores``) is at least twice
+    the median score among entities (floor 3.0), and the qualifying count
+    is capped at HUB_COUNT — so uniform or young graphs extract no hubs at
+    all. This step never depends on ``group_by``.
+
+    What happens to the rest depends on ``group_by``. ``"community"``
+    (default) runs label propagation and groups >= BUBBLE_MIN_MEMBERS become
+    bubbles keyed by their highest-scoring member. ``"type"`` skips
+    propagation and partitions the same nodes by their own ``type`` field
+    instead; a type's bubble is keyed ``"type:<typename>"`` and named
+    ``<typename>``. Either way, groups under the threshold stay as loose
+    nodes, display-capped at LOOSE_DISPLAY_CAP by score, with any overflow
+    folded into the same others bubble that absorbs bubble overflow; edges
+    are summed between containers; mode="flat" when no group reaches the
+    threshold — small or young workspaces render the plain graph instead,
+    though hubs (found before grouping is attempted) still populate when
+    present. Any other ``group_by`` value raises ``ValueError``.
     """
+    if group_by not in GROUP_BY_VALUES:
+        raise ValueError(f"unknown group_by: {group_by!r}")
     sem_nodes, sem_edges = _semantic_view(payload)
     by_id = {n["id"]: n for n in sem_nodes}
+    scores = _entity_scores(payload, sem_nodes, sem_edges)
 
-    # Hub qualification: a hub is an entity clearly heavier than the typical
-    # node — at least twice the median semantic weight (and never below 3).
+    # Hub qualification: a hub is an entity clearly higher-scoring than the
+    # typical node — at least twice the median score (and never below 3).
     # Uniform or young graphs therefore extract no hubs at all (nothing is
     # an outlier), and the count is hard-capped so the overview stays small.
     non_ref_nodes = [n for n in sem_nodes if n["type"] != "reference"]
     if non_ref_nodes:
-        weights = sorted(int(n["weight"]) for n in non_ref_nodes)
-        median = weights[len(weights) // 2]
-        floor = max(3, 2 * median)
-        qualifying = sum(1 for n in non_ref_nodes if int(n["weight"]) >= floor)
-        hubs, rest = _extract_hubs(sem_nodes, top_n=min(HUB_COUNT, qualifying))
+        node_scores = sorted(scores[n["id"]] for n in non_ref_nodes)
+        median = node_scores[len(node_scores) // 2]
+        floor = max(3.0, 2 * median)
+        qualifying = sum(1 for n in non_ref_nodes if scores[n["id"]] >= floor)
+        hubs, rest = _extract_hubs(sem_nodes, scores, top_n=min(HUB_COUNT, qualifying))
     else:
         hubs, rest = [], sem_nodes
     hub_ids = {n["id"] for n in hubs}
+    # Copies, not mutation: `payload` (and therefore `sem_nodes`) may be a
+    # cached object shared across calls — the emitted "weight" carries the
+    # score, but the cached node dict's own weight field is left untouched.
+    hubs_out = [{**n, "weight": round(scores[n["id"]], 1)} for n in hubs]
     rest_ids = [n["id"] for n in rest]
-    rest_edges = [
-        e
-        for e in sem_edges
-        if e["source"] not in hub_ids and e["target"] not in hub_ids
-    ]
-    labels = _label_propagation(rest_ids, _build_adjacency(rest_edges))
-    comms = _communities(labels)
+
+    if group_by == "type":
+        comms = _type_groups(rest_ids, by_id)
+    else:
+        rest_edges = [
+            e
+            for e in sem_edges
+            if e["source"] not in hub_ids and e["target"] not in hub_ids
+        ]
+        labels = _label_propagation(rest_ids, _build_adjacency(rest_edges))
+        comms = _communities(labels)
 
     def _rep(members: list[str]) -> str:
-        return min(members, key=lambda m: (-int(by_id[m]["weight"]), m))
+        return min(members, key=lambda m: (-scores[m], m))
+
+    def _identity(key: str, members: list[str]) -> tuple[str, str]:
+        """Bubble (id, name) for one group: a type group is named after the
+        type itself; a community is named after its highest-scoring member."""
+        if group_by == "type":
+            return f"type:{key}", key
+        rep = _rep(members)
+        return rep, by_id[rep]["name"]
 
     sized = sorted(
-        (members for members in comms.values() if len(members) >= BUBBLE_MIN_MEMBERS),
-        key=lambda m: (-len(m), _rep(m)),
+        (
+            (key, members)
+            for key, members in comms.items()
+            if len(members) >= BUBBLE_MIN_MEMBERS
+        ),
+        key=lambda kv: (-len(kv[1]), kv[0] if group_by == "type" else _rep(kv[1])),
     )
     loose_ids = sorted(
         nid
@@ -202,25 +307,23 @@ def assemble_overview(payload: dict[str, Any]) -> dict[str, Any]:
         return {
             "mode": "flat",
             "bubbles": [],
-            "hubs": hubs,
+            "hubs": hubs_out,
             "loose": [],
             "edges": [],
             "members": {},
             "stats": stats,
         }
 
-    loose_by_weight = sorted(
-        loose_ids, key=lambda nid: (-int(by_id[nid]["weight"]), nid)
-    )
-    displayed_loose_ids = loose_by_weight[:LOOSE_DISPLAY_CAP]
-    loose_overflow_ids = loose_by_weight[LOOSE_DISPLAY_CAP:]
+    loose_by_score = sorted(loose_ids, key=lambda nid: (-scores[nid], nid))
+    displayed_loose_ids = loose_by_score[:LOOSE_DISPLAY_CAP]
+    loose_overflow_ids = loose_by_score[LOOSE_DISPLAY_CAP:]
 
     shown, overflow = sized[:BUBBLE_DISPLAY_CAP], sized[BUBBLE_DISPLAY_CAP:]
     members_map: dict[str, list[str]] = {}
     bubbles: list[dict[str, Any]] = []
 
     def _bubble(bid: str, name: str, members: list[str]) -> dict[str, Any]:
-        top = sorted(members, key=lambda m: (-int(by_id[m]["weight"]), m))[:5]
+        top = sorted(members, key=lambda m: (-scores[m], m))[:5]
         type_counts: dict[str, int] = defaultdict(int)
         for m in members:
             type_counts[by_id[m]["type"]] += 1
@@ -239,16 +342,16 @@ def assemble_overview(payload: dict[str, Any]) -> dict[str, Any]:
                     "id": m,
                     "name": by_id[m]["name"],
                     "type": by_id[m]["type"],
-                    "weight": by_id[m]["weight"],
+                    "weight": round(scores[m], 1),
                 }
                 for m in top
             ],
         }
 
-    for members in shown:
-        rep = _rep(members)
-        bubbles.append(_bubble(rep, by_id[rep]["name"], members))
-    overflow_members = sorted(nid for members in overflow for nid in members)
+    for key, members in shown:
+        bid, name = _identity(key, members)
+        bubbles.append(_bubble(bid, name, members))
+    overflow_members = sorted(nid for _key, members in overflow for nid in members)
     others_members = sorted(overflow_members + loose_overflow_ids)
     if others_members:
         bubbles.append(_bubble(OTHERS_ID, "__others__", others_members))
@@ -278,8 +381,11 @@ def assemble_overview(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "mode": "clustered",
         "bubbles": bubbles,
-        "hubs": hubs,
-        "loose": [by_id[nid] for nid in displayed_loose_ids],
+        "hubs": hubs_out,
+        "loose": [
+            {**by_id[nid], "weight": round(scores[nid], 1)}
+            for nid in displayed_loose_ids
+        ],
         "edges": edges,
         "members": members_map,
         "stats": stats,
@@ -311,18 +417,20 @@ def _tree_signature(workspace: Path) -> int:
 
 
 def _put(
-    cache: dict[Path, tuple[int, dict[str, Any]]],
-    ws: Path,
+    cache: dict[_K, tuple[int, dict[str, Any]]],
+    key: _K,
     value: tuple[int, dict[str, Any]],
 ) -> None:
     """Insert/update under the caller's lock; evict oldest only on growth.
 
-    Refreshing a key already in the cache must never evict anything else —
-    eviction only makes room for a workspace the cache hasn't seen before.
+    Generic over the key shape: `_cache` keys on the workspace path alone,
+    `_overview_cache` keys on (workspace, group_by). Refreshing a key already
+    in the cache must never evict anything else — eviction only makes room
+    for a key the cache hasn't seen before.
     """
-    if ws not in cache and len(cache) >= _CACHE_MAX:
+    if key not in cache and len(cache) >= _CACHE_MAX:
         del cache[next(iter(cache))]
-    cache[ws] = value
+    cache[key] = value
 
 
 def _cached_payload(workspace: Path) -> tuple[int, dict[str, Any]]:
@@ -356,7 +464,9 @@ def get_full_graph_cached(workspace: Path) -> dict[str, Any]:
     return _cached_payload(workspace)[1]
 
 
-def _overview_from(ws: Path, sig: int, payload: dict[str, Any]) -> dict[str, Any]:
+def _overview_from(
+    ws: Path, sig: int, payload: dict[str, Any], group_by: str = "community"
+) -> dict[str, Any]:
     """Overview for an already-fetched (signature, payload) snapshot.
 
     Split out of `build_overview` so a caller that also needs the payload
@@ -366,28 +476,34 @@ def _overview_from(ws: Path, sig: int, payload: dict[str, Any]) -> dict[str, Any
     concurrent write could land between, desyncing the overview's members
     from the payload's node lookup.
 
-    Both cache levels key on the same tree signature, so the overview cache
-    invalidates exactly when the underlying payload would be rebuilt — no
-    separate identity to fall out of sync with it.
+    Cached under (ws, group_by): the two grouping modes partition the same
+    payload differently, so each gets its own slot rather than one mode's
+    result being served for the other. Both cache levels key on the same
+    tree signature, so the overview cache invalidates exactly when the
+    underlying payload would be rebuilt — no separate identity to fall out
+    of sync with it.
     """
+    cache_key = (ws, group_by)
     with _lock:
-        hit = _overview_cache.get(ws)
+        hit = _overview_cache.get(cache_key)
         if hit is not None and hit[0] == sig:
             return hit[1]
-    overview = assemble_overview(payload)
+    overview = assemble_overview(payload, group_by=group_by)
     with _lock:
-        _put(_overview_cache, ws, (sig, overview))
+        _put(_overview_cache, cache_key, (sig, overview))
     return overview
 
 
-def build_overview(workspace: Path) -> dict[str, Any]:
+def build_overview(workspace: Path, group_by: str = "community") -> dict[str, Any]:
     """Overview payload for the workspace, cached at both levels.
 
-    Synchronous and disk-heavy — event-loop callers hop through `asyncio.to_thread`.
+    ``group_by`` selects how non-hub nodes are grouped into bubbles — see
+    `assemble_overview`. Synchronous and disk-heavy — event-loop callers hop
+    through `asyncio.to_thread`.
     """
     ws = workspace.resolve()
     sig, payload = _cached_payload(ws)
-    return _overview_from(ws, sig, payload)
+    return _overview_from(ws, sig, payload, group_by=group_by)
 
 
 def _clear_all() -> None:
@@ -401,21 +517,27 @@ def build_cluster_subgraph(
     workspace: Path,
     ref: str,
     max_members: int = 150,
+    group_by: str = "community",
 ) -> dict[str, Any]:
     """Members-of-bubble subgraph for the neighborhood layer.
 
-    Keyed by the bubble id (representative ref, or OTHERS_ID). Raises
-    KeyError when ``ref`` is not a bubble in the current overview — the
-    caller maps that to a 404 and the client falls back to the overview.
+    Keyed by the bubble id (representative ref, or OTHERS_ID) — for
+    ``group_by="type"`` that id is ``"type:<typename>"``. Raises KeyError
+    when ``ref`` is not a bubble in the current overview — the caller maps
+    that to a 404 and the client falls back to the overview. ``group_by``
+    must match the grouping mode the ref was drawn from: the two modes
+    partition the same payload differently, so a ref only resolves under
+    the overview it came from (see `assemble_overview`).
 
-    Members are capped at ``max_members``, kept by descending weight with
-    a deterministic tie-break on id; ``total_members`` always reports the
-    full pre-cap member count, capped or not. Phantom entities and session
-    nodes count as scaffolding — context around the members, toggleable
-    in the client — when they sit directly on an edge to a KEPT member;
-    that check runs against the capped member set only, so a scaffolding
-    node can never itself unlock a second one purely by association —
-    inclusion never cascades past one hop from a real member.
+    Members are capped at ``max_members``, kept by descending importance
+    score (see ``_entity_scores``) with a deterministic tie-break on id;
+    ``total_members`` always reports the full pre-cap member count, capped
+    or not. Phantom entities and session nodes count as scaffolding —
+    context around the members, toggleable in the client — when they sit
+    directly on an edge to a KEPT member; that check runs against the
+    capped member set only, so a scaffolding node can never itself unlock
+    a second one purely by association — inclusion never cascades past
+    one hop from a real member.
 
     Overview and payload come from one shared (signature, payload)
     snapshot — a single tree stat-walk — so a member can never point at a
@@ -425,15 +547,17 @@ def build_cluster_subgraph(
     """
     ws = workspace.resolve()
     sig, payload = _cached_payload(ws)
-    overview = _overview_from(ws, sig, payload)
+    overview = _overview_from(ws, sig, payload, group_by=group_by)
     members = overview.get("members", {}).get(ref)
     if members is None:
         raise KeyError(ref)
     by_id = {n["id"]: n for n in payload["nodes"]}
+    sem_nodes, sem_edges = _semantic_view(payload)
+    scores = _entity_scores(payload, sem_nodes, sem_edges)
     member_set = set(members)
     kept_members = sorted(
         member_set,
-        key=lambda m: (-int(by_id[m]["weight"]), m),
+        key=lambda m: (-scores[m], m),
     )[:max_members]
     kept_member_ids = set(kept_members)
     scaffold: set[str] = set()
@@ -448,7 +572,12 @@ def build_cluster_subgraph(
             if n.get("phantom") or n["type"] == "session":
                 scaffold.add(a)
     kept = kept_member_ids | scaffold
-    nodes = [by_id[nid] for nid in sorted(kept)]
+    nodes = [
+        {**by_id[nid], "weight": round(scores[nid], 1)}
+        if nid in kept_member_ids
+        else by_id[nid]
+        for nid in sorted(kept)
+    ]
     edges = [
         e
         for e in payload["edges"]

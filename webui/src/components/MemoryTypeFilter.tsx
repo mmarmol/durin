@@ -16,7 +16,12 @@ interface MemoryTypeFilterProps {
   tail?: TypeLegendItem[];
   /** Phantom node count; when > 0 a `phantom` pseudo-type row is offered. */
   phantomCount: number;
-  /** Currently hidden types (may include the `phantom` pseudo-type). */
+  /** Zero-edge node count; when > 0 a `disconnected` pseudo-type row is
+   *  offered, labeled via i18n (unlike phantom, "disconnected" isn't a
+   *  real type name, so it has no literal string of its own to display). */
+  disconnectedCount?: number;
+  /** Currently hidden types (may include the `phantom`/`disconnected`
+   *  pseudo-types). */
   hidden: Set<string>;
   onToggle: (type: string) => void;
   onShowAll: () => void;
@@ -33,6 +38,7 @@ export function MemoryTypeFilter({
   types,
   tail = [],
   phantomCount,
+  disconnectedCount = 0,
   hidden,
   onToggle,
   onShowAll,
@@ -71,10 +77,12 @@ export function MemoryTypeFilter({
   }, [open]);
 
   const hasPhantom = phantomCount > 0;
+  const hasDisconnected = disconnectedCount > 0;
   const visibleCount =
     types.filter((tl) => !hidden.has(tl.type)).length +
     tail.filter((tl) => !hidden.has(tl.type)).length +
-    (hasPhantom && !hidden.has("phantom") ? 1 : 0);
+    (hasPhantom && !hidden.has("phantom") ? 1 : 0) +
+    (hasDisconnected && !hidden.has("disconnected") ? 1 : 0);
 
   const needle = query.trim().toLowerCase();
   const filtered = useMemo(
@@ -82,13 +90,17 @@ export function MemoryTypeFilter({
     [types, needle],
   );
   const showPhantomRow = hasPhantom && (!needle || "phantom".includes(needle));
+  const disconnectedLabel = t("memoryGraph.typeDisconnected");
+  const showDisconnectedRow =
+    hasDisconnected && (!needle || disconnectedLabel.toLowerCase().includes(needle));
 
-  if (types.length === 0 && tail.length === 0 && !hasPhantom) return null;
+  if (types.length === 0 && tail.length === 0 && !hasPhantom && !hasDisconnected) return null;
 
   function row(
     type: string,
     color: string | null,
     count: number | null,
+    label: string = type,
   ) {
     const isHidden = hidden.has(type);
     // Row = two sibling buttons (never nested — invalid + ambiguous a11y name):
@@ -115,7 +127,7 @@ export function MemoryTypeFilter({
               isHidden && "text-muted-foreground line-through",
             )}
           >
-            {type}
+            {label}
           </span>
           {count !== null ? (
             <span className="tabular-nums text-[10px] text-muted-foreground">{count}</span>
@@ -129,7 +141,7 @@ export function MemoryTypeFilter({
         <button
           type="button"
           onClick={() => onSolo(type)}
-          aria-label={`${t("memoryGraph.onlyType")} ${type}`}
+          aria-label={`${t("memoryGraph.onlyType")} ${label}`}
           className="rounded px-1 py-0.5 text-[10px] text-primary opacity-0 hover:bg-primary/10 focus:opacity-100 group-hover:opacity-100"
         >
           {t("memoryGraph.onlyType")}
@@ -212,7 +224,7 @@ export function MemoryTypeFilter({
             />
           </div>
           <div className="max-h-56 overflow-y-auto">
-            {filtered.length === 0 && !showPhantomRow && tail.length === 0 ? (
+            {filtered.length === 0 && !showPhantomRow && !showDisconnectedRow && tail.length === 0 ? (
               <div className="px-1.5 py-2 text-center text-muted-foreground">
                 {t("memoryGraph.noMatches")}
               </div>
@@ -223,6 +235,9 @@ export function MemoryTypeFilter({
                     summary row, not an individually-searchable type. */}
                 {tail.length > 0 ? tailRow() : null}
                 {showPhantomRow ? row("phantom", null, phantomCount) : null}
+                {showDisconnectedRow
+                  ? row("disconnected", null, disconnectedCount, disconnectedLabel)
+                  : null}
               </>
             )}
           </div>

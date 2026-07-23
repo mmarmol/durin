@@ -101,6 +101,12 @@ describe("MemoryGraphView layered", () => {
     // clear it so one test's view choice can't leak into the next test's
     // initial render.
     localStorage.clear();
+    // Table is the first-run default (no stored preference) as of Change 1 —
+    // covered by its own test below, which clears this back out. Every other
+    // test here exercises graph-view-specific behaviour (the clustered
+    // overview, canvas drills, breadcrumb, ...), so seed the stored
+    // preference as if the user had already chosen Graph.
+    localStorage.setItem("durin.memoryGraph.view", "graph");
     vi.mocked(api.fetchMemoryGraph).mockReset().mockResolvedValue(EMPTY_GRAPH);
     vi.mocked(api.fetchMemoryGraphOverview)
       .mockReset()
@@ -117,6 +123,9 @@ describe("MemoryGraphView layered", () => {
   });
 
   it("shows honest totals from the overview stats in clustered mode", async () => {
+    // Change 1: grouped rendering is no longer the default — opt into the
+    // "structure" (community) dimension to exercise it.
+    localStorage.setItem("durin.memoryGraph.graphMode", "structure");
     render(wrap(<MemoryGraphView active />));
     await waitFor(() =>
       expect(screen.getByText(/1[.,]?238/)).toBeInTheDocument(),
@@ -124,6 +133,7 @@ describe("MemoryGraphView layered", () => {
   });
 
   it("hides the type filter in the clustered overview, even though hub types exist", async () => {
+    localStorage.setItem("durin.memoryGraph.graphMode", "structure");
     render(wrap(<MemoryGraphView active />));
     // Anchor on the clustered totals so the absence check happens after the
     // overview has actually loaded (an absence assertion checked at t=0 would
@@ -135,6 +145,7 @@ describe("MemoryGraphView layered", () => {
   });
 
   it("shows the type filter in flat mode", async () => {
+    localStorage.setItem("durin.memoryGraph.graphMode", "structure");
     vi.mocked(api.fetchMemoryGraph).mockResolvedValue({
       nodes: [{ id: "person:ada", type: "person", name: "Ada", aliases: [], weight: 12 }],
       edges: [],
@@ -168,6 +179,12 @@ describe("MemoryGraphView layered", () => {
    *  t=0 would pass trivially, before either fetch resolves), then waits
    *  for a raw card to confirm Cards actually rendered before returning. */
   async function renderCardsView() {
+    // Change 1: the graph's default sub-mode is ungrouped, which would show
+    // RAW_DATA's flat counts instead of the clustered totals this helper
+    // anchors on below — opt into "structure" so that anchor still means
+    // "the overview resolved" the way it did before grouping became a
+    // choice.
+    localStorage.setItem("durin.memoryGraph.graphMode", "structure");
     vi.mocked(api.fetchMemoryGraph).mockResolvedValue(RAW_DATA);
     const user = userEvent.setup();
     render(wrap(<MemoryGraphView active />));
@@ -277,6 +294,7 @@ describe("MemoryGraphView layered", () => {
   });
 
   it("keeps the last overview and shows an inline error on refresh failure", async () => {
+    localStorage.setItem("durin.memoryGraph.graphMode", "structure");
     render(wrap(<MemoryGraphView active />));
     await waitFor(() =>
       expect(screen.getByText(/1[.,]?238/)).toBeInTheDocument(),
@@ -316,6 +334,9 @@ describe("MemoryGraphView layered", () => {
   });
 
   it("shows a dismissible stale-cluster pill after a drill 404s, and restores the overview", async () => {
+    // This test's click-to-drill gesture targets a bubble, which only draws
+    // in a grouped sub-mode — opt into "structure" (see Change 1).
+    localStorage.setItem("durin.memoryGraph.graphMode", "structure");
     // A single bubble (no hubs/loose) so the click below is unambiguous —
     // see the dispatch comment for why this doesn't need real geometry.
     vi.mocked(api.fetchMemoryGraphOverview).mockResolvedValue({
@@ -369,5 +390,199 @@ describe("MemoryGraphView layered", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /close/i }));
     expect(screen.queryByText(/changed since the map was built/i)).toBeNull();
+  });
+
+  // --- Change 1/2: list-first default, group-by selector ------------------
+
+  it("defaults to the table/list view when no view preference is stored", async () => {
+    // Override the shared beforeEach's seeded "graph" preference — this is
+    // the one test in the file that must see the true first-run default.
+    localStorage.clear();
+    vi.mocked(api.fetchMemoryGraph).mockResolvedValue(RAW_DATA);
+    render(wrap(<MemoryGraphView active />));
+    await waitFor(() => expect(screen.getByText("Aurora")).toBeInTheDocument());
+    // No canvas ever mounts for the table presentation.
+    expect(document.querySelector("canvas")).toBeNull();
+  });
+
+  it("still opens in the graph view when \"graph\" is the stored preference", async () => {
+    localStorage.setItem("durin.memoryGraph.view", "graph");
+    render(wrap(<MemoryGraphView active />));
+    await waitFor(() => expect(document.querySelector("canvas")).not.toBeNull());
+  });
+
+  it("defaults the graph to ungrouped — flat header counts, not the overview's totals", async () => {
+    vi.mocked(api.fetchMemoryGraph).mockResolvedValue(RAW_DATA);
+    render(wrap(<MemoryGraphView active />));
+
+    // RAW_DATA is 2 nodes / 0 edges — the flat counts show even though a
+    // clustered overview (CLUSTERED_OVERVIEW, 1,238 entities) is available
+    // and gets fetched in the background (hubs/stats reuse).
+    await waitFor(() => expect(screen.getByText(/2 nodes/)).toBeInTheDocument());
+    expect(screen.queryByText(/1[.,]?238/)).toBeNull();
+
+    expect(screen.getByRole("button", { name: "Ungrouped" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Structure" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    expect(screen.getByRole("button", { name: "Type" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  });
+
+  it("switches to Structure and shows the overview's honest totals", async () => {
+    vi.mocked(api.fetchMemoryGraph).mockResolvedValue(RAW_DATA);
+    const user = userEvent.setup();
+    render(wrap(<MemoryGraphView active />));
+    await waitFor(() => expect(screen.getByText(/2 nodes/)).toBeInTheDocument());
+
+    await user.click(screen.getByRole("button", { name: "Structure" }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/1[.,]?238/)).toBeInTheDocument(),
+    );
+    expect(screen.queryByText(/2 nodes/)).toBeNull();
+  });
+
+  it('migrates a stored legacy "clusters" graphMode to "structure"', async () => {
+    localStorage.setItem("durin.memoryGraph.graphMode", "clusters");
+    render(wrap(<MemoryGraphView active />));
+
+    await waitFor(() =>
+      expect(screen.getByText(/1[.,]?238/)).toBeInTheDocument(),
+    );
+    expect(screen.getByRole("button", { name: "Structure" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  it("keeps the group-by selector visible and usable when a grouped mode's overview reports flat", async () => {
+    // "Structure" is picked, but this dimension's overview comes back flat
+    // (too small/homogeneous to bubble) — overviewGraph is null even though
+    // graphMode isn't "all". Pre-fix, showGraphModeToggle required
+    // overviewGraph != null, so the selector vanished with no in-app way
+    // back to Ungrouped.
+    localStorage.setItem("durin.memoryGraph.graphMode", "structure");
+    vi.mocked(api.fetchMemoryGraph).mockResolvedValue(RAW_DATA);
+    vi.mocked(api.fetchMemoryGraphOverview).mockResolvedValue({
+      ...CLUSTERED_OVERVIEW,
+      mode: "flat",
+    });
+    const user = userEvent.setup();
+    render(wrap(<MemoryGraphView active />));
+    // The seam already falls back to the raw graph when the overview is
+    // flat — RAW_DATA's flat counts confirm content actually rendered.
+    await waitFor(() => expect(screen.getByText(/2 nodes/)).toBeInTheDocument());
+
+    const structureBtn = screen.getByRole("button", { name: "Structure" });
+    expect(structureBtn).toBeInTheDocument();
+    expect(structureBtn).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(screen.getByRole("button", { name: "Ungrouped" }));
+    expect(screen.getByRole("button", { name: "Ungrouped" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  it("orders the view switcher Table, Cards, Graph", async () => {
+    render(wrap(<MemoryGraphView active />));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^table$/i })).toBeInTheDocument(),
+    );
+    const buttons = screen.getAllByRole("button", {
+      name: /^(table|cards|graph)$/i,
+    });
+    expect(buttons.map((b) => b.textContent?.trim())).toEqual([
+      "Table",
+      "Cards",
+      "Graph",
+    ]);
+  });
+
+  // --- Change 2: disconnected pseudo-filter -------------------------------
+
+  it('shows a "no connections" pseudo-row in the type filter, hidden by default, but never in Cards view', async () => {
+    // 2 connected (an edge between them) + 3 isolated nodes.
+    vi.mocked(api.fetchMemoryGraph).mockResolvedValue({
+      nodes: [
+        { id: "person:aurora", type: "person", name: "Aurora", aliases: [], weight: 5 },
+        { id: "person:borealis", type: "person", name: "Borealis", aliases: [], weight: 3 },
+        { id: "topic:lonely1", type: "topic", name: "Lonely1", aliases: [], weight: 1 },
+        { id: "topic:lonely2", type: "topic", name: "Lonely2", aliases: [], weight: 1 },
+        { id: "topic:lonely3", type: "topic", name: "Lonely3", aliases: [], weight: 1 },
+      ],
+      edges: [{ source: "person:aurora", target: "person:borealis", weight: 2 }],
+      stats: {
+        node_count: 5,
+        edge_count: 1,
+        phantom_count: 0,
+        truncated_nodes: false,
+        truncated_edges: false,
+        types: ["person", "topic"],
+      },
+    });
+    const user = userEvent.setup();
+    render(wrap(<MemoryGraphView active />));
+    await waitFor(() => expect(screen.getByText(/5 nodes/)).toBeInTheDocument());
+
+    await user.click(screen.getByRole("button", { name: /types/i }));
+    const row = screen.getByText("no connections").closest("button");
+    expect(row).not.toBeNull();
+    expect(row).toHaveTextContent("3");
+    // Default-hidden, matching the phantom pseudo-type's default.
+    expect(row).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(row!);
+    expect(row).toHaveAttribute("aria-pressed", "true");
+
+    // Cards has no connectivity awareness at all — disconnectedIds is a
+    // raw-graph-canvas concept (gated on renderingRawGraph). The pseudo-row
+    // must not follow the shared toolbar into Cards, where toggling it would
+    // visibly do nothing.
+    await user.click(screen.getByRole("button", { name: /cards/i }));
+    await waitFor(() => expect(screen.getByText("Aurora")).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: /types/i }));
+    expect(screen.queryByText("no connections")).toBeNull();
+  });
+
+  // --- Change 3: Related mini-graph panel integration ---------------------
+
+  const ENTITY_DETAIL = {
+    ref: "person:aurora",
+    page: {
+      type: "person",
+      name: "Aurora",
+      aliases: [],
+      identifiers: null,
+      extra: {},
+      body: "",
+      dream_processed_through: null,
+    },
+    provenance: [],
+    history: [],
+    archive: [],
+    entries: [],
+  };
+
+  it("renders the Related mini-graph section when opening a real entity's panel from Cards", async () => {
+    vi.mocked(api.fetchMemoryEntity).mockResolvedValue(ENTITY_DETAIL);
+    const user = await renderCardsView();
+    await user.click(screen.getByText("Aurora"));
+    // Selecting a non-phantom entity opens on the Body tab by default — the
+    // mini-graph lives in Info (see MemoryGraphView), so switch there first.
+    await user.click(await screen.findByRole("button", { name: "Info" }));
+
+    expect(await screen.findByText("Related")).toBeInTheDocument();
+    // EGO_FOCUS (the shared mocked fetchMemorySubgraph result) has one
+    // neighbour, Ada — its presence confirms the mini-graph actually
+    // fetched and rendered, not just the section header.
+    expect(await screen.findByText("Ada")).toBeInTheDocument();
   });
 });

@@ -333,9 +333,15 @@ hidden when there is no active goal.
 
 ### Memory graph (WebUI)
 
-The Entities graph canvas in the memory browser (clustering rules and API
-surface in `memory/04_agent_tools.md`) renders in two layers rather than one
-flat force-directed graph.
+The Entities tab offers three presentations of the same node set — Table,
+Cards, and Graph, in that switcher order. A fresh session with no stored
+preference lands on Table, sorted by recent activity by default, so the
+list of what changed most recently is the first thing a visitor sees; Graph
+is one click away. A stored preference always wins over that default.
+
+The graph canvas itself (clustering rules and API surface in
+`memory/04_agent_tools.md`) renders in two layers rather than one flat
+force-directed graph.
 
 **Layers.** The **overview** is the landing layer: community bubbles draw
 neutral and hollow (a container, not an entity in its own right), semantic
@@ -351,7 +357,25 @@ key. The type-filter popover closes itself and calls `preventDefault()` when
 Esc is pressed while it is open, so a single keypress closes only that popover,
 not the neighborhood layer beneath it. Esc is a no-op while the search panel or
 edge popover is open — neither closes on Escape today and the layer stays put,
-independent of the defaultPrevented handshake.
+independent of the defaultPrevented handshake. A **group-by selector** beside
+the type filter — Ungrouped / Structure / Type — chooses how the overview
+bubbles the non-hub remainder: Structure groups by semantic community (the
+default clustering), Type groups by the entity's own type field, and
+Ungrouped swaps the bubble summary for the same flat, per-type-colored graph
+a too-small-to-cluster workspace already falls back to, chips and all.
+Ungrouped is the default — grouping is an explicit choice, not something
+sprung on a first-time view — but the overview is still fetched underneath
+it (on the Structure dimension) so hub emphasis keeps working without an
+extra round trip if the user does switch. Changing the dimension re-fetches
+the overview under that grouping and, for a cluster drill, resolves the
+bubble ref against the matching mode — a bubble id from one grouping is not
+a bubble id in the other. The selector stays visible at layer 1 regardless
+of whether the current dimension's overview actually came back clustered —
+a workspace can bubble under Structure but resolve flat under Type (or vice
+versa), and the user still needs a way back to Ungrouped; only a
+neighborhood drill hides it. When the current dimension resolves flat, the
+canvas falls back to the same flat graph Ungrouped shows, with the selector
+still there to try another dimension.
 
 **Click contract.** A bubble click enters its cluster; a hub or loose-node
 click enters that node's ego-subgraph; a node click inside a neighborhood
@@ -365,16 +389,21 @@ place.
 weight; bubble radius is a separate, wider log-scale band of its member
 count. Session nodes are a fixed size regardless of message count — message
 count is panel metadata for a session, never a signal the canvas sizes by.
+When the canvas shows the flat graph directly instead of the bubble summary
+— Ungrouped mode or a workspace too flat to cluster — nodes the overview
+flagged as hubs keep a minimum radius on top of that scale, so the entities
+the clustering considered most central stay visually prominent even without
+the bubbles around them.
 
 **Semantic zoom.** Node and edge geometry scale with the camera, but labels
 do not — they draw in screen space at a constant size at any zoom level. A
 zoom-dependent budget plus grid-based collision culling decides which
 labels are visible: zooming in raises the budget, and no two labels
-sharing a screen-space cell both render. A bubble's own label, and a
-hovered, selected, or isolated node's label, are exempt from the budget
-(though still dropped if actually off-screen); a bubble's member-count
-line additionally hides once the bubble is too small on screen to hold it
-legibly.
+sharing a screen-space cell both render. A bubble's own label, a hovered,
+selected, or isolated node's label, and — in that same hub-emphasis case —
+a hub node's label are exempt from the budget (though still dropped if
+actually off-screen); a bubble's member-count line additionally hides once
+the bubble is too small on screen to hold it legibly.
 
 **Theming.** Canvas colors are resolved from durin's design tokens at
 runtime rather than hardcoded: a hidden probe element asks the browser to
@@ -384,13 +413,26 @@ a palette or light/dark switch — so the canvas always matches the
 surrounding surface across all three palettes (ithildin/forge/mithril) and
 both modes.
 
-**Defaults and legend.** Phantom entities and session nodes are hidden by
-default wherever the visibility chips appear. Those chips live only in a
-neighborhood or in the pre-clustering flat graph — the clustered overview
-has none, because the server already excluded both kinds before clustering
-ever runs. The type legend groups the open-vocabulary type long tail
-behind a single "others" row past a fixed number of shown types, so an
-idiosyncratic workspace's type list can't overflow the toolbar.
+**Defaults and legend.** Phantom entities, session nodes, and disconnected
+entities are hidden by default wherever the visibility chips appear.
+"Disconnected" is computed client-side from the flat graph — zero edges in
+its edge list — rather than shipped by the server: real data, but visual
+dust once a workspace has enough of it. The chips live only in a
+neighborhood, in the pre-clustering flat graph, or in the overview's
+Ungrouped sub-mode — a grouped bubble summary (Structure or Type) has none,
+because the server already excluded phantoms and sessions before clustering
+ever runs, and "zero edges" isn't a property a bubble has. The disconnected
+row specifically is narrower still: it is offered only while the canvas is
+actually rendering that flat graph (the pre-clustering flat graph or
+Ungrouped) — a neighborhood drill and the Cards/Table presentations never
+show it, since there is nothing there for it to affect. Cards and Table
+separately never hide disconnected entities from their own list no matter
+what the toggle is set to elsewhere — decluttering the force-directed layout
+is a canvas concern, not a claim that the entity doesn't belong in the list.
+The type legend groups the
+open-vocabulary type long tail behind a single "others" row past a fixed
+number of shown types, so an idiosyncratic workspace's type list can't
+overflow the toolbar.
 
 **States and error contract.** A first load shows a skeleton placeholder; a
 workspace confirmed empty on both the flat and the overview fetch shows a
@@ -414,6 +456,21 @@ graph canvas only. The Cards and Table presentations of the same Entities
 tab always browse the full flat entity list — never the clustered overview
 or a drilled neighborhood — so switching to Cards mid-drill never truncates
 the grid down to whatever the canvas had focused.
+
+**Related mini-graph.** The entity detail panel's Info tab carries a
+compact ego-graph of its own — the selected entity's direct neighbors laid
+out on a ring, ranked by weight and capped well below the canvas's own
+limits, sessions and phantoms excluded the same way the canvas's default
+chips exclude them — reachable from any of the three presentations, not
+just the graph canvas. This is the intended entry point for a list-first
+session: pick an entity from Table or Cards, land on its detail panel, and
+browse outward through Related without ever opening the interactive graph.
+A neighbor click swaps the panel to that entity in place (the same
+mechanism the Documents shelf uses to open an entity's page); a "view in
+graph" action hands off to the full canvas, isolated on the same node, for
+whoever wants the force-directed layout instead. A fetch failure hides the
+section entirely rather than surfacing an error inside what is otherwise a
+successful detail view.
 
 ### Config flow
 

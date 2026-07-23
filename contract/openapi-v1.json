@@ -3558,8 +3558,18 @@
       },
       "MemoryOverviewQuery": {
         "additionalProperties": false,
-        "description": "No inputs \u2014 returns the clustered overview of the entity graph.",
-        "properties": {},
+        "description": "Clustered overview of the entity graph.\n\n``group_by`` chooses how non-hub nodes are grouped into bubbles:\n\"community\" (default) by semantic clustering, \"type\" by the entity's own\ntype field. See ``durin.memory.graph_overview.assemble_overview``.",
+        "properties": {
+          "group_by": {
+            "default": "community",
+            "enum": [
+              "community",
+              "type"
+            ],
+            "title": "Group By",
+            "type": "string"
+          }
+        },
         "title": "MemoryOverviewQuery",
         "type": "object"
       },
@@ -3623,8 +3633,17 @@
       },
       "MemorySubgraphQuery": {
         "additionalProperties": false,
-        "description": "Ego- or cluster-scoped neighborhood around a ref.",
+        "description": "Ego- or cluster-scoped neighborhood around a ref.\n\n``group_by`` only matters for ``scope=\"cluster\"``: it must match the\ngrouping mode the overview built ``ref`` under (see\n``MemoryOverviewQuery``), since the two modes partition the graph\ndifferently and a bubble ref only resolves under its own mode.",
         "properties": {
+          "group_by": {
+            "default": "community",
+            "enum": [
+              "community",
+              "type"
+            ],
+            "title": "Group By",
+            "type": "string"
+          },
           "hops": {
             "default": 1,
             "title": "Hops",

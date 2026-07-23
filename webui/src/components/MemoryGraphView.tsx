@@ -48,6 +48,7 @@ import { cn } from "@/lib/utils";
 import {
   colorForType,
   groupTypeLegend,
+  shortLabel,
   type EntitySortKey,
 } from "@/lib/memory-graph-style";
 import {
@@ -59,6 +60,7 @@ import {
   type LabelCandidate,
 } from "@/lib/memory-graph-layout";
 import { readCanvasTheme, watchTheme, type CanvasTheme } from "@/lib/canvas-theme";
+import { EntityMiniGraph } from "@/components/EntityMiniGraph";
 import { MemoryEntityCards } from "@/components/MemoryEntityCards";
 import { MemoryEntityTable } from "@/components/MemoryEntityTable";
 import { MemoryTypeFilter } from "@/components/MemoryTypeFilter";
@@ -136,16 +138,6 @@ function prefersReducedMotion(): boolean {
     typeof window !== "undefined" &&
     window.matchMedia("(prefers-reduced-motion: reduce)").matches
   );
-}
-
-/** Cap a node label to a sensible visual length without dropping the
- *  identifying suffix. Sessions can have long UUID-ish names; we
- *  ellipsise the middle so both ends stay readable. */
-function shortLabel(label: string, max = 22): string {
-  if (label.length <= max) return label;
-  const headLen = Math.max(8, Math.floor(max * 0.55));
-  const tailLen = Math.max(4, max - headLen - 1);
-  return `${label.slice(0, headLen)}…${label.slice(-tailLen)}`;
 }
 
 function tickForces(
@@ -251,7 +243,10 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
   // three views of the same set, not sibling tabs (the Obsidian Bases model).
   const [mode, setMode] = useState<"entities" | "documents">("entities");
   // Entities presentation. Persisted; the graph canvas is near-useless on
-  // touch, so compact viewports fall back to cards (see effectiveView).
+  // touch, so compact viewports fall back to cards (see effectiveView). The
+  // list (table, sorted by recent activity by default) is the first-run
+  // default — Graph is one click away in the switcher; a stored preference
+  // always wins over this default.
   const [view, setView] = useState<"graph" | "cards" | "table">(() => {
     try {
       const stored = localStorage.getItem("durin.memoryGraph.view");
@@ -261,7 +256,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
     } catch {
       /* localStorage unavailable */
     }
-    return "graph";
+    return "table";
   });
   const setViewPersisted = useCallback((v: "graph" | "cards" | "table") => {
     setView(v);
@@ -271,6 +266,45 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
       /* localStorage unavailable: ephemeral choice is fine */
     }
   }, []);
+  // Graph-view grouping dimension: "all" is the ungrouped, plain per-type-
+  // colored graph a flat workspace already shows; "structure" and "type" each
+  // render the overview fetched under that dimension (community clustering
+  // vs. the entity's own type field — see the seam and showGraphModeToggle
+  // below). Ungrouped is the default — grouping is an explicit opt-in, not
+  // something sprung on a first-time view. Persisted like `view`; a stored
+  // legacy "clusters" (the old binary toggle's grouped option, before there
+  // were two grouping dimensions to choose between) migrates to "structure"
+  // on read, and write-backs never use that spelling again.
+  type GraphMode = "all" | "structure" | "type";
+  const [graphMode, setGraphMode] = useState<GraphMode>(() => {
+    try {
+      const stored = localStorage.getItem("durin.memoryGraph.graphMode");
+      if (stored === "clusters") return "structure";
+      if (stored === "all" || stored === "structure" || stored === "type") {
+        return stored;
+      }
+    } catch {
+      /* localStorage unavailable */
+    }
+    return "all";
+  });
+  const setGraphModePersisted = useCallback((v: GraphMode) => {
+    setGraphMode(v);
+    try {
+      localStorage.setItem("durin.memoryGraph.graphMode", v);
+    } catch {
+      /* localStorage unavailable: ephemeral choice is fine */
+    }
+  }, []);
+  // Which dimension the fetched overview groups by — derived from graphMode,
+  // not stored separately, so there is one source of truth for "what the
+  // user picked". Ungrouped mode has no grouped rendering of its own (the
+  // seam below takes rawData directly) but the overview is still fetched
+  // for its hubs/stats (see hubIds, renderingRawGraph), so it stays on the
+  // community dimension rather than forcing an extra type-grouped fetch
+  // nothing will render.
+  const overviewGroupBy: "community" | "type" =
+    graphMode === "type" ? "type" : "community";
   // Shared ordering for the cards/table presentations (the graph's layout is
   // force-directed — sort does not apply there).
   const [sortKey, setSortKey] = useState<EntitySortKey>("recent");
@@ -392,11 +426,13 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
   }, [selected?.id, !!referenceDetail, panelExpanded]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Set of node types the user has toggled OFF in the legend. Default hides
-  // phantom (unconsolidated noise) and session (scaffolding, not an entity)
-  // so a fresh view opens on real, consolidated entities. Clicking a legend
-  // chip flips inclusion. Phantom is treated as its own pseudo-type.
+  // phantom (unconsolidated noise), session (scaffolding, not an entity),
+  // and disconnected (zero-edge nodes — real data, but visual dust) so a
+  // fresh view opens on the connected, consolidated core. Clicking a legend
+  // chip flips inclusion. Phantom and disconnected are each treated as their
+  // own pseudo-type (not a `type` field value).
   const [hiddenTypes, setHiddenTypes] = useState<Set<string>>(
-    new Set(["phantom", "session"]),
+    new Set(["phantom", "session", "disconnected"]),
   );
 
   function toggleType(type: string): void {
@@ -458,6 +494,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
   const layers = useGraphLayers(
     _props.active && effectiveView === "graph",
     () => tokenRef.current,
+    overviewGroupBy,
   );
   // The overview only replaces the canvas payload in clustered mode; a flat
   // workspace (too small to bubble) has nothing to translate, so the canvas
@@ -469,13 +506,64 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
         : null,
     [layers.overview],
   );
-  // THE SEAM: graph view only — a cluster/ego drill wins, then the clustered
-  // overview, then today's raw graph. Cards/table never look at the overview
-  // OR a drill: they present the full entity list rather than a navigable
-  // bubble map, so a drill entered from the canvas must not truncate their
-  // grid down to the focused subgraph.
+  // THE SEAM: graph view only — a cluster/ego drill wins; otherwise "all"
+  // graph mode (Change 2) takes the raw graph directly, and any grouped mode
+  // ("structure" or "type") falls back through its fetched overview to
+  // today's raw graph. Cards/
+  // table never look at the overview OR a drill: they present the full
+  // entity list rather than a navigable bubble map, so a drill entered from
+  // the canvas must not truncate their grid down to the focused subgraph.
   const data =
-    effectiveView === "graph" ? layers.focusGraph ?? overviewGraph ?? rawData : rawData;
+    effectiveView === "graph"
+      ? layers.focusGraph ?? (graphMode === "all" ? rawData : overviewGraph ?? rawData)
+      : rawData;
+
+  // Change 3: entities the overview flags as hubs stay visually prominent
+  // once the canvas leaves the clustered bubble summary — a radius floor and
+  // an always-on label, applied only while the canvas is actually rendering
+  // the raw graph in graph view ("all" mode, or a workspace too flat to
+  // cluster). In the bubble summary itself or a cluster/ego drill, the
+  // overview's hub list doesn't describe what's on screen, so the emphasis
+  // must not apply there.
+  const renderingRawGraph =
+    effectiveView === "graph" &&
+    layers.focusGraph == null &&
+    (graphMode === "all" || overviewGraph == null);
+  const hubIds = useMemo(
+    () => new Set((layers.overview?.hubs ?? []).map((h) => h.id)),
+    [layers.overview],
+  );
+  // Ids with zero edges in the flat graph — computed from rawData (not
+  // `data`) so the count stays stable regardless of which payload the
+  // canvas currently renders. The "disconnected" pseudo-type this backs only
+  // ever hides nodes while renderingRawGraph is true (see isVisible/
+  // hitTestNode below); a grouped overview or a cluster/ego drill is a
+  // server payload this client-side computation has no opinion about, and
+  // by construction a disconnected node (zero edges) can never be a drill's
+  // focus or a bubble member with edges of its own to lose.
+  const disconnectedIds = useMemo(() => {
+    const ids = new Set<string>();
+    if (!rawData) return ids;
+    const connected = new Set<string>();
+    for (const e of rawData.edges) {
+      connected.add(e.source);
+      connected.add(e.target);
+    }
+    for (const n of rawData.nodes) {
+      if (!connected.has(n.id)) ids.add(n.id);
+    }
+    return ids;
+  }, [rawData]);
+  // Local wrapper around the module-level nodeRadius: used by both the draw
+  // loop and the node hit-test so the visually-larger hub circle and its
+  // click/hover target never drift apart.
+  const hubAwareRadius = useCallback(
+    (n: SimNode): number =>
+      renderingRawGraph && hubIds.has(n.id)
+        ? Math.max(nodeRadius(n), 14)
+        : nodeRadius(n),
+    [renderingRawGraph, hubIds],
+  );
 
   // Navigate to the session a fact came from (provenance source_ref →
   // `session:<stem>` node). Selecting the node opens the session detail
@@ -722,10 +810,20 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
 
     function isVisible(node: SimNode): boolean {
       // Type-toggle: legend chips hide whole categories at a time.
-      // Phantom is treated as its own pseudo-type so the user can
-      // hide unconsolidated noise without losing the entity types.
+      // Phantom and disconnected are each treated as their own pseudo-type
+      // so the user can hide unconsolidated noise / zero-edge dust without
+      // losing the entity types. Disconnected only applies while the canvas
+      // is actually showing the flat graph (renderingRawGraph) — a grouped
+      // overview's bubbles/hubs and a cluster/ego drill are unaffected.
       if (hiddenTypes.has(node.type)) return false;
       if (node.phantom && hiddenTypes.has("phantom")) return false;
+      if (
+        renderingRawGraph &&
+        hiddenTypes.has("disconnected") &&
+        disconnectedIds.has(node.id)
+      ) {
+        return false;
+      }
       return true;
     }
 
@@ -768,7 +866,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
         let maxY = -Infinity;
         for (const n of nodes) {
           if (!isVisible(n)) continue;
-          const r = nodeRadius(n) + 18;
+          const r = hubAwareRadius(n) + 18;
           if (n.x - r < minX) minX = n.x - r;
           if (n.x + r > maxX) maxX = n.x + r;
           if (n.y - r < minY) minY = n.y - r;
@@ -845,7 +943,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
 
       for (const n of nodes) {
         if (!isVisible(n)) continue;
-        const r = nodeRadius(n);
+        const r = hubAwareRadius(n);
         const lit = isHighlighted(n.id);
         if (n.kind === "bubble") {
           // A bubble stands in for a whole cluster — drawn hollow so it
@@ -912,7 +1010,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
       const cands: LabelCandidate[] = [];
       for (const n of nodes) {
         if (!isVisible(n)) continue;
-        const r = nodeRadius(n);
+        const r = hubAwareRadius(n);
         cands.push({
           id: n.id,
           sx: n.x * cam.k + cam.tx,
@@ -922,13 +1020,17 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
             n.kind === "bubble" ||
             hoverSet?.has(n.id) === true ||
             selected?.id === n.id ||
-            isolatedRef === n.id,
+            isolatedRef === n.id ||
+            // Change 3: a hub stays labeled even off the priority nodes
+            // above, once the canvas is rendering the raw graph it was
+            // flagged in (see renderingRawGraph).
+            (renderingRawGraph && hubIds.has(n.id)),
         });
       }
       const show = visibleLabels(cands, { w, h }, labelBudget(cam.k));
       for (const n of nodes) {
         if (!show.has(n.id)) continue;
-        const r = nodeRadius(n);
+        const r = hubAwareRadius(n);
         const sx = n.x * cam.k + cam.tx;
         const sy = labelSy(n, r);
         const lit = isHighlighted(n.id);
@@ -965,7 +1067,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
       ro.disconnect();
       canvas.removeEventListener("wheel", onWheel);
     };
-  }, [_props.active, effectiveView, selected, isolatedRef, searchMatchSet, hiddenTypes, compact, disengageAutoFit]);
+  }, [_props.active, effectiveView, selected, isolatedRef, searchMatchSet, hiddenTypes, compact, disengageAutoFit, hubAwareRadius, disconnectedIds, renderingRawGraph]);
 
   // Hit-test (for nodes AND edges). Skips nodes hidden by legend
   // toggles so the user can't accidentally select a node that's not
@@ -976,13 +1078,20 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
       const n = nodes[i];
       if (hiddenTypes.has(n.type)) continue;
       if (n.phantom && hiddenTypes.has("phantom")) continue;
-      const r = nodeRadius(n) + 4;
+      if (
+        renderingRawGraph &&
+        hiddenTypes.has("disconnected") &&
+        disconnectedIds.has(n.id)
+      ) {
+        continue;
+      }
+      const r = hubAwareRadius(n) + 4;
       const dx = x - n.x;
       const dy = y - n.y;
       if (dx * dx + dy * dy <= r * r) return n;
     }
     return null;
-  }, [hiddenTypes]);
+  }, [hiddenTypes, hubAwareRadius, disconnectedIds, renderingRawGraph]);
 
   const hitTestEdge = useCallback((x: number, y: number): SimEdge | null => {
     // Distance from point (x,y) to each line segment; pick the closest
@@ -1335,27 +1444,48 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
     if (!data) return;
     const next = new Set<string>(data.stats.types);
     if (data.stats.phantom_count > 0) next.add("phantom");
+    if (disconnectedIds.size > 0) next.add("disconnected");
     setHiddenTypes(next);
-  }, [data]);
+  }, [data, disconnectedIds]);
 
-  // Solo: show only `type` (hide all others, and phantom unless it's the solo).
+  // Solo: show only `type` (hide all others, and phantom/disconnected unless
+  // one of them is the solo).
   const soloType = useCallback(
     (type: string) => {
       if (!data) return;
       const next = new Set<string>(data.stats.types.filter((t) => t !== type));
       if (data.stats.phantom_count > 0 && type !== "phantom") next.add("phantom");
+      if (disconnectedIds.size > 0 && type !== "disconnected") next.add("disconnected");
       setHiddenTypes(next);
     },
-    [data],
+    [data, disconnectedIds],
   );
 
-  // The clustered overview has nothing to filter by type: the server
+  // The clustered bubble summary has nothing to filter by type: the server
   // already excluded phantoms/sessions before bubbling, and a bubble isn't
   // itself a type. The filter comes back once there's a real per-type node
-  // set to browse — a cluster/ego drill, flat mode, or the cards/table
-  // presentations (which always read the full entity list).
+  // set to browse — a cluster/ego drill, flat mode, "all" graph mode
+  // (Change 2 renders the same overview payload as the flat graph instead
+  // of bubbles), or the cards/table presentations (which always read the
+  // full entity list).
   const showTypeFilter =
-    effectiveView !== "graph" || layers.focusGraph != null || overviewGraph == null;
+    effectiveView !== "graph" ||
+    layers.focusGraph != null ||
+    overviewGraph == null ||
+    graphMode === "all";
+
+  // The group-by selector (Ungrouped/Structure/Type) is visible whenever the
+  // canvas is at layer 1 (no cluster/ego drill) with something to show —
+  // deliberately independent of whether the *current* dimension's overview
+  // actually came back clustered. A grouped mode can still land flat under
+  // one dimension (e.g. "Type" when every entity shares a single type), and
+  // the user needs a way back to Ungrouped without the selector itself
+  // disappearing out from under them. When the overview is flat, the seam
+  // above (`data`) already falls back to the raw graph on its own, so there
+  // is still content on screen for the (still-interactive) selector to sit
+  // above.
+  const showGraphModeToggle =
+    effectiveView === "graph" && layers.focusGraph == null && rawData != null;
 
   // Real (non-scaffolding) node count in the current drill — phantom and
   // session nodes are kept in a cluster's focusGraph only as scaffolding
@@ -1458,12 +1588,19 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
           <>
         {data && !compact ? (
           <span className="text-xs text-muted-foreground">
-            {effectiveView === "graph" && overviewGraph != null && layers.focusGraph == null && layers.overview ? (
-              // Clustered overview, no drill, graph view: report the
-              // workspace's honest totals (from the overview's own stats)
-              // instead of the canvas's capped bubble/hub/loose node count.
-              // Gated on graph view too, or Cards/Table (which always show
-              // the full rawData list) would inherit this graph-only count.
+            {effectiveView === "graph" &&
+            graphMode !== "all" &&
+            overviewGraph != null &&
+            layers.focusGraph == null &&
+            layers.overview ? (
+              // Grouped overview ("structure" or "type") actually rendering
+              // as bubbles, no drill, graph view: report the workspace's
+              // honest totals (from the overview's own stats) instead of the
+              // canvas's capped bubble/hub/loose node count. Ungrouped ("all")
+              // mode shows the same flat counts as a drill or a flat
+              // workspace, via the branch below. Gated on graph view too, or
+              // Cards/Table (which always show the full rawData list) would
+              // inherit this graph-only count.
               <>
                 {t("memoryGraph.entitiesTotal", { count: layers.overview.stats.entity_count })}
                 {" · "}
@@ -1575,12 +1712,39 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
       </header>
 
       {/* Entities toolbar — the view switcher (three presentations of the
-          same node set, Obsidian-Bases style), the type filter chips (shared
-          by all three views; previously a graph-only floating legend), and
-          the sort control for the cards/table grids. */}
+          same node set, Obsidian-Bases style, Table/Cards/Graph in that
+          order), the Ungrouped/Structure/Type group-by selector (graph
+          view's layer-1 canvas only, see showGraphModeToggle), the type
+          filter chips (shared by all three views; previously a graph-only
+          floating legend), and the sort control for the cards/table
+          grids. */}
       {mode === "entities" ? (
         <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-border/40 px-3 py-1.5 text-[11px]">
           <div className="flex items-center gap-0.5 rounded-md border border-border/50 p-0.5">
+            <button
+              type="button"
+              onClick={() => setViewPersisted("table")}
+              className={cn(
+                "flex items-center gap-1 rounded px-2 py-0.5 transition-colors",
+                effectiveView === "table"
+                  ? "bg-primary/10 font-medium text-primary"
+                  : "text-muted-foreground hover:bg-muted/60",
+              )}
+            >
+              <Table2 className="h-3 w-3" /> {t("memoryGraph.viewTable")}
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewPersisted("cards")}
+              className={cn(
+                "flex items-center gap-1 rounded px-2 py-0.5 transition-colors",
+                effectiveView === "cards"
+                  ? "bg-primary/10 font-medium text-primary"
+                  : "text-muted-foreground hover:bg-muted/60",
+              )}
+            >
+              <LayoutGrid className="h-3 w-3" /> {t("memoryGraph.viewCards")}
+            </button>
             {!compact ? (
               <button
                 type="button"
@@ -1595,31 +1759,37 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                 <Network className="h-3 w-3" /> {t("memoryGraph.viewGraph")}
               </button>
             ) : null}
-            <button
-              type="button"
-              onClick={() => setViewPersisted("cards")}
-              className={cn(
-                "flex items-center gap-1 rounded px-2 py-0.5 transition-colors",
-                effectiveView === "cards"
-                  ? "bg-primary/10 font-medium text-primary"
-                  : "text-muted-foreground hover:bg-muted/60",
-              )}
-            >
-              <LayoutGrid className="h-3 w-3" /> {t("memoryGraph.viewCards")}
-            </button>
-            <button
-              type="button"
-              onClick={() => setViewPersisted("table")}
-              className={cn(
-                "flex items-center gap-1 rounded px-2 py-0.5 transition-colors",
-                effectiveView === "table"
-                  ? "bg-primary/10 font-medium text-primary"
-                  : "text-muted-foreground hover:bg-muted/60",
-              )}
-            >
-              <Table2 className="h-3 w-3" /> {t("memoryGraph.viewTable")}
-            </button>
           </div>
+          {showGraphModeToggle ? (
+            <>
+              <span className="mx-0.5 h-4 w-px bg-border/60" aria-hidden />
+              <span className="text-muted-foreground">{t("memoryGraph.groupBy")}</span>
+              <div className="flex items-center gap-0.5 rounded-md border border-border/50 p-0.5">
+                {(
+                  [
+                    { id: "all", label: t("memoryGraph.groupNone") },
+                    { id: "structure", label: t("memoryGraph.groupStructure") },
+                    { id: "type", label: t("memoryGraph.groupType") },
+                  ] as const
+                ).map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => setGraphModePersisted(opt.id)}
+                    aria-pressed={graphMode === opt.id}
+                    className={cn(
+                      "rounded px-2 py-0.5 transition-colors",
+                      graphMode === opt.id
+                        ? "bg-primary/10 font-medium text-primary"
+                        : "text-muted-foreground hover:bg-muted/60",
+                    )}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : null}
           {showTypeFilter &&
           (typesLegend.length > 0 || (data?.stats.phantom_count ?? 0) > 0) ? (
             <span className="mx-0.5 h-4 w-px bg-border/60" aria-hidden />
@@ -1629,6 +1799,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
               types={shownTypesLegend}
               tail={tailTypesLegend}
               phantomCount={data?.stats.phantom_count ?? 0}
+              disconnectedCount={renderingRawGraph ? disconnectedIds.size : 0}
               hidden={hiddenTypes}
               onToggle={toggleType}
               onShowAll={() => setHiddenTypes(new Set())}
@@ -2230,6 +2401,28 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
               {detail ? (
                 <>
                   {activeTab === "info" ? (
+                    <>
+                      {/* The related-entities mini-graph, real entities
+                          only — phantom/session/reference nodes either have
+                          no meaningful neighbourhood (phantom) or are
+                          handled by an entirely different panel (session,
+                          reference; the latter never reaches this branch —
+                          see the "reference" redirect above — kept here
+                          anyway as a defensive, self-documenting guard). */}
+                      {!selected.phantom &&
+                      selected.type !== "session" &&
+                      selected.type !== "reference" ? (
+                        <EntityMiniGraph
+                          token={token}
+                          entityRef={selected.id}
+                          entityName={selected.name}
+                          onNavigate={(ref) => handleOpenEntity(ref)}
+                          onViewInGraph={() => {
+                            setViewPersisted("graph");
+                            void layers.enterEgo(selected.id, selected.name);
+                          }}
+                        />
+                      ) : null}
                     <dl className="space-y-2">
                       <div className="flex justify-between gap-2">
                         <dt className="text-muted-foreground">{t("memoryGraph.fieldType")}</dt>
@@ -2317,6 +2510,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                         </div>
                       ) : null}
                     </dl>
+                    </>
                   ) : null}
 
                   {activeTab === "body" ? (
