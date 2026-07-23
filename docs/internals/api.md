@@ -357,7 +357,11 @@ Every error response is RFC 9457 `application/problem+json` with
 - **TypeScript webui** — every authenticated call routes through
   `fetchWithReauth` (`webui/src/lib/http.ts`), which adds the bearer token header
   and retries once with a fresh bootstrap token on a 401. A guard test keeps any
-  other module from calling `fetch` directly and bypassing that retry.
+  other module from calling `fetch` directly and bypassing that retry. The
+  freshest token lives in a module-level store in `http.ts` (`setCurrentToken`),
+  updated by the proactive pre-expiry refresh and the 401 reauth path — never in
+  React state, so a token rotation does not change the `token` prop and cannot
+  re-fire `[token]`-keyed effects (which previously reset every view ~each TTL).
 
 ---
 

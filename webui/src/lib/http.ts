@@ -5,6 +5,20 @@
 
 let reauthHandler: (() => Promise<string | null>) | null = null;
 
+// The freshest bootstrap token, updated on every proactive refresh and 401
+// reauth. Kept here — not in React state — so a token rotation never changes
+// the `token` prop flowing through the component tree: a state-held token
+// re-fires every `[token]`-keyed effect on each rotation (~80% of the TTL),
+// which used to re-fetch lists, reset selections, and discard unsaved edits
+// across all views. Callers keep passing the token they mounted with;
+// `fetchWithReauth` substitutes this one.
+let currentToken: string | null = null;
+
+/** Store the freshest bootstrap token for all subsequent REST calls. */
+export function setCurrentToken(token: string | null): void {
+  currentToken = token;
+}
+
 /** Register a callback that mints a fresh token. When a REST call gets
  *  a 401 — the gateway restarted and wiped its in-memory token pool, so
  *  the cached token is now stale — `fetchWithReauth` calls this, then retries
@@ -25,17 +39,19 @@ export async function fetchWithReauth(
   init?: RequestInit,
   retryOn401 = true,
 ): Promise<Response> {
+  const bearer = currentToken ?? token;
   const res = await fetch(url, {
     ...(init ?? {}),
     headers: {
       ...(init?.headers ?? {}),
-      Authorization: `Bearer ${token}`,
+      Authorization: `Bearer ${bearer}`,
     },
     credentials: "same-origin",
   });
   if (res.status === 401 && retryOn401 && reauthHandler) {
     const fresh = await reauthHandler();
-    if (fresh && fresh !== token) {
+    if (fresh && fresh !== bearer) {
+      currentToken = fresh;
       return fetchWithReauth(url, fresh, init, false);
     }
   }

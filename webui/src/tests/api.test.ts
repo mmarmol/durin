@@ -20,9 +20,13 @@ import {
   updateSettings,
   updateWebSearchSettings,
 } from "@/lib/api";
+import { setCurrentToken } from "@/lib/http";
 
 describe("webui API helpers", () => {
   beforeEach(() => {
+    // A successful 401-reauth stores the minted token module-side; reset it so
+    // each test's explicit token is the one that reaches the wire.
+    setCurrentToken(null);
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
