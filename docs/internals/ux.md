@@ -337,7 +337,12 @@ The Entities tab offers three presentations of the same node set — Table,
 Cards, and Graph, in that switcher order. A fresh session with no stored
 preference lands on Table, sorted by recent activity by default, so the
 list of what changed most recently is the first thing a visitor sees; Graph
-is one click away. A stored preference always wins over that default.
+is one click away. The preference persists under a versioned key: a stored
+"graph" value from before this list-first default shipped was the old
+default rather than a deliberate choice, and can't be told apart from one
+on disk, so it resets to Table once. A preference stored under the
+versioned key from then on is a genuine choice and always wins over the
+default.
 
 The graph canvas itself (clustering rules and API surface in
 `memory/04_agent_tools.md`) renders in two layers rather than one flat
@@ -396,14 +401,18 @@ the clustering considered most central stay visually prominent even without
 the bubbles around them.
 
 **Semantic zoom.** Node and edge geometry scale with the camera, but labels
-do not — they draw in screen space at a constant size at any zoom level. A
-zoom-dependent budget plus grid-based collision culling decides which
-labels are visible: zooming in raises the budget, and no two labels
-sharing a screen-space cell both render. A bubble's own label, a hovered,
-selected, or isolated node's label, and — in that same hub-emphasis case —
-a hub node's label are exempt from the budget (though still dropped if
-actually off-screen); a bubble's member-count line additionally hides once
-the bubble is too small on screen to hold it legibly.
+do not — they draw in screen space at a constant size at any zoom level.
+Visibility is decided purely by local density, not a global count: labels
+are culled by a zoom-sized grid, one label per screen-space cell, so a
+region where every candidate already lands in a distinct cell shows all of
+them, evenly spaced, instead of an id-ordered subset of some budget. The
+grid cell shrinks as the camera zooms in, so more, closer labels fit as
+zoom gives them room. Ordering decides which candidate wins a contested
+cell: a bubble's own label, a hovered, selected, or isolated node's label,
+and — in that same hub-emphasis case — a hub node's label sort first and so
+claim their cell even against a heavier ordinary candidate (though still
+dropped if actually off-screen); a bubble's member-count line additionally
+hides once the bubble is too small on screen to hold it legibly.
 
 **Theming.** Canvas colors are resolved from durin's design tokens at
 runtime rather than hardcoded: a hidden probe element asks the browser to
