@@ -95,6 +95,44 @@ const EGO_FOCUS = {
   },
 };
 
+// Clustered overview with a single bubble (no hubs/loose) for testing
+// cluster drills with a deterministic click target.
+const BUBBLE_ONLY_OVERVIEW = {
+  mode: "clustered" as const,
+  bubbles: [{ id: "topic:emailsync", name: "emailsync", count: 5, types: ["topic"], top: [] }],
+  hubs: [],
+  loose: [],
+  edges: [],
+  stats: {
+    entity_count: 5,
+    reference_count: 0,
+    bubble_count: 1,
+    loose_count: 0,
+    phantom_count: 0,
+    session_count: 0,
+  },
+};
+
+// A cluster subgraph payload (sample cluster members).
+const CLUSTER_PAYLOAD = {
+  nodes: [
+    { id: "doc:email1", type: "doc", name: "Email 1", aliases: [], weight: 2 },
+    { id: "doc:email2", type: "doc", name: "Email 2", aliases: [], weight: 1 },
+  ],
+  edges: [{ source: "doc:email1", target: "doc:email2", weight: 1 }],
+  focus: "topic:emailsync",
+  total_members: 2,
+  stats: {
+    node_count: 2,
+    edge_count: 1,
+    phantom_count: 0,
+    truncated_nodes: false,
+    truncated_edges: false,
+    types: ["doc"],
+    session_count: 0,
+  },
+};
+
 describe("MemoryGraphView layered", () => {
   beforeEach(() => {
     // The view switcher persists to localStorage (see setViewPersisted) —
@@ -768,5 +806,49 @@ describe("MemoryGraphView layered", () => {
     expect(
       screen.queryByText("Ada Lovelace", { selector: ".font-semibold" }),
     ).toBeNull();
+  });
+
+  it("does not switch the detail panel when a cluster drill is clicked with a panel already open", async () => {
+    vi.mocked(api.fetchMemoryGraphOverview).mockResolvedValue(BUBBLE_ONLY_OVERVIEW);
+    vi.mocked(api.fetchMemoryGraph).mockResolvedValue(RAW_DATA);
+    vi.mocked(api.fetchClusterSubgraph).mockResolvedValue(CLUSTER_PAYLOAD);
+    const user = userEvent.setup();
+
+    localStorage.setItem("durin.memoryGraph.graphMode", "structure");
+    render(wrap(<MemoryGraphView active />));
+    await waitFor(() => expect(screen.getByText(/5 entities/)).toBeInTheDocument());
+
+    // Open Aurora's panel via Cards.
+    await user.click(screen.getByRole("button", { name: /cards/i }));
+    await waitFor(() => expect(screen.getByText("Aurora")).toBeInTheDocument());
+    await user.click(screen.getByText("Aurora"));
+    await screen.findByRole("button", { name: /isolate neighbourhood/i });
+
+    // Switch to Graph and verify Aurora is still shown.
+    await user.click(screen.getByRole("button", { name: /^graph$/i }));
+    await waitFor(() =>
+      expect(screen.getByText("Aurora", { selector: ".font-semibold" })).toBeInTheDocument(),
+    );
+
+    // Click the bubble to drill the cluster — uses same coordinate (40, 0)
+    // as the hub-click pattern since happy-dom places all overview nodes
+    // deterministically at that point.
+    const canvas = document.querySelector("canvas");
+    if (!canvas) throw new Error("canvas not found");
+    for (const type of ["pointerdown", "pointerup"]) {
+      const evt = new Event(type, { bubbles: true, cancelable: true }) as PointerEvent & {
+        clientX: number;
+        clientY: number;
+        pointerId: number;
+      };
+      Object.assign(evt, { clientX: 40, clientY: 0, pointerId: 1, button: 0 });
+      canvas.dispatchEvent(evt);
+    }
+
+    // Cluster drill never opens or switches a panel — Aurora's name stays.
+    expect(
+      await screen.findByText("Aurora", { selector: ".font-semibold" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Email 1", { selector: ".font-semibold" })).toBeNull();
   });
 });
