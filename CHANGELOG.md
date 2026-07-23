@@ -5,6 +5,56 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.4.2 — 2026-07-23
+
+### Highlights
+
+- **The memory section now leads with what you touched last, not a map.**
+  Memoria opens on the recency-sorted list (then cards, then graph); each
+  entity's panel gains a "Related" mini graph — its 1-hop neighborhood,
+  clickable to hop entity-to-entity, with "View in graph" jumping into the
+  exploratory graph already centered there. The standalone graph defaults to
+  the ungrouped view with the most-connected entities emphasized, and
+  grouping (by structure or by type) is an explicit choice. (#449)
+- **Entity importance is honest now.** The overview used to weigh entities by
+  a mention count that is always zero on current workspaces; importance is
+  now relation degree plus log-damped distinct-session evidence, so hubs
+  reflect what durin actually knows and works with — and high-churn
+  operational entities can't drown the structure as session volume grows.
+  Noise stays hidden by default behind verifiable structural filters
+  (sessions, phantoms, no-connections), never an inferred "importance". (#449)
+- **Skill curation closes its loop.** Reviewing a gated skill now adopts it —
+  the verdict clears the gate permanently and each finding carries a per-file
+  acknowledgement — and invalid quarantined skills get a deterministic repair
+  path instead of silent expulsion; broken frontmatter no longer ejects a
+  gated skill or strands its suggestions. (#446, #447, #448)
+
+### Memory
+
+- `GET /api/v1/memory/graph/overview` accepts `groupBy=community|type`;
+  cluster drills follow the active dimension, caches are kept per dimension,
+  and bubble thresholds fit real relation-graph density. (#449)
+- Overview and drill payloads carry the degree/session score as node weight,
+  so radii and label priority track the live signal with no client
+  contract change. (#449)
+
+### WebUI
+
+- Memory view: list-by-recency default, reordered switcher (Table, Cards,
+  Graph), Related mini ego-graph in the entity panel, group-by selector,
+  disconnected-nodes filter with honest counts — strings in all nine
+  locales. (#449)
+
+### Workflows
+
+- Workflows and node ids can be renamed from the editor, with references
+  rewritten consistently. (#445)
+
+### MCP
+
+- Transient `invalid_grant` responses during the OAuth code exchange are
+  retried instead of failing the connection outright. (#443)
+
 ## 0.4.1 — 2026-07-23
 
 ### Highlights
