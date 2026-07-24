@@ -5,6 +5,40 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.4.6 — 2026-07-24
+
+### Highlights
+
+- **The nightly dream stops re-doing last night's work.** Full dreams were
+  running 2.5–3.5 hours, 90% of it in the dedup judge — ~600 standing entity
+  pairs re-sent to the LLM every night, 83% of them the exact pairs already
+  ruled "different" the night before. Settled verdicts are now remembered
+  (keyed by both pages' actual content and the judge's identity), so a pair
+  only returns to the LLM when something about it changes. Expected effect:
+  refine drops from hours to minutes and aux-model token spend falls ~90%.
+  (#468)
+- **Entity descriptions stop being overwritten by the last document
+  processed.** Document seeding and session discovery wrote each source's
+  "significance" sentence — why the entity matters *to that source* — as the
+  entity's body, and newest-wins precedence meant central entities were
+  rewritten on every pass (one organization page: 18 rewrites in 4 days,
+  ending as whichever document happened to be processed last). Significance
+  now only fills an empty body; described entities keep their description
+  while still accruing relations, aliases, and sources. (#467)
+
+### Memory
+
+- New field-patch kind `body_if_absent`, used by the document-seeding and
+  discovery passes; the learnings write keeps `body_replace` (there the body
+  is the item's content). (#467)
+- Verdict cache in `memory/.refine_verdicts.json`: plain Tier-1 "different"
+  verdicts are memoized against a fingerprint of judgment-bearing fields
+  (source/provenance accrual does not reopen a settled pair) plus the judge
+  template and model; cache hits emit `memory.absorb.skipped` with reason
+  `cached_verdict`, so the hit rate is visible in telemetry. Borderline
+  verdicts are never cached and user tombstones remain a separate, permanent
+  mechanism. (#468)
+
 ## 0.4.5 — 2026-07-24
 
 ### Highlights
