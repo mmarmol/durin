@@ -281,3 +281,13 @@ def _parse_response(raw: str) -> JudgeResult:
         confidence=confidence,
         reasoning=reasoning,
     )
+
+
+def judge_template_fingerprint() -> str:
+    """Stable short hash of the judge prompt template.
+
+    Verdict-cache key component: a template change means every cached verdict
+    was produced by a different judge, so all pairs re-judge."""
+    import hashlib
+
+    return hashlib.sha256(_load_template().encode("utf-8")).hexdigest()[:12]
