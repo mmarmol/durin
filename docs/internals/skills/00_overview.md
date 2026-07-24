@@ -283,6 +283,19 @@ one pipeline in `durin/agent/skills_import.py`:
    scripts (shell exec, dynamic eval, reverse shell patterns). Returns a
    `ScanReport` with `findings` and a `verdict` of `safe`, `caution`, or
    `dangerous`.
+
+   **Environment access is correlated, not matched on its own**
+   (`_env_exfil_finding`). Reading configuration from the environment is
+   ordinary, so a bare `os.environ` match produced a caution on every script
+   that read a bucket name or a region. The finding now needs two signals in
+   the same file: a read whose *variable name* says credential (`…KEY`,
+   `…TOKEN`, `…SECRET`, …) — or the whole mapping handed over as a value, which
+   has no legitimate use — together with a way out. Outbound includes SDK
+   clients (`boto3`, `botocore`, …), since grepping for an `http(s)` literal
+   misses a script that reaches AWS without a URL in its source. The finding's
+   text is deliberately unchanged: findings are fingerprinted as
+   `category|where|detail` and acked in the review store, so rewording one
+   silently invalidates existing reviews of already-audited skills.
 5. `decide_action(source, verdict=..., carries_code=..., allowlist=...)` applies
    the trust-times-verdict gate: `dangerous` → block; `carries_code` OR
    `caution` OR source not in allowlist → confirm; safe + allowlisted → allow.
