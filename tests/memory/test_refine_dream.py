@@ -479,3 +479,18 @@ def test_refine_below_threshold_same_is_not_cached(tmp_path):
     run_refine(tmp_path, llm_invoke=_judge_stub("same", 50, counter))
     run_refine(tmp_path, llm_invoke=_judge_stub("same", 50, counter))
     assert counter["n"] == 2
+
+
+def test_refine_always_on_flip_keeps_cached_verdict(tmp_path):
+    # always_on is curation state (flipped by the always_on pass after every
+    # run as the pinned set re-ranks), not identity content — verified live:
+    # 10 flag flips across two consecutive runs reopened 8 of 35 cached pairs.
+    from durin.memory.principal import mark_always_on
+
+    _two_dupes(tmp_path)
+    counter = {"n": 0}
+    run_refine(tmp_path, llm_invoke=_judge_stub("different", 90, counter))
+    assert counter["n"] == 1
+    mark_always_on(tmp_path, "company:mxhero", True)
+    run_refine(tmp_path, llm_invoke=_judge_stub("different", 90, counter))
+    assert counter["n"] == 1, "an always_on flip must not reopen a settled pair"
