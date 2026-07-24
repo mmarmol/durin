@@ -217,7 +217,7 @@ class LoopsService:
             spec = parse_loop(definition)
         except LoopError as exc:
             raise ValidationFailedError(f"invalid loop: {exc}")
-        save_loop(self._workspace, spec)
+        save_loop(self._workspace, spec, actor="user", reason="saved in the loops editor")
         sync_loop_jobs(self._cron_service, spec)
         return LoopSaveResult(name=spec.name)
 
@@ -230,7 +230,8 @@ class LoopsService:
     async def delete(self, cmd: LoopDeleteCommand, principal: Principal) -> LoopDeleteResult:
         principal.require(Scope.LOOPS_WRITE)
         try:
-            delete_loop(self._workspace, cmd.name)
+            delete_loop(self._workspace, cmd.name, actor="user",
+                        reason="deleted in the loops editor")
         except LoopNotFound:
             raise NotFoundError(f"loop {cmd.name!r} not found")
         remove_loop_jobs(self._cron_service, cmd.name)

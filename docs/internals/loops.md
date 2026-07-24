@@ -99,12 +99,24 @@ flowchart TD
 Loop definitions live one JSON file per loop under
 `<workspace>/loops/<name>.json` (`durin/loops/store.py`), the same
 files-are-truth model as workflows, workflows' definitions, and cron jobs.
-Unlike workflow definitions, loop definitions are **not** git-versioned — a
-loop is a thin binding (workflow + goal + triggers), not authored content
-worth a diff history. Saves and deletes take a cross-process file lock
-(`cross_process_lock`) because the webui, the `loops` agent tool, and any
-future CLI surface can write concurrently; reads (`load_loop`, `list_loops`)
-are lock-free and skip malformed files rather than failing a listing.
+Saves and deletes take a cross-process file lock (`cross_process_lock`)
+because the webui, the `loops` agent tool, and any future CLI surface can
+write concurrently; reads (`load_loop`, `list_loops`) are lock-free and skip
+malformed files rather than failing a listing.
+
+Definitions are **git-versioned** (`durin/loops/version_store.py`), like
+workflows, skills and memory. This reverses an earlier call that a loop was
+"a thin binding, not authored content worth a diff history": a loop carries a
+goal intent, verification checks and trigger bindings, all of which are edited
+by hand and by the agent, and until this existed a change from any surface
+overwrote the previous definition with nothing to review or roll back to. The
+commit lives inside `save_loop`/`delete_loop` rather than in each caller, so
+every door is versioned structurally instead of by remembering to ask, and it
+carries `Actor` (`user` / `agent`) and `Reason` trailers. Versioning is
+best-effort: the definition already landed, so a git failure logs rather than
+turning a successful save into an error. The per-loop write locks live inside
+`loops/` by design, so the repo ignores `*.lock`. Like workflow history, this
+is not exposed over HTTP — it is the substrate for review and rollback.
 
 Runs live under `<workspace>/loops-runs/<loop>/<run_id>.json`
 (`durin/loops/run_log.py`). Each run file has exactly one owning writer — the

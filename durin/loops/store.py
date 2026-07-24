@@ -11,6 +11,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from loguru import logger
+
 from durin.loops.spec import LoopNotFound, LoopSpec, loop_to_dict, parse_loop
 from durin.utils.atomic_write import atomic_write_text
 from durin.utils.file_lock import cross_process_lock
@@ -44,16 +46,52 @@ def list_loops(workspace: str | Path) -> list[LoopSpec]:
     return out
 
 
-def save_loop(workspace: str | Path, spec: LoopSpec) -> None:
+def save_loop(
+    workspace: str | Path,
+    spec: LoopSpec,
+    *,
+    actor: str = "user",
+    reason: str = "saved",
+) -> None:
     d = loops_dir(workspace)
     d.mkdir(parents=True, exist_ok=True)
+    path = _path(workspace, spec.name)
+    existed = path.exists()
     with cross_process_lock(loops_dir(workspace) / spec.name):
-        atomic_write_text(_path(workspace, spec.name), json.dumps(loop_to_dict(spec), indent=2))
+        atomic_write_text(path, json.dumps(loop_to_dict(spec), indent=2))
+    _version(workspace, [path], f"loop({spec.name}): {'edit' if existed else 'create'}",
+             reason, actor)
 
 
-def delete_loop(workspace: str | Path, name: str) -> None:
+def delete_loop(
+    workspace: str | Path,
+    name: str,
+    *,
+    actor: str = "user",
+    reason: str = "deleted",
+) -> None:
     p = _path(workspace, name)
     with cross_process_lock(loops_dir(workspace) / name):
         if not p.exists():
             raise LoopNotFound(f"loop '{name}' not found")
         p.unlink()
+    _version(workspace, [p], f"loop({name}): delete", reason, actor)
+
+
+def _version(
+    workspace: str | Path, paths: list[Path], subject: str, reason: str, actor: str,
+) -> None:
+    """Record the change in the loop version store.
+
+    Lives here rather than in each caller so every door — the webui service, the
+    agent tool, the CLI — is versioned structurally instead of by remembering to
+    ask. Best-effort by contract: the definition already landed, so a git failure
+    must not turn a successful save into an error.
+    """
+    from durin.loops.version_store import LoopVersionStore
+
+    try:
+        LoopVersionStore(loops_dir(workspace)).commit_paths(
+            paths, subject, reason, actor=actor)
+    except Exception:  # noqa: BLE001
+        logger.warning("loop version commit failed for {}", subject)
