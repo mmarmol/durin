@@ -165,6 +165,10 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   definition. Same validation and version history as authoring; it refuses a name that does
   not exist yet. The rationale matters: the self-improvement pass reads the version history
   to avoid re-proposing edits the user reverted.
+- **Script files:** call `workflow_script_write(name, content, rationale)` to create or
+  replace the file a `script` node runs; reference it from the node by that file name. The
+  generic file tools refuse any path under `workflows/` — like `skills/`, this registry is
+  write-guarded so nothing lands unvalidated or outside the version history.
 
 ## Authoring references — read on demand
 

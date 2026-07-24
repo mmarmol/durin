@@ -73,6 +73,40 @@ class WorkflowVersionStore:
             logger.exception("workflow version history failed for {}", self.dir)
             return []
 
+    def commit_paths(
+        self,
+        paths: list[Path],
+        subject: str,
+        reason: str,
+        *,
+        actor: str,
+    ) -> str | None:
+        """Commit an arbitrary set of touched paths as ONE version.
+
+        A rename is three mutations — the new definition, the removal of the old
+        one, and the repointed sub-flow reference in every caller — and they have
+        to land together, or the history shows an intermediate state where a
+        caller points at a workflow that does not exist. Deletions are staged by
+        passing the (now missing) path: staging a removed path records it.
+
+        Best-effort, locked, never raises — same contract as the rest of the store.
+        """
+        try:
+            with cross_process_lock(self._lock):
+                if not self._repo.is_initialized():
+                    self._repo.init()
+                try:
+                    return self._repo.commit(
+                        subject=subject,
+                        trailers={"Reason": reason, "Actor": actor},
+                        paths=list(paths),
+                    )
+                except NothingToCommitError:
+                    return None
+        except Exception:  # noqa: BLE001
+            logger.exception("workflow version commit failed for {}", subject)
+            return None
+
     def commit_edit(self, name: str, reason: str, *, actor: str = "dream") -> str | None:
         """Commit the current ``<name>.json`` with a ``Reason`` trailer (the rationale
         for an edit) and an ``Actor`` trailer. This is what an applied dream edit uses,
