@@ -387,10 +387,25 @@ before it is applied:
 |---|---|---|
 | `evolve` | `apply_skill_edit` — bounded find/replace on the skill body | target must be in `selected` |
 | `restructure` | `restructure_skill_agentic` — the judge supplies only an `intent`; an agentic sub-agent authors the fix (bundle a script, author a workflow to delegate to) in an **isolated staging copy** using real tools, the result is validated (integrity floor + composition gate + security scan), and only a validated, complete skill is applied to live via the locked commit — else discarded, live untouched | target must be in `selected`; requires a non-empty `intent`; the judge never emits whole artifacts inline (that shape corrupted a skill when a completion truncated) |
-| `fuse` | `dream_fuse_skills` — merge multiple skills into a new one, preserving source bundled scripts | every source must be in `selected`; `dream_fuse_skills` itself refuses any `manual` source and runs the composition gate + scan on the merged result |
-| `retire` | `remove_skill` — delete outright (git-recoverable) | target must be in `selected` |
+| `fuse` | `dream_fuse_skills` — merge multiple skills into a new one, preserving source bundled scripts | every source must be in `selected`; `dream_fuse_skills` itself refuses any `manual` source, refuses a source anything **depends on** (below), and runs the composition gate + scan on the merged result |
+| `retire` | `remove_skill` — delete outright (git-recoverable) | target must be in `selected`, and nothing may depend on it (below) |
 | `principle` | `add_principle` | capped at `PRINCIPLES_CAP` |
 | `retire_principle` | `retire_principle` | id must reference an active principle |
+
+**Nothing autonomous may change a skill something depends on.** A workflow work
+node names skills in `skills: [...]`, so a skill is not a leaf: rewriting one
+changes what that workflow does, and removing one leaves the node pointing at a
+name that does not resolve. `_dependency_refusal` (`durin/agent/skills_store.py`)
+consults the reverse graph (`durin/registry_graph.py`) and refuses
+`dream_restructure_skill` and any `dream_fuse_skills` source that is referenced;
+`retire` is guarded at its curation call site rather than inside `remove_skill`,
+because a user deleting their own skill from the CLI or the webui is entitled to.
+The refusal carries the `dependents` back to the caller so the work can be
+surfaced to the user as a suggestion instead of discarded. This is a different
+question from the `manual` check beside it: that one answers *who may change
+this*, this one answers *what breaks if it changes*. The `dependents` tool
+(`durin/agent/tools/dependents.py`) exposes the same query read-only, so a pass
+can check before attempting rather than discovering a dependency by being refused.
 
 `restructure` exists as a distinct action from `evolve` because a text
 find/replace cannot add bundled files or author a workflow — the two moves the

@@ -471,6 +471,7 @@ def _build_skill_extract_tools(workspace: Path, fs: Any) -> Any:
     ``Dream`` phase-2; the daily ``memory_dream`` skill-extract pass is its new home.
     """
     from durin.agent.tools.filesystem import EditFileTool, ReadFileTool
+    from durin.agent.tools.dependents import DependentsTool
     from durin.agent.tools.list_workflows import ListWorkflowsTool
     from durin.agent.tools.registry import ToolRegistry
     from durin.agent.tools.skill_acquire_seed import SkillAcquireSeedTool
@@ -508,6 +509,9 @@ def _build_skill_extract_tools(workspace: Path, fs: Any) -> Any:
     tools.register(ListWorkflowsTool(workspace=workspace))
     tools.register(WorkflowWriteTool(workspace=workspace))
     tools.register(WorkflowScriptWriteTool(workspace=workspace))
+    # The reverse edges: what a workflow or loop already depends on. Without this
+    # the pass can only discover a dependency by being refused mid-mutation.
+    tools.register(DependentsTool(workspace=workspace))
     return tools
 
 

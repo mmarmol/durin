@@ -267,6 +267,17 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
                 logger.warning("curation: skipping retire of out-of-scope skill %s", a.get("name"))
                 _emit("skill.curation_action", action="retire", skill=a.get("name"), applied=False)
                 continue
+            # A workflow names a skill by name: retiring one it references leaves
+            # the node pointing at nothing. The guard sits here, at the autonomous
+            # call site, rather than inside remove_skill — a user deleting their
+            # own skill is entitled to, and is warned elsewhere.
+            from durin.registry_graph import dependents_of, describe
+            deps = dependents_of(workspace, skill=a["name"])
+            if deps:
+                logger.warning("curation: refusing to retire %s — referenced by %s",
+                               a["name"], describe(deps))
+                _emit("skill.curation_action", action="retire", skill=a["name"], applied=False)
+                continue
             r = ss.remove_skill(workspace, a["name"])
             ok = bool(r.get("ok"))
             applied += 1 if ok else 0

@@ -868,6 +868,34 @@ def dream_create_skill(workspace: Path, name: str, content: str,
                            commit_subject=f"skill({name}): {rationale.strip()} [dream]")
 
 
+def _dependency_refusal(workspace: Path, skill: str, *, verb: str) -> dict | None:
+    """Refuse an autonomous mutation of a skill something else depends on.
+
+    The `manual` check upstream answers *who may change this*; this answers *what
+    breaks if it changes*. A workflow names a skill by name, so an autonomous
+    rewrite or removal changes — or breaks — that workflow without anyone asking.
+    The dependents travel back in the result so the caller can surface the work as
+    a suggestion for the user instead of discarding it.
+
+    Returns None when nothing depends on the skill.
+    """
+    from durin.registry_graph import dependents_of, describe
+
+    deps = dependents_of(workspace, skill=skill)
+    if not deps:
+        return None
+    return {
+        "error": (f"refusing to {verb} {skill!r}: it is referenced by "
+                  f"{describe(deps)}. Changing it would change what they do — "
+                  f"the user decides this one."),
+        "dependency_blocked": True,
+        "dependents": [
+            {"kind": d.kind, "name": d.name, "via": d.via, "where": d.where}
+            for d in deps
+        ],
+    }
+
+
 def dream_restructure_skill(workspace: Path, name: str, *, content: str,
                             rationale: str, files: dict[str, str] | None = None,
                             attribution: "Attribution | None" = None,
@@ -896,6 +924,11 @@ def dream_restructure_skill(workspace: Path, name: str, *, content: str,
         return {"error": f"skill not found: {name}"}
     if read_mode(workspace, name, loader) == "manual":
         return {"error": f"skill is manual, refusing: {name}"}
+    # A workflow node injects this skill's prose into its prompt, so rewriting the
+    # body silently changes that workflow's behaviour. The user owns that call.
+    blocked = _dependency_refusal(workspace, name, verb="restructure")
+    if blocked is not None:
+        return blocked
     if not (content.strip() and (_frontmatter_description(content) or _derive_description(content))):
         return {"error": "skill body has no derivable description"}
     if composition_judge is not None and not composition_override:
@@ -961,6 +994,12 @@ def dream_fuse_skills(workspace: Path, *, target: str, content: str,
     for s in sources:
         if read_mode(workspace, s) == "manual":
             return {"error": f"source is manual, refusing: {s}"}
+        # A fuse REMOVES its sources. A workflow node names a skill by name, so
+        # removing a referenced one leaves that node pointing at nothing — the
+        # ownership check above says who may change it, not what breaks if it goes.
+        blocked = _dependency_refusal(workspace, s, verb="fuse away")
+        if blocked is not None:
+            return blocked
     if _skill_md(workspace, target).exists():
         return {"error": f"target already exists: {target}"}
     if composition_judge is not None:
