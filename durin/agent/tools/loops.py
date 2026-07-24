@@ -211,8 +211,8 @@ class LoopsTool(Tool):
         except LoopNotFound as exc:
             return f"Error: {exc}"
         new_spec = replace(spec, enabled=enable)
-        save_loop(self._ws, new_spec)
         state = "enabled" if enable else "paused"
+        save_loop(self._ws, new_spec, actor="agent", reason=f"loop {state}")
         if self._cron is None:
             return f"Loop '{name}' is now {state} (cron sync skipped: no cron service on this surface)."
         sync_loop_jobs(self._cron, new_spec)
@@ -231,7 +231,7 @@ class LoopsTool(Tool):
             spec = parse_loop(data)
         except LoopError as exc:
             return f"Error: invalid loop definition: {exc}"
-        save_loop(self._ws, spec)
+        save_loop(self._ws, spec, actor="agent", reason="authored by the agent")
         if self._cron is not None:
             sync_loop_jobs(self._cron, spec)
         state = "enabled" if spec.enabled else "paused"
