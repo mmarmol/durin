@@ -86,14 +86,17 @@ def _judge_content_fingerprint(page: "EntityPage") -> str:
     """Hash of the fields a verdict can turn on: identity and content.
 
     Deliberately EXCLUDES provenance, derived_from and timestamps — source
-    accrual (every seeding pass adds one) must not reopen a settled pair."""
+    accrual (every seeding pass adds one) must not reopen a settled pair —
+    and the always_on attribute: it is curation state the always_on pass
+    re-ranks after every run, not identity content."""
     import hashlib
 
     payload = json.dumps({
         "type": page.type,
         "name": page.name,
         "aliases": sorted(page.aliases or []),
-        "attributes": page.attributes or {},
+        "attributes": {
+            k: v for k, v in (page.attributes or {}).items() if k != "always_on"},
         "relations": sorted(
             f"{r.get('to')}|{r.get('type')}" for r in (page.relations or [])),
         "body": page.body or "",
