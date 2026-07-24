@@ -913,6 +913,13 @@ End-to-end for a single `run_workflow` call:
   node (a node's own `timeout` overrides it); `workflow.script_output_max_chars`
   (default 16000) caps a script node's captured stdout — the edge text it passes on
   (excess is truncated with a notice).
+- **A delete refuses while something still points at it.** A `subworkflow` node and a
+  loop both name a workflow by name, so removing one they run breaks them silently.
+  `DELETE …/{name}` consults the reverse graph (`durin/registry_graph.py`) and returns
+  a validation error naming the dependents; retarget or remove those first. This is the
+  same question the dream's skill barrier asks (see
+  [skills/02_lifecycle_and_curation.md](skills/02_lifecycle_and_curation.md)) — *what
+  breaks if this goes* — applied to the workflow registry.
 - **Every mutation is versioned.** Each mutating route commits the paths it touched
   through the version store (`commit_paths`, actor `user`), after releasing the write
   lock — the store takes that same non-reentrant lock. A rename commits its three
@@ -927,9 +934,11 @@ End-to-end for a single `run_workflow` call:
   snapshot never interleave); **duplicate** (`…/{name}/duplicate` — copy a definition to a
   new name to use as a starting point); **rename** (`…/{name}/rename` — move the definition
   to a new name; carries the run-history directory (manifests, recommendations, dream
-  cursor) along best-effort, rewrites the moved manifests' inner `workflow` field, and
-  repoints `subworkflow` nodes in every other definition so callers do not silently
-  break); **run** (`…/{name}/run` — executes the workflow on a task and
+  cursor) along best-effort, rewrites the moved manifests' inner `workflow` field,
+  repoints `subworkflow` nodes in every other definition, and repoints the **loops**
+  that run it — sub-flow callers share the definition directory and the rename's single
+  commit, while a loop lives in its own directory with its own version store, so it is
+  re-saved through `save_loop` and versioned there); **run** (`…/{name}/run` — executes the workflow on a task and
   returns the per-node trace); the **recommendations** queue (`…/recommendations`,
   `…/recommendations/{id}/apply`, `…/recommendations/{id}/dismiss`); and `GET
   /api/v1/workflows/scripts`, which lists the filenames under
