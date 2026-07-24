@@ -68,12 +68,21 @@ around to see. At least one of these must hold:
 ```
 
 - **Triggers** (any mix): `cron` (a schedule), `channel` (email / telegram / slack /
-  discord / whatsapp, with structural `filters` — `sender_contains`, `subject_contains`,
-  `text_contains` — and an optional `semantic` condition judged by the aux model,
-  fail-closed), or `webhook` (a named hook POSTed by an external system, secret-gated).
+  discord / whatsapp, with structural `filters` and an optional `semantic` condition
+  judged by the aux model, fail-closed), or `webhook` (a named hook POSTed by an
+  external system, secret-gated).
   A loop with no triggers fires only manually. `correlate` (channel or webhook) is a
   one-capture-group regex: messages carrying the same captured value — a ticket id, an
   order number — reach the same case even across unrelated threads.
+- **Channel `filters`** is an open key→value map. Keys ending in `_contains`
+  (`sender_contains`, `subject_contains`, `text_contains`) are case-insensitive
+  substring tests on prose. Every other key is an *exact* match, on either a fact every
+  channel provides — `sender`, `sender_name`, `sender_kind` (`human`/`bot`), `chat`,
+  `chat_name`, `is_dm` — or a channel-specific one (Slack: `app_id`, `bot_id`,
+  `surface`; Discord: `guild`, `thread_id`). Exact, not substring: a filter for room
+  `support` must not also fire in `support-escalations`. All set keys must hold. A key
+  the named channel never provides matches nothing and is warned about on save, so
+  scope an app-driven loop with `sender_kind: "bot"` plus `chat`, not with a guess.
 - **Goal** = natural-language `intent` + typed `checks`. A `script` check passes iff
   its command exits 0 — it cannot be sweet-talked; an `assertion` is judged against the
   run's evidence. A failing **required** check blocks `done` no matter what the judge

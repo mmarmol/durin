@@ -1460,7 +1460,15 @@
       "operatorToHint": "對於聊天頻道（Telegram、Slack…），升級通知需要收件對象 ID；若未提供，通知僅會出現在活動收件匣中。",
       "savePaused": "儲存為暫停狀態",
       "saveEnabled": "儲存並啟用",
-      "cancel": "取消"
+      "cancel": "取消",
+      "otherFilters": "其他篩選條件",
+      "otherFiltersHint": "對身分、頻道或管道專有欄位的精確比對。以 _contains 結尾的鍵為子字串比對。",
+      "filterKey": "篩選鍵",
+      "filterKeyPlaceholder": "chat",
+      "filterValue": "篩選值",
+      "filterValuePlaceholder": "C0ABC123",
+      "addFilter": "新增篩選條件",
+      "removeFilter": "移除篩選條件"
     }
   },
   "skills": {

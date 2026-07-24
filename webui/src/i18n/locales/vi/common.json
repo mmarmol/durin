@@ -1460,7 +1460,15 @@
       "operatorToHint": "Với các kênh chat (Telegram, Slack…), việc báo lên cần một id người nhận; nếu không có, chúng chỉ đến hộp thư Hoạt động.",
       "savePaused": "Lưu ở trạng thái tạm dừng",
       "saveEnabled": "Lưu & bật",
-      "cancel": "Hủy"
+      "cancel": "Hủy",
+      "otherFilters": "Bộ lọc khác",
+      "otherFiltersHint": "Khớp chính xác theo danh tính, phòng hoặc trường riêng của kênh. Khóa kết thúc bằng _contains là tìm chuỗi con.",
+      "filterKey": "Khóa bộ lọc",
+      "filterKeyPlaceholder": "chat",
+      "filterValue": "Giá trị bộ lọc",
+      "filterValuePlaceholder": "C0ABC123",
+      "addFilter": "Thêm bộ lọc",
+      "removeFilter": "Xóa bộ lọc"
     }
   },
   "skills": {

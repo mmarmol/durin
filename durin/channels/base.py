@@ -215,18 +215,24 @@ class BaseChannel(ABC):
         metadata: dict[str, Any] | None = None,
         session_key: str | None = None,
         is_dm: bool = False,
+        trigger_only: bool = False,
     ) -> None:
         """Build the inbound event and publish it. Authorization + pairing are
         enforced centrally at the bus ingress gate (ChannelManager), so every
         channel — and any direct publisher — is gated uniformly and no channel
-        can bypass it."""
+        can bypass it.
+
+        ``trigger_only`` marks a message that may fire loop triggers but must
+        never reach the agent as conversation; it is still authorized like any
+        other."""
         meta = metadata or {}
-        if self.supports_streaming:
+        if self.supports_streaming and not trigger_only:
             meta = {**meta, "_wants_stream": True}
         await self.bus.publish_inbound(InboundMessage(
             channel=self.name, sender_id=str(sender_id), chat_id=str(chat_id),
             content=content, media=media or [], metadata=meta,
-            session_key_override=session_key, is_dm=is_dm))
+            session_key_override=session_key, is_dm=is_dm,
+            trigger_only=trigger_only))
 
     @classmethod
     def default_config(cls) -> dict[str, Any]:

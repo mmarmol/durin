@@ -142,6 +142,10 @@ class SlackChannel(BaseChannel):
         self._web_client: AsyncWebClient | None = None
         self._socket_client: SocketModeClient | None = None
         self._bot_user_id: str | None = None
+        # Our own bot id, the identity our posts carry when they come back as
+        # bot_message with no user field. Without it a self-post in that shape
+        # would slip past the user-id self-check below.
+        self._bot_id: str | None = None
         self._target_cache: dict[str, str] = {}
         self._thread_context_attempted: set[str] = set()
         self._dedup = MessageDeduplicator(max_size=SLACK_EVENT_DEDUP_MAX, ttl_seconds=SLACK_EVENT_DEDUP_TTL_S)
@@ -178,6 +182,7 @@ class SlackChannel(BaseChannel):
         try:
             auth = await self._web_client.auth_test()
             self._bot_user_id = auth.get("user_id")
+            self._bot_id = auth.get("bot_id")
             self.logger.info("bot connected as {}", self._bot_user_id)
         except SlackApiError as e:
             error_code = str((e.response or {}).get("error") or "")
@@ -567,11 +572,24 @@ class SlackChannel(BaseChannel):
 
         subtype = event.get("subtype")
         # Slack uses subtype=file_share for user messages with attachments.
-        # Ignore other subtypes such as bot_message / message_changed / deleted.
-        if subtype and subtype != "file_share":
+        # bot_message is how apps post (ticket alerts, monitors, CI digests):
+        # allowed through so loop triggers can see them, and published as
+        # trigger-only below so durin never answers one as conversation.
+        # Other subtypes (message_changed / deleted / channel_join / ...) stay
+        # ignored.
+        if subtype and subtype not in ("file_share", "bot_message"):
             return
         if self._bot_user_id and sender_id == self._bot_user_id:
             return
+        if self._bot_id and event.get("bot_id") == self._bot_id:
+            return
+        # An app's post: either the bot_message subtype (webhook-style apps,
+        # which often carry no user id at all) or a bot_id riding alongside a
+        # real user id (apps that own a bot user). Webhook-style posts are
+        # identified by their bot_id, which is what authorization then keys on.
+        is_bot = subtype == "bot_message" or bool(event.get("bot_id"))
+        if is_bot and not sender_id:
+            sender_id = event.get("bot_id")
 
         # Avoid double-processing: Slack sends both `message` and `app_mention`
         # for mentions in channels. Prefer `app_mention`.
@@ -597,10 +615,15 @@ class SlackChannel(BaseChannel):
 
         # Routing only — sender authorization is enforced once at the central
         # bus-ingress gate, which also sends pairing codes to unapproved DMs.
+        # group_policy governs whether durin joins a conversation, so it does
+        # not apply to an app's post: that is an event, not something addressed
+        # to durin, and a mention-only room would otherwise hide every
+        # notification from loop triggers. What contains those is authorization
+        # at the gate — an app must be approved like any other sender.
         if is_dm:
             if not self.config.dm_enabled:
                 return
-        elif not self._should_respond_in_channel(
+        elif not is_bot and not self._should_respond_in_channel(
             event_type, text, chat_id, event.get("thread_ts")
         ):
             return
@@ -634,9 +657,11 @@ class SlackChannel(BaseChannel):
             and event_type == "app_mention"
         ):
             self._follow_thread(f"{chat_id}:{thread_ts}")
-        # Add :eyes: reaction to the triggering message (best-effort)
+        # Add :eyes: reaction to the triggering message (best-effort). Not on
+        # an app's post: the reaction means "durin is working on your message",
+        # and nobody is waiting on one.
         try:
-            if sender_allowed and self._web_client and event.get("ts"):
+            if sender_allowed and not is_bot and self._web_client and event.get("ts"):
                 await self._web_client.reactions_add(
                     channel=chat_id,
                     name=self.config.react_emoji,
@@ -664,7 +689,9 @@ class SlackChannel(BaseChannel):
                     file_markers.append(marker)
 
         is_slash = text.strip().startswith("/")
-        content = text if is_slash or not sender_allowed else await self._with_thread_context(
+        # Surrounding-thread context is conversation scaffolding; an app's post
+        # is matched on its own content, so skip the API round-trips for it.
+        content = text if is_slash or is_bot or not sender_allowed else await self._with_thread_context(
             text,
             chat_id=chat_id,
             channel_type=channel_type,
@@ -694,6 +721,7 @@ class SlackChannel(BaseChannel):
                 },
                 session_key=session_key,
                 is_dm=is_dm,
+                trigger_only=is_bot,
             )
         except Exception:
             self.logger.exception("Error handling message from {}", sender_id)
@@ -932,8 +960,27 @@ class SlackChannel(BaseChannel):
         for att in event.get("attachments") or []:
             if not isinstance(att, dict):
                 continue
-            parts = [str(att.get(key) or "").strip() for key in ("author_name", "title", "text")]
-            body = " — ".join(part for part in parts if part)
+            # Apps put the whole message inside the attachment — a footer that
+            # identifies the item, fields that carry the body — and leave the
+            # top-level text empty, so a trigger matching on message text would
+            # see nothing. Footer first so the identifying line survives the
+            # length cap; duplicates dropped because apps routinely repeat the
+            # same sentence across text and fallback.
+            candidates = [
+                str(att.get("footer") or ""),
+                *(str(att.get(key) or "") for key in ("author_name", "title", "text", "fallback")),
+                *(
+                    str(att_field.get("value") or "")
+                    for att_field in att.get("fields") or []
+                    if isinstance(att_field, dict)
+                ),
+            ]
+            parts: list[str] = []
+            for candidate in candidates:
+                stripped = candidate.strip()
+                if stripped and stripped not in parts:
+                    parts.append(stripped)
+            body = " — ".join(parts)
             att_text = str(att.get("text") or "").strip()
             if body and body not in text and (not att_text or att_text not in text):
                 lines.append(f"[shared] {body[:500]}")

@@ -1274,7 +1274,15 @@
       "operatorToHint": "Para canales de chat (Telegram, Slack…) los escalados necesitan un id de destinatario; sin él solo llegan a la bandeja de Activity.",
       "savePaused": "Guardar pausado",
       "saveEnabled": "Guardar y habilitar",
-      "cancel": "Cancelar"
+      "cancel": "Cancelar",
+      "otherFilters": "Otros filtros",
+      "otherFiltersHint": "Coincidencia exacta por identidad, sala o un campo propio del canal. Las claves que terminan en _contains buscan subcadenas.",
+      "filterKey": "Clave del filtro",
+      "filterKeyPlaceholder": "chat",
+      "filterValue": "Valor del filtro",
+      "filterValuePlaceholder": "C0ABC123",
+      "addFilter": "Agregar filtro",
+      "removeFilter": "Quitar filtro"
     }
   },
   "skills": {

@@ -1460,7 +1460,15 @@
       "operatorToHint": "Untuk channel chat (Telegram, Slack…) eskalasi butuh ID penerima; tanpa itu hanya akan sampai ke kotak masuk Aktivitas.",
       "savePaused": "Simpan sebagai dijeda",
       "saveEnabled": "Simpan & aktifkan",
-      "cancel": "Batal"
+      "cancel": "Batal",
+      "otherFilters": "Filter lainnya",
+      "otherFiltersHint": "Kecocokan persis pada identitas, ruang, atau kolom khusus kanal. Kunci yang berakhiran _contains mencari substring.",
+      "filterKey": "Kunci filter",
+      "filterKeyPlaceholder": "chat",
+      "filterValue": "Nilai filter",
+      "filterValuePlaceholder": "C0ABC123",
+      "addFilter": "Tambah filter",
+      "removeFilter": "Hapus filter"
     }
   },
   "skills": {

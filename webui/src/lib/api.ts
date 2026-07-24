@@ -870,12 +870,12 @@ export interface LoopTriggerCron {
 export interface LoopTriggerChannel {
   source: "channel";
   channel: "email" | "telegram" | "slack" | "discord" | "whatsapp";
-  filters: {
-    from_contains?: string;
-    subject_contains?: string;
-    sender_contains?: string;
-    text_contains?: string;
-  };
+  // The filter vocabulary is open: keys ending in _contains are substring
+  // tests on prose, any other key is an exact match on an identity, a place,
+  // or a channel-specific dimension. Each channel declares what it can
+  // populate and the backend warns (never rejects) on the rest, so anything
+  // read here must be written back untouched.
+  filters: Record<string, string>;
   semantic?: string;
   match: "wake_or_new" | "always_new";
   correlate?: string;

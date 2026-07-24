@@ -81,6 +81,11 @@ class MessageBus:
                     exc_info=True,
                 )
                 continue
+        if msg.trigger_only:
+            # Published for trigger matching only. No interceptor claimed it,
+            # so nothing wants it: enqueuing would turn an app's notification
+            # into a conversation nobody asked durin to have.
+            return
         await self.inbound.put(msg)
 
     async def consume_inbound(self) -> InboundMessage:

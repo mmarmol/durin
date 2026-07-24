@@ -33,11 +33,28 @@ interface TriggerRow {
   subjectContains: string;
   senderContains: string;
   textContains: string;
+  // Every filter key that is not one of the four named inputs above: the
+  // universal facts (chat, sender_kind, ...) and each channel's own
+  // vocabulary. Kept as pairs so a definition authored elsewhere survives a
+  // round-trip through this form untouched.
+  otherFilters: FilterPair[];
   semantic: string;
   match: "wake_or_new" | "always_new";
   correlate: string;
   hook: string;
 }
+
+interface FilterPair {
+  key: string;
+  value: string;
+}
+
+const NAMED_FILTER_KEYS = new Set([
+  "from_contains",
+  "subject_contains",
+  "sender_contains",
+  "text_contains",
+]);
 
 interface CheckRow {
   kind: "script" | "assertion";
@@ -75,6 +92,7 @@ const EMPTY_TRIGGER: Omit<TriggerRow, "rowId"> = {
   subjectContains: "",
   senderContains: "",
   textContains: "",
+  otherFilters: [],
   semantic: "",
   match: "wake_or_new",
   correlate: "",
@@ -121,6 +139,9 @@ function defToForm(def: LoopDef): FormState {
           subjectContains: trig.filters.subject_contains ?? "",
           senderContains: trig.filters.sender_contains ?? "",
           textContains: trig.filters.text_contains ?? "",
+          otherFilters: Object.entries(trig.filters)
+            .filter(([key]) => !NAMED_FILTER_KEYS.has(key))
+            .map(([key, value]) => ({ key, value: String(value ?? "") })),
           semantic: trig.semantic ?? "",
           match: trig.match,
           correlate: trig.correlate ?? "",
@@ -161,12 +182,7 @@ function formToDef(form: FormState, enabled: boolean): LoopDef {
   );
   const triggers: LoopTrigger[] = form.triggers.map((row): LoopTrigger => {
     if (row.source === "channel") {
-      const filters: {
-        from_contains?: string;
-        subject_contains?: string;
-        sender_contains?: string;
-        text_contains?: string;
-      } = {};
+      const filters: Record<string, string> = {};
       // from/subject inputs are only shown in the UI for email, but the
       // backend accepts them on any channel — an out-of-band definition
       // (API/tool-authored) may already carry them on a non-email row, and
@@ -175,6 +191,13 @@ function formToDef(form: FormState, enabled: boolean): LoopDef {
       if (row.subjectContains.trim()) filters.subject_contains = row.subjectContains.trim();
       if (row.senderContains.trim()) filters.sender_contains = row.senderContains.trim();
       if (row.textContains.trim()) filters.text_contains = row.textContains.trim();
+      // Same reasoning, now for the open vocabulary: whatever this form did
+      // not give a named input to still has to come back out intact.
+      for (const pair of row.otherFilters) {
+        const key = pair.key.trim();
+        const value = pair.value.trim();
+        if (key && value) filters[key] = value;
+      }
       return {
         source: "channel",
         channel: row.channel,
@@ -270,6 +293,37 @@ export function LoopForm({
     setForm((f) => ({ ...f, triggers: [...f.triggers, { ...EMPTY_TRIGGER, rowId: nextRowId() }] }));
   const removeTrigger = (i: number) =>
     setForm((f) => ({ ...f, triggers: f.triggers.filter((_, idx) => idx !== i) }));
+
+  const setFilterPair = (i: number, j: number, key: keyof FilterPair, value: string) =>
+    setForm((f) => ({
+      ...f,
+      triggers: f.triggers.map((row, idx) =>
+        idx === i
+          ? {
+              ...row,
+              otherFilters: row.otherFilters.map((pair, pairIdx) =>
+                pairIdx === j ? { ...pair, [key]: value } : pair,
+              ),
+            }
+          : row,
+      ),
+    }));
+  const addFilterPair = (i: number) =>
+    setForm((f) => ({
+      ...f,
+      triggers: f.triggers.map((row, idx) =>
+        idx === i ? { ...row, otherFilters: [...row.otherFilters, { key: "", value: "" }] } : row,
+      ),
+    }));
+  const removeFilterPair = (i: number, j: number) =>
+    setForm((f) => ({
+      ...f,
+      triggers: f.triggers.map((row, idx) =>
+        idx === i
+          ? { ...row, otherFilters: row.otherFilters.filter((_, pairIdx) => pairIdx !== j) }
+          : row,
+      ),
+    }));
 
   const addCheck = () => setForm((f) => ({ ...f, checks: [...f.checks, { ...EMPTY_CHECK }] }));
   const removeCheck = (i: number) =>
@@ -534,6 +588,45 @@ export function LoopForm({
                         value={row.textContains}
                         onChange={(e) => setTrigger(i, "textContains", e.target.value)}
                       />
+                    </div>
+                    <div className="min-w-[260px] flex-[2]">
+                      <span className={rowLabelClass}>{t("loops.form.otherFilters")}</span>
+                      {row.otherFilters.map((pair, j) => (
+                        <div key={`${row.rowId}-filter-${j}`} className="mt-1 flex gap-1">
+                          <input
+                            aria-label={t("loops.form.filterKey")}
+                            placeholder={t("loops.form.filterKeyPlaceholder")}
+                            className={`${inputClass} flex-1`}
+                            value={pair.key}
+                            onChange={(e) => setFilterPair(i, j, "key", e.target.value)}
+                          />
+                          <input
+                            aria-label={t("loops.form.filterValue")}
+                            placeholder={t("loops.form.filterValuePlaceholder")}
+                            className={`${inputClass} flex-1`}
+                            value={pair.value}
+                            onChange={(e) => setFilterPair(i, j, "value", e.target.value)}
+                          />
+                          <button
+                            type="button"
+                            aria-label={t("loops.form.removeFilter")}
+                            className="px-2 text-xs text-muted-foreground hover:text-foreground"
+                            onClick={() => removeFilterPair(i, j)}
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
+                      <button
+                        type="button"
+                        className="mt-1 text-[10.5px] text-muted-foreground hover:text-foreground"
+                        onClick={() => addFilterPair(i)}
+                      >
+                        + {t("loops.form.addFilter")}
+                      </button>
+                      <p className="mt-1 text-[10.5px] text-muted-foreground">
+                        {t("loops.form.otherFiltersHint")}
+                      </p>
                     </div>
                     <div className="min-w-[200px] flex-[2]">
                       <label htmlFor={`loop-trigger-semantic-${i}`} className={rowLabelClass}>

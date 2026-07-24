@@ -265,6 +265,16 @@ claim-waiting loop run or fires a newly
 matched loop trigger, consuming the message so it never reaches the agent as a
 normal turn.
 
+**Trigger-only messages.** `InboundMessage.trigger_only` marks a message that
+may fire loop triggers but must never become a conversation — an app posting
+alerts into a room. It runs the authorizer gate and the interceptors like any
+other message; the difference is at the end of `publish_inbound`, where an
+unconsumed trigger-only message is **dropped instead of enqueued**. Without
+that, a notification no loop happened to match would land in the agent's queue
+and be answered in the room, turning every app post into a conversation nobody
+asked for. Such messages also skip the `_wants_stream` flag, since nothing is
+waiting on a streamed reply.
+
 The channel contract is to be **pure transport**: publish unconditionally with
 `is_dm` set and let the gate authorize — a channel should NOT re-implement
 `is_allowed`/pairing in its handlers. **Telegram, Slack, Discord, and
@@ -284,6 +294,21 @@ adapter applies two inbound normalizations of its own: it deduplicates
 messages replayed by the gateway on reconnect, and it reassembles a long
 message the Discord client split client-side before re-publishing it as one
 `InboundMessage`.
+
+**App-authored posts.** Both Slack and Discord let messages from *other* bots
+through, dropping only their own account so an instance never answers itself.
+Slack additionally treats an app's post (the `bot_message` subtype, or a
+`bot_id` alongside a real user id) as an event rather than an address to
+durin: `group_policy` is skipped for it, because that policy governs joining a
+conversation and a mention-only room would otherwise hide every notification
+from loop triggers. What contains these is authorization — an app must be
+approved like any other sender — plus `trigger_only`, which keeps an
+unmatched post from reaching the agent. Slack posts them without the working
+reaction, without thread context, and with the attachment's `footer` and
+`fields` folded into the text, since apps routinely leave the top-level text
+empty and put everything identifying (a ticket number, a status) in the
+attachment. Other subtypes (`message_changed`, `message_deleted`,
+`channel_join`, …) stay discarded.
 
 The agent loop (`AgentLoop.run()`) consumes from `bus.inbound`. The
 `InboundMessage.session_key` property returns `session_key_override` when set,
