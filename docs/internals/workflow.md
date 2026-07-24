@@ -868,6 +868,7 @@ End-to-end for a single `run_workflow` call:
 | `RunWorkflowTool` | `durin/agent/tools/run_workflow.py` | The `run_workflow` LLM tool (core scope) that loads, runs, summarizes a workflow, and records its run. |
 | `ListWorkflowsTool` | `durin/agent/tools/list_workflows.py` | The `list_workflows` LLM tool (core scope, read-only) that lists the workspace's workflows with their `description` and I/O for discovery; an optional `query` filters by name/description. |
 | `WorkflowWriteTool` | `durin/agent/tools/workflow_write.py` | The `workflow_write` LLM tool (core scope): validates a definition via `parse_workflow` before persisting, refuses overwriting an existing name, defaults `improvement_mode` to `manual`, and commits through the version store. The agent's sanctioned authoring path (also given to the dream's skill-extract sub-agent, so a skill can delegate to a workflow it authored). |
+| `WorkflowScriptWriteTool` | `durin/agent/tools/workflow_script_write.py` | The `workflow_script_write` LLM tool: the sanctioned door for the script files a `script` node runs. Generic write tools are denied under `workflows/` (see [security.md](security.md)), so this is how an agent — and the dream's skill-extract sub-agent — authors a deterministic step. Persists through `save_workflow_script`, the same door the editor's `PUT …/scripts/{name}` route uses. |
 | `start_run`, `mark_node_started`, `update_run`, `finalize_run`, `typical_node_durations`, `typical_total_duration`, `read_manifest`, `runs_for_session`, `reconcile_running`, `read_runs_since` | `durin/workflow/run_log.py` | The live run manifest (running→terminal, including the in-flight `active_node` marker and the once-per-run `typical_s`/`typical_total_s` baselines), per-run diagnostic records, crash reconciliation, and the self-improvement signal source. `read_runs_since` callers that need terminal runs should skip records with `status in {"running","crashed"}`. |
 | `NodeExecutionError` | `durin/workflow/engine.py` | Typed error raised by the node runner when an agent turn or a script node's process fails or times out; carries `node_id`, `iteration`, and `session_key` (`None` for a script node) so the engine can record an attributable `NodeRun` before aborting. |
 | `compute_diagnostics` | `durin/workflow/diagnostics.py` | Reduces run records to recurring per-node trouble (loop-backs, gate fails, script failures with sample error strings) → improvement candidates. |
@@ -911,6 +912,13 @@ End-to-end for a single `run_workflow` call:
   node (a node's own `timeout` overrides it); `workflow.script_output_max_chars`
   (default 16000) caps a script node's captured stdout — the edge text it passes on
   (excess is truncated with a notice).
+- **Every mutation is versioned.** Each mutating route commits the paths it touched
+  through the version store (`commit_paths`, actor `user`), after releasing the write
+  lock — the store takes that same non-reentrant lock. A rename commits its three
+  mutations (new definition, removal of the old, repointed caller references) as **one**
+  version, so history never shows a caller pointing at a workflow that does not exist.
+  Versioning is best-effort by contract: the write already landed, so a commit failure
+  logs and never fails the request.
 - **Management API:** `WorkflowsService` (`durin/service/workflows.py`) exposes, over HTTP
   at `/api/v1/workflows[/{name}]` and in the OpenAPI contract: list / load / save / delete
   (save validates via `parse_workflow` and writes atomically under the version lock — the
@@ -928,10 +936,11 @@ End-to-end for a single `run_workflow` call:
   directory is absent) — the source for the visual editor's script-file picker.
   `GET /api/v1/workflows/scripts/{name}` and `PUT /api/v1/workflows/scripts/{name}`
   (body `{content}`) read and create-or-replace one script file — the editor's
-  file-mode "New script…" and "Edit" actions — with the same containment rule as
-  the parser (single relative filename, no `..`), a 256 KB content cap, an atomic
-  write, and a best-effort version-store snapshot. This is the surface the webui
-  visual editor uses.
+  file-mode "New script…" and "Edit" actions. The write itself goes through
+  `save_workflow_script` (`durin/workflow/editing.py`), the shared door the agent's
+  `workflow_script_write` tool also uses: single relative filename (no `..`), a
+  256 KB content cap, an atomic write under the version lock, and a commit scoped to
+  that file. This is the surface the webui visual editor uses.
 - **Lineage:** node sessions reuse the lineage metadata on the open session document
   (`durin/session/lineage.py`), so no schema migration is involved.
 - **Self-improvement** (per-workflow `improvement_mode`, two states like a skill's:

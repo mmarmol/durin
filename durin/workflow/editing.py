@@ -32,6 +32,56 @@ def safe_workflow_name(name: str) -> bool:
     )
 
 
+# A script file's content cap — generous for a deterministic node script, small
+# enough to keep an HTTP JSON body and the atomic write cheap.
+MAX_SCRIPT_CONTENT_BYTES = 256 * 1024
+
+
+def save_workflow_script(
+    workspace: str | Path,
+    name: str,
+    content: str,
+    *,
+    reason: str,
+    actor: str,
+) -> dict:
+    """Validate and persist one workflow script file; returns ``{ok|error, ...}``.
+
+    The script sibling of :func:`save_workflow_definition`, and for the same
+    reason: ``workflows/scripts/`` holds the code that script nodes execute, so
+    it needs one door that validates, writes under the shared lock and commits —
+    not a generic file write that leaves the version store dirty.
+
+    The name must be a single relative path segment. That is stricter than the
+    workflow parser's script-path rule (which allows nesting), matching what the
+    editor's create/edit door has always written: a flat filename.
+    """
+    name = (name or "").strip()
+    if not name or name in (".", "..") or any(c in name for c in ("/", "\\", "\x00")):
+        return {"error": f"invalid script name: {name!r} must be a single path segment"}
+    if len(content.encode("utf-8")) > MAX_SCRIPT_CONTENT_BYTES:
+        return {"error": f"script content exceeds the {MAX_SCRIPT_CONTENT_BYTES}-byte cap"}
+    if not (reason or "").strip():
+        return {"error": "rationale is required"}
+
+    d = workflows_dir(workspace)
+    scripts = d / "scripts"
+    scripts.mkdir(parents=True, exist_ok=True)
+    path = scripts / name
+    existed = path.exists()
+    with cross_process_lock(version_lock_target(d)):
+        atomic_write_text(path, content)
+    sha = None
+    try:
+        sha = WorkflowVersionStore(d).commit_paths(
+            [path], f"script({name}): {'edit' if existed else 'create'}",
+            reason.strip(), actor=actor,
+        )
+    except Exception as exc:  # noqa: BLE001 - versioning is best-effort, the write landed
+        logger.warning("workflow script version commit failed for {}: {}", name, exc)
+    return {"ok": True, "name": name, "commit": sha}
+
+
 _background_names_cache: frozenset[str] | None = None
 
 

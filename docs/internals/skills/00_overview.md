@@ -244,7 +244,12 @@ published.
 `notebook_edit` tools refuse any path under `skills/`, redirecting the caller
 to the draft flow instead; `read_file` (and other read-only tools: `list_dir`,
 grep/search, the repo overview) are unaffected, so an active skill's SKILL.md
-stays directly readable. The guard lives in the agent-facing tools themselves
+stays directly readable. The same guard covers the other registries that own a
+validated, versioned write door — `workflows/` (use `workflow_write` /
+`workflow_edit`, and `workflow_script_write` for the scripts a script node runs)
+and `loops/` (use the loop tools) — because otherwise the rule is only an
+instruction in a skill, and a generic write lands unvalidated and unversioned.
+The guard lives in the agent-facing tools themselves
 (`durin/agent/tools/filesystem.py`, `.../notebook.py`); durin's own store
 operations write to `skills/` directly through `skills_store.py` and never go
 through those tools, so they are unaffected by it. The one deliberate opt-out

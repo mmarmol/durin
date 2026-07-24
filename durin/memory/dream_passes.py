@@ -476,6 +476,7 @@ def _build_skill_extract_tools(workspace: Path, fs: Any) -> Any:
     from durin.agent.tools.skill_acquire_seed import SkillAcquireSeedTool
     from durin.agent.tools.skill_search import SkillSearchTool
     from durin.agent.tools.skill_write import SkillWriteTool
+    from durin.agent.tools.workflow_script_write import WorkflowScriptWriteTool
     from durin.agent.tools.workflow_write import WorkflowWriteTool
 
     registries: list = []
@@ -501,9 +502,12 @@ def _build_skill_extract_tools(workspace: Path, fs: Any) -> Any:
                                    allowlist=allowlist, limit=limit))
     tools.register(SkillAcquireSeedTool(workspace=workspace, allowlist=allowlist))
     # Composition doctrine: the extractor can see the workflow catalog and author
-    # a new workflow for a skill to delegate to, instead of narrating it in prose.
+    # a new workflow for a skill to delegate to, instead of narrating it in prose —
+    # including the deterministic script a script node runs, which the generic file
+    # tools may not write (workflows/ is guarded, like skills/).
     tools.register(ListWorkflowsTool(workspace=workspace))
     tools.register(WorkflowWriteTool(workspace=workspace))
+    tools.register(WorkflowScriptWriteTool(workspace=workspace))
     return tools
 
 

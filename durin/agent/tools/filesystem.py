@@ -36,20 +36,22 @@ class _FsTool(Tool, ContextAware):
         extra_allowed_dirs: list[Path] | None = None,
         file_states: FileStates | None = None,
         post_edit_config: Any = None,
-        guard_skills_dir: bool = True,
+        guard_registry_dirs: bool = True,
     ):
         self._workspace = workspace
         self._allowed_dir = allowed_dir
         self._extra_allowed_dirs = extra_allowed_dirs
         # PostEditCheckConfig | None — only Write/Edit consume it.
         self._post_edit_config = post_edit_config
-        # Whether _resolve_write() refuses writes under workspace/skills/. On
-        # by default so every LLM-facing instance (main loop, subagents,
-        # execute_code — all built via `create(ctx)`) is protected. Callers
-        # that hand-build a tool over an isolated, non-live workspace (e.g. a
-        # throwaway staging copy that is itself validated before ever
-        # reaching the live tree) may pass False — see skill_restructure.py.
-        self._guard_skills_dir = guard_skills_dir
+        # Whether _resolve_write() refuses writes under the registry dirs that
+        # own their own validated, versioned write door (skills/, workflows/,
+        # loops/ — see _resolve_write). On by default so every LLM-facing
+        # instance (main loop, subagents, execute_code — all built via
+        # `create(ctx)`) is protected. Callers that hand-build a tool over an
+        # isolated, non-live workspace (e.g. a throwaway staging copy that is
+        # itself validated before ever reaching the live tree) may pass False —
+        # see skill_restructure.py.
+        self._guard_registry_dirs = guard_registry_dirs
         # Explicit state is used by isolated runners like Dream/subagents.
         # Main AgentLoop tools leave this unset and resolve state from the
         # current async task, which keeps shared tool instances session-safe.
@@ -108,14 +110,22 @@ class _FsTool(Tool, ContextAware):
         )
 
     def _resolve_write(self, path: str) -> Path:
-        """Like `_resolve`, but additionally refuses paths under the skills
-        registry — reads of `skills/` stay legitimate (builtins, installed
-        skills), but generic write tools must not touch it directly. Skill
-        authoring goes through `skill-drafts/<name>/` + `skill_publish`.
+        """Like `_resolve`, but additionally refuses paths under the registries
+        that own their own write door — reads stay legitimate, writes must not
+        bypass the door that validates and versions them:
+
+        - `skills/` → `skill-drafts/<name>/` + `skill_publish`
+        - `workflows/` → `workflow_write` / `workflow_edit`, and
+          `workflow_script_write` for `workflows/scripts/`
+        - `loops/` → the loop tools
+
+        Without this the guarantee is only an instruction in a skill, and a
+        generic write lands unvalidated and unversioned — which is how workflow
+        edits went missing from history.
         """
         denied = (
-            [self._workspace / "skills"]
-            if self._guard_skills_dir and self._workspace is not None
+            [self._workspace / d for d in ("skills", "workflows", "loops")]
+            if self._guard_registry_dirs and self._workspace is not None
             else None
         )
         return resolve_workspace_path(

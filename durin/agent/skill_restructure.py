@@ -196,7 +196,7 @@ def _build_restructure_tools(staging: Path) -> Any:
     fs = FileStates()
     tools = ToolRegistry()
     tools.register(ReadFileTool(workspace=staging, allowed_dir=staging, file_states=fs))
-    # guard_skills_dir=False: `staging` is a throwaway tempdir copy (mirroring
+    # guard_registry_dirs=False: `staging` is a throwaway tempdir copy (mirroring
     # the live layout as `staging/skills/<name>/` purely so the sub-agent's
     # path references line up), not the live skills registry — the generic
     # skills-write guard would otherwise block the very `skills/{name}/...`
@@ -205,9 +205,9 @@ def _build_restructure_tools(staging: Path) -> Any:
     # `_restructure_async` (integrity check + composition judge + security
     # scan), so this isolated copy needs no additional path guarding.
     tools.register(WriteFileTool(workspace=staging, allowed_dir=staging, file_states=fs,
-                                  guard_skills_dir=False))
+                                  guard_registry_dirs=False))
     tools.register(EditFileTool(workspace=staging, allowed_dir=staging, file_states=fs,
-                                 guard_skills_dir=False))
+                                 guard_registry_dirs=False))
     tools.register(ListWorkflowsTool(workspace=staging))
     tools.register(WorkflowWriteTool(workspace=staging))
     return tools

@@ -241,6 +241,20 @@ class WorkflowsService:
         # inside the versioned dir.
         return version_lock_target(self._dir())
 
+    def _commit(self, paths: list[Path], subject: str, reason: str) -> None:
+        """Record an editor mutation in the workflow version store.
+
+        Every mutating route must call this: an edit that only changes the tree
+        leaves no history and cannot be rolled back, and the periodic run
+        snapshot would later sweep it up under an unrelated subject. Call it
+        AFTER the write lock is released — the store takes that same
+        cross-process lock, which is not reentrant.
+
+        Best-effort by contract, like the rest of the store: the write already
+        landed, so a versioning failure must never fail the request.
+        """
+        WorkflowVersionStore(self._dir()).commit_paths(paths, subject, reason, actor="user")
+
     @route(
         "GET", "/api/v1/workflows",
         scope=Scope.WORKFLOWS_READ.value,
@@ -338,19 +352,17 @@ class WorkflowsService:
     async def put_script(self, cmd: WorkflowScriptPutCommand, principal: Principal) -> WorkflowScriptPutResult:
         principal.require(Scope.WORKFLOWS_WRITE)
         _validate_script_name(cmd.name)
-        if len(cmd.content.encode("utf-8")) > _MAX_SCRIPT_CONTENT_BYTES:
-            raise ValidationFailedError(
-                f"script content exceeds the {_MAX_SCRIPT_CONTENT_BYTES}-byte cap"
-            )
-        d = self._scripts_dir()
-        d.mkdir(parents=True, exist_ok=True)
-        path = d / cmd.name
-        with cross_process_lock(self._lock_target()):
-            atomic_write_text(path, cmd.content)
-        # Snapshot into the workflow version history: scripts/ lives inside the
-        # git-versioned workflows dir, so a script edit lands in the same history as a
-        # workflow definition edit. Best-effort: never blocks the write above.
-        WorkflowVersionStore(self._dir()).snapshot(f"script {cmd.name}")
+        # The shared editing engine validates, writes under the same lock and commits
+        # to the workflow version history — the agent's workflow_script_write uses the
+        # very same door, so neither surface can land an unversioned script.
+        from durin.workflow.editing import save_workflow_script
+
+        result = save_workflow_script(
+            self._workspace, cmd.name, cmd.content,
+            reason="saved in the workflow editor", actor="user",
+        )
+        if result.get("error"):
+            raise ValidationFailedError(result["error"])
         return WorkflowScriptPutResult(name=cmd.name)
 
     @route(
@@ -386,8 +398,14 @@ class WorkflowsService:
         warnings = definition_warnings(parsed)
         path = self._dir() / f"{cmd.name}.json"
         path.parent.mkdir(parents=True, exist_ok=True)
+        existed = path.exists()
         with cross_process_lock(self._lock_target()):
             atomic_write_text(path, json.dumps(cmd.definition, indent=2, ensure_ascii=False))
+        self._commit(
+            [path],
+            f"workflow({cmd.name}): {'edit' if existed else 'create'}",
+            "saved in the workflow editor",
+        )
         return WorkflowSaveResult(name=cmd.name, warnings=warnings)
 
     @route(
@@ -403,6 +421,8 @@ class WorkflowsService:
             raise NotFoundError(f"workflow {cmd.name!r} not found")
         with cross_process_lock(self._lock_target()):
             path.unlink()
+        # Staging a path that no longer exists is what records the removal.
+        self._commit([path], f"workflow({cmd.name}): delete", "deleted in the workflow editor")
         return WorkflowDeleteResult(deleted=True)
 
     @route(
@@ -430,6 +450,11 @@ class WorkflowsService:
             if dest.exists():
                 raise ValidationFailedError(f"workflow {target!r} already exists")
             atomic_write_text(dest, json.dumps(definition, indent=2, ensure_ascii=False))
+        self._commit(
+            [dest],
+            f"workflow({target}): create",
+            f"duplicated from {cmd.name} in the workflow editor",
+        )
         return WorkflowDuplicateResult(name=target)
 
     @route(
@@ -453,6 +478,10 @@ class WorkflowsService:
         definition["name"] = target          # keep the inner name consistent with the file name
         parse_workflow(definition)            # the renamed graph must still be valid
         dest = self._dir() / f"{target}.json"
+        # Every file this rename touches, so the whole move lands as ONE version:
+        # a partial commit would leave a history where a caller points at a
+        # workflow that does not exist.
+        touched: list[Path] = [dest, src]
         with cross_process_lock(self._lock_target()):
             if dest.exists():
                 raise ValidationFailedError(f"workflow {target!r} already exists")
@@ -474,6 +503,12 @@ class WorkflowsService:
                         changed = True
                 if changed:
                     atomic_write_text(sibling, json.dumps(sib_def, indent=2, ensure_ascii=False))
+                    touched.append(sibling)
+        self._commit(
+            touched,
+            f"workflow({cmd.name}): rename to {target}",
+            "renamed in the workflow editor (definition, removal and caller references)",
+        )
         # Carry the run history (manifests, recommendations, dream cursor) to the new
         # name. Best-effort: a failure here never undoes the definition rename.
         src_runs = run_log.runs_root(self._workspace) / cmd.name

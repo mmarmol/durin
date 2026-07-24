@@ -455,7 +455,9 @@ async def test_script_put_snapshots_into_the_version_history(tmp_path):
     svc, p = _svc(tmp_path), Principal.local()
     await svc.put_script(WorkflowScriptPutCommand(name="check.py", content="print(1)\n"), p)
     store = WorkflowVersionStore(tmp_path / "workflows")
-    assert any(c.subject == "script check.py" for c in store.history())
+    # The commit is scoped to this file and names it, rather than sweeping up
+    # whatever else happened to be pending under a generic subject.
+    assert any("check.py" in c.subject for c in store.history())
 
 
 @pytest.mark.asyncio

@@ -88,14 +88,14 @@ async def test_edit_tool_allows_drafts(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_write_tool_guard_skills_dir_false_allows_isolated_staging_write(tmp_path):
+async def test_write_tool_guard_registry_dirs_false_allows_isolated_staging_write(tmp_path):
     """Internal callers whose `workspace` is an isolated, non-live copy (e.g.
     skill_restructure's throwaway staging dir, which mirrors the live layout as
     staging/skills/<name>/ purely so path references line up) opt out via
-    guard_skills_dir=False — the guard exists to protect the *live* registry,
+    guard_registry_dirs=False — the guard exists to protect the *live* registry,
     not every directory that happens to be named "skills"."""
     staging = tmp_path / "staging"
     (staging / "skills").mkdir(parents=True)
-    tool = WriteFileTool(workspace=staging, allowed_dir=staging, guard_skills_dir=False)
+    tool = WriteFileTool(workspace=staging, allowed_dir=staging, guard_registry_dirs=False)
     result = await tool.execute(path="skills/qr/scripts/decode.py", content="x")
     assert "Successfully wrote" in result
