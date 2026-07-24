@@ -32,6 +32,13 @@ export type WorkflowNodeDef = {
   reconcile?: "read" | "choose" | "union";
   // work node: per-node visit budget (blank/undefined = inherit workflow default)
   max_visits?: number;
+  // work node: tool-round budget per execution (blank/undefined = engine default)
+  max_turns?: number;
+  // work node: self re-entries after exhausting max_turns (requires max_turns;
+  // undefined = none) and the author steering injected on each re-entry
+  // (requires max_reentries; blank/undefined = engine default text)
+  max_reentries?: number;
+  reentry_prompt?: string;
   // script node: exactly one of command (inline, bash) or script (a file under
   // workflows/scripts/) is set; timeout is in seconds (undefined = backend default).
   command?: string;

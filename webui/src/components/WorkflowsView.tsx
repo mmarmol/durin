@@ -724,8 +724,8 @@ function ScriptFileEditor({
 // an optional timeout, the subprocess env knob (clean allowlist default vs. full
 // gateway env), the shared routing controls, and the per-node visit budget.
 // Agent-only fields (model/persona/context/session/prompt/mode/tools/skills/mcps/
-// max_turns) are deliberately never rendered here — the backend parser rejects them
-// on a script node.
+// max_turns/max_reentries/reentry_prompt) are deliberately never rendered here —
+// the backend parser rejects them on a script node.
 function ScriptFields({
   node,
   allNodes,
@@ -1190,6 +1190,55 @@ function NodeConfigPanel({
               limit: (node.max_visits as number | undefined) ?? workflowMaxVisits ?? 3,
             })}
           </span>
+
+          {/* Turn budget group. The backend contract chains the three fields:
+              max_reentries requires max_turns, reentry_prompt requires
+              max_reentries — so clearing a parent clears its dependents. */}
+          <Field label={t("workflows.maxTurns")}>
+            <Input
+              type="number"
+              min={1}
+              value={(node.max_turns as number | undefined) ?? ""}
+              placeholder={t("workflows.maxTurnsHint")}
+              onChange={(e) => {
+                const n = parseInt(e.target.value, 10);
+                if (e.target.value === "" || !Number.isFinite(n)) {
+                  onChange({ max_turns: undefined, max_reentries: undefined, reentry_prompt: undefined });
+                } else {
+                  onChange({ max_turns: Math.max(1, n) });
+                }
+              }}
+              className="h-8"
+            />
+          </Field>
+          {typeof node.max_turns === "number" && (
+            <Field label={t("workflows.maxReentries")}>
+              <Input
+                type="number"
+                min={0}
+                value={(node.max_reentries as number | undefined) ?? ""}
+                placeholder={t("workflows.maxReentriesHint")}
+                onChange={(e) => {
+                  const n = parseInt(e.target.value, 10);
+                  const next = e.target.value === "" || !Number.isFinite(n) || n <= 0 ? undefined : n;
+                  onChange(next === undefined
+                    ? { max_reentries: undefined, reentry_prompt: undefined }
+                    : { max_reentries: next });
+                }}
+                className="h-8"
+              />
+            </Field>
+          )}
+          {((node.max_reentries as number | undefined) ?? 0) >= 1 && (
+            <Field label={t("workflows.reentryPrompt")}>
+              <Textarea
+                className="min-h-[4rem] resize-y text-sm"
+                value={(node.reentry_prompt as string) ?? ""}
+                placeholder={t("workflows.reentryPromptHint")}
+                onChange={(e) => onChange({ reentry_prompt: e.target.value || undefined })}
+              />
+            </Field>
+          )}
         </>
       )}
 

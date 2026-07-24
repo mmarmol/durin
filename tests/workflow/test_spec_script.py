@@ -30,7 +30,8 @@ def test_command_xor_script():
 
 
 def test_agent_only_fields_rejected():
-    for field in ("model", "persona", "context", "session", "prompt", "mode", "tools", "skills", "mcps", "max_turns"):
+    for field in ("model", "persona", "context", "session", "prompt", "mode", "tools",
+                  "skills", "mcps", "max_turns", "max_reentries", "reentry_prompt"):
         with pytest.raises(WorkflowError, match="do not apply"):
             parse_workflow(_wf([{"id": "s", "kind": "script", "command": "x", field: "v"}]))
 

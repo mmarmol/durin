@@ -61,6 +61,8 @@ follows `next` or **routes** on a verdict.
 | `cases` | object | none | **Multi-way routing.** `{ "LABEL": "target-node-id-or-null", ... }`. The node ends with one label; the engine follows that edge. |
 | `max_visits` | int ≥ 1 \| null | inherit envelope | Per-node loop cap override. |
 | `max_turns` | int ≥ 1 \| null | global default | Tool-use rounds budget *within* one execution of this node (distinct from `max_visits`). |
+| `max_reentries` | int ≥ 0 | `0` | **Self re-entry.** When the node exhausts `max_turns`, the runner asks it (forced one-call `assess` tool) whether essential work is missing; if so it re-enters its OWN conversation with a fresh `max_turns` budget, up to this many times, before the no-tools synthesis runs. Use on evidence-heavy nodes whose workload varies per run. **Requires `max_turns`.** |
+| `reentry_prompt` | string | `""` | Author steering appended to each re-entry turn (e.g. "stop gathering; verify pending claims, then deliver"). Empty = generic engine steer. **Requires `max_reentries` ≥ 1.** |
 | `detached` | bool | `false` | **Launch and continue.** The walk starts this node and moves on along `next` immediately; the edge text passes through unchanged, the node's output never becomes the run result, and its failure records `node_failed` without sinking the run. For side effects (persist, notify, archive) off the critical path. Requires linear `next` (no routing, no `context: "shared"`); may not be a parallel unit or a routing target. |
 | `inputs_from` | array of strings | `[]` | **Named inputs.** The node's input becomes one labeled block `[source-id]` per named node (its LAST recorded output this run), ALWAYS followed by an `[upstream]` block with the walk's current edge text — loop-back feedback is never lost. A source that has not run composes as `(no output recorded)`. Sources must exist, not be the node itself, not be detached. |
 | `output_schema` | object \| null | none | **Structured output.** A JSON Schema (root must be an object; wrap arrays in a single-property object). The runner forces a `deliver` tool call with this schema as its parameters, validates the payload, and retries IMMEDIATELY inside the node with the exact validation error; after the attempts the node fails (failure-resume applies). The node's output is the validated payload as JSON. Mutually exclusive with routing. |
@@ -126,7 +128,7 @@ buffer (the buffer passes through it untouched).
   naming the node and exit code — in a gate a non-zero exit is a verdict, in a linear step
   it is an error.
 - Agent-only fields (`model`, `persona`, `prompt`, `mode`, `tools`, `context`, `session`,
-  `skills`, `mcps`, `max_turns`) are **rejected** on a script node.
+  `skills`, `mcps`, `max_turns`, `max_reentries`, `reentry_prompt`) are **rejected** on a script node.
 
 ### `parallel` — concurrent branches
 
