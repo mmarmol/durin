@@ -36,7 +36,8 @@ def normalize_relation_type(rtype: Any) -> str:
     return _REL_TYPE_NONWORD.sub("_", str(rtype or "").lower()).strip("_")
 
 PatchKind = Literal[
-    "attribute", "relation", "alias", "body_append", "body_replace", "derived_from",
+    "attribute", "relation", "alias", "body_append", "body_replace",
+    "body_if_absent", "derived_from",
 ]
 
 
@@ -145,6 +146,19 @@ def apply_field_patch(page: EntityPage, patch: FieldPatch) -> bool:
 
     if patch.kind == "body_append":
         _append_body(page, patch)
+        _record_body_authority(page, prov, entry)
+        return True
+
+    if patch.kind == "body_if_absent":
+        # Fill an empty body, never touch an existing one. This is the write
+        # kind for doc/session-local "significance" prose: it describes why
+        # the entity matters to ONE source, so on an already-described entity
+        # it must not compete for the body at all — a same-rank body_replace
+        # would win by recency and the body would end up being whichever
+        # source was processed last.
+        if page.body.strip():
+            return False
+        page.body = str(patch.value).rstrip("\n")
         _record_body_authority(page, prov, entry)
         return True
 

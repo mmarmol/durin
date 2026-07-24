@@ -408,7 +408,7 @@ def run_seed_entities_pass(
                 ]
                 sig = prop.get("significance")
                 if sig:
-                    patches.append(FieldPatch(kind="body_replace", value=sig,
+                    patches.append(FieldPatch(kind="body_if_absent", value=sig,
                                               author="dream", source_ref=src, at=now))
                 patches.append(FieldPatch(kind="derived_from", value=doc_ref,
                                           author="dream", source_ref=src, at=now))

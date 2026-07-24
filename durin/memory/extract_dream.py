@@ -423,7 +423,7 @@ def discover_entities(
                                       source_ref=entity_src, at=now))
         sig = prop.get("significance")
         if sig:
-            patches.append(FieldPatch(kind="body_replace", value=sig, author="dream",
+            patches.append(FieldPatch(kind="body_if_absent", value=sig, author="dream",
                                       source_ref=entity_src, at=now))
         target = _resolve_existing_ref(index, ref, prop["name"])
         if target is None and vector_index is not None:
