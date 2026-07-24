@@ -349,7 +349,8 @@ threaded through; it is `None` when the vector index is unavailable.
    (`run_started_at` is set and either page was created at or after the run
    started, checked via `created_at` then `updated_at`; no timestamp = treated
    as old, fail-open) — the run never merges its own fresh output; cross-run
-   duplicates converge on the next pass.
+   duplicates converge on the next pass — or `cached_verdict` (see the verdict
+   cache below).
 4. For survivors, `judge_pair` (`durin/memory/absorb_judge.py`) — the
    **Tier 1 cheap judge** — renders **the whole entity page** via
    `page.to_markdown()` (body capped at a configurable char budget; the full
@@ -377,6 +378,21 @@ threaded through; it is `None` when the vector index is unavailable.
    `memory/.flagged_pairs.json`. `durin memory absorb-suggest` and the webui
    Bandeja surface these so the operator can inspect and merge or dismiss them
    manually.
+
+**Verdict cache.** A standing candidate pair whose members haven't changed
+re-emerges every run (alias overlap and embedding distance are deterministic),
+and a "different" verdict changes nothing on disk — so without memory of the
+verdict the judge would re-answer the same question nightly. Settled plain
+Tier-1 `"different"` verdicts are memoized in `memory/.refine_verdicts.json`,
+keyed by a fingerprint of both pages' judgment-bearing content (type, name,
+aliases, attributes, relations, body — deliberately excluding provenance,
+`derived_from`, and timestamps, so source accrual does not reopen a settled
+pair) plus the judge identity (prompt-template hash + model). A cache hit
+skips the pair with reason `cached_verdict`; a change to either page's
+content, the template, or the model re-judges. Merged pairs disappear on
+their own, and borderline outcomes (`unclear`, below-threshold `same`) are
+never cached — they must stay re-examinable. The user's tombstones are a
+separate, permanent mechanism checked before the cache.
 
 `EntityAbsorption.absorb` does a deterministic structural merge (union of
 aliases / attributes / relations / provenance; canonical wins attribute

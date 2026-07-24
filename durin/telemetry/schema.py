@@ -838,6 +838,9 @@ class MemoryAbsorbSkippedEvent(TypedDict):
       (the run never merges its own fresh output).
     - ``"judge_error"``: the judge raised ``JudgeError`` (unparseable verdict
       after all retries) and the pair was skipped for this run.
+    - ``"cached_verdict"``: an earlier run judged this exact pair "different"
+      and neither page's judgment-bearing content (nor the judge template or
+      model) has changed since — the verdict cache answers instead of the LLM.
 
     Declined verdicts ("different" / "unclear" / below-threshold "same") are
     not skips — they show up in ``memory.absorb.judged`` instead.

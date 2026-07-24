@@ -416,3 +416,66 @@ def test_refine_absorb_events_carry_entity_type(tmp_path, monkeypatch):
     merged = [d for n, d in events if n == "memory.absorb.auto_merged"]
     assert judged and judged[0]["entity_type"] == "company"
     assert merged and merged[0]["entity_type"] == "company"
+
+
+# --- verdict cache -----------------------------------------------------------
+
+
+def test_refine_cached_different_skips_rejudge(tmp_path):
+    # A standing "different" pair must be judged ONCE, not every night: the
+    # live box re-judged 361 of 437 pairs (83%) between two consecutive
+    # dreams, ~3h of aux-LLM calls per run.
+    _two_dupes(tmp_path)
+    counter = {"n": 0}
+    out1 = run_refine(tmp_path, llm_invoke=_judge_stub("different", 90, counter))
+    assert counter["n"] == 1
+    assert out1["kept_separate"]
+
+    out2 = run_refine(tmp_path, llm_invoke=_judge_stub("different", 90, counter))
+    assert counter["n"] == 1, "second run must not re-invoke the judge"
+    assert any(s["reason"] == "cached_verdict" for s in out2["skipped"])
+    assert not out2["kept_separate"]
+
+
+def test_refine_rejudges_when_judged_content_changes(tmp_path):
+    _two_dupes(tmp_path)
+    counter = {"n": 0}
+    run_refine(tmp_path, llm_invoke=_judge_stub("different", 90, counter))
+    assert counter["n"] == 1
+
+    write_entity(tmp_path, "company:mxhero",
+                 [FieldPatch(kind="body_replace", value="Now described very differently.",
+                             author="dream", source_ref="s2", at=NOW)])
+    run_refine(tmp_path, llm_invoke=_judge_stub("different", 90, counter))
+    assert counter["n"] == 2, "a body change must invalidate the cached verdict"
+
+
+def test_refine_rejudges_on_model_change(tmp_path):
+    _two_dupes(tmp_path)
+    counter = {"n": 0}
+    run_refine(tmp_path, llm_invoke=_judge_stub("different", 90, counter), model="m1")
+    run_refine(tmp_path, llm_invoke=_judge_stub("different", 90, counter), model="m2")
+    assert counter["n"] == 2
+
+
+def test_refine_metadata_accrual_keeps_cached_verdict(tmp_path):
+    # derived_from / provenance accrual (the churn every seeding pass causes)
+    # must NOT reopen a settled pair — only judgment-bearing fields do.
+    _two_dupes(tmp_path)
+    counter = {"n": 0}
+    run_refine(tmp_path, llm_invoke=_judge_stub("different", 90, counter))
+    write_entity(tmp_path, "company:mxhero",
+                 [FieldPatch(kind="derived_from", value="reference:some-doc",
+                             author="dream", source_ref="ref:doc", at=NOW)])
+    run_refine(tmp_path, llm_invoke=_judge_stub("different", 90, counter))
+    assert counter["n"] == 1
+
+
+def test_refine_below_threshold_same_is_not_cached(tmp_path):
+    # A borderline unmerged "same" is not a settled verdict — it must be
+    # re-examined (or escalated) on the next run, not frozen by the cache.
+    _two_dupes(tmp_path)
+    counter = {"n": 0}
+    run_refine(tmp_path, llm_invoke=_judge_stub("same", 50, counter))
+    run_refine(tmp_path, llm_invoke=_judge_stub("same", 50, counter))
+    assert counter["n"] == 2

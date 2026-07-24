@@ -18,7 +18,11 @@ import json
 from pathlib import Path
 from typing import Any, Callable
 
-from durin.memory.absorb_judge import JudgeError, judge_pair
+from durin.memory.absorb_judge import (
+    JudgeError,
+    judge_pair,
+    judge_template_fingerprint,
+)
 from durin.memory.absorption import EntityAbsorption
 from durin.memory.entity_page import EntityPage
 from durin.memory.llm_invoke import default_llm_invoke
@@ -57,6 +61,69 @@ def _created_this_run(page: "EntityPage", run_started_at: Any) -> bool:
 
 def _tombstone_path(workspace: Path) -> Path:
     return Path(workspace) / "memory" / _TOMBSTONE_FILE
+
+
+# --- verdict cache -----------------------------------------------------------
+#
+# A standing candidate pair whose members haven't changed re-emerges every run
+# (alias overlap and embedding distance are deterministic), and "different"
+# changes nothing on disk — so without memory of the verdict the judge re-answers
+# the same question nightly (observed live: 83% of one run's judgments repeated
+# the previous run's, ~3h of aux-LLM calls). Settled "different" verdicts are
+# memoized here, keyed by the judgment-bearing content of both pages plus the
+# judge identity (template + model). Only plain Tier-1 "different" is cached:
+# merged pairs vanish on their own, and borderline outcomes (unclear /
+# below-threshold same) must stay re-examinable.
+
+_VERDICTS_FILE = ".refine_verdicts.json"
+
+
+def _verdicts_path(workspace: Path) -> Path:
+    return Path(workspace) / "memory" / _VERDICTS_FILE
+
+
+def _judge_content_fingerprint(page: "EntityPage") -> str:
+    """Hash of the fields a verdict can turn on: identity and content.
+
+    Deliberately EXCLUDES provenance, derived_from and timestamps — source
+    accrual (every seeding pass adds one) must not reopen a settled pair."""
+    import hashlib
+
+    payload = json.dumps({
+        "type": page.type,
+        "name": page.name,
+        "aliases": sorted(page.aliases or []),
+        "attributes": page.attributes or {},
+        "relations": sorted(
+            f"{r.get('to')}|{r.get('type')}" for r in (page.relations or [])),
+        "body": page.body or "",
+    }, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def _pair_fingerprint(
+    ref_a: str, page_a: "EntityPage", ref_b: str, page_b: "EntityPage",
+) -> str:
+    """Order-stable combined fingerprint (follows the sorted pair key)."""
+    items = sorted([(ref_a, page_a), (ref_b, page_b)], key=lambda i: i[0])
+    return ":".join(_judge_content_fingerprint(p) for _, p in items)
+
+
+def _load_verdict_cache(workspace: Path) -> dict[str, dict]:
+    p = _verdicts_path(workspace)
+    if not p.exists():
+        return {}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_verdict_cache(workspace: Path, cache: dict[str, dict]) -> None:
+    p = _verdicts_path(workspace)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(p, json.dumps(cache, sort_keys=True, ensure_ascii=False))
 
 
 def _pair_key(a: str, b: str) -> str:
@@ -244,6 +311,10 @@ def run_refine(
     kept: list[dict] = []
     skipped: list[dict] = []
     escalations = 0
+    verdict_cache = _load_verdict_cache(workspace)
+    # Judge identity: template + model. Either changing re-judges everything.
+    judge_id = f"{judge_template_fingerprint()}|{model or ''}"
+    cache_dirty = False
 
     for cand in candidates:
         ref_a, ref_b = cand.refs
@@ -270,6 +341,14 @@ def run_refine(
                 or _created_this_run(page_b, run_started_at)):
             skipped.append({"pair": [ref_a, ref_b], "reason": "quarantine"})
             _emit("memory.absorb.skipped", canonical=ref_a, absorbed=ref_b, reason="quarantine")
+            continue
+        pair_fp = _pair_fingerprint(ref_a, page_a, ref_b, page_b)
+        cached = verdict_cache.get(_pair_key(ref_a, ref_b))
+        if (cached and cached.get("fp") == pair_fp
+                and cached.get("judge") == judge_id):
+            skipped.append({"pair": [ref_a, ref_b], "reason": "cached_verdict"})
+            _emit("memory.absorb.skipped", canonical=ref_a, absorbed=ref_b,
+                  reason="cached_verdict")
             continue
         try:
             judged = judge_pair(
@@ -332,7 +411,17 @@ def run_refine(
                             reasoning=decision.reasoning)
             kept.append({"pair": [ref_a, ref_b], "verdict": decision.verdict,
                          "confidence": decision.confidence})
+            if decision.verdict == "different" and not escalated:
+                verdict_cache[_pair_key(ref_a, ref_b)] = {
+                    "verdict": decision.verdict,
+                    "confidence": decision.confidence,
+                    "fp": pair_fp,
+                    "judge": judge_id,
+                }
+                cache_dirty = True
 
+    if cache_dirty:
+        _save_verdict_cache(workspace, verdict_cache)
     return {
         "merged": merged,
         "kept_separate": kept,
