@@ -3257,6 +3257,47 @@ def _refresh_help_epilog() -> None:
         pass  # keep the static _HELP_EPILOG
 
 
+@app.command()
+def approvals(
+    subsystem: str = typer.Argument(
+        "", help="Only this subsystem (mcp, skills). Default: all."),
+    discard: str = typer.Option(
+        "", "--discard", help="Discard one pending request by id."),
+    config: str | None = typer.Option(None, "--config", "-c", help="Config file path."),
+    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace path."),
+) -> None:
+    """Privileged actions an autonomous run recorded for your approval.
+
+    A cron job, dream, workflow or sub-agent has no user to ask, so an action
+    that would add or change executable state (an MCP server, a skill, a
+    dependency install) is recorded instead of run. This is where they wait.
+    """
+    from durin.agent import approval
+
+    cfg = _load_runtime_config(config, workspace)
+    ws = Path(cfg.workspace_path).expanduser()
+    subsystems = [subsystem] if subsystem else ["mcp", "skills"]
+
+    if discard:
+        for name in subsystems:
+            if approval.discard_pending(ws, name, discard):
+                console.print(f"[green]Discarded {name}/{discard}[/green]")
+                return
+        console.print(f"[yellow]No pending request {discard!r}[/yellow]")
+        raise typer.Exit(1)
+
+    total = 0
+    for name in subsystems:
+        for record in approval.list_pending(ws, name):
+            total += 1
+            console.print(
+                f"[bold]{name}/{record['id']}[/bold]  {record['summary']}\n"
+                f"  action={record['action']}  from={record.get('session_key') or '?'}"
+                f"  at={record.get('requested_at', '')[:19]}")
+    if not total:
+        console.print("No pending approvals.")
+
+
 _refresh_help_epilog()
 
 

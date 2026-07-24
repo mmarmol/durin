@@ -15,9 +15,21 @@ def _src_skill(parent: Path, name: str, body: str = "ok\n") -> Path:
     return s
 
 
+def _interactive(tool):
+    """Give the tool the context the agent loop always sets before execute:
+    a chat session with a live consumer — i.e. a person who can approve."""
+    from durin.agent import pending_answers
+    from durin.agent.tools.context import RequestContext
+
+    pending_answers.set_consumer_active(True)
+    tool.set_context(RequestContext(channel="websocket", chat_id="c",
+                                    session_key="websocket:test"))
+    return tool
+
+
 def _tool(ws: Path, allowlist: list[str] | None = None) -> SkillImportTool:
     ws.mkdir(parents=True, exist_ok=True)
-    return SkillImportTool(workspace=ws, allowlist=allowlist or [])
+    return _interactive(SkillImportTool(workspace=ws, allowlist=allowlist or []))
 
 
 def _run(tool: SkillImportTool, **kw):

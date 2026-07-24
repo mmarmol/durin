@@ -11,7 +11,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+from durin.agent import approval
 from durin.agent.tools.base import Tool, tool_parameters
+from durin.agent.tools.context import ContextAware, RequestContext
 from durin.agent.tools.schema import BooleanSchema, StringSchema, tool_parameters_schema
 
 _PARAMETERS = tool_parameters_schema(
@@ -39,7 +41,7 @@ def _skill_dir(workspace: Path, name: str) -> Path:
 
 
 @tool_parameters(_PARAMETERS)
-class SkillInstallDepsTool(Tool):
+class SkillInstallDepsTool(Tool, ContextAware):
     """Install a skill's declared deps via ExecTool; dry-run by default."""
 
     def __init__(self, workspace, exec_run: Callable[..., Awaitable[str]] | None,
@@ -47,6 +49,10 @@ class SkillInstallDepsTool(Tool):
         self._workspace = Path(workspace)
         self._exec_run = exec_run        # async (command=...) -> output str
         self._policy = policy
+        self._request_ctx: RequestContext | None = None
+
+    def set_context(self, ctx: RequestContext) -> None:
+        self._request_ctx = ctx
 
     @property
     def name(self) -> str:
@@ -87,6 +93,20 @@ class SkillInstallDepsTool(Tool):
         if self._policy == "never":
             return {**base, "ran": False,
                     "note": "install_policy=never — reporting only, not running"}
+        # Authority is a property of the context, never of `confirm`: a value
+        # the model wrote cannot be evidence that a person approved. With
+        # nobody reachable the request is recorded, not run. install_policy=auto
+        # is the exception — that authority was granted in config, out of band.
+        session_key = getattr(self._request_ctx, "session_key", None)
+        if self._policy != "auto" and not approval.human_reachable(session_key):
+            decision = approval.gate(
+                self._workspace, "skills", action="install_deps",
+                summary=f"install declared dependencies of skill {name!r}",
+                detail={"commands": commands, "needs_privileges": privileged},
+                session_key=session_key)
+            return {**base, "ran": False,
+                    "staged_for_approval": decision.record["id"],
+                    "note": decision.message}
         run = self._policy == "auto" or confirm
         if not run:
             return {**base, "ran": False,
