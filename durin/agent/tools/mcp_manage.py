@@ -17,8 +17,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from durin.agent import approval
 from durin.agent.mcp_registry import build_mcp_adapters
 from durin.agent.tools.base import Tool, tool_parameters
+from durin.agent.tools.context import ContextAware, RequestContext
 from durin.agent.tools.schema import StringSchema, tool_parameters_schema
 
 _GATED = {"install", "add", "update"}
@@ -47,15 +49,20 @@ def _name_from_ref(ref: str) -> str:
 
 
 @tool_parameters(_PARAMETERS)
-class McpManageTool(Tool):
+class McpManageTool(Tool, ContextAware):
     """mcp_manage tool — gated MCP server CRUD + registry install."""
 
     def __init__(self, *, service, exec_run=None, install_policy="approve",
-                 registries=None) -> None:
+                 registries=None, workspace=".") -> None:
         self._service = service
         self._exec_run = exec_run
         self._policy = install_policy
         self._registries = list(registries or [])
+        self._workspace = workspace
+        self._request_ctx: RequestContext | None = None
+
+    def set_context(self, ctx: RequestContext) -> None:
+        self._request_ctx = ctx
 
     @property
     def name(self) -> str:
@@ -86,17 +93,42 @@ class McpManageTool(Tool):
             exec_run=ExecTool.create(ctx).execute,
             install_policy=disc.install_policy,
             registries=list(disc.registries),
+            workspace=getattr(ctx, "workspace", "."),
         )
 
     def _gate(self, action: str, kwargs: dict) -> str:
-        """Return 'run' | 'dry' | 'refuse' for a gated action."""
+        """Return 'run' | 'dry' | 'refuse' | 'stage' for a gated action.
+
+        Authority comes from the execution context, never from ``kwargs``: a
+        confirm written by the model is a claim, not evidence that a person
+        approved. With nobody reachable (cron, dream, workflow, sub-agent) the
+        action is staged for out-of-band approval instead of running.
+        """
         if action not in _GATED:
             return "run"
         if self._policy == "never":
             return "refuse"
-        if self._policy == "auto" or str(kwargs.get("confirm", "")).lower() == "true":
+        # install_policy=auto IS pre-declared authority: the operator granted it
+        # in config, out of band, before the run — so it holds with nobody
+        # watching. Everything below needs a person in the loop.
+        if self._policy == "auto":
+            return "run"
+        if not approval.human_reachable(self._session_key()):
+            return "stage"
+        if str(kwargs.get("confirm", "")).lower() == "true":
             return "run"
         return "dry"
+
+    def _session_key(self) -> str | None:
+        ctx = getattr(self, "_request_ctx", None)
+        return getattr(ctx, "session_key", None) if ctx is not None else None
+
+    def _stage(self, action: str, *, summary: str, detail: dict) -> dict:
+        decision = approval.gate(
+            self._workspace, "mcp", action=action, summary=summary,
+            detail=detail, session_key=self._session_key())
+        return {"staged_for_approval": decision.record["id"],
+                "note": decision.message}
 
     async def execute(self, **kwargs: Any) -> Any:
         from durin.service.principal import Principal
@@ -138,9 +170,13 @@ class McpManageTool(Tool):
             raw = json.loads(raw) if raw.strip() else {}
         if not name:
             return {"error": "name is required"}
-        gate = self._gate("update" if update else "add", kwargs)
+        action = "update" if update else "add"
+        gate = self._gate(action, kwargs)
         if gate == "refuse":
             return {"refused": "install_policy=never"}
+        if gate == "stage":
+            return self._stage(action, summary=f"MCP server {name!r} ({action})",
+                               detail={"name": name, "config": raw})
         if gate == "dry":
             return {"dry_run": True, "would": {"action": "update" if update else "add",
                     "name": name, "config": raw},
@@ -191,6 +227,9 @@ class McpManageTool(Tool):
         if gate == "refuse":
             return {"refused": "install_policy=never", "ref": ref,
                     "runtime_plan": runtime_plan}
+        if gate == "stage":
+            return self._stage("install", summary=f"install MCP server {ref!r}",
+                               detail={"ref": ref, "runtime_plan": runtime_plan})
         if gate == "dry":
             return {"dry_run": True, "ref": ref, "name": server_name,
                     "model": "local" if use_local else "remote",

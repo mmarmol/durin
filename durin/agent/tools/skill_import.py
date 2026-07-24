@@ -24,6 +24,7 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
+from durin.agent import approval
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.context import ContextAware, RequestContext
 from durin.agent.tools.schema import BooleanSchema, StringSchema, tool_parameters_schema
@@ -162,6 +163,21 @@ class SkillImportTool(Tool, ContextAware):
         confirm = bool(kwargs.get("confirm", False))
         override = bool(kwargs.get("override", False))
         replace = bool(kwargs.get("replace", False))
+        # `confirm` is a claim written by the model, not evidence that a person
+        # approved: installing a skill adds executable content, so with nobody
+        # reachable (cron, dream, workflow, sub-agent) the request is recorded
+        # for out-of-band approval instead of running.
+        if action == "install":
+            session_key = self._session.get()
+            if self._install_policy != "auto" and not approval.human_reachable(session_key):
+                decision = approval.gate(
+                    self._workspace, "skills", action="import",
+                    summary=f"install skill {name or source!r}",
+                    detail={"source": source, "name": name,
+                            "override": override, "replace": replace},
+                    session_key=session_key)
+                return {"staged_for_approval": decision.record["id"],
+                        "note": decision.message}
 
         if action == "resolve":
             if not source:

@@ -3,7 +3,10 @@
 ## 1 Purpose
 
 This document is a comprehensive reference for durin's defense-in-depth security
-architecture. It covers five interlocking layers:
+architecture. It covers six interlocking layers:
+
+- **Authority by context** — an action that adds or changes executable state is
+  authorized by the execution context, never by a field in the tool call.
 
 - **Secret storage and injection** — plaintext credentials live only in a
   mode-0600 file; config holds opaque references; subprocesses receive scoped
@@ -33,6 +36,28 @@ Every consumer that needs the value calls `resolve_secret()` at the point of use
 A second mechanism, *scoped auto-injection*, pushes matching secrets into
 subprocess environments automatically — the scope field on each entry controls
 which consumers qualify.
+
+**Authority is a property of the context, not of the request.** `mcp_manage`,
+`skill_import`, `skill_edit` and `skill_install_deps` introduce or rewrite
+executable state, so they are gated. The gate reads the runtime-generated
+session key (`websocket:`, `cli:`, `slack:`… vs `cron:`, `cron_dream`,
+`workflow:`, `reactive_dream`, `system:`) — a value the model cannot write —
+plus the live-consumer flag that says an answer could actually be delivered.
+An unrecognised session kind is treated as autonomous: an unknown context is
+not a person.
+
+A `confirm` field in the tool call is a claim by the model, never evidence
+that a person agreed, so it can only ever *narrow* the decision: it is
+consulted after the context has already established that a human is reachable.
+When nobody is reachable, the action does not run — the request is staged to
+`<workspace>/.approvals/<subsystem>/<id>.json` and surfaced by
+`durin approvals`, so an autonomous run leaves a durable record instead of
+either executing unsupervised or losing the work. The one exemption is a
+policy of `auto` (`tools.mcp_discovery.install_policy`, `skills.install_policy`):
+that authority was granted by the operator in config, out of band and ahead of
+the run, which is what makes it delegable. `durin.agent.approval` owns this
+classification, and `pending_answers.can_block` (the blocking `ask_user_question`
+wait) delegates to it — a context that cannot authorize cannot answer either.
 
 **Layered skill import gates.** Importing a skill passes two independent scan
 stages. The first is deterministic: a regex and AST pass that always runs.

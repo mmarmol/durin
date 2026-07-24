@@ -6,6 +6,7 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
+from durin.agent import approval
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.context import ContextAware, RequestContext
 from durin.agent.tools.schema import BooleanSchema, StringSchema, tool_parameters_schema
@@ -76,6 +77,19 @@ class SkillEditTool(Tool, ContextAware):
         name = str(kwargs.get("name", "")).strip()
         if not name:
             return {"error": "name is required"}
+        # An applied edit rewrites executable skill content, and `confirm` is
+        # written by the model — not evidence a person agreed. With nobody
+        # reachable, record the request instead of applying it.
+        session_key = self._session.get()
+        if kwargs.get("confirm") and not approval.human_reachable(session_key):
+            decision = approval.gate(
+                self._workspace, "skills", action="edit",
+                summary=f"apply an edit to skill {name!r}",
+                detail={"name": name, "file": str(kwargs.get("file") or "SKILL.md"),
+                        "rationale": str(kwargs.get("rationale", ""))[:500]},
+                session_key=session_key)
+            return {"staged_for_approval": decision.record["id"],
+                    "note": decision.message}
         rationale = str(kwargs.get("rationale", ""))
         attribution = Attribution(actor="agent", session=self._session.get(), agent=self._model.get())
         result = apply_skill_edit(

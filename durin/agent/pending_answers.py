@@ -38,11 +38,21 @@ def set_consumer_active(active: bool) -> None:
     _CONSUMER_ACTIVE = active
 
 
+def consumer_active() -> bool:
+    """True while an inbound consumer is alive to deliver a user's answer."""
+    return _CONSUMER_ACTIVE
+
+
 def can_block(session_key: str | None) -> bool:
-    """True when an in-turn wait on *session_key* could ever be answered."""
-    if not _CONSUMER_ACTIVE or not session_key:
-        return False
-    return not session_key.startswith(NON_INTERACTIVE_SESSION_PREFIXES)
+    """True when an in-turn wait on *session_key* could ever be answered.
+
+    Delegates the context classification to ``durin.agent.approval`` so a
+    context that cannot authorize a privileged action cannot answer a
+    question either — one owner for "is a person actually there".
+    """
+    from durin.agent.approval import human_reachable
+
+    return human_reachable(session_key)
 
 
 def create(session_key: str) -> asyncio.Future:

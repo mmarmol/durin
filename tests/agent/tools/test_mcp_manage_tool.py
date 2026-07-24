@@ -41,9 +41,22 @@ class _Reg:
         })
 
 
+def _interactive(tool):
+    """Give the tool the context the agent loop always sets before execute:
+    a chat session with a live consumer — i.e. a person who can approve."""
+    from durin.agent import pending_answers
+    from durin.agent.tools.context import RequestContext
+
+    pending_answers.set_consumer_active(True)
+    tool.set_context(RequestContext(channel="websocket", chat_id="c",
+                                    session_key="websocket:test"))
+    return tool
+
+
 def _tool(policy="auto", service=None):
-    return McpManageTool(service=service or _FakeService(), exec_run=None,
-                         install_policy=policy, registries=[])
+    return _interactive(McpManageTool(
+        service=service or _FakeService(), exec_run=None,
+        install_policy=policy, registries=[]))
 
 
 @pytest.mark.asyncio

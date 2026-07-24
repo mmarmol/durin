@@ -7,11 +7,24 @@ _SPEC = [{"kind": "brew", "value": "gh", "command": "brew install gh",
           "needs_privileges": False}]
 
 
+def _interactive(tool):
+    """Give the tool the context the agent loop always sets before execute:
+    a chat session with a live consumer — i.e. a person who can approve."""
+    from durin.agent import pending_answers
+    from durin.agent.tools.context import RequestContext
+
+    pending_answers.set_consumer_active(True)
+    tool.set_context(RequestContext(channel="websocket", chat_id="c",
+                                    session_key="websocket:test"))
+    return tool
+
+
 def _tool(tmp_path, policy, ran):
     async def _exec(command, **_):
         ran.append(command)
         return f"ran: {command}"
-    return SkillInstallDepsTool(workspace=tmp_path, exec_run=_exec, policy=policy)
+    return _interactive(SkillInstallDepsTool(
+        workspace=tmp_path, exec_run=_exec, policy=policy))
 
 
 def test_tool_name(tmp_path):
