@@ -97,7 +97,8 @@ DANGEROUS_CODE_RULES = [
     (r"/dev/tcp/|\bnc\s+-[a-z]*e|\bncat\s+-[a-z]*e", "dangerous_code", "dangerous", "reverse shell"),
     (r"(?is)os\.dup2\s*\([^\n]*\.fileno\s*\(", "dangerous_code", "dangerous", "fd dup to socket (reverse shell)"),
     (r"(?i)\bpty\.spawn\s*\(", "dangerous_code", "dangerous", "pty.spawn (reverse shell primitive)"),
-    (r"\bos\.environ\b|\bprocess\.env\b", "dangerous_code", "caution", "environment access (exfil-adjacent)"),
+    # Environment access is NOT a standalone rule — see _env_exfil_finding. A bare
+    # `os.environ` match fires on every script that reads ordinary configuration.
     (r"\batob\s*\(|\bbase64\.b64decode\s*\(|(?:\\x[0-9a-fA-F]{2}){8,}", "dangerous_code", "caution", "obfuscation (base64/hex)"),
 ]
 
@@ -134,6 +135,55 @@ _CODE_RULES = (DANGEROUS_CODE_RULES + DATA_EXFILTRATION_RULES
 
 def _apply(text: str, where: str, rules) -> list[Finding]:
     return [Finding(c, s, where, d) for rx, c, s, d in rules if re.search(rx, text)]
+
+
+# --- correlated environment access ------------------------------------------
+# Reading configuration from the environment is ordinary; reading a CREDENTIAL
+# while holding a way to send it is the shape worth a human's attention. Both
+# signals must appear in the same file, mirroring how DATA_EXFILTRATION_RULES
+# already require a secret read and a network call together.
+
+# An env var whose NAME says credential. Config names (…_BUCKET, …_REGION,
+# …_URL) read as ordinary and produce nothing.
+_SECRET_ENV_NAME = re.compile(
+    r"""(?ix)
+    (?:os\.environ(?:\.get)?\s*[\[(]|process\.env[.\[]|getenv\s*\()\s*
+    ['"]?[A-Z0-9_]*
+    (?: KEY | TOKEN | SECRET | PASSWORD | PASSWD | CREDENTIAL | AUTH | PRIVATE | SESSION )
+    [A-Z0-9_]*['"]?
+    """
+)
+
+# The whole environment handed over as a value — `data=os.environ`, `json=process.env`.
+# No name to inspect, and no legitimate reason to ship the entire mapping: this is
+# exfil-shaped on its own, so it correlates on the outbound signal alone.
+_BULK_ENV = re.compile(
+    r"(?i)(?:[=(,]\s*|\breturn\s+)(?:os\.environ|process\.env)\s*(?![.\[(])"
+)
+
+# A way out. SDK clients count: grepping for an http(s) literal misses boto3,
+# which reaches AWS without a URL ever appearing in the source.
+_OUTBOUND = re.compile(
+    r"(?i)\b(?:requests|httpx|aiohttp|urllib|urlopen|urlretrieve|boto3|botocore|socket|"
+    r"smtplib|paramiko|curl|wget|nc|ncat|fetch|axios|XMLHttpRequest|WebSocket)\b"
+)
+
+_ENV_EXFIL_DETAIL = "environment access (exfil-adjacent)"
+
+
+def _env_exfil_finding(text: str, where: str) -> list[Finding]:
+    """A credential (or the whole environment) read in a file that can reach out.
+
+    The detail string is deliberately identical to the one the old standalone
+    rule emitted: findings are fingerprinted as ``category|where|detail`` and
+    acked in the review store, so rewording it would silently invalidate every
+    existing review of an already-audited skill.
+    """
+    if not _OUTBOUND.search(text):
+        return []
+    if _SECRET_ENV_NAME.search(text) or _BULK_ENV.search(text):
+        return [Finding("dangerous_code", "caution", where, _ENV_EXFIL_DETAIL)]
+    return []
 
 
 # Install-spec safe-pattern allowlists.
@@ -261,6 +311,7 @@ def scan_skill(skill_dir: Path) -> ScanReport:
             continue
         rel = str(p.relative_to(skill_dir))
         rep.findings += _apply(txt, rel, _CODE_RULES)
+        rep.findings += _env_exfil_finding(txt, rel)
         # AST behavioral pass for Python scripts. Local import breaks the
         # skill_ast <-> skill_scan import cycle (skill_ast imports Finding).
         if p.suffix == ".py":

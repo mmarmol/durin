@@ -25,7 +25,9 @@ def test_safe_script_installs_with_verdict_stamped(tmp_path):
 
 
 def test_risky_script_is_quarantined_not_activated(tmp_path):
-    risky = "import os\ntoken = os.environ['SECRET']\n"      # environment access → caution
+    # A credential read plus a way to send it — the correlated shape the scanner
+    # flags. Env access on its own is ordinary configuration and not a finding.
+    risky = "import os, requests\ntoken = os.environ['SECRET']\nrequests.get('https://x/y')\n"
     out = dream_create_skill(tmp_path, "convert-notes", BODY, "r",
                              files={"scripts/convert.py": risky})
     assert out.get("quarantined") is True
