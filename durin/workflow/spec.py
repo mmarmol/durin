@@ -95,6 +95,8 @@ class WorkNode:
     cases: dict[str, str | None] | None = None  # multi-way routing: label -> target node id (null = end)
     max_visits: int | None = None        # per-node loop cap (None = inherit workflow default)
     max_turns: int | None = None         # agentic tool-round budget for this node (None = global default)
+    max_reentries: int = 0               # self re-entries after exhausting max_turns (0 = go straight to synthesis)
+    reentry_prompt: str = ""             # author steering appended on each re-entry (empty = engine default)
     detached: bool = False               # launch and continue: side-effect node off the critical path
     inputs_from: tuple[str, ...] = ()    # named sources composed (labeled) into this node's input
     output_schema: dict | None = None    # JSON Schema the node's output must satisfy (forced deliver tool)
@@ -108,7 +110,8 @@ class WorkNode:
 
 
 _AGENT_ONLY_FIELDS = frozenset(
-    {"model", "persona", "context", "session", "prompt", "mode", "tools", "skills", "mcps", "max_turns"}
+    {"model", "persona", "context", "session", "prompt", "mode", "tools", "skills", "mcps",
+     "max_turns", "max_reentries", "reentry_prompt"}
 )
 
 
@@ -414,6 +417,26 @@ def _build_node(raw: dict[str, Any]) -> Node:
                 raise WorkflowError(
                     f"node {node_id!r}: max_turns must be an int >= 1, got {node_max_turns!r}"
                 )
+        max_reentries = raw.get("max_reentries", 0)
+        if isinstance(max_reentries, bool) or not isinstance(max_reentries, int) or max_reentries < 0:
+            raise WorkflowError(
+                f"node {node_id!r}: max_reentries must be an int >= 0, got {max_reentries!r}"
+            )
+        # Re-entry triggers on max_turns exhaustion; without an explicit budget the
+        # runner never enters that path, so a reentry setting there would be dead.
+        if max_reentries and node_max_turns is None:
+            raise WorkflowError(
+                f"node {node_id!r}: max_reentries requires max_turns"
+            )
+        reentry_prompt = raw.get("reentry_prompt", "")
+        if not isinstance(reentry_prompt, str):
+            raise WorkflowError(
+                f"node {node_id!r}: reentry_prompt must be a string, got {reentry_prompt!r}"
+            )
+        if reentry_prompt and not max_reentries:
+            raise WorkflowError(
+                f"node {node_id!r}: reentry_prompt requires max_reentries >= 1"
+            )
         return WorkNode(
             id=node_id,
             title=raw.get("title", ""),
@@ -432,6 +455,8 @@ def _build_node(raw: dict[str, Any]) -> Node:
             cases=cases,
             max_visits=node_max_visits,
             max_turns=node_max_turns,
+            max_reentries=max_reentries,
+            reentry_prompt=reentry_prompt,
             detached=detached,
             inputs_from=inputs_from,
             output_schema=output_schema,

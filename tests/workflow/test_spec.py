@@ -548,6 +548,57 @@ def test_max_turns_string_raises():
                         "nodes": [{"id": "a", "kind": "work", "max_turns": "6"}]})
 
 
+# ── max_reentries / reentry_prompt spec tests ─────────────────────────────────
+
+
+def test_reentry_fields_default_off():
+    a = parse_workflow({"name": "w", "start": "a",
+                        "nodes": [{"id": "a", "kind": "work"}]}).nodes["a"]
+    assert a.max_reentries == 0
+    assert a.reentry_prompt == ""
+
+
+def test_reentry_fields_parse_with_max_turns():
+    a = parse_workflow({"name": "w", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "max_turns": 10,
+         "max_reentries": 2, "reentry_prompt": "verify, then deliver"},
+    ]}).nodes["a"]
+    assert a.max_reentries == 2
+    assert a.reentry_prompt == "verify, then deliver"
+
+
+def test_max_reentries_requires_max_turns():
+    with pytest.raises(WorkflowError, match="max_reentries requires max_turns"):
+        parse_workflow({"name": "w", "start": "a",
+                        "nodes": [{"id": "a", "kind": "work", "max_reentries": 1}]})
+
+
+def test_reentry_prompt_requires_max_reentries():
+    with pytest.raises(WorkflowError, match="reentry_prompt requires max_reentries"):
+        parse_workflow({"name": "w", "start": "a", "nodes": [
+            {"id": "a", "kind": "work", "max_turns": 10, "reentry_prompt": "go on"}]})
+
+
+def test_max_reentries_negative_raises():
+    with pytest.raises(WorkflowError, match="max_reentries must be an int >= 0"):
+        parse_workflow({"name": "w", "start": "a", "nodes": [
+            {"id": "a", "kind": "work", "max_turns": 10, "max_reentries": -1}]})
+
+
+def test_max_reentries_bool_rejected():
+    # bool is a subclass of int; True == 1 but must still be rejected.
+    with pytest.raises(WorkflowError, match="max_reentries must be an int >= 0"):
+        parse_workflow({"name": "w", "start": "a", "nodes": [
+            {"id": "a", "kind": "work", "max_turns": 10, "max_reentries": True}]})
+
+
+def test_reentry_prompt_non_string_raises():
+    with pytest.raises(WorkflowError, match="reentry_prompt must be a string"):
+        parse_workflow({"name": "w", "start": "a", "nodes": [
+            {"id": "a", "kind": "work", "max_turns": 10, "max_reentries": 1,
+             "reentry_prompt": 7}]})
+
+
 
 def test_routing_node_cannot_use_shared_context_binary():
     with pytest.raises(WorkflowError, match="routing node.*cannot use context=.shared."):

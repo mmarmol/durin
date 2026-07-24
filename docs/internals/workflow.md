@@ -132,7 +132,7 @@ and `next` are mutually exclusive. Routing nodes default to **explore** (read-on
 `bash -c`) or `script` (a file under `<workspace>/workflows/scripts/`, validated at
 parse time to be a relative path with no `..`); the parser rejects any agent-only
 field (`model`, `persona`, `context`, `session`, `prompt`, `mode`, `tools`, `skills`,
-`mcps`, `max_turns`) on a script node. `ScriptNodeRunner`
+`mcps`, `max_turns`, `max_reentries`, `reentry_prompt`) on a script node. `ScriptNodeRunner`
 (`durin/workflow/script_runner.py`) executes it: a `.py` script runs under the current
 interpreter, a `.sh` script under `bash`, anything else must be directly executable (a
 shebang); an inline `command` always runs via `bash -c`. **stdin** carries the upstream
@@ -215,7 +215,9 @@ A work node may declare a **structured output** (`output_schema`): the node runn
 `deliver` tool call whose parameters ARE the schema (the same machinery as the `route`
 verdict), validates the payload server-side (jsonschema), retries immediately inside the
 node with the exact validation error, and fails the node after the attempt budget — no
-text fallback. The node's output is the validated payload as JSON, and with `output_file`
+text fallback. The delivery instruction names the schema's required fields up front, so
+a required-property miss costs a retry only when the model ignores an explicit list, not
+because it had to infer the contract from the schema alone. The node's output is the validated payload as JSON, and with `output_file`
 the ENGINE writes it into the working folder (the model never types the file).
 A work or script node may be **detached** (`detached: true`): the walk launches it on a
 small per-run executor and continues immediately along its `next` — the upstream edge text
@@ -285,10 +287,29 @@ have up to N rounds of tool use. Gather efficiently, then give your final answer
 (2) runs the agent with `max_iterations = max_turns` instead of the global default, and
 (3) if the run ends because the budget was exhausted, makes a second call with no tools
 and `max_iterations=1` asking the model to synthesize from what it gathered — so the node
-always produces a real answer rather than a canned "max iterations" message. The second
+always produces a real answer rather than a canned "max iterations" message. The
+synthesis prompt states that no further tool calls are possible and demands the full
+content as text; when the node declares an `output_schema` it also names the schema's
+required fields, so the transcript the forced `deliver` call transcribes actually
+contains a conclusion for each of them. The second
 call's messages are appended to the first run's messages and persisted together. If the
 first run completes within budget, no second call is made and the path is byte-for-byte
 identical to a node without `max_turns`.
+
+**`max_reentries` + `reentry_prompt`** (both agent-only; `max_reentries` requires
+`max_turns`, `reentry_prompt` requires `max_reentries`) let a node that exhausted its
+turn budget re-enter its own conversation with a fresh budget instead of being forced
+straight into synthesis — the adaptive path for evidence-heavy nodes whose workload
+varies per run. On exhaustion the runner first asks the model, via a forced one-call
+`assess` tool (`deliver` vs `continue`), whether essential work is actually missing; a
+node that only needs to emit its answer proceeds to synthesis without spending a
+re-entry, and any assessment failure counts as `deliver` (degrading to the pre-feature
+behavior). A granted re-entry appends a user turn — "you have been granted up to N more
+rounds" plus the node's `reentry_prompt` (or a generic close-the-gaps steer) — and
+re-runs the agent over the same message list with the same hooks, so checkpointing and
+progress keep working and the progress round counter restarts against the fresh budget.
+Re-entries are bounded by `max_reentries` (default 0 = feature off), and the synthesis +
+`deliver` path still runs afterwards if the budget is exhausted again.
 
 **The engine is decoupled from the LLM and runs loop-safe.** The graph walk depends
 only on an injected `NodeRunner` callable, so it is fully unit-testable with a mock.

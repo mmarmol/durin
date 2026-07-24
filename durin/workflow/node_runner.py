@@ -351,17 +351,71 @@ class AgentNodeRunner:
             )
             raise self._on_failure(req, failure_messages, exc) from exc
 
+        # When the node exhausted its tool-round budget, it may re-enter its own
+        # conversation with a fresh budget (author opt-in via max_reentries). Each
+        # re-entry first asks the model, via a forced tool call, whether essential
+        # work is actually missing — a node that only needs to emit its answer goes
+        # straight to synthesis instead of burning a re-entry on it.
+        node_schema = getattr(req.node, "output_schema", None)
+        reentries_left = getattr(req.node, "max_reentries", 0) or 0
+        while (node_max_turns is not None and result.stop_reason == "max_iterations"
+               and reentries_left > 0):
+            if not self._wants_reentry(result.messages, model):
+                break
+            reentries_left -= 1
+            steer = getattr(req.node, "reentry_prompt", "") or (
+                "Stop gathering broadly: close the essential gaps you identified, "
+                "verify what your answer depends on, then give your final answer."
+            )
+            reentry_messages = list(result.messages) + [{
+                "role": "user",
+                "content": (
+                    "You have been granted up to "
+                    f"{run_max_iterations} more rounds of tool use. {steer}"
+                ),
+            }]
+            try:
+                result = asyncio.run(self.runner.run(AgentRunSpec(
+                    initial_messages=reentry_messages,
+                    tools=self._build_tools(req.node, req.workspace_override),
+                    model=model,
+                    max_iterations=run_max_iterations,
+                    max_tool_result_chars=self.max_tool_result_chars,
+                    concurrent_tools=True,
+                    hook=hook,
+                )))
+            except Exception as exc:  # noqa: BLE001 - persist + re-raise, same as the first run
+                checkpointed = checkpoint_hook.last_persisted
+                failure_messages = (
+                    checkpointed
+                    if checkpointed is not None and len(checkpointed) > len(reentry_messages)
+                    else reentry_messages
+                )
+                raise self._on_failure(req, failure_messages, exc) from exc
+
         # When the node exhausted its tool-round budget without finishing, make a
         # second call with no tools so the model must emit a synthesis from what it
         # gathered. This converts the canned "max iterations" outcome into a real
-        # answer and persists both runs' messages.
+        # answer and persists both runs' messages. The prompt names the schema's
+        # required fields (when the node has one) and demands full content — a bare
+        # "give your answer" invites a statement of intent ("let me write it to
+        # disk") that leaves the deliver call below nothing to transcribe.
         if node_max_turns is not None and result.stop_reason == "max_iterations":
+            synthesis_prompt = (
+                "You have used all your tool rounds and can make no further tool "
+                "calls. Based solely on what you have gathered so far, write your "
+                "complete final answer as text now — the full content, not a "
+                "statement of intent."
+            )
+            required_fields = [str(k) for k in ((node_schema or {}).get("required") or [])]
+            if required_fields:
+                synthesis_prompt += (
+                    " Your answer must state your conclusion for every required "
+                    "field of the output schema: " + ", ".join(required_fields) + "."
+                )
             synthesis_messages = list(result.messages) + [{
                 "role": "user",
-                "content": (
-                    "You have used all your tool rounds. Based solely on what you have "
-                    "gathered so far, give your best final answer now."
-                ),
+                "content": synthesis_prompt,
             }]
             try:
                 synthesis_result = asyncio.run(self.runner.run(AgentRunSpec(
@@ -407,7 +461,6 @@ class AgentNodeRunner:
         # validation error, so a malformed payload costs seconds inside this node
         # instead of a full downstream loop-back. No fallback: after the attempts
         # the node fails (and the run's failure-resume can retry it).
-        node_schema = getattr(req.node, "output_schema", None)
         if node_schema is not None:
             try:
                 payload = self._derive_structured_output(all_messages, node_schema, model)
@@ -466,6 +519,41 @@ class AgentNodeRunner:
             logger.opt(exception=True).debug("route-tool verdict failed; falling back to text parse")
         return None
 
+    def _wants_reentry(self, messages: list[dict], model: str | None) -> bool:
+        """After budget exhaustion, ask the model — via a forced tool call — whether
+        essential work is still missing (re-enter) or it can already produce its
+        final output from what it gathered (proceed to synthesis). Any failure
+        counts as "can deliver", degrading to the no-re-entry behavior."""
+        tool = {"type": "function", "function": {
+            "name": "assess",
+            "description": "Report whether you can produce your complete final "
+                           "output from what you already gathered, or essential "
+                           "work is still missing.",
+            "parameters": {"type": "object", "required": ["verdict"], "properties": {
+                "verdict": {"enum": ["deliver", "continue"]}}}}}
+        convo = list(messages) + [{
+            "role": "user",
+            "content": ("You have used all your tool rounds. Call `assess`: verdict "
+                        "'deliver' if you can produce your complete final output "
+                        "from what you gathered, 'continue' if essential work is "
+                        "still missing and you need more tool rounds."),
+        }]
+        try:
+            resp = asyncio.run(self.runner.provider.chat(
+                messages=convo, tools=[tool], tool_choice="required", model=model))
+            for tc in (getattr(resp, "tool_calls", None) or []):
+                args = getattr(tc, "arguments", None)
+                if args is None:
+                    args = getattr(tc, "input", None) or getattr(tc, "args", None)
+                if isinstance(args, str):
+                    args = json.loads(args)
+                if (args or {}).get("verdict") == "continue":
+                    return True
+        except Exception:  # noqa: BLE001 - assessment failure degrades to synthesis
+            logger.opt(exception=True).debug(
+                "re-entry assessment failed; proceeding to synthesis")
+        return False
+
     _STRUCTURED_OUTPUT_ATTEMPTS = 3
 
     def _derive_structured_output(self, messages: list[dict], schema: dict,
@@ -483,10 +571,15 @@ class AgentNodeRunner:
             "description": "Deliver this step's final output as structured data "
                            "matching the required schema.",
             "parameters": schema}}
+        required_fields = [str(k) for k in (schema.get("required") or [])]
+        instruction = ("Deliver your final output now by calling the `deliver` tool. "
+                       "The tool's parameters are the required output schema.")
+        if required_fields:
+            instruction += (" Your payload MUST include every required field: "
+                            + ", ".join(required_fields) + ".")
         convo = list(messages) + [{
             "role": "user",
-            "content": ("Deliver your final output now by calling the `deliver` tool. "
-                        "The tool's parameters are the required output schema."),
+            "content": instruction,
         }]
         last_error = "the model made no deliver tool call"
         for _ in range(self._STRUCTURED_OUTPUT_ATTEMPTS):
