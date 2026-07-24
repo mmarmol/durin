@@ -115,6 +115,36 @@ const EXISTING_TELEGRAM_WITH_EMAIL_FILTERS: LoopDef = {
   operator_to: null,
 };
 
+// A slack trigger scoped by the open filter vocabulary: an exact room, a
+// sender kind, and a channel-specific dimension. None of these has a named
+// input in the form.
+const SLACK_OPEN_FILTERS: Record<string, string> = {
+  chat: "C0GUARDSUP",
+  sender_kind: "bot",
+  app_id: "A0221L31T4P",
+  text_contains: "Ticket #",
+};
+
+const EXISTING_SLACK_OPEN_FILTERS: LoopDef = {
+  name: "tickets",
+  enabled: true,
+  workflow: "digest-wf",
+  goal: { intent: "triage the ticket", checks: [] },
+  triggers: [
+    {
+      source: "channel",
+      channel: "slack",
+      filters: SLACK_OPEN_FILTERS,
+      match: "wake_or_new",
+      correlate: "Ticket #(\\d+)",
+    },
+  ],
+  concurrency: "single",
+  stuck_after: 3,
+  operator_channel: null,
+  operator_to: null,
+};
+
 describe("LoopForm", () => {
   beforeEach(() => {
     vi.mocked(listWorkflows).mockReset().mockResolvedValue(["digest-wf"]);
@@ -522,6 +552,42 @@ describe("LoopForm", () => {
     await waitFor(() => expect(saveLoop).toHaveBeenCalledTimes(1));
     const [, def] = vi.mocked(saveLoop).mock.calls[0];
     expect(def.triggers).toEqual(EXISTING_TELEGRAM_WITH_EMAIL_FILTERS.triggers);
+  });
+
+  it("round-trips open-vocabulary filters it has no named input for", async () => {
+    // Without this, opening a room-scoped loop in the editor and pressing
+    // save would silently strip the filters that scope it.
+    render(
+      <LoopForm token="tok" editLoop={EXISTING_SLACK_OPEN_FILTERS} onDone={vi.fn()} onCancel={vi.fn()} />,
+    );
+
+    await screen.findByRole("option", { name: "digest-wf" });
+
+    fireEvent.click(screen.getByRole("button", { name: /save & enable/i }));
+    await waitFor(() => expect(saveLoop).toHaveBeenCalledTimes(1));
+    const [, def] = vi.mocked(saveLoop).mock.calls[0];
+    expect(def.triggers).toEqual(EXISTING_SLACK_OPEN_FILTERS.triggers);
+  });
+
+  it("lets an operator add a room filter that has no named input", async () => {
+    render(
+      <LoopForm token="tok" editLoop={EXISTING_SLACK_OPEN_FILTERS} onDone={vi.fn()} onCancel={vi.fn()} />,
+    );
+
+    await screen.findByRole("option", { name: "digest-wf" });
+
+    fireEvent.click(screen.getByRole("button", { name: /add filter/i }));
+    const keyInputs = screen.getAllByLabelText(/filter key/i);
+    const valueInputs = screen.getAllByLabelText(/filter value/i);
+    fireEvent.change(keyInputs[keyInputs.length - 1], { target: { value: "chat_name" } });
+    fireEvent.change(valueInputs[valueInputs.length - 1], { target: { value: "guard-support" } });
+
+    fireEvent.click(screen.getByRole("button", { name: /save & enable/i }));
+    await waitFor(() => expect(saveLoop).toHaveBeenCalledTimes(1));
+    const [, def] = vi.mocked(saveLoop).mock.calls[0];
+    expect(def.triggers[0]).toMatchObject({
+      filters: { ...SLACK_OPEN_FILTERS, chat_name: "guard-support" },
+    });
   });
 
   it("pressing Enter in the name input submits via Save & enable", async () => {

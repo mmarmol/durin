@@ -1460,7 +1460,15 @@
       "operatorToHint": "Pour les canaux de chat (Telegram, Slack…), les escalades nécessitent un ID de destinataire ; sans cela, elles n’atteignent que la boîte de réception Activité.",
       "savePaused": "Enregistrer en pause",
       "saveEnabled": "Enregistrer et activer",
-      "cancel": "Annuler"
+      "cancel": "Annuler",
+      "otherFilters": "Autres filtres",
+      "otherFiltersHint": "Correspondance exacte sur l'identité, le salon ou un champ propre au canal. Les clés terminant par _contains recherchent une sous-chaîne.",
+      "filterKey": "Clé du filtre",
+      "filterKeyPlaceholder": "chat",
+      "filterValue": "Valeur du filtre",
+      "filterValuePlaceholder": "C0ABC123",
+      "addFilter": "Ajouter un filtre",
+      "removeFilter": "Supprimer le filtre"
     }
   },
   "skills": {

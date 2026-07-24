@@ -1,4 +1,6 @@
 import pytest
+from loguru import logger
+
 from durin.loops.spec import GoalCheck, LoopError, LoopSpec, LoopTrigger, loop_to_dict, parse_loop
 
 
@@ -132,11 +134,34 @@ def test_parse_channel_trigger_defaults():
     assert parse_loop(loop_to_dict(spec)) == spec
 
 
-def test_parse_rejects_unknown_filter_key():
+def test_parse_warns_but_keeps_undeclared_filter_key():
+    """The filter vocabulary is open: a key the channel never populates is
+    kept and warned about, not rejected. Rejecting would make the per-channel
+    declaration able to block a trigger that works."""
     data = _minimal()
     data["triggers"] = [{"source": "channel", "channel": "email", "filters": {"body_contains": "x"}}]
-    with pytest.raises(LoopError):
-        parse_loop(data)
+
+    warnings: list[str] = []
+    sink = logger.add(lambda message: warnings.append(str(message)), level="WARNING")
+    try:
+        spec = parse_loop(data)
+    finally:
+        logger.remove(sink)
+
+    assert spec.triggers[0].filters == {"body_contains": "x"}
+    assert any("body_contains" in warning for warning in warnings)
+
+
+def test_parse_does_not_warn_on_a_key_the_channel_declares():
+    """Slack's own vocabulary must not trip the undeclared-key warning."""
+    data = _minimal()
+    data["triggers"] = [
+        {"source": "channel", "channel": "slack", "filters": {"chat": "C0ABC123", "sender_kind": "bot"}}
+    ]
+
+    spec = parse_loop(data)
+
+    assert spec.triggers[0].filters == {"chat": "C0ABC123", "sender_kind": "bot"}
 
 
 def test_parse_rejects_bad_channel():

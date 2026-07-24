@@ -337,15 +337,39 @@ registered by a pre-`channel_meta` deployment.
 source — the `custom:` prefix can never collide with a plain `thread_key`,
 since none of the per-channel formats above start with it.
 
-**Filter keys per source.** A channel trigger's `filters` accepts
-`from_contains` / `sender_contains` (aliases — both test `facts.sender`,
-case-insensitive substring), `subject_contains` (tests `facts.title`; always
-false on a chat channel, since only email ever sets a title), and
-`text_contains` (tests `facts.text`). Any, all, or none may be set, and they
-apply identically regardless of which channel the trigger names — there is
-no per-channel filter vocabulary. A `webhook` trigger has no `filters` field
-at all (rejected at parse time, §4m) — its only structural narrowing is the
-`hook` name itself plus an optional `correlate`/`semantic`.
+**Filter keys per source.** A channel trigger's `filters` is an open
+key→value map. The key's shape picks the comparison:
+
+- Keys ending in **`_contains`** are case-insensitive substring tests on
+  prose. `from_contains` / `sender_contains` are aliases (both test
+  `facts.sender`), `subject_contains` tests `facts.title` (always false on a
+  chat channel, since only email sets a title), `text_contains` tests
+  `facts.text`.
+- **Every other key** is a case-insensitive *exact* match, because it names an
+  identity or a place rather than prose — a substring test would let a filter
+  for room `support` also fire in `support-escalations`.
+
+Exact keys resolve against two layers of facts. The **core** — `sender`,
+`sender_name`, `sender_kind`, `chat`, `chat_name`, `is_dm` — is populated by
+every channel under the same names, so a trigger written against it carries
+across channels unchanged. Anything with no cross-channel meaning lives in
+each channel's **open bag** (`facts.extra`), which the matcher looks up
+without interpreting; Slack contributes `app_id`, `bot_id` and `surface`,
+Discord `guild` and `thread_id`, and so on. Adding a dimension touches only
+that channel's branch in `channel_meta.extract`.
+
+Each channel *declares* what it can populate (`channel_meta.CHANNEL_FILTER_KEYS`).
+The declaration is advisory: the parser **warns** about a key the named
+channel never emits and keeps it, rather than rejecting — a channel may
+legitimately emit an undeclared key, and rejecting would let the declaration
+block a working trigger. The warning still earns its keep, since an exact key
+nothing populates matches nothing, so without it the trigger would just stay
+silent forever. Any, all, or none of the keys may be set; all set keys must
+hold.
+
+A `webhook` trigger has no `filters` field at all (rejected at parse time,
+§4m) — its only structural narrowing is the `hook` name itself plus an
+optional `correlate`/`semantic`.
 
 **Correlate: custom correlation keys.** A trigger's optional `correlate`
 field is a regex, validated at parse time (`spec._parse_correlate`) to

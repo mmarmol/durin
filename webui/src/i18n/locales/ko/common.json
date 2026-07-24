@@ -1460,7 +1460,15 @@
       "operatorToHint": "채팅 채널(Telegram, Slack 등)에서는 에스컬레이션에 수신자 ID가 필요합니다. 없으면 '활동' 탭에만 표시됩니다.",
       "savePaused": "일시 정지 상태로 저장",
       "saveEnabled": "저장하고 활성화",
-      "cancel": "취소"
+      "cancel": "취소",
+      "otherFilters": "기타 필터",
+      "otherFiltersHint": "발신자, 채널방 또는 채널 고유 항목에 대한 정확한 일치. _contains로 끝나는 키는 부분 문자열 검색입니다.",
+      "filterKey": "필터 키",
+      "filterKeyPlaceholder": "chat",
+      "filterValue": "필터 값",
+      "filterValuePlaceholder": "C0ABC123",
+      "addFilter": "필터 추가",
+      "removeFilter": "필터 제거"
     }
   },
   "skills": {

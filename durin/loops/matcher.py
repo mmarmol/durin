@@ -67,6 +67,34 @@ from durin.telemetry.logger import (
 
 _SUMMARY_CONTENT_CHARS = 1000
 
+# Substring filter keys and the fact each one reads. from_contains and
+# sender_contains are independent aliases that both filter on the sender;
+# either (or both) may be set on a trigger.
+_CONTAINS_SOURCES: dict[str, Callable[[InboundFacts], str | None]] = {
+    "from_contains": lambda f: f.sender,
+    "sender_contains": lambda f: f.sender,
+    "subject_contains": lambda f: f.title,
+    "text_contains": lambda f: f.text,
+}
+
+
+def _exact_value(facts: InboundFacts, key: str) -> str | None:
+    """The value an exact-match filter key compares against: a core fact, or
+    else the channel's own open bag. None means this channel never populated
+    that key, so no filter naming it can match."""
+    if key == "is_dm":
+        return "true" if facts.is_dm else "false"
+    core = {
+        "sender": facts.sender,
+        "sender_name": facts.sender_name,
+        "sender_kind": facts.sender_kind,
+        "chat": facts.chat,
+        "chat_name": facts.chat_name,
+    }
+    if key in core:
+        return core[key] or None
+    return facts.extra.get(key)
+
 
 class TriggerMatcher:
     def __init__(self, workspace, *, runtime: LoopsRuntime,
@@ -198,19 +226,29 @@ class TriggerMatcher:
 
     @staticmethod
     def _structural_match(filters: dict, facts: InboundFacts) -> bool:
-        # from_contains and sender_contains are independent aliases that both
-        # filter on facts.sender; either (or both) may be set on a trigger.
-        for key in ("from_contains", "sender_contains"):
-            needle = filters.get(key)
-            if needle and needle.lower() not in facts.sender.lower():
+        """Every filter must hold for the trigger to match.
+
+        A key ending in ``_contains`` is a case-insensitive substring test on
+        prose. Every other key is a case-insensitive exact match on an
+        identity or a place, because those are tokens, not prose: a substring
+        test would let a filter for the room "support" also fire in
+        "support-escalations". An exact key the channel never populated never
+        matches — which is what makes the parser's warning about undeclared
+        keys worth having, since the alternative is a trigger that silently
+        stays quiet forever.
+        """
+        for key, needle in filters.items():
+            if not isinstance(needle, str) or not needle:
+                continue
+            source = _CONTAINS_SOURCES.get(key)
+            if source is not None:
+                haystack = source(facts)
+                if haystack is None or needle.lower() not in haystack.lower():
+                    return False
+                continue
+            actual = _exact_value(facts, key)
+            if actual is None or actual.lower() != needle.lower():
                 return False
-        subject_needle = filters.get("subject_contains")
-        if subject_needle:
-            if facts.title is None or subject_needle.lower() not in facts.title.lower():
-                return False
-        text_needle = filters.get("text_contains")
-        if text_needle and text_needle.lower() not in facts.text.lower():
-            return False
         return True
 
     async def _semantic_match(self, condition: str, facts: InboundFacts, msg: Any) -> bool:

@@ -1460,7 +1460,15 @@
       "operatorToHint": "チャットチャンネル（Telegram、Slack など）でのエスカレーションには宛先 ID が必要です。指定がない場合は Activity の受信箱にのみ届きます。",
       "savePaused": "一時停止として保存",
       "saveEnabled": "保存して有効化",
-      "cancel": "キャンセル"
+      "cancel": "キャンセル",
+      "otherFilters": "その他のフィルター",
+      "otherFiltersHint": "ID・ルーム・チャネル固有の項目に対する完全一致。_contains で終わるキーは部分一致です。",
+      "filterKey": "フィルターキー",
+      "filterKeyPlaceholder": "chat",
+      "filterValue": "フィルター値",
+      "filterValuePlaceholder": "C0ABC123",
+      "addFilter": "フィルターを追加",
+      "removeFilter": "フィルターを削除"
     }
   },
   "skills": {

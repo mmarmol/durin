@@ -1460,7 +1460,15 @@
       "operatorToHint": "对于聊天类频道（Telegram、Slack 等），升级通知需要一个接收者 ID；否则只会出现在「活动」收件箱中。",
       "savePaused": "保存为暂停状态",
       "saveEnabled": "保存并启用",
-      "cancel": "取消"
+      "cancel": "取消",
+      "otherFilters": "其他筛选条件",
+      "otherFiltersHint": "对身份、频道或渠道专有字段的精确匹配。以 _contains 结尾的键为子串匹配。",
+      "filterKey": "筛选键",
+      "filterKeyPlaceholder": "chat",
+      "filterValue": "筛选值",
+      "filterValuePlaceholder": "C0ABC123",
+      "addFilter": "添加筛选条件",
+      "removeFilter": "删除筛选条件"
     }
   },
   "skills": {

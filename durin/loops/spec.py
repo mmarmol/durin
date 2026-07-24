@@ -10,6 +10,10 @@ import re
 from dataclasses import dataclass, field
 from typing import Literal
 
+from loguru import logger
+
+from durin.loops.channel_meta import CHANNEL_FILTER_KEYS
+
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 _SCHEDULE_KINDS = {"at", "every", "cron"}
 # Keys each schedule kind accepts. `durin.loops.cron_sync.sync_loop_jobs` does
@@ -27,7 +31,6 @@ _SCHEDULE_ALLOWED_KEYS = {
 # never mix.
 _CHANNEL_ONLY_FIELDS = {"channel", "filters", "semantic", "match", "hook", "correlate"}
 _CHANNEL_KINDS = {"email", "telegram", "slack", "discord", "whatsapp"}
-_CHANNEL_FILTER_ALLOWED_KEYS = {"from_contains", "subject_contains", "sender_contains", "text_contains"}
 _CHANNEL_MATCH_MODES = {"wake_or_new", "always_new"}
 # Fields exclusive to the webhook shape, rejected on a channel trigger.
 _WEBHOOK_ONLY_FIELDS = {"hook"}
@@ -57,7 +60,7 @@ class LoopTrigger:
     source: Literal["cron", "channel", "webhook"]
     schedule: dict = field(default_factory=dict)  # CronSchedule-shaped: kind/at_ms/every_ms/expr/tz
     channel: str | None = None  # channel trigger only: email/telegram/slack/discord/whatsapp
-    filters: dict = field(default_factory=dict)  # channel trigger only: from_contains/subject_contains/sender_contains/text_contains
+    filters: dict = field(default_factory=dict)  # channel trigger only: open key->value map, see durin.loops.channel_meta
     semantic: str | None = None  # channel or webhook trigger: optional model-judged condition
     match: Literal["wake_or_new", "always_new"] = "wake_or_new"  # channel trigger only
     hook: str | None = None  # webhook trigger only: the hook name that fires this trigger
@@ -175,9 +178,20 @@ def _parse_channel_trigger(raw: dict, i: int) -> LoopTrigger:
     filters = raw.get("filters") or {}
     if not isinstance(filters, dict):
         raise LoopError(f"trigger[{i}]: filters must be an object")
-    unknown = set(filters) - _CHANNEL_FILTER_ALLOWED_KEYS
-    if unknown:
-        raise LoopError(f"trigger[{i}]: unknown filter key(s) {sorted(unknown)}")
+    # Warn, never reject: the filter vocabulary is open, and a channel may
+    # legitimately emit a key it did not declare. Rejecting here would make
+    # the declaration a second source of truth able to block a working
+    # trigger. The warning still earns its keep — an undeclared key matches
+    # nothing, so without it the trigger would just stay silent forever.
+    undeclared = set(filters) - CHANNEL_FILTER_KEYS.get(channel, frozenset())
+    if undeclared:
+        logger.warning(
+            "loops: trigger[{}] filters on {} which the {} channel never populates; "
+            "this trigger will not match",
+            i,
+            sorted(undeclared),
+            channel,
+        )
     for key, value in filters.items():
         if not isinstance(value, str) or not value.strip():
             raise LoopError(f"trigger[{i}]: filter {key!r} must be a non-empty string")

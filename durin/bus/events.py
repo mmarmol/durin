@@ -23,6 +23,11 @@ class InboundMessage:
     metadata: dict[str, Any] = field(default_factory=dict)  # Channel-specific data
     session_key_override: str | None = None  # Optional override for thread-scoped sessions
     is_dm: bool = False  # True when the message arrived in a private/direct-message chat
+    # True for messages published so loop triggers can see them, but which must
+    # never become a conversation — an app posting alerts into a room. They run
+    # the normal authorization gate and interceptors; if no interceptor claims
+    # one, it is dropped instead of handed to the agent.
+    trigger_only: bool = False
 
     @property
     def session_key(self) -> str:

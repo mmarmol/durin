@@ -1523,7 +1523,15 @@
       "operatorToHint": "For chat channels (Telegram, Slack…) escalations need a recipient id; without it they only reach the Activity inbox.",
       "savePaused": "Save as paused",
       "saveEnabled": "Save & enable",
-      "cancel": "Cancel"
+      "cancel": "Cancel",
+      "otherFilters": "Other filters",
+      "otherFiltersHint": "Exact match on identity, room, or a channel-specific field. Keys ending in _contains are substring tests.",
+      "filterKey": "Filter key",
+      "filterKeyPlaceholder": "chat",
+      "filterValue": "Filter value",
+      "filterValuePlaceholder": "C0ABC123",
+      "addFilter": "Add filter",
+      "removeFilter": "Remove filter"
     }
   },
   "skills": {
