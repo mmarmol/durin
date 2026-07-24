@@ -5,6 +5,44 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.4.8 — 2026-07-24
+
+### Highlights
+
+- **A confirmation the agent writes for itself is no longer an approval.**
+  Four tools that add or rewrite executable state — MCP servers, skills,
+  skill edits, dependency installs — decided whether they had permission by
+  reading a `confirm` field out of their own call arguments. A value the model
+  writes can never be evidence that a person agreed, and the tools carrying it
+  are available to cron jobs, dreams and workflows, where there is nobody to
+  ask at all. Permission now comes from the context the run happens in, which
+  only the runtime can set. With no one reachable the action does not run: it
+  is recorded, and `durin approvals` shows what is waiting. (#473)
+- **Loop triggers can finally say where a message came from and who sent it.**
+  Channel triggers matched on four fixed text fields, so "only in this room"
+  and "only app notifications, not people" were both inexpressible; on Slack
+  app posts never arrived at all. Filters are now an open map over facts every
+  channel populates under the same names, plus a per-channel bag for what has
+  no cross-channel meaning. (#472)
+
+### Security
+
+- Privileged actions are gated by the execution context (the runtime-minted
+  session key plus a live consumer able to deliver an answer); an unrecognised
+  context counts as autonomous. Requests that cannot run are staged under
+  `<workspace>/.approvals/` and listed by `durin approvals`. A policy of `auto`
+  stays exempt — that authority was granted in configuration, ahead of the run.
+  (#473)
+- Blocking questions no longer wait on contexts that can never answer: the
+  non-interactive list missed dreams, workflows and the dream supervisor, so an
+  `ask_user_question` inside a dream sat for five minutes waiting for a reply
+  that could not arrive. (#473)
+
+### Channels
+
+- Slack app and bot posts reach loop triggers, and `group_policy: mention` no
+  longer hides them from a trigger that asked for them. (#472)
+
 ## 0.4.7 — 2026-07-24
 
 ### Memory
