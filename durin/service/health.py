@@ -72,6 +72,12 @@ class MemoryDiagnosticsResult(Result):
     # gc generation sizes — a monotonically ballooning gen2 is the classic
     # signature of Python-side retention.
     gc_counts: list[int] = []
+    # glibc allocator view (0.0 = not glibc/unknown). rss_mb far above
+    # malloc_in_use_mb = freed memory retained in arenas (the janitor's
+    # trim territory), not live-object growth.
+    malloc_system_mb: float = 0.0
+    malloc_in_use_mb: float = 0.0
+    malloc_free_mb: float = 0.0
     # Host context so a reader can judge headroom without a second call.
     total_mb: float
     available_mb: float

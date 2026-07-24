@@ -4187,6 +4187,21 @@ export interface components {
              * @default []
              */
             gc_counts: number[];
+            /**
+             * Malloc Free Mb
+             * @default 0
+             */
+            malloc_free_mb: number;
+            /**
+             * Malloc In Use Mb
+             * @default 0
+             */
+            malloc_in_use_mb: number;
+            /**
+             * Malloc System Mb
+             * @default 0
+             */
+            malloc_system_mb: number;
             /** Rss Mb */
             rss_mb: number;
             /** Threads */

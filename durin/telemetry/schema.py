@@ -1350,14 +1350,33 @@ class MemoryIndexCompactedEvent(TypedDict):
 class GatewayMemoryEvent(TypedDict):
     """Periodic footprint snapshot of the gateway process (boot + every few
     minutes): resident set, children total, threads, gc generation sizes,
-    and host total/available memory for headroom context."""
+    the glibc allocator's live-vs-retained split, and host total/available
+    memory for headroom context."""
 
     rss_mb: float
     children_mb: float
     threads: int
     gc_counts: list[int]
+    # glibc allocator view (0.0 = not glibc/unknown): rss far above
+    # malloc_in_use_mb means the allocator retains freed pages — allocator
+    # retention, not object growth.
+    malloc_system_mb: float
+    malloc_in_use_mb: float
+    malloc_free_mb: float
     total_mb: float
     available_mb: float
+
+
+class GatewayMemoryTrimEvent(TypedDict):
+    """The malloc janitor found glibc arenas retaining more freed memory
+    than the trim threshold and called malloc_trim(0). ``released`` is
+    glibc's own report of whether any pages went back to the OS; the rss
+    before/after pair is the observed effect."""
+
+    rss_before_mb: float
+    rss_after_mb: float
+    retained_mb: float
+    released: bool
 
 
 class MemoryDreamAlwaysOnEvent(TypedDict):
@@ -1730,6 +1749,7 @@ EVENTS: dict[str, type] = {
     "memory.embedding.service_fallback": MemoryEmbeddingServiceFallbackEvent,
     "memory.index.compacted": MemoryIndexCompactedEvent,
     "gateway.memory": GatewayMemoryEvent,
+    "gateway.memory.trimmed": GatewayMemoryTrimEvent,
     "memory.dream.always_on": MemoryDreamAlwaysOnEvent,
     "memory.dream.flagged": MemoryDreamFlaggedEvent,
     "memory.dream.parse_failure": MemoryDreamParseFailureEvent,

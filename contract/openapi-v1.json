@@ -3430,6 +3430,21 @@
             "title": "Gc Counts",
             "type": "array"
           },
+          "malloc_free_mb": {
+            "default": 0.0,
+            "title": "Malloc Free Mb",
+            "type": "number"
+          },
+          "malloc_in_use_mb": {
+            "default": 0.0,
+            "title": "Malloc In Use Mb",
+            "type": "number"
+          },
+          "malloc_system_mb": {
+            "default": 0.0,
+            "title": "Malloc System Mb",
+            "type": "number"
+          },
           "rss_mb": {
             "title": "Rss Mb",
             "type": "number"

@@ -24,16 +24,27 @@ __all__ = [
 def memory_snapshot() -> dict:
     """One cheap footprint snapshot of THIS process for telemetry/diagnostics:
     resident set, direct+transitive children total, thread count, gc gen
-    sizes, and the host's total/available memory for context."""
+    sizes, the glibc allocator's live-vs-retained split, and the host's
+    total/available memory for context."""
     import gc
     import threading
 
+    from durin.utils.glibc_malloc import malloc_stats_mb
+
     rss, children = tree_rss_mb()
+    # 0.0 = unknown (not glibc), same convention as available_memory_mb.
+    # rss_mb far above malloc_in_use_mb distinguishes allocator retention
+    # from genuine object growth without attaching a debugger.
+    malloc = malloc_stats_mb() or {
+        "system_mb": 0.0, "in_use_mb": 0.0, "free_mb": 0.0}
     return {
         "rss_mb": rss,
         "children_mb": children,
         "threads": threading.active_count(),
         "gc_counts": list(gc.get_count()),
+        "malloc_system_mb": malloc["system_mb"],
+        "malloc_in_use_mb": malloc["in_use_mb"],
+        "malloc_free_mb": malloc["free_mb"],
         "total_mb": total_memory_mb(),
         "available_mb": available_memory_mb(),
     }

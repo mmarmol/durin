@@ -223,9 +223,36 @@ def start_periodic_run_reconciler(
 _MEMORY_TELEMETRY_PERIOD_S = 900.0
 _memory_telemetry_started = threading.Event()
 
+# Freed-but-unreturned glibc memory (malloc_free_mb) above which the tick
+# calls malloc_trim(0). Trim only releases pages of already-freed chunks,
+# so the threshold trades a few ms of arena-lock walk against gigabytes:
+# the 2026-07-24 box gateway held 3.8GB RSS with ~190MB live.
+_MALLOC_TRIM_THRESHOLD_MB = 512.0
+
+
+def _maybe_trim_malloc(snapshot: dict) -> dict | None:
+    """Trim glibc arenas when they retain more than the threshold of freed
+    memory. Returns the ``gateway.memory.trimmed`` payload, or None when no
+    trim ran (below threshold, or no glibc signal)."""
+    from durin.utils import glibc_malloc, process_tree
+
+    retained = snapshot.get("malloc_free_mb", 0.0)
+    if snapshot.get("malloc_system_mb", 0.0) <= 0.0:
+        return None
+    if retained < _MALLOC_TRIM_THRESHOLD_MB:
+        return None
+    released = glibc_malloc.malloc_trim()
+    return {
+        "rss_before_mb": snapshot.get("rss_mb", 0.0),
+        "rss_after_mb": process_tree.process_rss_mb(),
+        "retained_mb": round(retained, 1),
+        "released": released,
+    }
+
 
 def start_memory_telemetry(*, period_s: float = _MEMORY_TELEMETRY_PERIOD_S) -> bool:
-    """Emit a ``gateway.memory`` telemetry event at boot and periodically.
+    """Emit a ``gateway.memory`` telemetry event at boot and periodically,
+    and return allocator-retained memory to the OS when it piles up.
 
     The footprint curve of the serving process is a first-class signal: the
     2026-07-18 review found a 2GB-resident gateway with zero recorded data
@@ -239,7 +266,16 @@ def start_memory_telemetry(*, period_s: float = _MEMORY_TELEMETRY_PERIOD_S) -> b
         from durin.agent.tools._telemetry import emit_tool_event
         from durin.utils.process_tree import memory_snapshot
 
-        emit_tool_event("gateway.memory", memory_snapshot())
+        snapshot = memory_snapshot()
+        emit_tool_event("gateway.memory", snapshot)
+        trimmed = _maybe_trim_malloc(snapshot)
+        if trimmed is not None:
+            emit_tool_event("gateway.memory.trimmed", trimmed)
+            logger.info(
+                "malloc janitor: trimmed glibc arenas "
+                f"(rss {trimmed['rss_before_mb']:.0f}MB -> "
+                f"{trimmed['rss_after_mb']:.0f}MB, "
+                f"retained {trimmed['retained_mb']:.0f}MB)")
 
     def _emit_forever() -> None:
         import time
