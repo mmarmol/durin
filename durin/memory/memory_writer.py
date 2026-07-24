@@ -251,7 +251,8 @@ def _compose_entity_commit_message(
     n_attr = sum(1 for p in patches if p.kind == "attribute")
     n_alias = sum(1 for p in patches if p.kind == "alias")
     n_src = sum(1 for p in patches if p.kind == "derived_from")
-    has_body = any(p.kind in ("body_append", "body_replace") for p in patches)
+    has_body = any(
+        p.kind in ("body_append", "body_replace", "body_if_absent") for p in patches)
 
     summary: list[str] = []
     if name_changed:
@@ -277,6 +278,8 @@ def _compose_entity_commit_message(
             body_lines.append("body append")
         elif p.kind == "body_replace":
             body_lines.append("body replace")
+        elif p.kind == "body_if_absent":
+            body_lines.append("body seed (if absent)")
         elif p.kind == "relation":
             v = p.value or {}
             body_lines.append(f"relation → {v.get('to', '?')} ({v.get('type', '?')})")

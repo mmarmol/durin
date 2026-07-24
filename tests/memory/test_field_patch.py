@@ -186,3 +186,26 @@ def test_relation_patch_normalizes_type_and_dedups():
     assert len(p.relations) == 1
     assert p.relations[0]["type"] == "occurs_in"          # stored canonical
     assert "x:y\x1foccurs_in" in p.provenance["relations"]  # provenance keyed on canonical
+
+
+def test_body_if_absent_fills_an_empty_body():
+    p = _page()
+    changed = apply_field_patch(p, FieldPatch(kind="body_if_absent", value="Seeded prose.",
+                                              author="dream", source_ref="ref:doc", at=NOW))
+    assert changed is True
+    assert p.body == "Seeded prose."
+    assert p.provenance["body"]["author"] == "dream"
+
+
+def test_body_if_absent_never_touches_an_existing_body():
+    # The whole point of the kind: a doc-local significance must not stomp an
+    # entity that already has a description — same-rank body_replace would
+    # (same rank → newer wins), making the body whichever doc was seeded last.
+    p = _page()
+    apply_field_patch(p, FieldPatch(kind="body_replace", value="Global description.",
+                                    author="dream", source_ref="ref:first", at=NOW))
+    changed = apply_field_patch(p, FieldPatch(kind="body_if_absent", value="Doc-local view.",
+                                              author="dream", source_ref="ref:second", at=LATER))
+    assert changed is False
+    assert p.body == "Global description."
+    assert p.provenance["body"]["source_ref"] == "ref:first"

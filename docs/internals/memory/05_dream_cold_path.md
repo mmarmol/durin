@@ -183,6 +183,11 @@ skill_signals)` iterates every `sessions/*.jsonl` and calls
    `relations` (typed links to other entities mentioned in the turns), and a
    `significance` sentence that captures *why this entity is in the user's
    memory* — their relationship to it — rather than restating the attributes.
+   Because significance is source-local prose, both the discovery and the
+   document-seeding passes write it as `body_if_absent`: it becomes the body
+   only when the page has none, and never competes with an existing
+   description (a same-rank `body_replace` would win by recency, leaving the
+   body as whichever source happened to be processed last).
    The prompt requests all four components from the source turns only; none are
    invented. The proposal also includes a `turn` field: the turn number where
    the entity's durable fact first appears. Each patch written by `discover_entities`

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 from durin.memory.distill_dream import (
@@ -311,3 +312,47 @@ def test_curate_topics_no_distilled_docs_is_noop(tmp_path: Path) -> None:
     r = run_curate_topics_pass(
         tmp_path, llm_invoke=_topics_stub([{"label": "X", "docs": ["raw"]}]))
     assert r["skipped"] is True and r["topics"] == 0
+
+
+def test_seed_preserves_existing_entity_body(tmp_path: Path) -> None:
+    # Seeding a doc that mentions an already-described entity must add
+    # provenance (derived_from, relations) WITHOUT replacing the body: the
+    # proposal's significance is that document's local perspective, not a
+    # better global description. (organization:mxhero was rewritten 18 times
+    # in 4 days by exactly this path.)
+    from durin.memory.distill_dream import run_seed_entities_pass
+    from durin.memory.entity_page import EntityPage
+    from durin.memory.field_patch import FieldPatch
+    from durin.memory.memory_writer import write_entity
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    slug = _distilled(ws)
+    write_entity(ws, "person:ada", [
+        FieldPatch(kind="body_replace", value="The first programmer.",
+                   author="dream", source_ref="s#t0",
+                   at=datetime(2026, 6, 1, tzinfo=timezone.utc)),
+    ], create=True, name="Ada")
+
+    stub = _seed_stub([{"ref": "person:ada", "name": "Ada",
+                        "significance": "The author of this document."}])
+    result = run_seed_entities_pass(ws, llm_invoke=stub)
+    assert result["entities"] == 1
+
+    page = EntityPage.from_file(ws / "memory" / "entities" / "person" / "ada.md")
+    assert page.body.strip() == "The first programmer."
+    assert page.derived_from == [f"reference:{slug}"]
+
+
+def test_seed_still_bodies_a_new_entity(tmp_path: Path) -> None:
+    from durin.memory.distill_dream import run_seed_entities_pass
+    from durin.memory.entity_page import EntityPage
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    _distilled(ws)
+    stub = _seed_stub([{"ref": "person:ada", "name": "Ada",
+                        "significance": "The author."}])
+    run_seed_entities_pass(ws, llm_invoke=stub)
+    page = EntityPage.from_file(ws / "memory" / "entities" / "person" / "ada.md")
+    assert page.body.strip() == "The author."
