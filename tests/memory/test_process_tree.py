@@ -45,3 +45,20 @@ def test_memory_snapshot_shape() -> None:
     assert snap["rss_mb"] > 0
     assert snap["threads"] >= 1
     assert len(snap["gc_counts"]) == 3
+
+
+def test_memory_snapshot_has_malloc_fields() -> None:
+    from durin.utils.glibc_malloc import malloc_stats_mb
+    from durin.utils.process_tree import memory_snapshot
+
+    snap = memory_snapshot()
+    # Always present; 0.0 = not glibc / unknown (same convention as
+    # available_memory_mb).
+    if malloc_stats_mb() is not None:
+        assert snap["malloc_system_mb"] > 0.0
+        assert snap["malloc_in_use_mb"] > 0.0
+        assert snap["malloc_free_mb"] >= 0.0
+    else:
+        assert snap["malloc_system_mb"] == 0.0
+        assert snap["malloc_in_use_mb"] == 0.0
+        assert snap["malloc_free_mb"] == 0.0

@@ -122,13 +122,26 @@ At the start of each turn, `AgentLoop._run_agent_loop` calls
 reset in a `finally` block to prevent cross-turn leakage.
 
 The gateway also emits a periodic `gateway.memory` footprint event (RSS,
-children, threads, gc, host headroom) from a background thread wired at
-service-registry build time, and serves the same snapshot on demand via
-`GET /api/v1/diagnostics/memory` — the first-class instruments for "where is
-the serving process' memory going", added after the 2026-07-18 incident
-found a 2GB-resident gateway with no recorded footprint history. Background
-threads that emit must bind a session logger first (`bind_telemetry(
-get_session_logger(...))`) — `emit_tool_event` drops events without one.
+children, threads, gc, glibc allocator split, host headroom) from a
+background thread wired at service-registry build time, and serves the same
+snapshot on demand via `GET /api/v1/diagnostics/memory` — the first-class
+instruments for "where is the serving process' memory going", added after the
+2026-07-18 incident found a 2GB-resident gateway with no recorded footprint
+history. Background threads that emit must bind a session logger first
+(`bind_telemetry(get_session_logger(...))`) — `emit_tool_event` drops events
+without one.
+
+On glibc the snapshot includes the allocator's live-vs-retained split
+(`malloc_system_mb` / `malloc_in_use_mb` / `malloc_free_mb`, from
+`mallinfo2`; 0.0 elsewhere), which separates "objects are growing" from
+"the allocator retains freed pages" without attaching a debugger — the
+distinction that resolved the 2026-07-24 box diagnosis (3.8GB RSS, ~190MB
+live). The same tick acts as a malloc janitor: when `malloc_free_mb`
+exceeds a threshold it calls `malloc_trim(0)` (releases pages of
+already-freed arena chunks only — live allocations are untouchable by
+design) and emits `gateway.memory.trimmed` with the observed RSS
+before/after. Both helpers live in `durin/utils/glibc_malloc.py` and no-op
+off glibc.
 
 Tools call `emit_tool_event(event_type, data)` from
 `durin/agent/tools/_telemetry.py`. This free function:
