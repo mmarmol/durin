@@ -5,6 +5,61 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.4.5 — 2026-07-24
+
+### Highlights
+
+- **Every editable surface now has history.** Workflow edits made in the
+  dashboard — save, delete, duplicate, rename — now commit to the version
+  store like the agent's own edits always did, each mutation under its own
+  subject instead of one coarse sweep. Loops, previously the last surface
+  with no history at all, get the same treatment: every change from the
+  webui, the agent, or the CLI is reviewable and reversible. (#459, #460)
+- **A pipeline node that runs out of budget gets a second chance.** A work
+  node that exhausted its turn budget used to force a synthesis and die if
+  that synthesis failed schema validation — whether the run survived was a
+  coin flip on how the final turn happened to phrase itself. Nodes can now
+  declare `max_reentries` with a `reentry_prompt`, and the exhaustion path
+  is schema-aware: the forced synthesis is asked for the structured payload
+  directly instead of prose that may or may not contain it. (#461)
+- **The gateway hands retained memory back to the OS.** A heavy failed run
+  could leave the process holding gigabytes of freed-but-unreturned glibc
+  arena pages — indistinguishable from a leak in the old telemetry (a live
+  diagnosis found 3.8GB resident with ~190MB actually live). The periodic
+  memory tick now reports the allocator's live-vs-retained split and, past
+  a threshold of retained freed memory, calls `malloc_trim(0)` and records
+  what came back. (#465)
+
+### Workflows
+
+- Renaming a workflow follows into the loops that run it, and deleting one
+  refuses while a loop or a sub-flow node still references it — the same
+  dependency barrier skills gained for dreams, applied to the workflow
+  registry. (#464)
+- The registry directories are guarded against generic file writes: registry
+  content changes go through the services that version them. (#459)
+
+### Memory
+
+- Dream passes refuse autonomous changes to skills a workflow depends on:
+  fuse can no longer remove a referenced source skill, and restructure asks
+  before rewriting prose a work node injects into its prompt. (#463)
+
+### Security
+
+- The skill scanner correlates environment access with network reach instead
+  of flagging every `os.environ` mention: a script reading a bucket name with
+  no way to send it anywhere is no longer `caution`, while one reading a
+  credential and calling out keeps the flag. (#462)
+
+### Observability
+
+- `gateway.memory` telemetry and `GET /api/v1/diagnostics/memory` carry
+  `malloc_system_mb` / `malloc_in_use_mb` / `malloc_free_mb` (0.0 off
+  glibc), separating "objects are growing" from "the allocator retains
+  freed pages"; a trim emits `gateway.memory.trimmed` with the observed
+  RSS before and after. (#465)
+
 ## 0.4.4 — 2026-07-23
 
 ### Highlights
