@@ -5,6 +5,16 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.4.7 — 2026-07-24
+
+### Memory
+
+- The refine verdict cache no longer reopens settled pairs when the
+  always_on pass re-ranks its pinned set: the `always_on` attribute is
+  curation state, not identity content, and is now excluded from the
+  judgment fingerprint. Found in the live verification of 0.4.6 (8 of 35
+  cached pairs reopened by 10 overnight flag flips). (#470)
+
 ## 0.4.6 — 2026-07-24
 
 ### Highlights
