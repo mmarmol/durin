@@ -19,7 +19,6 @@ from durin.providers.anthropic_provider import AnthropicProvider
 from durin.providers.azure_openai_provider import AzureOpenAIProvider
 from durin.providers.bedrock_provider import BedrockProvider
 from durin.providers.github_copilot_provider import GitHubCopilotProvider
-from durin.providers.local_llama_provider import LocalLlamaProvider
 from durin.providers.openai_codex_provider import OpenAICodexProvider
 from durin.providers.openai_compat_provider import OpenAICompatProvider
 
@@ -36,7 +35,6 @@ PROVIDERS = [
     AzureOpenAIProvider,
     BedrockProvider,
     GitHubCopilotProvider,
-    LocalLlamaProvider,
     OpenAICodexProvider,
     OpenAICompatProvider,
 ]

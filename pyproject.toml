@@ -4,7 +4,7 @@ version = "0.4.8"
 description = "Personal AI agent with daily-driver CLI, modal TUI, and graph-based memory"
 readme = "README.md"
 # Upper bound = highest Python line durin is tested/known-good on, keeping the
-# heavy extras (e.g. llama-cpp-python) off too-new Pythons that lack wheels.
+# heavy extras off too-new Pythons that lack wheels.
 # uv reads this and fetches a compatible interpreter on its own; pip/pipx do
 # NOT auto-select, so with those pass --python to an in-range interpreter.
 requires-python = ">=3.11,<3.14"
@@ -109,10 +109,6 @@ matrix = [
     "mistune>=3.0,<4.0",
     # HTML sanitizer for outbound formatted bodies.
     "nh3>=0.2,<1.0",
-]
-local = [
-    "llama-cpp-python>=0.3.0",
-    "huggingface-hub>=0.20.0",
 ]
 stt = [
     # Fast on-CPU ASR runtime (Parakeet TDT v3 / SenseVoice) — prebuilt wheels.
@@ -253,7 +249,6 @@ filterwarnings = [
 ]
 markers = [
     "ollama: requires running Ollama instance with a local model",
-    "local_llm: requires llama-cpp-python and a cached GGUF model",
     "slow: marks slow / live-LLM end-to-end tests (opt-in via env)",
     "network: live tests against real skill registries (opt-in: DURIN_LIVE_REGISTRY_TESTS=1)",
 ]

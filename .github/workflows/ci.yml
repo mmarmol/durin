@@ -90,10 +90,9 @@ jobs:
           python -m pip install --upgrade pip
           # Skip the webui bundle — CI doesn't need it and it would force
           # bun/npm onto the runner just for tests.
-          # Install every optional extra except `[local]` (llama-cpp-python
-          # is huge and platform-specific) and `[memory]` (fastembed
-          # downloads ~2GB models). Tests that need those self-skip via
-          # `pytest.importorskip` when they're absent.
+          # Install every optional extra except `[memory]` (fastembed
+          # downloads ~2GB models). Tests that need it self-skip via
+          # `pytest.importorskip` when it is absent.
           DURIN_SKIP_WEBUI_BUILD=1 pip install -e ".[dev,mcp,web,oauth,slack,discord]"
 
       - name: Run unit tests
