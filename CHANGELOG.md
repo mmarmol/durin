@@ -62,6 +62,15 @@ previous tag — highlights first, then changes grouped by area.
 - Leaving plan mode via `/mode` records the plan as cancelled instead of
   leaving its event open forever. (#478)
 
+### Gateway
+
+- `durin gateway restart` works again. The fallback that resolves which
+  executable to re-invoke returned a single string with spaces, used as the
+  program name of a shell-less spawn, so it was exec'd as one literal path and
+  always failed. It also named a module that is not runnable. The resolver now
+  returns argv parts and looks beside the running interpreter before giving up,
+  which covers `sudo -u durin`, whose reduced PATH hides `~/.local/bin`. (#486)
+
 ### Providers
 
 - The `local` extra and its in-process llama.cpp provider are removed. The
