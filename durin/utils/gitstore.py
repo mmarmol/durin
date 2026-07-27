@@ -467,25 +467,6 @@ class GitStore:
             logger.exception("Git diff_commits failed")
             return ""
 
-    def find_commit(self, short_sha: str, max_entries: int = 20) -> CommitInfo | None:
-        """Find a commit by short SHA prefix match."""
-        for c in self.log(max_entries=max_entries):
-            if c.sha.startswith(short_sha):
-                return c
-        return None
-
-    def show_commit_diff(self, short_sha: str, max_entries: int = 20) -> tuple[CommitInfo, str] | None:
-        """Find a commit and return it with its diff vs the parent."""
-        commits = self.log(max_entries=max_entries)
-        for i, c in enumerate(commits):
-            if c.sha.startswith(short_sha):
-                if i + 1 < len(commits):
-                    diff = self.diff_commits(commits[i + 1].sha, c.sha)
-                else:
-                    diff = ""
-                return c, diff
-        return None
-
     def commit_diff(self, short_sha: str, *, path: str | None = None,
                     max_entries: int = 500) -> tuple["CommitInfo", str] | None:
         """Return (commit, unified-diff) for one commit vs its git parent.

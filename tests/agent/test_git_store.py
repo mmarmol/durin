@@ -143,41 +143,6 @@ class TestDiffCommits:
         assert git_ready.diff_commits("deadbeef", "cafebabe") == ""
 
 
-class TestFindCommit:
-    def test_finds_by_prefix(self, git_ready):
-        ws = git_ready._workspace
-        (ws / "SOUL.md").write_text("v2", encoding="utf-8")
-        sha = git_ready.auto_commit("v2")
-        found = git_ready.find_commit(sha[:4])
-        assert found is not None
-        assert found.sha == sha
-
-    def test_returns_none_for_unknown(self, git_ready):
-        assert git_ready.find_commit("deadbeef") is None
-
-
-class TestShowCommitDiff:
-    def test_returns_commit_with_diff(self, git_ready):
-        ws = git_ready._workspace
-        (ws / "SOUL.md").write_text("content", encoding="utf-8")
-        sha = git_ready.auto_commit("add content")
-        result = git_ready.show_commit_diff(sha)
-        assert result is not None
-        commit, diff = result
-        assert commit.sha == sha
-        assert "content" in diff
-
-    def test_first_commit_has_empty_diff(self, git_ready):
-        init_sha = git_ready.log()[-1].sha
-        result = git_ready.show_commit_diff(init_sha)
-        assert result is not None
-        _, diff = result
-        assert diff == ""
-
-    def test_returns_none_for_unknown(self, git_ready):
-        assert git_ready.show_commit_diff("deadbeef") is None
-
-
 class TestCommitInfoFormat:
     def test_format_with_diff(self):
         from durin.utils.gitstore import CommitInfo

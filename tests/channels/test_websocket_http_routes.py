@@ -6,6 +6,8 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
+from tests.conftest import write_webui_transcript
 from starlette.testclient import TestClient
 
 from durin.api.asgi import build_gateway_http_app
@@ -212,9 +214,8 @@ def test_session_delete_removes_file(
 ) -> None:
     monkeypatch.setattr("durin.config.paths.get_data_dir", lambda: tmp_path)
     sm = _seed_session(tmp_path, key="websocket:doomed")
-    from durin.utils.webui_transcript import append_transcript_object
 
-    append_transcript_object("websocket:doomed", {"event": "user", "chat_id": "doomed", "text": "x"})
+    write_webui_transcript("websocket:doomed", {"event": "user", "chat_id": "doomed", "text": "x"})
     client = _make_client(bus, session_manager=sm)
 
     tok = _token(client)

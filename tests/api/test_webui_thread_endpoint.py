@@ -20,13 +20,14 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
+from tests.conftest import write_webui_transcript
 from starlette.testclient import TestClient
 
 from durin.api.asgi import build_gateway_http_app
 from durin.channels.websocket import WebSocketChannel
 from durin.session.manager import Session, SessionManager
 from durin.utils import webui_transcript as wt
-from durin.utils.webui_transcript import append_transcript_object
 
 
 def _ch(bus: Any, *, session_manager: SessionManager | None = None) -> WebSocketChannel:
@@ -78,14 +79,14 @@ def _seed_paged_transcript(key: str, turns: int) -> None:
     turns exceed a shrunk page size.
     """
     for i in range(turns):
-        append_transcript_object(
+        write_webui_transcript(
             key, {"event": "user", "chat_id": "x", "text": f"question {i}"}
         )
-        append_transcript_object(key, {"event": "message", "chat_id": "x", "kind": "tool_hint", "text": f"tool run {i}"})
-        append_transcript_object(
+        write_webui_transcript(key, {"event": "message", "chat_id": "x", "kind": "tool_hint", "text": f"tool run {i}"})
+        write_webui_transcript(
             key, {"event": "message", "chat_id": "x", "text": f"answer {i} " + "x" * 200}
         )
-        append_transcript_object(key, {"event": "turn_end", "chat_id": "x"})
+        write_webui_transcript(key, {"event": "turn_end", "chat_id": "x"})
 
 
 def test_thread_endpoint_accepts_before_and_returns_prev_cursor(
@@ -133,7 +134,7 @@ def test_invalid_before_is_rejected(
 ) -> None:
     monkeypatch.setattr("durin.config.paths.get_data_dir", lambda: tmp_path)
     key = "websocket:badbefore"
-    append_transcript_object(key, {"event": "user", "chat_id": "x", "text": "hi"})
+    write_webui_transcript(key, {"event": "user", "chat_id": "x", "text": "hi"})
 
     client = _make_client(bus)
     tok = _token(client)

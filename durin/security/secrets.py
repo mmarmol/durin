@@ -282,19 +282,6 @@ class SecretStore:
                 self._save()
         return removed
 
-    def set_scope(self, name: str, scope: list[str]) -> bool:
-        """Replace a secret's ``scope`` in memory only. Returns False when unknown.
-
-        Mutates the in-memory entry but does NOT persist; callers needing
-        durability must use :meth:`set_scope_locked`.
-        """
-        self._ensure()
-        entry = self._entries.get(name)
-        if entry is None:
-            return False
-        entry.scope = list(scope)
-        return True
-
     def set_scope_locked(self, name: str, scope: list[str]) -> bool:
         """Replace a secret's ``scope`` under a cross-process lock. Returns False when unknown.
 

@@ -6,6 +6,8 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
+from tests.conftest import write_webui_transcript
 from starlette.testclient import TestClient
 from websockets.exceptions import ConnectionClosed
 from websockets.frames import Close
@@ -1825,14 +1827,13 @@ def test_is_valid_chat_id(value: Any, expected: bool) -> None:
 def test_v1_webui_thread_returns_signed_json(tmp_path, monkeypatch) -> None:
     """GET /api/v1/sessions/{key}/webui-thread — the signed front-door route
     builds the persisted display thread (media URLs HMAC-signed by the channel)."""
-    from durin.utils.webui_transcript import append_transcript_object
 
     bus = MagicMock()
     # _build_client patches get_data_dir; seed the transcript afterwards so it
     # lands in the same dir the route reads from.
     _channel, client = _build_client(bus, monkeypatch, tmp_path)
     key = "websocket:c1"
-    append_transcript_object(key, {"event": "user", "chat_id": "c1", "text": "hi"})
+    write_webui_transcript(key, {"event": "user", "chat_id": "c1", "text": "hi"})
     tok = client.get("/webui/bootstrap").json()["token"]
     resp = client.get(
         f"/api/v1/sessions/{key}/webui-thread",

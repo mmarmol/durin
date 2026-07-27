@@ -65,7 +65,7 @@ def test_large_ceiling_does_not_starve_input_budget(monkeypatch):
 
     Old behaviour: budget = 202800 - 128000 - 1024 = 73776, so an
     estimate of 100k overflowed. New behaviour: the reservation is
-    capped, so 100k fits and the precheck returns None.
+    capped, so 100k fits inside the budget.
     """
     from durin.agent import runner as runner_mod
     from durin.agent.runner import AgentRunner, AgentRunSpec
@@ -86,7 +86,10 @@ def test_large_ceiling_does_not_starve_input_budget(monkeypatch):
         max_tokens=128_000,
     )
     spec.tools.get_definitions.return_value = []
-    assert runner._mid_turn_precheck(spec, [{"role": "user", "content": "hi"}]) is None
+    result = runner._estimate_and_budget(spec, [{"role": "user", "content": "hi"}])
+    assert result is not None
+    estimate, budget = result
+    assert estimate <= budget
 
 
 def test_small_ceiling_budget_unchanged(monkeypatch):
@@ -112,7 +115,7 @@ def test_small_ceiling_budget_unchanged(monkeypatch):
         max_tokens=2_000,
     )
     spec.tools.get_definitions.return_value = []
-    result = runner._mid_turn_precheck(spec, [{"role": "user", "content": "hi"}])
+    result = runner._estimate_and_budget(spec, [{"role": "user", "content": "hi"}])
     assert result is not None
     estimate, budget = result
     assert budget == 6976

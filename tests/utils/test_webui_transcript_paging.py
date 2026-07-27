@@ -22,7 +22,7 @@ from durin.utils import webui_transcript as wt
 
 
 def _dump(obj: dict) -> str:
-    # Byte-identical to what append_transcript_object writes (compact JSON),
+    # Byte-identical to what the transcript writer emits (compact JSON),
     # so the tests exercise _is_user_line's production branch.
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
 
