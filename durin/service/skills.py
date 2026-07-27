@@ -542,7 +542,11 @@ class SkillsService:
         # Off the event loop: web_save runs a blocking `bash -n` lint subprocess
         # (up to 10s) and a git commit; keeping it inline would stall the loop.
         status, payload = await asyncio.to_thread(
-            ss.web_save, self._workspace, cmd.name, cmd.content,
+            ss.web_save,
+            self._workspace,
+            cmd.name,
+            cmd.content,
+            attribution=ss.Attribution(actor="user"),
         )
         return _skills_result(status, payload)
 

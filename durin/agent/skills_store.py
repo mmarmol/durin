@@ -1755,8 +1755,9 @@ def web_get(workspace: Path, name: str) -> tuple[int, dict]:
     return 200, {"name": name, "mode": read_mode(workspace, name), "content": content}
 
 
-def web_save(workspace: Path, name: str, content: str) -> tuple[int, dict]:
-    res = save_skill_content(workspace, name, content)
+def web_save(workspace: Path, name: str, content: str, *,
+             attribution: "Attribution | None" = None) -> tuple[int, dict]:
+    res = save_skill_content(workspace, name, content, attribution=attribution)
     return (400, res) if "error" in res else (200, res)
 
 
