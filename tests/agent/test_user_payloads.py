@@ -68,6 +68,30 @@ def test_serialize_pending_plan_review():
     assert "/build" in out[0]
 
 
+def test_serialize_pending_plan_review_includes_verification():
+    """Criteria travel as their own field — the text surface must show them
+    too, or the dumb-channel user approves a plan without its definition
+    of done."""
+    meta = {
+        "pending_plan_review": {
+            "path": "p.md",
+            "plan": "# Análisis\n\n1. corregir el clasificador",
+            "verification": "Re-ejecutar el pipeline con el ticket #23108.",
+        }
+    }
+    out = serialize_pending_interactions(meta)
+    assert "# Análisis" in out[0]
+    assert "Re-ejecutar el pipeline" in out[0]
+
+
+def test_format_interactive_tool_event_plan_includes_verification():
+    plan = format_interactive_tool_event({
+        "name": "exit_plan_mode",
+        "arguments": {"plan": "# P", "verification": "pytest passes", "path": "p.md"},
+    })
+    assert "pytest passes" in plan
+
+
 def test_serialize_long_plan_truncates():
     meta = {
         "pending_plan_review": {

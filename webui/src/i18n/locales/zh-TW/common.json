@@ -1902,6 +1902,7 @@
     },
     "plan": {
       "title": "擬議計畫",
+      "verification": "驗證",
       "approve": "核准 (/build)",
       "hint": "或回覆意見以調整計畫"
     },

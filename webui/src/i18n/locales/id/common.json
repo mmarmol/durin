@@ -1902,6 +1902,7 @@
     },
     "plan": {
       "title": "Rencana yang diusulkan",
+      "verification": "Verifikasi",
       "approve": "Setujui (/build)",
       "hint": "atau balas dengan masukan untuk menyempurnakannya"
     },

@@ -75,6 +75,11 @@ def _serialize_plan_review(payload: Mapping[str, Any]) -> str | None:
     path = str(payload.get("path") or "").strip()
     if not plan:
         return None
+    verification = str(payload.get("verification") or "").strip()
+    if verification:
+        from durin.agent.tools.plan_mode import compose_plan_document
+
+        plan = compose_plan_document(plan, verification).strip()
     if len(plan) > _PLAN_FALLBACK_MAX_CHARS:
         plan = plan[:_PLAN_FALLBACK_MAX_CHARS].rstrip() + "\n…(truncated)"
     tail = f"\n\nFull plan: {path}" if path else ""

@@ -1902,6 +1902,7 @@
     },
     "plan": {
       "title": "Plan proposé",
+      "verification": "Vérification",
       "approve": "Approuver (/build)",
       "hint": "ou répondez avec vos retours pour l'affiner"
     },

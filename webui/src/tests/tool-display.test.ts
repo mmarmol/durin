@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { toolDisplayClass } from "@/lib/tool-display";
+import { eventDisplayClass, toolDisplayClass } from "@/lib/tool-display";
 
 describe("toolDisplayClass", () => {
   it("hoists interactive/presentational tools", () => {
@@ -47,5 +47,21 @@ describe("toolDisplayClass — tier-3 chips", () => {
 describe("toolDisplayClass — subagent result", () => {
   it("hoists subagent_result as a first-class card", () => {
     expect(toolDisplayClass("subagent_result")).toBe("hoist");
+  });
+});
+
+describe("eventDisplayClass — failed calls", () => {
+  it("keeps hoisting and chipping successful calls", () => {
+    expect(eventDisplayClass({ name: "exit_plan_mode", phase: "end" })).toBe("hoist");
+    expect(eventDisplayClass({ name: "exit_plan_mode", phase: "start" })).toBe("hoist");
+    expect(eventDisplayClass({ name: "message", phase: "end" })).toBe("chip");
+  });
+
+  it("demotes a rejected call to trace instead of a plan card", () => {
+    // A rejected exit_plan_mode used to paint a full plan card with an
+    // approve button, so a retry showed the user two plans in a row.
+    expect(eventDisplayClass({ name: "exit_plan_mode", phase: "error" })).toBe("trace");
+    expect(eventDisplayClass({ name: "message", phase: "error" })).toBe("trace");
+    expect(eventDisplayClass({ name: "ask_user_question", phase: "error" })).toBe("trace");
   });
 });

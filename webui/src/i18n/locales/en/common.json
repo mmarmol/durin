@@ -1974,6 +1974,7 @@
     },
     "plan": {
       "title": "Proposed plan",
+      "verification": "Verification",
       "approve": "Approve (/build)",
       "hint": "or reply with feedback to refine it"
     },

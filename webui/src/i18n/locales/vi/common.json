@@ -1902,6 +1902,7 @@
     },
     "plan": {
       "title": "Kế hoạch đề xuất",
+      "verification": "Xác minh",
       "approve": "Phê duyệt (/build)",
       "hint": "hoặc trả lời kèm góp ý để tinh chỉnh"
     },

@@ -99,6 +99,29 @@ describe("HoistedToolBlock — exit_plan_mode", () => {
     expect(a.sendUserMessage).toHaveBeenCalledWith("/build");
   });
 
+  it("renders the verification criteria under their own label", async () => {
+    render(
+      <ThreadActionsProvider value={actions()}>
+        <HoistedToolBlock
+          answered={false}
+          event={{
+            phase: "end",
+            call_id: "c",
+            name: "exit_plan_mode",
+            arguments: {
+              plan: "# Análisis\n\n1. corregir el clasificador",
+              verification: "Re-ejecutar el pipeline con el ticket 23108",
+            },
+          }}
+        />
+      </ThreadActionsProvider>,
+    );
+    expect(await screen.findByText("Análisis", {}, { timeout: 10_000 })).toBeInTheDocument();
+    expect(
+      await screen.findByText(/Re-ejecutar el pipeline/, {}, { timeout: 10_000 }),
+    ).toBeInTheDocument();
+  });
+
   it("hides the approve action once answered", async () => {
     render(
       <ThreadActionsProvider value={actions()}>

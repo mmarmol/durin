@@ -367,6 +367,7 @@ class PlanModePresentedEvent(TypedDict):
     """``exit_plan_mode`` tool finished writing the plan markdown; the
     runtime now expects the model to present the plan to the user."""
     plan_chars: int
+    verification_chars: int
     from_mode: str
     plan_path: str
 
