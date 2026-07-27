@@ -290,7 +290,7 @@ protection, then SSRF URL detection, then workspace boundary on absolute paths.
   configured (the default), the list is an opt-out — matching commands are blocked
   unless an `allow_patterns` entry explicitly exempts them. Hardcoded deny patterns
   cover `rm -rf`, `dd`, disk operations, power commands, fork bombs, and direct
-  writes to internal state files (`history.jsonl`, `.dream_cursor`).
+  writes to the append-only `history.jsonl` archive.
 
 - *Memory vault protection* (`_guard_memory_mutation()`): mutations of the
   `memory/` directory via `rm`, `mv`, `cp`, `tee`, `sed -i`, `dd`, and redirect

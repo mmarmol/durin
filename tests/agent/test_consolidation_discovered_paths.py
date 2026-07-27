@@ -3,7 +3,7 @@
 Tool results used to be summarized away with their discovered paths
 (2026-07-17 incident: zendesk-ticket-evaluation forgotten 4 times).
 Paths now ride the session summary mechanically — no LLM trust involved.
-history.jsonl (dream input) stays untouched.
+history.jsonl (the write-only archive of raw summarizer output) stays untouched.
 """
 from __future__ import annotations
 
@@ -17,6 +17,13 @@ from durin.agent.memory import (
     MemoryStore,
     extract_discovered_paths,
 )
+
+
+def _entries(store) -> list[dict]:
+    """Parsed history.jsonl records — the store is write-only, so a test that
+    asserts on what was archived reads the file back itself."""
+    text = store.read_file(store.history_file)
+    return [json.loads(line) for line in text.splitlines() if line.strip()]
 
 
 def _tool_call_msg(name: str, arguments: dict) -> dict:
@@ -134,6 +141,6 @@ async def test_archive_appends_paths_to_summary_not_history(
     assert summary is not None
     assert "Files/paths examined in this span" in summary
     assert "/ws/skills" in summary
-    entries = store.read_unprocessed_history(since_cursor=0)
+    entries = _entries(store)
     assert len(entries) == 1
     assert "Files/paths examined" not in entries[0]["content"]

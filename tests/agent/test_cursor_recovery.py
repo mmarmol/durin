@@ -1,9 +1,9 @@
 """Regression tests for cursor recovery after non-integer cursor corruption.
 
 Root cause: cron jobs and other callers occasionally wrote string cursors to
-history.jsonl (e.g. ``"cursor": "abc"``).  The original ``_next_cursor`` and
-``read_unprocessed_history`` assumed integer cursors and crashed with
-``TypeError`` / ``ValueError``, blocking all subsequent history appends.
+history.jsonl (e.g. ``"cursor": "abc"``).  ``_next_cursor`` assumed integer
+cursors and crashed with ``TypeError`` / ``ValueError``, blocking all
+subsequent history appends.
 """
 
 
@@ -70,45 +70,6 @@ class TestNextCursorRecovery:
         assert cursor == 11
 
 
-class TestReadUnprocessedWithCorruption:
-    """``read_unprocessed_history`` must skip entries with non-int cursors
-    instead of crashing on comparison."""
-
-    def test_skips_string_cursor_entries(self, store):
-        """Entries with string cursors are silently skipped."""
-        store.history_file.write_text(
-            '{"cursor": 1, "timestamp": "2026-04-01 10:00", "content": "valid1"}\n'
-            '{"cursor": "bad", "timestamp": "2026-04-01 10:01", "content": "corrupted"}\n'
-            '{"cursor": 3, "timestamp": "2026-04-01 10:02", "content": "valid3"}\n',
-            encoding="utf-8",
-        )
-        entries = store.read_unprocessed_history(since_cursor=0)
-        assert len(entries) == 2
-        assert [e["cursor"] for e in entries] == [1, 3]
-
-    def test_mixed_corruption_preserves_order(self, store):
-        """Valid entries maintain correct order despite corrupt neighbors."""
-        store.history_file.write_text(
-            '{"cursor": "x", "timestamp": "2026-04-01 10:00", "content": "bad"}\n'
-            '{"cursor": 2, "timestamp": "2026-04-01 10:01", "content": "good2"}\n'
-            '{"cursor": null, "timestamp": "2026-04-01 10:02", "content": "also bad"}\n'
-            '{"cursor": 4, "timestamp": "2026-04-01 10:03", "content": "good4"}\n',
-            encoding="utf-8",
-        )
-        entries = store.read_unprocessed_history(since_cursor=0)
-        assert [e["cursor"] for e in entries] == [2, 4]
-
-    def test_all_valid_still_works(self, store):
-        """Normal operation unaffected — baseline regression check."""
-        store.append_history("event 1")
-        store.append_history("event 2")
-        store.append_history("event 3")
-        entries = store.read_unprocessed_history(since_cursor=1)
-        assert len(entries) == 2
-        assert entries[0]["cursor"] == 2
-        assert entries[1]["cursor"] == 3
-
-
 class TestCursorValidationInvariant:
     """First-principles checks: the cursor validity rules and the
     observability we layer on top of them."""
@@ -131,9 +92,6 @@ class TestCursorValidationInvariant:
         store._cursor_file.unlink(missing_ok=True)
         assert store.append_history("next") == 5
 
-        entries = store.read_unprocessed_history(since_cursor=0)
-        assert [e["cursor"] for e in entries] == [4, 5]
-
     def test_next_cursor_returns_max_not_just_last_int(self, store):
         """Under adversarial corruption, file order ≠ numeric order.  The
         recovery scan must return ``max(valid cursors) + 1``, not the
@@ -155,15 +113,19 @@ class TestCursorValidationInvariant:
 
     def test_corruption_is_logged_exactly_once_per_store(self, store, caplog):
         """Observability without spam: the first non-int cursor emits one
-        warning, subsequent reads on the same store stay quiet.  Without
-        this, a poisoned file produces one warning per agent turn."""
+        warning, later recovery scans on the same store stay quiet.  Without
+        this, a poisoned file produces one warning per agent turn.
+
+        Driven through ``append_history``: a corrupt tail forces the recovery
+        scan, which is where the warning lives. The file is re-poisoned before
+        the second append so the scan runs twice, not once."""
         import logging
 
         from loguru import logger as loguru_logger
 
+        poison = '{"cursor": "bad", "timestamp": "2026-04-01 10:02", "content": "x"}\n'
         store.history_file.write_text(
-            '{"cursor": "bad1", "timestamp": "2026-04-01 10:00", "content": "x"}\n'
-            '{"cursor": 2, "timestamp": "2026-04-01 10:01", "content": "y"}\n',
+            '{"cursor": 2, "timestamp": "2026-04-01 10:01", "content": "y"}\n' + poison,
             encoding="utf-8",
         )
         store._cursor_file.unlink(missing_ok=True)
@@ -173,9 +135,11 @@ class TestCursorValidationInvariant:
         )
         try:
             with caplog.at_level(logging.WARNING):
-                store.read_unprocessed_history(since_cursor=0)
-                store.read_unprocessed_history(since_cursor=0)
-                store.append_history("another")
+                store.append_history("first")
+                with open(store.history_file, "a", encoding="utf-8") as f:
+                    f.write(poison)
+                store._cursor_file.unlink(missing_ok=True)
+                store.append_history("second")
         finally:
             loguru_logger.remove(handler_id)
 

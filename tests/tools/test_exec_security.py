@@ -86,12 +86,10 @@ async def test_exec_blocks_chained_internal_url():
         "mv backup.jsonl memory/history.jsonl",
         "dd if=/dev/zero of=memory/history.jsonl",
         "sed -i 's/old/new/' history.jsonl",
-        "echo x > .dream_cursor",
-        "cp /tmp/x memory/.dream_cursor",
     ],
 )
 def test_exec_blocks_writes_to_history_jsonl(command):
-    """Direct writes to history.jsonl / .dream_cursor must be blocked (#2989)."""
+    """Direct writes to history.jsonl must be blocked (#2989)."""
     tool = ExecTool()
     result = tool._guard_command(command, "/tmp")
     assert result is not None

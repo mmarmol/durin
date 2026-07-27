@@ -2,6 +2,8 @@
 
 from unittest.mock import AsyncMock, MagicMock
 
+import json
+
 import pytest
 
 from durin.agent.memory import (
@@ -10,6 +12,13 @@ from durin.agent.memory import (
     MemoryStore,
 )
 from durin.session.manager import Session
+
+
+def _entries(store) -> list[dict]:
+    """Parsed history.jsonl records — the store is write-only, so a test that
+    asserts on what was archived reads the file back itself."""
+    text = store.read_file(store.history_file)
+    return [json.loads(line) for line in text.splitlines() if line.strip()]
 
 
 @pytest.fixture
@@ -57,7 +66,7 @@ class TestConsolidatorSummarize:
         ]
         result, _tags = await consolidator.archive(messages)
         assert result == "User fixed a bug in the auth module."
-        entries = store.read_unprocessed_history(since_cursor=0)
+        entries = _entries(store)
         assert len(entries) == 1
 
     async def test_summarize_raw_dumps_on_llm_failure(self, consolidator, mock_provider, store):
@@ -66,7 +75,7 @@ class TestConsolidatorSummarize:
         messages = [{"role": "user", "content": "hello"}]
         result, _tags = await consolidator.archive(messages)
         assert result is None  # no summary on raw dump fallback
-        entries = store.read_unprocessed_history(since_cursor=0)
+        entries = _entries(store)
         assert len(entries) == 1
         assert "[RAW]" in entries[0]["content"]
 
@@ -93,7 +102,7 @@ class TestConsolidatorArchiveErrorHandling:
         ]
         result, _tags = await consolidator.archive(messages)
         assert result is None
-        entries = store.read_unprocessed_history(since_cursor=0)
+        entries = _entries(store)
         assert len(entries) == 1
         assert "[RAW]" in entries[0]["content"]
         assert "Error:" not in entries[0]["content"]
@@ -110,7 +119,7 @@ class TestConsolidatorArchiveErrorHandling:
         ]
         result, _tags = await consolidator.archive(messages)
         assert result == "User fixed a bug in the auth module."
-        entries = store.read_unprocessed_history(since_cursor=0)
+        entries = _entries(store)
         assert len(entries) == 1
         assert "[RAW]" not in entries[0]["content"]
 
@@ -319,7 +328,7 @@ class TestRawArchiveTruncation:
         big = "x" * 50_000
         messages = [{"role": "user", "content": big}]
         store.raw_archive(messages)
-        entries = store.read_unprocessed_history(since_cursor=0)
+        entries = _entries(store)
         assert len(entries) == 1
         assert len(entries[0]["content"]) < 50_000
         assert "[RAW]" in entries[0]["content"]
@@ -328,7 +337,7 @@ class TestRawArchiveTruncation:
         """Small messages should not be truncated."""
         messages = [{"role": "user", "content": "hello"}]
         store.raw_archive(messages)
-        entries = store.read_unprocessed_history(since_cursor=0)
+        entries = _entries(store)
         assert len(entries) == 1
         assert "hello" in entries[0]["content"]
 
@@ -336,7 +345,7 @@ class TestRawArchiveTruncation:
         """max_chars parameter should override default limit."""
         messages = [{"role": "user", "content": "a" * 200}]
         store.raw_archive(messages, max_chars=100)
-        entries = store.read_unprocessed_history(since_cursor=0)
+        entries = _entries(store)
         assert len(entries[0]["content"]) < 200
 
 
@@ -383,7 +392,7 @@ class TestArchiveTruncation:
         )
         await consolidator.archive([{"role": "user", "content": "hi"}])
 
-        entry = store.read_unprocessed_history(since_cursor=0)[0]
+        entry = _entries(store)[0]
         assert len(entry["content"]) <= _ARCHIVE_SUMMARY_MAX_CHARS + 50
 
     async def test_archive_truncates_via_tiktoken_with_positive_budget(self, consolidator, mock_provider, store):
