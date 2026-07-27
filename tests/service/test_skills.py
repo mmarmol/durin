@@ -168,6 +168,30 @@ async def test_save_overwrites_skill_content(tmp_path: Path) -> None:
     assert result.data.get("ok") or result.data.get("name") == "hello"
 
 
+async def test_save_stamps_the_user_actor_as_a_trailer(tmp_path: Path) -> None:
+    """The actor must be stamped, not inferred from the commit subject.
+
+    Every other mutation path (agent tools, import, curation, file save) writes
+    an explicit `Actor` trailer; this route used to rely on `_derive_actor`
+    reading "via web" out of the default rationale. Dream's curation filters
+    user edits by actor to avoid silently reverting them, so an actor that
+    depends on prose is one rationale change away from being wrong.
+    """
+    import durin.agent.skills_store as ss
+
+    ws = _make_workspace(tmp_path)
+    svc = _svc(ws)
+    await svc.save(
+        SkillSaveCommand(name="hello", content="---\nname: hello\ndescription: d\n---\nBody.\n"),
+        Principal.local(),
+    )
+
+    head = ss._store(ws).log(max_entries=1, path="hello")[0]
+    assert ss._parse_trailers(head.message).get("Actor") == "user"
+    # And the edit is visible to curation as a user edit.
+    assert [c["actor"] for c in ss.skill_history(ws, "hello")["commits"][:1]] == ["user"]
+
+
 async def test_save_offloads_blocking_lint_and_commit(tmp_path: Path, monkeypatch) -> None:
     import durin.service.skills as sksvc
 
