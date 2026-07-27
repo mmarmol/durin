@@ -228,8 +228,8 @@ def start_daemon(
     # try/finally so the fd is closed even if Popen raises (C5): the child
     # has already dup'd it, so the parent always drops its copy.
     try:
-        binary = durin_executable or _resolve_durin_binary()
-        cmd = [binary, "gateway", "--foreground", *(extra_args or [])]
+        launcher = [durin_executable] if durin_executable else _resolve_durin_argv()
+        cmd = [*launcher, "gateway", "--foreground", *(extra_args or [])]
         env = {**os.environ}
         proc = subprocess.Popen(  # noqa: S603 — durin invokes its own binary; no shell
             cmd,
@@ -248,19 +248,28 @@ def start_daemon(
     return proc.pid
 
 
-def _resolve_durin_binary() -> str:
-    """Find the ``durin`` executable to re-invoke for the child.
+def _resolve_durin_argv() -> list[str]:
+    """Argv prefix that re-invokes durin for the child process.
 
-    Falls back to ``sys.executable -m durin.cli.commands`` if the
-    durin script isn't on PATH (rare; covers oddball editable installs).
+    Returns the parts separately because the caller passes them straight to
+    ``subprocess.Popen`` without a shell: a single "python -m durin" string
+    would be exec'd as one literal path and fail.
+
+    ``PATH`` is not always the user's own — a ``sudo -u durin durin gateway
+    restart`` runs with a reduced PATH that omits ``~/.local/bin`` — so when
+    the script is not found there, look next to the running interpreter,
+    where every venv/pipx/uv-tool install puts it. Re-invoking the module is
+    the last resort.
     """
     import shutil
 
     found = shutil.which("durin")
     if found:
-        return found
-    # Last resort: re-invoke via the current interpreter.
-    return f"{sys.executable} -m durin.cli.commands"
+        return [found]
+    sibling = Path(sys.executable).parent / "durin"
+    if sibling.is_file():
+        return [str(sibling)]
+    return [sys.executable, "-m", "durin"]
 
 
 def stop_daemon(*, grace_seconds: float = 5.0) -> DaemonStatus:

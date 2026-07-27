@@ -93,7 +93,7 @@ def test_daemon_status_stale_pid_when_garbage_contents(isolated_home: Path) -> N
 
 
 def test_start_daemon_writes_pid_and_returns_alive_process(isolated_home: Path) -> None:
-    """Mock _resolve_durin_binary so start_daemon spawns a sleep instead of durin itself."""
+    """Mock _resolve_durin_argv so start_daemon spawns a sleep instead of durin itself."""
     fake_bin = "/bin/sh"
 
     # Monkeypatch the subprocess invocation: capture what would be spawned,
@@ -105,7 +105,7 @@ def test_start_daemon_writes_pid_and_returns_alive_process(isolated_home: Path) 
         return real_popen(["sleep", "30"], **kwargs)
 
     with patch("durin.cli.gateway_daemon.subprocess.Popen", side_effect=fake_popen), \
-         patch("durin.cli.gateway_daemon._resolve_durin_binary", return_value=fake_bin):
+         patch("durin.cli.gateway_daemon._resolve_durin_argv", return_value=[fake_bin]):
         pid = start_daemon([])
     try:
         assert pid > 0
@@ -140,7 +140,7 @@ def test_start_daemon_cleans_stale_pid_and_starts(isolated_home: Path) -> None:
         return real_popen(["sleep", "30"], **kwargs)
 
     with patch("durin.cli.gateway_daemon.subprocess.Popen", side_effect=fake_popen), \
-         patch("durin.cli.gateway_daemon._resolve_durin_binary", return_value="/bin/sh"):
+         patch("durin.cli.gateway_daemon._resolve_durin_argv", return_value=["/bin/sh"]):
         pid = start_daemon([])
     try:
         assert pid > 0
@@ -313,3 +313,42 @@ def test_start_daemon_closes_log_fd_when_popen_fails(tmp_path, monkeypatch):
 
     assert opened, "expected the log file to be opened"
     assert all(f.closed for f in opened), "log fd leaked when Popen raised"
+
+
+class TestResolveDurinArgv:
+    """The child process is spawned without a shell, so the launcher has to be
+    argv parts. The fallback used to return "python -m durin.cli.commands" as a
+    single string, which Popen exec'd as one literal path — it could only ever
+    raise FileNotFoundError."""
+
+    def test_prefers_durin_on_path(self, monkeypatch, tmp_path):
+        from durin.cli import gateway_daemon as gd
+
+        script = tmp_path / "durin"
+        script.write_text("#!/bin/sh\n", encoding="utf-8")
+        monkeypatch.setattr("shutil.which", lambda _name: str(script))
+        assert gd._resolve_durin_argv() == [str(script)]
+
+    def test_falls_back_to_the_interpreter_sibling(self, monkeypatch, tmp_path):
+        """A reduced PATH (sudo -u durin …) hides ~/.local/bin, but every
+        venv / pipx / uv-tool install puts durin beside the interpreter."""
+        from durin.cli import gateway_daemon as gd
+
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        (bin_dir / "python").write_text("", encoding="utf-8")
+        sibling = bin_dir / "durin"
+        sibling.write_text("#!/bin/sh\n", encoding="utf-8")
+        monkeypatch.setattr("shutil.which", lambda _name: None)
+        monkeypatch.setattr(gd.sys, "executable", str(bin_dir / "python"))
+        assert gd._resolve_durin_argv() == [str(sibling)]
+
+    def test_last_resort_is_executable_argv_not_one_string(self, monkeypatch, tmp_path):
+        from durin.cli import gateway_daemon as gd
+
+        monkeypatch.setattr("shutil.which", lambda _name: None)
+        monkeypatch.setattr(gd.sys, "executable", str(tmp_path / "python"))
+        argv = gd._resolve_durin_argv()
+        assert argv == [str(tmp_path / "python"), "-m", "durin"]
+        # The failure mode being guarded: a space inside argv[0].
+        assert " " not in argv[0]
