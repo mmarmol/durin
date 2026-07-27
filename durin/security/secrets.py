@@ -72,6 +72,17 @@ class SecretScopeError(SecretError):
     """
 
 
+class RedactedValueError(SecretError):
+    """A credential field was about to be persisted holding a redaction marker.
+
+    Tool results are redacted before they reach the model, so anything that
+    round-trips a credential through an agent (read a config file, write it
+    back) carries a marker where the credential was. Persisting it destroys
+    the credential silently — the failure only surfaces later, as an auth
+    error from the provider or channel.
+    """
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -449,7 +460,11 @@ def store_secret(
 # prefixes + conservative key=value heuristics. Format-based, language-
 # agnostic (no NLP token lists). Pattern matches mask to a bare `«redacted»`.
 
-_PATTERN_MARKER = "«redacted»"
+# Both layers open with this; `find_redacted_credentials` keys off it to catch
+# a masked value on its way back to disk, whichever layer produced it.
+REDACTION_MARKER_PREFIX = "«redacted"
+
+_PATTERN_MARKER = f"{REDACTION_MARKER_PREFIX}»"
 
 # Vendor-prefixed credentials — high confidence, low false-positive.
 _VENDOR_PATTERNS: tuple[re.Pattern[str], ...] = (
@@ -478,6 +493,14 @@ _PEM_PATTERN = re.compile(
 # `Authorization: Bearer <token>` — keep the scheme word, mask the credential.
 _BEARER_PATTERN = re.compile(r"(?i)\b(bearer\s+)([A-Za-z0-9._~+/=-]{12,})")
 
+# The KV heuristics below match on the *key*, so a config field holding a
+# `${secret:NAME}` reference has the exact shape of a leaked credential. A
+# reference is a pointer into the store, not a secret — masking one and then
+# writing the config back replaces a working credential with a marker. Spare
+# any value that is exactly a reference (terminated by a quote, whitespace or
+# end of line, mirroring the whole-field-value rule in `_REF_RE`).
+_SECRET_REF_AHEAD = r"(?!\$\{secret:[A-Z][A-Z0-9_]*\}(?:[\"']|\s|$))"
+
 # env-style assignment with an UPPER_SNAKE key naming a credential (the exact
 # shape an `env` dump or `allowed_env_keys` leak takes). Case-sensitive on the
 # key so common lowercase words ("Total tokens: 123") are not matched.
@@ -485,7 +508,7 @@ _ENV_KV_PATTERN = re.compile(
     r"\b([A-Z][A-Z0-9_]*"
     r"(?:API_?KEY|SECRET|TOKEN|PASSWORD|PASSWD|PASSPHRASE|ACCESS_?KEY"
     r"|PRIVATE_?KEY|CLIENT_?SECRET|CREDENTIALS?|AUTH)"
-    r"[A-Z0-9_]*)(\s*[:=]\s*)([^\s\"']{8,})"
+    r"[A-Z0-9_]*)(\s*[:=]\s*)" + _SECRET_REF_AHEAD + r"([^\s\"']{8,})"
 )
 
 # Quoted JSON-style `"apiKey": "value"` — mask the value, keep the key.
@@ -493,7 +516,7 @@ _JSON_KV_PATTERN = re.compile(
     r"(?i)([\"']\s*[a-z0-9_]*"
     r"(?:api_?key|secret|token|password|passwd|passphrase|access_?key"
     r"|private_?key|client_?secret|credentials?)"
-    r"[a-z0-9_]*\s*[\"']\s*:\s*[\"'])([^\"']{8,})"
+    r"[a-z0-9_]*\s*[\"']\s*:\s*[\"'])" + _SECRET_REF_AHEAD + r"([^\"']{8,})"
 )
 
 
@@ -539,7 +562,7 @@ class SecretRedactor:
     def redact_text(self, text: str) -> str:
         for value, name in self._items:
             if value in text:
-                text = text.replace(value, f"«redacted:{name}»")
+                text = text.replace(value, f"{REDACTION_MARKER_PREFIX}:{name}»")
         if self._patterns:
             text = _apply_patterns(text)
         return text
@@ -579,6 +602,45 @@ def build_redactor() -> SecretRedactor:
 def redact_secrets(content: Any) -> Any:
     """Convenience: redact *content* against the current store."""
     return build_redactor().redact(content)
+
+
+# -- write-back guard ---------------------------------------------------------
+# Redaction protects the model's context; it must never reach disk. Config
+# fields named like credentials are the ones that break when it does, and the
+# only ones where a marker can never be legitimate text — free-form config
+# (persona descriptions, prompts) is allowed to say the word.
+
+#: Leaf config keys whose values hold credentials. Case-insensitive.
+CREDENTIAL_KEY_RE = re.compile(
+    r"(api_?key|secret|token|password|client_secret|access_key|refresh_token)",
+    re.IGNORECASE,
+)
+
+
+def find_redacted_credentials(data: Any, _prefix: str = "") -> list[str]:
+    """Return the dotted paths of credential fields holding a redaction marker.
+
+    Walks dicts and lists. Empty when *data* is clean, which is the
+    overwhelmingly common case, so callers can treat this as a cheap
+    pre-write assertion.
+    """
+    found: list[str] = []
+    if isinstance(data, dict):
+        for key in sorted(data):
+            value = data[key]
+            path = f"{_prefix}.{key}" if _prefix else str(key)
+            if (
+                isinstance(value, str)
+                and CREDENTIAL_KEY_RE.search(str(key))
+                and REDACTION_MARKER_PREFIX in value
+            ):
+                found.append(path)
+            else:
+                found.extend(find_redacted_credentials(value, path))
+    elif isinstance(data, list):
+        for index, item in enumerate(data):
+            found.extend(find_redacted_credentials(item, f"{_prefix}[{index}]"))
+    return found
 
 
 def migrate_plaintext_provider_keys(config_path: Path | None = None) -> list[str]:

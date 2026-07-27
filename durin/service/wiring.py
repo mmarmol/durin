@@ -107,7 +107,8 @@ def build_service_registry(
     registry.register("cron", CronService(cron_scheduler=cron_service))
     registry.register("sessions", SessionsService(session_manager=session_manager))
     registry.register("settings", SettingsService(on_default_changed=on_default_changed))
-    registry.register("config", ConfigService(on_config_changed=on_config_changed))
+    registry.register("config", ConfigService(
+        on_config_changed=on_config_changed, channel_manager=channel_manager))
     registry.register("telegram", TelegramService())
     registry.register("discord", DiscordService())
     registry.register("slack", SlackService())

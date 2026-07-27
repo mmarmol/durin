@@ -118,6 +118,47 @@ def test_pattern_keeps_plain_prose() -> None:
     assert _r().redact_text(text) == text
 
 
+# -- secret references are pointers, not secrets ------------------------------
+# The KV heuristics match on the *key* ("bot_token", "api_key"), so a config
+# line holding a `${secret:NAME}` reference looked exactly like a leaked
+# credential. Masking it turned a working config into a broken one the moment
+# an agent read a config file and wrote it back.
+
+
+def test_pattern_keeps_secret_ref_in_json_config() -> None:
+    text = '"bot_token": "${secret:SLACK_BOT_TOKEN}"'
+    assert _r().redact_text(text) == text
+
+
+def test_pattern_keeps_secret_ref_in_env_assignment() -> None:
+    text = "SLACK_BOT_TOKEN=${secret:SLACK_BOT_TOKEN}"
+    assert _r().redact_text(text) == text
+
+
+def test_pattern_keeps_every_secret_ref_in_a_config_block() -> None:
+    text = (
+        '{\n'
+        '  "slack": {\n'
+        '    "bot_token": "${secret:SLACK_BOT_TOKEN}",\n'
+        '    "app_token": "${secret:SLACK_APP_TOKEN}"\n'
+        '  },\n'
+        '  "openrouter": { "api_key": "${secret:OPENROUTER_API_KEY}" }\n'
+        '}'
+    )
+    assert _r().redact_text(text) == text
+
+
+def test_pattern_still_redacts_literal_next_to_a_ref() -> None:
+    """Sparing refs must not spare a real credential on the next line."""
+    text = (
+        '"bot_token": "${secret:SLACK_BOT_TOKEN}",\n'
+        '"app_token": "xapp-1-A012345678-9876543210-abcdef"'
+    )
+    out = _r().redact_text(text)
+    assert "${secret:SLACK_BOT_TOKEN}" in out
+    assert "xapp-1-A012345678-9876543210-abcdef" not in out
+
+
 # -- layering: default off, union with value-based ---------------------------
 
 
