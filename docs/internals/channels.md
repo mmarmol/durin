@@ -842,9 +842,8 @@ stale contract.
 The webui sidebar lists sessions from all channels (Telegram, CLI, subagent,
 etc.). Historically, clicking one returned a 404 because the rich per-session
 JSONL transcript used by the thread endpoint is written only by the websocket
-channel (via `append_transcript_object`, defined in
-`durin/utils/webui_transcript.py` and called only from
-`durin/channels/websocket.py`).
+channel (through the batching `TranscriptWriter` in
+`durin/utils/webui_transcript.py`, fed from `durin/channels/websocket.py`).
 
 The thread endpoint (`GET /api/v1/sessions/{key}/webui-thread`) now falls back
 to the **universal session history** when no JSONL exists: it reads the

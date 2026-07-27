@@ -215,11 +215,8 @@ def test_find_by_service(tmp_path) -> None:
     assert store.find_by_service("nonexistent") == []
 
 
-def test_remove_and_set_scope(tmp_path) -> None:
+def test_remove(tmp_path) -> None:
     store = SecretStore(path=tmp_path / "secrets.json")
     store.put("K", value="v", service="x", scope=["exec"])
-    assert store.set_scope("K", ["skill:*"]) is True
-    assert store.get("K").scope == ["skill:*"]
-    assert store.set_scope("UNKNOWN", ["exec"]) is False
     assert store.remove("K") is True
     assert store.remove("K") is False

@@ -643,25 +643,6 @@ async def test_todo_write_body_shows_checklist_from_arguments() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_exit_plan_mode_has_approve_rows() -> None:
-    """_plan_action_ids returns the two action row ids for exit_plan_mode."""
-    bubble = ToolCallBubble({
-        "name": "exit_plan_mode", "phase": "end", "call_id": "p1",
-        "arguments": {"plan": "1. do a thing\n2. do another"},
-    })
-    ids = bubble._plan_action_ids()
-    assert ids == ["tc-plan-approve", "tc-plan-refine"]
-
-
-def test_non_plan_tool_has_no_approve_rows() -> None:
-    """_plan_action_ids returns [] for any tool other than exit_plan_mode."""
-    bubble = ToolCallBubble({
-        "name": "exec", "phase": "end", "call_id": "e1",
-        "arguments": {"command": "ls"},
-    })
-    assert bubble._plan_action_ids() == []
-
-
 @pytest.mark.asyncio
 async def test_exit_plan_mode_bubble_has_approve_and_refine_widgets() -> None:
     """The mounted bubble must contain Static rows with the expected ids."""

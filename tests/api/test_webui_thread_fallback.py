@@ -12,6 +12,8 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
+from tests.conftest import write_webui_transcript
 from starlette.testclient import TestClient
 
 from durin.api.asgi import build_gateway_http_app
@@ -125,13 +127,12 @@ def test_websocket_session_with_transcript_uses_jsonl(
 ) -> None:
     """A websocket session with a JSONL transcript is NOT marked readOnly."""
     monkeypatch.setattr("durin.config.paths.get_data_dir", lambda: tmp_path)
-    from durin.utils.webui_transcript import append_transcript_object
 
     sm = SessionManager(tmp_path)
     s = Session(key="websocket:live")
     s.add_message("user", "hi")
     sm.save(s)
-    append_transcript_object(
+    write_webui_transcript(
         "websocket:live", {"event": "user", "chat_id": "live", "text": "hi"}
     )
 

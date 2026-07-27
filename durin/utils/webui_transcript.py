@@ -132,20 +132,6 @@ def read_transcript_page(
     return lines_out, prev_cursor
 
 
-def append_transcript_object(session_key: str, obj: dict[str, Any]) -> None:
-    raw = json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
-    if len(raw.encode("utf-8")) > _MAX_TRANSCRIPT_FILE_BYTES:
-        msg = "webui transcript line too large"
-        raise ValueError(msg)
-    path = webui_transcript_path(session_key)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    line = raw + "\n"
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(line)
-        f.flush()
-        os.fsync(f.fileno())
-
-
 _FLUSH_INTERVAL_S = 0.1
 _MAX_BUFFERED_BYTES = 4 * 1024 * 1024
 

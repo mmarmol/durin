@@ -282,12 +282,6 @@ class ToolCallBubble(Vertical):
             bg.add(task)
             task.add_done_callback(bg.discard)
 
-    def _plan_action_ids(self) -> list[str]:
-        """Return the action row ids for exit_plan_mode, empty for other tools."""
-        if self._name == "exit_plan_mode":
-            return ["tc-plan-approve", "tc-plan-refine"]
-        return []
-
     def _remove_action_rows(self) -> None:
         """Drop the inline action rows mounted from the start payload."""
         for row_id in ("#tc-plan-actions", "#tc-secret-provide"):

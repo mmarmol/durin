@@ -13,12 +13,13 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
+from tests.conftest import write_webui_transcript
 from starlette.testclient import TestClient
 
 from durin.api.asgi import build_gateway_http_app
 from durin.channels.websocket import WebSocketChannel
 from durin.session.manager import Session, SessionManager
-from durin.utils.webui_transcript import append_transcript_object
 
 
 def _ch(bus: Any, *, session_manager: SessionManager | None = None) -> WebSocketChannel:
@@ -65,7 +66,7 @@ def _seed_websocket_session(
         s.metadata["persona"] = persona
     sm.save(s)
     # Write a JSONL transcript so build_webui_thread_response returns data (non-None path)
-    append_transcript_object(key, {"event": "user", "chat_id": key.split(":")[-1], "text": "hello"})
+    write_webui_transcript(key, {"event": "user", "chat_id": key.split(":")[-1], "text": "hello"})
     return sm
 
 

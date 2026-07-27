@@ -1230,9 +1230,9 @@ class AgentRunner:
 
         Returns ``None`` when no budget can be computed (no window, empty
         message list, non-positive budget, or estimator failure) — callers
-        then proceed without a precheck. Unlike ``_mid_turn_precheck`` this
-        returns the estimate *whether or not* it fits, so the caller can
-        reuse it to size the dynamic output budget without re-estimating.
+        then proceed without a precheck. The estimate is returned *whether or
+        not* it fits, so the caller can reuse it to size the dynamic output
+        budget without re-estimating.
         """
         _provider = provider if provider is not None else self.provider
         if not messages:
@@ -1254,34 +1254,6 @@ class AgentRunner:
                 "Mid-turn precheck estimation failed for {}; skipping",
                 spec.session_key or "default",
             )
-            return None
-        return estimate, budget
-
-    def _mid_turn_precheck(
-        self,
-        spec: AgentRunSpec,
-        messages: list[dict[str, Any]],
-        provider: LLMProvider | None = None,
-    ) -> tuple[int, int] | None:
-        """Mid-turn precheck.
-
-        Estimate whether the post-sanitize prompt fits in the budget. Returns
-        ``(estimated_tokens, budget_tokens)`` when overflow is detected,
-        ``None`` when the prompt fits (the common case — fast path).
-
-        ``_snip_history`` already trims from the head, but
-        ``find_legal_message_start`` may force-keep messages that exceed the
-        budget (Anthropic role-alternation requirements). A single oversized
-        tool result late in the history can survive snipping. Catching this
-        here saves an LLM call that would have hit a 400 anyway and ensures
-        the caller gets a distinct ``mid_turn_precheck_overflow`` stop_reason
-        instead of a generic provider error.
-        """
-        decision = self._estimate_and_budget(spec, messages, provider)
-        if decision is None:
-            return None
-        estimate, budget = decision
-        if estimate <= budget:
             return None
         return estimate, budget
 

@@ -580,15 +580,3 @@ def clear_executing_plan_if_todos_done(metadata: Any) -> bool:
 # ---------------------------------------------------------------------------
 # Tool filtering
 # ---------------------------------------------------------------------------
-
-
-def filter_tools(tools: list[Any], mode: AgentMode) -> list[Any]:
-    """Return the subset of *tools* allowed under *mode*.
-
-    Fast path when the mode imposes no restriction (default BUILD_MODE):
-    return the input list unchanged. Hot path on every turn, so we avoid
-    list construction when not necessary.
-    """
-    if mode.allowed is None and not mode.denied:
-        return tools
-    return [t for t in tools if mode.is_tool_allowed(getattr(t, "name", ""))]

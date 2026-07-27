@@ -27,7 +27,6 @@ from durin.agent.agent_mode import (
     enter_plan_mode,
     executing_plan_runtime_lines,
     exit_plan_mode,
-    filter_tools,
     get_active_mode,
     get_active_mode_name,
     get_mode,
@@ -221,27 +220,6 @@ class TestSessionHelpers:
         session = _session_stub({})
         with pytest.raises(ValueError):
             set_mode(session, "nonexistent_mode")
-
-
-# ---------------------------------------------------------------------------
-# filter_tools
-# ---------------------------------------------------------------------------
-
-
-class TestFilterTools:
-
-    def test_fast_path_for_build(self):
-        tools = [SimpleNamespace(name=n) for n in ("read_file", "edit_file", "exec")]
-        assert filter_tools(tools, BUILD_MODE) is tools
-
-    def test_filters_plan_mode(self):
-        tools = [SimpleNamespace(name=n) for n in ("read_file", "edit_file", "grep", "exec")]
-        out = filter_tools(tools, PLAN_MODE)
-        names = {t.name for t in out}
-        assert "read_file" in names
-        assert "grep" in names
-        assert "edit_file" not in names
-        assert "exec" not in names
 
 
 # ---------------------------------------------------------------------------

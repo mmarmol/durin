@@ -168,3 +168,24 @@ def _restore_loguru_durin_activation():
         yield
     finally:
         logger.enable("durin")
+
+
+def write_webui_transcript(session_key: str, *events: dict) -> None:
+    """Persist webui transcript events through the production writer.
+
+    Several suites need transcript lines on disk to exercise reading, paging,
+    replay or deletion. Writing the JSONL by hand would pin those tests to a
+    format the writer could drift away from, so they go through the real
+    ``TranscriptWriter`` — the same path ``durin/channels/websocket.py`` uses.
+    """
+    import asyncio
+
+    from durin.utils import webui_transcript as wt
+
+    async def _run() -> None:
+        writer = wt.get_transcript_writer()
+        for event in events:
+            writer.enqueue(session_key, event)
+        await writer.flush(session_key)
+
+    asyncio.run(_run())
