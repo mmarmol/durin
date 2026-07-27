@@ -5,6 +5,84 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.4.9 — 2026-07-27
+
+### Highlights
+
+- **A Slack channel could authenticate with the word `«redacted»`.** Reading a
+  config file through a tool masked every credential-keyed field, including the
+  ones holding a `${secret:NAME}` reference — a pointer, not a credential. An
+  agent that read the config and wrote it back persisted that view, so
+  `channels.slack.bot_token` ended up literally storing the redaction marker
+  and the channel failed with `invalid_auth` while the secret store was
+  untouched. References are now printed as themselves, and the single config
+  write path refuses to persist a redaction marker into a credential field at
+  all. Editing a channel's config also cycles the running channel, so a saved
+  change takes effect without a gateway restart. (#482)
+- **Plan mode stopped rejecting plans for being written in Spanish.** A plan
+  had to carry an English `## Verification` heading; a plan that ended in
+  `## Verificación` was refused and had to be written out again — and the retry
+  came back shorter. Success criteria are now a separate argument, so nothing
+  about the prose is inspected and a plan in any language is accepted. (#475)
+- **A proposed plan is no longer sent again on every turn.** On channels
+  without native rendering — Telegram, Slack, Discord, WhatsApp, email, Matrix
+  — the full plan text was re-published at the end of each turn until you
+  approved it. Leaving plan mode with `/mode` never stopped it, because only
+  `/build` cleared the pending plan. Delivery now happens once, a revised plan
+  is sent again, and `/mode` closes the plan it leaves behind. (#478)
+
+### Security
+
+- `${secret:NAME}` references survive redaction, and `save_config` rejects a
+  credential-keyed field whose value is a redaction marker, naming the offending
+  paths. A literal credential sitting next to a reference is still masked. (#482)
+- Whole-skill saves through `POST /api/v1/skills/{name}/save` stamp an explicit
+  `Actor: user` git trailer. The actor used to be inferred from the commit
+  subject, which held only because the default rationale contained the words
+  "via web" — dream's curation filters user edits by actor precisely so it does
+  not silently revert work you did by hand. (#481)
+
+### Channels
+
+- A config write to `channels.<name>.<field>` cycles the running channel, so a
+  live channel no longer keeps serving the settings it was built with. Stopped
+  channels stay stopped. (#482)
+
+### Plan mode
+
+- Verification criteria are a required `verification` argument rather than a
+  heading matched in the plan's prose; the plan file is still one markdown
+  document. (#475)
+- A rejected `exit_plan_mode` no longer renders a plan card with an approve
+  button in the web UI, or leaves Approve/Refine rows in the TUI. Failed tool
+  calls fold into the activity trace instead of being presented as something
+  that happened. (#475)
+- The plan-mode prompt no longer asks the model to repeat the whole plan in its
+  next message — the channel already renders it. (#475)
+- Leaving plan mode via `/mode` records the plan as cancelled instead of
+  leaving its event open forever. (#478)
+
+### Providers
+
+- The `local` extra and its in-process llama.cpp provider are removed. The
+  provider could not emit tool calls, so it could never run the agent; local
+  models are served through Ollama, LM Studio or vLLM, which speak the OpenAI
+  API including tools. **If you installed `durin-agent[local]`, drop that
+  extra** — it no longer exists. (#483)
+
+### Memory
+
+- `memory/history.jsonl` is documented and enforced as a write-only archive of
+  the consolidator's raw output. Its reader half — a cursor-driven queue whose
+  consumer was replaced by the per-session dream cursor — is gone. Nothing about
+  what is written changes. (#479)
+
+### Internal
+
+- Six helpers whose replacements were already in use are removed, along with a
+  websocket todos snapshot for an event that was never built. (#480, #484)
+- Weekly vendored refreshes of the MCP floor and the model catalog. (#476, #477)
+
 ## 0.4.8 — 2026-07-24
 
 ### Highlights
