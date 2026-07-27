@@ -3,7 +3,7 @@
 ## What durin is
 
 durin is a personal-assistant **agent harness**: a local daemon that drives an
-LLM (Claude, GLM, local llama.cpp models, and others) through long-running,
+LLM (Claude, GLM, local models via Ollama or LM Studio, and others) through long-running,
 multi-turn work. It is more than a memory store — it bundles four things into one
 runtime:
 

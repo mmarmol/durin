@@ -745,15 +745,6 @@ wheels = [
 ]
 
 [[package]]
-name = "diskcache"
-version = "5.6.3"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/3f/21/1c1ffc1a039ddcc459db43cc108658f32c57d271d7289a2794e401d0fdb6/diskcache-5.6.3.tar.gz", hash = "sha256:2c3a3fa2743d8535d832ec61c2054a1641f41775aa7c556758a109941e33e4fc", size = 67916, upload-time = "2023-08-31T06:12:00.316Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/3f/27/4570e78fc0bf5ea0ca45eb1de3818a23787af9b390c0b0a0033a1b8236f9/diskcache-5.6.3-py3-none-any.whl", hash = "sha256:5e31b2d5fbad117cc363ebaf6b689474db18a1f6438bc82358b024abd4c2ca19", size = 45550, upload-time = "2023-08-31T06:11:58.822Z" },
-]
-
-[[package]]
 name = "distro"
 version = "1.9.0"
 source = { registry = "https://pypi.org/simple" }
@@ -861,10 +852,6 @@ dev = [
 discord = [
     { name = "discord-py" },
 ]
-local = [
-    { name = "huggingface-hub" },
-    { name = "llama-cpp-python" },
-]
 matrix = [
     { name = "matrix-nio" },
     { name = "mistune" },
@@ -913,7 +900,6 @@ requires-dist = [
     { name = "fastembed", marker = "extra == 'memory'", specifier = ">=0.7,<0.9" },
     { name = "filelock", specifier = ">=3.25.2" },
     { name = "httpx", specifier = ">=0.28.0,<1.0.0" },
-    { name = "huggingface-hub", marker = "extra == 'local'", specifier = ">=0.20.0" },
     { name = "jinja2", specifier = ">=3.1.0,<4.0.0" },
     { name = "json-repair", specifier = ">=0.57.0,<1.0.0" },
     { name = "jsonpatch", specifier = ">=1.33,<2.0" },
@@ -921,7 +907,6 @@ requires-dist = [
     { name = "lancedb", marker = "extra == 'memory'", specifier = ">=0.30.0,<1.0.0" },
     { name = "lark-oapi", specifier = ">=1.4.0,<2.0.0" },
     { name = "litellm", specifier = ">=1.40.0" },
-    { name = "llama-cpp-python", marker = "extra == 'local'", specifier = ">=0.3.0" },
     { name = "loguru", specifier = ">=0.7.3,<1.0.0" },
     { name = "markdown-it-py", specifier = ">=3.0,<5.0" },
     { name = "markitdown", extras = ["docx", "pptx", "xlsx", "xls", "pdf"], specifier = ">=0.1.6,<0.2.0" },
@@ -964,7 +949,7 @@ requires-dist = [
     { name = "watchdog", specifier = ">=4.0,<7.0" },
     { name = "websockets", specifier = ">=13.0,<17.0" },
 ]
-provides-extras = ["oauth", "mcp", "web", "slack", "discord", "matrix", "local", "stt", "voice", "tts", "memory", "cross-encoder", "api", "dev"]
+provides-extras = ["oauth", "mcp", "web", "slack", "discord", "matrix", "stt", "voice", "tts", "memory", "cross-encoder", "api", "dev"]
 
 [[package]]
 name = "et-xmlfile"
@@ -1548,18 +1533,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/86/4b/15d4cb75f054933c1
 wheels = [
     { url = "https://files.pythonhosted.org/packages/eb/86/49cf94af8c51cacc15fd9bff1e6f9de1fb07ab10b8bb09961675ab389af4/litellm-1.89.0-py3-none-any.whl", hash = "sha256:63b33e2de386ab2a83fed7ed852c755e59d461a21b16c79fc17993f1b8c3d154", size = 15475805, upload-time = "2026-06-13T23:45:46.037Z" },
 ]
-
-[[package]]
-name = "llama-cpp-python"
-version = "0.3.29"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "diskcache" },
-    { name = "jinja2" },
-    { name = "numpy" },
-    { name = "typing-extensions" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/83/0f/8e03877aa9ea79890cf64f6d12d47f4daced663d0dd6abe482fe6483e7e6/llama_cpp_python-0.3.29.tar.gz", hash = "sha256:21122165951bdc25ba27c0483a2f44082c860d89422945548c64df08b6029ce4", size = 70016946, upload-time = "2026-06-13T19:42:12.153Z" }
 
 [[package]]
 name = "loguru"

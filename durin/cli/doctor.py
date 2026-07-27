@@ -815,7 +815,6 @@ _EXTRAS_IMPORT_PROBES: dict[str, tuple[str, ...]] = {
     "oauth": ("oauth_cli_kit",),
     "slack": ("slack_sdk",),
     "discord": ("discord",),
-    "local": ("llama_cpp", "huggingface_hub"),
     "tts": ("supertonic",),
 }
 
