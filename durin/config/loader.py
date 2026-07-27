@@ -318,6 +318,28 @@ def _apply_ssrf_whitelist(config: Config) -> None:
     configure_ssrf_whitelist(config.tools.ssrf_whitelist)
 
 
+def _reject_redacted_credentials(data: dict[str, Any]) -> None:
+    """Refuse to persist a credential field holding a redaction marker.
+
+    Tool results are redacted before they reach the model, so an agent that
+    reads config and writes it back carries a marker where the credential
+    was. Saving it replaces a working credential with placeholder text and
+    the breakage only surfaces later, as an auth failure. Fail the write
+    instead — the credential on disk stays intact.
+    """
+    from durin.security.secrets import RedactedValueError, find_redacted_credentials
+
+    offenders = find_redacted_credentials(data)
+    if not offenders:
+        return
+    raise RedactedValueError(
+        "refusing to save a redacted credential into config: "
+        + ", ".join(offenders)
+        + ". These fields hold a redaction marker, not a credential — restore the "
+        "${secret:NAME} reference (or the real value) before saving."
+    )
+
+
 def save_config(config: Config, config_path: Path | None = None) -> None:
     """Save configuration to file.
 
@@ -346,6 +368,7 @@ def save_config(config: Config, config_path: Path | None = None) -> None:
     with cross_process_lock(path):
         data = config.model_dump(mode="json", by_alias=False, exclude_defaults=True)
         data = _prune_noise_sections(data)
+        _reject_redacted_credentials(data)
 
         if _is_split_layout(path):
             _write_split_layout(data, path)

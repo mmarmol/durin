@@ -11,7 +11,6 @@ from __future__ import annotations
 import copy
 import json
 import os
-import re
 import shutil
 import subprocess
 import tempfile
@@ -25,15 +24,9 @@ from rich.syntax import Syntax
 
 from durin.config.loader import get_config_path, save_config
 from durin.config.schema import Config
+from durin.security.secrets import CREDENTIAL_KEY_RE
 
 console = Console()
-
-# Field-name patterns whose values get masked by `config show` (without --raw).
-# Match is case-insensitive on the leaf key.
-_SECRET_KEY_PATTERN = re.compile(
-    r"(api_?key|secret|token|password|client_secret|access_key|refresh_token)",
-    re.IGNORECASE,
-)
 
 
 # ---------------------------------------------------------------------------
@@ -126,7 +119,7 @@ def mask_secrets(data: Any) -> Any:
             if (
                 isinstance(v, str)
                 and v
-                and _SECRET_KEY_PATTERN.search(k)
+                and CREDENTIAL_KEY_RE.search(k)
                 and not _is_secret_ref(v)
             ):
                 out[k] = "***"

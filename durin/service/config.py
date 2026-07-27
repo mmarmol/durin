@@ -33,6 +33,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from loguru import logger
 from pydantic import Field
 
 from durin.service.principal import Principal, Scope
@@ -321,11 +322,18 @@ def _channel_field_schema(model: type) -> list[dict[str, Any]]:
 class ConfigService:
     """Read/write the effective config, list models/channels, probe model health."""
 
-    def __init__(self, on_config_changed: Callable[[], None] | None = None) -> None:
+    def __init__(
+        self,
+        on_config_changed: Callable[[], None] | None = None,
+        channel_manager: Any = None,
+    ) -> None:
         # Fired after a write to a concurrency-cap key so the running loop
         # re-reads the caps and resizes its lanes without a restart. None on
         # surfaces without a live loop (the write still persists to disk).
         self._on_config_changed = on_config_changed
+        # Used to re-apply a per-channel config edit to the live channel.
+        # None on surfaces with no running gateway (CLI, tests).
+        self._channel_manager = channel_manager
 
     @route(
         "GET",
@@ -386,15 +394,49 @@ class ConfigService:
             raise ValidationFailedError(f"validation failed: {e}") from e
 
         save_config(config, path)
-        if (
-            self._on_config_changed is not None
-            and _normalize_dotted_path(cmd.key) in CONCURRENCY_CAP_KEYS
-        ):
+        normalized = _normalize_dotted_path(cmd.key)
+        if self._on_config_changed is not None and normalized in CONCURRENCY_CAP_KEYS:
             self._on_config_changed()
+        await self._reapply_channel_config(normalized, config)
         return ConfigSetResult(
             ok=True,
             config=mask_secrets(config.model_dump(mode="json", by_alias=False)),
         )
+
+    async def _reapply_channel_config(self, key: str, config: Any) -> None:
+        """Cycle the live channel *key* belongs to, so the edit takes effect.
+
+        A running channel holds the config it was constructed with — the
+        manager only re-reads config when a channel starts. Cycling is a
+        no-op for a channel that is not running: the user stopped it on
+        purpose, and saving a setting is not a request to start it.
+
+        Best-effort. The config is already durable at this point, so a
+        channel that fails to come back up must not fail the write; the
+        runtime status surfaces it as stopped.
+        """
+        if self._channel_manager is None:
+            return
+        parts = key.split(".")
+        # `channels.<name>.<field>`; `channels.<global_field>` is not a channel.
+        if len(parts) < 3 or parts[0] != "channels":
+            return
+        name = parts[1]
+        try:
+            status = self._channel_manager.get_status() or {}
+            if not (status.get(name) or {}).get("running"):
+                return
+            await self._channel_manager.stop_channel(name)
+            section = getattr(config.channels, name, None)
+            enabled = (
+                section.get("enabled", False)
+                if isinstance(section, dict)
+                else getattr(section, "enabled", False)
+            )
+            if enabled:
+                await self._channel_manager.start_channel(name)
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to re-apply config to channel {}", name)
 
     @route(
         "GET",

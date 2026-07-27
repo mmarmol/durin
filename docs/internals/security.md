@@ -174,6 +174,26 @@ credential-shaped strings by format — vendor prefixes (`sk-`, `ghp_`, `AKIA…
 PEM blocks, `Authorization: Bearer` headers, env-style key-value assignments, and
 JSON credential fields — regardless of whether the value is in the store.
 
+The pattern pass matches on the *key* for its key-value heuristics, so it explicitly
+spares a value that is exactly a `${secret:NAME}` reference. A reference is a pointer
+into the store, not a credential — the same reason `mask_secrets` prints references
+verbatim. Without that carve-out every referenced config field (`bot_token`,
+`api_key`) read through a tool came back masked.
+
+### Redaction never reaches disk
+
+Redaction protects the model's context, and a marker is never a value worth keeping.
+An agent that reads a config file and writes it back would otherwise persist the
+masked view, replacing a working credential with placeholder text — a failure that
+only surfaces later as an auth error from the channel or provider.
+
+`save_config` (`durin/config/loader.py`) is the single choke point for every config
+write (CLI, service routes, wizard), and it refuses the write when
+`find_redacted_credentials` reports a credential-shaped key holding a marker,
+raising `RedactedValueError` before anything is written. The check is scoped by
+`CREDENTIAL_KEY_RE` — the same key pattern `mask_secrets` uses — so free-form config
+such as a persona description may still contain the word.
+
 ### Shared GitHub credential
 
 GitHub access — raising the API rate limit and reaching private repos — is one
@@ -410,7 +430,9 @@ only callers with system-write authority can manage other tokens.
 |---|---|---|
 | `SecretStore` | `durin/security/secrets.py` | File-backed persistent store; load/put/remove under `cross_process_lock`; `resolve()` for config-field use, `collect_for()` for Phase-2 injection |
 | `SecretEntry` | `durin/security/secrets.py` | Pydantic model per stored secret: `value`, `service`, `account`, `description`, `scope`, `origin`, `created_at` |
-| `SecretRedactor` | `durin/security/secrets.py` | Two-layer output scrubber: value-based (`«redacted:NAME»`) + pattern-based (`«redacted»`) for credential-shaped strings |
+| `SecretRedactor` | `durin/security/secrets.py` | Two-layer output scrubber: value-based (`«redacted:NAME»`) + pattern-based (`«redacted»`) for credential-shaped strings; both spare `${secret:NAME}` references |
+| `find_redacted_credentials` | `durin/security/secrets.py` | Returns the dotted paths of credential-keyed fields holding a redaction marker; used by `save_config` to refuse the write |
+| `RedactedValueError` | `durin/security/secrets.py` | Raised when a config write would persist a redaction marker into a credential field |
 | `resolve_secret` | `durin/security/secrets.py` | Module-level function; resolves a `${secret:NAME}` ref via the process-wide cached store; raises `SecretNotFoundError` on a dangling reference |
 | `ScanReport` | `durin/security/skill_scan.py` | Result of deterministic skill scan: `findings` list, `tools` list, `judge_verdict`; `.verdict` property merges both |
 | `Finding` | `durin/security/skill_scan.py` | Single scan result: `category`, `severity` (info/caution/high/dangerous), `where` (file/location), `detail` |

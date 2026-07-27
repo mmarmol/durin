@@ -197,6 +197,27 @@ gateway connection; when the probe detects a zombie socket the heartbeat
 cannot see, it force-closes the connection so the crash supervisor above
 reconnects it.
 
+### Config edits reach a running channel
+
+A channel instance holds the config it was constructed with; nothing re-reads
+config while it runs. `ChannelManager.start_channel` is the only place a
+channel picks up fresh config, and it is a no-op for a channel that is already
+alive. So writing `channels.<name>.<field>` on its own changes nothing until
+the next gateway restart — indistinguishable, from the dashboard, from the
+setting not working at all.
+
+`ConfigService.set` closes that gap: after a successful write to a
+`channels.<name>.<field>` key it cycles that channel through
+`stop_channel` + `start_channel`, so the new value is live before the response
+returns. A channel that is *not* currently running is left alone — the user
+stopped it deliberately, and saving a setting is not a request to start it —
+and a write that sets `enabled: false` stops without restarting. The cycle is
+best-effort: the config is already durable when it runs, so a channel that
+fails to come back up is logged and reported by the runtime status rather than
+failing the write. Global `channels.<field>` keys (`send_progress` and the
+other cross-channel defaults) are not per-channel sections and do not cycle
+anything.
+
 ### Optional extras and channel availability
 
 Some built-in channels depend on a third-party SDK that is not installed by
