@@ -288,6 +288,14 @@ class ToolCallBubble(Vertical):
             return ["tc-plan-approve", "tc-plan-refine"]
         return []
 
+    def _remove_action_rows(self) -> None:
+        """Drop the inline action rows mounted from the start payload."""
+        for row_id in ("#tc-plan-actions", "#tc-secret-provide"):
+            try:
+                self.query_one(row_id).remove()
+            except Exception:  # noqa: BLE001 — row absent for other tools
+                pass
+
     def _approve_plan(self) -> None:
         """Approve the plan: publish /build to switch the agent into build mode."""
         app = self.app
@@ -325,6 +333,10 @@ class ToolCallBubble(Vertical):
             self.add_class("error")
             err = event.get("error") or "Tool execution failed"
             self._update_body(Text(str(err), style="red"))
+            # A rejected call never produced anything to act on: an Approve
+            # row left over from the start payload would /build a plan the
+            # backend refused to save.
+            self._remove_action_rows()
         self._refresh_header()
 
     # ---- header ----
@@ -403,9 +415,9 @@ class ToolCallBubble(Vertical):
             return _request_secret_renderable(a, None)
         if self._name == "exit_plan_mode":
             a = self._args if isinstance(self._args, dict) else {}
-            plan = str(a.get("plan") or "").strip()
-            if plan:
-                return Text(plan)
+            plan = _plan_renderable(a)
+            if plan is not None:
+                return plan
         if self._name == "todo_write":
             a = self._args if isinstance(self._args, dict) else {}
             todos = a.get("todos")
@@ -439,9 +451,9 @@ class ToolCallBubble(Vertical):
             return _request_secret_renderable(a, result_text)
         if self._name == "exit_plan_mode":
             a = self._args if isinstance(self._args, dict) else {}
-            plan = str(a.get("plan") or "").strip()
-            if plan:
-                return Text(plan)
+            plan = _plan_renderable(a)
+            if plan is not None:
+                return plan
         if self._name == "todo_write":
             a = self._args if isinstance(self._args, dict) else {}
             todos = a.get("todos")
@@ -723,6 +735,26 @@ def _ask_user_renderable(question: str) -> Text:
     text = Text()
     text.append("❓ ", style="bold yellow")
     text.append(question or "(no question)", style="default")
+    return text
+
+
+def _plan_renderable(args: Any) -> Text | None:
+    """Render an ``exit_plan_mode`` proposal: the body, then its criteria.
+
+    The criteria arrive as their own argument, so they have to be appended
+    here or the user approves a plan without seeing its definition of done.
+    Returns ``None`` when there is no plan body to show.
+    """
+    a = args if isinstance(args, dict) else {}
+    plan = str(a.get("plan") or "").strip()
+    if not plan:
+        return None
+    text = Text(plan)
+    verification = str(a.get("verification") or "").strip()
+    if verification:
+        text.append("\n\n")
+        text.append("Verification", style="bold")
+        text.append(f"\n{verification}")
     return text
 
 

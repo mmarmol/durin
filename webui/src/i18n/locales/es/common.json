@@ -1725,6 +1725,7 @@
     },
     "plan": {
       "title": "Plan propuesto",
+      "verification": "Verificación",
       "approve": "Aprobar (/build)",
       "hint": "o responde con feedback para refinarlo"
     },

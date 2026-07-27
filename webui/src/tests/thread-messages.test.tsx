@@ -188,3 +188,42 @@ describe("ThreadMessages — single-member cluster bypass", () => {
     expect(screen.getByText(/tool calls/i)).toBeInTheDocument();
   });
 });
+
+describe("ThreadMessages — rejected interactive calls", () => {
+  it("shows one plan card when a rejected exit_plan_mode is followed by a retry", async () => {
+    // The backend can reject exit_plan_mode (bad arguments, wrong mode, disk
+    // error) and the model retries. Both calls carry a full `plan` payload;
+    // only the accepted one is a real proposal, so only it earns a card —
+    // otherwise the user sees two plans in a row and cannot tell which is live.
+    const messages: UIMessage[] = [
+      {
+        id: "t1",
+        role: "tool",
+        kind: "trace",
+        content: "",
+        createdAt: 1,
+        toolEvents: [
+          {
+            phase: "error",
+            call_id: "rejected",
+            name: "exit_plan_mode",
+            arguments: { plan: "# Draft plan", verification: "n/a" },
+            error: "Error: `verification` argument is required",
+          },
+          {
+            phase: "end",
+            call_id: "accepted",
+            name: "exit_plan_mode",
+            arguments: { plan: "# Final plan", verification: "pytest passes" },
+          },
+        ],
+      },
+    ];
+    render(<ThreadMessages messages={messages} isStreaming={false} />);
+
+    expect(await screen.findByText("Final plan", {}, { timeout: 10_000 })).toBeInTheDocument();
+    expect(screen.queryByText("Draft plan")).not.toBeInTheDocument();
+    // The rejected call is not dropped — it folds into the activity cluster.
+    expect(screen.getByRole("button", { name: /tool/i })).toBeInTheDocument();
+  });
+});

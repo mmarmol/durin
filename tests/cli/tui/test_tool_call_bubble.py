@@ -684,6 +684,52 @@ async def test_exit_plan_mode_bubble_has_approve_and_refine_widgets() -> None:
         assert "Refine" in _static_plain(refine)
 
 
+def test_plan_renderable_includes_verification() -> None:
+    """The criteria ride in their own argument — the body must show them."""
+    from durin.cli.tui.widgets.tool_call_bubble import _plan_renderable
+
+    text = _plan_renderable({
+        "plan": "1. corregir el clasificador",
+        "verification": "Re-ejecutar el pipeline con el ticket 23108",
+    })
+    assert text is not None
+    assert "corregir el clasificador" in text.plain
+    assert "Re-ejecutar el pipeline" in text.plain
+
+
+def test_plan_renderable_without_plan_is_none() -> None:
+    from durin.cli.tui.widgets.tool_call_bubble import _plan_renderable
+
+    assert _plan_renderable({"verification": "only criteria"}) is None
+    assert _plan_renderable(None) is None
+
+
+@pytest.mark.asyncio
+async def test_rejected_plan_drops_the_approve_row() -> None:
+    """A rejected exit_plan_mode must not leave an Approve row behind — it
+    would /build a plan the backend refused to save."""
+    app = DurinApp(agent_loop=None)
+    async with app.run_test() as pilot:
+        from textual.css.query import NoMatches
+
+        chat = app.query_one(ChatView)
+        bubble = ToolCallBubble({
+            "version": 1, "phase": "start", "call_id": "pm2",
+            "name": "exit_plan_mode",
+            "arguments": {"plan": "1. step one", "verification": "n/a"},
+        })
+        chat.mount(bubble)
+        await pilot.pause()
+        bubble.update_from_event({
+            "phase": "error",
+            "error": "Error: `verification` argument is required",
+        })
+        await pilot.pause()
+
+        with pytest.raises(NoMatches):
+            bubble.query_one("#tc-plan-approve")
+
+
 def test_execute_code_renderable_shows_error_not_envelope() -> None:
     """execute_code's JSON envelope is parsed to a clean error, not dumped raw."""
     import json as _json

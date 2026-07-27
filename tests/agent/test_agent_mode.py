@@ -707,20 +707,26 @@ def test_plan_stall_turns_config_default():
 
 
 class TestVerificationGuidance:
-    """The model is told upfront that plans need verification criteria —
-    guidance that reduces lint-reject round-trips (the enforcement itself
-    is the exit_plan_mode lint)."""
+    """Verification criteria are a required tool argument, not a heading the
+    model has to spell in English — the guidance must point at the argument."""
 
-    def test_plan_mode_suffix_mentions_verification_requirement(self):
+    def test_plan_mode_suffix_points_at_the_verification_argument(self):
         from durin.agent.agent_mode import PLAN_MODE
 
-        assert "## Verification" in PLAN_MODE.prompt_suffix
-        assert "verify:" in PLAN_MODE.prompt_suffix
+        assert "`verification` argument" in PLAN_MODE.prompt_suffix
+        # No heading keyword to match: a Spanish plan must not be steered
+        # into writing an English "## Verification" heading itself.
+        assert "## Verification" not in PLAN_MODE.prompt_suffix
 
-    def test_exit_plan_mode_schema_mentions_verification(self):
+    def test_plan_mode_suffix_does_not_ask_to_repeat_the_plan(self):
+        """The channel renders the plan card; re-pasting it shows it twice."""
+        from durin.agent.agent_mode import PLAN_MODE
+
+        assert "Do NOT paste the plan again" in PLAN_MODE.prompt_suffix
+
+    def test_exit_plan_mode_requires_both_arguments(self):
         from durin.agent.tools.plan_mode import ExitPlanModeTool
 
         tool = ExitPlanModeTool(sessions=None)
-        desc = tool.parameters["properties"]["plan"]["description"]
-        assert "## Verification" in desc
-        assert "rejected" in desc
+        assert set(tool.parameters["required"]) == {"plan", "verification"}
+        assert "verification" in tool.parameters["properties"]

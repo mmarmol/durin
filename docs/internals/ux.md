@@ -145,6 +145,16 @@ webui-listed commands).
   `AgentLoop._maybe_publish_interaction_fallback`. In the TUI the `exit_plan_mode`
   bubble additionally renders inline `Approve` and `Refine` action rows; selecting
   Approve publishes the `/build` command without requiring the user to type it.
+  `exit_plan_mode` takes the plan body and its success criteria as two
+  separate arguments (`plan`, `verification`, both required) and writes them
+  as one markdown file under `<workspace>/.durin/plans/<session>/`, criteria
+  last under a `## Verification` heading. Splitting them is what makes the
+  requirement language-independent: durin never inspects the model's prose
+  for a heading keyword, so a plan written in any language is accepted.
+  A payload is only user-facing while the call *succeeds*: a `phase="error"`
+  event is demoted to a plain trace row (webui) and loses its inline action
+  rows (TUI), so a rejected call plus the model's retry never present two
+  plan cards — the rejected proposal was never saved and cannot be approved.
 - **Blocking ask_user**: when `agents.defaults.ask_user_blocking` is true
   (the default), `ask_user_question` awaits the user's next plain-text reply
   *inside the same turn* via the `durin/agent/pending_answers.py` future

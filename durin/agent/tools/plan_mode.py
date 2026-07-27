@@ -61,19 +61,19 @@ _ACTIVE_PLAN_PATH_KEY = "active_plan_path"
 # per-session directory.
 _SESSION_SLUG_RE = re.compile(r"[^\w\-]+")
 
-# Verification lint — format convention with English keywords (like
-# frontmatter keys), NOT content/language detection. Presence-only check:
-# quality of the criteria is judged by the human at /build, where the
-# approval gate now covers the *definition of done*, not just the steps.
-_VERIFICATION_HEADING_RE = re.compile(r"(?im)^#{1,6}\s+verification\b")
-_VERIFY_MARKER_RE = re.compile(r"(?im)^[\s\-*\d.)]*verify\s*:")
+# Structural marker for the verification section in the plan file. The
+# criteria arrive as their own tool argument, so requiring them costs no
+# keyword matching over the model's prose: a plan written in Spanish (or
+# any other language) can no longer be rejected for spelling the heading
+# "Verificación". The heading itself stays English because it is a file
+# format marker, like the plan filename — the criteria under it are in
+# whatever language the model is writing.
+_VERIFICATION_HEADING = "## Verification"
 
 
-def has_verification_criteria(plan: str) -> bool:
-    """True when *plan* contains a Verification heading or `verify:` lines."""
-    return bool(
-        _VERIFICATION_HEADING_RE.search(plan) or _VERIFY_MARKER_RE.search(plan)
-    )
+def compose_plan_document(plan: str, verification: str) -> str:
+    """Full plan markdown: the body followed by the verification section."""
+    return f"{plan.strip()}\n\n{_VERIFICATION_HEADING}\n\n{verification.strip()}\n"
 
 
 def _session_slug(session_key: str | None) -> str:
@@ -223,17 +223,24 @@ class EnterPlanModeTool(Tool, _PlanModeToolBase):
 @tool_parameters(
     tool_parameters_schema(
         plan=StringSchema(
-            "The complete plan in Markdown. Include the goal, the steps "
-            "you will take (numbered or as a checklist), any files you "
-            "intend to modify, and any open questions or assumptions. "
-            "REQUIRED: a `## Verification` section (or per-step `verify:` "
-            "lines) stating how each step's success will be checked — "
-            "plans without verification criteria are rejected. "
+            "The plan body in Markdown. Include the goal, the steps you "
+            "will take (numbered or as a checklist), any files you intend "
+            "to modify, and any open questions or assumptions. Do NOT put "
+            "the verification criteria here — they go in the separate "
+            "`verification` argument and are appended for you. "
             "The user will see this verbatim and either run `/build` to "
             "approve, or send more messages to refine the plan.",
             max_length=20_000,
         ),
-        required=["plan"],
+        verification=StringSchema(
+            "How each step's success will be checked — a command to run, "
+            "an observable condition, or a test that must pass. Markdown, "
+            "typically one line per step. Write it in the same language as "
+            "`plan`: it is a separate argument precisely so you never have "
+            "to match an English heading.",
+            max_length=8_000,
+        ),
+        required=["plan", "verification"],
     )
 )
 class ExitPlanModeTool(Tool, _PlanModeToolBase):
@@ -273,7 +280,9 @@ class ExitPlanModeTool(Tool, _PlanModeToolBase):
         return (
             "Write your finished plan to disk and yield to the user for "
             "approval. The plan is saved to "
-            "`<workspace>/.durin/plans/plan_<timestamp>.md`; the path is "
+            "`<workspace>/.durin/plans/plan_<timestamp>.md` — the plan body "
+            "followed by a Verification section built from the "
+            "`verification` argument; the path is "
             "returned so you can refer to it. The session REMAINS in plan "
             "mode until the user runs `/build` to approve, so the user "
             "can review and edit the plan file in any editor before "
@@ -285,7 +294,12 @@ class ExitPlanModeTool(Tool, _PlanModeToolBase):
     def exclusive(self) -> bool:
         return True
 
-    async def execute(self, plan: str | None = None, **kwargs: Any) -> str:
+    async def execute(
+        self,
+        plan: str | None = None,
+        verification: str | None = None,
+        **kwargs: Any,
+    ) -> str:
         from durin.agent.agent_mode import (
             PLAN_MODE,
             get_active_mode_name,
@@ -295,6 +309,15 @@ class ExitPlanModeTool(Tool, _PlanModeToolBase):
             return (
                 "Error: `plan` argument is required and must be a non-empty "
                 "Markdown string describing the plan."
+            )
+
+        if not verification or not verification.strip():
+            return (
+                "Error: `verification` argument is required and must be a "
+                "non-empty string stating how each step's success will be "
+                "checked — a command to run, an observable condition, or a "
+                "test that must pass. Keep the plan body as it is and pass "
+                "the criteria in `verification`."
             )
 
         session = self._session()
@@ -311,14 +334,7 @@ class ExitPlanModeTool(Tool, _PlanModeToolBase):
                 "approved, continue execution directly."
             )
 
-        if not has_verification_criteria(plan):
-            return (
-                "Error: plan has no verification criteria. Add a "
-                "`## Verification` section (or per-step `verify:` lines) "
-                "stating how each step's success will be checked — a "
-                "command to run, an observable condition, or a test that "
-                "must pass. Then call `exit_plan_mode` again."
-            )
+        document = compose_plan_document(plan, verification)
 
         # Write the plan to disk. The directory lives inside the workspace
         # so the ReadFileTool can pick it up without extra allowed-dir
@@ -330,7 +346,7 @@ class ExitPlanModeTool(Tool, _PlanModeToolBase):
         try:
             plan_dir.mkdir(parents=True, exist_ok=True)
             plan_path = _new_plan_path(plan_dir)
-            atomic_write_text(plan_path, plan)
+            atomic_write_text(plan_path, document)
         except OSError as e:
             return (
                 f"Error: could not write plan file to {plan_dir}: {e}"
@@ -351,11 +367,18 @@ class ExitPlanModeTool(Tool, _PlanModeToolBase):
         # Expose the plan to channels: rich channels render a plan card from
         # tool_events; dumb channels get the serialized fallback at turn end
         # (durin/agent/user_payloads.py). /build clears this payload.
+        # The payload carries the two parts, not the composed document, so
+        # every surface renders the same shape the plan card does.
         from durin.agent.user_payloads import PENDING_PLAN_KEY
-        session.metadata[PENDING_PLAN_KEY] = {"path": display, "plan": plan}
+        session.metadata[PENDING_PLAN_KEY] = {
+            "path": display,
+            "plan": plan,
+            "verification": verification,
+        }
 
         self._emit("plan_mode.presented", {
             "plan_chars": len(plan),
+            "verification_chars": len(verification),
             "from_mode": current,
             "plan_path": str(plan_path),
         })

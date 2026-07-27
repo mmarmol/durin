@@ -44,3 +44,19 @@ export function toolDisplayClass(name: string | undefined): ToolDisplayClass {
   if (name && CHIPPED.has(name)) return "chip";
   return "trace";
 }
+
+/**
+ * Display class for a specific event. A call that FAILED never earns a
+ * first-class block or a chip: the payload it carries is a proposal the
+ * backend rejected, and rendering it as a plan card (or a "message sent"
+ * chip) states something that did not happen. Failed calls fall back to
+ * "trace" so they stay visible inside the activity cluster, with the
+ * error, instead of being silently dropped.
+ */
+export function eventDisplayClass(event: {
+  name?: string;
+  phase?: string;
+}): ToolDisplayClass {
+  if (event.phase === "error") return "trace";
+  return toolDisplayClass(event.name);
+}

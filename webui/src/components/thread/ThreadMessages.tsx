@@ -4,7 +4,7 @@ import {
   isAgentActivityMember,
 } from "@/components/thread/AgentActivityCluster";
 import { HoistedToolBlock, ToolChipRow } from "@/components/thread/ToolBlocks";
-import { toolDisplayClass } from "@/lib/tool-display";
+import { eventDisplayClass } from "@/lib/tool-display";
 import type { ToolProgressEvent, UIMessage } from "@/lib/types";
 
 interface ThreadMessagesProps {
@@ -62,12 +62,12 @@ function partitionTrace(m: UIMessage): {
 } {
   const events = m.toolEvents ?? [];
   if (events.length === 0) return { rest: m, hoisted: [], chips: [] };
-  const hoisted = events.filter((e) => toolDisplayClass(e.name) === "hoist");
-  const chips = events.filter((e) => toolDisplayClass(e.name) === "chip");
+  const hoisted = events.filter((e) => eventDisplayClass(e) === "hoist");
+  const chips = events.filter((e) => eventDisplayClass(e) === "chip");
   if (hoisted.length === 0 && chips.length === 0) {
     return { rest: m, hoisted, chips };
   }
-  const trace = events.filter((e) => toolDisplayClass(e.name) === "trace");
+  const trace = events.filter((e) => eventDisplayClass(e) === "trace");
   const rest = trace.length > 0 ? { ...m, toolEvents: trace } : null;
   return { rest, hoisted, chips };
 }

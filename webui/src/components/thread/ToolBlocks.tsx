@@ -163,6 +163,7 @@ function PlanBlock({
   const actions = useThreadActions();
   const a = args(event);
   const plan = typeof a.plan === "string" ? a.plan : "";
+  const verification = typeof a.verification === "string" ? a.verification : "";
   if (!plan) return null;
   return (
     <BlockShell tone="accent" icon={<FileText className="h-3.5 w-3.5" aria-hidden />}>
@@ -170,6 +171,14 @@ function PlanBlock({
         {t("message.plan.title")}
       </div>
       <MarkdownText className="text-[13px]">{plan}</MarkdownText>
+      {verification ? (
+        <>
+          <div className="mb-1 mt-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            {t("message.plan.verification")}
+          </div>
+          <MarkdownText className="text-[13px]">{verification}</MarkdownText>
+        </>
+      ) : null}
       {!answered && actions ? (
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <button
