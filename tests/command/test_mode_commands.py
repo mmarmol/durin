@@ -448,3 +448,58 @@ class TestCmdMode:
         result = await cmd_mode(_make_ctx("/mode build", session=session, args="build"))
         assert "Already in" in result.content
         assert "build" in result.content
+
+    @pytest.mark.asyncio
+    async def test_leaving_plan_mode_closes_the_pending_plan(self, tmp_path: Path):
+        """`/build` is not the only exit from plan mode. Leaving with `/mode`
+        used to strand the plan: its event stayed `pending` forever and its
+        review payload stayed live, which dumb channels re-send."""
+        from types import SimpleNamespace
+
+        from durin.agent.tools.plan_mode import _ACTIVE_PLAN_PATH_KEY
+        from durin.session.session_meta import (
+            append_event,
+            make_plan_event,
+            meta_path_for,
+            read_meta,
+        )
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+        session_key = "cli:direct"
+        plan_path = tmp_path / "plan_20260727_120000_000.md"
+        mp = meta_path_for(session_key, sessions_dir)
+        append_event(mp, session_key, make_plan_event(
+            plan_id=plan_path.stem, plan_path=str(plan_path), title="A plan",
+        ))
+
+        session = SimpleNamespace(
+            key=session_key,
+            metadata={
+                SESSION_MODE_KEY: "plan",
+                _ACTIVE_PLAN_PATH_KEY: str(plan_path),
+                "pending_plan_review": {"path": "p.md", "plan": "# A plan"},
+            },
+        )
+        ctx = _make_ctx("/mode build", session=session, args="build")
+        ctx.loop = SimpleNamespace(sessions=SimpleNamespace(sessions_dir=sessions_dir))
+
+        result = await cmd_mode(ctx)
+
+        assert "build" in result.content
+        assert session.metadata[SESSION_MODE_KEY] == "build"
+        # Nothing left pointing at a plan the user never approved.
+        assert _ACTIVE_PLAN_PATH_KEY not in session.metadata
+        assert "pending_plan_review" not in session.metadata
+        # And the event log records why it ended.
+        events = read_meta(mp)["events"]
+        assert [e["outcome"] for e in events] == ["cancelled"]
+        assert events[0]["closed_at"]
+
+    @pytest.mark.asyncio
+    async def test_leaving_plan_mode_without_a_plan_is_harmless(self):
+        """No plan proposed → nothing to close, no meta lookup needed."""
+        session = _session({SESSION_MODE_KEY: "plan"})
+        result = await cmd_mode(_make_ctx("/mode build", session=session, args="build"))
+        assert session.metadata[SESSION_MODE_KEY] == "build"
+        assert "build" in result.content

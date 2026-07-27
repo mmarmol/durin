@@ -32,7 +32,8 @@ from durin.agent.tools.self import MyTool
 from durin.agent.user_payloads import (
     PENDING_SECRET_KEY,
     channel_renders_tool_payloads,
-    serialize_pending_interactions,
+    mark_interactions_delivered,
+    undelivered_interactions,
 )
 from durin.bus.events import OUTBOUND_META_AGENT_UI, InboundMessage, OutboundMessage
 from durin.bus.queue import MessageBus
@@ -1347,18 +1348,31 @@ class AgentLoop:
         self, *, channel: str, chat_id: str, session_key: str
     ) -> None:
         """Serialize pending interactive payloads as plain messages for
-        channels that can't render structured tool payloads (user_payloads.py)."""
+        channels that can't render structured tool payloads (user_payloads.py).
+
+        Delivery happens once. The plan payload deliberately outlives the turn
+        that produced it — ``/build`` owns its lifecycle — so without a
+        delivered-marker every later turn would re-send the whole plan to the
+        channel until the user approves it.
+        """
         if channel_renders_tool_payloads(channel):
             return
         try:
             session = self.sessions.get_or_create(session_key)
-            texts = serialize_pending_interactions(session.metadata)
+            items = undelivered_interactions(session.metadata)
         except Exception:  # noqa: BLE001 — fallback must never break the turn
             return
-        for text in texts:
+        if not items:
+            return
+        for _key, text in items:
             await self.bus.publish_outbound(OutboundMessage(
                 channel=channel, chat_id=chat_id, content=text,
             ))
+        with suppress(Exception):
+            mark_interactions_delivered(session.metadata, items)
+            # Persist so a gateway restart doesn't resurrect the payload and
+            # deliver it a second time.
+            self.sessions.save(session, reindex=False)
 
     def _persist_user_message_early(
         self,
