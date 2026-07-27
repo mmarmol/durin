@@ -7,7 +7,6 @@ from durin.session.todo_state import (
     parse_todos,
     render_todos_markdown,
     todos_runtime_lines,
-    todos_ws_blob,
 )
 
 
@@ -95,18 +94,6 @@ def test_runtime_lines_truncate_at_cap():
     lines = todos_runtime_lines(meta)
     # No truncation note when within cap.
     assert not any("truncated" in ln for ln in lines)
-
-
-def test_ws_blob_returns_items_or_empty():
-    assert todos_ws_blob(None) == {"items": []}
-    meta = {
-        TODOS_KEY: [
-            {"content": "x", "status": "pending", "activeForm": "xing"},
-        ]
-    }
-    assert todos_ws_blob(meta) == {
-        "items": [{"content": "x", "status": "pending", "activeForm": "xing"}]
-    }
 
 
 def test_render_markdown_shows_status_boxes():

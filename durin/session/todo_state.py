@@ -22,6 +22,13 @@ immediately as they finish. We do not try to enforce any of those rules
 in code — the prompt does — but ``todos_runtime_lines`` echoes the
 current state back to the model on every turn so it cannot silently
 drift.
+
+The list reaches clients through the ``todo_write`` tool event (the
+payload-canonical contract: rich channels render the arguments, the rest
+get the text fallback) and, in the TUI, by reading session metadata
+directly. There is no dedicated websocket frame for todos — ambient
+session state that needs pushing outside a turn rides the ``goal_state``
+blob, next to the mode and any pending question.
 """
 
 from __future__ import annotations
@@ -110,12 +117,6 @@ def todos_runtime_lines(metadata: Mapping[str, Any] | None) -> list[str]:
     if len(todos) > _MAX_LINES_IN_RUNTIME:
         out.append(f"  … (+{len(todos) - _MAX_LINES_IN_RUNTIME} more, truncated)")
     return out
-
-
-def todos_ws_blob(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
-    """JSON-safe snapshot for WebSocket ``todos_state`` events."""
-    todos = parse_todos(todos_raw(metadata)) or []
-    return {"items": todos}
 
 
 def render_todos_markdown(todos: list[dict[str, str]] | None) -> str:
