@@ -30,8 +30,6 @@ def _make_builder(tmp_path):
     memory = MagicMock()
     memory.get_memory_context.return_value = ""
     memory.read_memory.return_value = ""
-    memory.read_unprocessed_history.return_value = []
-    memory.get_last_dream_cursor.return_value = None
     b.memory = memory
 
     skills = MagicMock()

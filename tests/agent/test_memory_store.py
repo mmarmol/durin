@@ -13,6 +13,13 @@ def store(tmp_path):
     return MemoryStore(tmp_path)
 
 
+def _entries(store) -> list[dict]:
+    """Parsed history.jsonl records. The store is write-only, so tests that
+    assert on what was persisted read the file back themselves."""
+    text = store.read_file(store.history_file)
+    return [json.loads(line) for line in text.splitlines() if line.strip()]
+
+
 class TestMemoryStoreBasicIO:
     def test_read_soul_returns_empty_when_missing(self, store):
         assert store.read_soul() == ""
@@ -69,31 +76,6 @@ class TestHistoryWithCursor:
         assert data["cursor"] == cursor
         assert data["content"] == ""
 
-    def test_read_unprocessed_history(self, store):
-        store.append_history("event 1")
-        store.append_history("event 2")
-        store.append_history("event 3")
-        entries = store.read_unprocessed_history(since_cursor=1)
-        assert len(entries) == 2
-        assert entries[0]["cursor"] == 2
-
-    def test_read_unprocessed_history_returns_all_when_cursor_zero(self, store):
-        store.append_history("event 1")
-        store.append_history("event 2")
-        entries = store.read_unprocessed_history(since_cursor=0)
-        assert len(entries) == 2
-
-    def test_read_unprocessed_skips_entries_without_cursor(self, store):
-        """Regression: entries missing the cursor key should be silently skipped."""
-        store.history_file.write_text(
-            '{"timestamp": "2026-04-01 10:00", "content": "no cursor"}\n'
-            '{"cursor": 2, "timestamp": "2026-04-01 10:01", "content": "valid"}\n'
-            '{"cursor": 3, "timestamp": "2026-04-01 10:02", "content": "also valid"}\n',
-            encoding="utf-8",
-        )
-        entries = store.read_unprocessed_history(since_cursor=0)
-        assert [e["cursor"] for e in entries] == [2, 3]
-
     def test_next_cursor_falls_back_when_last_entry_has_no_cursor(self, store):
         """Regression: _next_cursor should not KeyError on entries without cursor."""
         store.history_file.write_text(
@@ -106,25 +88,13 @@ class TestHistoryWithCursor:
         cursor = store.append_history("new event")
         assert cursor == 1
 
-    def test_compact_history_drops_oldest(self, tmp_path):
-        store = MemoryStore(tmp_path, max_history_entries=2)
-        store.append_history("event 1")
-        store.append_history("event 2")
-        store.append_history("event 3")
-        store.append_history("event 4")
-        store.append_history("event 5")
-        store.compact_history()
-        entries = store.read_unprocessed_history(since_cursor=0)
-        assert len(entries) == 2
-        assert entries[0]["cursor"] in {4, 5}
-
     def test_write_entries_uses_atomic_write(self, tmp_path):
         """_write_entries uses temp file + os.replace for atomicity."""
         store = MemoryStore(tmp_path)
         store.append_history("event 1")
         store.append_history("event 2")
         store.append_history("event 3")
-        entries = store.read_unprocessed_history(since_cursor=0)
+        entries = _entries(store)
 
         # Monitor temp file existence
         tmp_path_obj = store.history_file.with_suffix(".jsonl.tmp")
@@ -142,7 +112,7 @@ class TestHistoryWithCursor:
         """Exception during _write_entries cleans up the temp file."""
         store = MemoryStore(tmp_path)
         store.append_history("event 1")
-        entries = store.read_unprocessed_history(since_cursor=0)
+        entries = _entries(store)
 
         tmp_path_obj = store.history_file.with_suffix(".jsonl.tmp")
 
@@ -171,7 +141,7 @@ class TestAppendHistoryHardCap:
         """An entry above _HISTORY_ENTRY_HARD_CAP is truncated before being persisted."""
         huge = "x" * (_HISTORY_ENTRY_HARD_CAP + 10_000)
         store.append_history(huge)
-        entry = store.read_unprocessed_history(since_cursor=0)[0]
+        entry = _entries(store)[0]
         assert len(entry["content"]) <= _HISTORY_ENTRY_HARD_CAP + 50
 
     def test_oversize_warning_is_emitted_once(self, store, caplog):
@@ -194,62 +164,18 @@ class TestAppendHistoryHardCap:
     def test_custom_max_chars_overrides_default(self, store):
         """Callers that pass max_chars should get their tighter cap applied."""
         store.append_history("a" * 500, max_chars=100)
-        entry = store.read_unprocessed_history(since_cursor=0)[0]
+        entry = _entries(store)[0]
         assert len(entry["content"]) <= 150  # 100 + "\n... (truncated)"
 
     def test_normal_sized_entries_unaffected(self, store):
         """The hard cap must not alter entries that fit within it."""
         msg = "normal short entry"
         store.append_history(msg)
-        entry = store.read_unprocessed_history(since_cursor=0)[0]
+        entry = _entries(store)[0]
         assert entry["content"] == msg
 
 
-class TestDreamCursor:
-    def test_initial_cursor_is_zero(self, store):
-        assert store.get_last_dream_cursor() == 0
-
-    def test_set_and_get_cursor(self, store):
-        store.set_last_dream_cursor(5)
-        assert store.get_last_dream_cursor() == 5
-
-    def test_cursor_persists(self, store):
-        store.set_last_dream_cursor(3)
-        store2 = MemoryStore(store.workspace)
-        assert store2.get_last_dream_cursor() == 3
-
-    def test_git_restore_rolls_back_dream_cursor(self, tmp_path):
-        store = MemoryStore(tmp_path)
-        store.write_soul("before")
-        store.set_last_dream_cursor(1)
-        assert store.git.init() is True
-
-        store.write_soul("after")
-        store.set_last_dream_cursor(2)
-        dream_sha = store.git.auto_commit("dream: update")
-        assert dream_sha is not None
-
-        store.write_soul("newer")
-        store.set_last_dream_cursor(3)
-
-        restore_sha = store.git.revert(dream_sha)
-
-        assert restore_sha is not None
-        assert store.read_soul() == "before"
-        assert store.get_last_dream_cursor() == 1
-
-
 class TestLegacyHistoryMigration:
-    def test_read_unprocessed_history_handles_entries_without_cursor(self, store):
-        """JSONL entries with cursor=1 are correctly parsed and returned."""
-        store.history_file.write_text(
-            '{"cursor": 1, "timestamp": "2026-03-30 14:30", "content": "Old event"}\n',
-            encoding="utf-8",
-        )
-        entries = store.read_unprocessed_history(since_cursor=0)
-        assert len(entries) == 1
-        assert entries[0]["cursor"] == 1
-
     def test_migrates_legacy_history_md_preserving_partial_entries(self, tmp_path):
         memory_dir = tmp_path / "memory"
         memory_dir.mkdir()
@@ -269,7 +195,7 @@ class TestLegacyHistoryMigration:
             (memory_dir / "HISTORY.md.bak").stat().st_mtime,
         ).strftime("%Y-%m-%d %H:%M")
 
-        entries = store.read_unprocessed_history(since_cursor=0)
+        entries = _entries(store)
         assert [entry["cursor"] for entry in entries] == [1, 2, 3]
         assert entries[0]["timestamp"] == "2026-04-01 10:00"
         assert entries[0]["content"] == "User prefers dark mode."
@@ -279,7 +205,6 @@ class TestLegacyHistoryMigration:
         assert entries[2]["timestamp"] == fallback_timestamp
         assert entries[2]["content"].startswith("Legacy chunk without timestamp.")
         assert store.read_file(store._cursor_file).strip() == "3"
-        assert store.read_file(store._dream_cursor_file).strip() == "3"
         assert not legacy_file.exists()
         assert (memory_dir / "HISTORY.md.bak").read_text(encoding="utf-8") == legacy_content
 
@@ -296,7 +221,7 @@ class TestLegacyHistoryMigration:
 
         store = MemoryStore(tmp_path)
 
-        entries = store.read_unprocessed_history(since_cursor=0)
+        entries = _entries(store)
         assert len(entries) == 3
         assert [entry["content"] for entry in entries] == [
             "First event.",
@@ -318,7 +243,7 @@ class TestLegacyHistoryMigration:
 
         store = MemoryStore(tmp_path)
 
-        entries = store.read_unprocessed_history(since_cursor=0)
+        entries = _entries(store)
         assert len(entries) == 2
         assert entries[0]["content"].startswith("[RAW] 2 messages")
         assert "USER: hello" in entries[0]["content"]
@@ -338,7 +263,7 @@ class TestLegacyHistoryMigration:
             (memory_dir / "HISTORY.md.bak").stat().st_mtime,
         ).strftime("%Y-%m-%d %H:%M")
 
-        entries = store.read_unprocessed_history(since_cursor=0)
+        entries = _entries(store)
         assert len(entries) == 2
         assert entries[0]["timestamp"] == fallback_timestamp
         assert entries[0]["content"] == "[2026-03-25–2026-04-02] Multi-day summary."
@@ -358,7 +283,7 @@ class TestLegacyHistoryMigration:
 
         store = MemoryStore(tmp_path)
 
-        entries = store.read_unprocessed_history(since_cursor=0)
+        entries = _entries(store)
         assert len(entries) == 1
         assert entries[0]["cursor"] == 7
         assert entries[0]["content"] == "existing"
@@ -375,7 +300,7 @@ class TestLegacyHistoryMigration:
 
         store = MemoryStore(tmp_path)
 
-        entries = store.read_unprocessed_history(since_cursor=0)
+        entries = _entries(store)
         assert len(entries) == 1
         assert entries[0]["cursor"] == 1
         assert entries[0]["timestamp"] == "2026-04-01 10:00"
@@ -391,7 +316,7 @@ class TestLegacyHistoryMigration:
 
         store = MemoryStore(tmp_path)
 
-        entries = store.read_unprocessed_history(since_cursor=0)
+        entries = _entries(store)
         assert len(entries) == 1
         assert entries[0]["timestamp"] == "2026-04-01 10:00"
         assert "Broken" in entries[0]["content"]

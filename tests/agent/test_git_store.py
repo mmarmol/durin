@@ -5,7 +5,7 @@ import pytest
 
 from durin.utils.gitstore import CommitInfo, GitStore
 
-TRACKED = ["SOUL.md", "AGENTS.md", "memory/.dream_cursor"]
+TRACKED = ["SOUL.md", "AGENTS.md", "memory/notes.md"]
 
 
 @pytest.fixture
@@ -221,13 +221,3 @@ class TestRevert:
         assert git_ready.revert("deadbeef") is None
 
 
-class TestMemoryStoreGitProperty:
-    def test_git_property_exposes_gitstore(self, tmp_path):
-        from durin.agent.memory import MemoryStore
-        store = MemoryStore(tmp_path)
-        assert isinstance(store.git, GitStore)
-
-    def test_git_property_is_same_object(self, tmp_path):
-        from durin.agent.memory import MemoryStore
-        store = MemoryStore(tmp_path)
-        assert store.git is store._git

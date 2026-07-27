@@ -130,14 +130,14 @@ class ExecTool(Tool, ContextAware):
             r">\s*/dev/sd",                  # write to disk
             r"\b(shutdown|reboot|poweroff)\b",  # system power
             r":\(\)\s*\{.*\};\s*:",          # fork bomb
-            # Block writes to durin internal state files.
-            # history.jsonl / .dream_cursor are managed by append_history();
-            # direct writes corrupt the cursor format and crash /dream.
-            r">>?\s*\S*(?:history\.jsonl|\.dream_cursor)",            # > / >> redirect
-            r"\btee\b[^|;&<>]*(?:history\.jsonl|\.dream_cursor)",     # tee / tee -a
-            r"\b(?:cp|mv)\b(?:\s+[^\s|;&<>]+)+\s+\S*(?:history\.jsonl|\.dream_cursor)",  # cp/mv target
-            r"\bdd\b[^|;&<>]*\bof=\S*(?:history\.jsonl|\.dream_cursor)",  # dd of=
-            r"\bsed\s+-i[^|;&<>]*(?:history\.jsonl|\.dream_cursor)",  # sed -i
+            # Block writes to durin internal state files. history.jsonl is
+            # append-only and owned by append_history(); a direct write
+            # corrupts the cursor format and breaks every later append.
+            r">>?\s*\S*history\.jsonl",                       # > / >> redirect
+            r"\btee\b[^|;&<>]*history\.jsonl",                 # tee / tee -a
+            r"\b(?:cp|mv)\b(?:\s+[^\s|;&<>]+)+\s+\S*history\.jsonl",  # cp/mv target
+            r"\bdd\b[^|;&<>]*\bof=\S*history\.jsonl",        # dd of=
+            r"\bsed\s+-i[^|;&<>]*history\.jsonl",              # sed -i
         ]
         self.allow_patterns = allow_patterns or []
         self.restrict_to_workspace = restrict_to_workspace

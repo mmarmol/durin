@@ -30,8 +30,6 @@ def _make_builder(tmp_path):
     memory = MagicMock()
     memory.get_memory_context.return_value = ""
     memory.read_memory.return_value = ""
-    memory.read_unprocessed_history.return_value = []
-    memory.get_last_dream_cursor.return_value = None
     b.memory = memory
 
     skills = MagicMock()
@@ -50,10 +48,6 @@ def builder(tmp_path):
 def _set_memory(builder: ContextBuilder, text: str) -> None:
     builder.memory.get_memory_context.return_value = text
     builder.memory.read_memory.return_value = text
-
-
-def _set_history(builder: ContextBuilder, entries: list[dict]) -> None:
-    builder.memory.read_unprocessed_history.return_value = entries
 
 
 def test_stable_layer_isolated_from_volatile(tmp_path):
@@ -129,7 +123,6 @@ def test_volatile_changes_do_not_alter_stable_prefix(builder):
 
     # Build 2 — full volatile.
     _set_memory(builder, "Some non-trivial memory.")
-    _set_history(builder, [{"timestamp": "2026-05-20", "content": "did X"}])
     p2 = builder.build_system_prompt(
         channel="cli", session_summary="A summary."
     )

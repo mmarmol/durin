@@ -3,7 +3,7 @@
 Explicit memory_search / memory_drill results in evicted turns used to
 be summarized away entirely. The refs (pointers, not content) now ride
 the session summary, extracted mechanically from the tool results —
-no LLM trust involved. history.jsonl (dream input) stays untouched.
+no LLM trust involved. history.jsonl (the raw archive) stays untouched.
 """
 
 from __future__ import annotations
@@ -45,6 +45,13 @@ _RENDERED = (
     "Steps to deploy.\n"
     "=== END SKILL ==="
 )
+
+
+def _entries(store) -> list[dict]:
+    """Parsed history.jsonl records — the store is write-only, so a test that
+    asserts on what was archived reads the file back itself."""
+    text = store.read_file(store.history_file)
+    return [json.loads(line) for line in text.splitlines() if line.strip()]
 
 
 # ---------------------------------------------------------------------------
@@ -136,8 +143,8 @@ async def test_archive_appends_refs_line_to_summary_only(
     assert summary is not None
     assert "Memory refs cited in this span" in summary
     assert "person:marcelo; memory/episodic/abc123.md" in summary
-    # history.jsonl (dream input) carries the raw LLM output, untouched.
-    entries = store.read_unprocessed_history(since_cursor=0)
+    # history.jsonl carries the raw LLM output, untouched.
+    entries = _entries(store)
     assert len(entries) == 1
     assert "Memory refs cited" not in entries[0]["content"]
 

@@ -18,7 +18,6 @@ from loguru import logger
 from durin.memory.consolidator_tags import parse_consolidator_response
 from durin.session.manager import Session
 from durin.telemetry.logger import current_telemetry
-from durin.utils.gitstore import GitStore
 from durin.utils.helpers import (
     ensure_dir,
     estimate_message_tokens,
@@ -43,32 +42,22 @@ if TYPE_CHECKING:
 class MemoryStore:
     """Pure file I/O for memory files: history.jsonl, SOUL.md."""
 
-    _DEFAULT_MAX_HISTORY = 1000
     _LEGACY_ENTRY_START_RE = re.compile(r"^\[(\d{4}-\d{2}-\d{2}[^\]]*)\]\s*")
     _LEGACY_TIMESTAMP_RE = re.compile(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2})\]\s*")
     _LEGACY_RAW_MESSAGE_RE = re.compile(
         r"^\[\d{4}-\d{2}-\d{2}[^\]]*\]\s+[A-Z][A-Z0-9_]*(?:\s+\[tools:\s*[^\]]+\])?:"
     )
 
-    def __init__(self, workspace: Path, max_history_entries: int = _DEFAULT_MAX_HISTORY):
+    def __init__(self, workspace: Path):
         self.workspace = workspace
-        self.max_history_entries = max_history_entries
         self.memory_dir = ensure_dir(workspace / "memory")
         self.history_file = self.memory_dir / "history.jsonl"
         self.legacy_history_file = self.memory_dir / "HISTORY.md"
         self.soul_file = workspace / "SOUL.md"
         self._cursor_file = self.memory_dir / ".cursor"
-        self._dream_cursor_file = self.memory_dir / ".dream_cursor"
         self._corruption_logged = False  # rate-limit non-int cursor warning
         self._oversize_logged = False  # rate-limit oversized-entry warning
-        self._git = GitStore(workspace, tracked_files=[
-            "SOUL.md", "memory/.dream_cursor",
-        ])
         self._maybe_migrate_legacy_history()
-
-    @property
-    def git(self) -> GitStore:
-        return self._git
 
     # -- generic helpers -----------------------------------------------------
 
@@ -105,9 +94,6 @@ class MemoryStore:
                 self._write_entries(entries)
                 last_cursor = entries[-1]["cursor"]
                 self._cursor_file.write_text(str(last_cursor), encoding="utf-8")
-                # Default to "already processed" so upgrades do not replay the
-                # user's entire historical archive into Dream on first start.
-                self._dream_cursor_file.write_text(str(last_cursor), encoding="utf-8")
 
             backup_path = self._next_legacy_backup_path()
             self.legacy_history_file.replace(backup_path)
@@ -209,6 +195,14 @@ class MemoryStore:
         self.soul_file.write_text(content, encoding="utf-8")
 
     # -- history.jsonl — append-only, JSONL format ---------------------------
+    #
+    # Write-only archive. It holds the consolidator's *raw* LLM output for
+    # every span it compacted away; the parsed version of that same output is
+    # what reaches the session summary, so this file is the record of what the
+    # parse might have dropped. Nothing in durin reads it back: the dream
+    # mines `sessions/*.jsonl` with a per-session cursor, not this file. Do not
+    # reintroduce a global "unprocessed since cursor N" reader here — that
+    # shape belongs to a consumer that no longer exists.
 
     def append_history(self, entry: str, *, max_chars: int | None = None) -> int:
         """Append *entry* to history.jsonl and return its auto-incrementing cursor.
@@ -293,20 +287,6 @@ class MemoryStore:
             return cursor + 1
         return max((c for _, c in self._iter_valid_entries()), default=0) + 1
 
-    def read_unprocessed_history(self, since_cursor: int) -> list[dict[str, Any]]:
-        """Return history entries with a valid cursor > *since_cursor*."""
-        return [e for e, c in self._iter_valid_entries() if c > since_cursor]
-
-    def compact_history(self) -> None:
-        """Drop oldest entries if the file exceeds *max_history_entries*."""
-        if self.max_history_entries <= 0:
-            return
-        entries = self._read_entries()
-        if len(entries) <= self.max_history_entries:
-            return
-        kept = entries[-self.max_history_entries:]
-        self._write_entries(kept)
-
     # -- JSONL helpers -------------------------------------------------------
 
     def _read_entries(self) -> list[dict[str, Any]]:
@@ -366,17 +346,6 @@ class MemoryStore:
         except BaseException:
             tmp_path.unlink(missing_ok=True)
             raise
-
-    # -- dream cursor --------------------------------------------------------
-
-    def get_last_dream_cursor(self) -> int:
-        if self._dream_cursor_file.exists():
-            with suppress(ValueError, OSError):
-                return int(self._dream_cursor_file.read_text(encoding="utf-8").strip())
-        return 0
-
-    def set_last_dream_cursor(self, cursor: int) -> None:
-        self._dream_cursor_file.write_text(str(cursor), encoding="utf-8")
 
     # -- message formatting utility ------------------------------------------
 
@@ -1061,7 +1030,7 @@ class Consolidator:
             self.store.append_history(raw, max_chars=_ARCHIVE_SUMMARY_MAX_CHARS)
             summary, tags = parse_consolidator_response(raw)
             # P5 (2026-06-10): the refs ride the session summary only —
-            # history.jsonl (dream input) stays untouched. Mechanical,
+            # history.jsonl (the raw archive) stays untouched. Mechanical,
             # appended after the LLM output so it can't be dropped or
             # hallucinated by the summarizer.
             with suppress(Exception):
