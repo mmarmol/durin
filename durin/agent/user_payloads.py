@@ -13,6 +13,7 @@ payloads themselves and (b) how each pending payload serializes to text.
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any, Mapping
 
 # Channels whose UI renders tool payloads (question panels, plan cards,
@@ -23,7 +24,15 @@ RICH_PAYLOAD_CHANNELS = {"websocket", "cli"}
 PENDING_SECRET_KEY = "pending_secret_request"
 PENDING_PLAN_KEY = "pending_plan_review"
 
+# Digest per payload key of what the text fallback already published, so a
+# payload that outlives its turn is not re-sent on every later turn.
+_DELIVERED_KEY = "_delivered_interactions"
+
 _PLAN_FALLBACK_MAX_CHARS = 4_000
+
+
+def _digest(text: str) -> str:
+    return hashlib.sha1(text.encode("utf-8", "replace")).hexdigest()[:16]
 
 
 def channel_renders_tool_payloads(channel: str | None) -> bool:
@@ -96,18 +105,57 @@ _SERIALIZERS = (
 )
 
 
-def serialize_pending_interactions(metadata: Mapping[str, Any] | None) -> list[str]:
-    """Plain-text fallback messages for every pending interaction in *metadata*."""
+def pending_interaction_items(
+    metadata: Mapping[str, Any] | None,
+) -> list[tuple[str, str]]:
+    """``(metadata_key, fallback_text)`` for every pending interaction."""
     if not metadata:
         return []
-    out: list[str] = []
+    out: list[tuple[str, str]] = []
     for key, fn in _SERIALIZERS:
         payload = metadata.get(key)
         if isinstance(payload, Mapping):
             text = fn(payload)
             if text:
-                out.append(text)
+                out.append((key, text))
     return out
+
+
+def serialize_pending_interactions(metadata: Mapping[str, Any] | None) -> list[str]:
+    """Plain-text fallback messages for every pending interaction in *metadata*."""
+    return [text for _, text in pending_interaction_items(metadata)]
+
+
+def undelivered_interactions(
+    metadata: Mapping[str, Any] | None,
+) -> list[tuple[str, str]]:
+    """Pending interactions whose current text has not been published yet.
+
+    Keyed on a digest of the text rather than on the metadata key alone: a
+    payload the model *revises* (a refined plan, a re-asked question) reads as
+    new and is delivered again, while an unchanged payload that outlives its
+    turn — the plan waits for ``/build`` — is delivered exactly once.
+    """
+    delivered = (metadata or {}).get(_DELIVERED_KEY) or {}
+    if not isinstance(delivered, Mapping):
+        delivered = {}
+    return [
+        (key, text)
+        for key, text in pending_interaction_items(metadata)
+        if delivered.get(key) != _digest(text)
+    ]
+
+
+def mark_interactions_delivered(
+    metadata: dict[str, Any], items: list[tuple[str, str]]
+) -> None:
+    """Record *items* (as returned by :func:`undelivered_interactions`) as sent."""
+    delivered = metadata.get(_DELIVERED_KEY)
+    if not isinstance(delivered, dict):
+        delivered = {}
+    for key, text in items:
+        delivered[key] = _digest(text)
+    metadata[_DELIVERED_KEY] = delivered
 
 
 _EVENT_SERIALIZERS = {

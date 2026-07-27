@@ -142,7 +142,12 @@ webui-listed commands).
   render the structured payload directly (question panel with option chips,
   masked secret prompt, plan card, todo checklist). All other channels receive
   a serialized plain-text fallback at turn end from
-  `AgentLoop._maybe_publish_interaction_fallback`. In the TUI the `exit_plan_mode`
+  `AgentLoop._maybe_publish_interaction_fallback`. That fallback delivers each
+  payload **once**, keyed on a digest of the serialized text: the question and
+  secret payloads are cleared by the user's next message, but a plan payload
+  deliberately outlives its turn (only `/build` closes it), so without the
+  digest every later turn would re-send the whole plan. A payload the model
+  *revises* produces different text and is delivered again. In the TUI the `exit_plan_mode`
   bubble additionally renders inline `Approve` and `Refine` action rows; selecting
   Approve publishes the `/build` command without requiring the user to type it.
   `exit_plan_mode` takes the plan body and its success criteria as two
@@ -151,6 +156,12 @@ webui-listed commands).
   last under a `## Verification` heading. Splitting them is what makes the
   requirement language-independent: durin never inspects the model's prose
   for a heading keyword, so a plan written in any language is accepted.
+  Each proposed plan also appends a `type=plan` event to the session's
+  `.meta.json`, and every exit from plan mode closes it: `/build` records
+  `executing`, a replacement plan via `/plan` records `superseded`, and
+  switching away with `/mode` records `cancelled` while dropping the pending
+  payload and the active-plan pointer. Without that last transition a plan the
+  user walked away from stayed pending forever and kept being re-delivered.
   A payload is only user-facing while the call *succeeds*: a `phase="error"`
   event is demoted to a plain trace row (webui) and loses its inline action
   rows (TUI), so a rejected call plus the model's retry never present two

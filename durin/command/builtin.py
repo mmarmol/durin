@@ -889,6 +889,36 @@ def _supersede_executing_plan(ctx: CommandContext, plan_path: str) -> None:
         mark_plan_superseded(mp, plan_id, msg_index)
 
 
+def _abandon_pending_plan(ctx: CommandContext) -> None:
+    """Close a plan that was proposed but never approved.
+
+    ``/build`` is not the only way out of plan mode — ``/mode <other>``
+    switches away too, and a plan left behind that way used to keep its
+    event at ``pending`` forever and its review payload live (channels
+    without native rendering publish a live payload as text). Clears both
+    and records the ``cancelled`` outcome. Best-effort: never breaks the
+    slash command.
+    """
+    from contextlib import suppress
+    from pathlib import Path
+
+    from durin.agent.tools.plan_mode import _ACTIVE_PLAN_PATH_KEY
+    from durin.agent.user_payloads import PENDING_PLAN_KEY
+    from durin.session.session_meta import mark_plan_cancelled
+
+    if ctx.session is None or ctx.session.metadata is None:
+        return
+    plan_path = ctx.session.metadata.pop(_ACTIVE_PLAN_PATH_KEY, None)
+    ctx.session.metadata.pop(PENDING_PLAN_KEY, None)
+    if not plan_path:
+        return
+    mp = _resolve_session_meta_path(ctx)
+    if mp is None:
+        return
+    with suppress(Exception):
+        mark_plan_cancelled(mp, Path(plan_path).stem)
+
+
 def _approve_executing_plan(ctx: CommandContext, plan_path: str) -> None:
     """Mark the active plan in session meta as approved/executing."""
     from contextlib import suppress
@@ -1133,7 +1163,11 @@ async def cmd_mode(ctx: CommandContext) -> OutboundMessage:
             if previous == target:
                 content = f"Already in **{target}** mode."
             else:
+                from durin.agent.agent_mode import PLAN_MODE
+
                 set_mode(ctx.session, target)
+                if previous == PLAN_MODE.name:
+                    _abandon_pending_plan(ctx)
                 _emit_mode_telemetry("agent_mode.switch", {
                     "from": previous,
                     "to": target,

@@ -98,3 +98,74 @@ def test_user_message_clears_pending_payloads(tmp_path):
     assert "pending_question" not in session.metadata
     assert PENDING_SECRET_KEY not in session.metadata
     assert "pending_plan_review" in session.metadata
+
+
+@pytest.mark.asyncio
+async def test_pending_plan_is_delivered_once_not_every_turn(tmp_path):
+    """A plan outlives the turn that produced it (only /build closes it), so
+    without a delivered-marker every later turn re-sent the whole plan to the
+    channel. Measured before the fix: 3 turns → 3 full plan messages."""
+    loop = _make_loop(tmp_path)
+    session = loop.sessions.get_or_create("telegram:42")
+    session.metadata["pending_plan_review"] = {
+        "path": "p.md", "plan": "# Plan\n1. step one", "verification": "tests pass",
+    }
+
+    for _ in range(3):
+        await loop._maybe_publish_interaction_fallback(
+            channel="telegram", chat_id="42", session_key="telegram:42",
+        )
+
+    sent = [
+        call.args[0]
+        for call in loop.bus.publish_outbound.call_args_list
+        if "step one" in (call.args[0].content or "")
+    ]
+    assert len(sent) == 1
+    # The payload itself survives — /build still owns its lifecycle.
+    assert "pending_plan_review" in session.metadata
+
+
+@pytest.mark.asyncio
+async def test_revised_plan_is_delivered_again(tmp_path):
+    """Delivery is keyed on the text, so a refined plan reaches the user."""
+    loop = _make_loop(tmp_path)
+    session = loop.sessions.get_or_create("telegram:42")
+    session.metadata["pending_plan_review"] = {"path": "p.md", "plan": "# Plan v1"}
+    await loop._maybe_publish_interaction_fallback(
+        channel="telegram", chat_id="42", session_key="telegram:42",
+    )
+    session.metadata["pending_plan_review"] = {"path": "p.md", "plan": "# Plan v2"}
+    await loop._maybe_publish_interaction_fallback(
+        channel="telegram", chat_id="42", session_key="telegram:42",
+    )
+
+    bodies = [c.args[0].content or "" for c in loop.bus.publish_outbound.call_args_list]
+    assert sum("Plan v1" in b for b in bodies) == 1
+    assert sum("Plan v2" in b for b in bodies) == 1
+
+
+@pytest.mark.asyncio
+async def test_question_still_delivered_once_per_ask(tmp_path):
+    """The same guard must not swallow a re-asked question."""
+    loop = _make_loop(tmp_path)
+    session = loop.sessions.get_or_create("telegram:42")
+    session.metadata["pending_question"] = {
+        "question_id": "q1", "question": "Which color?", "options": ["red"],
+    }
+    await loop._maybe_publish_interaction_fallback(
+        channel="telegram", chat_id="42", session_key="telegram:42",
+    )
+    await loop._maybe_publish_interaction_fallback(
+        channel="telegram", chat_id="42", session_key="telegram:42",
+    )
+    session.metadata["pending_question"] = {
+        "question_id": "q2", "question": "Which size?", "options": ["L"],
+    }
+    await loop._maybe_publish_interaction_fallback(
+        channel="telegram", chat_id="42", session_key="telegram:42",
+    )
+
+    bodies = [c.args[0].content or "" for c in loop.bus.publish_outbound.call_args_list]
+    assert sum("Which color?" in b for b in bodies) == 1
+    assert sum("Which size?" in b for b in bodies) == 1
