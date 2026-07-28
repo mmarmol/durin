@@ -95,6 +95,21 @@ Every query token is double-quoted before FTS5 to escape special characters (`%`
 
 `search_memory(workspace, query, scope="all", level="warm")` walks `memory/`, `sessions/`, and `ingested/` for literal matches. This is the only path for raw ingested artifacts (not in LanceDB or FTS5 by design) and a recovery path for not-yet-indexed files. Session turns are FTS-indexed since schema v6, so grep and FTS often produce overlapping URIs; RRF accumulates both contributions for the same URI.
 
+`search_memory` addresses a canonical page by its display path (`memory/entity_page/<ref>`) — the shape drill-down and the webui expect — so `_safe_grep_fallback` rewrites it to the bare ref before fusion and carries the display path in `path`.
+
+### The fusion-URI invariant
+
+All three arms must key a document by the **same** string, or RRF treats one document as two: it occupies two of the caller's `limit` slots and splits its score, so a well-matched document can fall below top-K even though every arm found it. The fusion key is not always the display path — per class:
+
+| Class | Fusion URI | Display path |
+|---|---|---|
+| Entity page | `<type>:<slug>` | `memory/entity_page/<type>:<slug>` |
+| Skill | `skill/<slug>` | `skills/<slug>/SKILL.md` |
+| Episodic / stable / corpus | `memory/<class>/<id>` | same |
+| Session turn | `sessions/<key>.md#turn-N` | same |
+
+The FTS indexer's `_payload_for` is the reference shape; the vector normaliser and the grep fallback both rewrite into it. The result layer re-derives the display path from the fusion URI.
+
 ### Step 3 — RRF fusion and adjustments
 
 `fuse_rrf` merges the three ranked URI lists:
