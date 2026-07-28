@@ -70,8 +70,9 @@ function CheckRow({ check }: { check: LoopRunCheck }) {
 
 // The detail view of a single loop run, shown expanded under its ActivityView
 // row: status + timestamps, origin (who/what triggered it), the task (capped,
-// expandable), the ask, an error detail (destructive tone), the goal checks
-// table, and a copyable reference to the underlying workflow run.
+// expandable), the ask, a status detail (destructive tone for error/escalated,
+// muted otherwise — interrupted is not a failure), the goal checks table, and
+// a copyable reference to the underlying workflow run.
 export function RunDetail({ run }: { run: LoopRun }) {
   const { t } = useTranslation();
   const [taskExpanded, setTaskExpanded] = useState(false);
@@ -149,7 +150,14 @@ export function RunDetail({ run }: { run: LoopRun }) {
           <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
             {t("loops.runDetail.detailLabel")}
           </span>
-          <div className="whitespace-pre-wrap break-words text-destructive">{run.detail}</div>
+          <div
+            className={cn(
+              "whitespace-pre-wrap break-words",
+              run.status === "escalated" || run.status === "error" ? "text-destructive" : "text-muted-foreground",
+            )}
+          >
+            {run.detail}
+          </div>
         </div>
       )}
 
