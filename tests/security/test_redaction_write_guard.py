@@ -100,3 +100,40 @@ def test_save_config_leaves_a_good_config_untouched_on_reject(tmp_path) -> None:
     with pytest.raises(RedactedValueError):
         save_config(_config_with_slack("«redacted»"), path)
     assert load_config(path).channels.slack["bot_token"] == "${secret:SLACK_BOT_TOKEN}"
+
+
+# ---------------------------------------------------------------------------
+# The dashboard mask is a second marker, from a different layer
+# ---------------------------------------------------------------------------
+
+
+def test_ui_mask_is_rejected_too():
+    """`mask_secrets` serves a literal credential to the dashboard as ``***``.
+    Writing that back destroys the credential exactly like the tool-result
+    marker does — the UI never returns it today, but the write path is a
+    public API and the chokepoint should not depend on client behaviour."""
+    data = {"channels": {"slack": {"bot_token": "***"}}}
+    assert find_redacted_credentials(data) == ["channels.slack.bot_token"]
+
+
+def test_ui_mask_is_rejected_with_surrounding_space():
+    data = {"providers": {"openrouter": {"api_key": "  ***  "}}}
+    assert find_redacted_credentials(data) == ["providers.openrouter.api_key"]
+
+
+def test_a_secret_reference_is_still_accepted():
+    """A reference is a pointer, not a mask — it must save."""
+    data = {"channels": {"slack": {"bot_token": "${secret:SLACK_BOT_TOKEN}"}}}
+    assert find_redacted_credentials(data) == []
+
+
+def test_a_real_credential_is_still_accepted():
+    data = {"channels": {"slack": {"bot_token": "xoxb-real-looking-token"}}}
+    assert find_redacted_credentials(data) == []
+
+
+def test_asterisks_outside_a_credential_field_are_untouched():
+    """The marker only means something in a credential-keyed field; free-form
+    config may legitimately contain ``***``."""
+    data = {"agents": {"defaults": {"persona_note": "***"}}}
+    assert find_redacted_credentials(data) == []
