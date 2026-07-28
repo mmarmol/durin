@@ -1486,6 +1486,8 @@ def _run_gateway(
             if not job.payload.loop:
                 logger.warning("loop_trigger cron job {} has no loop name; skipping", job.id)
                 return None
+            # No origin by construction: a scheduled fire has nobody waiting on
+            # it, so its outcome belongs to the loop's declared destination.
             await loops_runtime.try_fire(job.payload.loop, source="cron")
             return None
 

@@ -1,8 +1,11 @@
 from pathlib import Path
 
-from durin.agent.tools.context import ToolContext
+import pytest
+
+from durin.agent.tools.context import RequestContext, ToolContext
 from durin.agent.tools.loops import LoopsTool
 from durin.cron.service import CronService
+from durin.loops import run_log as rl
 from durin.loops.cron_sync import loop_job_id, sync_loop_jobs
 from durin.loops.runtime import LoopsRuntime
 from durin.loops.spec import parse_loop
@@ -182,3 +185,36 @@ async def test_status_unknown_loop_returns_readable_error(tmp_path):
 
     out = await tool.execute(action="status", name="nope")
     assert out.startswith("Error:")
+
+
+@pytest.mark.asyncio
+async def test_chat_fire_records_the_firing_session_as_origin(tmp_path):
+    """Without this the outcome has nowhere to go back to."""
+    rt = _runtime(tmp_path, [_wr("completed")])
+    tool = LoopsTool.create(_ctx(tmp_path, runtime=rt))
+    tool.set_context(RequestContext(
+        channel="websocket", chat_id="abc", session_key="websocket:abc"))
+    save_loop(tmp_path, parse_loop(
+        {"name": "l1", "workflow": "w1", "goal": {"intent": "done"}}))
+
+    await tool.execute(action="fire", name="l1")
+
+    run = rl.list_runs(tmp_path, "l1", limit=1)[0]
+    assert run["origin"] == {
+        "kind": "session", "session_key": "websocket:abc",
+        "channel": "websocket", "chat_id": "abc",
+    }
+
+
+@pytest.mark.asyncio
+async def test_chat_fire_without_a_context_records_no_origin(tmp_path):
+    """A surface that never injects a context must fall through to the
+    loop's declared destination, not to a half-built origin."""
+    rt = _runtime(tmp_path, [_wr("completed")])
+    tool = LoopsTool.create(_ctx(tmp_path, runtime=rt))
+    save_loop(tmp_path, parse_loop(
+        {"name": "l1", "workflow": "w1", "goal": {"intent": "done"}}))
+
+    await tool.execute(action="fire", name="l1")
+
+    assert rl.list_runs(tmp_path, "l1", limit=1)[0]["origin"] is None

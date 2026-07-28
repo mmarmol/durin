@@ -11,6 +11,7 @@ available when the surface wires a ``LoopsRuntime`` onto ``ToolContext``.
 from __future__ import annotations
 
 import json
+from contextvars import ContextVar
 from dataclasses import replace
 from typing import Any
 
@@ -64,6 +65,21 @@ class LoopsTool(Tool):
         self._ws = workspace
         self._runtime = runtime
         self._cron = cron_service
+        # Who asked. A run fired from a conversation reports back into that
+        # conversation; without this the outcome falls through to the loop's
+        # declared destination, which is often unset.
+        self._origin: ContextVar[dict | None] = ContextVar("loops_origin", default=None)
+
+    def set_context(self, ctx: Any) -> None:
+        if not ctx.session_key:
+            self._origin.set(None)
+            return
+        self._origin.set({
+            "kind": "session",
+            "session_key": ctx.session_key,
+            "channel": ctx.channel,
+            "chat_id": ctx.chat_id,
+        })
 
     @classmethod
     def enabled(cls, ctx: Any) -> bool:
@@ -177,7 +193,8 @@ class LoopsTool(Tool):
 
     async def _fire(self, name: str, task: str | None) -> str:
         try:
-            record = await self._runtime.fire(name, source="chat", task=task or None)
+            record = await self._runtime.fire(
+                name, source="chat", task=task or None, origin=self._origin.get())
         except LoopBusy as exc:
             return f"Loop '{name}' is busy: {exc}"
         except LoopNotFound as exc:
