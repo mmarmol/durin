@@ -275,15 +275,13 @@ class LoopsTool(Tool):
     ) -> None:
         """Tell whoever was promised this run's outcome that none is coming.
 
-        Best-effort and defensive: the delivery path is optional (a surface
-        can wire a runtime with no outcome callback at all) and must never
+        Best-effort: the runtime's own outcome callback is optional (a
+        surface can wire a `LoopsRuntime` with no `on_outcome` at all —
+        `report_no_outcome` itself handles that), but this call must never
         turn one background failure into a second, unhandled one.
         """
-        report = getattr(self._runtime, "report_no_outcome", None)
-        if report is None:
-            return
         try:
-            await report(name, run_id, origin=origin, reason=reason)
+            await self._runtime.report_no_outcome(name, run_id, origin=origin, reason=reason)
         except Exception:
             logger.exception(
                 "loops: could not report the failed fire of loop '{}' run {}", name, run_id,
