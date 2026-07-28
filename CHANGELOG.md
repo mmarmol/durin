@@ -5,6 +5,41 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.5.1 — 2026-07-28
+
+### Highlights
+
+- **Restarting the box no longer counted as a loop failing.** 0.5.0 taught a
+  loop run killed with its process to say `interrupted` and relaunch what never
+  started — but only when the process died abruptly. A graceful
+  `systemctl restart` cancelled the run instead, and it was recorded `error`
+  with no reason: it counted toward the stuck-loop streak, so a loop could
+  escalate because the machine was restarted rather than because it kept
+  failing, and nothing was relaunched, so whatever triggered it went unserved.
+  A run cut short by the gateway going down is now left alone for the next
+  start's sweep, which finalizes it with a reason, reports it, and relaunches
+  it when no work had started. A deliberate stop is still an error. (#497)
+- **A `${secret:NAME}` reference is resolved everywhere a credential is read.**
+  0.4.9 and 0.5.0 fixed this one site at a time; this release closes the sweep.
+  `durin status` presented the reference string instead of the secret when
+  probing a live gateway, and the cloud speech-to-text and text-to-speech
+  services built their providers straight from the raw config value — so a
+  credential kept out of the config file, the documented way, silently failed
+  to authenticate. (#495, #499)
+
+### Secrets
+
+- The config write guard also rejects the dashboard's own mask, not just the
+  tool-result redaction marker. Every web surface that displays a credential
+  was audited for whether it could round-trip a mask back into storage. (#498)
+
+### Memory
+
+- A canonical entity page is one result again. The three retrieval arms
+  disagreed on how to address it, so a single page arrived as two documents —
+  taking two of the caller's result slots and splitting its score between
+  them. (#496)
+
 ## 0.5.0 — 2026-07-28
 
 ### Highlights
