@@ -15,6 +15,11 @@ from durin.utils.atomic_write import atomic_write_text
 SCHEMA = 1
 ACTIVE_STATUSES = ("running", "needs_operator", "waiting_info")
 
+# A run killed with its process did not fail — it never produced a result.
+# The streak counter means "this loop keeps missing its goal", so a run that
+# never ran must not break a genuine streak nor extend it.
+STREAK_TRANSPARENT_STATUSES = ("interrupted",)
+
 
 def runs_root(workspace: str | Path) -> Path:
     return Path(workspace) / "loops-runs"
@@ -123,7 +128,7 @@ def consecutive_no_goal(ws, loop: str) -> int:
     n = 0
     for m in list_runs(ws, loop, limit=None):
         status = m.get("status")
-        if status in ACTIVE_STATUSES:
+        if status in ACTIVE_STATUSES or status in STREAK_TRANSPARENT_STATUSES:
             continue
         if status in ("no_goal", "error"):
             n += 1

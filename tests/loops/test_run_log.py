@@ -235,3 +235,27 @@ def test_consecutive_no_goal_skips_waiting_info(tmp_path):
         rl.start_run(tmp_path, "a", f"r{i}", source="cron", task="t")
         rl.finalize_run(tmp_path, "a", f"r{i}", status=status)
     assert rl.consecutive_no_goal(tmp_path, "a") == 3
+
+
+def test_interrupted_is_transparent_to_the_streak(tmp_path):
+    """A restart is not evidence the loop started working: failures on either
+    side of an interrupted run still count as consecutive."""
+    for i, status in enumerate(["no_goal", "no_goal", "interrupted", "no_goal"]):
+        rl.start_run(tmp_path, "l1", f"r{i}", source="cron", task="t")
+        rl.finalize_run(tmp_path, "l1", f"r{i}", status=status)
+    assert rl.consecutive_no_goal(tmp_path, "l1") == 3
+
+
+def test_done_still_breaks_the_streak(tmp_path):
+    for i, status in enumerate(["no_goal", "done", "no_goal"]):
+        rl.start_run(tmp_path, "l1", f"r{i}", source="cron", task="t")
+        rl.finalize_run(tmp_path, "l1", f"r{i}", status=status)
+    assert rl.consecutive_no_goal(tmp_path, "l1") == 1
+
+
+def test_interrupted_is_not_active(tmp_path):
+    """An interrupted run is terminal: it must not hold a single-concurrency
+    loop's only slot."""
+    rl.start_run(tmp_path, "l1", "r0", source="cron", task="t")
+    rl.finalize_run(tmp_path, "l1", "r0", status="interrupted")
+    assert rl.active_runs(tmp_path, "l1") == []
