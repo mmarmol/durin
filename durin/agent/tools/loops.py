@@ -16,10 +16,13 @@ from contextvars import ContextVar
 from dataclasses import replace
 from typing import Any
 
+from loguru import logger
+
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.schema import StringSchema, tool_parameters_schema
 from durin.loops import queue, run_log
 from durin.loops.cron_sync import sync_loop_jobs
+from durin.loops.runtime import LoopBusy
 from durin.loops.spec import LoopError, LoopNotFound, parse_loop
 from durin.loops.store import list_loops, load_loop, save_loop
 
@@ -210,11 +213,17 @@ class LoopsTool(Tool):
             return f"Loop '{name}' is busy: an active run already exists"
 
         run_id = self._runtime.reserve_run_id()
-        task_handle = asyncio.create_task(
-            self._runtime.fire(name, source="chat", task=task or None,
-                               origin=self._origin.get(), run_id=run_id))
+        origin = self._origin.get()
+        task_handle = asyncio.create_task(self._background_fire(name, task, origin, run_id))
         self._fires.add(task_handle)
         task_handle.add_done_callback(self._fires.discard)
+        if origin is None:
+            return (
+                f"Loop '{name}' started (run id: {run_id}). This surface has no "
+                "conversation origin wired, so its outcome cannot be delivered "
+                f"back here as a follow-up — use loops(action='status', "
+                f"name='{name}') to check on it."
+            )
         return (
             f"Loop '{name}' started (run id: {run_id}). Its outcome will be "
             "delivered to you automatically as a follow-up message when it "
@@ -222,6 +231,34 @@ class LoopsTool(Tool):
             f"end your turn. Use loops(action='status', name='{name}') only if "
             "the user asks for an update."
         )
+
+    async def _background_fire(
+        self, name: str, task: str | None, origin: dict | None, run_id: str,
+    ) -> None:
+        """Run the fire task in the background and never let its outcome vanish.
+
+        `asyncio.create_task` in `_fire` schedules this but nothing awaits it,
+        so any exception it raises would otherwise only surface as an
+        unretrieved-task-exception warning at GC time — the agent has already
+        been told the run started and no one is watching for the failure.
+        Mirrors matcher._fire and runtime._drain_fire: a distinct `LoopBusy`
+        branch for the loop going busy between this call's pre-check and the
+        task actually running (e.g. two fires issued in the same batch — the
+        pre-check can't see a sibling task's run until it writes its own
+        run_log entry), and a catch-all for everything else (LoopNotFound if
+        the loop is deleted mid-flight, a run_log write error, ...).
+        """
+        try:
+            await self._runtime.fire(name, source="chat", task=task or None, origin=origin, run_id=run_id)
+        except LoopBusy:
+            logger.warning(
+                "loops: chat fire for loop '{}' lost the race (now busy); run {} never started",
+                name, run_id,
+            )
+        except Exception:
+            logger.exception(
+                "loops: backgrounded chat fire for loop '{}' (run {}) failed", name, run_id,
+            )
 
     async def _answer(self, name: str, run_id: str, answer: str) -> str:
         try:

@@ -87,25 +87,14 @@ async def test_fire_delegates_to_runtime_and_returns_status_text(tmp_path):
     assert "l1" in out
     assert "started" in out.lower()
 
-    await asyncio.sleep(0)  # let the backgrounded fire run to completion
+    # Wait for the backgrounded fire's task directly rather than sleep(0):
+    # sleep(0) only yields long enough to work because the fakes here never
+    # actually suspend — gather is correct regardless of how many awaits the
+    # fire path takes internally.
+    await asyncio.gather(*tool._fires)
     run = rl.list_runs(tmp_path, "l1", limit=1)[0]
     assert run["status"] == "done"
     assert run["goal_reached"] is True
-
-
-async def test_fire_busy_returns_readable_message_not_traceback(tmp_path):
-    save_loop(tmp_path, parse_loop({"name": "l1", "workflow": "w1", "goal": {"intent": "done"}}))
-    rt = _runtime(tmp_path, [_wr("needs_input", out="q?", needs_input_node="g")])
-    # Seed an active run directly: a backgrounded fire has not yet recorded
-    # its own run_log entry by the time it returns, so a second immediate
-    # fire can no longer rely on the first call's side effects for busy.
-    rl.start_run(tmp_path, "l1", "existing", source="cron", task="t")
-    tool = LoopsTool.create(_ctx(tmp_path, runtime=rt))
-
-    out = await tool.execute(action="fire", name="l1")
-
-    assert "busy" in out.lower()
-    assert "Traceback" not in out
 
 
 async def test_answer_resumes_run(tmp_path):
@@ -114,7 +103,7 @@ async def test_answer_resumes_run(tmp_path):
     tool = LoopsTool.create(_ctx(tmp_path, runtime=rt))
 
     await tool.execute(action="fire", name="l1")
-    await asyncio.sleep(0)  # let the backgrounded fire reach needs_operator
+    await asyncio.gather(*tool._fires)  # let the backgrounded fire reach needs_operator
     run_id = rl.list_runs(tmp_path, "l1", limit=1)[0]["run_id"]
 
     out = await tool.execute(action="answer", name="l1", run_id=run_id, answer="yes")
@@ -209,7 +198,7 @@ async def test_chat_fire_records_the_firing_session_as_origin(tmp_path):
         {"name": "l1", "workflow": "w1", "goal": {"intent": "done"}}))
 
     await tool.execute(action="fire", name="l1")
-    await asyncio.sleep(0)  # let the backgrounded fire record its origin
+    await asyncio.gather(*tool._fires)  # let the backgrounded fire record its origin
 
     run = rl.list_runs(tmp_path, "l1", limit=1)[0]
     assert run["origin"] == {
@@ -228,7 +217,7 @@ async def test_chat_fire_without_a_context_records_no_origin(tmp_path):
         {"name": "l1", "workflow": "w1", "goal": {"intent": "done"}}))
 
     await tool.execute(action="fire", name="l1")
-    await asyncio.sleep(0)  # let the backgrounded fire record its origin
+    await asyncio.gather(*tool._fires)  # let the backgrounded fire record its origin
 
     assert rl.list_runs(tmp_path, "l1", limit=1)[0]["origin"] is None
 
@@ -260,7 +249,7 @@ async def test_fire_returns_before_the_workflow_finishes(tmp_path):
     assert "started" in out.lower()
     assert "lr0" in out
     released.set()
-    await asyncio.sleep(0)
+    await asyncio.gather(*tool._fires)
 
 
 @pytest.mark.asyncio
@@ -277,3 +266,64 @@ async def test_busy_loop_still_reports_synchronously(tmp_path):
     out = await tool.execute(action="fire", name="l1")
 
     assert "busy" in out.lower()
+    assert "Traceback" not in out
+
+
+@pytest.mark.asyncio
+async def test_runtime_loop_busy_from_a_batched_fire_is_logged_not_swallowed(tmp_path, caplog):
+    """Two fires issued back-to-back both pass the tool's synchronous
+    pre-check (neither's run_log entry exists until its own backgrounded
+    task actually runs), so the runtime's own active_runs check is what
+    raises LoopBusy for the second one. That exception must be logged, not
+    vanish as an unretrieved-task-exception warning at GC time — which is
+    what happened before `_fire` wrapped the background task."""
+    import logging
+
+    from loguru import logger as loguru_logger
+
+    started = asyncio.Event()
+    released = asyncio.Event()
+
+    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None):
+        started.set()
+        await released.wait()
+        return _wr("completed", run_id=run_id)
+
+    async def judge(intent, assertions, evidence):
+        return {"intent_met": True, "assertions": {}}
+
+    ids = iter([f"lr{i}" for i in range(10)])
+    rt = LoopsRuntime(tmp_path, workflow_exec=workflow_exec, judge=judge,
+                      keep_runs=20, check_timeout_s=5, run_id_factory=lambda: next(ids))
+    tool = LoopsTool.create(_ctx(tmp_path, runtime=rt))
+    save_loop(tmp_path, parse_loop({"name": "l1", "workflow": "w1", "goal": {"intent": "done"}}))
+
+    reply_a = await tool.execute(action="fire", name="l1")
+    reply_b = await tool.execute(action="fire", name="l1")
+    assert "lr0" in reply_a and "started" in reply_a.lower()
+    assert "lr1" in reply_b and "started" in reply_b.lower()
+    pending = set(tool._fires)  # both tasks, captured before either has run a single step
+
+    handler_id = loguru_logger.add(caplog.handler, format="{message}", level="WARNING")
+    try:
+        with caplog.at_level(logging.WARNING):
+            # Let lr0's fire start and reach run_log.start_run, then suspend
+            # on `released` — this is the window in which lr1's fire runs and
+            # loses the runtime's active_runs race.
+            await started.wait()
+
+            runs = {r["run_id"]: r["status"] for r in rl.list_runs(tmp_path, "l1", limit=5)}
+            assert runs == {"lr0": "running"}  # lr1 never reached start_run
+
+            released.set()
+            await asyncio.gather(*pending)  # must not raise: LoopBusy is caught, not propagated
+    finally:
+        loguru_logger.remove(handler_id)
+
+    busy_warnings = [
+        r for r in caplog.records if "lr1" in r.getMessage() and "busy" in r.getMessage()
+    ]
+    assert len(busy_warnings) == 1, (
+        f"expected exactly one logged warning for lr1's lost race, got: "
+        f"{[r.getMessage() for r in caplog.records]}"
+    )
