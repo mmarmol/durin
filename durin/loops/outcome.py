@@ -72,7 +72,11 @@ def route(outcome: LoopOutcome, *, operator_channel: str | None) -> Destination 
     if origin:
         if origin.get("kind") == "session" and origin.get("session_key"):
             return Destination(kind="session", origin=origin)
-        if origin.get("channel") and origin.get("chat_id"):
+        # A webhook origin has no reply contract (channel_meta.build_reply
+        # has no webhook case) — it must not be classified as a thread
+        # destination, or the outcome falls into a channel nothing can
+        # deliver to instead of reaching the operator backstop below.
+        if origin.get("channel") and origin.get("channel") != "webhook" and origin.get("chat_id"):
             return Destination(kind="thread", origin=origin)
     if operator_channel and outcome.status in ACTIONABLE_STATUSES:
         return Destination(kind="operator", origin=None)

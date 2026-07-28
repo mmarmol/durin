@@ -1636,7 +1636,7 @@ def _run_gateway(
         with neither is logged rather than dropped in silence — a loop that
         finishes into the void is the failure this exists to prevent.
         """
-        from durin.loops.outcome import route
+        from durin.loops.outcome import ACTIONABLE_STATUSES, route
 
         try:
             spec = _load_loop(config.workspace_path, outcome.loop)
@@ -1646,7 +1646,7 @@ def _run_gateway(
 
         dest = route(outcome, operator_channel=spec.operator_channel)
         if dest is None:
-            if outcome.status in ("no_goal", "error", "escalated", "interrupted"):
+            if outcome.status in ACTIONABLE_STATUSES:
                 logger.warning(
                     "loops: loop '{}' run {} ended '{}' with no origin and no "
                     "operator_channel — nobody was told",
@@ -1657,7 +1657,9 @@ def _run_gateway(
         if dest.kind == "session":
             from durin.bus.events import InboundMessage
 
-            origin = dest.origin or {}
+            # route() only returns kind="session" when origin["session_key"]
+            # is truthy, so origin is guaranteed a non-None dict here.
+            origin = dest.origin
             await bus.publish_inbound(InboundMessage(
                 channel="system",
                 sender_id="loop_outcome",
@@ -1676,8 +1678,11 @@ def _run_gateway(
                 await bus.publish_outbound(
                     _loop_channel_meta.build_reply(dest.origin, outcome.summary))
             except ValueError:
-                # A channel with no reply contract (e.g. a webhook origin).
-                logger.debug("loops: outcome origin has no reply channel; not delivered")
+                # A channel with no reply contract. route() already excludes
+                # webhook origins from kind="thread", so reaching this means
+                # an origin carries a channel build_reply doesn't know —
+                # worth surfacing at a level the daemon actually logs.
+                logger.warning("loops: outcome origin has no reply channel; not delivered")
             return
 
         await _deliver_to_channel(OutboundMessage(

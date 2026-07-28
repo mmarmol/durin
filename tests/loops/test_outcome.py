@@ -92,3 +92,23 @@ def test_done_is_delivered_when_somebody_asked():
 @pytest.mark.parametrize("status", ["no_goal", "error", "escalated", "interrupted"])
 def test_actionable_statuses_reach_a_standing_destination(status):
     assert route(_out(status=status, origin=None), operator_channel="slack") is not None
+
+
+def test_a_webhook_origin_falls_back_to_the_operator_channel():
+    """A webhook origin has no reply contract (channel_meta.build_reply has no
+    webhook case). It carries both `channel` and `chat_id` truthy just like a
+    real thread origin, so route() must special-case it rather than
+    classifying it as a thread destination nothing can deliver into — the
+    operator backstop is the only way this outcome reaches anybody."""
+    origin = {"channel": "webhook", "chat_id": "my-hook", "thread": None, "subject": "my-hook", "reply": {}}
+    dest = route(_out(origin=origin), operator_channel="slack")
+    assert dest.kind == "operator"
+
+
+def test_a_webhook_origin_with_no_operator_channel_is_undeliverable():
+    """Same shape as above, but with nobody configured as the backstop:
+    route() must return None (not a thread destination) so the caller's
+    "nobody was told" warning fires instead of silently dropping into a
+    build_reply ValueError."""
+    origin = {"channel": "webhook", "chat_id": "my-hook", "thread": None, "subject": "my-hook", "reply": {}}
+    assert route(_out(status="error", origin=origin), operator_channel=None) is None
