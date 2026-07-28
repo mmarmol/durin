@@ -327,3 +327,51 @@ async def test_runtime_loop_busy_from_a_batched_fire_is_logged_not_swallowed(tmp
         f"expected exactly one logged warning for lr1's lost race, got: "
         f"{[r.getMessage() for r in caplog.records]}"
     )
+
+
+@pytest.mark.asyncio
+async def test_a_chat_fire_that_loses_the_race_is_retracted_to_the_session(tmp_path):
+    """The tool's reply tells the agent the outcome arrives as a follow-up and
+    to stop polling. When the backgrounded fire loses the concurrency race the
+    run never exists, so no outcome is ever emitted for it — the agent waits
+    forever on a message that only a log line records. The retraction has to
+    travel the same delivery path the outcome would have."""
+    started = asyncio.Event()
+    released = asyncio.Event()
+    outcomes = []
+
+    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None):
+        started.set()
+        await released.wait()
+        return _wr("completed", run_id=run_id)
+
+    async def judge(intent, assertions, evidence):
+        return {"intent_met": True, "assertions": {}}
+
+    async def on_outcome(outcome):
+        outcomes.append(outcome)
+
+    ids = iter([f"lr{i}" for i in range(10)])
+    rt = LoopsRuntime(tmp_path, workflow_exec=workflow_exec, judge=judge, keep_runs=20,
+                      check_timeout_s=5, run_id_factory=lambda: next(ids),
+                      on_outcome=on_outcome)
+    tool = LoopsTool.create(_ctx(tmp_path, runtime=rt))
+    tool.set_context(RequestContext(
+        channel="websocket", chat_id="abc", session_key="websocket:abc"))
+    save_loop(tmp_path, parse_loop({"name": "l1", "workflow": "w1", "goal": {"intent": "done"}}))
+
+    await tool.execute(action="fire", name="l1")
+    await tool.execute(action="fire", name="l1")   # loses the race inside the runtime
+    pending = set(tool._fires)
+    await started.wait()
+    released.set()
+    await asyncio.gather(*pending)
+
+    retractions = [o for o in outcomes if o.run_id == "lr1"]
+    assert len(retractions) == 1, f"lr1 was announced and never retracted: {outcomes}"
+    assert "produced no outcome" in retractions[0].summary
+    # Routed back to the session that asked, exactly like a real outcome.
+    assert retractions[0].origin == {
+        "kind": "session", "session_key": "websocket:abc",
+        "channel": "websocket", "chat_id": "abc",
+    }

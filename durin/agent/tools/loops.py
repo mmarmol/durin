@@ -247,6 +247,11 @@ class LoopsTool(Tool):
         pre-check can't see a sibling task's run until it writes its own
         run_log entry), and a catch-all for everything else (LoopNotFound if
         the loop is deleted mid-flight, a run_log write error, ...).
+
+        Both branches also retract the run id through the runtime's outcome
+        path. The agent was already told this run's outcome arrives as a
+        follow-up and instructed not to poll, so a failure the log alone
+        records leaves it waiting on a message that will never come.
         """
         try:
             await self._runtime.fire(name, source="chat", task=task or None, origin=origin, run_id=run_id)
@@ -255,9 +260,33 @@ class LoopsTool(Tool):
                 "loops: chat fire for loop '{}' lost the race (now busy); run {} never started",
                 name, run_id,
             )
-        except Exception:
+            await self._report_no_outcome(
+                name, run_id, origin,
+                "the loop went busy with another run before this one could start",
+            )
+        except Exception as exc:
             logger.exception(
                 "loops: backgrounded chat fire for loop '{}' (run {}) failed", name, run_id,
+            )
+            await self._report_no_outcome(name, run_id, origin, f"the fire failed: {exc}")
+
+    async def _report_no_outcome(
+        self, name: str, run_id: str, origin: dict | None, reason: str,
+    ) -> None:
+        """Tell whoever was promised this run's outcome that none is coming.
+
+        Best-effort and defensive: the delivery path is optional (a surface
+        can wire a runtime with no outcome callback at all) and must never
+        turn one background failure into a second, unhandled one.
+        """
+        report = getattr(self._runtime, "report_no_outcome", None)
+        if report is None:
+            return
+        try:
+            await report(name, run_id, origin=origin, reason=reason)
+        except Exception:
+            logger.exception(
+                "loops: could not report the failed fire of loop '{}' run {}", name, run_id,
             )
 
     async def _answer(self, name: str, run_id: str, answer: str) -> str:
