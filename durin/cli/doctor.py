@@ -870,7 +870,9 @@ def check_extras_drift() -> CheckResult:
     you've had installed at some point — in ``config.install.extras``.
     This check compares that list against what's currently importable
     and warns when something dropped (typically a fresh `pipx install`
-    after an uninstall, which wipes extras).
+    after an uninstall, which wipes extras). Names durin no longer ships
+    are skipped — they cannot be reinstalled, so warning about them would
+    send the user at a package that does not exist.
     """
     try:
         cfg = load_config()
@@ -880,7 +882,13 @@ def check_extras_drift() -> CheckResult:
             "Could not load config.",
             category="extras",
         )
-    tracked = set(cfg.install.extras or [])
+    # An extra durin no longer ships cannot be "restored": suggesting
+    # `pip install durin-agent[<gone>]` for it would just fail. The tracked
+    # list is append-only history, so retired names stay in it forever —
+    # compare only against the extras this build still knows about.
+    known = set(_EXTRAS_IMPORT_PROBES)
+    retired = set(cfg.install.extras or []) - known
+    tracked = set(cfg.install.extras or []) & known
     if not tracked:
         return CheckResult(
             "previously installed extras", "ok",
@@ -899,9 +907,12 @@ def check_extras_drift() -> CheckResult:
             category="extras",
             extras_list=sorted_missing,
         )
+    detail = f"{len(tracked)} present — {', '.join(sorted(tracked))}"
+    if retired:
+        detail += f" (ignoring retired: {', '.join(sorted(retired))})"
     return CheckResult(
         "previously installed extras", "ok",
-        f"{len(tracked)} present — {', '.join(sorted(tracked))}",
+        detail,
         category="extras",
     )
 
