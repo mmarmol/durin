@@ -1251,7 +1251,7 @@ async def check_model_ping_async(
 ) -> CheckResult:
     """Async core of :func:`check_model_ping`.
 
-    A 3-token round-trip via the same provider/client the agent uses.
+    A tiny round-trip via the same provider/client the agent uses.
     Safe to ``await`` from inside a running event loop (the gateway's
     HTTP handlers need this). Pass ``cfg`` to ping an in-memory config.
     """
@@ -1287,7 +1287,20 @@ async def check_model_ping_async(
             )
         except Exception as e:  # noqa: BLE001
             return f"{type(e).__name__}: {e}"
-        if getattr(resp, "content", None) is None and not getattr(resp, "tool_calls", None):
+        # Providers don't raise on API failures: they hand back an ordinary
+        # response whose content is the error text, so this outranks the
+        # content check below — otherwise a dead provider pings green.
+        if getattr(resp, "finish_reason", None) == "error":
+            return str(getattr(resp, "content", None) or "provider error")
+        # A reasoning model can burn the whole tiny output budget on reasoning
+        # tokens and never reach visible content. It still answered, which is
+        # the only thing a ping asks; judging it on prose alone fails a model
+        # that works fine at real max_tokens.
+        if (
+            getattr(resp, "content", None) is None
+            and not getattr(resp, "tool_calls", None)
+            and not getattr(resp, "reasoning_content", None)
+        ):
             return "empty response"
         return None  # success
 
