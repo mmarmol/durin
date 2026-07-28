@@ -118,6 +118,53 @@ def _isolate_telemetry_dir(tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
+def _ban_repo_root_writes():
+    """Fail the test that drops a file into the repo root, naming it.
+
+    Production code builds paths by formatting whatever it was handed:
+    ``cross_process_lock`` does ``Path(f"{target}.lock")``. Hand it a mock and
+    the f-string yields the mock's *repr*, which is a relative path — so the
+    lock file is created in the process CWD, i.e. the repo root, under a name
+    like ``<MagicMock name='SessionManager()._get_session_path()'>.lock``. A
+    mock is ``isinstance(..., os.PathLike)``, so no type check at the lock
+    catches this; only the artifact on disk reveals it.
+
+    Those files are invisible in ``git status`` (``.gitignore`` excludes them
+    so one never reaches a commit), which is exactly why the leak survived for
+    so long: nothing failed, and the mess was silently swept aside instead of
+    the test being fixed. This turns it back into a loud failure at the moment
+    it happens, attributed to the test that caused it.
+
+    The rule is deliberately general — no test may create anything in the repo
+    root, whatever the mechanism. Tests write to ``tmp_path`` or the isolated
+    ``DURIN_HOME``. Names the pytest/coverage machinery owns are exempt. A
+    leaked *file* is deleted so the tree is left clean; a leaked directory is
+    reported but left alone rather than recursively removed, since guessing
+    what is safe to delete is how a guard becomes the accident.
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    tooling = {".pytest_cache", ".coverage", "__pycache__"}
+    before = set(os.listdir(root))
+    yield
+    leaked = sorted(n for n in set(os.listdir(root)) - before if n not in tooling)
+    for name in leaked:
+        entry = root / name
+        if entry.is_file():
+            entry.unlink()
+    if leaked:
+        pytest.fail(
+            "test wrote into the repo root: "
+            + ", ".join(repr(n) for n in leaked)
+            + ". Tests write under tmp_path or DURIN_HOME. A '<MagicMock ...>' "
+            "name means a mocked path object reached real filesystem code — "
+            "give the double a real tmp_path instead of mocking the path away.",
+            pytrace=False,
+        )
+
+
+@pytest.fixture(autouse=True)
 def _test_default_author_scope():
     with author_scope("agent_created"):
         yield
