@@ -27,7 +27,7 @@ def _isolate_telemetry_dir(tmp_path, monkeypatch):
 def _mk_runtime(tmp_path, results, judge_verdict=None, asks=None, counterpart_asks=None, queue_ttl_s=3600):
     calls = {"exec": []}
 
-    async def workflow_exec(name, task, *, resume_run_id=None):
+    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None):
         calls["exec"].append((name, task, resume_run_id))
         return results.pop(0)
 
@@ -191,7 +191,7 @@ async def test_fire_reuses_already_bound_telemetry(tmp_path, _isolate_telemetry_
 async def test_workflow_exec_exception_sets_detail_not_ask(tmp_path):
     _save(tmp_path)
 
-    async def workflow_exec(name, task, *, resume_run_id=None):
+    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None):
         raise RuntimeError("boom")
 
     async def judge(intent, assertions, evidence):
@@ -216,7 +216,7 @@ async def test_judge_exception_finalizes_as_error_not_stuck_running(tmp_path):
     _save(tmp_path)
     calls = {"exec": []}
 
-    async def workflow_exec(name, task, *, resume_run_id=None):
+    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None):
         calls["exec"].append((name, task, resume_run_id))
         return _wr("completed")
 
@@ -383,7 +383,7 @@ async def test_answer_releases_claim_even_when_resumed_exec_raises(tmp_path):
     results = [_wr("needs_input", out="[TO:counterpart] confirm?", needs_input_node="gate")]
     calls = {"exec": []}
 
-    async def workflow_exec(name, task, *, resume_run_id=None):
+    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None):
         calls["exec"].append((name, task, resume_run_id))
         if results:
             return results.pop(0)
@@ -498,3 +498,28 @@ async def test_post_finish_drain_re_queues_on_loop_busy(tmp_path, monkeypatch):
     requeued = loop_queue.pop_fresh(tmp_path, "l1", 3600)
     assert requeued["content"] == "drained task"
     assert requeued["origin"] == origin
+
+
+async def test_fire_records_the_workflow_run_id_before_the_workflow_finishes(tmp_path):
+    """The manifest must name the workflow run while it is still in flight —
+    a crash sweep reading it later is the only way to tell whether any work
+    had started."""
+    _save(tmp_path)
+    seen = {}
+
+    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None):
+        # Mid-flight: read back what the loop already persisted.
+        seen["mid_flight"] = rl.read_run(tmp_path, "l1", "lr0").get("workflow_run_id")
+        seen["passed"] = run_id
+        return WorkflowResult(status="completed", final_output="out", run_id=run_id)
+
+    async def judge(intent, assertions, evidence):
+        return {"intent_met": True, "assertions": {}}
+
+    ids = iter([f"lr{i}" for i in range(10)])
+    rt = LoopsRuntime(tmp_path, workflow_exec=workflow_exec, judge=judge, keep_runs=20,
+                      check_timeout_s=5, run_id_factory=lambda: next(ids))
+    await rt.fire("l1", source="chat")
+
+    assert seen["passed"] is not None
+    assert seen["mid_flight"] == seen["passed"]

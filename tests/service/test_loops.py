@@ -38,7 +38,7 @@ def _svc(tmp_path, *, runtime=None) -> LoopsService:
 def _runtime(tmp_path, results, judge_verdict=None):
     calls = {"exec": []}
 
-    async def workflow_exec(name, task, *, resume_run_id=None):
+    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None):
         calls["exec"].append((name, task, resume_run_id))
         return results.pop(0)
 

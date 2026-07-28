@@ -135,11 +135,17 @@ class LoopsRuntime:
         run_id = self._run_id()
         effective_task = task or spec.goal_intent
         run_log.start_run(self._ws, spec.name, run_id, source=source, task=effective_task, origin=origin)
+        # Reserve the workflow's run id and persist it BEFORE launching: if this
+        # process dies mid-run, the reserved id is the only handle a later sweep
+        # has for asking whether the workflow ever started.
+        wf_run_id = self._run_id()
+        run_log.update_run(self._ws, spec.name, run_id, workflow_run_id=wf_run_id)
         emit_tool_event("loops.fired", {"loop": spec.name, "source": source, "skipped": False})
         try:
-            result = await self._exec(spec.workflow, effective_task, resume_run_id=None)
+            result = await self._exec(spec.workflow, effective_task,
+                                      resume_run_id=None, run_id=wf_run_id)
         except Exception as exc:  # noqa: BLE001
-            return await self._finish(spec, run_id, "error", None, detail=str(exc))
+            return await self._finish(spec, run_id, "error", wf_run_id, detail=str(exc))
         return await self._interpret(spec, run_id, result)
 
     async def _interpret(self, spec: LoopSpec, run_id: str, result) -> dict:

@@ -609,6 +609,7 @@ class WorkflowsService:
         input_files: list[str] | None = None,
         output_format: str | None = None,
         resume_run_id: str | None = None,
+        run_id: str | None = None,
     ) -> WorkflowResult:
         if self._app_config is None or self._sessions is None:
             raise UnavailableError("running a workflow is not available on this surface")
@@ -669,7 +670,8 @@ class WorkflowsService:
             workspace=ws, pick_runner=judge.pick,
             max_node_visits=wf_cfg.max_node_visits,
             parallel_llm_concurrency=wf_cfg.parallel_llm_concurrency,
-            parallel_script_concurrency=wf_cfg.parallel_script_concurrency)
+            parallel_script_concurrency=wf_cfg.parallel_script_concurrency,
+            run_id_factory=(lambda: run_id) if run_id else None)
         result = await asyncio.to_thread(
             engine.run, workflow, task,
             input_files=input_files,

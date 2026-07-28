@@ -15,7 +15,7 @@ def _cron(tmp_path) -> CronService:
 
 
 def _runtime(tmp_path, results):
-    async def workflow_exec(name, task, *, resume_run_id=None):
+    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None):
         return results.pop(0)
 
     async def judge(intent, assertions, evidence):
