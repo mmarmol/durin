@@ -25,7 +25,8 @@ def _isolate_telemetry_dir(tmp_path, monkeypatch):
 
 
 def _mk_runtime(tmp_path, results, judge_verdict=None, asks=None,
-                counterpart_asks=None, queue_ttl_s=3600, on_outcome=None):
+                counterpart_asks=None, queue_ttl_s=3600, on_outcome=None,
+                is_shutting_down=None):
     calls = {"exec": []}
 
     async def workflow_exec(name, task, *, resume_run_id=None, run_id=None):
@@ -46,7 +47,7 @@ def _mk_runtime(tmp_path, results, judge_verdict=None, asks=None,
                       check_timeout_s=5, on_operator_ask=on_ask,
                       on_counterpart_ask=on_counterpart_ask,
                       run_id_factory=lambda: next(ids), queue_ttl_s=queue_ttl_s,
-                      on_outcome=on_outcome)
+                      on_outcome=on_outcome, is_shutting_down=is_shutting_down)
     return rt, calls
 
 
@@ -586,6 +587,111 @@ async def test_needs_operator_emits_no_outcome(tmp_path):
 
     assert outcomes == []
     assert len(asks) == 1
+
+
+@pytest.mark.asyncio
+async def test_cancelled_during_shutdown_leaves_the_run_running_for_the_sweep(tmp_path):
+    """A graceful shutdown (SIGTERM) cancels the in-flight workflow, which
+    surfaces here identically to a deliberate stop: _interpret's aborted/
+    cancelled branch. Finalizing it here — even as `interrupted` — would take
+    it out of `running`, and find_orphans only ever looks at `running`
+    manifests: finalizing here is what would silently disable the one
+    mechanism (the next start's orphan sweep) that actually relaunches the
+    pending cause. So during a shutdown the manifest must be left exactly as
+    start_run wrote it, and nothing must be reported — the run isn't over."""
+    outcomes = []
+
+    async def on_outcome(outcome):
+        outcomes.append(outcome)
+
+    _save(tmp_path)
+    rt, _ = _mk_runtime(tmp_path, [_wr_for("cancelled")], on_outcome=on_outcome,
+                        is_shutting_down=lambda: True)
+    m = await rt.fire("l1", source="cron")
+
+    assert m["status"] == "running"
+    assert m["owner"] is not None
+    record = rl.read_run(tmp_path, "l1", m["run_id"])
+    assert record["status"] == "running"
+    assert record["finished_at"] is None
+    assert outcomes == []
+
+    # The owning process is later found dead — what a real restart discovers.
+    rl.update_run(tmp_path, "l1", m["run_id"], owner={"pid": 999999, "started": "long ago"})
+    orphans = rl.find_orphans(tmp_path)
+    assert [o["run_id"] for o in orphans] == [m["run_id"]]
+
+
+@pytest.mark.asyncio
+async def test_cancelled_outside_shutdown_still_finalizes_error(tmp_path):
+    """The deliberate-cancel case (a user calling tasks(action='stop') on the
+    workflow) must not regress: outside a shutdown, `cancelled` still
+    finalizes `error` and still reports it — nobody wants a run someone chose
+    to stop relaunched."""
+    outcomes = []
+
+    async def on_outcome(outcome):
+        outcomes.append(outcome)
+
+    _save(tmp_path)
+    rt, _ = _mk_runtime(tmp_path, [_wr_for("cancelled")], on_outcome=on_outcome)
+    m = await rt.fire("l1", source="manual")
+
+    assert m["status"] == "error"
+    assert m["finished_at"] is not None
+    assert [o.status for o in outcomes] == ["error"]
+
+
+@pytest.mark.asyncio
+async def test_aborted_during_shutdown_behaves_like_cancelled(tmp_path):
+    """`aborted` (a node failure) reaches the same else branch as `cancelled`
+    in _interpret — during a shutdown it gets identical treatment."""
+    outcomes = []
+
+    async def on_outcome(outcome):
+        outcomes.append(outcome)
+
+    _save(tmp_path)
+    rt, _ = _mk_runtime(tmp_path, [_wr_for("aborted")], on_outcome=on_outcome,
+                        is_shutting_down=lambda: True)
+    m = await rt.fire("l1", source="cron")
+
+    assert m["status"] == "running"
+    assert outcomes == []
+
+
+@pytest.mark.asyncio
+async def test_shutdown_left_run_is_interrupted_and_relaunched_by_the_next_sweep(tmp_path):
+    """End-to-end: once the run left `running` by a shutdown is found with a
+    dead owner (what a restart discovers), the existing sweep_orphans path —
+    already verified live for the abrupt-death case — takes over identically:
+    finalize `interrupted`, report it, and relaunch it since nothing had
+    started under its reserved workflow run id."""
+    from durin.workflow import run_log as wf_rl
+
+    outcomes = []
+
+    async def on_outcome(outcome):
+        outcomes.append(outcome)
+
+    _save(tmp_path)
+    rt, calls = _mk_runtime(tmp_path, [_wr_for("cancelled"), _wr_for("completed")],
+                            on_outcome=on_outcome, is_shutting_down=lambda: True)
+    m = await rt.fire("l1", source="cron")
+    assert m["status"] == "running"
+    wf_run_id = rl.read_run(tmp_path, "l1", m["run_id"])["workflow_run_id"]
+    assert wf_rl.read_manifest(tmp_path, "w1", wf_run_id) is None
+
+    # The owning process is later found dead — what a real restart discovers.
+    rl.update_run(tmp_path, "l1", m["run_id"], owner={"pid": 999999, "started": "long ago"})
+
+    handled = await rt.sweep_orphans()
+    await _drain()
+
+    assert handled == [m["run_id"]]
+    assert rl.read_run(tmp_path, "l1", m["run_id"])["status"] == "interrupted"
+    assert [o.status for o in outcomes] == ["interrupted", "done"]
+    assert len(calls["exec"]) == 2  # the original attempt, then the relaunch
 
 
 @pytest.mark.asyncio

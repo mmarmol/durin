@@ -70,7 +70,8 @@ def _bind_loop_telemetry(name: str):
 class LoopsRuntime:
     def __init__(self, workspace, *, workflow_exec, judge, keep_runs: int,
                  check_timeout_s: int, on_operator_ask=None, on_counterpart_ask=None,
-                 run_id_factory=None, queue_ttl_s: int = 3600, on_outcome=None):
+                 run_id_factory=None, queue_ttl_s: int = 3600, on_outcome=None,
+                 is_shutting_down=None):
         self._ws = Path(workspace)
         self._exec = workflow_exec
         self._judge = judge
@@ -81,6 +82,11 @@ class LoopsRuntime:
         self._run_id = run_id_factory or (lambda: uuid.uuid4().hex[:12])
         self._queue_ttl_s = queue_ttl_s
         self._on_outcome = on_outcome
+        # () -> bool, true once the gateway has begun a graceful shutdown.
+        # Consulted only by _interpret's aborted/cancelled branch, to tell a
+        # workflow cancelled BY that shutdown apart from one a user
+        # deliberately stopped — both arrive here as the same result.
+        self._is_shutting_down = is_shutting_down or (lambda: False)
         # Strong references for sweep_orphans' backgrounded relaunches (see
         # asyncio's own warning: a task with no other reference can be
         # garbage-collected mid-flight). Discarded via the task's own
@@ -354,6 +360,24 @@ class LoopsRuntime:
             record = run_log.finalize_run(self._ws, spec.name, run_id, status="no_goal",
                                           workflow_run_id=wf_run_id, goal_reached=False)
         else:  # aborted / cancelled
+            if self._is_shutting_down():
+                # A graceful shutdown (SIGTERM) cancels every in-flight
+                # workflow the same way a deliberate tasks(action='stop')
+                # does — both arrive here identically. They must not be
+                # treated alike: a deliberate stop really is over and stays
+                # 'error' (below), but a run cut short by the gateway going
+                # down has not failed, only not finished yet. Finalizing it
+                # here — even as 'interrupted' — would take it out of
+                # 'running', and find_orphans only ever looks at 'running'
+                # manifests: that would silently disable the one mechanism
+                # (the next start's orphan sweep) that finalizes it with a
+                # reason, reports it, and relaunches it if nothing had
+                # started. So leave the manifest exactly as it is — same
+                # status, same owner — and report nothing: the run isn't
+                # over.
+                return run_log.read_run(self._ws, spec.name, run_id) or {
+                    "run_id": run_id, "loop": spec.name, "status": "running",
+                }
             record = run_log.finalize_run(self._ws, spec.name, run_id, status="error",
                                           workflow_run_id=wf_run_id, goal_reached=False)
         return await self._post_finish(spec, run_id, record)
