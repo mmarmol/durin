@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from durin.providers.speech import SpeechAudio, SpeechSynthesisProvider
+from durin.security.secrets import resolve_secret
 
 
 def _build_provider(name: str, config: Any) -> SpeechSynthesisProvider:
@@ -24,7 +25,7 @@ def _build_provider(name: str, config: Any) -> SpeechSynthesisProvider:
         from durin.providers.speech import OpenAISpeechProvider
 
         return OpenAISpeechProvider(
-            api_key=config.openai.api_key,
+            api_key=resolve_secret(config.openai.api_key),
             api_base=config.openai.api_base,
             language=config.language,
         )
