@@ -583,8 +583,8 @@ against its own queue.
 `durin/service/loops.py`) is computed fresh on every request from the loop's
 run manifests (`run_log.list_runs`) — nothing about it is persisted or
 cached; the numbers only ever reflect whatever runs are still on disk
-(subject to `keep_runs` pruning, §4a/§6). Five fields carry the actual
-stats:
+(subject to `keep_runs` pruning, §4a/§6). The fields on `LoopStatsResult`
+(`durin/service/loops.py`) carry the actual stats:
 
 - **`outcomes`** — the loop's terminal runs (`done`, `no_goal`, `escalated`,
   `error`, `interrupted` — never `running`, `needs_operator`, or
@@ -602,15 +602,15 @@ stats:
   than dividing by zero.
 - **`escalation_rate`** — `counts["escalated"] / resolved`, the same
   null-safety and the same `resolved` denominator as `convergence`.
-- **`counts`** — a full tally across all eight statuses (`running`,
-  `needs_operator`, `waiting_info`, `done`, `no_goal`, `escalated`,
-  `error`, `interrupted`), each starting at zero.
+- **`counts`** — a full tally across every status in `_ALL_STATUSES`
+  (`durin/service/loops.py`: `run_log.ACTIVE_STATUSES` plus the terminal
+  statuses the `outcomes` bullet above lists), each starting at zero.
 - **`pending_events`** — the loop's current queue depth (`queue.pending`,
   §4k), the same number the Definitions list's queued-count badge shows.
 
 `counts` walks every retained run regardless of status. `outcomes` looks at
-the wider terminal subset (all five terminal statuses, including
-`interrupted`) — a loop with many retained runs but few terminal ones shows
+the wider terminal subset (`_TERMINAL_STATUSES` in `durin/service/loops.py`,
+including `interrupted`) — a loop with many retained runs but few terminal ones shows
 all of them (up to the 20 cap). `convergence` and `escalation_rate` narrow
 further, to the resolved subset that excludes `interrupted` — a loop with
 many interrupted runs but few resolved ones still divides only over the
