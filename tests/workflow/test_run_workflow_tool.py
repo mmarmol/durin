@@ -407,3 +407,72 @@ def test_format_result_warns_on_missing_declared_artifacts():
     out = _format_result(res, output_files=True)
     assert "evidence.json" in out
     assert "declared" in out.lower() and "not produced" in out.lower()
+
+
+@pytest.mark.asyncio
+async def test_run_uses_the_default_saved_after_the_tool_was_built(tmp_path):
+    """Switching the default model (settings screen -> save_config) must reach the
+    NEXT workflow run, not only the next gateway restart.
+
+    The tool is constructed once at boot with the config snapshot of that moment;
+    a run that resolves its provider from that snapshot keeps calling the model
+    the operator already moved away from.
+    """
+    _write_workflow(tmp_path, "w", {
+        "name": "w", "start": "a",
+        "nodes": [{"id": "a", "kind": "work", "prompt": "p", "next": None}],
+    })
+    boot = SimpleNamespace(resolve_default_preset=lambda: "old-preset",
+                           tools=ToolsConfig(), workflow=WorkflowConfig())
+    saved = SimpleNamespace(resolve_default_preset=lambda: "new-preset",
+                            tools=ToolsConfig(), workflow=WorkflowConfig())
+    sessions = SessionManager(workspace=tmp_path)
+    ctx = SimpleNamespace(workspace=str(tmp_path), sessions=sessions, app_config=boot,
+                          provider_snapshot_loader=lambda *a, **k: None)
+    tool = RunWorkflowTool.create(ctx)
+
+    fake_provider = MagicMock(spec=LLMProvider)
+    fake_provider.get_default_model.return_value = "test-model"
+    seen: list = []
+
+    def _capture(config, *, preset=None, **kw):
+        seen.append(preset)
+        return fake_provider
+
+    with patch("durin.config.loader.load_config", return_value=saved), \
+         patch("durin.config.loader.resolve_config_env_vars", side_effect=lambda c: c), \
+         patch("durin.providers.factory.make_provider", side_effect=_capture), \
+         patch("durin.agent.runner.AgentRunner.run",
+               AsyncMock(return_value=AgentRunResult(final_content="ok", messages=[]))):
+        await tool.execute(name="w", task="t", background=False)
+
+    assert seen == ["new-preset"]
+
+
+@pytest.mark.asyncio
+async def test_run_falls_back_to_the_injected_config_without_a_live_context(tmp_path):
+    """Embedded/SDK surfaces build the tool with an explicit config and no live
+    context — those keep using exactly the config they were handed."""
+    _write_workflow(tmp_path, "w", {
+        "name": "w", "start": "a",
+        "nodes": [{"id": "a", "kind": "work", "prompt": "p", "next": None}],
+    })
+    injected = SimpleNamespace(resolve_default_preset=lambda: "injected-preset",
+                               tools=ToolsConfig(), workflow=WorkflowConfig())
+    tool = RunWorkflowTool.create(SimpleNamespace(
+        workspace=str(tmp_path), sessions=SessionManager(workspace=tmp_path), app_config=injected))
+
+    fake_provider = MagicMock(spec=LLMProvider)
+    fake_provider.get_default_model.return_value = "test-model"
+    seen: list = []
+
+    def _capture(config, *, preset=None, **kw):
+        seen.append(preset)
+        return fake_provider
+
+    with patch("durin.providers.factory.make_provider", side_effect=_capture), \
+         patch("durin.agent.runner.AgentRunner.run",
+               AsyncMock(return_value=AgentRunResult(final_content="ok", messages=[]))):
+        await tool.execute(name="w", task="t", background=False)
+
+    assert seen == ["injected-preset"]
