@@ -48,6 +48,7 @@ def start_run(ws, loop: str, run_id: str, *, source: str, task: str, origin: dic
         "schema": SCHEMA, "run_id": run_id, "loop": loop, "status": "running",
         "source": source, "task": task[:8000], "origin": origin, "workflow_run_id": None,
         "ask": None, "detail": None, "checks": None, "goal_reached": None,
+        "work_started": None,
         "started_at": time.time(), "finished_at": None,
         # Which process is executing this run — the crash sweep flips any
         # "running" manifest whose owner is no longer alive.
@@ -64,7 +65,7 @@ def update_run(ws, loop: str, run_id: str, **fields) -> dict:
 def finalize_run(ws, loop: str, run_id: str, *, status: str,
                  workflow_run_id: str | None = None, ask: str | None = None,
                  detail: str | None = None, checks: list | None = None,
-                 goal_reached: bool | None = None) -> dict:
+                 goal_reached: bool | None = None, work_started: bool | None = None) -> dict:
     record = read_run(ws, loop, run_id) or {"schema": SCHEMA, "run_id": run_id, "loop": loop}
     record.update({
         "status": status, "finished_at": time.time(),
@@ -75,6 +76,11 @@ def finalize_run(ws, loop: str, run_id: str, *, status: str,
         "detail": detail[:2000] if detail is not None else record.get("detail"),
         "checks": checks if checks is not None else record.get("checks"),
         "goal_reached": goal_reached if goal_reached is not None else record.get("goal_reached"),
+        # Whether the workflow itself ever started — set only by sweep_orphans
+        # for an `interrupted` run. Carried as a fact (not inferred later from
+        # `detail`'s wording) so build_outcome knows whether the reserved
+        # workflow run id genuinely might hold partial work.
+        "work_started": work_started if work_started is not None else record.get("work_started"),
     })
     return _write(ws, loop, run_id, record)
 

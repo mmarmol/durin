@@ -717,8 +717,12 @@ Every run that reaches a terminal status — `done`, `no_goal`, `escalated`,
 best-effort, like every other notification path in this doc: a delivery
 failure is logged, never turned into a failed run. The outcome carries the
 run's `status`, `goal_reached`, a short `summary` (the status plus any
-`detail`, plus — for `interrupted` — a note that the reserved workflow run
-may hold partial work), and the run's recorded `origin`.
+`detail`, plus — only for an `interrupted` run where `sweep_orphans` found
+work already in flight — a note that the reserved workflow run may hold
+partial work) and the run's recorded `origin`. A never-started `interrupted`
+run carries no such note: its `detail` already says the workflow never got
+going, and hedging that it "may" hold partial work in the same breath would
+contradict that.
 
 `route` (`durin/loops/outcome.py`) is the pure decision of where that outcome
 goes, given the outcome and the loop's `operator_channel`:

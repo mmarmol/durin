@@ -40,7 +40,12 @@ def build_outcome(loop: str, record: dict) -> LoopOutcome:
     detail = record.get("detail")
     if detail:
         parts.append(str(detail))
-    if status == "interrupted" and wf_run_id:
+    # Only claim partial work when sweep_orphans found the workflow's own
+    # manifest already on disk (`work_started`, persisted on the record —
+    # see run_log.finalize_run). workflow_run_id alone is not evidence: `_run`
+    # mints and persists it before execute() ever starts, so it is present
+    # even for a run that was killed before the workflow took a single step.
+    if status == "interrupted" and wf_run_id and record.get("work_started"):
         parts.append(f"Workflow run {wf_run_id} may hold partial work.")
 
     return LoopOutcome(

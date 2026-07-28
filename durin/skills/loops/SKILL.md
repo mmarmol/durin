@@ -122,7 +122,11 @@ Two distinct humans may be in the picture:
   question is delivered **in-context on the origin channel** (same mail thread, same
   telegram topic, same slack thread), and their reply wakes exactly that run.
 - **The operator** — the durin owner. Untagged asks park as `needs_operator` in the
-  webui's Loops → Activity inbox, answerable there or via the `loops` tool.
+  webui's Loops → Activity inbox, answerable there or via the `loops` tool. If the loop
+  has an `operator_channel` configured, durin also proactively pushes the ask there (and
+  does the same for a stuck-loop escalation) — a heads-up so you can notice on that
+  channel without watching the webui, not a reply lane: answering still goes through the
+  webui or the `loops` tool, never by replying in that channel.
 
 Separately from asks, **every run that ends reports its outcome**. It goes back to
 wherever the run was fired from — the conversation that asked for it, the channel

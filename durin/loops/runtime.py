@@ -198,7 +198,8 @@ class LoopsRuntime:
                       "interrupted by a restart with work already in flight")
             record = run_log.finalize_run(self._ws, loop_name, run_id,
                                           status="interrupted", workflow_run_id=wf_run_id,
-                                          detail=detail, goal_reached=False)
+                                          detail=detail, goal_reached=False,
+                                          work_started=work_started)
             await self._post_finish(spec, run_id, record)
             handled.append(run_id)
 

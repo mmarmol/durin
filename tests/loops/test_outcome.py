@@ -24,10 +24,24 @@ def test_error_summary_carries_the_detail():
     assert "provider timeout" in out.summary
 
 
-def test_interrupted_summary_carries_the_workflow_run_id():
-    """The operator's handle for retaking partial work."""
-    out = build_outcome("nightly", _record(status="interrupted", workflow_run_id="wf9"))
+def test_interrupted_summary_carries_the_workflow_run_id_when_work_had_started():
+    """The operator's handle for retaking partial work — only offered when
+    sweep_orphans found the workflow's own manifest already on disk."""
+    out = build_outcome("nightly", _record(status="interrupted", workflow_run_id="wf9",
+                                           work_started=True))
     assert "wf9" in out.summary
+    assert "may hold partial work" in out.summary
+
+
+def test_interrupted_summary_omits_partial_work_claim_when_nothing_started():
+    """workflow_run_id is minted and persisted before execute() ever runs (see
+    LoopsRuntime._run), so it is present even for a run killed before the
+    workflow took a single step. The summary must not hedge that unstarted
+    work 'may' exist — it must say nothing happened, not contradict itself."""
+    out = build_outcome("nightly", _record(status="interrupted", workflow_run_id="wf9",
+                                           work_started=False))
+    assert "may hold partial work" not in out.summary
+    assert "wf9" not in out.summary
 
 
 def test_origin_rides_along_untouched():

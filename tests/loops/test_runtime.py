@@ -611,6 +611,10 @@ async def test_orphan_with_no_workflow_manifest_is_relaunched(tmp_path):
     assert handled == ["dead"]
     assert rl.read_run(tmp_path, "l1", "dead")["status"] == "interrupted"
     assert [o.status for o in outcomes] == ["interrupted", "done"]
+    # Nothing had started, so the summary must not hedge that partial work
+    # might exist — that would contradict the "before the workflow started"
+    # detail in the very same message.
+    assert "may hold partial work" not in outcomes[0].summary
     # Relaunched with the original task, as a NEW run.
     assert calls["exec"][0][1] == "the original task"
     assert rl.read_run(tmp_path, "l1", "dead")["finished_at"] is not None
@@ -645,6 +649,10 @@ async def test_orphan_whose_workflow_manifest_exists_is_not_relaunched(tmp_path)
     assert handled == ["dead"]
     assert rl.read_run(tmp_path, "l1", "dead")["status"] == "interrupted"
     assert [o.status for o in outcomes] == ["interrupted"]
+    # Work was in flight — the summary must name the workflow run id so the
+    # operator has a handle for retaking it.
+    assert "wf1" in outcomes[0].summary
+    assert "may hold partial work" in outcomes[0].summary
     assert calls["exec"] == []
 
 
