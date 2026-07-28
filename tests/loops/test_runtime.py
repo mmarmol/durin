@@ -819,12 +819,10 @@ async def test_a_slow_relaunch_on_one_loop_does_not_delay_another_loops_outcome(
     in the same pass — and, since a `single`-concurrency loop's manifest
     stays "running" until finalized, made that other loop look busy for the
     whole time too. Finalizing and notifying every orphan must happen in one
-    pass, before either relaunch is even started."""
+    pass, and must not wait on either relaunch's own completion."""
     release = asyncio.Event()
-    started = asyncio.Event()
 
     async def slow_workflow_exec(name, task, *, resume_run_id=None, run_id=None):
-        started.set()
         await release.wait()
         return _wr_for("completed")
 
@@ -853,10 +851,13 @@ async def test_a_slow_relaunch_on_one_loop_does_not_delay_another_loops_outcome(
     # legibly. Bound it explicitly so a regression fails fast and self-explains.
     handled = await asyncio.wait_for(rt.sweep_orphans(), 5)
 
-    # Neither relaunch has even started running yet — sweep_orphans returned
-    # without waiting on either one, proving the finalize/notify pass below
-    # did not sit behind a slow (or in this test, indefinitely blocked) relaunch.
-    assert not started.is_set()
+    # `release` is only set below, after these assertions, so neither relaunch
+    # can possibly have completed yet — whichever one has merely been given an
+    # event-loop turn is a scheduling detail (asyncio.wait_for's own internals
+    # differ between Python 3.11 and 3.12+ in how many turns that takes) and
+    # is not the guarantee under test. sweep_orphans returning here at all —
+    # instead of hanging on the bound below until the 5s timeout — is what
+    # proves both orphans' finalize/notify pass did not wait on either relaunch.
     assert set(handled) == {"dead-a", "dead-b"}
     assert rl.read_run(tmp_path, "a", "dead-a")["status"] == "interrupted"
     assert rl.read_run(tmp_path, "b", "dead-b")["status"] == "interrupted"
