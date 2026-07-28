@@ -69,7 +69,7 @@ flowchart TD
 
     OBS_TOOL --> OBSQ
     SESS --> SIG
-    SIG -->|log_observation| OBSQ[".observations.jsonl\nOPEN / APPLIED / DECLINED\nJaccard dedup, count>=2"]
+    SIG -->|log_observation| OBSQ[".observations.jsonl\nOPEN / APPLIED / DECLINED / UPSTREAM\nJaccard dedup, count>=2"]
 
     subgraph SkillExtract["Skill-extract pass (daily cron, agentic)"]
         SE["run_skill_extract_pass\nsub-agent: search -> acquire seed -> write,\nor author from scratch"]
@@ -289,16 +289,29 @@ provenance.
   complaint identically twice. A match bumps `count` and `last_seen` on the
   existing record instead of creating a duplicate; `count >= 2` is the
   recurrence signal curation looks for.
-- **Lifecycle.** `OPEN` → `APPLIED` or `DECLINED`, set in bulk by
-  `apply_dispositions` from the curation judge's per-observation verdicts, or
-  one at a time by `resolve_observation` when the user resolves a record by
-  hand (see the API surface below). `DECLINED` records are kept **active**
-  (not archived) — they are the judge's memory against re-proposing something
-  already rejected, and a user's manual decline feeds that same memory.
-  `APPLIED` records are moved to `.observations.archive.jsonl` by
-  `archive_resolved`, called at the **start** of the next curation pass so an
-  applied record gets one full cycle of visibility (e.g. in the webui backlog)
-  before leaving the active file.
+- **Lifecycle.** `OPEN` → `APPLIED`, `DECLINED` or `UPSTREAM`. The first two are
+  set in bulk by `apply_dispositions` from the curation judge's per-observation
+  verdicts, or one at a time by `resolve_observation` when the user resolves a
+  record by hand (see the API surface below); `UPSTREAM` is a manual-only exit.
+  `DECLINED` and `UPSTREAM` records are kept **active** (not archived) — together
+  they are the judge's memory against re-proposing something already settled,
+  which `suppressed_observations` reads. `APPLIED` records are moved to
+  `.observations.archive.jsonl` by `archive_resolved`, called at the **start** of
+  the next curation pass so an applied record gets one full cycle of visibility
+  (e.g. in the webui backlog) before leaving the active file.
+- **The `UPSTREAM` exit — the one route curation cannot take.** Curation only
+  reviews `auto` **workspace** skills, so an observation logged against a skill
+  durin *ships* is never shown to the judge and never resolves: it stays `OPEN`
+  forever, and the only exits on offer would be a lie (`APPLIED` claims a local
+  change that never happened) or a distortion (`DECLINED` rejects a note that is
+  usually correct). Applying such a note locally is worse than it looks — a
+  builtin can only be edited by forking it into the workspace, and that copy
+  shadows the packaged one, so the install stops receiving that skill's
+  improvements from every later release for the sake of a gap that belongs to
+  durin itself. `UPSTREAM` records that fact: the note is accepted, the fix is
+  owed by durin rather than by this workspace, and the record leaves the OPEN
+  queue while still holding the judge back from re-proposing it. The webui offers
+  it only on rows whose `source` is `builtin`.
 - **Skill-ref validity.** A `skill` value is either an existing skill name,
   the literal `"all"` (a cross-cutting record not scoped to one skill), or
   `new:<name>` (a coverage gap, consumed by skill-extract rather than
@@ -551,9 +564,9 @@ decisions about external content are never made silently.
 | `_recent_sessions_text` | `durin/memory/dream_passes.py` | Head+tail windowing of recent session transcripts for the extract prompt. |
 | `_resolve_gap_observations` / `_norm` | `durin/memory/dream_passes.py` | Closes `new:*` gap observations by exact or normalized name match against newly-authored skills. |
 | `discover_skill_signals` | `durin/agent/skill_signals.py` | Hindsight pass: detects generalizing corrections/gaps from a session's turns, tail-truncated; logs via `log_observation`. |
-| `log_observation` / `open_observations` / `declined_observations` | `durin/agent/skill_observations.py` | Append-with-dedup, and read the OPEN/DECLINED views the curation judge consumes. |
+| `log_observation` / `open_observations` / `suppressed_observations` | `durin/agent/skill_observations.py` | Append-with-dedup, and read the OPEN view plus the settled (DECLINED + UPSTREAM) view the curation judge consumes. |
 | `apply_dispositions` / `archive_resolved` | `durin/agent/skill_observations.py` | Bulk status transition from judge verdicts; move APPLIED records to the archive file at the next pass's start. |
-| `resolve_observation` | `durin/agent/skill_observations.py` | Single-record manual resolution (`applied`/`declined`) behind `POST /api/v1/skills/observations/{id}/resolve`; emits `skill.observation_resolved`. |
+| `resolve_observation` | `durin/agent/skill_observations.py` | Single-record manual resolution (`applied`/`declined`/`upstream`) behind `POST /api/v1/skills/observations/{id}/resolve`; emits `skill.observation_resolved`. |
 | `add_principle` / `retire_principle` / `active_principles` | `durin/agent/skill_observations.py` | Cross-cutting principles store, capped at `PRINCIPLES_CAP`. |
 | `curate_catalog` | `durin/agent/skill_curation.py` | Daily delta curation over `auto` workspace skills: backfill, delta build, judge, apply, stamp. |
 | `suggest_manual_skills` | `durin/agent/skill_curation.py` | Parallel curation pass over `manual` skills that enqueues suggestions instead of applying them. |

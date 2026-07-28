@@ -165,13 +165,14 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
             _shutil.rmtree(rep.qdir, ignore_errors=True)
 
     # The judge sees OPEN observations for the skills under review (plus
-    # cross-skill "all" records), and the compact DECLINED history so it
-    # doesn't re-propose rejected changes.
+    # cross-skill "all" records), and the compact history of records already
+    # taken off the queue by hand — rejected, or routed to durin itself — so it
+    # doesn't re-propose them.
     in_scope = set(selected) | {"all"}
     obs_shown = [r for r in open_obs if r.get("skill") in in_scope]
     declined_shown = [
         {"id": r.get("id"), "skill": r.get("skill"), "issue": r.get("issue")}
-        for r in so.declined_observations(workspace)
+        for r in so.suppressed_observations(workspace)
         if r.get("skill") in in_scope
     ]
 
@@ -216,6 +217,12 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
                 logger.warning("curation: skipping fuse with out-of-scope sources %s", a.get("sources"))
                 _emit("skill.curation_action", action="fuse", skill=a.get("target"), applied=False)
                 continue
+            # Same reason as the evolve guard below: a field the judge forgot is
+            # one skipped action, not a KeyError that kills the rest of the pass.
+            if not a.get("target") or not a.get("content") or not a.get("sources"):
+                logger.warning("curation: skipping incomplete fuse of %s", a.get("target"))
+                _emit("skill.curation_action", action="fuse", skill=a.get("target"), applied=False)
+                continue
             r = ss.dream_fuse_skills(workspace, target=a["target"], content=a["content"],
                                      sources=a["sources"], rationale=a.get("rationale", "fuse"),
                                      files=_normalize_files(a.get("files")) or None,
@@ -253,6 +260,17 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
             if a.get("name") not in selected:
                 logger.warning("curation: skipping evolve of out-of-scope skill %s", a.get("name"))
                 _emit("skill.curation_action", action="evolve", skill=a.get("name"), applied=False)
+                continue
+            # An evolve missing its old/new pair used to raise KeyError here and
+            # abort the whole pass mid-flight — losing every remaining action AND
+            # the review stamps, so the same delta came back the next night. A
+            # malformed action is one skipped action, never a dead pass.
+            if "old" not in a or "new" not in a:
+                logger.warning("curation: skipping evolve of %s — action carries no %s",
+                               a.get("name"),
+                               "old text" if "old" not in a else "new text")
+                _emit("skill.curation_action", action="evolve", skill=a.get("name"),
+                     applied=False)
                 continue
             r = ss.apply_skill_edit(workspace, a["name"], old=a["old"], new=a["new"],
                                     rationale=a.get("rationale", "evolve"))

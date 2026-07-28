@@ -1572,6 +1572,9 @@
       "resolve": "Mark handled",
       "dismiss": "Dismiss",
       "dismissHint": "Dismissed observations are remembered so curation won't re-propose them.",
+      "upstream": "Goes to durin",
+      "upstreamHint": "The fix belongs in durin's own skill: takes it off this queue without claiming a local change. Remembered so curation won't re-propose it.",
+      "builtinNote": "durin ships this skill, so nightly curation never acts on these notes — applying one here means forking the shipped skill, which stops it receiving updates. Route it to durin instead.",
       "kinds": {
         "correction": "correction",
         "gap": "gap",

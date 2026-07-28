@@ -11,9 +11,9 @@ from durin.agent.skill_curation import curate_catalog
 from durin.agent.skill_observations import (
     active_principles,
     add_principle,
-    declined_observations,
     log_observation,
     open_observations,
+    suppressed_observations,
 )
 
 
@@ -83,7 +83,7 @@ def test_declined_disposition_remembered_and_shown_to_judge(tmp_path):
 
     curate_catalog(ws, judge=lambda p: json.dumps({
         "actions": [], "observations": [{"id": 1, "disposition": "declined"}]}))
-    assert [r["id"] for r in declined_observations(ws)] == [1]
+    assert [r["id"] for r in suppressed_observations(ws)] == [1]
 
     # next run: a fresh OPEN obs triggers review; declined history is in prompt
     _obs(ws, skill="stable", issue="another problem entirely")

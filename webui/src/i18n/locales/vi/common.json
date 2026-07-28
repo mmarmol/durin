@@ -1509,6 +1509,9 @@
       "resolve": "Đánh dấu đã xử lý",
       "dismiss": "Bỏ qua",
       "dismissHint": "Các quan sát bị bỏ qua sẽ được ghi nhớ để quá trình giám tuyển không đề xuất lại.",
+      "upstream": "Gửi tới durin",
+      "upstreamHint": "Bản sửa thuộc về skill của chính durin: đưa ghi chú ra khỏi hàng đợi này mà không tuyên bố một thay đổi cục bộ. Được ghi nhớ để việc curation không đề xuất lại.",
+      "builtinNote": "Skill này do durin cung cấp, nên curation ban đêm không bao giờ xử lý các ghi chú này — áp dụng ở đây nghĩa là fork skill đi kèm, và nó sẽ không còn nhận cập nhật. Hãy gửi tới durin.",
       "kinds": {
         "correction": "sửa lỗi",
         "gap": "thiếu sót",

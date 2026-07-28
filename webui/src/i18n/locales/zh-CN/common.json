@@ -1509,6 +1509,9 @@
       "resolve": "标记为已处理",
       "dismiss": "忽略",
       "dismissHint": "被忽略的观察记录会被记住，策展不会再次提出。",
+      "upstream": "交给 durin",
+      "upstreamHint": "修复属于 durin 自带技能：将其从此队列移除，且不声称做过本地改动。会被记住，以免整理流程再次提出。",
+      "builtinNote": "该技能随 durin 一起提供，夜间整理不会处理这些记录——在此应用等于分叉自带技能，之后就收不到更新了。请交给 durin 处理。",
       "kinds": {
         "correction": "修正",
         "gap": "缺口",

@@ -165,10 +165,14 @@ function ObservationsBadge({ count }: { count?: number }) {
 function ObservationsPanel({
   skill,
   token,
+  builtin,
   onResolved,
 }: {
   skill: string;
   token: string;
+  /** A skill durin ships. Curation never acts on these records — applying one
+   * would mean forking the shipped skill — so they get the upstream exit. */
+  builtin?: boolean;
   onResolved: () => void | Promise<void>;
 }) {
   const { t } = useTranslation();
@@ -188,7 +192,10 @@ function ObservationsPanel({
     void load();
   }, [load]);
 
-  const resolve = async (id: number, disposition: "applied" | "declined") => {
+  const resolve = async (
+    id: number,
+    disposition: "applied" | "declined" | "upstream",
+  ) => {
     setBusyId(id);
     setErr(null);
     try {
@@ -215,6 +222,11 @@ function ObservationsPanel({
       <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
         {t("skills.observations.title")}
       </p>
+      {builtin ? (
+        <p className="mb-2 text-[12px] text-muted-foreground">
+          {t("skills.observations.builtinNote")}
+        </p>
+      ) : null}
       <ul className="flex flex-col gap-3">
         {obs.map((o) => (
           <li key={o.id} className="flex flex-col gap-1">
@@ -235,7 +247,7 @@ function ObservationsPanel({
             <p className="text-[12px] text-muted-foreground">
               {t("skills.observations.proposal")}: {o.improvement}
             </p>
-            <div className="mt-1 flex gap-2">
+            <div className="mt-1 flex flex-wrap gap-2">
               <Button
                 variant="outline"
                 size="sm"
@@ -244,6 +256,17 @@ function ObservationsPanel({
               >
                 {t("skills.observations.resolve")}
               </Button>
+              {builtin ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={busyId === o.id}
+                  title={t("skills.observations.upstreamHint")}
+                  onClick={() => void resolve(o.id, "upstream")}
+                >
+                  {t("skills.observations.upstream")}
+                </Button>
+              ) : null}
               <Button
                 variant="ghost"
                 size="sm"
@@ -298,6 +321,29 @@ function ReviewedChip({ by }: { by: "user" | "llm" }) {
       {t("skills.review.reviewedBy", { by: who })}
     </span>
   );
+}
+
+/** What a list row should say about a skill's security state, or nothing at all.
+ *
+ * A "Revisada" chip earns its place only while it is actually suppressing a live
+ * finding. A review whose findings have since disappeared — the flagged script
+ * changed, or the skill was reviewed when nothing was flagged to begin with —
+ * asserts nothing, and used to sit on the row forever competing with the skill's
+ * own name. Falling through to the verdict badge (silent on `safe`) keeps a real
+ * caution visible in that case instead of hiding behind a stale chip. */
+function rowSecurityState(
+  row: SkillRow,
+):
+  | { kind: "reviewed"; by: "user" | "llm" }
+  | { kind: "verdict"; verdict: SkillVerdict }
+  | null {
+  if (row.review && (row.findings?.length ?? 0) > 0) {
+    return { kind: "reviewed", by: row.review.by };
+  }
+  if (row.verdict === "caution" || row.verdict === "dangerous") {
+    return { kind: "verdict", verdict: row.verdict };
+  }
+  return null;
 }
 
 /** Source registry tag shown on every search result + its detail view. durin
@@ -1133,7 +1179,9 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
               list.length === 0 ? (
                 <p className="p-4 text-[13px] text-muted-foreground">{t("skills.empty")}</p>
               ) : (
-                list.map((row) => (
+                list.map((row) => {
+                  const state = rowSecurityState(row);
+                  return (
                   <button
                     key={row.name}
                     type="button"
@@ -1145,23 +1193,35 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
                         : "hover:bg-muted/40",
                     )}
                   >
-                    <span className="flex items-center justify-between gap-2">
-                      <span className="truncate text-[14px] font-medium text-foreground">
+                    {/* The name owns its line. With name and badges sharing one
+                        line, the badges (shrink-0) squeezed the `truncate` name
+                        down to zero width — an observation count plus a review
+                        chip left the skill unidentifiable and clipped the mode
+                        badge off the right edge. */}
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-foreground">
                         {row.name}
                       </span>
-                      <span className="flex shrink-0 items-center gap-1.5">
-                        <ObservationsBadge count={row.open_observations} />
-                        {row.review ? <ReviewedChip by={row.review.by} /> : <VerdictBadge verdict={row.verdict} />}
-                        <ModeBadge mode={row.mode} />
-                      </span>
+                      <ModeBadge mode={row.mode} />
                     </span>
+                    {row.open_observations || state ? (
+                      <span className="flex flex-wrap items-center gap-1.5">
+                        <ObservationsBadge count={row.open_observations} />
+                        {state?.kind === "reviewed" ? (
+                          <ReviewedChip by={state.by} />
+                        ) : state ? (
+                          <VerdictBadge verdict={state.verdict} />
+                        ) : null}
+                      </span>
+                    ) : null}
                     <span className="truncate text-[12px] text-muted-foreground">
                       {row.source}
                       {row.provenance?.source ? ` · ${row.provenance.source}` : ""}
                     </span>
                     <UsageLine useCount={row.use_count} lastUsedMs={row.last_used_ms} />
                   </button>
-                ))
+                  );
+                })
               )
             ) : quarList.length === 0 ? (
               <p className="p-4 text-[13px] text-muted-foreground">{t("skills.pendingEmpty")}</p>
@@ -1178,8 +1238,8 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
                       : "hover:bg-muted/40",
                   )}
                 >
-                  <span className="flex items-center justify-between gap-2">
-                    <span className="truncate text-[14px] font-medium text-foreground">
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-foreground">
                       {q.name}
                     </span>
                     <SecurityChip verdict={q.verdict} />
@@ -1873,6 +1933,7 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
                   <ObservationsPanel
                     skill={detail.name}
                     token={token}
+                    builtin={skillRow?.source === "builtin"}
                     onResolved={refresh}
                   />
                 ) : null}

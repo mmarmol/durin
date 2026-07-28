@@ -99,3 +99,25 @@ async def test_write_tool_guard_registry_dirs_false_allows_isolated_staging_writ
     tool = WriteFileTool(workspace=staging, allowed_dir=staging, guard_registry_dirs=False)
     result = await tool.execute(path="skills/qr/scripts/decode.py", content="x")
     assert "Successfully wrote" in result
+
+
+@pytest.mark.parametrize(
+    ("registry", "path", "door"),
+    [
+        ("skills", "skills/x/SKILL.md", "skill_publish"),
+        ("workflows", "workflows/x.json", "workflow_write"),
+        ("loops", "loops/x.json", "loops tool"),
+    ],
+)
+def test_refusal_names_the_registry_that_actually_blocked(tmp_path, registry, path, door):
+    """The refusal has to point at the right door. One hardcoded "use
+    skill_publish" message sent an agent editing a loop definition into the
+    skills workflow, costing it several turns before it found `loops(action=…)`.
+    """
+    ws = tmp_path
+    denied = [ws / d for d in ("skills", "workflows", "loops")]
+    with pytest.raises(PermissionError) as exc:
+        resolve_workspace_path(path, ws, allowed_dir=ws, denied_subdirs=denied)
+    message = str(exc.value)
+    assert f"protected {registry} registry" in message
+    assert door in message

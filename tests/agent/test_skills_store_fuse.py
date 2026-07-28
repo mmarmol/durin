@@ -54,3 +54,39 @@ def test_fuse_refuses_existing_target(tmp_path):
     res = ss.dream_fuse_skills(ws, target="taken", content="x",
                                sources=["git-a"], rationale="r")
     assert "error" in res
+
+
+def test_read_bundle_files_skips_build_junk_and_binaries(tmp_path):
+    """Bundles travel as text. A .pyc left behind by running a bundled script
+    used to raise UnicodeDecodeError out of whichever curation action touched the
+    skill, killing the whole nightly pass over a build artifact."""
+    d = tmp_path / "skills" / "tooling"; d.mkdir(parents=True)
+    (d / "SKILL.md").write_text("---\nname: tooling\n---\nbody\n", encoding="utf-8")
+    scripts = d / "scripts"; scripts.mkdir()
+    (scripts / "run.py").write_text("print('hi')\n", encoding="utf-8")
+    cache = scripts / "__pycache__"; cache.mkdir()
+    # Real python 3.12 pyc magic — the exact byte that broke a live restructure.
+    (cache / "run.cpython-312.pyc").write_bytes(b"\xcb\x0d\x0d\x0a\x00\x00")
+    (d / "logo.png").write_bytes(b"\x89PNG\r\n\x1a\n\x00")
+    (d / ".DS_Store").write_bytes(b"\x00\x01junk")
+
+    files = ss.read_bundle_files(d)
+
+    assert files == {"scripts/run.py": "print('hi')\n"}
+
+
+def test_fuse_carries_text_bundles_past_a_stray_pyc(tmp_path):
+    ws = tmp_path / "ws"
+    _mk_auto(ws, "git-a"); _mk_auto(ws, "git-b")
+    scripts = ws / "skills" / "git-a" / "scripts"; scripts.mkdir(parents=True)
+    (scripts / "helper.sh").write_text("echo hi\n", encoding="utf-8")
+    cache = scripts / "__pycache__"; cache.mkdir()
+    (cache / "helper.cpython-312.pyc").write_bytes(b"\xcb\x0d\x0d\x0a")
+
+    res = ss.dream_fuse_skills(
+        ws, target="git-flow", content="# Git flow\n\nmerged\n",
+        sources=["git-a", "git-b"], rationale="overlap")
+
+    assert res.get("ok") is True
+    assert (ws / "skills" / "git-flow" / "scripts" / "helper.sh").is_file()
+    assert not (ws / "skills" / "git-flow" / "scripts" / "__pycache__").exists()

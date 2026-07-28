@@ -737,6 +737,31 @@ def _safe_bundle_path(rel: str) -> bool:
     return all(p not in ("", ".", "..") for p in parts)
 
 
+def read_bundle_files(skill_dir: Path) -> dict[str, str]:
+    """A skill's bundled files as ``{relative path: text}``, SKILL.md excluded.
+
+    Bundles travel as text, so two kinds of file are skipped rather than
+    inherited: build junk (``__pycache__``, dotfiles — running a bundled Python
+    script leaves .pyc next to it) and anything that isn't decodable UTF-8. Both
+    used to raise UnicodeDecodeError out of a curation action, killing the whole
+    nightly pass over a build artifact the skill never asked for.
+    """
+    out: dict[str, str] = {}
+    for f in sorted(Path(skill_dir).rglob("*")):
+        if not f.is_file() or f.name == "SKILL.md":
+            continue
+        rel = f.relative_to(skill_dir).as_posix()
+        if not _safe_bundle_path(rel):
+            continue
+        if any(p.startswith(".") or p == "__pycache__" for p in rel.split("/")):
+            continue
+        try:
+            out[rel] = f.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, ValueError):
+            logger.info("skill bundle: skipping non-text file %s", rel)
+    return out
+
+
 def _quarantine_authored_skill(workspace: Path, skill_dir: Path, rep) -> dict:
     """Relocate a just-authored skill whose bundled code scanned caution/dangerous
     into the import quarantine (the same surfaces review it: approve re-gates,
@@ -1015,12 +1040,8 @@ def dream_fuse_skills(workspace: Path, *, target: str, content: str,
         sdir = _skills_dir(workspace) / s
         if not sdir.is_dir():
             continue
-        for f in sorted(sdir.rglob("*")):
-            if not f.is_file() or f.name == "SKILL.md":
-                continue
-            rel = f.relative_to(sdir).as_posix()
-            if _safe_bundle_path(rel):
-                merged_files.setdefault(rel, f.read_text(encoding="utf-8"))
+        for rel, text in read_bundle_files(sdir).items():
+            merged_files.setdefault(rel, text)
     merged_files.update(files)
 
     store = _store_init(workspace)

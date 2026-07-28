@@ -5138,7 +5138,7 @@
       },
       "ResolveObservationCommand": {
         "additionalProperties": false,
-        "description": "Resolve one OPEN observation: ``applied`` (handled) or ``declined``.",
+        "description": "Resolve one OPEN observation: ``applied`` (handled), ``declined``\n(rejected, remembered so curation won't re-propose it) or ``upstream``\n(accepted, but it belongs to a skill durin ships, so the fix goes to durin\nitself instead of forking the shipped skill here).",
         "properties": {
           "disposition": {
             "title": "Disposition",
@@ -11412,7 +11412,7 @@
             "description": "Success"
           }
         },
-        "summary": "Resolve an open observation (applied or declined)",
+        "summary": "Resolve an open observation (applied, declined or upstream)",
         "x-required-scope": "skills:write"
       }
     },
