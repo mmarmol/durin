@@ -11,7 +11,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from durin.bus.events import InboundMessage
+from durin.config.home import durin_home
 from durin.providers.base import LLMResponse
+from durin.utils.helpers import safe_filename
 
 
 def _make_loop():
@@ -26,8 +28,17 @@ def _make_loop():
     workspace.__truediv__ = MagicMock(return_value=MagicMock())
 
     with patch("durin.agent.loop.ContextBuilder"), \
-         patch("durin.agent.loop.SessionManager"), \
+         patch("durin.agent.loop.SessionManager") as MockSessionMgr, \
          patch("durin.agent.loop.SubagentManager"):
+        # One method on this double reaches the real filesystem: a turn feeds
+        # `sessions._get_session_path(key)` to the turn lease, which formats it
+        # into `Path(f"{target}.lock")`. A bare mock formats to its own repr —
+        # a *relative* path — so the lock file gets created in the CWD (the
+        # repo root) under a `<MagicMock ...>.lock` name. Mirror the real path
+        # shape inside this test's throwaway DURIN_HOME instead.
+        MockSessionMgr.return_value._get_session_path.side_effect = (
+            lambda key: durin_home() / "sessions" / f"{safe_filename(key.replace(':', '_'))}.jsonl"
+        )
         loop = AgentLoop(bus=bus, provider=provider, workspace=workspace)
     return loop, bus
 
