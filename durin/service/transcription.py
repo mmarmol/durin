@@ -16,6 +16,8 @@ from typing import Any, Callable
 
 from loguru import logger
 
+from durin.security.secrets import resolve_secret
+
 
 @dataclass
 class TranscriptResult:
@@ -75,7 +77,7 @@ class TranscriptionService:
                 from durin.providers.transcription import GroqTranscriptionProvider
 
                 return GroqTranscriptionProvider(
-                    api_key=config.groq.api_key,
+                    api_key=resolve_secret(config.groq.api_key),
                     api_base=config.groq.api_base,
                     language=config.language,
                 )
@@ -83,7 +85,7 @@ class TranscriptionService:
                 from durin.providers.transcription import OpenAITranscriptionProvider
 
                 return OpenAITranscriptionProvider(
-                    api_key=config.openai.api_key,
+                    api_key=resolve_secret(config.openai.api_key),
                     api_base=config.openai.api_base,
                     language=config.language,
                 )
@@ -92,7 +94,7 @@ class TranscriptionService:
                 from durin.providers.transcription import OpenAITranscriptionProvider
 
                 return OpenAITranscriptionProvider(
-                    api_key=config.http.api_key,
+                    api_key=resolve_secret(config.http.api_key),
                     api_base=config.http.base_url,
                     language=config.language,
                 )
