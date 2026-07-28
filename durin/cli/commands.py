@@ -59,6 +59,40 @@ from durin import __logo__, __version__
 from durin.agent.loop import AgentLoop
 
 
+def _resolve_static_token(raw: str) -> str:
+    """Resolve the gateway's static admin token from its config value.
+
+    The value may be a ``${secret:NAME}`` reference, exactly like any other
+    channel credential — the channel resolves it at startup and `durin status`
+    resolves it for display. This read site used to take it literally, which
+    made the *reference string* the accepted password: the real token was
+    refused, and a string that is printed verbatim in config dumps and status
+    output granted ADMIN instead.
+
+    A reference that does not resolve yields no token at all. Failing closed
+    costs a lost bootstrap login; failing open would hand admin to whoever can
+    read the config.
+    """
+    if not raw:
+        return ""
+    from durin.security.secrets import (
+        SecretNotFoundError,
+        is_secret_ref,
+        resolve_secret,
+    )
+
+    if not is_secret_ref(raw):
+        return raw
+    try:
+        return resolve_secret(raw) or ""
+    except SecretNotFoundError:
+        logger.error(
+            "Gateway static token references a secret that is not in the "
+            "store; the bootstrap token is disabled until it resolves. "
+            "Issued API tokens are unaffected."
+        )
+        return ""
+
 def _sanitize_surrogates(text: str) -> str:
     """Reconstruct surrogate pairs into real characters; replace lone surrogates.
 
@@ -1997,11 +2031,12 @@ def _run_gateway(
                 # Static token lives on the websocket channel config.
                 _ws_cfg_u = getattr(config.channels, "websocket", None)
                 if isinstance(_ws_cfg_u, dict):
-                    _static_token_u = _ws_cfg_u.get("token") or ""
+                    _static_token_raw = _ws_cfg_u.get("token") or ""
                 elif _ws_cfg_u is not None:
-                    _static_token_u = getattr(_ws_cfg_u, "token", "") or ""
+                    _static_token_raw = getattr(_ws_cfg_u, "token", "") or ""
                 else:
-                    _static_token_u = ""
+                    _static_token_raw = ""
+                _static_token_u = _resolve_static_token(_static_token_raw)
 
                 _unified_app = _build_gw_app(
                     _ws_channel,
