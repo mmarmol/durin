@@ -109,10 +109,12 @@ A run's status is one of `running · needs_operator · waiting_info · done · n
 escalated · error · interrupted`.
 
 `interrupted` is not a failure: the run was killed with its process (a gateway
-restart), so it never produced a result. If no workflow had started, the loop fires a
-replacement run automatically and tells you. If work was already in flight, it stops
-and reports the workflow run id — steps may have posted somewhere external, so decide
-before re-firing. It does not count toward `stuck_after`.
+restart), so it never produced a result. If no workflow had started and the loop is
+enabled, it fires a replacement run and names it ("relaunched as `<run id>`") — and if
+that replacement then can't start, you are told that too. If the loop is paused, or if
+work was already in flight, nothing is relaunched: a run already in flight may have
+posted somewhere external, so it reports the workflow run id and leaves the decision to
+you. It does not count toward `stuck_after`.
 
 Two distinct humans may be in the picture:
 
@@ -128,12 +130,14 @@ Two distinct humans may be in the picture:
   channel without watching the webui, not a reply lane: answering still goes through the
   webui or the `loops` tool, never by replying in that channel.
 
-Separately from asks, **every run that ends reports its outcome**. It goes back to
-wherever the run was fired from — the conversation that asked for it, the channel
-thread that triggered it — and falls back to the loop's `operator_channel` when
-nothing fired it interactively. A standing destination only hears about outcomes
-worth acting on (`no_goal`, `error`, `escalated`, `interrupted`); a run somebody
-explicitly asked for reports back whatever happened, including success.
+Separately from asks, **every run that ends reports its outcome — to your side, never
+to the counterpart**. A run you fired from a conversation answers back in that
+conversation, whatever happened, including success. Everything else — cron, manual,
+webhook, and any run an inbound message triggered — goes to the loop's
+`operator_channel`, and only for outcomes worth acting on (`no_goal`, `error`,
+`escalated`, `interrupted`). An outcome is internal status: the counterpart's thread
+carries only what the workflow itself writes for them, so never word a
+`[TO:counterpart]` ask as if it were a status report.
 
 The `[TO:counterpart]` contract has one structural requirement: the workflow must
 actually **end `needs_input`** (a `cases` route to the reserved `__needs_input__`
@@ -147,7 +151,8 @@ text as final output ends the run; there is nothing to wake.
 - `loops(action="status", name=…)` — a loop's recent runs and pending asks.
 - `loops(action="fire", name=…, task?)` — start a run now. **It returns immediately
   with the run id; it does not wait.** The outcome arrives on its own as a follow-up
-  message when the run finishes — do not poll for it with sleep loops, and do not
+  message when the run finishes — and so does the bad news if the run never starts at
+  all, so silence means still running. Do not poll for it with sleep loops, and do not
   re-fire because you have not heard back. Use `action="status"` only if the user asks
   for an update. On a surface with no conversation origin wired, the tool says so in
   its reply up front instead of promising a follow-up — use `action="status"` to check

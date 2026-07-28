@@ -57,6 +57,9 @@ background and hands back a run id immediately — it never holds the agent's
 turn open for as long as the run takes. The eventual terminal outcome is
 delivered back into that same chat session as a follow-up once the run
 finishes (§4o); the tool's own response tells the agent not to poll for it.
+A backgrounded fire that never starts at all (it lost the concurrency race,
+or raised) is retracted down that same path, so the agent is never left
+waiting on a follow-up that cannot come.
 
 ## 3. Diagram
 
@@ -96,7 +99,7 @@ flowchart TD
     STREAK -->|yes| ESC[rewrite status: escalated\nloops.escalated\nnotify operator: kind=escalation]
     STREAK -->|no| TELEM[loops.run_finished]
     ESC --> TELEM
-    TELEM --> OUTCOME[emit_outcome: route\norigin session/thread first,\noperator_channel backstop — §4o]
+    TELEM --> OUTCOME[emit_outcome: route\nasking session first,\noperator_channel backstop — §4o]
     OUTCOME --> PRUNE[prune_runs\nkeep_runs, needs_operator never pruned]
 
     ORPHAN([gateway: periodic sweep\nLoopsRuntime.sweep_orphans — §4p]) --> DEAD{running manifest\nowner process dead?}
@@ -106,7 +109,7 @@ flowchart TD
     WORK -->|yes: work in flight| INT2[finalize: interrupted]
     INT1 --> POST
     INT2 --> POST
-    INT1 -.->|no work had started| RELAUNCH[background: fire\nsame source/task/origin]
+    INT1 -.->|no work had started\nAND loop enabled| RELAUNCH[background: fire\nsame source/task/origin,\nreserved run id named in the notice]
 ```
 
 ## 4. How it works
@@ -598,9 +601,9 @@ cached; the numbers only ever reflect whatever runs are still on disk
   total count of retained runs that reached `done`, `no_goal`, `escalated`,
   or `error` (not just the 20 returned in `outcomes`). `interrupted` is
   excluded from `resolved`: a run whose process died mid-flight settled
-  nothing about the loop's goal — the cause is either already relaunched or
-  left to a replacement run — so it must read as neither a success nor a
-  failure, mirroring how `run_log.consecutive_no_goal`'s own
+  nothing about the loop's goal — the cause is either picked up by a
+  replacement run or left for a human to decide on (§4p) — so it must read as
+  neither a success nor a failure, mirroring how `run_log.consecutive_no_goal`'s own
   `STREAK_TRANSPARENT_STATUSES` skips it rather than breaking or extending
   the goal streak. `None` when the loop has no resolved runs yet, rather
   than dividing by zero.
@@ -727,27 +730,32 @@ contradict that.
 `route` (`durin/loops/outcome.py`) is the pure decision of where that outcome
 goes, given the outcome and the loop's `operator_channel`:
 
-1. **Origin first.** If the run's `origin` names a chat session (`kind:
-   "session"`, set when a run is fired through the `loops` tool —
-   `LoopsTool.set_context`, `durin/agent/tools/loops.py`), the outcome goes
-   back into that same session, regardless of status. If instead the origin
-   names a channel and chat id (set when a channel trigger fires a run —
-   `TriggerMatcher._dispatch_match`, `durin/loops/matcher.py`) — other than
-   `webhook`, which has no reply contract (`channel_meta.build_reply` has no
-   webhook case) — the outcome goes back into that channel thread, also
-   regardless of status. Either way, the run answers back to whatever asked
-   for this specific result, whatever the status turned out to be.
-2. **`operator_channel` is the backstop, not an override.** Only when the run
-   has no deliverable origin (a cron/manual fire, or a webhook origin falling
-   through) does the loop's configured `operator_channel` get a say — and
-   only for an outcome worth interrupting somebody who didn't ask for this
-   particular run: `no_goal`, `error`, `escalated`, or `interrupted`
+1. **The session that asked, if there is one.** If the run's `origin` names a
+   chat session (`kind: "session"`, set when a run is fired through the
+   `loops` tool — `LoopsTool.set_context`, `durin/agent/tools/loops.py`), the
+   outcome goes back into that same session, regardless of status. Somebody
+   there genuinely asked for this specific result, so they get it whatever it
+   turned out to be.
+2. **A channel origin is never a destination.** A channel origin
+   (`TriggerMatcher._dispatch_match`, `durin/loops/matcher.py`) identifies the
+   **counterpart** — the external party the loop is corresponding with — not
+   a requester: an inbound event fired that run, nobody on durin's side did.
+   An outcome is internal status, carrying a raw exception string in `detail`
+   for an `error` run, so posting it into that thread would answer a customer
+   with durin's own plumbing. The counterpart lane carries workflow-authored
+   prose only (§4j). So a channel origin falls through to the backstop exactly
+   like a cron fire does.
+3. **`operator_channel` is the backstop, not an override.** Only when the run
+   has no session origin (a cron/manual fire, a channel- or webhook-triggered
+   run) does the loop's configured `operator_channel` get a say — and only for
+   an outcome worth interrupting somebody who didn't ask for this particular
+   run: `no_goal`, `error`, `escalated`, or `interrupted`
    (`ACTIONABLE_STATUSES`). A `done` outcome on the backstop path is
    deliberately dropped — a scheduled loop meeting its goal is the normal
    case, not something to push a notification about.
-3. **Undeliverable is logged, never silent.** `route` returns `None` when
-   neither an origin nor an actionable backstop applies (a `done` run fired
-   by cron with no operator channel, for instance). The production wiring
+4. **Undeliverable is logged, never silent.** `route` returns `None` when
+   neither a session origin nor an actionable backstop applies (a `done` run
+   fired by cron with no operator channel, for instance). The production wiring
    (`_on_loop_outcome`, `durin/cli/commands.py`) treats that as fine for a
    non-actionable status, but logs a warning when the outcome itself was
    actionable and still went nowhere — a loop quietly failing into the void
@@ -758,11 +766,18 @@ Delivery itself differs by destination kind, both in `_on_loop_outcome` and
 both best-effort: a session destination is delivered as an injected inbound
 message (`bus.publish_inbound`, tagged `injected_event: loop_outcome`) that
 asks the agent to summarize the outcome for the user in that same session,
-rather than a raw dump of the summary text; a thread or operator destination
-publishes the raw `summary` text directly (`channel_meta.build_reply` for a
-thread, a plain `OutboundMessage` for the operator channel). A thread
-destination whose origin channel `build_reply` doesn't recognize is likewise
-logged rather than silently dropped.
+rather than a raw dump of the summary text; an operator destination publishes
+the raw `summary` text as a plain `OutboundMessage` on the loop's
+`operator_channel`.
+
+**Retracting a run id that was announced early.** Two paths hand out a run id
+before the run exists: the `loops` tool's backgrounded `fire` (§2) and the
+replacement named in an interrupted notice (§4p). Both are promises that an
+outcome follows, and both can be broken — the fire loses the concurrency race,
+or raises. `LoopsRuntime.report_no_outcome` sends the retraction ("run …
+produced no outcome — …") down this same routing, carrying the announced run
+id and the same origin, so the recipient hears it instead of the miss ending
+as a log line under somebody still waiting.
 
 This is also why the chat-fired path is no longer a blocking call (§2): the
 `loops` tool's `fire` action starts the run in the background and returns a
@@ -782,6 +797,16 @@ to a fixed age cutoff. Detection is deliberately separate from deciding what
 to do about it — that decision needs the loop's definition and a delivery
 path, neither of which a bare file scan has.
 
+`LoopsRuntime.answer` re-stamps `owner` alongside the status when it flips a
+parked run back to `running`: a `needs_operator` or `waiting_info` run is
+answered hours or days later, routinely by a process that restarted since the
+fire, so leaving the original owner there would make the sweep read a live
+resume as an orphan and finalize it `interrupted` while it is still executing
+— delivering a false interruption to the very person who just answered, and
+freeing a `single` loop's slot under a run that still holds it. The workflow
+engine takes the same precaution (`run_log.start_run` runs unconditionally on
+resume, `durin/workflow/engine.py`).
+
 `LoopsRuntime.sweep_orphans` (`durin/loops/runtime.py`) is what acts on what
 `find_orphans` reports. Before it ever launches the workflow, `_run` mints
 the workflow's own run id and persists it onto the loop-run manifest
@@ -798,22 +823,44 @@ API). Treating "no nodes yet" as "safe to relaunch" would relaunch precisely
 those; treating existence itself as the line means erring the other way
 costs at most one manual re-fire.
 
-Every orphan is finalized as `interrupted` (the `detail` distinguishes
-"before the workflow started" from "with work already in flight") and run
-through the same `_post_finish` path (§4b) as any other terminal run —
-escalation check, telemetry, outcome delivery (above), pruning, queue drain —
-for every orphan in the sweep's pass, before any relaunch is even started.
-Only then, for the orphans where nothing had started, is a replacement run
-fired — each one `asyncio.create_task`'d rather than awaited inline, because
-awaiting a slow replacement workflow here would stall every later orphan's
-own finalize/notify behind it, and — since a `single`-concurrency loop's
-manifest stays `"running"` until finalized — could make an unrelated loop
-look busy to a concurrent fire attempt for the whole time. The runtime keeps
-a strong reference to each backgrounded relaunch task (discarded via its own
-done-callback) so it can't be garbage-collected mid-flight. A relaunch that
-loses the concurrency race (`LoopBusy`) is logged, not raised — the
-interrupted outcome already told somebody, and a live run for that loop is
-already serving the original cause.
+Every orphan is finalized as `interrupted`, logged (one greppable
+`reconciled orphaned loop …` line per orphan, not only for the ones that get
+relaunched), and run through the same `_post_finish` path (§4b) as any other
+terminal run — escalation check, telemetry, outcome delivery (above), pruning,
+queue drain — for every orphan in the sweep's pass, before any relaunch is
+even started. Only then, for the orphans where nothing had started, is a
+replacement run fired — each one `asyncio.create_task`'d rather than awaited
+inline, because awaiting a slow replacement workflow here would stall every
+later orphan's own finalize/notify behind it, and — since a `single`-
+concurrency loop's manifest stays `"running"` until finalized — could make an
+unrelated loop look busy to a concurrent fire attempt for the whole time. The
+runtime keeps a strong reference to each backgrounded relaunch task (discarded
+via its own done-callback) so it can't be garbage-collected mid-flight.
+
+The run's `detail` — which `build_outcome` folds into what the recipient reads
+— says which of three things happened, because a loop that silently relaunches
+itself is its own class of problem:
+
+| Situation | `detail` | Relaunched |
+|---|---|---|
+| workflow manifest exists | interrupted by a restart with work already in flight | no — it may already have acted externally |
+| nothing started, loop enabled | interrupted by a restart before the workflow started; relaunched as `<run id>` | yes |
+| nothing started, loop paused | interrupted by a restart before the workflow started; not relaunched — the loop is paused | no |
+
+Naming the replacement means minting its id in the *first* pass, via
+`reserve_run_id()` — a local id, not a fire, so the two-pass structure is
+intact — and passing it to `fire(..., run_id=...)` in the second, so the id
+announced is the id that actually runs. The paused case is the sweep's own
+check against the loaded spec: `fire` deliberately ignores `enabled` (a manual
+run-now must work on a paused loop), so without it a loop paused while the
+gateway was down would come back to life on restart.
+
+A relaunch that then doesn't happen is retracted to the same recipient
+(`report_no_outcome`, §4o), not just logged: whether it lost the concurrency
+race (`LoopBusy` — a live run for that loop is already serving the original
+cause, and a second must not be stacked on it) or raised outright, the notice
+already named a replacement, and only the recipient can judge whether what is
+running covers the cause.
 
 This runs on the gateway's own event loop — an infinite `sweep_orphans` loop,
 `_LOOPS_SWEEP_PERIOD_S` apart (`durin/cli/commands.py`) — not the daemon

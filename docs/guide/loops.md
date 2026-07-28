@@ -324,24 +324,32 @@ Once a run finishes, durin doesn't just record it for the Activity feed — it
 tries to hand you the result directly, the same way it hands you a question
 when a run needs one:
 
-- **Fired from a conversation** — a chat request, or a channel message that
-  triggered the loop — the outcome comes back into that same conversation: a
-  chat-fired run gets a follow-up message in the same session once it's
-  done; a channel-triggered run (like the support-ticket example above) gets
-  a reply into the same thread the trigger fired from. This happens
-  whatever the run's outcome was, including a plain `done`.
-- **Fired any other way** — a schedule tick, a manual "run now" from the
-  dashboard, a webhook call (which has no reply address of its own) — the
-  outcome goes to the loop's **Operator** channel instead, if one is
-  configured. Here, a `done` outcome stays quiet on purpose: a scheduled
-  loop meeting its goal is the normal case, not something worth interrupting
-  you for. Everything else — `no goal`, `escalated`, `error`, or an
-  interrupted run — is always pushed.
+- **You asked for it in chat** — the outcome comes back into that same
+  conversation, as a follow-up message once the run is done. This happens
+  whatever the outcome was, including a plain `done`: you asked, so you're
+  told. If the run never gets started at all (the loop went busy in the
+  meantime), you're told that too, rather than left waiting.
+- **Anything else** — a schedule tick, a manual "run now" from the dashboard,
+  a webhook call, or an **inbound message that triggered the loop** — the
+  outcome goes to the loop's **Operator** channel, if one is configured.
+  Here, a `done` outcome stays quiet on purpose: a scheduled loop meeting its
+  goal is the normal case, not something worth interrupting you for.
+  Everything else — `no goal`, `escalated`, `error`, or an interrupted run —
+  is always pushed.
 - **Neither** — no conversation to answer back into, and no operator
   channel configured — doesn't mean the outcome is lost: it's still sitting
   in the Activity feed (below) whenever you check. For anything but a quiet
   `done`, durin also logs a warning on its own side instead of pretending
   the outcome went somewhere.
+
+**A run's outcome never goes to the person on the other end.** When an
+inbound message triggers a loop — the support-ticket example above — the
+customer who wrote it is the party the loop is *corresponding with*, not the
+one who asked for a status report: they never requested that run, durin's
+trigger did. So the outcome goes to you (via the Operator channel), never
+into their thread. The only thing that reaches them is what the loop's own
+workflow writes for them: a question it needs answered to keep going (see
+**The workflow needs more information** above), in the loop's own words.
 
 ## Reading the Activity view
 
@@ -362,7 +370,7 @@ what it was asked to do, its status, where it came from (`cron`, `manual`,
 | no goal | Completed (or ran out of passes) but the goal wasn't reached. |
 | escalated | Missed the goal too many times in a row — an operator has been notified. |
 | error | The run failed outright (a tool/provider error, or the run was aborted). |
-| interrupted | The run's process was killed before it could finish — not a failure, and not counted as one either way. If nothing had happened yet, durin fires a fresh run to replace it automatically. |
+| interrupted | The run's process was killed before it could finish — not a failure, and not counted as one either way. If nothing had happened yet and the loop isn't paused, durin fires a fresh run to replace it automatically and names it in the run's Detail. |
 
 Each loop's row in the **Loops** tab also shows how many runs are
 currently active and how many need you, plus a queued-count badge when
@@ -396,11 +404,11 @@ status and timestamps already visible in the row, it shows:
 - **Task** — the full instruction the run's workflow was given, truncated
   with a **Show more** toggle when it's long.
 - **Ask** — the question the run is currently paused on, if any.
-- **Detail** — the specific reason behind a `no goal`, `escalated`,
-  `interrupted`, or `error` outcome: an error message for `error` (and any
-  `escalated` run that escalated from one), or, for `interrupted`, a note
-  on whether work was already under way when the process died — not
-  itself a sign that the run failed.
+- **Detail** — the specific reason behind an `escalated`, `interrupted`, or
+  `error` outcome: an error message for `error` (and any `escalated` run that
+  escalated from one), or, for `interrupted`, a note on whether work was
+  already under way when the process died and whether a replacement run was
+  fired — not itself a sign that the run failed.
 - **Checks** — a table of every goal check the run was graded against: what
   kind it was (script or assertion), the command or assertion text, and
   whether it passed, with any extra detail the check produced. A run shows no checks table
