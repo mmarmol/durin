@@ -124,27 +124,11 @@ function SecretRefRow({
     <SettingsRow title={leaf.display}>
       <MaskedSecret
         secretName={secretName}
-        serviceLabel={deriveServiceLabel(leaf.path)}
         busy={busy}
         onDisconnect={() => onSave(leaf.path, "")}
       />
     </SettingsRow>
   );
-}
-
-function deriveServiceLabel(path: string): string {
-  // `providers.zhipu.api_key` → `provider:zhipu`
-  // `channels.telegram.bot_token` → `channel:telegram`
-  // anything else → first dotted segment
-  const parts = path.split(".");
-  const head = parts[0] ?? "config";
-  const mapping: Record<string, string> = {
-    providers: "provider",
-    channels: "channel",
-  };
-  const prefix = mapping[head] ?? head;
-  const tail = parts[1] ?? "";
-  return tail ? `${prefix}:${tail}` : prefix;
 }
 
 /** One config leaf, picking the right control for its type. */

@@ -7,9 +7,15 @@ the :class:`~durin.security.secrets.SecretStore`. In replace mode
 metadata and scope are preserved. The value never enters the chat, the
 agent context, or a tool result — only the fact that the secret now
 exists is later reported back to the agent.
+
+Dismissing returns the stored entry's metadata rather than a bare flag:
+replace mode preserves whatever scope the entry already had, so a caller
+that assumed one would describe the credential wrongly to the agent.
 """
 
 from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -17,11 +23,18 @@ from textual.containers import Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Input, Label
 
+if TYPE_CHECKING:
+    from durin.service.secrets import SecretItem
+
 __all__ = ["SecretPromptScreen"]
 
 
-class SecretPromptScreen(ModalScreen[bool]):
-    """Masked prompt that stores a credential. Returns True once stored."""
+class SecretPromptScreen(ModalScreen["SecretItem | None"]):
+    """Masked prompt that stores a credential.
+
+    Returns the stored entry's metadata (never the value), or None when
+    cancelled.
+    """
 
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
@@ -110,22 +123,23 @@ class SecretPromptScreen(ModalScreen[bool]):
         self._save(event.value)
 
     def action_cancel(self) -> None:
-        self.dismiss(False)
+        self.dismiss(None)
 
     def _save(self, value: str) -> None:
         value = (value or "").strip()
         if not value:
             self._show_error("The value is required.")
             return
+        stored: SecretItem
         try:
             from durin.service.secrets import SecretsService
 
             if self._update:
-                SecretsService().store_entry(
+                stored = SecretsService().store_entry(
                     name=self._name, value=value, rotate=True,
                 )
             else:
-                SecretsService().store_entry(
+                stored = SecretsService().store_entry(
                     name=self._name,
                     value=value,
                     service=self._service,
@@ -135,7 +149,7 @@ class SecretPromptScreen(ModalScreen[bool]):
         except Exception as exc:  # noqa: BLE001
             self._show_error(f"Could not store the secret: {exc}")
             return
-        self.dismiss(True)
+        self.dismiss(stored)
 
     def _show_error(self, message: str) -> None:
         try:

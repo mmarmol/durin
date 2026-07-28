@@ -1256,6 +1256,44 @@ async def test_secret_store_valid_new_secret_emits_ok_and_agent_resume(
 
 
 @pytest.mark.asyncio
+async def test_secret_rotation_resume_reports_the_stored_scope(
+    bus: MagicMock, monkeypatch, tmp_path
+) -> None:
+    """A rotation frame carries no metadata — the resume note must still name
+    the scope the entry kept, or the agent abandons a credential it can read.
+    """
+    monkeypatch.setattr(
+        "durin.config.loader._current_config_path", tmp_path / "config.json"
+    )
+    channel = _ch(bus)
+    conn = _FakeConn()
+    await channel._handle_secret_store_envelope(
+        conn,
+        "client-1",
+        {
+            "type": "secret_store", "request_id": "r1", "name": "MY_TOKEN",
+            "service": "github", "value": "first-value", "scope": ["exec"],
+            "chat_id": "chat-abc",
+        },
+    )
+    bus.publish_inbound.reset_mock()
+    await channel._handle_secret_store_envelope(
+        conn,
+        "client-1",
+        {
+            "type": "secret_store", "request_id": "r2", "name": "MY_TOKEN",
+            "value": "second-value", "rotate": True, "chat_id": "chat-abc",
+        },
+    )
+    assert conn.last_event("secret_stored")["ok"] is True
+    resume = bus.publish_inbound.call_args[0][0]
+    assert "service=github" in resume.content
+    assert "scope=exec" in resume.content
+    assert "$MY_TOKEN" in resume.content
+    assert "second-value" not in resume.content
+
+
+@pytest.mark.asyncio
 async def test_secret_store_invalid_name_emits_fail(
     bus: MagicMock, monkeypatch, tmp_path
 ) -> None:

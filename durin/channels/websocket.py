@@ -1698,7 +1698,7 @@ class WebSocketChannel(BaseChannel):
         only the wire framing: the ``secret_stored`` event and the agent-resume
         notification on ``chat_id``.
         """
-        from durin.service.secrets import SecretStoreCommand
+        from durin.service.secrets import SecretStoreCommand, secret_stored_notice
 
         request_id = str(envelope.get("request_id") or "")
 
@@ -1716,7 +1716,7 @@ class WebSocketChannel(BaseChannel):
             else []
         )
         try:
-            await self._services.get("secrets").store(
+            stored = await self._services.get("secrets").store(
                 SecretStoreCommand(
                     name=name,
                     value=str(envelope.get("value") or ""),
@@ -1743,16 +1743,7 @@ class WebSocketChannel(BaseChannel):
         # Tell the agent — metadata only, never the value — so it resumes.
         cid = envelope.get("chat_id")
         if _is_valid_chat_id(cid):
-            scope_label = ", ".join(scope) or "none"
-            usable = (
-                f" It is available to your shell commands as ${name}."
-                if "exec" in scope
-                else ""
-            )
-            note = (
-                f"The user stored the secret '{name}' (service={service}, "
-                f"scope={scope_label}).{usable} Please continue the task."
-            )
+            note = secret_stored_notice(stored)
             self._attach(connection, cid)
             await self._handle_message(
                 sender_id=client_id,

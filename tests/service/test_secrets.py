@@ -9,6 +9,7 @@ from durin.service.secrets import (
     SecretsListQuery,
     SecretsService,
     SecretStoreCommand,
+    secret_stored_notice,
 )
 from durin.service.types import ForbiddenError, NotFoundError, ValidationFailedError
 
@@ -203,3 +204,37 @@ def test_store_entry_rotate_rejects_empty_value(secrets_store):
     svc.store_entry(name="GH", value="old-value-123", service="github")
     with pytest.raises(ValidationFailedError, match="value is required"):
         svc.store_entry(name="GH", value="", rotate=True)
+
+
+# -- the agent-facing note --------------------------------------------------
+
+
+def test_stored_notice_reports_the_scope_the_entry_kept(secrets_store):
+    """A rotation carries no metadata on the wire. Built from the request, the
+    note would tell the agent an exec-scoped credential has no scope — and the
+    agent then stops using a token it can still read.
+    """
+    svc = SecretsService()
+    svc.store_entry(name="GH", value="old-value-123", service="github", scope=["exec"])
+    item = svc.store_entry(name="GH", value="new-value-456", rotate=True)
+    note = secret_stored_notice(item)
+    assert "service=github" in note
+    assert "scope=exec" in note
+    assert "$GH" in note
+    assert "new-value-456" not in note
+
+
+def test_stored_notice_omits_the_shell_hint_without_exec_scope(secrets_store):
+    item = SecretsService().store_entry(
+        name="GH", value="value-123456", service="github", scope=["channel:slack"]
+    )
+    note = secret_stored_notice(item)
+    assert "scope=channel:slack" in note
+    assert "$GH" not in note
+
+
+def test_stored_notice_says_none_when_the_entry_is_unscoped(secrets_store):
+    item = SecretsService().store_entry(
+        name="GH", value="value-123456", service="github"
+    )
+    assert "scope=none" in secret_stored_notice(item)

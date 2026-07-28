@@ -61,6 +61,27 @@ class SecretStoreCommand(Command):
     rotate: bool = False
 
 
+def secret_stored_notice(item: SecretItem) -> str:
+    """The agent-facing note telling it a credential is now in the store.
+
+    Built from the *stored* entry, never from the request that wrote it. A
+    rotation sends only name and value — metadata is preserved server-side —
+    so a note assembled from the request reports ``scope=none`` for a secret
+    that kept its ``exec`` scope, and the agent stops using a credential it
+    can still read. Carries metadata only; the value never leaves the store.
+    """
+    scope = ", ".join(item.scope) or "none"
+    usable = (
+        f" It is available to your shell commands as ${item.name}."
+        if "exec" in item.scope
+        else ""
+    )
+    return (
+        f"The user stored the secret '{item.name}' (service={item.service}, "
+        f"scope={scope}).{usable} Please continue the task."
+    )
+
+
 class SecretsService:
     """Read, write, and delete entries in the durin SecretStore (values never returned)."""
 
