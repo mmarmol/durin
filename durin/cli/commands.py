@@ -2798,11 +2798,18 @@ def _probe_gateway_runtime(config: Any, *, timeout: float = 1.5) -> dict[str, An
                 "cron": None,
             }
             ws_section = getattr(config.channels, "websocket", None)
-            token = (
-                ws_section.get("token")
-                if isinstance(ws_section, dict)
-                else getattr(ws_section, "token", "")
-            ) or ""
+            # Resolve like the gateway does when it decides what to accept:
+            # the stored value may be a ${secret:NAME} reference, and sending
+            # the reference string would just 401 — silently, since the
+            # authenticated half degrades on failure by design.
+            token = _resolve_static_token(
+                (
+                    ws_section.get("token")
+                    if isinstance(ws_section, dict)
+                    else getattr(ws_section, "token", "")
+                )
+                or ""
+            )
             if token:
                 rs = client.get(
                     f"{base}/api/v1/status",

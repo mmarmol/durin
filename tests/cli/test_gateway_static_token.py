@@ -54,3 +54,43 @@ def test_reference_resolving_to_empty_does_not_fall_back_to_the_reference(monkey
     reference string into the password slot."""
     monkeypatch.setattr("durin.security.secrets.resolve_secret", lambda _v: "")
     assert _resolve_static_token("${secret:WEBSOCKET_TOKEN}") == ""
+
+
+def test_status_probe_sends_the_resolved_token(monkeypatch):
+    """`durin status` presents the token; the gateway decides which one it
+    accepts. Both sides have to resolve, or the authenticated half of the
+    probe 401s and the live channel state silently reads as unknown.
+    """
+    import httpx
+
+    from durin.cli import commands as c
+
+    monkeypatch.setattr(
+        "durin.security.secrets.resolve_secret", lambda _v: "the-real-token"
+    )
+
+    seen: dict[str, str] = {}
+
+    class _Resp:
+        status_code = 200
+        def json(self):
+            return {"version": "9.9.9", "uptime_s": 1, "channels": [], "cron": []}
+
+    class _Client:
+        def __init__(self, *a, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def get(self, url, headers=None):
+            if headers:
+                seen["auth"] = headers.get("Authorization", "")
+            return _Resp()
+
+    monkeypatch.setattr(httpx, "Client", _Client)
+    monkeypatch.setattr(c, "_gateway_base_url", lambda _cfg: "http://x")
+
+    cfg = type("C", (), {"channels": type("Ch", (), {
+        "websocket": {"token": "${secret:WEBUI_TOKEN}"}})()})()
+    c._probe_gateway_runtime(cfg)
+
+    assert seen.get("auth") == "Bearer the-real-token"
+    assert "${secret:" not in seen.get("auth", "")
