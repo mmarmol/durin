@@ -41,7 +41,7 @@ export function ChannelSecretField({
       : "";
   if (current) {
     return (
-      <MaskedSecret secretName={current} serviceLabel={serviceLabel} busy={busy} onDisconnect={onClear} />
+      <MaskedSecret secretName={current} busy={busy} onDisconnect={onClear} />
     );
   }
 

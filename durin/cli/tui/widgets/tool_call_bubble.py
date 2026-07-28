@@ -17,12 +17,15 @@ from __future__ import annotations
 
 import difflib
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Static
+
+if TYPE_CHECKING:
+    from durin.service.secrets import SecretItem
 
 __all__ = ["ToolCallBubble"]
 
@@ -253,21 +256,18 @@ class ToolCallBubble(Vertical):
             self._on_secret_prompt_done,
         )
 
-    def _on_secret_prompt_done(self, stored: bool | None) -> None:
+    def _on_secret_prompt_done(self, stored: SecretItem | None) -> None:
         """After the masked prompt: tell the agent the secret exists.
 
-        Metadata only — the value never leaves the secret store.
+        Metadata only — the value never leaves the secret store. The note is
+        built from the entry the screen actually wrote, since replace mode
+        keeps the scope the secret already had.
         """
-        if not stored:
+        if stored is None:
             return
-        a = self._args if isinstance(self._args, dict) else {}
-        name = str(a.get("name") or "").strip()
-        service = str(a.get("service") or "").strip()
-        note = (
-            f"The user stored the secret '{name}' (service={service}, "
-            f"scope=exec). It is available to your shell commands as "
-            f"${name}. Please continue the task."
-        )
+        from durin.service.secrets import secret_stored_notice
+
+        note = secret_stored_notice(stored)
         publish = getattr(self.app, "_publish_inbound", None)
         if publish is None:
             return

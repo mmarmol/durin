@@ -11,12 +11,10 @@ import { useClient } from "@/providers/ClientProvider";
 
 export function MaskedSecret({
   secretName,
-  serviceLabel,
   busy,
   onDisconnect,
 }: {
   secretName: string;
-  serviceLabel: string;
   busy: boolean;
   onDisconnect: () => void;
 }) {
@@ -33,7 +31,10 @@ export function MaskedSecret({
     setRotating(true);
     setRotateError(null);
     try {
-      await client.storeSecret({ name: secretName, service: serviceLabel, value: v });
+      // Value-only replacement: this dialog collects nothing else, and a
+      // plain store would replace the entry — stripping the scope that lets
+      // exec read the credential, plus its account and description.
+      await client.storeSecret({ name: secretName, value: v, rotate: true });
       setDialogOpen(false);
       setNewValue("");
     } catch (e) {

@@ -744,6 +744,46 @@ def test_execute_code_renderable_shows_stdout_on_success() -> None:
     assert _execute_code_renderable(result).plain == "hello\nworld"
 
 
+@pytest.mark.asyncio
+async def test_secret_prompt_note_reports_the_stored_scope() -> None:
+    """The note the agent gets is built from what landed in the store. A
+    hardcoded `scope=exec` lies for every credential scoped to a channel or a
+    provider, and sends the agent looking for a shell variable that is not
+    there."""
+    from durin.service.secrets import SecretItem
+
+    app = DurinApp(agent_loop=None)
+    published: list[str] = []
+
+    async def _capture(text, media, **kwargs):
+        published.append(text)
+
+    async with app.run_test() as pilot:
+        chat = app.query_one(ChatView)
+        event = {
+            "version": 1, "phase": "end", "call_id": "rs7",
+            "name": "request_secret",
+            "arguments": {"name": "SLACK_BOT_TOKEN", "service": "channel:slack"},
+        }
+        bubble = ToolCallBubble(event)
+        chat.mount(bubble)
+        await pilot.pause()
+        app._publish_inbound = _capture  # type: ignore[method-assign]
+        bubble._on_secret_prompt_done(
+            SecretItem(
+                name="SLACK_BOT_TOKEN", service="channel:slack", account="",
+                description="", scope=["channel:slack"], origin="tui",
+                created_at="2026-07-28T00:00:00Z", value_hint="xoxb••••1234",
+            )
+        )
+        await pilot.pause()
+
+    assert len(published) == 1
+    assert "scope=channel:slack" in published[0]
+    assert "scope=exec" not in published[0]
+    assert "$SLACK_BOT_TOKEN" not in published[0]
+
+
 def test_secret_prompt_update_mode_derivation() -> None:
     """Replace mode needs the update flag AND a non-create-flow result: the
     tool degrades update=true to the create flow when the secret is missing

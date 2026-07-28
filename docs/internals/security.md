@@ -150,6 +150,16 @@ declares the intent in a structural flag (an existing secret is never touched
 without it), the channel prompts the user, and the user supplies the new value
 through the same secure paths — the value still never reaches the model.
 
+Once the write lands, the agent is told the credential exists so it can resume.
+That note is built by `secret_stored_notice` from the `SecretItem` the write
+returned — the stored entry, never the request that wrote it. The distinction
+matters because a rotation carries no metadata: a note assembled from the
+request would report `scope=none` for a secret that kept its `exec` scope, and
+the agent would stop using a credential it can still read. Every surface that
+prompts for a secret (the websocket frame handler and the TUI prompt screen)
+shares that one builder, and the TUI prompt dismisses with the stored entry
+rather than a bare stored/cancelled flag so it has something truthful to pass.
+
 Secret names must match `[A-Z][A-Z0-9_]*`, making them valid environment variable
 names — intentional, because Phase-2 auto-injection uses them directly as env var
 keys. A config field that holds `${secret:NAME}` is validated by `is_secret_ref()`
@@ -434,6 +444,7 @@ only callers with system-write authority can manage other tokens.
 | `find_redacted_credentials` | `durin/security/secrets.py` | Returns the dotted paths of credential-keyed fields holding a redaction marker; used by `save_config` to refuse the write |
 | `RedactedValueError` | `durin/security/secrets.py` | Raised when a config write would persist a redaction marker into a credential field |
 | `resolve_secret` | `durin/security/secrets.py` | Module-level function; resolves a `${secret:NAME}` ref via the process-wide cached store; raises `SecretNotFoundError` on a dangling reference |
+| `secret_stored_notice` | `durin/service/secrets.py` | Builds the agent-facing resume note from the stored `SecretItem` (never the write request), so a rotation still reports the scope the entry kept |
 | `ScanReport` | `durin/security/skill_scan.py` | Result of deterministic skill scan: `findings` list, `tools` list, `judge_verdict`; `.verdict` property merges both |
 | `Finding` | `durin/security/skill_scan.py` | Single scan result: `category`, `severity` (info/caution/high/dangerous), `where` (file/location), `detail` |
 | `scan_skill` | `durin/security/skill_scan.py` | Entry point for the deterministic scan; applies body rules to `SKILL.md` and code rules + AST pass to all script files |
