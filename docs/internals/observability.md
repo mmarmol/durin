@@ -237,7 +237,12 @@ Check categories and representative checks:
   keys present; a transcription round-trip succeeds.
 - **tts** — text-to-speech engine importable and its model cached.
 - **opt-in** — `--ping`: HTTP GET to provider's `api_base`; `--ping-model`: a
-  real 3-token round-trip to the configured model.
+  real round-trip to the configured model on a deliberately tiny output budget.
+  It passes when the model produced *anything* — content, tool calls, or
+  reasoning; a reasoning model can spend that entire budget thinking and never
+  reach visible prose, and is live all the same. It fails when `finish_reason`
+  is `error`, since providers report failures as an ordinary response whose
+  content is the error text rather than by raising.
 
 `apply_safe_fixes()` (invoked by `--fix`) creates the workspace directory if
 missing and replays config migration. It never touches API keys or destructive
