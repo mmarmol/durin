@@ -151,3 +151,36 @@ def test_detect_installed_extras_smoke_real() -> None:
     result = detect_installed_extras()
     assert isinstance(result, list)
     assert all(isinstance(x, str) for x in result)
+
+
+def test_check_drift_ignores_an_extra_durin_no_longer_ships(temp_config: Path) -> None:
+    """A retired extra stays in the append-only tracked list forever, but it
+    cannot be reinstalled — `durin-agent[local]` no longer exists — so warning
+    about it would point the user at a package that is not there.
+    """
+    data = json.loads(temp_config.read_text())
+    data.setdefault("install", {})["extras"] = ["memory", "local"]
+    temp_config.write_text(json.dumps(data), encoding="utf-8")
+
+    with patch("durin.cli.doctor.detect_installed_extras", return_value=["memory"]):
+        r = check_extras_drift()
+
+    assert r.status == "ok"
+    assert "local" not in (r.fix or "")
+    assert "retired: local" in r.message
+
+
+def test_check_drift_still_warns_for_a_real_loss_alongside_a_retired_one(
+    temp_config: Path,
+) -> None:
+    """Skipping retired names must not swallow a genuine drop."""
+    data = json.loads(temp_config.read_text())
+    data.setdefault("install", {})["extras"] = ["memory", "mcp", "local"]
+    temp_config.write_text(json.dumps(data), encoding="utf-8")
+
+    with patch("durin.cli.doctor.detect_installed_extras", return_value=["mcp"]):
+        r = check_extras_drift()
+
+    assert r.status == "warn"
+    assert r.extras_list == ("memory",)
+    assert "local" not in r.message
