@@ -586,3 +586,89 @@ async def test_needs_operator_emits_no_outcome(tmp_path):
 
     assert outcomes == []
     assert len(asks) == 1
+
+
+@pytest.mark.asyncio
+async def test_orphan_with_no_workflow_manifest_is_relaunched(tmp_path):
+    """Nothing ran, so nothing can be duplicated and the cause is unserved."""
+    outcomes = []
+
+    async def on_outcome(outcome):
+        outcomes.append(outcome)
+
+    rt, calls = _mk_runtime(tmp_path, [_wr_for("completed")], on_outcome=on_outcome)
+    _save(tmp_path)
+    rl.start_run(tmp_path, "l1", "dead", source="chat", task="the original task")
+    rl.update_run(tmp_path, "l1", "dead", workflow_run_id="wf-never-started",
+                  owner={"pid": 999999, "started": "long ago"})
+
+    handled = await rt.sweep_orphans()
+
+    assert handled == ["dead"]
+    assert rl.read_run(tmp_path, "l1", "dead")["status"] == "interrupted"
+    assert [o.status for o in outcomes] == ["interrupted", "done"]
+    # Relaunched with the original task, as a NEW run.
+    assert calls["exec"][0][1] == "the original task"
+    assert rl.read_run(tmp_path, "l1", "dead")["finished_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_orphan_whose_workflow_manifest_exists_is_not_relaunched(tmp_path):
+    """The engine got going and may have posted externally — relaunching
+    would duplicate. Existence of the manifest is the test, NOT a count of
+    completed nodes: a node is recorded only when it finishes, so a run killed
+    inside its first node has an empty node list and the most side effects."""
+    import time as _time
+
+    from durin.workflow import run_log as wf_rl
+
+    outcomes = []
+
+    async def on_outcome(outcome):
+        outcomes.append(outcome)
+
+    rt, calls = _mk_runtime(tmp_path, [], on_outcome=on_outcome)
+    _save(tmp_path)
+    rl.start_run(tmp_path, "l1", "dead", source="chat", task="t")
+    rl.update_run(tmp_path, "l1", "dead", workflow_run_id="wf1",
+                  owner={"pid": 999999, "started": "long ago"})
+    # Manifest present, zero completed nodes — the dangerous case.
+    wf_rl.start_run(tmp_path, "w1", "wf1", root_session_key=None,
+                    started_at=_time.time(), task="t")
+
+    handled = await rt.sweep_orphans()
+
+    assert handled == ["dead"]
+    assert rl.read_run(tmp_path, "l1", "dead")["status"] == "interrupted"
+    assert [o.status for o in outcomes] == ["interrupted"]
+    assert calls["exec"] == []
+
+
+@pytest.mark.asyncio
+async def test_relaunch_carries_the_original_origin(tmp_path):
+    """The origin must survive the restart, or the replacement run's outcome
+    has nowhere to go — the exact failure this whole change exists to fix."""
+    origin = {"kind": "session", "session_key": "websocket:abc",
+              "channel": "websocket", "chat_id": "abc"}
+    outcomes = []
+
+    async def on_outcome(outcome):
+        outcomes.append(outcome)
+
+    rt, _ = _mk_runtime(tmp_path, [_wr_for("completed")], on_outcome=on_outcome)
+    _save(tmp_path)
+    rl.start_run(tmp_path, "l1", "dead", source="chat", task="t", origin=origin)
+    rl.update_run(tmp_path, "l1", "dead", workflow_run_id="wf-never-started",
+                  owner={"pid": 999999, "started": "long ago"})
+
+    await rt.sweep_orphans()
+
+    assert [o.origin for o in outcomes] == [origin, origin]
+
+
+@pytest.mark.asyncio
+async def test_sweep_ignores_a_live_run(tmp_path):
+    rt, _ = _mk_runtime(tmp_path, [])
+    _save(tmp_path)
+    rl.start_run(tmp_path, "l1", "alive", source="cron", task="t")
+    assert await rt.sweep_orphans() == []

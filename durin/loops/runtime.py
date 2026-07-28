@@ -31,7 +31,7 @@ from durin.agent.tools._telemetry import emit_tool_event
 from durin.loops import claims, queue, run_log
 from durin.loops.checks import verify_goal
 from durin.loops.outcome import build_outcome
-from durin.loops.spec import LoopSpec
+from durin.loops.spec import LoopNotFound, LoopSpec
 from durin.loops.store import load_loop
 from durin.telemetry.logger import bind_telemetry, current_telemetry, get_session_logger, reset_telemetry
 
@@ -141,6 +141,64 @@ class LoopsRuntime:
         finally:
             if token is not None:
                 reset_telemetry(token)
+
+    async def sweep_orphans(self) -> list[str]:
+        """Finalize runs whose process died, tell somebody, relaunch what never ran.
+
+        A run killed with its process did not fail — it produced no result at
+        all. Whether relaunching it is safe turns on one question: did any work
+        happen? The existence of the workflow's own manifest answers it. The
+        engine writes that manifest before it walks anything, so no manifest
+        means the run never got going: the original cause is still unserved and
+        a fresh run is the first attempt, not a retry.
+
+        Existence, not a count of completed nodes, is the test. A node is
+        recorded only when it finishes, so a run killed inside its first node
+        shows an empty node list while being the most likely to have already
+        posted somewhere external. Reading "no nodes" as safe would relaunch
+        exactly those. Erring the other way costs one manual re-fire.
+        """
+        from durin.workflow import run_log as wf_run_log
+
+        handled: list[str] = []
+        for rec in run_log.find_orphans(self._ws):
+            loop_name = rec.get("loop") or ""
+            run_id = rec.get("run_id") or ""
+            if not loop_name or not run_id:
+                continue
+            try:
+                spec = load_loop(self._ws, loop_name)
+            except LoopNotFound:
+                continue
+
+            wf_run_id = rec.get("workflow_run_id")
+            work_started = bool(
+                wf_run_id
+                and wf_run_log.read_manifest(self._ws, spec.workflow, wf_run_id) is not None
+            )
+
+            detail = ("interrupted by a restart before the workflow started"
+                      if not work_started else
+                      "interrupted by a restart with work already in flight")
+            record = run_log.finalize_run(self._ws, loop_name, run_id,
+                                          status="interrupted", workflow_run_id=wf_run_id,
+                                          detail=detail, goal_reached=False)
+            await self._post_finish(spec, run_id, record)
+            handled.append(run_id)
+
+            if not work_started:
+                logger.info("loops: relaunching loop '{}' run {} — no work had started",
+                            loop_name, run_id)
+                try:
+                    await self.fire(loop_name, source=rec.get("source") or "cron",
+                                    task=rec.get("task"), origin=rec.get("origin"))
+                except LoopBusy:
+                    # A single-concurrency loop already has a live run — the
+                    # cause is being served. The interrupted outcome above
+                    # already told somebody; do not stack a second run on it.
+                    logger.info("loops: not relaunching loop '{}' run {} — already busy",
+                                loop_name, run_id)
+        return handled
 
     async def _run(self, spec: LoopSpec, *, source: str, task: str | None,
                     origin: dict | None = None, run_id: str | None = None) -> dict:

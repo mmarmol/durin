@@ -5,58 +5,76 @@ from durin.loops import run_log as rl
 _DEAD_OWNER = {"pid": 2**22 + 54321, "started": "never"}
 
 
-def test_reconcile_running_flips_stale_run_to_error(tmp_path):
-    """Legacy ownerless manifest: the age cutoff applies."""
+def test_find_orphans_reports_stale_ownerless_run(tmp_path):
+    """Legacy ownerless manifest: the age cutoff applies. Detection only —
+    the manifest itself is left untouched."""
     rl.start_run(tmp_path, "a", "stale", source="cron", task="t")
     rl.update_run(tmp_path, "a", "stale", started_at=0.0, owner=None)
 
-    flipped = rl.reconcile_running(tmp_path, now=2000.0, max_age_s=100.0)
+    orphans = rl.find_orphans(tmp_path, now=2000.0, max_age_s=100.0)
 
-    assert flipped == ["stale"]
-    rec = rl.read_run(tmp_path, "a", "stale")
-    assert rec["status"] == "error"
-    assert rec["ask"] is None
+    assert [o["run_id"] for o in orphans] == ["stale"]
+    assert rl.read_run(tmp_path, "a", "stale")["status"] == "running"
 
 
-def test_reconcile_running_flips_dead_owner_regardless_of_age(tmp_path):
+def test_find_orphans_reports_dead_owner_regardless_of_age(tmp_path):
     import time as _time
 
     rl.start_run(tmp_path, "a", "ghost", source="cron", task="t")
     rl.update_run(tmp_path, "a", "ghost", owner=_DEAD_OWNER)  # seconds old
 
-    flipped = rl.reconcile_running(tmp_path, now=_time.time())
-    assert flipped == ["ghost"]
-    assert rl.read_run(tmp_path, "a", "ghost")["status"] == "error"
+    orphans = rl.find_orphans(tmp_path, now=_time.time())
+    assert [o["run_id"] for o in orphans] == ["ghost"]
+    assert rl.read_run(tmp_path, "a", "ghost")["status"] == "running"
 
 
-def test_reconcile_running_never_touches_live_owner(tmp_path):
+def test_find_orphans_never_reports_a_live_owner(tmp_path):
     rl.start_run(tmp_path, "a", "mine", source="cron", task="t")
     rl.update_run(tmp_path, "a", "mine", started_at=0.0)  # ancient but owned
 
-    flipped = rl.reconcile_running(tmp_path, now=10**12, max_age_s=1.0)
-    assert flipped == []
+    orphans = rl.find_orphans(tmp_path, now=10**12, max_age_s=1.0)
+    assert orphans == []
     assert rl.read_run(tmp_path, "a", "mine")["status"] == "running"
 
 
-def test_reconcile_running_leaves_fresh_run_untouched(tmp_path):
+def test_find_orphans_leaves_fresh_run_unreported(tmp_path):
     rl.start_run(tmp_path, "a", "fresh", source="cron", task="t")
     rl.update_run(tmp_path, "a", "fresh", started_at=1950.0)
 
-    flipped = rl.reconcile_running(tmp_path, now=2000.0, max_age_s=100.0)
+    orphans = rl.find_orphans(tmp_path, now=2000.0, max_age_s=100.0)
 
-    assert flipped == []
+    assert orphans == []
     assert rl.read_run(tmp_path, "a", "fresh")["status"] == "running"
 
 
-def test_reconcile_running_leaves_needs_operator_untouched(tmp_path):
+def test_find_orphans_leaves_needs_operator_unreported(tmp_path):
     rl.start_run(tmp_path, "a", "waiting", source="cron", task="t")
     rl.update_run(tmp_path, "a", "waiting", started_at=0.0)
     rl.finalize_run(tmp_path, "a", "waiting", status="needs_operator", ask="approve?")
 
-    flipped = rl.reconcile_running(tmp_path, now=2000.0, max_age_s=100.0)
+    orphans = rl.find_orphans(tmp_path, now=2000.0, max_age_s=100.0)
 
-    assert flipped == []
+    assert orphans == []
     assert rl.read_run(tmp_path, "a", "waiting")["status"] == "needs_operator"
+
+
+def test_find_orphans_reports_without_writing(tmp_path):
+    """Detection is separate from the decision: the sweep that can notify and
+    relaunch owns the write."""
+    rl.start_run(tmp_path, "l1", "r1", source="cron", task="t")
+    rec = rl.read_run(tmp_path, "l1", "r1")
+    rec["owner"] = {"pid": 999999, "started": "long ago"}
+    rl._write(tmp_path, "l1", "r1", rec)
+
+    orphans = rl.find_orphans(tmp_path)
+
+    assert [o["run_id"] for o in orphans] == ["r1"]
+    assert rl.read_run(tmp_path, "l1", "r1")["status"] == "running"
+
+
+def test_find_orphans_ignores_a_live_owner(tmp_path):
+    rl.start_run(tmp_path, "l1", "r1", source="cron", task="t")
+    assert rl.find_orphans(tmp_path) == []
 
 
 def test_start_finalize_read(tmp_path):

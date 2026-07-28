@@ -147,17 +147,10 @@ def build_service_registry(
     except Exception:  # noqa: BLE001 - crash reconciliation is best-effort
         pass
 
-    # Same crash recovery for loop runs: a gateway restart mid-run otherwise
-    # leaves a "running" manifest forever, and a concurrency="single" loop
-    # never fires again (its active_runs check sees the stale manifest).
-    try:
-        import time
-
-        from durin.loops import run_log as loops_run_log
-
-        loops_run_log.reconcile_running(_workspace(), now=time.time())
-    except Exception:  # noqa: BLE001 - crash reconciliation is best-effort
-        pass
+    # Loop-run reconciliation is NOT here: an orphaned loop run has to be
+    # reported to whoever fired it and, when no work had started, relaunched —
+    # neither of which a file-only sweep thread can do. The gateway starts an
+    # async sweep on its LoopsRuntime instead.
 
     # Sweep stale claims (a thread-to-waiting-run mapping released on the
     # normal answer path) that were never released, e.g. the process died
@@ -190,7 +183,7 @@ def start_periodic_run_reconciler(
     *,
     period_s: float = _RECONCILE_PERIOD_S,
 ) -> bool:
-    """Start the background workflow/loop run-manifest sweep (once per process).
+    """Start the background workflow run-manifest sweep (once per process).
 
     Daemon thread, file-based sweeps only — dead-owner manifests flip to
     their crashed/error status so the UI and `tasks` never show a ghost for
@@ -202,7 +195,6 @@ def start_periodic_run_reconciler(
     def _sweep_forever() -> None:
         import time
 
-        from durin.loops import run_log as loops_run_log
         from durin.workflow import run_log as wf_run_log
 
         while True:
@@ -211,7 +203,6 @@ def start_periodic_run_reconciler(
                 ws = workspace_resolver()
                 wf_run_log.reconcile_running(
                     ws, now=time.time(), max_age_s=wf_run_log.RECONCILE_AGE_S)
-                loops_run_log.reconcile_running(ws, now=time.time())
             except Exception:  # noqa: BLE001 - the sweep must never die
                 logger.exception("periodic run reconciliation failed")
 

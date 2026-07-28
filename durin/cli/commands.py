@@ -1255,6 +1255,12 @@ def gateway_logs_cmd(
         pass
 
 
+_LOOPS_SWEEP_PERIOD_S = 600.0
+# Strong reference for the process lifetime: an un-awaited task is
+# collectable, and a collected sweep silently stops reconciling.
+_loops_sweep_task: asyncio.Task | None = None
+
+
 def _run_gateway(
     config: Config,
     *,
@@ -1704,6 +1710,20 @@ def _run_gateway(
     )
     agent.register_loops_tool(loops_runtime)
 
+    async def _loops_orphan_sweep() -> None:
+        """Reconcile loop runs orphaned by a dead process, forever.
+
+        Runs on the gateway's loop rather than the file-sweep thread because
+        finalizing an orphan means delivering its outcome and possibly firing
+        a replacement run — both need the live runtime.
+        """
+        while True:
+            try:
+                await loops_runtime.sweep_orphans()
+            except Exception:  # noqa: BLE001 — the sweep must never die
+                logger.exception("loops: orphan sweep failed")
+            await asyncio.sleep(_LOOPS_SWEEP_PERIOD_S)
+
     # Route inbound channel messages through the trigger matcher BEFORE they
     # reach the normal agent turn: a claim wake or a fired/queued loop trigger
     # consumes the message, everything else falls through unchanged.
@@ -2066,6 +2086,13 @@ def _run_gateway(
 
         try:
             await cron.start()
+
+            # Started here rather than at definition time: the coroutine is
+            # defined earlier (right after register_loops_tool), but
+            # asyncio.create_task needs a running loop, which only exists
+            # once this coroutine itself is executing.
+            global _loops_sweep_task
+            _loops_sweep_task = asyncio.create_task(_loops_orphan_sweep())
 
             # Unified uvicorn server: the gateway serves WS chat + /api/v1 + SPA
             # via a single Starlette app on the websocket channel's port.  The
