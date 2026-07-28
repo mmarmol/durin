@@ -243,7 +243,10 @@ class RejectSuggestionCommand(Command):
 
 
 class ResolveObservationCommand(Command):
-    """Resolve one OPEN observation: ``applied`` (handled) or ``declined``."""
+    """Resolve one OPEN observation: ``applied`` (handled), ``declined``
+    (rejected, remembered so curation won't re-propose it) or ``upstream``
+    (accepted, but it belongs to a skill durin ships, so the fix goes to durin
+    itself instead of forking the shipped skill here)."""
 
     id: int
     disposition: str
@@ -814,7 +817,7 @@ class SkillsService:
         scope=Scope.SKILLS_WRITE.value,
         request_model=ResolveObservationCommand,
         response_model=SkillsResult,
-        summary="Resolve an open observation (applied or declined)",
+        summary="Resolve an open observation (applied, declined or upstream)",
     )
     async def resolve_observation(
         self, cmd: ResolveObservationCommand, principal: Principal
@@ -822,9 +825,9 @@ class SkillsService:
         principal.require(Scope.SKILLS_WRITE)
         from durin.agent import skill_observations as so
 
-        if cmd.disposition not in ("applied", "declined"):
+        if cmd.disposition not in ("applied", "declined", "upstream"):
             raise ValidationFailedError(
-                "disposition must be 'applied' or 'declined'")
+                "disposition must be 'applied', 'declined' or 'upstream'")
         res = so.resolve_observation(self._workspace, cmd.id, cmd.disposition)
         if res.get("error"):
             raise NotFoundError(str(res["error"]), details=res)

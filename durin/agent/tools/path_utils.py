@@ -11,6 +11,18 @@ WORKSPACE_BOUNDARY_NOTE = (
 )
 
 
+# The write door each registry owns, keyed by the registry directory's name.
+# The refusal has to name the RIGHT door: a single hardcoded "use skill_publish"
+# message sent an agent trying to edit a loop definition off to the skills
+# workflow, which cost it several turns before it found `loops(action=…)`.
+_REGISTRY_DOORS = {
+    "skills": "author the skill under skill-drafts/<name>/ and run skill_publish",
+    "workflows": ("use workflow_write / workflow_edit, or workflow_script_write "
+                  "for workflows/scripts/"),
+    "loops": "use the loops tool — action='create' replaces an existing definition",
+}
+
+
 def is_under(path: Path, directory: Path) -> bool:
     """Return True when path resolves under directory."""
     try:
@@ -61,8 +73,10 @@ def resolve_workspace_path(
             )
     for denied in (denied_subdirs or []):
         if is_under(resolved, denied):
+            door = _REGISTRY_DOORS.get(denied.name)
             raise PermissionError(
-                f"Path {path} is under the protected skills registry. Author skills under "
-                f"skill-drafts/<name>/ and run skill_publish to activate them." + WORKSPACE_BOUNDARY_NOTE
+                f"Path {path} is under the protected {denied.name} registry, which owns "
+                f"its own validated + versioned write door"
+                + (f": {door}." if door else ".") + WORKSPACE_BOUNDARY_NOTE
             )
     return resolved

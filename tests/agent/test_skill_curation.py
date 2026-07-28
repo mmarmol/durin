@@ -336,3 +336,56 @@ def test_curation_fenced_judge_output_is_recovered(tmp_path):
     res = curate_catalog(tmp_path, judge=lambda p: fenced)
     assert "judge_parse_failed" not in res
     assert not ss.needs_curation(tmp_path, name)  # stamped
+
+
+def test_curate_survives_evolve_action_missing_its_text(tmp_path, monkeypatch):
+    """A judge action missing `old`/`new` must cost one action, not the pass.
+
+    Indexing those keys raised KeyError out of `curate_catalog`, so a single
+    malformed action discarded every later action AND the review stamps — the
+    same delta then came back the next night, re-paying the whole judge call.
+    """
+    import durin.agent.tools._telemetry as tel
+    events = []
+    monkeypatch.setattr(tel, "emit_tool_event",
+                        lambda name, data: events.append((name, data)))
+    ws = tmp_path / "ws"
+    _mk(ws, "broken", "old body")
+    _mk(ws, "fine", "old body")
+
+    def fake_judge(prompt):
+        return ('{"actions": ['
+                '{"type": "evolve", "name": "broken", "old": "old body"},'
+                '{"type": "evolve", "name": "fine", "old": "old body",'
+                ' "new": "new body", "rationale": "r"}]}')
+
+    res = curate_catalog(ws, judge=fake_judge)
+
+    # The malformed action was skipped; the one after it still landed.
+    assert res["applied"] == 1
+    assert "new body" in (ss.read_skill_content(ws, "fine") or "")
+    assert "old body" in (ss.read_skill_content(ws, "broken") or "")
+    actions = [d for n, d in events if n == "skill.curation_action"]
+    assert {"action": "evolve", "skill": "broken", "applied": False} in actions
+    # And the pass completed: both reviewed skills got stamped.
+    assert not ss.needs_curation(ws, "broken")
+    assert not ss.needs_curation(ws, "fine")
+
+
+def test_curate_survives_incomplete_fuse_action(tmp_path):
+    """Same guard on the fuse verb: a missing target/content/sources is one
+    skipped action, not a KeyError that kills the rest of the pass."""
+    ws = tmp_path / "ws"
+    _mk(ws, "a", "body a")
+    _mk(ws, "b", "body b")
+
+    def fake_judge(prompt):
+        return ('{"actions": ['
+                '{"type": "fuse", "sources": ["a", "b"], "target": "merged"},'
+                '{"type": "evolve", "name": "a", "old": "body a",'
+                ' "new": "body a2", "rationale": "r"}]}')
+
+    res = curate_catalog(ws, judge=fake_judge)
+    assert res["applied"] == 1
+    assert "body a2" in (ss.read_skill_content(ws, "a") or "")
+    assert ss.read_skill_content(ws, "merged") is None

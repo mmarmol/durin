@@ -34,6 +34,13 @@ def _emit(event: str, **data) -> None:
 KINDS = ("correction", "gap", "improvement", "simplify")
 PRINCIPLES_CAP = 12
 
+# Dispositions a human may set on an OPEN record, and the status each writes.
+_MANUAL_DISPOSITIONS = {
+    "applied": "APPLIED",
+    "declined": "DECLINED",
+    "upstream": "UPSTREAM",
+}
+
 _ACTIVE = ".observations.jsonl"
 _ARCHIVE = ".observations.archive.jsonl"
 _PRINCIPLES = ".principles.jsonl"
@@ -196,14 +203,23 @@ def resolve_observation(workspace: Path, oid: int, disposition: str) -> dict:
     ``applied`` marks the underlying issue as handled (the record is archived
     at the start of the next curation pass); ``declined`` keeps the record in
     the active file as memory against the judge re-proposing the same change.
+
+    ``upstream`` is the exit for a record curation can never act on: an
+    observation about a skill durin *ships*. Applying it locally would mean
+    forking the shipped skill, which shadows the packaged copy and cuts the
+    install off from that skill's future releases — so the fix belongs in
+    durin itself, and the record leaves the OPEN queue without claiming a
+    local change that never happened. Like ``declined`` it stays in the active
+    file, so nothing re-proposes it here.
     """
     workspace = Path(workspace)
-    if disposition not in ("applied", "declined"):
-        return {"error": "disposition must be 'applied' or 'declined'"}
+    if disposition not in _MANUAL_DISPOSITIONS:
+        return {"error": "disposition must be one of "
+                         f"{', '.join(repr(d) for d in _MANUAL_DISPOSITIONS)}"}
     records = _read_records(_active_path(workspace))
     for rec in records:
         if int(rec.get("id", 0)) == int(oid) and rec.get("status") == "OPEN":
-            rec["status"] = "APPLIED" if disposition == "applied" else "DECLINED"
+            rec["status"] = _MANUAL_DISPOSITIONS[disposition]
             rec["resolved_at"] = _today()
             _write_records(_active_path(workspace), records)
             store = _store_init(workspace)
@@ -217,10 +233,11 @@ def resolve_observation(workspace: Path, oid: int, disposition: str) -> dict:
     return {"error": f"no open observation with id {oid}"}
 
 
-def declined_observations(workspace: Path) -> list[dict]:
-    """DECLINED observations — kept active as memory against re-proposing."""
+def suppressed_observations(workspace: Path) -> list[dict]:
+    """Records kept active as memory against re-proposing: DECLINED (rejected
+    here) and UPSTREAM (accepted, but the fix belongs in durin itself)."""
     return [r for r in _read_records(_active_path(Path(workspace)))
-            if r.get("status") == "DECLINED"]
+            if r.get("status") in ("DECLINED", "UPSTREAM")]
 
 
 def apply_dispositions(workspace: Path, dispositions: list[dict]) -> dict:

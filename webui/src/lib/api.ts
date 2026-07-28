@@ -2500,7 +2500,7 @@ export async function fetchSkillObservations(
 export async function resolveSkillObservation(
   token: string,
   id: number,
-  disposition: "applied" | "declined",
+  disposition: "applied" | "declined" | "upstream",
   base: string = "",
 ): Promise<{ ok: boolean }> {
   return post<{ ok: boolean }>(

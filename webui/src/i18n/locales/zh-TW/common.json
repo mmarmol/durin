@@ -1509,6 +1509,9 @@
       "resolve": "標記為已處理",
       "dismiss": "忽略",
       "dismissHint": "被忽略的觀察記錄會被記住，策展不會再次提出。",
+      "upstream": "交給 durin",
+      "upstreamHint": "修復屬於 durin 內建技能：將其從此佇列移除，且不聲稱做過本機變更。會被記住，以免整理流程再次提出。",
+      "builtinNote": "此技能隨 durin 一起提供，夜間整理不會處理這些記錄——在此套用等於分叉內建技能，之後就收不到更新了。請交給 durin 處理。",
       "kinds": {
         "correction": "修正",
         "gap": "缺口",

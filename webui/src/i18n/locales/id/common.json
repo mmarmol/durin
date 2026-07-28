@@ -1509,6 +1509,9 @@
       "resolve": "Tandai ditangani",
       "dismiss": "Abaikan",
       "dismissHint": "Observasi yang diabaikan akan diingat agar kurasi tidak mengusulkannya lagi.",
+      "upstream": "Kirim ke durin",
+      "upstreamHint": "Perbaikannya milik skill durin sendiri: mengeluarkan catatan ini dari antrean tanpa mengklaim perubahan lokal. Diingat agar kurasi tidak mengusulkannya lagi.",
+      "builtinNote": "Skill ini dibawa oleh durin, jadi kurasi malam tidak pernah menindak catatan ini — menerapkannya di sini berarti mem-fork skill bawaan, yang lalu berhenti menerima pembaruan. Kirim ke durin saja.",
       "kinds": {
         "correction": "koreksi",
         "gap": "celah",

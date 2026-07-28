@@ -1323,6 +1323,9 @@
       "resolve": "Marcar atendida",
       "dismiss": "Descartar",
       "dismissHint": "Las observaciones descartadas se recuerdan para que la curación no vuelva a proponerlas.",
+      "upstream": "Va a durin",
+      "upstreamHint": "El arreglo corresponde a la skill de durin: la saca de esta cola sin afirmar un cambio local. Queda recordada para que la curación no la vuelva a proponer.",
+      "builtinNote": "Esta skill viene con durin, así que la curación nocturna nunca actúa sobre estas notas — aplicarla acá implica forkear la skill que trae el paquete, que deja de recibir actualizaciones. Mandala a durin.",
       "kinds": {
         "correction": "corrección",
         "gap": "brecha",

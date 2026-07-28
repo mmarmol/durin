@@ -83,6 +83,15 @@ around to see. At least one of these must hold:
   `support` must not also fire in `support-escalations`. All set keys must hold. A key
   the named channel never provides matches nothing and is warned about on save, so
   scope an app-driven loop with `sender_kind: "bot"` plus `chat`, not with a guess.
+- **A bot-only key silently excludes every human.** `bot_id` / `app_id` exist only on
+  app-authored messages, so a trigger filtered by one *cannot* fire for a person
+  writing in the same room — the filter is not "prefer this bot", it is "bots, and
+  only this one". When a loop must answer **both** an app and humans in one channel,
+  give it **two triggers**: one filtered by `bot_id` (or `app_id`), one by
+  `sender_kind: "human"`. Triggers are OR-ed, filters within a trigger are AND-ed —
+  there is no way to express this with a single trigger. A `sender_kind: "human"`
+  trigger also cannot self-trigger on durin's own posts: durin writes as an app, so
+  its messages arrive as `sender_kind: "bot"`.
 - **Goal** = natural-language `intent` + typed `checks`. A `script` check passes iff
   its command exits 0 — it cannot be sweet-talked; an `assertion` is judged against the
   run's evidence. A failing **required** check blocks `done` no matter what the judge
@@ -124,6 +133,16 @@ text as final output ends the run; there is nothing to wake.
   definitions and history stay.
 - `loops(action="create", definition=<JSON>)` — same validation as the webui; a bad
   schedule, filter set, or correlate regex is rejected at save time with the reason.
+  **This is also how you change one.** There is no separate update action: `create`
+  with an existing `name` replaces that definition wholesale (versioned as an edit, so
+  the previous one stays recoverable). Send the *complete* definition — anything you
+  leave out is gone, not merged.
+
+Neither `list` nor `status` prints triggers, filters or checks, so to change one part of
+a live loop, first **read** `loops/<name>.json` (reads are allowed), then send the whole
+edited definition through `action="create"`. Do not write that file: `loops/` is closed
+to generic file writes, because this tool is what validates the schedule/filters and
+records the change in the version store.
 
 Creating a loop is standing, autonomous behavior with a human lane attached — confirm
 the user actually wants recurring/parked work (and on which channel replies should

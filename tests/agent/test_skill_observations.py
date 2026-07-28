@@ -8,11 +8,11 @@ from durin.agent.skill_observations import (
     add_principle,
     apply_dispositions,
     archive_resolved,
-    declined_observations,
     log_observation,
     open_observations,
     resolve_observation,
     retire_principle,
+    suppressed_observations,
 )
 
 
@@ -129,7 +129,7 @@ def test_apply_dispositions_transitions_states(tmp_path):
     assert res["applied"] == 1 and res["declined"] == 1 and res["kept"] == 1
     assert res["commit"]
     assert [r["id"] for r in open_observations(ws)] == [3]
-    assert [r["id"] for r in declined_observations(ws)] == [2]
+    assert [r["id"] for r in suppressed_observations(ws)] == [2]
 
 
 def test_apply_dispositions_ignores_unknown_ids(tmp_path):
@@ -151,7 +151,7 @@ def test_archive_moves_applied_keeps_declined_and_open(tmp_path):
     assert moved == 1
     assert (ws / "skills" / ".observations.archive.jsonl").exists()
     active_ids = {r["id"] for r in open_observations(ws)} | {
-        r["id"] for r in declined_observations(ws)}
+        r["id"] for r in suppressed_observations(ws)}
     assert active_ids == {2, 3}
 
 
@@ -273,7 +273,36 @@ def test_resolve_observation_applied_and_declined(tmp_path):
     res = resolve_observation(ws, 2, "declined")
     assert res["ok"] is True
     assert open_observations(ws) == []
-    assert [r["id"] for r in declined_observations(ws)] == [2]
+    assert [r["id"] for r in suppressed_observations(ws)] == [2]
+
+
+def test_resolve_observation_upstream_leaves_queue_and_stays_as_memory(tmp_path):
+    """The exit for a note about a skill durin ships: curation can never act on
+    it, so it must be able to leave the OPEN queue without claiming a local
+    change — while still holding the judge back from re-proposing it."""
+    ws = tmp_path / "ws"
+    _log(ws, skill="loops", issue="bot_id filter excludes humans")
+    res = resolve_observation(ws, 1, "upstream")
+    assert res["ok"] is True and res["disposition"] == "upstream"
+    assert open_observations(ws) == []
+    assert [r["id"] for r in suppressed_observations(ws)] == [1]
+
+    from durin.agent.skill_observations import _active_path, _read_records
+    rec = _read_records(_active_path(ws))[0]
+    assert rec["status"] == "UPSTREAM"
+    assert rec["resolved_at"]
+
+
+def test_upstream_records_are_never_archived(tmp_path):
+    """Only APPLIED records leave the active file: an upstream note stays as the
+    judge's memory, exactly like a declined one."""
+    ws = tmp_path / "ws"
+    _log(ws, skill="workflows", issue="a")
+    _log(ws, skill="loops", issue="b")
+    resolve_observation(ws, 1, "applied")
+    resolve_observation(ws, 2, "upstream")
+    assert archive_resolved(ws) == 1
+    assert [r["id"] for r in suppressed_observations(ws)] == [2]
 
 
 def test_resolve_observation_stamps_resolved_at(tmp_path):

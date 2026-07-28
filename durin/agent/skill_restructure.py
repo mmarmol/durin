@@ -153,13 +153,7 @@ async def _restructure_async(
             return {"applied": False, "error": f"still violates doctrine: {reason}"}
 
         # 6. Gather staged bundled files (scripts) + security-scan the staged dir.
-        files: dict[str, str] = {}
-        for f in sorted(stg_skill.rglob("*")):
-            if not f.is_file() or f.name == "SKILL.md":
-                continue
-            rel = f.relative_to(stg_skill).as_posix()
-            if ss._safe_bundle_path(rel):
-                files[rel] = f.read_text(encoding="utf-8")
+        files = ss.read_bundle_files(stg_skill)
         if files:
             from durin.security.skill_scan import scan_skill
             rep = scan_skill(stg_skill)

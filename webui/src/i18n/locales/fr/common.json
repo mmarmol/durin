@@ -1509,6 +1509,9 @@
       "resolve": "Marquer traitée",
       "dismiss": "Ignorer",
       "dismissHint": "Les observations ignorées sont mémorisées pour que la curation ne les propose plus.",
+      "upstream": "Renvoyer à durin",
+      "upstreamHint": "Le correctif appartient à la compétence de durin : retire la note de cette file sans prétendre à une modification locale. Mémorisée pour que la curation ne la repropose pas.",
+      "builtinNote": "Cette compétence est livrée avec durin : la curation nocturne n'agit jamais sur ces notes — l'appliquer ici revient à forker la compétence livrée, qui ne recevra plus de mises à jour. Renvoyez-la à durin.",
       "kinds": {
         "correction": "correction",
         "gap": "lacune",

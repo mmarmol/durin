@@ -80,7 +80,24 @@ async def test_resolve_applied_and_declined(tmp_path):
     await svc.resolve_observation(
         ResolveObservationCommand(id=2, disposition="declined"), pr)
     assert so.open_observations(ws) == []
-    assert [r["id"] for r in so.declined_observations(ws)] == [2]
+    assert [r["id"] for r in so.suppressed_observations(ws)] == [2]
+
+
+@pytest.mark.asyncio
+async def test_resolve_upstream_takes_the_record_off_the_queue(tmp_path):
+    """The exit for an observation on a skill durin ships: curation never acts on
+    it, so the API must accept a disposition that neither claims a local change
+    nor rejects the note."""
+    ws = tmp_path
+    _log(ws, skill="loops", issue="bot_id filter excludes humans")
+
+    svc = SkillsService(workspace=ws)
+    res = await svc.resolve_observation(
+        ResolveObservationCommand(id=1, disposition="upstream"), Principal.local())
+
+    assert res.data["ok"] is True
+    assert so.open_observations(ws) == []
+    assert [r["id"] for r in so.suppressed_observations(ws)] == [1]
 
 
 @pytest.mark.asyncio

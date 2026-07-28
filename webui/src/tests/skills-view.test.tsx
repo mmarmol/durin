@@ -100,6 +100,58 @@ describe("SkillsView security surface", () => {
     expect(await screen.findByText("Reviewed · you")).toBeInTheDocument();
   });
 
+  it("keeps a long name readable next to an observation count and a review chip", async () => {
+    // Name and badges used to share one line: the badges (shrink-0) squeezed the
+    // truncating name to zero width, leaving the row unidentifiable.
+    vi.mocked(api.listSkills).mockResolvedValue([
+      {
+        name: "mxhero-email-tracing-domain-model",
+        source: "workspace",
+        mode: "auto",
+        status: "active",
+        verdict: "caution",
+        findings: [
+          { category: "dangerous_code", severity: "caution", where: "scripts/x.py", detail: "environment access (exfil-adjacent)" },
+        ],
+        review: { by: "user", verdict: "safe", original: "caution", note: "", at: "2026-07-28" },
+        open_observations: 2,
+      },
+    ]);
+    vi.mocked(api.listQuarantine).mockResolvedValue([]);
+
+    render(wrap(<SkillsView />));
+
+    const name = await screen.findByText("mxhero-email-tracing-domain-model");
+    expect(name).toBeInTheDocument();
+    // The badges are siblings of the name's line, not competitors inside it.
+    expect(name.parentElement).not.toContainElement(
+      screen.getByText("2 open observation(s)"),
+    );
+    expect(screen.getByText("Reviewed · you")).toBeInTheDocument();
+  });
+
+  it("drops the Reviewed chip once no live finding is left to suppress", async () => {
+    // A review pinned to a file that has since changed suppresses nothing; the
+    // chip asserted no fact and sat on the row forever.
+    vi.mocked(api.listSkills).mockResolvedValue([
+      {
+        name: "doc-sync",
+        source: "workspace",
+        mode: "auto",
+        status: "active",
+        verdict: "safe",
+        findings: [],
+        review: { by: "user", verdict: "safe", original: "caution", note: "", at: "2026-07-23" },
+      },
+    ]);
+    vi.mocked(api.listQuarantine).mockResolvedValue([]);
+
+    render(wrap(<SkillsView />));
+
+    expect(await screen.findByText("doc-sync")).toBeInTheDocument();
+    expect(screen.queryByText("Reviewed · you")).not.toBeInTheDocument();
+  });
+
   it("dangerous mark-reviewed shows inline confirm then calls reviewSkill", async () => {
     vi.mocked(api.listSkills).mockResolvedValue([
       {
@@ -659,5 +711,69 @@ describe("SkillsView open observations", () => {
     await waitFor(() =>
       expect(screen.queryByText("Open observations")).not.toBeInTheDocument(),
     );
+  });
+
+  function builtinRowWithObservations() {
+    return [
+      {
+        name: "loops",
+        source: "builtin",
+        mode: "auto" as const,
+        status: "active" as const,
+        verdict: "safe" as const,
+        findings: [],
+        open_observations: 1,
+      },
+    ];
+  }
+
+  function observationOn(skill: string) {
+    return [
+      {
+        id: 45,
+        skill,
+        kind: "correction",
+        issue: "a bot_id filter silently excludes humans",
+        improvement: "document the two-trigger pattern",
+        principle: null,
+        count: 1,
+        first_seen: "2026-07-26",
+        last_seen: "2026-07-26",
+      },
+    ];
+  }
+
+  it("offers the upstream exit only for a skill durin ships", async () => {
+    // Curation never acts on a builtin's notes, so without this exit the only
+    // way off the queue would be to claim a local change that never happened.
+    vi.mocked(api.listSkills).mockResolvedValue(builtinRowWithObservations());
+    vi.mocked(api.listQuarantine).mockResolvedValue([]);
+    vi.mocked(api.getSkill).mockResolvedValue({ name: "loops", mode: "auto", content: "body" });
+    vi.mocked(api.listSkillFiles).mockResolvedValue([{ path: "SKILL.md", text: true, size: 4 }]);
+    vi.mocked(api.fetchSkillObservations).mockResolvedValue(observationOn("loops"));
+    vi.mocked(api.resolveSkillObservation).mockResolvedValue({ ok: true });
+
+    const user = userEvent.setup();
+    render(wrap(<SkillsView />));
+    fireEvent.click(await screen.findByText("loops"));
+
+    expect(await screen.findByText(/durin ships this skill/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Goes to durin" }));
+    expect(api.resolveSkillObservation).toHaveBeenCalledWith("tok", 45, "upstream");
+  });
+
+  it("hides the upstream exit for a workspace skill curation can actually fix", async () => {
+    vi.mocked(api.listSkills).mockResolvedValue(rowWithObservations());
+    vi.mocked(api.listQuarantine).mockResolvedValue([]);
+    vi.mocked(api.getSkill).mockResolvedValue({ name: "doc-sync", mode: "auto", content: "body" });
+    vi.mocked(api.listSkillFiles).mockResolvedValue([{ path: "SKILL.md", text: true, size: 4 }]);
+    vi.mocked(api.fetchSkillObservations).mockResolvedValue(observationOn("doc-sync"));
+
+    render(wrap(<SkillsView />));
+    fireEvent.click(await screen.findByText("doc-sync"));
+
+    expect(await screen.findByText(/two-trigger pattern/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Goes to durin" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/durin ships this skill/)).not.toBeInTheDocument();
   });
 });

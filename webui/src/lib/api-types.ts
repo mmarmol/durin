@@ -1920,7 +1920,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Resolve an open observation (applied or declined) */
+        /** Resolve an open observation (applied, declined or upstream) */
         post: operations["skills_resolve_observation"];
         delete?: never;
         options?: never;
@@ -5018,7 +5018,10 @@ export interface components {
         };
         /**
          * ResolveObservationCommand
-         * @description Resolve one OPEN observation: ``applied`` (handled) or ``declined``.
+         * @description Resolve one OPEN observation: ``applied`` (handled), ``declined``
+         *     (rejected, remembered so curation won't re-propose it) or ``upstream``
+         *     (accepted, but it belongs to a skill durin ships, so the fix goes to durin
+         *     itself instead of forking the shipped skill here).
          */
         ResolveObservationCommand: {
             /** Disposition */
