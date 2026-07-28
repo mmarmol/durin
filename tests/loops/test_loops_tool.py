@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -76,22 +77,31 @@ async def test_create_list_status_flow(tmp_path):
 
 
 async def test_fire_delegates_to_runtime_and_returns_status_text(tmp_path):
+    """The tool call itself only reports the launch; the terminal status
+    lands in the run log once the backgrounded fire completes."""
     save_loop(tmp_path, parse_loop({"name": "l1", "workflow": "w1", "goal": {"intent": "done"}}))
     rt = _runtime(tmp_path, [_wr("completed")])
     tool = LoopsTool.create(_ctx(tmp_path, runtime=rt))
 
     out = await tool.execute(action="fire", name="l1", task="do it")
     assert "l1" in out
-    assert "done" in out
-    assert "goal_reached: True" in out
+    assert "started" in out.lower()
+
+    await asyncio.sleep(0)  # let the backgrounded fire run to completion
+    run = rl.list_runs(tmp_path, "l1", limit=1)[0]
+    assert run["status"] == "done"
+    assert run["goal_reached"] is True
 
 
 async def test_fire_busy_returns_readable_message_not_traceback(tmp_path):
     save_loop(tmp_path, parse_loop({"name": "l1", "workflow": "w1", "goal": {"intent": "done"}}))
     rt = _runtime(tmp_path, [_wr("needs_input", out="q?", needs_input_node="g")])
+    # Seed an active run directly: a backgrounded fire has not yet recorded
+    # its own run_log entry by the time it returns, so a second immediate
+    # fire can no longer rely on the first call's side effects for busy.
+    rl.start_run(tmp_path, "l1", "existing", source="cron", task="t")
     tool = LoopsTool.create(_ctx(tmp_path, runtime=rt))
 
-    await tool.execute(action="fire", name="l1")
     out = await tool.execute(action="fire", name="l1")
 
     assert "busy" in out.lower()
@@ -103,8 +113,9 @@ async def test_answer_resumes_run(tmp_path):
     rt = _runtime(tmp_path, [_wr("needs_input", out="approve?", needs_input_node="g"), _wr("completed")])
     tool = LoopsTool.create(_ctx(tmp_path, runtime=rt))
 
-    fired = await tool.execute(action="fire", name="l1")
-    run_id = fired.split("run ")[1].split(":")[0]
+    await tool.execute(action="fire", name="l1")
+    await asyncio.sleep(0)  # let the backgrounded fire reach needs_operator
+    run_id = rl.list_runs(tmp_path, "l1", limit=1)[0]["run_id"]
 
     out = await tool.execute(action="answer", name="l1", run_id=run_id, answer="yes")
     assert "done" in out
@@ -198,6 +209,7 @@ async def test_chat_fire_records_the_firing_session_as_origin(tmp_path):
         {"name": "l1", "workflow": "w1", "goal": {"intent": "done"}}))
 
     await tool.execute(action="fire", name="l1")
+    await asyncio.sleep(0)  # let the backgrounded fire record its origin
 
     run = rl.list_runs(tmp_path, "l1", limit=1)[0]
     assert run["origin"] == {
@@ -216,5 +228,52 @@ async def test_chat_fire_without_a_context_records_no_origin(tmp_path):
         {"name": "l1", "workflow": "w1", "goal": {"intent": "done"}}))
 
     await tool.execute(action="fire", name="l1")
+    await asyncio.sleep(0)  # let the backgrounded fire record its origin
 
     assert rl.list_runs(tmp_path, "l1", limit=1)[0]["origin"] is None
+
+
+@pytest.mark.asyncio
+async def test_fire_returns_before_the_workflow_finishes(tmp_path):
+    """The loop is read, not driven: the agent must not hold its turn open
+    for the length of the run."""
+    import asyncio
+
+    released = asyncio.Event()
+
+    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None):
+        await released.wait()
+        return _wr("completed", run_id=run_id)
+
+    async def judge(intent, assertions, evidence):
+        return {"intent_met": True, "assertions": {}}
+
+    ids = iter([f"lr{i}" for i in range(10)])
+    rt = LoopsRuntime(tmp_path, workflow_exec=workflow_exec, judge=judge,
+                      keep_runs=20, check_timeout_s=5, run_id_factory=lambda: next(ids))
+    tool = LoopsTool.create(_ctx(tmp_path, runtime=rt))
+    save_loop(tmp_path, parse_loop(
+        {"name": "l1", "workflow": "w1", "goal": {"intent": "done"}}))
+
+    out = await asyncio.wait_for(tool.execute(action="fire", name="l1"), timeout=1.0)
+
+    assert "started" in out.lower()
+    assert "lr0" in out
+    released.set()
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_busy_loop_still_reports_synchronously(tmp_path):
+    """LoopBusy is known before anything is launched — it must not be
+    swallowed into the background."""
+    rt = _runtime(tmp_path, [_wr("completed")])
+    save_loop(tmp_path, parse_loop({
+        "name": "l1", "workflow": "w1", "goal": {"intent": "done"},
+        "concurrency": "single"}))
+    rl.start_run(tmp_path, "l1", "existing", source="cron", task="t")
+
+    tool = LoopsTool.create(_ctx(tmp_path, runtime=rt))
+    out = await tool.execute(action="fire", name="l1")
+
+    assert "busy" in out.lower()

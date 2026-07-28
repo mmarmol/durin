@@ -82,14 +82,24 @@ class LoopsRuntime:
         self._queue_ttl_s = queue_ttl_s
         self._on_outcome = on_outcome
 
+    def reserve_run_id(self) -> str:
+        """Mint a run id a caller can report before the run exists.
+
+        Lets a caller that is about to background the fire (e.g. the chat
+        tool) hand the id back to the user immediately, then pass it into
+        `fire` so the run that eventually starts uses the same id instead
+        of minting a second one.
+        """
+        return self._run_id()
+
     async def fire(self, name: str, *, source: str, task: str | None = None,
-                    origin: dict | None = None) -> dict:
+                    origin: dict | None = None, run_id: str | None = None) -> dict:
         token = _bind_loop_telemetry(name)
         try:
             spec = load_loop(self._ws, name)
             if spec.concurrency == "single" and run_log.active_runs(self._ws, name):
                 raise LoopBusy(f"loop '{name}' already has an active run")
-            return await self._run(spec, source=source, task=task, origin=origin)
+            return await self._run(spec, source=source, task=task, origin=origin, run_id=run_id)
         finally:
             if token is not None:
                 reset_telemetry(token)
@@ -133,8 +143,8 @@ class LoopsRuntime:
                 reset_telemetry(token)
 
     async def _run(self, spec: LoopSpec, *, source: str, task: str | None,
-                    origin: dict | None = None) -> dict:
-        run_id = self._run_id()
+                    origin: dict | None = None, run_id: str | None = None) -> dict:
+        run_id = run_id or self._run_id()
         effective_task = task or spec.goal_intent
         run_log.start_run(self._ws, spec.name, run_id, source=source, task=effective_task, origin=origin)
         # Reserve the workflow's run id and persist it BEFORE launching: if this

@@ -10,6 +10,7 @@ available when the surface wires a ``LoopsRuntime`` onto ``ToolContext``.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from contextvars import ContextVar
 from dataclasses import replace
@@ -19,7 +20,6 @@ from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.schema import StringSchema, tool_parameters_schema
 from durin.loops import queue, run_log
 from durin.loops.cron_sync import sync_loop_jobs
-from durin.loops.runtime import LoopBusy
 from durin.loops.spec import LoopError, LoopNotFound, parse_loop
 from durin.loops.store import list_loops, load_loop, save_loop
 
@@ -69,6 +69,8 @@ class LoopsTool(Tool):
         # conversation; without this the outcome falls through to the loop's
         # declared destination, which is often unset.
         self._origin: ContextVar[dict | None] = ContextVar("loops_origin", default=None)
+        # Strong references: an un-awaited task is collectable mid-flight.
+        self._fires: set = set()
 
     def set_context(self, ctx: Any) -> None:
         if not ctx.session_key:
@@ -192,14 +194,34 @@ class LoopsTool(Tool):
         return "\n".join(lines)
 
     async def _fire(self, name: str, task: str | None) -> str:
+        """Start a run and return; the outcome arrives as a follow-up.
+
+        A loop run is read, not driven — holding the agent's turn open for the
+        length of a multi-stage workflow makes the turn hostage to a run the
+        agent cannot influence, and loses the run entirely if this process
+        dies. Busy and not-found are decided before anything is launched, so
+        they still answer inline.
+        """
         try:
-            record = await self._runtime.fire(
-                name, source="chat", task=task or None, origin=self._origin.get())
-        except LoopBusy as exc:
-            return f"Loop '{name}' is busy: {exc}"
+            spec = load_loop(self._ws, name)
         except LoopNotFound as exc:
             return f"Error: {exc}"
-        return self._format_run(name, record)
+        if spec.concurrency == "single" and run_log.active_runs(self._ws, name):
+            return f"Loop '{name}' is busy: an active run already exists"
+
+        run_id = self._runtime.reserve_run_id()
+        task_handle = asyncio.create_task(
+            self._runtime.fire(name, source="chat", task=task or None,
+                               origin=self._origin.get(), run_id=run_id))
+        self._fires.add(task_handle)
+        task_handle.add_done_callback(self._fires.discard)
+        return (
+            f"Loop '{name}' started (run id: {run_id}). Its outcome will be "
+            "delivered to you automatically as a follow-up message when it "
+            "finishes — do NOT poll for it: tell the user it is running and "
+            f"end your turn. Use loops(action='status', name='{name}') only if "
+            "the user asks for an update."
+        )
 
     async def _answer(self, name: str, run_id: str, answer: str) -> str:
         try:
