@@ -30,7 +30,7 @@ from loguru import logger
 from durin.agent.tools._telemetry import emit_tool_event
 from durin.loops import claims, queue, run_log
 from durin.loops.checks import verify_goal
-from durin.loops.outcome import build_outcome
+from durin.loops.outcome import LoopOutcome, build_outcome
 from durin.loops.spec import LoopNotFound, LoopSpec
 from durin.loops.store import load_loop
 from durin.telemetry.logger import bind_telemetry, current_telemetry, get_session_logger, reset_telemetry
@@ -130,7 +130,16 @@ class LoopsRuntime:
             record = run_log.read_run(self._ws, name, run_id)
             if not record or record.get("status") not in ("needs_operator", "waiting_info"):
                 raise ValueError(f"run '{run_id}' of loop '{name}' is not awaiting an answer")
-            run_log.update_run(self._ws, name, run_id, status="running")
+            # Re-stamp the owner, not just the status: THIS process is the one
+            # executing the resume. A parked run is answered hours or days
+            # later, routinely after a restart, so the recorded owner is
+            # usually the long-dead process that first fired it. Leaving it
+            # there makes the crash sweep read a live `running` run as an
+            # orphan and finalize it `interrupted` while it is still going.
+            from durin.utils.process_tree import process_identity
+
+            run_log.update_run(self._ws, name, run_id, status="running",
+                               owner=process_identity())
             # Release now, before the resume: the old claim is stale the
             # moment the answer arrives (idempotent — a needs_operator run
             # held no claim). If _interpret re-asks another tagged question
@@ -172,11 +181,21 @@ class LoopsRuntime:
         attempt for the whole time. Each relaunch is instead started with
         `asyncio.create_task` once every orphan in this pass is already
         finalized and notified.
+
+        The replacement's run id is nonetheless minted in the first pass, so
+        the interrupted notice can name it: a loop that silently relaunches
+        itself is its own class of problem. Minting is a local id, not a fire,
+        so it costs the first pass nothing.
+
+        A paused loop is never relaunched, and the notice says so rather than
+        promising a replacement. `fire` deliberately ignores `enabled` (a
+        manual run-now has to work on a paused loop), so this sweep is the
+        only place that switch can be honoured for a run nobody asked for.
         """
         from durin.workflow import run_log as wf_run_log
 
         handled: list[str] = []
-        to_relaunch: list[dict] = []
+        to_relaunch: list[tuple[dict, str]] = []
         for rec in run_log.find_orphans(self._ws):
             loop_name = rec.get("loop") or ""
             run_id = rec.get("run_id") or ""
@@ -193,49 +212,97 @@ class LoopsRuntime:
                 and wf_run_log.read_manifest(self._ws, spec.workflow, wf_run_id) is not None
             )
 
-            detail = ("interrupted by a restart before the workflow started"
-                      if not work_started else
-                      "interrupted by a restart with work already in flight")
+            if work_started:
+                detail = "interrupted by a restart with work already in flight"
+                new_run_id = None
+            elif not spec.enabled:
+                # Paused while the gateway was down. Nothing ran, but firing a
+                # replacement would run a loop its owner switched off — say so
+                # instead, so the recipient isn't left expecting one.
+                detail = ("interrupted by a restart before the workflow started; "
+                          "not relaunched — the loop is paused")
+                new_run_id = None
+            else:
+                new_run_id = self.reserve_run_id()
+                detail = ("interrupted by a restart before the workflow started; "
+                          f"relaunched as {new_run_id}")
+
             record = run_log.finalize_run(self._ws, loop_name, run_id,
                                           status="interrupted", workflow_run_id=wf_run_id,
                                           detail=detail, goal_reached=False,
                                           work_started=work_started)
+            logger.info("loops: reconciled orphaned loop '{}' run {} as interrupted — {}",
+                        loop_name, run_id, detail)
             await self._post_finish(spec, run_id, record)
             handled.append(run_id)
 
-            if not work_started:
-                to_relaunch.append(rec)
+            if new_run_id is not None:
+                to_relaunch.append((rec, new_run_id))
 
-        for rec in to_relaunch:
-            loop_name = rec.get("loop") or ""
-            run_id = rec.get("run_id") or ""
-            logger.info("loops: relaunching loop '{}' run {} — no work had started",
-                        loop_name, run_id)
-            task = asyncio.create_task(self._relaunch_orphan(rec))
+        for rec, new_run_id in to_relaunch:
+            logger.info("loops: relaunching loop '{}' run {} as {} — no work had started",
+                        rec.get("loop") or "", rec.get("run_id") or "", new_run_id)
+            task = asyncio.create_task(self._relaunch_orphan(rec, new_run_id))
             self._sweep_tasks.add(task)
             task.add_done_callback(self._sweep_tasks.discard)
         return handled
 
-    async def _relaunch_orphan(self, rec: dict) -> None:
+    async def _relaunch_orphan(self, rec: dict, new_run_id: str) -> None:
         """Fire the replacement run for one orphan, backgrounded by sweep_orphans.
 
         Runs independently of the sweep pass that scheduled it, so nothing
         here can delay another orphan's finalize/notify or another loop's
-        fire attempt.
+        fire attempt. The id was already promised by the interrupted notice,
+        so a replacement that does not happen is retracted to that same
+        recipient rather than left as a log line nobody reads.
         """
         loop_name = rec.get("loop") or ""
         run_id = rec.get("run_id") or ""
+        origin = rec.get("origin") if isinstance(rec.get("origin"), dict) else None
         try:
             await self.fire(loop_name, source=rec.get("source") or "cron",
-                            task=rec.get("task"), origin=rec.get("origin"))
+                            task=rec.get("task"), origin=origin, run_id=new_run_id)
         except LoopBusy:
             # A single-concurrency loop already has a live run — the cause is
-            # being served. The interrupted outcome already told somebody; do
-            # not stack a second run on it.
+            # being served, so a second run must not be stacked on it. The
+            # promised replacement still never happened, and only the
+            # recipient can judge whether the live run covers this cause.
             logger.info("loops: not relaunching loop '{}' run {} — already busy",
                         loop_name, run_id)
-        except Exception:  # noqa: BLE001 — one bad orphan must not go unlogged
+            await self.report_no_outcome(
+                loop_name, new_run_id, origin=origin,
+                reason=(f"the loop already had an active run when this replacement for "
+                        f"run {run_id} was due to start"),
+            )
+        except Exception as exc:  # noqa: BLE001 — one bad orphan must not go unlogged
             logger.exception("loops: relaunch of loop '{}' run {} failed", loop_name, run_id)
+            await self.report_no_outcome(
+                loop_name, new_run_id, origin=origin,
+                reason=f"this replacement for run {run_id} failed to start: {exc}",
+            )
+
+    async def report_no_outcome(self, loop: str, run_id: str, *,
+                                origin: dict | None, reason: str) -> None:
+        """Retract a run id that was announced before the run existed.
+
+        Handing out a run id (a backgrounded chat fire, the replacement named
+        in an interrupted notice) promises that an outcome follows. When the
+        fire never happens, that promise breaks with nothing behind it but a
+        log line — so the retraction goes to the same recipient the outcome
+        would have reached. Carries `interrupted` because that is what
+        happened as far as the recipient is concerned: no result was produced,
+        and it is the routing status that reaches a standing destination as
+        well as a session.
+        """
+        await self._deliver(LoopOutcome(
+            loop=loop,
+            run_id=run_id,
+            status="interrupted",
+            goal_reached=False,
+            summary=f"Loop '{loop}' run {run_id} produced no outcome — {reason}.",
+            origin=origin,
+            workflow_run_id=None,
+        ))
 
     async def _run(self, spec: LoopSpec, *, source: str, task: str | None,
                     origin: dict | None = None, run_id: str | None = None) -> dict:
@@ -331,15 +398,21 @@ class LoopsRuntime:
     async def _emit_outcome(self, loop: str, record: dict) -> None:
         """Report a terminal run to whoever should hear about it.
 
+        Every terminal status goes through here — the recipient decides what
+        is worth showing."""
+        await self._deliver(build_outcome(loop, record))
+
+    async def _deliver(self, outcome: LoopOutcome) -> None:
+        """Hand one outcome to the surface's delivery callback.
+
         Best-effort like the ask paths: a delivery failure must not turn a
-        finished run into a failed one. Every terminal status goes through
-        here — the recipient decides what is worth showing."""
+        finished run into a failed one."""
         if self._on_outcome is None:
             return
         try:
-            await self._on_outcome(build_outcome(loop, record))
+            await self._on_outcome(outcome)
         except Exception:  # noqa: BLE001 — delivery is best-effort
-            logger.exception("loops: outcome delivery for loop '{}' failed", loop)
+            logger.exception("loops: outcome delivery for loop '{}' failed", outcome.loop)
 
     async def _say(self, spec: LoopSpec, run_id: str, kind: str, text: str) -> None:
         if self._notify:

@@ -680,6 +680,130 @@ async def test_relaunch_carries_the_original_origin(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_the_interrupted_notice_names_the_run_that_replaces_it(tmp_path):
+    """A loop that silently relaunches itself is its own class of problem, so
+    the recipient is told which run took over — and the id in the notice must
+    be the id that actually runs, not a second one minted later."""
+    import re
+
+    outcomes = []
+
+    async def on_outcome(outcome):
+        outcomes.append(outcome)
+
+    rt, _ = _mk_runtime(tmp_path, [_wr_for("completed")], on_outcome=on_outcome)
+    _save(tmp_path)
+    rl.start_run(tmp_path, "l1", "dead", source="cron", task="t")
+    rl.update_run(tmp_path, "l1", "dead", workflow_run_id="wf-never-started",
+                  owner={"pid": 999999, "started": "long ago"})
+
+    await rt.sweep_orphans()
+    await _drain()
+
+    match = re.search(r"relaunched as (\S+)", outcomes[0].summary)
+    assert match, f"the interrupted notice must name its replacement: {outcomes[0].summary!r}"
+    replacement = match.group(1)
+    assert replacement != "dead"
+    # The announced id is the run that really happened, not a fiction.
+    replacement_run = rl.read_run(tmp_path, "l1", replacement)
+    assert replacement_run is not None and replacement_run["status"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_a_paused_loop_is_not_relaunched_and_the_notice_says_why(tmp_path):
+    """`fire` deliberately ignores `enabled` (a manual run-now must work on a
+    paused loop), so the sweep is what has to respect it — otherwise a loop
+    paused while the gateway was down comes back to life on restart. The
+    recipient is told no replacement is coming instead of being promised one."""
+    outcomes = []
+
+    async def on_outcome(outcome):
+        outcomes.append(outcome)
+
+    rt, calls = _mk_runtime(tmp_path, [_wr_for("completed")], on_outcome=on_outcome)
+    _save(tmp_path, enabled=False)
+    rl.start_run(tmp_path, "l1", "dead", source="cron", task="t")
+    rl.update_run(tmp_path, "l1", "dead", workflow_run_id="wf-never-started",
+                  owner={"pid": 999999, "started": "long ago"})
+
+    await rt.sweep_orphans()
+    await _drain()
+
+    assert calls["exec"] == []
+    assert [o.status for o in outcomes] == ["interrupted"]
+    assert "paused" in outcomes[0].summary
+    assert "relaunched as" not in outcomes[0].summary
+
+
+@pytest.mark.asyncio
+async def test_the_sweep_logs_every_orphan_it_finalizes_not_just_relaunches(tmp_path, caplog):
+    """The production complaint that started this: a sweep that finalized runs
+    left `grep -i reconcil` returning nothing, because only relaunches logged
+    — and the dangerous orphan (work in flight) is exactly the one that is
+    never relaunched."""
+    import logging
+
+    from loguru import logger as loguru_logger
+
+    from durin.workflow import run_log as wf_rl
+
+    rt, _ = _mk_runtime(tmp_path, [])
+    _save(tmp_path)
+    rl.start_run(tmp_path, "l1", "dead", source="cron", task="t")
+    rl.update_run(tmp_path, "l1", "dead", workflow_run_id="wf1",
+                  owner={"pid": 999999, "started": "long ago"})
+    wf_rl.start_run(tmp_path, "w1", "wf1", root_session_key=None,
+                    started_at=time.time(), task="t")
+
+    handler_id = loguru_logger.add(caplog.handler, format="{message}", level="INFO")
+    try:
+        with caplog.at_level(logging.INFO):
+            await rt.sweep_orphans()
+    finally:
+        loguru_logger.remove(handler_id)
+
+    reconciled = [r.getMessage() for r in caplog.records if "reconcil" in r.getMessage().lower()]
+    assert len(reconciled) == 1, f"expected one reconcile line, got {[r.getMessage() for r in caplog.records]}"
+    assert "dead" in reconciled[0] and "interrupted" in reconciled[0]
+
+
+@pytest.mark.asyncio
+async def test_answering_a_run_re_stamps_its_owner_so_the_sweep_leaves_it_alone(tmp_path):
+    """A parked run is answered hours or days later — routinely after a
+    restart, which is the whole point of needs_operator/waiting_info. The
+    manifest still names the process that first fired it, so unless `answer`
+    re-stamps the owner alongside the status, find_orphans reads the resumed
+    run as an orphan and sweep_orphans finalizes it `interrupted` WHILE it is
+    still executing: a false "interrupted" delivered to the very person who
+    just answered, a `single` loop's slot freed under a live run, and a
+    manifest the finishing resume then overwrites again."""
+    _save(tmp_path)
+    seen = {}
+    dead_owner = {"pid": 999999, "started": "long ago"}
+
+    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None):
+        # Mid-resume: this is the window sweep_orphans would run in.
+        seen["orphans"] = [r.get("run_id") for r in rl.find_orphans(tmp_path)]
+        seen["owner"] = rl.read_run(tmp_path, "l1", "parked").get("owner")
+        return _wr_for("completed")
+
+    async def judge(intent, assertions, evidence):
+        return {"intent_met": True, "assertions": {}}
+
+    rt = LoopsRuntime(tmp_path, workflow_exec=workflow_exec, judge=judge, keep_runs=20,
+                      check_timeout_s=5, run_id_factory=lambda: "unused")
+    rl.start_run(tmp_path, "l1", "parked", source="cron", task="t")
+    rl.finalize_run(tmp_path, "l1", "parked", status="needs_operator",
+                    workflow_run_id="wf1", ask="which one?")
+    rl.update_run(tmp_path, "l1", "parked", owner=dead_owner)
+
+    await rt.answer("l1", "parked", "this one")
+
+    assert seen["orphans"] == []
+    assert seen["owner"] != dead_owner
+
+
+@pytest.mark.asyncio
 async def test_sweep_ignores_a_live_run(tmp_path):
     rt, _ = _mk_runtime(tmp_path, [])
     _save(tmp_path)
@@ -746,13 +870,19 @@ async def test_a_slow_relaunch_on_one_loop_does_not_delay_another_loops_outcome(
 
 
 @pytest.mark.asyncio
-async def test_relaunch_loop_busy_is_caught_and_logged_not_raised(tmp_path):
+async def test_a_relaunch_that_loses_the_race_is_retracted_to_the_recipient(tmp_path):
     """A single-concurrency loop with another (genuinely live) run active must
-    not raise LoopBusy out of the backgrounded relaunch — the interrupted
-    outcome already told somebody; a second run must not be forced. Task 7's
-    review in this branch caught a genuinely swallowed LoopBusy bug, so this
-    is not a hypothetical class of defect."""
-    rt, calls = _mk_runtime(tmp_path, [])
+    not raise LoopBusy out of the backgrounded relaunch — a second run must
+    not be forced. But the interrupted notice already named a replacement, so
+    swallowing the miss into an info log leaves the recipient waiting on a run
+    that will never exist. The retraction goes to the same recipient, not to
+    the log alone."""
+    outcomes = []
+
+    async def on_outcome(outcome):
+        outcomes.append(outcome)
+
+    rt, calls = _mk_runtime(tmp_path, [], on_outcome=on_outcome)
     _save(tmp_path)   # concurrency defaults to "single"
     rl.start_run(tmp_path, "l1", "dead", source="cron", task="t")
     rl.update_run(tmp_path, "l1", "dead", workflow_run_id="wf-never-started",
@@ -766,6 +896,12 @@ async def test_relaunch_loop_busy_is_caught_and_logged_not_raised(tmp_path):
 
     assert handled == ["dead"]
     assert calls["exec"] == []   # relaunch never ran — LoopBusy, not a crash
+    assert len(outcomes) == 2
+    announced = outcomes[0].summary.split("relaunched as ")[1].strip()
+    # The retraction names the very run id the interrupted notice promised.
+    assert outcomes[1].run_id == announced
+    assert "produced no outcome" in outcomes[1].summary
+    assert "active run" in outcomes[1].summary
 
 
 @pytest.mark.asyncio
