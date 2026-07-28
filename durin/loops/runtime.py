@@ -376,23 +376,36 @@ class LoopsRuntime:
                                                "status": record["status"],
                                                "goal_reached": bool(record.get("goal_reached"))})
         await self._emit_outcome(spec.name, record)
-        run_log.prune_runs(self._ws, spec.name, self._keep_runs)
-        # The run that just finished held the only concurrency slot a
-        # `single` loop allows; if a channel event piled up in the queue
-        # while it ran, fire it now instead of waiting for the next inbound
-        # message. Scheduled via create_task (never awaited here) so a slow
-        # drained run can't delay returning this record to the caller.
-        if spec.enabled and spec.concurrency == "single":
-            event = queue.pop_fresh(self._ws, spec.name, self._queue_ttl_s)
-            if event is not None:
-                origin = event.get("origin")
-                emit_tool_event("loops.event_matched", {
-                    "loop": spec.name,
-                    "source_channel": (origin or {}).get("channel", ""),
-                    "action": "drained",
-                })
-                asyncio.create_task(self._drain_fire(spec.name,
-                                                     task=event.get("content"), origin=origin))
+        # Housekeeping only, and it must stay contained from here on: a caller
+        # of fire() (_relaunch_orphan, the chat tool's backgrounded fire) reads
+        # an exception out of this method as "the fire failed" and retracts
+        # the run with a "produced no outcome" message. The real outcome just
+        # went out above, so letting a filesystem/lock error from pruning or
+        # the queue drain escape would retract a run whose actual outcome the
+        # recipient already has — two contradictory messages for one run.
+        try:
+            run_log.prune_runs(self._ws, spec.name, self._keep_runs)
+            # The run that just finished held the only concurrency slot a
+            # `single` loop allows; if a channel event piled up in the queue
+            # while it ran, fire it now instead of waiting for the next inbound
+            # message. Scheduled via create_task (never awaited here) so a slow
+            # drained run can't delay returning this record to the caller.
+            if spec.enabled and spec.concurrency == "single":
+                event = queue.pop_fresh(self._ws, spec.name, self._queue_ttl_s)
+                if event is not None:
+                    origin = event.get("origin")
+                    emit_tool_event("loops.event_matched", {
+                        "loop": spec.name,
+                        "source_channel": (origin or {}).get("channel", ""),
+                        "action": "drained",
+                    })
+                    asyncio.create_task(self._drain_fire(spec.name,
+                                                         task=event.get("content"), origin=origin))
+        except Exception:  # noqa: BLE001 — contained; see comment above
+            logger.exception(
+                "loops: post-outcome housekeeping (prune/queue-drain) for loop '{}' run {} failed",
+                spec.name, run_id,
+            )
         return record
 
     async def _emit_outcome(self, loop: str, record: dict) -> None:

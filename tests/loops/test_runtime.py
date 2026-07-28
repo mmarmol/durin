@@ -933,3 +933,48 @@ async def test_sweep_skips_a_malformed_orphan_record_missing_a_run_id(tmp_path, 
                         lambda ws: [{"loop": "l1", "run_id": ""}, {"loop": "", "run_id": "r1"}])
 
     assert await rt.sweep_orphans() == []
+
+
+@pytest.mark.asyncio
+async def test_post_finish_tail_failure_does_not_retract_a_delivered_outcome(tmp_path, monkeypatch):
+    """A prune_runs failure AFTER the real outcome already went out must not
+    escape _post_finish: _relaunch_orphan's catch-all reads any exception out
+    of fire() as "the fire failed" and sends a "produced no outcome"
+    retraction — which would contradict the "done" outcome the recipient was
+    just given for that very run."""
+    from durin.loops import runtime as runtime_mod
+
+    outcomes = []
+
+    async def on_outcome(outcome):
+        outcomes.append(outcome)
+
+    rt, calls = _mk_runtime(tmp_path, [_wr_for("completed")], on_outcome=on_outcome)
+    _save(tmp_path)
+    rl.start_run(tmp_path, "l1", "dead", source="chat", task="the original task")
+    rl.update_run(tmp_path, "l1", "dead", workflow_run_id="wf-never-started",
+                  owner={"pid": 999999, "started": "long ago"})
+
+    # The first _post_finish call (finalizing "dead" as interrupted) must
+    # succeed so the relaunch is scheduled at all; only the SECOND call — the
+    # replacement run's own _post_finish, reached after its real "done"
+    # outcome is already delivered — simulates the filesystem/lock error.
+    real_prune_runs = runtime_mod.run_log.prune_runs
+    call_count = [0]
+
+    def flaky_prune_runs(ws, loop, keep):
+        call_count[0] += 1
+        if call_count[0] >= 2:
+            raise OSError("simulated filesystem error pruning runs")
+        return real_prune_runs(ws, loop, keep)
+
+    monkeypatch.setattr(runtime_mod.run_log, "prune_runs", flaky_prune_runs)
+
+    handled = await rt.sweep_orphans()
+    await _drain()
+
+    assert handled == ["dead"]
+    assert calls["exec"], "the replacement run must actually have executed"
+    # Exactly the interrupted notice and the replacement's real outcome — no
+    # third "produced no outcome" retraction contradicting the "done" above.
+    assert [o.status for o in outcomes] == ["interrupted", "done"]
