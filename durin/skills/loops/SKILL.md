@@ -106,16 +106,30 @@ around to see. At least one of these must hold:
 ## Runs, waking, and the two human lanes
 
 A run's status is one of `running · needs_operator · waiting_info · done · no_goal ·
-escalated · error`. Two distinct humans may be in the picture:
+escalated · error · interrupted`.
+
+`interrupted` is not a failure: the run was killed with its process (a gateway
+restart), so it never produced a result. If no workflow had started, the loop fires a
+replacement run automatically and tells you. If work was already in flight, it stops
+and reports the workflow run id — steps may have posted somewhere external, so decide
+before re-firing. It does not count toward `stuck_after`.
+
+Two distinct humans may be in the picture:
 
 - **The counterpart** — whoever is on the other side of the case (the customer who
   mailed in). When the workflow needs *their* answer, it ends at a `__needs_input__`
   gate with the ask prefixed `[TO:counterpart]`: the run parks as `waiting_info`, the
   question is delivered **in-context on the origin channel** (same mail thread, same
   telegram topic, same slack thread), and their reply wakes exactly that run.
-- **The operator** — the durin owner. Untagged asks, escalations, and errors land in
-  the webui's Loops → Activity inbox (`needs_operator`), answerable there, via the
-  `loops` tool, or on the configured `operator_channel`.
+- **The operator** — the durin owner. Untagged asks park as `needs_operator` in the
+  webui's Loops → Activity inbox, answerable there or via the `loops` tool.
+
+Separately from asks, **every run that ends reports its outcome**. It goes back to
+wherever the run was fired from — the conversation that asked for it, the channel
+thread that triggered it — and falls back to the loop's `operator_channel` when
+nothing fired it interactively. A standing destination only hears about outcomes
+worth acting on (`no_goal`, `error`, `escalated`, `interrupted`); a run somebody
+explicitly asked for reports back whatever happened, including success.
 
 The `[TO:counterpart]` contract has one structural requirement: the workflow must
 actually **end `needs_input`** (a `cases` route to the reserved `__needs_input__`
@@ -127,7 +141,13 @@ text as final output ends the run; there is nothing to wake.
 - `loops(action="list")` — what exists, enabled state, active runs. Check this before
   creating: the standing work may already be defined.
 - `loops(action="status", name=…)` — a loop's recent runs and pending asks.
-- `loops(action="fire", name=…, task?)` — start a run now (manual trigger).
+- `loops(action="fire", name=…, task?)` — start a run now. **It returns immediately
+  with the run id; it does not wait.** The outcome arrives on its own as a follow-up
+  message when the run finishes — do not poll for it with sleep loops, and do not
+  re-fire because you have not heard back. Use `action="status"` only if the user asks
+  for an update. On a surface with no conversation origin wired, the tool says so in
+  its reply up front instead of promising a follow-up — use `action="status"` to check
+  on that run instead.
 - `loops(action="answer", name=…, run_id=…, answer=…)` — reply to a waiting run.
 - `loops(action="enable"/"pause", name=…)` — pause removes the standing triggers;
   definitions and history stay.
