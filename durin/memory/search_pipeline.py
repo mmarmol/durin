@@ -63,6 +63,11 @@ _LIBRARY_URI_PREFIXES = (
 )
 
 
+# Display-path prefix for canonical entity pages. Fusion keys them by the
+# bare `<type>:<slug>` ref instead — see `_safe_grep_fallback`.
+_ENTITY_PAGE_PREFIX = "memory/entity_page/"
+
+
 def _is_library_uri(uri: str) -> bool:
     """True when ``uri`` addresses ingested Library material."""
     return any(uri.startswith(p) for p in _LIBRARY_URI_PREFIXES)
@@ -669,8 +674,19 @@ def _safe_grep_fallback(
             hit_type = "session"
         else:
             hit_type = getattr(r, "class_name", "") or "episodic"
+        # Canonical pages: `search_memory` addresses them by their display
+        # path, but the FTS indexer (`_payload_for`) and the vector
+        # normaliser above both key them by the bare `<type>:<slug>` ref.
+        # Handing RRF the path would make the same page two documents —
+        # it would occupy two of the caller's `limit` slots, and since the
+        # result layer re-adds the prefix, both rows would render under an
+        # identical uri with only one carrying a snippet. The display path
+        # rides along in `path` for the result layer to drill.
+        fusion_uri = r.uri
+        if hit_type == "entity_page" and fusion_uri.startswith(_ENTITY_PAGE_PREFIX):
+            fusion_uri = fusion_uri[len(_ENTITY_PAGE_PREFIX):]
         out.append({
-            "uri": r.uri,
+            "uri": fusion_uri,
             "path": getattr(r, "uri", ""),
             "type": hit_type,
             "snippet": getattr(r, "snippet", "")
