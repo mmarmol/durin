@@ -459,6 +459,15 @@ def store_secret(
 # a masked value on its way back to disk, whichever layer produced it.
 REDACTION_MARKER_PREFIX = "«redacted"
 
+# The config API serves credentials to the dashboard through `mask_secrets`,
+# which replaces a literal with this. It is a different marker from the
+# tool-result one above, produced by a different layer, and it destroys a
+# credential just as thoroughly if it is written back. The current UI never
+# returns it — masked rows are read-only and secret fields emit a
+# ${secret:NAME} reference — but the write path is a public API, so the
+# chokepoint checks for it rather than trusting every client.
+UI_MASK_MARKER = "***"
+
 _PATTERN_MARKER = f"{REDACTION_MARKER_PREFIX}»"
 
 # Vendor-prefixed credentials — high confidence, low false-positive.
@@ -613,7 +622,11 @@ CREDENTIAL_KEY_RE = re.compile(
 
 
 def find_redacted_credentials(data: Any, _prefix: str = "") -> list[str]:
-    """Return the dotted paths of credential fields holding a redaction marker.
+    """Return the dotted paths of credential fields holding a mask.
+
+    Two layers produce one: the tool-result redaction the model sees, and the
+    ``***`` the config API serves to the dashboard. Either one replaces a
+    working credential with placeholder text if it is written back.
 
     Walks dicts and lists. Empty when *data* is clean, which is the
     overwhelmingly common case, so callers can treat this as a cheap
@@ -627,7 +640,8 @@ def find_redacted_credentials(data: Any, _prefix: str = "") -> list[str]:
             if (
                 isinstance(value, str)
                 and CREDENTIAL_KEY_RE.search(str(key))
-                and REDACTION_MARKER_PREFIX in value
+                and (REDACTION_MARKER_PREFIX in value
+                     or value.strip() == UI_MASK_MARKER)
             ):
                 found.append(path)
             else:
