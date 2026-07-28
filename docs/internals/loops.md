@@ -302,8 +302,8 @@ it is routed, which does not necessarily land on `operator_channel` at all.
 
 ### 4g. Escalation
 
-`_post_finish` runs after every run finalized to `done`, `no_goal`, or
-`error` — a `needs_operator` run skips it entirely (§4b). If the
+`_post_finish` runs after every run finalized to `done`, `no_goal`, `error`,
+or `interrupted` — a `needs_operator` run skips it entirely (§4b). If the
 just-finalized status is `no_goal` or `error`, it counts the loop's
 **consecutive** `no_goal`/`error`
 runs (`run_log.consecutive_no_goal`, most-recent-first, stopping at the first
