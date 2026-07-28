@@ -5,6 +5,92 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.5.0 — 2026-07-28
+
+### Highlights
+
+- **A loop run that died with the gateway told nobody.** Two chat-fired runs
+  were killed by gateway restarts; both manifests were rewritten to `error`
+  with no `finished_at`, no reason, no log line and no notification. The agent
+  that fired them sat waiting on a turn it could no longer influence, and the
+  operator never learned either. Every loop run that ends now reports an
+  outcome, and it goes back to whoever asked for the run — the conversation
+  that fired it — falling back to the loop's `operator_channel` when nothing
+  fired it interactively. An outcome that reaches nobody logs a warning
+  instead of vanishing. (#493)
+- **`interrupted` replaces the lie that a killed run had failed.** A run killed
+  with its process did not fail — it never produced a result, so calling it
+  `error` claimed work was tried and misread the goal-streak counter that
+  decides when a loop is stuck. Interrupted runs are now their own terminal
+  state, transparent to that streak and excluded from the convergence and
+  escalation rates. When no workflow had started, the loop fires a replacement
+  and names it; when work was already in flight it stops and reports the
+  workflow run id, because steps may already have posted somewhere external.
+  (#493)
+- **Firing a loop from chat no longer holds the turn hostage.** `loops` with
+  `action="fire"` ran the whole workflow inside the tool call, so the agent
+  could not answer, and a restart mid-run killed the awaited call with nothing
+  left behind. It now returns the run id immediately and the outcome arrives
+  as a follow-up. (#493)
+- **A rotated secret kept its scope, but durin said otherwise.** An agent was
+  told a freshly rotated credential had `scope=none` and no longer announced it
+  as an available environment variable, because the confirmation was built from
+  the write request instead of from what was actually stored. The agent stopped
+  trusting a working token and asked for it to be replaced. (#492)
+
+### Loops
+
+- Crash recovery moved off the file-only sweep thread onto the runtime, which
+  is the only place that can deliver an outcome and fire a replacement. The
+  relaunch decision is the existence of the workflow's manifest, not a count of
+  completed nodes: a node is recorded only when it finishes, so a run killed
+  inside its first node shows no nodes while being the likeliest to have
+  already acted. (#493)
+- Outcomes are never delivered into a counterpart's channel thread. That lane
+  carries workflow-authored prose only; internal status and exception text stay
+  on the operator side. (#493)
+- A standing destination only hears actionable outcomes; a run somebody
+  explicitly asked for reports back whatever happened, including success. (#493)
+- Answering a run parked since before a gateway restart no longer risks the
+  sweep finalizing it as interrupted while it is still running. (#493)
+
+### Gateway and channels
+
+- A `${secret:NAME}` reference in the websocket channel's static admin token is
+  resolved before comparison. The reference string itself used to be the
+  accepted password while the real secret was refused. (#490)
+- A config that points at a secret which is not in the store now fails loudly
+  instead of taking the whole HTTP surface down quietly: the gateway used to
+  start, log a warning, and leave nothing listening — no dashboard, no API.
+  (#491)
+
+### Skills
+
+- Feedback on a built-in skill has an exit again, and a curation pass is no
+  longer lost. A "reviewed" chip that no longer suppresses anything is
+  recognised as stale. In the skills list, a skill's name no longer collapses
+  to zero width when its badges are crowded. (#489)
+
+### Doctor
+
+- `durin doctor` stops reporting a missing extra that durin no longer ships.
+  The installed-extras list is append-only history, so any retired extra became
+  a permanent warning with a suggested fix that could not work. (#488)
+
+### Web UI
+
+- Loop runs can show the `interrupted` state, in all nine locales, and an
+  interrupted run's explanatory note is no longer styled as a failure. A run
+  fired from a conversation now names that origin instead of rendering a blank
+  row. (#493)
+
+### Documentation
+
+- The `loops` skill no longer tells agents that errors reach the operator —
+  they never did, and an agent believing it is part of what made the incident
+  invisible. It now describes outcome delivery, the non-blocking `fire`
+  contract, and `interrupted`. (#493)
+
 ## 0.4.9 — 2026-07-27
 
 ### Highlights
