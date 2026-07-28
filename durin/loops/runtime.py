@@ -30,6 +30,7 @@ from loguru import logger
 from durin.agent.tools._telemetry import emit_tool_event
 from durin.loops import claims, queue, run_log
 from durin.loops.checks import verify_goal
+from durin.loops.outcome import build_outcome
 from durin.loops.spec import LoopSpec
 from durin.loops.store import load_loop
 from durin.telemetry.logger import bind_telemetry, current_telemetry, get_session_logger, reset_telemetry
@@ -69,7 +70,7 @@ def _bind_loop_telemetry(name: str):
 class LoopsRuntime:
     def __init__(self, workspace, *, workflow_exec, judge, keep_runs: int,
                  check_timeout_s: int, on_operator_ask=None, on_counterpart_ask=None,
-                 run_id_factory=None, queue_ttl_s: int = 3600):
+                 run_id_factory=None, queue_ttl_s: int = 3600, on_outcome=None):
         self._ws = Path(workspace)
         self._exec = workflow_exec
         self._judge = judge
@@ -79,6 +80,7 @@ class LoopsRuntime:
         self._notify_counterpart = on_counterpart_ask
         self._run_id = run_id_factory or (lambda: uuid.uuid4().hex[:12])
         self._queue_ttl_s = queue_ttl_s
+        self._on_outcome = on_outcome
 
     async def fire(self, name: str, *, source: str, task: str | None = None,
                     origin: dict | None = None) -> dict:
@@ -201,6 +203,7 @@ class LoopsRuntime:
         emit_tool_event("loops.run_finished", {"loop": spec.name, "run_id": run_id,
                                                "status": record["status"],
                                                "goal_reached": bool(record.get("goal_reached"))})
+        await self._emit_outcome(spec.name, record)
         run_log.prune_runs(self._ws, spec.name, self._keep_runs)
         # The run that just finished held the only concurrency slot a
         # `single` loop allows; if a channel event piled up in the queue
@@ -219,6 +222,19 @@ class LoopsRuntime:
                 asyncio.create_task(self._drain_fire(spec.name,
                                                      task=event.get("content"), origin=origin))
         return record
+
+    async def _emit_outcome(self, loop: str, record: dict) -> None:
+        """Report a terminal run to whoever should hear about it.
+
+        Best-effort like the ask paths: a delivery failure must not turn a
+        finished run into a failed one. Every terminal status goes through
+        here — the recipient decides what is worth showing."""
+        if self._on_outcome is None:
+            return
+        try:
+            await self._on_outcome(build_outcome(loop, record))
+        except Exception:  # noqa: BLE001 — delivery is best-effort
+            logger.exception("loops: outcome delivery for loop '{}' failed", loop)
 
     async def _say(self, spec: LoopSpec, run_id: str, kind: str, text: str) -> None:
         if self._notify:

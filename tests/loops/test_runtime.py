@@ -24,7 +24,8 @@ def _isolate_telemetry_dir(tmp_path, monkeypatch):
     return telemetry_dir
 
 
-def _mk_runtime(tmp_path, results, judge_verdict=None, asks=None, counterpart_asks=None, queue_ttl_s=3600):
+def _mk_runtime(tmp_path, results, judge_verdict=None, asks=None,
+                counterpart_asks=None, queue_ttl_s=3600, on_outcome=None):
     calls = {"exec": []}
 
     async def workflow_exec(name, task, *, resume_run_id=None, run_id=None):
@@ -42,8 +43,10 @@ def _mk_runtime(tmp_path, results, judge_verdict=None, asks=None, counterpart_as
 
     ids = iter([f"lr{i}" for i in range(100)])
     rt = LoopsRuntime(tmp_path, workflow_exec=workflow_exec, judge=judge, keep_runs=20,
-                      check_timeout_s=5, on_operator_ask=on_ask, on_counterpart_ask=on_counterpart_ask,
-                      run_id_factory=lambda: next(ids), queue_ttl_s=queue_ttl_s)
+                      check_timeout_s=5, on_operator_ask=on_ask,
+                      on_counterpart_ask=on_counterpart_ask,
+                      run_id_factory=lambda: next(ids), queue_ttl_s=queue_ttl_s,
+                      on_outcome=on_outcome)
     return rt, calls
 
 
@@ -60,6 +63,10 @@ def _save(tmp_path, **over):
 
 def _wr(status, **kw):
     return WorkflowResult(status=status, final_output=kw.pop("out", "output"), run_id=kw.pop("run_id", "wf1"), **kw)
+
+
+def _wr_for(status):
+    return WorkflowResult(status=status, final_output="out", run_id="wf1")
 
 
 async def test_completed_and_goal_reached_is_done(tmp_path):
@@ -523,3 +530,40 @@ async def test_fire_records_the_workflow_run_id_before_the_workflow_finishes(tmp
 
     assert seen["passed"] is not None
     assert seen["mid_flight"] == seen["passed"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wf_status,expected", [
+    ("completed", "done"),
+    ("exhausted", "no_goal"),
+    ("aborted", "error"),
+])
+async def test_every_terminal_status_emits_exactly_one_outcome(tmp_path, wf_status, expected):
+    outcomes = []
+
+    async def on_outcome(outcome):
+        outcomes.append(outcome)
+
+    rt, _ = _mk_runtime(tmp_path, [_wr_for(wf_status)], on_outcome=on_outcome)
+    _save(tmp_path)
+    await rt.fire("l1", source="cron")
+
+    assert [o.status for o in outcomes] == [expected]
+
+
+@pytest.mark.asyncio
+async def test_needs_operator_emits_no_outcome(tmp_path):
+    """A pause is not a terminal state — the existing ask path owns it."""
+    outcomes, asks = [], []
+
+    async def on_outcome(outcome):
+        outcomes.append(outcome)
+
+    rt, _ = _mk_runtime(tmp_path, [WorkflowResult(status="needs_input",
+                                                  final_output="which one?", run_id="wf1")],
+                        asks=asks, on_outcome=on_outcome)
+    _save(tmp_path)
+    await rt.fire("l1", source="cron")
+
+    assert outcomes == []
+    assert len(asks) == 1
