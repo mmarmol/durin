@@ -1629,6 +1629,63 @@ def _run_gateway(
         except Exception:
             logger.exception("loop counterpart delivery (non-fatal) failed")
 
+    async def _on_loop_outcome(outcome) -> None:
+        """Deliver a terminal run's outcome to whoever should hear about it.
+
+        Origin first, the loop's declared channel as the backstop. An outcome
+        with neither is logged rather than dropped in silence — a loop that
+        finishes into the void is the failure this exists to prevent.
+        """
+        from durin.loops.outcome import route
+
+        try:
+            spec = _load_loop(config.workspace_path, outcome.loop)
+        except Exception:  # noqa: BLE001 — a deleted loop must not break delivery
+            logger.warning("loops: outcome for unknown loop '{}' dropped", outcome.loop)
+            return
+
+        dest = route(outcome, operator_channel=spec.operator_channel)
+        if dest is None:
+            if outcome.status in ("no_goal", "error", "escalated", "interrupted"):
+                logger.warning(
+                    "loops: loop '{}' run {} ended '{}' with no origin and no "
+                    "operator_channel — nobody was told",
+                    outcome.loop, outcome.run_id, outcome.status,
+                )
+            return
+
+        if dest.kind == "session":
+            from durin.bus.events import InboundMessage
+
+            origin = dest.origin or {}
+            await bus.publish_inbound(InboundMessage(
+                channel="system",
+                sender_id="loop_outcome",
+                chat_id=f"{origin.get('channel') or 'websocket'}:{origin.get('chat_id') or ''}",
+                content=(
+                    f"[Loop '{outcome.loop}' finished]\n\n{outcome.summary}\n\n"
+                    "Summarize the outcome for the user."
+                ),
+                session_key_override=origin["session_key"],
+                metadata={"injected_event": "loop_outcome", "loop": outcome.loop},
+            ))
+            return
+
+        if dest.kind == "thread":
+            try:
+                await bus.publish_outbound(
+                    _loop_channel_meta.build_reply(dest.origin, outcome.summary))
+            except ValueError:
+                # A channel with no reply contract (e.g. a webhook origin).
+                logger.debug("loops: outcome origin has no reply channel; not delivered")
+            return
+
+        await _deliver_to_channel(OutboundMessage(
+            channel=spec.operator_channel,
+            chat_id=spec.operator_to or "direct",
+            content=outcome.summary,
+        ))
+
     loops_runtime = LoopsRuntime(
         config.workspace_path,
         workflow_exec=_loops_workflows_service.execute,
@@ -1638,6 +1695,7 @@ def _run_gateway(
         on_operator_ask=_on_loop_ask,
         on_counterpart_ask=_on_counterpart_ask,
         queue_ttl_s=config.loops.queue_ttl_s,
+        on_outcome=_on_loop_outcome,
     )
     agent.register_loops_tool(loops_runtime)
 
