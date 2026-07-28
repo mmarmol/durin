@@ -129,6 +129,25 @@ async def test_stuck_guard_escalates(tmp_path):
     assert any(k == "escalation" for _, _, k, _ in asks)
 
 
+async def test_stuck_guard_escalation_outcome_reports_escalated(tmp_path):
+    """_post_finish rewrites the record to `escalated` before emitting the
+    outcome, so the outcome for the run that crosses stuck_after must carry
+    that rewritten status rather than the raw `no_goal` the run finished
+    with. Guards against `_emit_outcome` ever being moved ahead of the
+    escalation rewrite, which would silently ship a stale status."""
+    _save(tmp_path, stuck_after=2)
+    outcomes = []
+
+    async def on_outcome(outcome):
+        outcomes.append(outcome)
+
+    rt, _ = _mk_runtime(tmp_path, [_wr("exhausted"), _wr("exhausted")], on_outcome=on_outcome)
+    await rt.fire("l1", source="cron")
+    await rt.fire("l1", source="cron")
+
+    assert [o.status for o in outcomes] == ["no_goal", "escalated"]
+
+
 async def test_disabled_loop_skips_cron_fire(tmp_path):
     _save(tmp_path, enabled=False)
     rt, calls = _mk_runtime(tmp_path, [])
