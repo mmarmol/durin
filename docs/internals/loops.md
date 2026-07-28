@@ -158,12 +158,16 @@ turns a workflow's terminal status into a loop-run status:
 | goal verification raised | `error` | A judge/provider failure during `verify_goal` must not strand a `completed` run — it is recorded as `error`, not left `running`. |
 | owning process died mid-run (no `WorkflowResult` ever produced) | `interrupted` | Assigned by `LoopsRuntime.sweep_orphans` (§4p), not `_interpret` — a run whose process is gone never returns a result to interpret at all. Distinct from `error`: the workflow didn't fail, it simply never got to report. Transparent to the goal streak (`run_log.STREAK_TRANSPARENT_STATUSES`) and excluded from the resolved-runs denominator in convergence/escalation-rate math (§4l). |
 
-`_post_finish` runs for the `done`, `no_goal`, and `error` outcomes reached
-via `_interpret`, and for `interrupted` outcomes reached via `sweep_orphans`
-(§4p): it checks for **escalation** (§4g), emits `loops.run_finished`
-telemetry, delivers the run's outcome (§4o), prunes old runs, and — for a
-`single`-concurrency loop — drains one fresh event off the loop's queue if
-one is waiting (§4k). The `needs_input` → `needs_operator` /
+`_post_finish` runs for the `done`, `no_goal`, and `error` outcomes, and for
+`interrupted` outcomes reached via `sweep_orphans` (§4p). Most of the first
+three arrive via `_interpret`, but `error` can also arrive without it: when
+`WorkflowsService.execute` itself raises (the table row above), `_run` and
+`answer` call `_finish` — and so `_post_finish` — directly, before
+`_interpret` is ever invoked. Either way, `_post_finish` checks for
+**escalation** (§4g), emits `loops.run_finished` telemetry, delivers the
+run's outcome (§4o), prunes old runs, and — for a `single`-concurrency
+loop — drains one fresh event off the loop's queue if one is waiting
+(§4k). The `needs_input` → `needs_operator` /
 `waiting_info` branches both return from `_interpret` before `_post_finish`
 runs, so neither status emits a `loops.run_finished` event nor is pruned — a
 run only reaches `_post_finish` once it is answered, the workflow is

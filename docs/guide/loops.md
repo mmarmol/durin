@@ -339,8 +339,9 @@ when a run needs one:
   interrupted run — is always pushed.
 - **Neither** — no conversation to answer back into, and no operator
   channel configured — doesn't mean the outcome is lost: it's still sitting
-  in the Activity feed (below) whenever you check, and durin logs a warning
-  on its own side instead of pretending the outcome went somewhere.
+  in the Activity feed (below) whenever you check. For anything but a quiet
+  `done`, durin also logs a warning on its own side instead of pretending
+  the outcome went somewhere.
 
 ## Reading the Activity view
 
@@ -395,8 +396,11 @@ status and timestamps already visible in the row, it shows:
 - **Task** — the full instruction the run's workflow was given, truncated
   with a **Show more** toggle when it's long.
 - **Ask** — the question the run is currently paused on, if any.
-- **Detail** — an error message, shown when there's a specific failure
-  reason behind a `no goal`, `escalated`, or `error` outcome.
+- **Detail** — the specific reason behind a `no goal`, `escalated`,
+  `interrupted`, or `error` outcome: an error message for `error` (and any
+  `escalated` run that escalated from one), or, for `interrupted`, a note
+  on whether work was already under way when the process died — not
+  itself a sign that the run failed.
 - **Checks** — a table of every goal check the run was graded against: what
   kind it was (script or assertion), the command or assertion text, and
   whether it passed, with any extra detail the check produced. A run shows no checks table
