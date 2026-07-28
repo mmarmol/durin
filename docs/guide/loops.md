@@ -318,6 +318,30 @@ a `400`; a call to a hook name no enabled loop is listening for gets a
 `404`. Otherwise the loop fires (or queues, or wakes a waiting run — same
 rules as a channel trigger) and the response reports which.
 
+## Where a loop's outcome goes
+
+Once a run finishes, durin doesn't just record it for the Activity feed — it
+tries to hand you the result directly, the same way it hands you a question
+when a run needs one:
+
+- **Fired from a conversation** — a chat request, or a channel message that
+  triggered the loop — the outcome comes back into that same conversation: a
+  chat-fired run gets a follow-up message in the same session once it's
+  done; a channel-triggered run (like the support-ticket example above) gets
+  a reply into the same thread the trigger fired from. This happens
+  whatever the run's outcome was, including a plain `done`.
+- **Fired any other way** — a schedule tick, a manual "run now" from the
+  dashboard, a webhook call (which has no reply address of its own) — the
+  outcome goes to the loop's **Operator** channel instead, if one is
+  configured. Here, a `done` outcome stays quiet on purpose: a scheduled
+  loop meeting its goal is the normal case, not something worth interrupting
+  you for. Everything else — `no goal`, `escalated`, `error`, or an
+  interrupted run — is always pushed.
+- **Neither** — no conversation to answer back into, and no operator
+  channel configured — doesn't mean the outcome is lost: it's still sitting
+  in the Activity feed (below) whenever you check, and durin logs a warning
+  on its own side instead of pretending the outcome went somewhere.
+
 ## Reading the Activity view
 
 The **Activity** tab is a live feed of every run, across every loop, newest
@@ -337,6 +361,7 @@ what it was asked to do, its status, where it came from (`cron`, `manual`,
 | no goal | Completed (or ran out of passes) but the goal wasn't reached. |
 | escalated | Missed the goal too many times in a row — an operator has been notified. |
 | error | The run failed outright (a tool/provider error, or the run was aborted). |
+| interrupted | The run's process was killed before it could finish — not a failure, and not counted as one either way. If nothing had happened yet, durin fires a fresh run to replace it automatically. |
 
 Each loop's row in the **Loops** tab also shows how many runs are
 currently active and how many need you, plus a queued-count badge when
@@ -347,9 +372,9 @@ channel events are waiting for their turn (see **Channel triggers** above).
 Switch the Activity tab to **Board** and the same runs are laid out as five
 fixed columns instead of one list: **Needs you**, **Waiting reply**,
 **Running**, **Done**, and **Attention**. The first four match the statuses
-above one-to-one; **Attention** is where `no goal`, `escalated`, and `error`
-runs all land together — three different reasons a run didn't reach its
-goal, grouped into the one place that means "look at this." Each column
+above one-to-one; **Attention** is where `no goal`, `escalated`, `error`, and
+`interrupted` runs all land together — four different reasons a run didn't
+finish cleanly, grouped into the one place that means "look at this." Each column
 header shows a live count, and cards within a column are sorted newest
 first. Clicking a card expands the same run detail described below, right
 in place.
@@ -389,13 +414,15 @@ error that sent it to `error`.
 
 Each loop's row in the **Loops** tab also carries a compact outcome
 strip: up to ten dots, oldest to newest left to right, one per recent
-finished run. A filled dot is a `done` run, a muted dot is `no goal`, and a
-red dot is `escalated` or `error`. Hover a dot to see its status and when it
-finished.
+finished run. A filled dot is a `done` run, a muted dot is `no goal` or
+`interrupted`, and a red dot is `escalated` or `error`. Hover a dot to see
+its status and when it finished.
 
 Next to the dots, a percentage shows **convergence** — the share of this
-loop's finished runs that reached their goal — and, only when there have
-been any, an **esc** percentage for how many of those runs were escalated.
+loop's finished runs that reached their goal (an interrupted run isn't
+counted either way — it didn't resolve anything, it just didn't get to
+finish) — and, only when there have been any, an **esc** percentage for how
+many of those runs were escalated.
 Both percentages are computed over the loop's retained finished runs (older
 runs are pruned over time), not just
 the ten dots shown, so a loop with a long history can show a stable

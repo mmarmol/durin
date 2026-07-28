@@ -714,7 +714,12 @@ async def test_a_slow_relaunch_on_one_loop_does_not_delay_another_loops_outcome(
         rl.update_run(tmp_path, loop, f"dead-{loop}", workflow_run_id=f"wf-{loop}-never-started",
                       owner={"pid": 999999, "started": "long ago"})
 
-    handled = await rt.sweep_orphans()
+    # A regression back to awaiting each relaunch inline would hang here
+    # forever (release is only set below, after the assertions) — pytest-timeout
+    # isn't installed and no CI workflow sets timeout-minutes, so an inline
+    # await would burn the runner's own multi-hour timeout instead of failing
+    # legibly. Bound it explicitly so a regression fails fast and self-explains.
+    handled = await asyncio.wait_for(rt.sweep_orphans(), 5)
 
     # Neither relaunch has even started running yet — sweep_orphans returned
     # without waiting on either one, proving the finalize/notify pass below
