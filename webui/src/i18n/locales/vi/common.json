@@ -1351,12 +1351,14 @@
         "no_goal": "không có mục tiêu",
         "escalated": "đã báo lên",
         "error": "lỗi",
+        "interrupted": "bị gián đoạn",
         "attention": "Cần chú ý"
       }
     },
     "runDetail": {
       "started": "bắt đầu {{when}}",
       "finished": "kết thúc {{when}}",
+      "sessionOrigin": "phiên trò chuyện {{chat}}",
       "taskLabel": "Tác vụ",
       "showMore": "Xem thêm",
       "showLess": "Thu gọn",

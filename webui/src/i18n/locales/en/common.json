@@ -1414,12 +1414,14 @@
         "no_goal": "no goal",
         "escalated": "escalated",
         "error": "error",
+        "interrupted": "interrupted",
         "attention": "Attention"
       }
     },
     "runDetail": {
       "started": "started {{when}}",
       "finished": "finished {{when}}",
+      "sessionOrigin": "chat session {{chat}}",
       "taskLabel": "Task",
       "showMore": "Show more",
       "showLess": "Show less",

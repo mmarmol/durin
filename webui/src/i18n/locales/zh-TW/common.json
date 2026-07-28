@@ -1351,12 +1351,14 @@
         "no_goal": "無目標",
         "escalated": "已升級",
         "error": "錯誤",
+        "interrupted": "已中斷",
         "attention": "需留意"
       }
     },
     "runDetail": {
       "started": "於 {{when}} 開始",
       "finished": "於 {{when}} 結束",
+      "sessionOrigin": "聊天工作階段 {{chat}}",
       "taskLabel": "任務",
       "showMore": "顯示更多",
       "showLess": "顯示較少",

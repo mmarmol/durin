@@ -1165,12 +1165,14 @@
         "no_goal": "sin objetivo",
         "escalated": "escalado",
         "error": "error",
+        "interrupted": "interrumpido",
         "attention": "Atención"
       }
     },
     "runDetail": {
       "started": "iniciado {{when}}",
       "finished": "finalizado {{when}}",
+      "sessionOrigin": "sesión de chat {{chat}}",
       "taskLabel": "Tarea",
       "showMore": "Mostrar más",
       "showLess": "Mostrar menos",

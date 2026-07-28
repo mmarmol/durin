@@ -10,9 +10,13 @@ available when the surface wires a ``LoopsRuntime`` onto ``ToolContext``.
 """
 from __future__ import annotations
 
+import asyncio
 import json
+from contextvars import ContextVar
 from dataclasses import replace
 from typing import Any
+
+from loguru import logger
 
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.schema import StringSchema, tool_parameters_schema
@@ -64,6 +68,23 @@ class LoopsTool(Tool):
         self._ws = workspace
         self._runtime = runtime
         self._cron = cron_service
+        # Who asked. A run fired from a conversation reports back into that
+        # conversation; without this the outcome falls through to the loop's
+        # declared destination, which is often unset.
+        self._origin: ContextVar[dict | None] = ContextVar("loops_origin", default=None)
+        # Strong references: an un-awaited task is collectable mid-flight.
+        self._fires: set = set()
+
+    def set_context(self, ctx: Any) -> None:
+        if not ctx.session_key:
+            self._origin.set(None)
+            return
+        self._origin.set({
+            "kind": "session",
+            "session_key": ctx.session_key,
+            "channel": ctx.channel,
+            "chat_id": ctx.chat_id,
+        })
 
     @classmethod
     def enabled(cls, ctx: Any) -> bool:
@@ -176,13 +197,95 @@ class LoopsTool(Tool):
         return "\n".join(lines)
 
     async def _fire(self, name: str, task: str | None) -> str:
+        """Start a run and return; the outcome arrives as a follow-up.
+
+        A loop run is read, not driven — holding the agent's turn open for the
+        length of a multi-stage workflow makes the turn hostage to a run the
+        agent cannot influence, and loses the run entirely if this process
+        dies. Busy and not-found are decided before anything is launched, so
+        they still answer inline.
+        """
         try:
-            record = await self._runtime.fire(name, source="chat", task=task or None)
-        except LoopBusy as exc:
-            return f"Loop '{name}' is busy: {exc}"
+            spec = load_loop(self._ws, name)
         except LoopNotFound as exc:
             return f"Error: {exc}"
-        return self._format_run(name, record)
+        if spec.concurrency == "single" and run_log.active_runs(self._ws, name):
+            return f"Loop '{name}' is busy: an active run already exists"
+
+        run_id = self._runtime.reserve_run_id()
+        origin = self._origin.get()
+        task_handle = asyncio.create_task(self._background_fire(name, task, origin, run_id))
+        self._fires.add(task_handle)
+        task_handle.add_done_callback(self._fires.discard)
+        if origin is None:
+            return (
+                f"Loop '{name}' started (run id: {run_id}). This surface has no "
+                "conversation origin wired, so its outcome cannot be delivered "
+                f"back here as a follow-up — use loops(action='status', "
+                f"name='{name}') to check on it."
+            )
+        return (
+            f"Loop '{name}' started (run id: {run_id}). Its outcome will be "
+            "delivered to you automatically as a follow-up message when it "
+            "finishes — do NOT poll for it: tell the user it is running and "
+            f"end your turn. Use loops(action='status', name='{name}') only if "
+            "the user asks for an update."
+        )
+
+    async def _background_fire(
+        self, name: str, task: str | None, origin: dict | None, run_id: str,
+    ) -> None:
+        """Run the fire task in the background and never let its outcome vanish.
+
+        `asyncio.create_task` in `_fire` schedules this but nothing awaits it,
+        so any exception it raises would otherwise only surface as an
+        unretrieved-task-exception warning at GC time — the agent has already
+        been told the run started and no one is watching for the failure.
+        Mirrors matcher._fire and runtime._drain_fire: a distinct `LoopBusy`
+        branch for the loop going busy between this call's pre-check and the
+        task actually running (e.g. two fires issued in the same batch — the
+        pre-check can't see a sibling task's run until it writes its own
+        run_log entry), and a catch-all for everything else (LoopNotFound if
+        the loop is deleted mid-flight, a run_log write error, ...).
+
+        Both branches also retract the run id through the runtime's outcome
+        path. The agent was already told this run's outcome arrives as a
+        follow-up and instructed not to poll, so a failure the log alone
+        records leaves it waiting on a message that will never come.
+        """
+        try:
+            await self._runtime.fire(name, source="chat", task=task or None, origin=origin, run_id=run_id)
+        except LoopBusy:
+            logger.warning(
+                "loops: chat fire for loop '{}' lost the race (now busy); run {} never started",
+                name, run_id,
+            )
+            await self._report_no_outcome(
+                name, run_id, origin,
+                "the loop went busy with another run before this one could start",
+            )
+        except Exception as exc:
+            logger.exception(
+                "loops: backgrounded chat fire for loop '{}' (run {}) failed", name, run_id,
+            )
+            await self._report_no_outcome(name, run_id, origin, f"the fire failed: {exc}")
+
+    async def _report_no_outcome(
+        self, name: str, run_id: str, origin: dict | None, reason: str,
+    ) -> None:
+        """Tell whoever was promised this run's outcome that none is coming.
+
+        Best-effort: the runtime's own outcome callback is optional (a
+        surface can wire a `LoopsRuntime` with no `on_outcome` at all —
+        `report_no_outcome` itself handles that), but this call must never
+        turn one background failure into a second, unhandled one.
+        """
+        try:
+            await self._runtime.report_no_outcome(name, run_id, origin=origin, reason=reason)
+        except Exception:
+            logger.exception(
+                "loops: could not report the failed fire of loop '{}' run {}", name, run_id,
+            )
 
     async def _answer(self, name: str, run_id: str, answer: str) -> str:
         try:

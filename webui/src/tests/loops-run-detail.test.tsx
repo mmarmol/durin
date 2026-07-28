@@ -81,6 +81,44 @@ const RUN_ERROR: api.LoopRun = {
   workflow_run_id: null,
 };
 
+const RUN_INTERRUPTED: api.LoopRun = {
+  run_id: "run-interrupted",
+  loop: "digest",
+  status: "interrupted",
+  source: "cron",
+  task: "produce the daily digest",
+  ask: null,
+  detail: "interrupted by a restart before the workflow started",
+  goal_reached: false,
+  started_at: 1_700_000_500,
+  finished_at: 1_700_000_510,
+  origin: null,
+  checks: null,
+  workflow_run_id: null,
+};
+
+const RUN_CHAT_FIRED: api.LoopRun = {
+  run_id: "run-chat",
+  loop: "briefing",
+  status: "done",
+  source: "chat",
+  task: "brief me",
+  ask: null,
+  detail: null,
+  goal_reached: true,
+  started_at: 1_700_000_600,
+  finished_at: 1_700_000_610,
+  // What LoopsTool.set_context records: a session, with no sender/subject/thread.
+  origin: {
+    kind: "session",
+    session_key: "websocket:abc",
+    channel: "websocket",
+    chat_id: "abc",
+  },
+  checks: null,
+  workflow_run_id: null,
+};
+
 const RUN_CLEAN: api.LoopRun = {
   run_id: "run-clean",
   loop: "support",
@@ -152,6 +190,32 @@ describe("loops RunDetail (ActivityView drill-in)", () => {
 
     const detailEl = await screen.findByText("the workflow node 'gate' crashed");
     expect(detailEl).toHaveClass("text-destructive");
+  });
+
+  it("an interrupted run shows the detail text in neutral tone, not destructive", async () => {
+    vi.mocked(api.listAllLoopRuns).mockResolvedValue([RUN_INTERRUPTED]);
+    const user = userEvent.setup();
+    render(wrap(<ActivityView />));
+
+    await screen.findByText("digest");
+    await user.click(screen.getByText("digest"));
+
+    const detailEl = await screen.findByText("interrupted by a restart before the workflow started");
+    expect(detailEl).toHaveClass("text-muted-foreground");
+    expect(detailEl).not.toHaveClass("text-destructive");
+  });
+
+  it("a chat-fired run names its session instead of a blank sender slot", async () => {
+    vi.mocked(api.listAllLoopRuns).mockResolvedValue([RUN_CHAT_FIRED]);
+    const user = userEvent.setup();
+    render(wrap(<ActivityView />));
+
+    await screen.findByText("briefing");
+    await user.click(screen.getByText("briefing"));
+
+    // A session origin has no `sender`; the row must say what it is instead.
+    expect(await screen.findByText(/chat session/i)).toBeInTheDocument();
+    expect(screen.getByText("websocket")).toBeInTheDocument();
   });
 
   it("a run without checks or origin expands cleanly with no crash", async () => {

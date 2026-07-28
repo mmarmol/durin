@@ -1351,12 +1351,14 @@
         "no_goal": "目標なし",
         "escalated": "エスカレーション済み",
         "error": "エラー",
+        "interrupted": "中断",
         "attention": "要注意"
       }
     },
     "runDetail": {
       "started": "{{when}} に開始",
       "finished": "{{when}} に終了",
+      "sessionOrigin": "チャットセッション {{chat}}",
       "taskLabel": "タスク",
       "showMore": "もっと見る",
       "showLess": "折りたたむ",

@@ -1351,12 +1351,14 @@
         "no_goal": "목표 없음",
         "escalated": "에스컬레이션됨",
         "error": "오류",
+        "interrupted": "중단됨",
         "attention": "주의"
       }
     },
     "runDetail": {
       "started": "{{when}} 시작",
       "finished": "{{when}} 종료",
+      "sessionOrigin": "채팅 세션 {{chat}}",
       "taskLabel": "작업",
       "showMore": "더 보기",
       "showLess": "접기",

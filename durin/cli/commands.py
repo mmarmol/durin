@@ -1255,6 +1255,12 @@ def gateway_logs_cmd(
         pass
 
 
+_LOOPS_SWEEP_PERIOD_S = 600.0
+# Strong reference for the process lifetime: an un-awaited task is
+# collectable, and a collected sweep silently stops reconciling.
+_loops_sweep_task: asyncio.Task | None = None
+
+
 def _run_gateway(
     config: Config,
     *,
@@ -1486,6 +1492,8 @@ def _run_gateway(
             if not job.payload.loop:
                 logger.warning("loop_trigger cron job {} has no loop name; skipping", job.id)
                 return None
+            # No origin by construction: a scheduled fire has nobody waiting on
+            # it, so its outcome belongs to the loop's declared destination.
             await loops_runtime.try_fire(job.payload.loop, source="cron")
             return None
 
@@ -1627,6 +1635,58 @@ def _run_gateway(
         except Exception:
             logger.exception("loop counterpart delivery (non-fatal) failed")
 
+    async def _on_loop_outcome(outcome) -> None:
+        """Deliver a terminal run's outcome to whoever should hear about it.
+
+        The session that asked, else the loop's declared channel as the
+        backstop. An outcome with neither is logged rather than dropped in
+        silence — a loop that finishes into the void is the failure this
+        exists to prevent. An outcome is internal status and never reaches
+        the counterpart a channel-triggered run is corresponding with.
+        """
+        from durin.loops.outcome import ACTIONABLE_STATUSES, route
+
+        try:
+            spec = _load_loop(config.workspace_path, outcome.loop)
+        except Exception:  # noqa: BLE001 — a deleted loop must not break delivery
+            logger.warning("loops: outcome for unknown loop '{}' dropped", outcome.loop)
+            return
+
+        dest = route(outcome, operator_channel=spec.operator_channel)
+        if dest is None:
+            if outcome.status in ACTIONABLE_STATUSES:
+                logger.warning(
+                    "loops: loop '{}' run {} ended '{}' with no origin and no "
+                    "operator_channel — nobody was told",
+                    outcome.loop, outcome.run_id, outcome.status,
+                )
+            return
+
+        if dest.kind == "session":
+            from durin.bus.events import InboundMessage
+
+            # route() only returns kind="session" when origin["session_key"]
+            # is truthy, so origin is guaranteed a non-None dict here.
+            origin = dest.origin
+            await bus.publish_inbound(InboundMessage(
+                channel="system",
+                sender_id="loop_outcome",
+                chat_id=f"{origin.get('channel') or 'websocket'}:{origin.get('chat_id') or ''}",
+                content=(
+                    f"[Loop '{outcome.loop}' finished]\n\n{outcome.summary}\n\n"
+                    "Summarize the outcome for the user."
+                ),
+                session_key_override=origin["session_key"],
+                metadata={"injected_event": "loop_outcome", "loop": outcome.loop},
+            ))
+            return
+
+        await _deliver_to_channel(OutboundMessage(
+            channel=spec.operator_channel,
+            chat_id=spec.operator_to or "direct",
+            content=outcome.summary,
+        ))
+
     loops_runtime = LoopsRuntime(
         config.workspace_path,
         workflow_exec=_loops_workflows_service.execute,
@@ -1636,8 +1696,23 @@ def _run_gateway(
         on_operator_ask=_on_loop_ask,
         on_counterpart_ask=_on_counterpart_ask,
         queue_ttl_s=config.loops.queue_ttl_s,
+        on_outcome=_on_loop_outcome,
     )
     agent.register_loops_tool(loops_runtime)
+
+    async def _loops_orphan_sweep() -> None:
+        """Reconcile loop runs orphaned by a dead process, forever.
+
+        Runs on the gateway's loop rather than the file-sweep thread because
+        finalizing an orphan means delivering its outcome and possibly firing
+        a replacement run — both need the live runtime.
+        """
+        while True:
+            try:
+                await loops_runtime.sweep_orphans()
+            except Exception:  # noqa: BLE001 — the sweep must never die
+                logger.exception("loops: orphan sweep failed")
+            await asyncio.sleep(_LOOPS_SWEEP_PERIOD_S)
 
     # Route inbound channel messages through the trigger matcher BEFORE they
     # reach the normal agent turn: a claim wake or a fired/queued loop trigger
@@ -2001,6 +2076,13 @@ def _run_gateway(
 
         try:
             await cron.start()
+
+            # Started here rather than at definition time: the coroutine is
+            # defined earlier (right after register_loops_tool), but
+            # asyncio.create_task needs a running loop, which only exists
+            # once this coroutine itself is executing.
+            global _loops_sweep_task
+            _loops_sweep_task = asyncio.create_task(_loops_orphan_sweep())
 
             # Unified uvicorn server: the gateway serves WS chat + /api/v1 + SPA
             # via a single Starlette app on the websocket channel's port.  The

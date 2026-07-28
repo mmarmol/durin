@@ -15,6 +15,11 @@ from durin.utils.atomic_write import atomic_write_text
 SCHEMA = 1
 ACTIVE_STATUSES = ("running", "needs_operator", "waiting_info")
 
+# A run killed with its process did not fail — it never produced a result.
+# The streak counter means "this loop keeps missing its goal", so a run that
+# never ran must not break a genuine streak nor extend it.
+STREAK_TRANSPARENT_STATUSES = ("interrupted",)
+
 
 def runs_root(workspace: str | Path) -> Path:
     return Path(workspace) / "loops-runs"
@@ -43,6 +48,7 @@ def start_run(ws, loop: str, run_id: str, *, source: str, task: str, origin: dic
         "schema": SCHEMA, "run_id": run_id, "loop": loop, "status": "running",
         "source": source, "task": task[:8000], "origin": origin, "workflow_run_id": None,
         "ask": None, "detail": None, "checks": None, "goal_reached": None,
+        "work_started": None,
         "started_at": time.time(), "finished_at": None,
         # Which process is executing this run — the crash sweep flips any
         # "running" manifest whose owner is no longer alive.
@@ -59,7 +65,7 @@ def update_run(ws, loop: str, run_id: str, **fields) -> dict:
 def finalize_run(ws, loop: str, run_id: str, *, status: str,
                  workflow_run_id: str | None = None, ask: str | None = None,
                  detail: str | None = None, checks: list | None = None,
-                 goal_reached: bool | None = None) -> dict:
+                 goal_reached: bool | None = None, work_started: bool | None = None) -> dict:
     record = read_run(ws, loop, run_id) or {"schema": SCHEMA, "run_id": run_id, "loop": loop}
     record.update({
         "status": status, "finished_at": time.time(),
@@ -70,6 +76,11 @@ def finalize_run(ws, loop: str, run_id: str, *, status: str,
         "detail": detail[:2000] if detail is not None else record.get("detail"),
         "checks": checks if checks is not None else record.get("checks"),
         "goal_reached": goal_reached if goal_reached is not None else record.get("goal_reached"),
+        # Whether the workflow itself ever started — set only by sweep_orphans
+        # for an `interrupted` run. Carried as a fact (not inferred later from
+        # `detail`'s wording) so build_outcome knows whether the reserved
+        # workflow run id genuinely might hold partial work.
+        "work_started": work_started if work_started is not None else record.get("work_started"),
     })
     return _write(ws, loop, run_id, record)
 
@@ -123,7 +134,7 @@ def consecutive_no_goal(ws, loop: str) -> int:
     n = 0
     for m in list_runs(ws, loop, limit=None):
         status = m.get("status")
-        if status in ACTIVE_STATUSES:
+        if status in ACTIVE_STATUSES or status in STREAK_TRANSPARENT_STATUSES:
             continue
         if status in ("no_goal", "error"):
             n += 1
@@ -132,17 +143,18 @@ def consecutive_no_goal(ws, loop: str) -> int:
     return n
 
 
-def reconcile_running(ws, now: float | None = None, max_age_s: float = 6 * 3600) -> list[str]:
-    """Boot sweep: flip any ``running`` manifest older than *max_age_s* to
-    ``error`` (loops vocabulary; ``ask`` cleared) so a gateway restart mid-run
-    does not leave a ``single``-concurrency loop permanently jammed — its next
-    trigger sees a stale ``running`` manifest in ``active_runs`` and refuses
-    to fire forever. Mirrors ``durin.workflow.run_log.reconcile_running``'s
-    ownership semantics: an owned manifest is flipped as soon as its owner
-    process is dead (no age heuristic; a run owned by another LIVE process is
-    never touched); ownerless legacy manifests fall back to the ``started_at``
-    age cutoff. Safe at boot AND periodically. A malformed manifest is
-    skipped, never fatal. Returns the flipped run ids.
+def find_orphans(ws, now: float | None = None, max_age_s: float = 6 * 3600) -> list[dict]:
+    """Report ``running`` manifests whose owner is gone, without writing.
+
+    An owned manifest is orphaned as soon as its owner process is dead; a run
+    owned by another LIVE process is never reported. Ownerless legacy
+    manifests fall back to the ``started_at`` age cutoff. A malformed manifest
+    is skipped, never fatal.
+
+    Detection is deliberately separate from the write: deciding what an
+    orphan means — relaunch it, or finalize it and tell somebody — needs the
+    loop's definition and a delivery path, neither of which a file-level
+    sweep has.
     """
     from durin.utils.process_tree import process_alive
 
@@ -152,7 +164,7 @@ def reconcile_running(ws, now: float | None = None, max_age_s: float = 6 * 3600)
     if now is None:
         now = time.time()
     cutoff = now - max_age_s
-    flipped: list[str] = []
+    orphans: list[dict] = []
     for loop_dir in root.iterdir():
         if not loop_dir.is_dir():
             continue
@@ -169,14 +181,9 @@ def reconcile_running(ws, now: float | None = None, max_age_s: float = 6 * 3600)
             else:
                 orphaned = (rec.get("started_at") or 0.0) < cutoff
             if orphaned:
-                rec["status"] = "error"
-                rec["ask"] = None
-                try:
-                    atomic_write_text(p, json.dumps(rec, indent=2))
-                    flipped.append(rec.get("run_id"))
-                except OSError:
-                    continue
-    return flipped
+                rec.setdefault("loop", loop_dir.name)
+                orphans.append(rec)
+    return orphans
 
 
 def prune_runs(ws, loop: str, keep: int) -> None:
