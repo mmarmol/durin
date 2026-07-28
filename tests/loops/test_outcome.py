@@ -68,19 +68,41 @@ def test_a_session_origin_wins_over_a_declared_channel():
     assert dest.origin == origin
 
 
-def test_a_thread_origin_wins_over_a_declared_channel():
-    origin = {"channel": "slack", "chat_id": "C1", "thread": "t1"}
-    dest = route(_out(origin=origin), operator_channel="slack")
-    assert dest.kind == "thread"
+@pytest.mark.parametrize("status", ["done", "no_goal", "error", "escalated", "interrupted"])
+def test_a_channel_origin_never_becomes_a_thread_destination(status):
+    """The counterpart must never be handed an outcome, at any status.
+
+    A channel origin names the external party the loop is corresponding with
+    — a customer on a mail thread, say — not somebody who asked for this run:
+    an inbound event fired it, nobody on durin's side did. An outcome is
+    internal status (a raw exception string rides along in `detail`), so
+    posting it into that thread would answer the customer with durin's own
+    plumbing. Only workflow-authored prose goes down the counterpart lane.
+    """
+    origin = {"channel": "email", "sender": "customer@example.com", "chat_id": "C1",
+              "thread": "t1", "subject": "invoice help", "reply": {}}
+    dest = route(_out(status=status, origin=origin), operator_channel="slack")
+    assert dest is None or dest.kind != "thread"
 
 
-def test_a_channel_without_a_chat_id_falls_back_instead_of_becoming_a_thread():
-    """A partial thread origin (channel but no chat_id) must not produce a thread
-    Destination — delivery indexes origin["chat_id"] directly and would crash on
-    a destination that lacks it. It falls through to the declared channel instead."""
-    origin = {"channel": "slack"}
-    dest = route(_out(origin=origin), operator_channel="slack")
+def test_a_channel_origin_reaches_the_operator_backstop():
+    """Not delivering to the counterpart must not mean not delivering at all:
+    a channel-fired run that ends badly is exactly what the operator backstop
+    exists for, same as a cron fire nobody can reply to."""
+    origin = {"channel": "email", "sender": "customer@example.com", "chat_id": "C1",
+              "thread": "t1", "subject": "invoice help", "reply": {}}
+    dest = route(_out(status="error", origin=origin), operator_channel="slack")
     assert dest.kind == "operator"
+    assert dest.origin is None
+
+
+def test_a_channel_origin_with_no_operator_channel_is_undeliverable():
+    """With no backstop configured the outcome goes nowhere and the caller
+    logs it — it must NOT fall back to the counterpart's thread as a
+    consolation delivery."""
+    origin = {"channel": "email", "sender": "customer@example.com", "chat_id": "C1",
+              "thread": "t1", "subject": "invoice help", "reply": {}}
+    assert route(_out(status="error", origin=origin), operator_channel=None) is None
 
 
 def test_no_origin_falls_back_to_the_declared_channel():
@@ -109,20 +131,12 @@ def test_actionable_statuses_reach_a_standing_destination(status):
 
 
 def test_a_webhook_origin_falls_back_to_the_operator_channel():
-    """A webhook origin has no reply contract (channel_meta.build_reply has no
-    webhook case). It carries both `channel` and `chat_id` truthy just like a
-    real thread origin, so route() must special-case it rather than
-    classifying it as a thread destination nothing can deliver into — the
-    operator backstop is the only way this outcome reaches anybody."""
+    """A webhook origin has no reply contract at all (channel_meta.build_reply
+    has no webhook case), so the operator backstop is the only way this
+    outcome reaches anybody. Kept alongside the channel-origin cases because
+    it is the one origin shape whose `chat_id` is a hook name rather than a
+    conversation — a routing rule that keyed on `chat_id` would regress here
+    first."""
     origin = {"channel": "webhook", "chat_id": "my-hook", "thread": None, "subject": "my-hook", "reply": {}}
     dest = route(_out(origin=origin), operator_channel="slack")
     assert dest.kind == "operator"
-
-
-def test_a_webhook_origin_with_no_operator_channel_is_undeliverable():
-    """Same shape as above, but with nobody configured as the backstop:
-    route() must return None (not a thread destination) so the caller's
-    "nobody was told" warning fires instead of silently dropping into a
-    build_reply ValueError."""
-    origin = {"channel": "webhook", "chat_id": "my-hook", "thread": None, "subject": "my-hook", "reply": {}}
-    assert route(_out(status="error", origin=origin), operator_channel=None) is None

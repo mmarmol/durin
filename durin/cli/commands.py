@@ -1638,9 +1638,11 @@ def _run_gateway(
     async def _on_loop_outcome(outcome) -> None:
         """Deliver a terminal run's outcome to whoever should hear about it.
 
-        Origin first, the loop's declared channel as the backstop. An outcome
-        with neither is logged rather than dropped in silence — a loop that
-        finishes into the void is the failure this exists to prevent.
+        The session that asked, else the loop's declared channel as the
+        backstop. An outcome with neither is logged rather than dropped in
+        silence — a loop that finishes into the void is the failure this
+        exists to prevent. An outcome is internal status and never reaches
+        the counterpart a channel-triggered run is corresponding with.
         """
         from durin.loops.outcome import ACTIONABLE_STATUSES, route
 
@@ -1677,18 +1679,6 @@ def _run_gateway(
                 session_key_override=origin["session_key"],
                 metadata={"injected_event": "loop_outcome", "loop": outcome.loop},
             ))
-            return
-
-        if dest.kind == "thread":
-            try:
-                await bus.publish_outbound(
-                    _loop_channel_meta.build_reply(dest.origin, outcome.summary))
-            except ValueError:
-                # A channel with no reply contract. route() already excludes
-                # webhook origins from kind="thread", so reaching this means
-                # an origin carries a channel build_reply doesn't know —
-                # worth surfacing at a level the daemon actually logs.
-                logger.warning("loops: outcome origin has no reply channel; not delivered")
             return
 
         await _deliver_to_channel(OutboundMessage(
