@@ -41,8 +41,14 @@ def _out(status="no_goal", origin=None):
 
 
 def test_a_session_origin_wins_over_a_declared_channel():
-    """Asked in a conversation, answered in that conversation."""
-    origin = {"kind": "session", "session_key": "websocket:abc"}
+    """Asked in a conversation, answered in that conversation.
+
+    A real session origin also carries a `channel` (and `chat_id`), so the
+    fixture must too — otherwise this test can't tell a correctly-ordered
+    session-then-channel check from a channel-first bug that happens to
+    match on `channel` before ever looking at `kind`/`session_key`.
+    """
+    origin = {"kind": "session", "session_key": "websocket:abc", "channel": "slack", "chat_id": "C1"}
     dest = route(_out(origin=origin), operator_channel="slack")
     assert dest.kind == "session"
     assert dest.origin == origin
@@ -52,6 +58,15 @@ def test_a_thread_origin_wins_over_a_declared_channel():
     origin = {"channel": "slack", "chat_id": "C1", "thread": "t1"}
     dest = route(_out(origin=origin), operator_channel="slack")
     assert dest.kind == "thread"
+
+
+def test_a_channel_without_a_chat_id_falls_back_instead_of_becoming_a_thread():
+    """A partial thread origin (channel but no chat_id) must not produce a thread
+    Destination — delivery indexes origin["chat_id"] directly and would crash on
+    a destination that lacks it. It falls through to the declared channel instead."""
+    origin = {"channel": "slack"}
+    dest = route(_out(origin=origin), operator_channel="slack")
+    assert dest.kind == "operator"
 
 
 def test_no_origin_falls_back_to_the_declared_channel():
@@ -69,7 +84,7 @@ def test_done_is_suppressed_for_a_standing_destination():
 
 
 def test_done_is_delivered_when_somebody_asked():
-    origin = {"kind": "session", "session_key": "websocket:abc"}
+    origin = {"kind": "session", "session_key": "websocket:abc", "channel": "slack", "chat_id": "C1"}
     dest = route(_out(status="done", origin=origin), operator_channel=None)
     assert dest.kind == "session"
 

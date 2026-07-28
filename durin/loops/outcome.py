@@ -72,7 +72,7 @@ def route(outcome: LoopOutcome, *, operator_channel: str | None) -> Destination 
     if origin:
         if origin.get("kind") == "session" and origin.get("session_key"):
             return Destination(kind="session", origin=origin)
-        if origin.get("channel"):
+        if origin.get("channel") and origin.get("chat_id"):
             return Destination(kind="thread", origin=origin)
     if operator_channel and outcome.status in ACTIONABLE_STATUSES:
         return Destination(kind="operator", origin=None)
