@@ -17,6 +17,7 @@ from durin.bus.queue import MessageBus
 from durin.channels.base import BaseChannel
 from durin.config.schema import Config
 from durin.pairing import PAIRING_CODE_META_KEY, format_pairing_reply, generate_code
+from durin.security.secrets import SecretNotFoundError
 from durin.utils.restart import consume_restart_notice_from_env, format_restart_completed_message
 
 if TYPE_CHECKING:
@@ -229,6 +230,18 @@ class ChannelManager:
                     continue
                 self.channels[name] = channel
                 logger.info("{} channel enabled", cls.display_name)
+            except SecretNotFoundError as e:
+                # A dangling ${secret:} reference is a configuration error the
+                # operator has to fix, not a transient condition — and it is
+                # silent from the outside: the gateway comes up, the other
+                # channels connect, and only this one is missing. When the
+                # casualty is the websocket channel, that is the dashboard and
+                # the HTTP API, i.e. the surface you would use to notice.
+                logger.error(
+                    "{} channel disabled: {}. Fix the reference or store the "
+                    "secret (`durin secret set <NAME>`); other channels keep "
+                    "running.", name, e,
+                )
             except Exception as e:
                 logger.warning("{} channel not available: {}", name, e)
 
