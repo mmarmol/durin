@@ -10,6 +10,7 @@ and the loop's declared destination and picks one, with no I/O.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 # Terminal statuses worth interrupting somebody who did not ask for this run.
 # `done` is deliberately absent: a scheduled loop meeting its goal is the
@@ -51,3 +52,28 @@ def build_outcome(loop: str, record: dict) -> LoopOutcome:
         origin=record.get("origin"),
         workflow_run_id=wf_run_id if isinstance(wf_run_id, str) else None,
     )
+
+
+@dataclass(frozen=True)
+class Destination:
+    kind: Literal["session", "thread", "operator"]
+    origin: dict | None
+
+
+def route(outcome: LoopOutcome, *, operator_channel: str | None) -> Destination | None:
+    """Pick where an outcome goes, or None when it should not be delivered.
+
+    Origin first: a run requested inside a conversation answers inside that
+    conversation. The loop's declared channel is the backstop for fires with
+    nobody behind them, not an override — and a standing destination only
+    hears about outcomes worth acting on.
+    """
+    origin = outcome.origin if isinstance(outcome.origin, dict) else None
+    if origin:
+        if origin.get("kind") == "session" and origin.get("session_key"):
+            return Destination(kind="session", origin=origin)
+        if origin.get("channel"):
+            return Destination(kind="thread", origin=origin)
+    if operator_channel and outcome.status in ACTIONABLE_STATUSES:
+        return Destination(kind="operator", origin=None)
+    return None
