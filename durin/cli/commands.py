@@ -1687,6 +1687,13 @@ def _run_gateway(
             content=outcome.summary,
         ))
 
+    # Flips True the instant the gateway begins a graceful shutdown
+    # (_request_shutdown, below — SIGTERM/SIGINT/SIGHUP). LoopsRuntime reads
+    # it to tell a workflow cancelled BY that shutdown apart from one a user
+    # deliberately stopped via tasks(action='stop') — both surface as the
+    # same cancelled/aborted result.
+    _shutdown_requested = False
+
     loops_runtime = LoopsRuntime(
         config.workspace_path,
         workflow_exec=_loops_workflows_service.execute,
@@ -1697,6 +1704,7 @@ def _run_gateway(
         on_counterpart_ask=_on_counterpart_ask,
         queue_ttl_s=config.loops.queue_ttl_s,
         on_outcome=_on_loop_outcome,
+        is_shutting_down=lambda: _shutdown_requested,
     )
     agent.register_loops_tool(loops_runtime)
 
@@ -2058,6 +2066,8 @@ def _run_gateway(
         unified_server = None  # Step 4: unified uvicorn on the WS port (default path)
 
         def _request_shutdown(signame: str) -> None:
+            nonlocal _shutdown_requested
+            _shutdown_requested = True
             logger.info("Gateway received {}; shutting down gracefully.", signame)
             if unified_server is not None:
                 unified_server.should_exit = True

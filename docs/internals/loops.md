@@ -82,7 +82,9 @@ flowchart TD
     RESULT -->|needs_input| ASK[finalize: needs_operator\nask = final_output]
     RESULT -->|completed| VERIFY[verify_goal\nscript checks + judge]
     RESULT -->|exhausted| NOGOAL1[finalize: no_goal\ngoal_reached=False]
-    RESULT -->|aborted / cancelled| ERR[finalize: error]
+    RESULT -->|aborted / cancelled| SHUT{gateway mid-shutdown?}
+    SHUT -->|no: deliberate stop| ERR[finalize: error]
+    SHUT -->|yes: SIGTERM cancelled it| ASIS[not finalized\nleft running, no outcome]
     EXEC -->|raised| ERR
 
     VERIFY --> REACHED{required checks pass\nAND judge intent_met?}
@@ -110,6 +112,7 @@ flowchart TD
     INT1 --> POST
     INT2 --> POST
     INT1 -.->|no work had started\nAND loop enabled| RELAUNCH[background: fire\nsame source/task/origin,\nreserved run id named in the notice]
+    ASIS -.->|next gateway start| ORPHAN
 ```
 
 ## 4. How it works
@@ -156,7 +159,8 @@ turns a workflow's terminal status into a loop-run status:
 | `needs_input` | `needs_operator` or `waiting_info` | The workflow's output becomes the run's `ask`. An untagged ask goes to `needs_operator` and notifies the operator (kind `ask`); a `[TO:counterpart]`-tagged ask on a run with a channel thread instead parks at `waiting_info` and is delivered to the counterpart — see §4j. |
 | `completed` | `done` or `no_goal` | Goal verification runs (§4c); `done` iff the goal was reached, `no_goal` otherwise. |
 | `exhausted` | `no_goal` | The node-visit budget ran out before completion; no goal verification is attempted — `goal_reached` is `False`. |
-| `aborted` / `cancelled` | `error` | The workflow ended abnormally. |
+| `aborted` / `cancelled` | `error` | The workflow ended abnormally — a deliberate `tasks(action='stop')` cancel, or a node failure. Does not apply while the gateway is shutting down (next row). |
+| `aborted` / `cancelled`, gateway mid-shutdown | *(none — left `running`)* | A graceful shutdown (`SIGTERM`/`SIGINT`/`SIGHUP`) cancels every in-flight workflow, which reaches this same branch with the same result a deliberate stop would produce. `_interpret` tells them apart via an injected `is_shutting_down` predicate and, during a shutdown, finalizes nothing: the manifest is left exactly as `start_run` wrote it and no outcome is emitted, because the run is not actually over. The next gateway start's orphan sweep (§4p) is what eventually decides its fate. |
 | workflow execution raised | `error` | Any exception from `WorkflowsService.execute` (provider error, MCP failure, …) short-circuits straight to `error`. |
 | goal verification raised | `error` | A judge/provider failure during `verify_goal` must not strand a `completed` run — it is recorded as `error`, not left `running`. |
 | owning process died mid-run (no `WorkflowResult` ever produced) | `interrupted` | Assigned by `LoopsRuntime.sweep_orphans` (§4p), not `_interpret` — a run whose process is gone never returns a result to interpret at all. Distinct from `error`: the workflow didn't fail, it simply never got to report. Transparent to the goal streak (`run_log.STREAK_TRANSPARENT_STATUSES`) and excluded from the resolved-runs denominator in convergence/escalation-rate math (§4l). |
@@ -796,6 +800,26 @@ live process is orphaned; a legacy manifest with no recorded owner falls back
 to a fixed age cutoff. Detection is deliberately separate from deciding what
 to do about it — that decision needs the loop's definition and a delivery
 path, neither of which a bare file scan has.
+
+A **graceful** shutdown (`durin gateway stop`/`restart`, or any `SIGTERM` /
+`SIGINT` / `SIGHUP` — `_request_shutdown` in `durin/cli/commands.py`) reaches
+this same `running`-manifest state by a different route rather than a second
+mechanism. Cancelling the gathered tasks propagates into whatever workflow is
+in flight, which ends `cancelled` or `aborted` — the identical
+`WorkflowResult` a user's own `tasks(action='stop')` produces (§4b). Only an
+injected `is_shutting_down` predicate (a `LoopsRuntime` constructor parameter,
+default "never shutting down"; the gateway wires it to a flag
+`_request_shutdown` sets) tells the two apart: outside a shutdown,
+`_interpret` finalizes that branch `error` exactly as always; during one, it
+finalizes nothing — the manifest is left exactly as `start_run` (or
+`answer`) wrote it, the same status and owner, and no outcome is emitted,
+because the run is not actually over. Its owner is still this (now-exiting)
+process, so `find_orphans` only picks it up once that process is truly gone —
+on the *next* gateway start, through the exact sweep this section describes.
+Finalizing it here instead — even as `interrupted` — would take the manifest
+out of `running` before the owning process had actually died, which is what
+`find_orphans` keys on; the relaunch that serves the pending cause would then
+never happen.
 
 `LoopsRuntime.answer` re-stamps `owner` alongside the status when it flips a
 parked run back to `running`: a `needs_operator` or `waiting_info` run is
