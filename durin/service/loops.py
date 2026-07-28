@@ -123,11 +123,15 @@ class LoopsHooksSecretResult(Result):
 
 # A run's process dying mid-flight is terminal for visibility (counts,
 # outcomes) — it happened and it's over. It is NOT a resolution of the loop's
-# goal: whatever caused the fire is still unserved (the sweep relaunches it
-# when nothing had started, or leaves the cause to the replacement run when
-# something had). So it must never count as a success or a failure in
-# convergence/escalation-rate math, exactly the same reasoning that keeps it
-# out of run_log.consecutive_no_goal's streak (run_log.STREAK_TRANSPARENT_STATUSES).
+# goal: whatever caused the fire is still unserved. The sweep relaunches it
+# only when nothing had started AND the loop is still enabled; a loop paused
+# in the meantime is left unrelaunched on purpose (the sweep reports that
+# instead of reviving a loop its owner switched off), and a loop where
+# something had already started is left alone regardless, since that work may
+# already be visible externally. So it must never count as a success or a
+# failure in convergence/escalation-rate math, exactly the same reasoning
+# that keeps it out of run_log.consecutive_no_goal's streak
+# (run_log.STREAK_TRANSPARENT_STATUSES).
 _TERMINAL_STATUSES = ("done", "no_goal", "escalated", "error", "interrupted")
 _RESOLVED_STATUSES = ("done", "no_goal", "escalated", "error")
 _ALL_STATUSES = run_log.ACTIVE_STATUSES + _TERMINAL_STATUSES
