@@ -1414,6 +1414,7 @@
         "no_goal": "no goal",
         "escalated": "escalated",
         "error": "error",
+        "interrupted": "interrupted",
         "attention": "Attention"
       }
     },

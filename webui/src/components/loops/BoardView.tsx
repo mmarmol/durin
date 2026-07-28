@@ -10,8 +10,8 @@ const CASE_SNIPPET_CAP = 60;
 
 // States are system-owned, so the board is read-only placement — no
 // drag-and-drop. A run's status maps to exactly one of these five columns;
-// no_goal/escalated/error all land in "attention" since each needs a look
-// from the operator, just for different reasons.
+// no_goal/escalated/error/interrupted all land in "attention" since each
+// needs a look from the operator, just for different reasons.
 type ColumnId = "needs_operator" | "waiting_info" | "running" | "done" | "attention";
 
 const COLUMNS: ColumnId[] = ["needs_operator", "waiting_info", "running", "done", "attention"];

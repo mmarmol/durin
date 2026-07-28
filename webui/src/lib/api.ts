@@ -935,7 +935,7 @@ export interface LoopRunCheck {
 export interface LoopRun {
   run_id: string;
   loop: string;
-  status: "running" | "needs_operator" | "waiting_info" | "done" | "no_goal" | "escalated" | "error";
+  status: "running" | "needs_operator" | "waiting_info" | "done" | "no_goal" | "escalated" | "error" | "interrupted";
   source: string;
   task: string;
   ask: string | null;

@@ -106,9 +106,9 @@ class LoopStatsQuery(Query):
 class LoopStatsResult(Result):
     name: str
     outcomes: list[dict[str, Any]]   # last 20 terminal runs, newest-first: {run_id, status, goal_reached, started_at, finished_at}
-    convergence: float | None        # done / terminal over ALL retained runs; None when no terminal runs
-    escalation_rate: float | None    # escalated / terminal over ALL retained runs; None when no terminal runs
-    counts: dict[str, int]           # {running, needs_operator, waiting_info, done, no_goal, escalated, error}
+    convergence: float | None        # done / resolved over ALL retained runs; None when no resolved runs
+    escalation_rate: float | None    # escalated / resolved over ALL retained runs; None when no resolved runs
+    counts: dict[str, int]           # {running, needs_operator, waiting_info, done, no_goal, escalated, error, interrupted}
     pending_events: int
 
 
@@ -121,7 +121,15 @@ class LoopsHooksSecretResult(Result):
     path_template: str   # "/api/v1/hooks/{hook}" — the caller substitutes {hook}
 
 
-_TERMINAL_STATUSES = ("done", "no_goal", "escalated", "error")
+# A run's process dying mid-flight is terminal for visibility (counts,
+# outcomes) — it happened and it's over. It is NOT a resolution of the loop's
+# goal: whatever caused the fire is still unserved (the sweep relaunches it
+# when nothing had started, or leaves the cause to the replacement run when
+# something had). So it must never count as a success or a failure in
+# convergence/escalation-rate math, exactly the same reasoning that keeps it
+# out of run_log.consecutive_no_goal's streak (run_log.STREAK_TRANSPARENT_STATUSES).
+_TERMINAL_STATUSES = ("done", "no_goal", "escalated", "error", "interrupted")
+_RESOLVED_STATUSES = ("done", "no_goal", "escalated", "error")
 _ALL_STATUSES = run_log.ACTIVE_STATUSES + _TERMINAL_STATUSES
 _OUTCOMES_LIMIT = 20
 
@@ -145,9 +153,9 @@ def _stats(workspace: Path, name: str) -> dict[str, Any]:
         status = r.get("status")
         if status in counts:
             counts[status] += 1
-    terminal = sum(counts[s] for s in _TERMINAL_STATUSES)
-    convergence = counts["done"] / terminal if terminal else None
-    escalation_rate = counts["escalated"] / terminal if terminal else None
+    resolved = sum(counts[s] for s in _RESOLVED_STATUSES)
+    convergence = counts["done"] / resolved if resolved else None
+    escalation_rate = counts["escalated"] / resolved if resolved else None
     outcomes = [
         {
             "run_id": r.get("run_id"), "status": r.get("status"),

@@ -1351,6 +1351,7 @@
         "no_goal": "목표 없음",
         "escalated": "에스컬레이션됨",
         "error": "오류",
+        "interrupted": "중단됨",
         "attention": "주의"
       }
     },

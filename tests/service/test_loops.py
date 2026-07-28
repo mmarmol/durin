@@ -276,9 +276,9 @@ async def test_stats_math_covers_every_status(tmp_path):
     assert stats.name == "l1"
     assert stats.counts == {
         "running": 1, "needs_operator": 1, "waiting_info": 1,
-        "done": 1, "no_goal": 1, "escalated": 1, "error": 1,
+        "done": 1, "no_goal": 1, "escalated": 1, "error": 1, "interrupted": 0,
     }
-    # terminal = done + no_goal + escalated + error = 4
+    # resolved = done + no_goal + escalated + error = 4 (interrupted excluded)
     assert stats.convergence == pytest.approx(1 / 4)
     assert stats.escalation_rate == pytest.approx(1 / 4)
     assert stats.pending_events == 0
@@ -293,6 +293,32 @@ async def test_stats_math_covers_every_status(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_stats_interrupted_is_visible_but_not_a_resolution(tmp_path):
+    """A process dying mid-flight is terminal for VISIBILITY — it shows up in
+    counts and outcomes, since something did happen and it is over — but it
+    settles nothing about the loop's goal, so it must not read as a success or
+    a failure in convergence/escalation_rate. Same rationale as
+    run_log.STREAK_TRANSPARENT_STATUSES for the goal streak."""
+    svc, p = _svc(tmp_path), Principal.local()
+    await svc.save(LoopSaveCommand(name="l1", definition=_VALID), p)
+
+    _seed_run(tmp_path, "l1", "r1", "done", 1.0, goal_reached=True)
+    _seed_run(tmp_path, "l1", "r2", "escalated", 2.0, goal_reached=False)
+    _seed_run(tmp_path, "l1", "r3", "interrupted", 3.0, goal_reached=False)
+    _seed_run(tmp_path, "l1", "r4", "interrupted", 4.0, goal_reached=False)
+
+    stats = await svc.stats(LoopStatsQuery(name="l1"), p)
+
+    assert stats.counts["interrupted"] == 2
+    # Visible: both interrupted runs are in the outcomes list, newest-first.
+    assert [o["run_id"] for o in stats.outcomes] == ["r4", "r3", "r2", "r1"]
+    # Not a resolution: resolved = done + escalated = 2 (the 2 interrupted
+    # runs are excluded from the denominator, not folded in as failures).
+    assert stats.convergence == pytest.approx(1 / 2)
+    assert stats.escalation_rate == pytest.approx(1 / 2)
+
+
+@pytest.mark.asyncio
 async def test_stats_null_when_no_runs_at_all(tmp_path):
     svc, p = _svc(tmp_path), Principal.local()
     await svc.save(LoopSaveCommand(name="l1", definition=_VALID), p)
@@ -303,7 +329,7 @@ async def test_stats_null_when_no_runs_at_all(tmp_path):
     assert stats.outcomes == []
     assert stats.counts == {
         "running": 0, "needs_operator": 0, "waiting_info": 0,
-        "done": 0, "no_goal": 0, "escalated": 0, "error": 0,
+        "done": 0, "no_goal": 0, "escalated": 0, "error": 0, "interrupted": 0,
     }
 
 

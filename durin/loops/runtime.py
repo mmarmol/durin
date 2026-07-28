@@ -81,6 +81,11 @@ class LoopsRuntime:
         self._run_id = run_id_factory or (lambda: uuid.uuid4().hex[:12])
         self._queue_ttl_s = queue_ttl_s
         self._on_outcome = on_outcome
+        # Strong references for sweep_orphans' backgrounded relaunches (see
+        # asyncio's own warning: a task with no other reference can be
+        # garbage-collected mid-flight). Discarded via the task's own
+        # done-callback once it finishes.
+        self._sweep_tasks: set[asyncio.Task] = set()
 
     def reserve_run_id(self) -> str:
         """Mint a run id a caller can report before the run exists.
@@ -157,10 +162,21 @@ class LoopsRuntime:
         shows an empty node list while being the most likely to have already
         posted somewhere external. Reading "no nodes" as safe would relaunch
         exactly those. Erring the other way costs one manual re-fire.
+
+        Finalizing and notifying every orphan happens in one pass, BEFORE any
+        relaunch starts. A relaunch runs a full replacement workflow (a slow
+        LLM run is the common case); awaiting it inline here would stall every
+        later orphan's own finalize/notify behind it, and — since a `single`-
+        concurrency loop's manifest is still "running" until finalized — could
+        even make an unrelated loop's orphan look busy to a concurrent fire
+        attempt for the whole time. Each relaunch is instead started with
+        `asyncio.create_task` once every orphan in this pass is already
+        finalized and notified.
         """
         from durin.workflow import run_log as wf_run_log
 
         handled: list[str] = []
+        to_relaunch: list[dict] = []
         for rec in run_log.find_orphans(self._ws):
             loop_name = rec.get("loop") or ""
             run_id = rec.get("run_id") or ""
@@ -187,18 +203,38 @@ class LoopsRuntime:
             handled.append(run_id)
 
             if not work_started:
-                logger.info("loops: relaunching loop '{}' run {} — no work had started",
-                            loop_name, run_id)
-                try:
-                    await self.fire(loop_name, source=rec.get("source") or "cron",
-                                    task=rec.get("task"), origin=rec.get("origin"))
-                except LoopBusy:
-                    # A single-concurrency loop already has a live run — the
-                    # cause is being served. The interrupted outcome above
-                    # already told somebody; do not stack a second run on it.
-                    logger.info("loops: not relaunching loop '{}' run {} — already busy",
-                                loop_name, run_id)
+                to_relaunch.append(rec)
+
+        for rec in to_relaunch:
+            loop_name = rec.get("loop") or ""
+            run_id = rec.get("run_id") or ""
+            logger.info("loops: relaunching loop '{}' run {} — no work had started",
+                        loop_name, run_id)
+            task = asyncio.create_task(self._relaunch_orphan(rec))
+            self._sweep_tasks.add(task)
+            task.add_done_callback(self._sweep_tasks.discard)
         return handled
+
+    async def _relaunch_orphan(self, rec: dict) -> None:
+        """Fire the replacement run for one orphan, backgrounded by sweep_orphans.
+
+        Runs independently of the sweep pass that scheduled it, so nothing
+        here can delay another orphan's finalize/notify or another loop's
+        fire attempt.
+        """
+        loop_name = rec.get("loop") or ""
+        run_id = rec.get("run_id") or ""
+        try:
+            await self.fire(loop_name, source=rec.get("source") or "cron",
+                            task=rec.get("task"), origin=rec.get("origin"))
+        except LoopBusy:
+            # A single-concurrency loop already has a live run — the cause is
+            # being served. The interrupted outcome already told somebody; do
+            # not stack a second run on it.
+            logger.info("loops: not relaunching loop '{}' run {} — already busy",
+                        loop_name, run_id)
+        except Exception:  # noqa: BLE001 — one bad orphan must not go unlogged
+            logger.exception("loops: relaunch of loop '{}' run {} failed", loop_name, run_id)
 
     async def _run(self, spec: LoopSpec, *, source: str, task: str | None,
                     origin: dict | None = None, run_id: str | None = None) -> dict:

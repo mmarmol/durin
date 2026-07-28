@@ -1351,6 +1351,7 @@
         "no_goal": "sans objectif",
         "escalated": "escaladé",
         "error": "erreur",
+        "interrupted": "interrompu",
         "attention": "Attention"
       }
     },

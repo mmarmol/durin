@@ -563,26 +563,34 @@ cached; the numbers only ever reflect whatever runs are still on disk
 stats:
 
 - **`outcomes`** — the loop's terminal runs (`done`, `no_goal`, `escalated`,
-  `error` — never `running`, `needs_operator`, or `waiting_info`), newest
-  first, capped to the most recent 20: `{run_id, status, goal_reached,
-  started_at, finished_at}` each.
-- **`convergence`** — `counts["done"] / terminal`, where `terminal` is the
-  total count of retained terminal runs (not just the 20 returned in
-  `outcomes`). `None` when the loop has no terminal runs yet, rather than
-  dividing by zero.
-- **`escalation_rate`** — `counts["escalated"] / terminal`, the same
-  null-safety and the same `terminal` denominator as `convergence`.
-- **`counts`** — a full tally across all seven statuses (`running`,
+  `error`, `interrupted` — never `running`, `needs_operator`, or
+  `waiting_info`), newest first, capped to the most recent 20: `{run_id,
+  status, goal_reached, started_at, finished_at}` each.
+- **`convergence`** — `counts["done"] / resolved`, where `resolved` is the
+  total count of retained runs that reached `done`, `no_goal`, `escalated`,
+  or `error` (not just the 20 returned in `outcomes`). `interrupted` is
+  excluded from `resolved`: a run whose process died mid-flight settled
+  nothing about the loop's goal — the cause is either already relaunched or
+  left to a replacement run — so it must read as neither a success nor a
+  failure, mirroring how `run_log.consecutive_no_goal`'s own
+  `STREAK_TRANSPARENT_STATUSES` skips it rather than breaking or extending
+  the goal streak. `None` when the loop has no resolved runs yet, rather
+  than dividing by zero.
+- **`escalation_rate`** — `counts["escalated"] / resolved`, the same
+  null-safety and the same `resolved` denominator as `convergence`.
+- **`counts`** — a full tally across all eight statuses (`running`,
   `needs_operator`, `waiting_info`, `done`, `no_goal`, `escalated`,
-  `error`), each starting at zero.
+  `error`, `interrupted`), each starting at zero.
 - **`pending_events`** — the loop's current queue depth (`queue.pending`,
   §4k), the same number the Definitions list's queued-count badge shows.
 
-`counts` walks every retained run regardless of status; `outcomes`,
-`convergence`, and `escalation_rate` only ever look at the terminal subset —
-a loop with many retained runs but few terminal ones shows all of them
-(up to the 20 cap) in `outcomes`, and computes the two rates over that same
-terminal set, not over `counts`' full total.
+`counts` walks every retained run regardless of status. `outcomes` looks at
+the wider terminal subset (all five terminal statuses, including
+`interrupted`) — a loop with many retained runs but few terminal ones shows
+all of them (up to the 20 cap). `convergence` and `escalation_rate` narrow
+further, to the resolved subset that excludes `interrupted` — a loop with
+many interrupted runs but few resolved ones still divides only over the
+resolved count, not over `counts`' full total or the wider terminal count.
 
 The webui's Activity **board** view is a presentation-only layout over the
 same run feed the List view uses (`GET /api/v1/loops/runs`), not the stats

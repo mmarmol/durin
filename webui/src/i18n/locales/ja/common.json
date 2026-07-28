@@ -1351,6 +1351,7 @@
         "no_goal": "目標なし",
         "escalated": "エスカレーション済み",
         "error": "エラー",
+        "interrupted": "中断",
         "attention": "要注意"
       }
     },

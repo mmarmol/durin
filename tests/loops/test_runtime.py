@@ -603,6 +603,10 @@ async def test_orphan_with_no_workflow_manifest_is_relaunched(tmp_path):
                   owner={"pid": 999999, "started": "long ago"})
 
     handled = await rt.sweep_orphans()
+    # The relaunch is now backgrounded via asyncio.create_task (Important-1
+    # fix): finalize+notify happen inline, but the replacement run only
+    # starts once the sweep pass yields control back to the event loop.
+    await _drain()
 
     assert handled == ["dead"]
     assert rl.read_run(tmp_path, "l1", "dead")["status"] == "interrupted"
@@ -662,6 +666,7 @@ async def test_relaunch_carries_the_original_origin(tmp_path):
                   owner={"pid": 999999, "started": "long ago"})
 
     await rt.sweep_orphans()
+    await _drain()
 
     assert [o.origin for o in outcomes] == [origin, origin]
 
@@ -671,4 +676,111 @@ async def test_sweep_ignores_a_live_run(tmp_path):
     rt, _ = _mk_runtime(tmp_path, [])
     _save(tmp_path)
     rl.start_run(tmp_path, "l1", "alive", source="cron", task="t")
+    assert await rt.sweep_orphans() == []
+
+
+@pytest.mark.asyncio
+async def test_a_slow_relaunch_on_one_loop_does_not_delay_another_loops_outcome(tmp_path):
+    """The bug the review demonstrated: sweep_orphans used to await each
+    relaunch inline inside the per-orphan loop, so a slow replacement
+    workflow on one loop blocked the finalize+notify of every LATER orphan
+    in the same pass — and, since a `single`-concurrency loop's manifest
+    stays "running" until finalized, made that other loop look busy for the
+    whole time too. Finalizing and notifying every orphan must happen in one
+    pass, before either relaunch is even started."""
+    release = asyncio.Event()
+    started = asyncio.Event()
+
+    async def slow_workflow_exec(name, task, *, resume_run_id=None, run_id=None):
+        started.set()
+        await release.wait()
+        return _wr_for("completed")
+
+    async def judge(intent, assertions, evidence):
+        return {"intent_met": True, "assertions": {}}
+
+    outcomes = []
+
+    async def on_outcome(outcome):
+        outcomes.append(outcome)
+
+    ids = iter([f"lr{i}" for i in range(20)])
+    rt = LoopsRuntime(tmp_path, workflow_exec=slow_workflow_exec, judge=judge, keep_runs=20,
+                      check_timeout_s=5, run_id_factory=lambda: next(ids), on_outcome=on_outcome)
+    _save(tmp_path, name="a")
+    _save(tmp_path, name="b")
+    for loop in ("a", "b"):
+        rl.start_run(tmp_path, loop, f"dead-{loop}", source="cron", task=f"task-{loop}")
+        rl.update_run(tmp_path, loop, f"dead-{loop}", workflow_run_id=f"wf-{loop}-never-started",
+                      owner={"pid": 999999, "started": "long ago"})
+
+    handled = await rt.sweep_orphans()
+
+    # Neither relaunch has even started running yet — sweep_orphans returned
+    # without waiting on either one, proving the finalize/notify pass below
+    # did not sit behind a slow (or in this test, indefinitely blocked) relaunch.
+    assert not started.is_set()
+    assert set(handled) == {"dead-a", "dead-b"}
+    assert rl.read_run(tmp_path, "a", "dead-a")["status"] == "interrupted"
+    assert rl.read_run(tmp_path, "b", "dead-b")["status"] == "interrupted"
+    assert len(outcomes) == 2
+    assert {o.status for o in outcomes} == {"interrupted"}
+
+    # Let both relaunches actually run so nothing is left dangling.
+    release.set()
+    await _drain()
+    await _drain()
+
+
+@pytest.mark.asyncio
+async def test_relaunch_loop_busy_is_caught_and_logged_not_raised(tmp_path):
+    """A single-concurrency loop with another (genuinely live) run active must
+    not raise LoopBusy out of the backgrounded relaunch — the interrupted
+    outcome already told somebody; a second run must not be forced. Task 7's
+    review in this branch caught a genuinely swallowed LoopBusy bug, so this
+    is not a hypothetical class of defect."""
+    rt, calls = _mk_runtime(tmp_path, [])
+    _save(tmp_path)   # concurrency defaults to "single"
+    rl.start_run(tmp_path, "l1", "dead", source="cron", task="t")
+    rl.update_run(tmp_path, "l1", "dead", workflow_run_id="wf-never-started",
+                  owner={"pid": 999999, "started": "long ago"})
+    # A run genuinely owned by this (live) process — active_runs sees it,
+    # so the relaunch attempt for "dead" hits LoopBusy.
+    rl.start_run(tmp_path, "l1", "live", source="cron", task="other")
+
+    handled = await rt.sweep_orphans()
+    await _drain()
+
+    assert handled == ["dead"]
+    assert calls["exec"] == []   # relaunch never ran — LoopBusy, not a crash
+
+
+@pytest.mark.asyncio
+async def test_sweep_skips_an_orphan_whose_loop_was_deleted(tmp_path):
+    """LoopNotFound (the loop definition no longer exists) is skipped
+    silently — there is no spec to relaunch against, no goal/stuck_after to
+    judge against, and nobody to notify on behalf of a loop that is gone."""
+    rt, _ = _mk_runtime(tmp_path, [])
+    rl.start_run(tmp_path, "ghost", "dead", source="cron", task="t")
+    rl.update_run(tmp_path, "ghost", "dead", workflow_run_id="wf1",
+                  owner={"pid": 999999, "started": "long ago"})
+
+    handled = await rt.sweep_orphans()
+
+    assert handled == []
+    assert rl.read_run(tmp_path, "ghost", "dead")["status"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_sweep_skips_a_malformed_orphan_record_missing_a_run_id(tmp_path, monkeypatch):
+    """Defensive guard: find_orphans always sets both keys today, but if a
+    legacy/corrupt manifest ever produced a record without one, sweep_orphans
+    must skip it rather than crash or try to finalize a run with no id."""
+    from durin.loops import runtime as runtime_mod
+
+    rt, _ = _mk_runtime(tmp_path, [])
+    _save(tmp_path)
+    monkeypatch.setattr(runtime_mod.run_log, "find_orphans",
+                        lambda ws: [{"loop": "l1", "run_id": ""}, {"loop": "", "run_id": "r1"}])
+
     assert await rt.sweep_orphans() == []

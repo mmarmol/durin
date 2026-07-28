@@ -1351,6 +1351,7 @@
         "no_goal": "无目标",
         "escalated": "已升级",
         "error": "出错",
+        "interrupted": "已中断",
         "attention": "需关注"
       }
     },

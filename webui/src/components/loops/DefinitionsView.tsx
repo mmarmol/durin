@@ -25,12 +25,12 @@ function errMsg(e: unknown): string {
 }
 
 // Theme-token tone for one outcome dot. Outcomes from the stats route are
-// always terminal (done/no_goal/escalated/error — see LoopsService._stats),
-// so no "active" case is needed here.
+// always terminal (done/no_goal/escalated/error/interrupted — see
+// LoopsService._stats), so no "active" case is needed here.
 function outcomeTone(status: LoopStats["outcomes"][number]["status"]): string {
   if (status === "done") return "bg-primary";
   if (status === "escalated" || status === "error") return "bg-destructive";
-  return "bg-muted-foreground/40"; // no_goal
+  return "bg-muted-foreground/40"; // no_goal / interrupted
 }
 
 // Compact per-loop sparkline: last 10 outcomes as dots plus convergence/

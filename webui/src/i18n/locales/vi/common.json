@@ -1351,6 +1351,7 @@
         "no_goal": "không có mục tiêu",
         "escalated": "đã báo lên",
         "error": "lỗi",
+        "interrupted": "bị gián đoạn",
         "attention": "Cần chú ý"
       }
     },
