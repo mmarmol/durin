@@ -1421,6 +1421,7 @@
     "runDetail": {
       "started": "started {{when}}",
       "finished": "finished {{when}}",
+      "sessionOrigin": "chat session {{chat}}",
       "taskLabel": "Task",
       "showMore": "Show more",
       "showLess": "Show less",

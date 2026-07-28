@@ -1358,6 +1358,7 @@
     "runDetail": {
       "started": "{{when}} 시작",
       "finished": "{{when}} 종료",
+      "sessionOrigin": "채팅 세션 {{chat}}",
       "taskLabel": "작업",
       "showMore": "더 보기",
       "showLess": "접기",

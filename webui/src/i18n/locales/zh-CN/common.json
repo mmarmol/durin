@@ -1358,6 +1358,7 @@
     "runDetail": {
       "started": "开始于 {{when}}",
       "finished": "结束于 {{when}}",
+      "sessionOrigin": "聊天会话 {{chat}}",
       "taskLabel": "任务",
       "showMore": "显示更多",
       "showLess": "收起",

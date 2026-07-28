@@ -912,15 +912,20 @@ export interface LoopSummary extends LoopDef {
   pending_events: number;
 }
 
-// The trigger context recorded at fire time for a channel-sourced run (null
-// for manual/cron fires, which have nobody to reply to). See
-// durin.loops.matcher._dispatch_match.
+// The trigger context recorded at fire time (null for manual/cron fires,
+// which have nobody behind them). Two shapes share the field:
+// a channel-triggered run records the inbound message's conversation
+// (durin.loops.matcher._dispatch_match) and a chat-fired run records the
+// asking agent session (durin.agent.tools.loops.LoopsTool.set_context) —
+// which carries kind/session_key and no sender/subject/thread at all.
 export interface LoopRunOrigin {
+  kind?: "session";
+  session_key?: string;
   channel: string;
-  sender: string;
-  chat_id: string;
-  thread: string | null;
-  subject: string;
+  chat_id?: string;
+  sender?: string;
+  thread?: string | null;
+  subject?: string;
 }
 
 // One goal check's verdict, from the run's manifest (durin.loops.checks.verify_goal).
@@ -1076,9 +1081,11 @@ export interface LoopStats {
   name: string;
   // Last 20 terminal runs, newest-first.
   outcomes: LoopStatsOutcome[];
-  // done / terminal over all retained runs; null when no terminal runs yet.
+  // done / resolved over all retained runs; null when no resolved runs yet.
+  // "Resolved" excludes interrupted: a run killed with its process says
+  // nothing about whether the loop converges.
   convergence: number | null;
-  // escalated / terminal over all retained runs; null when no terminal runs yet.
+  // escalated / resolved over all retained runs; null when no resolved runs yet.
   escalation_rate: number | null;
   counts: Record<string, number>;
   pending_events: number;

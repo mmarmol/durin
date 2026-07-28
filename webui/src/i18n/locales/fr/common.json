@@ -1358,6 +1358,7 @@
     "runDetail": {
       "started": "démarré {{when}}",
       "finished": "terminé {{when}}",
+      "sessionOrigin": "session de chat {{chat}}",
       "taskLabel": "Tâche",
       "showMore": "Afficher plus",
       "showLess": "Afficher moins",

@@ -69,7 +69,8 @@ function CheckRow({ check }: { check: LoopRunCheck }) {
 }
 
 // The detail view of a single loop run, shown expanded under its ActivityView
-// row: status + timestamps, origin (who/what triggered it), the task (capped,
+// row: status + timestamps, origin (the inbound message that triggered it, or
+// the chat session that asked for it), the task (capped,
 // expandable), the ask, a status detail (destructive tone for error/escalated,
 // muted otherwise — interrupted is not a failure), the goal checks table, and
 // a copyable reference to the underlying workflow run.
@@ -102,7 +103,15 @@ export function RunDetail({ run }: { run: LoopRun }) {
       {run.origin && (
         <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
           <span className="rounded bg-muted px-1.5 py-0.5">{run.origin.channel}</span>
-          <span>{run.origin.sender}</span>
+          {/* A chat-fired run's origin is a session, not an inbound message:
+              it has no sender, subject or thread — just the conversation it
+              was asked in. Naming that is the honest alternative to an empty
+              slot where a sender would be. */}
+          {run.origin.kind === "session" ? (
+            <span>{t("loops.runDetail.sessionOrigin", { chat: run.origin.chat_id || "—" })}</span>
+          ) : (
+            !!run.origin.sender && <span>{run.origin.sender}</span>
+          )}
           {!!run.origin.subject && (
             <>
               <span>·</span>

@@ -19,7 +19,8 @@ function errMsg(e: unknown): string {
 // treatment as other actionable items in the app; waiting_info reads as a
 // distinct, quieter tone (primary tint, not the accent surface) since it's
 // waiting on the counterpart rather than the operator; escalated/error read
-// as destructive; everything else (running, done, no_goal) is quiet muted text.
+// as destructive; everything else (running, done, no_goal, interrupted) is
+// quiet muted text — an interrupted run is not a failure.
 function statusTone(status: LoopRun["status"]): string {
   if (status === "needs_operator") return "bg-accent text-accent-foreground";
   if (status === "waiting_info") return "bg-primary/15 text-primary";
