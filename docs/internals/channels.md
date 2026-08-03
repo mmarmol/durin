@@ -460,6 +460,37 @@ metadata)` and `send_reasoning_delta(chat_id, delta, metadata)`. The
 is true and the subclass actually overrides `send_delta` (checked by identity
 against `BaseChannel.send_delta`).
 
+### Streaming edit budgets
+
+Channels that stream by editing a message in place (Telegram, Slack) live under
+**two** platform limits, and they are not always the same number: what a *new*
+message may contain, and what an *edit* may contain. Slack is the extreme case —
+`chat.postMessage` accepts about 40 000 characters while `chat.update` rejects
+anything past 4 000 with `msg_too_long`. Telegram caps both at 4 096.
+
+Each adapter therefore keeps a separate edit budget (`SLACK_UPDATE_MAX_LEN`,
+`TELEGRAM_MAX_MESSAGE_LEN`) sized under the platform's *edit* limit, and applies
+it to every edit — the throttled mid-stream previews and the final render alike.
+When the buffer outgrows that budget the adapter does not keep editing: it
+freezes the current message at the budget, posts the intervening chunks as
+standalone messages, and opens a new message for the tail so the stream keeps
+flowing. A long answer therefore arrives as several messages, which is the only
+shape an edit-based stream can take once it exceeds the edit limit.
+
+Getting this wrong loses the whole answer rather than degrading it. A rejected
+edit propagates out of `send_delta`, `_send_with_retry` burns its attempts on an
+error that will never succeed, and the response is dropped — the loop already
+marked the turn `_streamed`, so the dispatcher suppresses the complete
+non-streamed copy that would otherwise have been the fallback. What the reader
+is left with is the last preview that happened to fit.
+
+Chunks that get frozen by a rollover are final — nothing will edit them again —
+so an adapter that converts markup for its platform (Slack's mrkdwn) converts
+them at that moment. Only the live tail stays raw, until stream end renders it.
+Because that conversion can *grow* text past a budget it fit before (a Markdown
+table expands into a longer bulleted rendering), the split is applied after
+conversion, not before.
+
 `is_allowed(sender_id)` is a policy method called by the central gate — NOT by
 the channel itself. It checks: `"*"` in `allow_from`, exact match in
 `allow_from`, and `is_approved(channel, sender_id)` from the pairing store.
