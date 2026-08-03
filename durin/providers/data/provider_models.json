@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-07-27T10:13:54+00:00",
+  "generated_at": "2026-08-03T10:11:03+00:00",
   "providers": {
     "zhipu": [
       {
@@ -287,23 +287,23 @@
       },
       {
         "id": "google/gemma-3-12b-it",
-        "max_input_tokens": null,
-        "max_output_tokens": null,
-        "supports_vision": false,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 16384,
+        "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
         "supports_reasoning": false,
-        "supports_function_calling": false
+        "supports_function_calling": true
       },
       {
         "id": "google/gemma-3-4b-it",
-        "max_input_tokens": null,
-        "max_output_tokens": null,
-        "supports_vision": false,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 16384,
+        "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
         "supports_reasoning": false,
-        "supports_function_calling": false
+        "supports_function_calling": true
       },
       {
         "id": "google/gemma-4-31b-it",
@@ -547,13 +547,13 @@
       },
       {
         "id": "mistralai/mistral-medium-3.5-128b",
-        "max_input_tokens": null,
-        "max_output_tokens": null,
-        "supports_vision": false,
+        "max_input_tokens": 262144,
+        "max_output_tokens": 32768,
+        "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
-        "supports_reasoning": false,
-        "supports_function_calling": false
+        "supports_reasoning": true,
+        "supports_function_calling": true
       },
       {
         "id": "mistralai/mistral-nemotron",
@@ -607,26 +607,16 @@
       },
       {
         "id": "nvidia/cosmos-reason2-8b",
-        "max_input_tokens": null,
-        "max_output_tokens": null,
-        "supports_vision": false,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 16384,
+        "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
-        "supports_reasoning": false,
-        "supports_function_calling": false
+        "supports_reasoning": true,
+        "supports_function_calling": true
       },
       {
         "id": "nvidia/embed-qa-4",
-        "max_input_tokens": null,
-        "max_output_tokens": null,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": false,
-        "supports_function_calling": false
-      },
-      {
-        "id": "nvidia/ising-calibration-1-35b-a3b",
         "max_input_tokens": null,
         "max_output_tokens": null,
         "supports_vision": false,
@@ -677,33 +667,33 @@
       },
       {
         "id": "nvidia/llama-3.1-nemotron-70b-instruct",
-        "max_input_tokens": null,
-        "max_output_tokens": null,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
         "supports_reasoning": false,
-        "supports_function_calling": false
+        "supports_function_calling": true
       },
       {
         "id": "nvidia/llama-3.1-nemotron-nano-8b-v1",
-        "max_input_tokens": null,
-        "max_output_tokens": null,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 16384,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
-        "supports_reasoning": false,
-        "supports_function_calling": false
+        "supports_reasoning": true,
+        "supports_function_calling": true
       },
       {
         "id": "nvidia/llama-3.1-nemotron-nano-vl-8b-v1",
-        "max_input_tokens": null,
-        "max_output_tokens": null,
-        "supports_vision": false,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 16384,
+        "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
-        "supports_reasoning": false,
-        "supports_function_calling": false
+        "supports_reasoning": true,
+        "supports_function_calling": true
       },
       {
         "id": "nvidia/llama-3.1-nemotron-safety-guard-8b-v3",
@@ -717,13 +707,13 @@
       },
       {
         "id": "nvidia/llama-3.1-nemotron-ultra-253b-v1",
-        "max_input_tokens": null,
-        "max_output_tokens": null,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 16384,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
-        "supports_reasoning": false,
-        "supports_function_calling": false
+        "supports_reasoning": true,
+        "supports_function_calling": true
       },
       {
         "id": "nvidia/llama-3.2-nemoretriever-1b-vlm-embed-v1",
@@ -747,23 +737,23 @@
       },
       {
         "id": "nvidia/llama-3.3-nemotron-super-49b-v1",
-        "max_input_tokens": null,
-        "max_output_tokens": null,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 65536,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
-        "supports_reasoning": false,
-        "supports_function_calling": false
+        "supports_reasoning": true,
+        "supports_function_calling": true
       },
       {
         "id": "nvidia/llama-3.3-nemotron-super-49b-v1.5",
-        "max_input_tokens": null,
-        "max_output_tokens": null,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 65536,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
-        "supports_reasoning": false,
-        "supports_function_calling": false
+        "supports_reasoning": true,
+        "supports_function_calling": true
       },
       {
         "id": "nvidia/llama-nemotron-embed-1b-v2",
@@ -907,13 +897,13 @@
       },
       {
         "id": "nvidia/nemotron-nano-12b-v2-vl",
-        "max_input_tokens": null,
-        "max_output_tokens": null,
-        "supports_vision": false,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
-        "supports_reasoning": false,
-        "supports_function_calling": false
+        "supports_reasoning": true,
+        "supports_function_calling": true
       },
       {
         "id": "nvidia/nemotron-nano-3-30b-a3b",
@@ -1026,6 +1016,16 @@
         "supports_function_calling": false
       },
       {
+        "id": "nvidia/riva-translate-4b-instruct-v2",
+        "max_input_tokens": null,
+        "max_output_tokens": null,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": false,
+        "supports_function_calling": false
+      },
+      {
         "id": "nvidia/vila",
         "max_input_tokens": null,
         "max_output_tokens": null,
@@ -1057,13 +1057,13 @@
       },
       {
         "id": "poolside/laguna-xs-2.1",
-        "max_input_tokens": null,
-        "max_output_tokens": null,
+        "max_input_tokens": 262144,
+        "max_output_tokens": 16384,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
-        "supports_reasoning": false,
-        "supports_function_calling": false
+        "supports_reasoning": true,
+        "supports_function_calling": true
       },
       {
         "id": "snowflake/arctic-embed-l",
@@ -1087,13 +1087,13 @@
       },
       {
         "id": "thinkingmachines/inkling",
-        "max_input_tokens": null,
-        "max_output_tokens": null,
-        "supports_vision": false,
-        "supports_audio_input": false,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 16384,
+        "supports_vision": true,
+        "supports_audio_input": true,
         "supports_pdf_input": false,
-        "supports_reasoning": false,
-        "supports_function_calling": false
+        "supports_reasoning": true,
+        "supports_function_calling": true
       },
       {
         "id": "writer/palmyra-creative-122b",
@@ -3800,6 +3800,16 @@
         "supports_function_calling": true
       },
       {
+        "id": "kimi-k3",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
         "id": "minimax-m2.7",
         "max_input_tokens": 204800,
         "max_output_tokens": 128000,
@@ -4210,19 +4220,39 @@
         "supports_pdf_input": false,
         "supports_reasoning": false,
         "supports_function_calling": true
-      }
-    ],
-    "zai_coding_plan": [
+      },
       {
-        "id": "glm-4.5-air",
-        "max_input_tokens": 131072,
-        "max_output_tokens": 98304,
+        "id": "voxtral-mini-latest",
+        "max_input_tokens": 0,
+        "max_output_tokens": 0,
+        "supports_vision": false,
+        "supports_audio_input": true,
+        "supports_pdf_input": false,
+        "supports_reasoning": false,
+        "supports_function_calling": false
+      },
+      {
+        "id": "voxtral-mini-tts-latest",
+        "max_input_tokens": 0,
+        "max_output_tokens": 0,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
-        "supports_reasoning": true,
-        "supports_function_calling": true
+        "supports_reasoning": false,
+        "supports_function_calling": false
       },
+      {
+        "id": "voxtral-small-latest",
+        "max_input_tokens": 32000,
+        "max_output_tokens": 32000,
+        "supports_vision": false,
+        "supports_audio_input": true,
+        "supports_pdf_input": false,
+        "supports_reasoning": false,
+        "supports_function_calling": true
+      }
+    ],
+    "zai_coding_plan": [
       {
         "id": "glm-4.7",
         "max_input_tokens": 204800,
@@ -4244,16 +4274,6 @@
         "supports_function_calling": true
       },
       {
-        "id": "glm-5.1",
-        "max_input_tokens": 200000,
-        "max_output_tokens": 131072,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": true,
-        "supports_function_calling": true
-      },
-      {
         "id": "glm-5.2",
         "max_input_tokens": 1000000,
         "max_output_tokens": 131072,
@@ -4264,12 +4284,12 @@
         "supports_function_calling": true
       },
       {
-        "id": "glm-5v-turbo",
-        "max_input_tokens": 200000,
+        "id": "glm-5.2-highspeed",
+        "max_input_tokens": 1000000,
         "max_output_tokens": 131072,
-        "supports_vision": true,
+        "supports_vision": false,
         "supports_audio_input": false,
-        "supports_pdf_input": true,
+        "supports_pdf_input": false,
         "supports_reasoning": true,
         "supports_function_calling": true
       }
@@ -6756,6 +6776,16 @@
         "supports_function_calling": true
       },
       {
+        "id": "deepseek/deepseek-v4-flash-0731",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65536,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
         "id": "deepseek/deepseek-v4-pro",
         "max_input_tokens": 1048576,
         "max_output_tokens": 384000,
@@ -6867,7 +6897,7 @@
       },
       {
         "id": "google/gemini-3.1-flash-image-preview",
-        "max_input_tokens": 131072,
+        "max_input_tokens": 65536,
         "max_output_tokens": 65536,
         "supports_vision": true,
         "supports_audio_input": false,
@@ -6888,7 +6918,7 @@
       {
         "id": "google/gemini-3.1-flash-lite-image",
         "max_input_tokens": 65536,
-        "max_output_tokens": 66000,
+        "max_output_tokens": 65536,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -7008,7 +7038,7 @@
       {
         "id": "google/gemma-4-26b-a4b-it",
         "max_input_tokens": 262144,
-        "max_output_tokens": 262144,
+        "max_output_tokens": 16384,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -7396,16 +7426,6 @@
         "supports_function_calling": true
       },
       {
-        "id": "mistralai/devstral-2512",
-        "max_input_tokens": 262144,
-        "max_output_tokens": 262144,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": true,
-        "supports_reasoning": false,
-        "supports_function_calling": true
-      },
-      {
         "id": "mistralai/ministral-14b-2512",
         "max_input_tokens": 262144,
         "max_output_tokens": 262144,
@@ -7728,7 +7748,7 @@
       {
         "id": "nvidia/nemotron-3-nano-30b-a3b",
         "max_input_tokens": 262144,
-        "max_output_tokens": 228000,
+        "max_output_tokens": 262144,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -7986,42 +8006,12 @@
         "supports_function_calling": true
       },
       {
-        "id": "openai/gpt-4o-search-preview",
-        "max_input_tokens": 128000,
-        "max_output_tokens": 16384,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": false,
-        "supports_function_calling": false
-      },
-      {
         "id": "openai/gpt-5",
         "max_input_tokens": 400000,
         "max_output_tokens": 128000,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": true,
-        "supports_reasoning": true,
-        "supports_function_calling": true
-      },
-      {
-        "id": "openai/gpt-5-chat",
-        "max_input_tokens": 128000,
-        "max_output_tokens": 16384,
-        "supports_vision": true,
-        "supports_audio_input": false,
-        "supports_pdf_input": true,
-        "supports_reasoning": false,
-        "supports_function_calling": false
-      },
-      {
-        "id": "openai/gpt-5-codex",
-        "max_input_tokens": 400000,
-        "max_output_tokens": 128000,
-        "supports_vision": true,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
         "supports_reasoning": true,
         "supports_function_calling": true
       },
@@ -8083,16 +8073,6 @@
         "supports_audio_input": false,
         "supports_pdf_input": true,
         "supports_reasoning": true,
-        "supports_function_calling": true
-      },
-      {
-        "id": "openai/gpt-5.1-chat",
-        "max_input_tokens": 128000,
-        "max_output_tokens": 16384,
-        "supports_vision": true,
-        "supports_audio_input": false,
-        "supports_pdf_input": true,
-        "supports_reasoning": false,
         "supports_function_calling": true
       },
       {
@@ -8416,16 +8396,6 @@
         "supports_function_calling": true
       },
       {
-        "id": "openai/o3-deep-research",
-        "max_input_tokens": 200000,
-        "max_output_tokens": 100000,
-        "supports_vision": true,
-        "supports_audio_input": false,
-        "supports_pdf_input": true,
-        "supports_reasoning": true,
-        "supports_function_calling": true
-      },
-      {
         "id": "openai/o3-mini",
         "max_input_tokens": 200000,
         "max_output_tokens": 100000,
@@ -8457,16 +8427,6 @@
       },
       {
         "id": "openai/o4-mini",
-        "max_input_tokens": 200000,
-        "max_output_tokens": 100000,
-        "supports_vision": true,
-        "supports_audio_input": false,
-        "supports_pdf_input": true,
-        "supports_reasoning": true,
-        "supports_function_calling": true
-      },
-      {
-        "id": "openai/o4-mini-deep-research",
         "max_input_tokens": 200000,
         "max_output_tokens": 100000,
         "supports_vision": true,
@@ -8594,26 +8554,6 @@
         "supports_pdf_input": false,
         "supports_reasoning": true,
         "supports_function_calling": false
-      },
-      {
-        "id": "poolside/laguna-m.1",
-        "max_input_tokens": 262144,
-        "max_output_tokens": 32768,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": true,
-        "supports_function_calling": true
-      },
-      {
-        "id": "poolside/laguna-m.1:free",
-        "max_input_tokens": 262144,
-        "max_output_tokens": 32768,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": true,
-        "supports_function_calling": true
       },
       {
         "id": "poolside/laguna-s-2.1",
@@ -8828,7 +8768,7 @@
       {
         "id": "qwen/qwen3-coder-30b-a3b-instruct",
         "max_input_tokens": 262144,
-        "max_output_tokens": 32768,
+        "max_output_tokens": 262144,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -8868,7 +8808,7 @@
       {
         "id": "qwen/qwen3-max",
         "max_input_tokens": 262144,
-        "max_output_tokens": 32768,
+        "max_output_tokens": 65536,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -8878,7 +8818,7 @@
       {
         "id": "qwen/qwen3-max-thinking",
         "max_input_tokens": 262144,
-        "max_output_tokens": 32768,
+        "max_output_tokens": 65536,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -8928,7 +8868,7 @@
       {
         "id": "qwen/qwen3-vl-30b-a3b-instruct",
         "max_input_tokens": 262144,
-        "max_output_tokens": 16384,
+        "max_output_tokens": 32768,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -9106,9 +9046,19 @@
         "supports_function_calling": true
       },
       {
-        "id": "qwen/qwen3.7-max",
+        "id": "qwen/qwen3.7-flash",
         "max_input_tokens": 1000000,
         "max_output_tokens": 65536,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "qwen/qwen3.7-max",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 131072,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -9118,7 +9068,7 @@
       {
         "id": "qwen/qwen3.7-plus",
         "max_input_tokens": 1000000,
-        "max_output_tokens": 65536,
+        "max_output_tokens": 131072,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -9287,7 +9237,7 @@
       },
       {
         "id": "thedrummer/unslopnemo-12b",
-        "max_input_tokens": 32768,
+        "max_input_tokens": 1024000,
         "max_output_tokens": 32768,
         "supports_vision": false,
         "supports_audio_input": false,
@@ -9299,6 +9249,16 @@
         "id": "thinkingmachines/inkling",
         "max_input_tokens": 1048576,
         "max_output_tokens": 1048576,
+        "supports_vision": true,
+        "supports_audio_input": true,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "thinkingmachines/inkling-small",
+        "max_input_tokens": 524288,
+        "max_output_tokens": 262144,
         "supports_vision": true,
         "supports_audio_input": true,
         "supports_pdf_input": false,
@@ -9566,6 +9526,16 @@
         "supports_function_calling": true
       },
       {
+        "id": "~deepseek/deepseek-v4-flash-latest",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65536,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
         "id": "~google/gemini-flash-latest",
         "max_input_tokens": 1048576,
         "max_output_tokens": 65536,
@@ -9588,7 +9558,7 @@
       {
         "id": "~moonshotai/kimi-latest",
         "max_input_tokens": 1048576,
-        "max_output_tokens": 262144,
+        "max_output_tokens": 1048576,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -10018,6 +9988,16 @@
         "supports_function_calling": true
       },
       {
+        "id": "moonshotai/Kimi-K3",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 131072,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
         "id": "openai/gpt-oss-120b",
         "max_input_tokens": 131072,
         "max_output_tokens": 32768,
@@ -10051,6 +10031,36 @@
         "id": "stepfun-ai/Step-3.7-Flash",
         "max_input_tokens": 262144,
         "max_output_tokens": 256000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "tencent/Hy3",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 64000,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "thinkingmachines/Inkling",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "thinkingmachines/Inkling-Small",
+        "max_input_tokens": 524288,
+        "max_output_tokens": 1048576,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
