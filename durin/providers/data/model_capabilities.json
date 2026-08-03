@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "generated_at": "2026-07-27T10:13:54+00:00",
+  "generated_at": "2026-08-03T10:11:03+00:00",
   "sources": {
     "litellm": {
       "url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
@@ -4278,14 +4278,7 @@
       "supports_prompt_caching": true,
       "supports_response_schema": true,
       "_sources": [
-        "litellm:gpt-4o-search-preview",
-        "openrouter:openai/gpt-4o-search-preview"
-      ],
-      "_conflicts": [
-        "supports_vision(litellm:gpt-4o-search-preview=True, openrouter:openai/gpt-4o-search-preview=False)",
-        "supports_pdf_input(litellm:gpt-4o-search-preview=True, openrouter:openai/gpt-4o-search-preview=False)",
-        "supports_function_calling(litellm:gpt-4o-search-preview=True, openrouter:openai/gpt-4o-search-preview=False)",
-        "supports_prompt_caching(litellm:gpt-4o-search-preview=True, openrouter:openai/gpt-4o-search-preview=False)"
+        "litellm:gpt-4o-search-preview"
       ],
       "_authority": "merge"
     },
@@ -4979,13 +4972,12 @@
       "_conflicts": [
         "supports_pdf_input(litellm:gpt-5.4-mini=True, openrouter:openai/gpt-5.4-mini=True, models.dev:openai/gpt-5.4-mini=False)",
         "supports_prompt_caching(litellm:gpt-5.4-mini=True, openrouter:openai/gpt-5.4-mini=False, models.dev:openai/gpt-5.4-mini=False)",
-        "supports_response_schema(litellm:gpt-5.4-mini=True, openrouter:openai/gpt-5.4-mini=True, models.dev:openai/gpt-5.4-mini=False)",
-        "max_input_tokens(litellm:gpt-5.4-mini=1050000, openrouter:openai/gpt-5.4-mini=400000, models.dev:openai/gpt-5.4-mini=400000)"
+        "supports_response_schema(litellm:gpt-5.4-mini=True, openrouter:openai/gpt-5.4-mini=True, models.dev:openai/gpt-5.4-mini=False)"
       ],
       "_authority": "merge"
     },
     "gpt-5.4-mini-2026-03-17": {
-      "max_input_tokens": 1050000,
+      "max_input_tokens": 272000,
       "max_output_tokens": 128000,
       "mode": "chat",
       "supports_vision": true,
@@ -5025,13 +5017,12 @@
       "_conflicts": [
         "supports_pdf_input(litellm:gpt-5.4-nano=True, openrouter:openai/gpt-5.4-nano=True, models.dev:openai/gpt-5.4-nano=False)",
         "supports_prompt_caching(litellm:gpt-5.4-nano=True, openrouter:openai/gpt-5.4-nano=False, models.dev:openai/gpt-5.4-nano=False)",
-        "supports_response_schema(litellm:gpt-5.4-nano=True, openrouter:openai/gpt-5.4-nano=True, models.dev:openai/gpt-5.4-nano=False)",
-        "max_input_tokens(litellm:gpt-5.4-nano=1050000, openrouter:openai/gpt-5.4-nano=400000, models.dev:openai/gpt-5.4-nano=400000)"
+        "supports_response_schema(litellm:gpt-5.4-nano=True, openrouter:openai/gpt-5.4-nano=True, models.dev:openai/gpt-5.4-nano=False)"
       ],
       "_authority": "merge"
     },
     "gpt-5.4-nano-2026-03-17": {
-      "max_input_tokens": 1050000,
+      "max_input_tokens": 272000,
       "max_output_tokens": 128000,
       "mode": "chat",
       "supports_vision": true,
@@ -5129,12 +5120,7 @@
       "supports_prompt_caching": true,
       "supports_response_schema": true,
       "_sources": [
-        "litellm:gpt-5-chat",
-        "openrouter:openai/gpt-5-chat"
-      ],
-      "_conflicts": [
-        "supports_reasoning(litellm:gpt-5-chat=True, openrouter:openai/gpt-5-chat=False)",
-        "supports_prompt_caching(litellm:gpt-5-chat=True, openrouter:openai/gpt-5-chat=False)"
+        "litellm:gpt-5-chat"
       ],
       "_authority": "merge"
     },
@@ -5158,7 +5144,7 @@
       "_authority": "merge"
     },
     "gpt-5-codex": {
-      "max_input_tokens": 336000,
+      "max_input_tokens": 272000,
       "max_output_tokens": 128000,
       "mode": "chat",
       "supports_vision": true,
@@ -5172,12 +5158,7 @@
       "supports_prompt_caching": true,
       "supports_response_schema": true,
       "_sources": [
-        "litellm:gpt-5-codex",
-        "openrouter:openai/gpt-5-codex"
-      ],
-      "_conflicts": [
-        "supports_pdf_input(litellm:gpt-5-codex=True, openrouter:openai/gpt-5-codex=False)",
-        "supports_prompt_caching(litellm:gpt-5-codex=True, openrouter:openai/gpt-5-codex=False)"
+        "litellm:gpt-5-codex"
       ],
       "_authority": "merge"
     },
@@ -6323,7 +6304,7 @@
       "_authority": "merge"
     },
     "devstral-2512": {
-      "max_input_tokens": 262144,
+      "max_input_tokens": 259072,
       "max_output_tokens": 259072,
       "mode": "chat",
       "supports_vision": false,
@@ -6338,12 +6319,10 @@
       "supports_response_schema": true,
       "_sources": [
         "litellm:mistral/devstral-2512",
-        "openrouter:mistralai/devstral-2512",
         "models.dev:mistral/devstral-2512"
       ],
       "_conflicts": [
-        "supports_pdf_input(litellm:mistral/devstral-2512=False, openrouter:mistralai/devstral-2512=True, models.dev:mistral/devstral-2512=False)",
-        "supports_response_schema(litellm:mistral/devstral-2512=True, openrouter:mistralai/devstral-2512=True, models.dev:mistral/devstral-2512=False)"
+        "supports_response_schema(litellm:mistral/devstral-2512=True, models.dev:mistral/devstral-2512=False)"
       ],
       "_authority": "merge"
     },
@@ -7888,12 +7867,7 @@
       "supports_prompt_caching": true,
       "supports_response_schema": true,
       "_sources": [
-        "litellm:o3-deep-research",
-        "openrouter:openai/o3-deep-research"
-      ],
-      "_conflicts": [
-        "supports_reasoning(litellm:o3-deep-research=False, openrouter:openai/o3-deep-research=True)",
-        "supports_prompt_caching(litellm:o3-deep-research=True, openrouter:openai/o3-deep-research=False)"
+        "litellm:o3-deep-research"
       ],
       "_authority": "merge"
     },
@@ -8066,12 +8040,7 @@
       "supports_prompt_caching": true,
       "supports_response_schema": true,
       "_sources": [
-        "litellm:o4-mini-deep-research",
-        "openrouter:openai/o4-mini-deep-research"
-      ],
-      "_conflicts": [
-        "supports_reasoning(litellm:o4-mini-deep-research=False, openrouter:openai/o4-mini-deep-research=True)",
-        "supports_prompt_caching(litellm:o4-mini-deep-research=True, openrouter:openai/o4-mini-deep-research=False)"
+        "litellm:o4-mini-deep-research"
       ],
       "_authority": "merge"
     },
@@ -10903,7 +10872,6 @@
         "models.dev:deepseek/deepseek-v4-flash"
       ],
       "_conflicts": [
-        "supports_reasoning(litellm:deepseek-v4-flash=False, litellm:deepseek/deepseek-v4-flash=False, openrouter:deepseek/deepseek-v4-flash=True, models.dev:nvidia/deepseek-ai/deepseek-v4-flash=True, models.dev:deepseek/deepseek-v4-flash=True)",
         "supports_prompt_caching(litellm:deepseek-v4-flash=True, litellm:deepseek/deepseek-v4-flash=True, openrouter:deepseek/deepseek-v4-flash=False, models.dev:nvidia/deepseek-ai/deepseek-v4-flash=False, models.dev:deepseek/deepseek-v4-flash=False)",
         "supports_response_schema(litellm:deepseek-v4-flash=True, litellm:deepseek/deepseek-v4-flash=True, openrouter:deepseek/deepseek-v4-flash=True, models.dev:nvidia/deepseek-ai/deepseek-v4-flash=False, models.dev:deepseek/deepseek-v4-flash=False)",
         "max_output_tokens(litellm:deepseek-v4-flash=8192, litellm:deepseek/deepseek-v4-flash=8192, openrouter:deepseek/deepseek-v4-flash=393216, models.dev:nvidia/deepseek-ai/deepseek-v4-flash=393216, models.dev:deepseek/deepseek-v4-flash=384000)"
@@ -10932,10 +10900,47 @@
         "models.dev:deepseek/deepseek-v4-pro"
       ],
       "_conflicts": [
-        "supports_reasoning(litellm:deepseek-v4-pro=False, litellm:deepseek/deepseek-v4-pro=False, openrouter:deepseek/deepseek-v4-pro=True, models.dev:nvidia/deepseek-ai/deepseek-v4-pro=True, models.dev:deepseek/deepseek-v4-pro=True)",
         "supports_prompt_caching(litellm:deepseek-v4-pro=True, litellm:deepseek/deepseek-v4-pro=True, openrouter:deepseek/deepseek-v4-pro=False, models.dev:nvidia/deepseek-ai/deepseek-v4-pro=False, models.dev:deepseek/deepseek-v4-pro=False)",
         "supports_response_schema(litellm:deepseek-v4-pro=True, litellm:deepseek/deepseek-v4-pro=True, openrouter:deepseek/deepseek-v4-pro=True, models.dev:nvidia/deepseek-ai/deepseek-v4-pro=False, models.dev:deepseek/deepseek-v4-pro=False)",
         "max_output_tokens(litellm:deepseek-v4-pro=8192, litellm:deepseek/deepseek-v4-pro=8192, openrouter:deepseek/deepseek-v4-pro=384000, models.dev:nvidia/deepseek-ai/deepseek-v4-pro=393216, models.dev:deepseek/deepseek-v4-pro=384000)"
+      ],
+      "_authority": "merge"
+    },
+    "deepseek-v4-flash-0731": {
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 65536,
+      "mode": "chat",
+      "supports_vision": false,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": true,
+      "supports_reasoning": true,
+      "supports_prompt_caching": false,
+      "supports_response_schema": true,
+      "_sources": [
+        "openrouter:deepseek/deepseek-v4-flash-0731"
+      ],
+      "_authority": "merge"
+    },
+    "qwen3.7-flash": {
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 65536,
+      "mode": "chat",
+      "supports_vision": true,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_video_input": true,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": true,
+      "supports_reasoning": true,
+      "supports_prompt_caching": false,
+      "supports_response_schema": true,
+      "_sources": [
+        "openrouter:qwen/qwen3.7-flash"
       ],
       "_authority": "merge"
     },
@@ -11017,7 +11022,7 @@
     },
     "gemini-3.1-flash-lite-image": {
       "max_input_tokens": 65536,
-      "max_output_tokens": 65768,
+      "max_output_tokens": 65536,
       "mode": "chat",
       "supports_vision": true,
       "supports_audio_input": false,
@@ -11104,7 +11109,7 @@
     },
     "nemotron-3-ultra-550b-a55b": {
       "max_input_tokens": 756144,
-      "max_output_tokens": 40960,
+      "max_output_tokens": 65536,
       "mode": "chat",
       "supports_vision": false,
       "supports_audio_input": false,
@@ -11121,8 +11126,7 @@
         "models.dev:nvidia/nvidia/nemotron-3-ultra-550b-a55b"
       ],
       "_conflicts": [
-        "supports_response_schema(openrouter:nvidia/nemotron-3-ultra-550b-a55b=True, models.dev:nvidia/nvidia/nemotron-3-ultra-550b-a55b=False)",
-        "max_output_tokens(openrouter:nvidia/nemotron-3-ultra-550b-a55b=16384, models.dev:nvidia/nvidia/nemotron-3-ultra-550b-a55b=65536)"
+        "supports_response_schema(openrouter:nvidia/nemotron-3-ultra-550b-a55b=True, models.dev:nvidia/nvidia/nemotron-3-ultra-550b-a55b=False)"
       ],
       "_authority": "merge"
     },
@@ -11147,7 +11151,7 @@
     },
     "qwen3.7-plus": {
       "max_input_tokens": 1000000,
-      "max_output_tokens": 65536,
+      "max_output_tokens": 98304,
       "mode": "chat",
       "supports_vision": true,
       "supports_audio_input": false,
@@ -11235,7 +11239,7 @@
     },
     "qwen3.7-max": {
       "max_input_tokens": 1000000,
-      "max_output_tokens": 65536,
+      "max_output_tokens": 98304,
       "mode": "chat",
       "supports_vision": false,
       "supports_audio_input": false,
@@ -11467,7 +11471,7 @@
     },
     "gemma-4-26b-a4b-it": {
       "max_input_tokens": 262144,
-      "max_output_tokens": 147456,
+      "max_output_tokens": 24576,
       "mode": "chat",
       "supports_vision": true,
       "supports_audio_input": false,
@@ -11485,8 +11489,7 @@
       ],
       "_conflicts": [
         "supports_video_input(openrouter:google/gemma-4-26b-a4b-it=True, models.dev:google/gemma-4-26b-a4b-it=False)",
-        "supports_response_schema(openrouter:google/gemma-4-26b-a4b-it=True, models.dev:google/gemma-4-26b-a4b-it=False)",
-        "max_output_tokens(openrouter:google/gemma-4-26b-a4b-it=262144, models.dev:google/gemma-4-26b-a4b-it=32768)"
+        "supports_response_schema(openrouter:google/gemma-4-26b-a4b-it=True, models.dev:google/gemma-4-26b-a4b-it=False)"
       ],
       "_authority": "merge"
     },
@@ -11914,7 +11917,7 @@
     },
     "qwen3-max-thinking": {
       "max_input_tokens": 262144,
-      "max_output_tokens": 32768,
+      "max_output_tokens": 65536,
       "mode": "chat",
       "supports_vision": false,
       "supports_audio_input": false,
@@ -12033,7 +12036,7 @@
     },
     "nemotron-3-nano-30b-a3b": {
       "max_input_tokens": 196608,
-      "max_output_tokens": 179536,
+      "max_output_tokens": 196608,
       "mode": "chat",
       "supports_vision": false,
       "supports_audio_input": false,
@@ -12189,25 +12192,6 @@
       "supports_response_schema": true,
       "_sources": [
         "openrouter:anthropic/claude-opus-4.5"
-      ],
-      "_authority": "merge"
-    },
-    "gpt-5.1-chat": {
-      "max_input_tokens": 128000,
-      "max_output_tokens": 16384,
-      "mode": "chat",
-      "supports_vision": true,
-      "supports_audio_input": false,
-      "supports_pdf_input": true,
-      "supports_video_input": false,
-      "supports_audio_output": false,
-      "supports_image_output": false,
-      "supports_function_calling": true,
-      "supports_reasoning": false,
-      "supports_prompt_caching": false,
-      "supports_response_schema": true,
-      "_sources": [
-        "openrouter:openai/gpt-5.1-chat"
       ],
       "_authority": "merge"
     },
@@ -12441,7 +12425,7 @@
     },
     "qwen3-vl-30b-a3b-instruct": {
       "max_input_tokens": 262144,
-      "max_output_tokens": 16384,
+      "max_output_tokens": 32768,
       "mode": "chat",
       "supports_vision": true,
       "supports_audio_input": false,
@@ -12536,7 +12520,7 @@
     },
     "qwen3-max": {
       "max_input_tokens": 262144,
-      "max_output_tokens": 49152,
+      "max_output_tokens": 65536,
       "mode": "chat",
       "supports_vision": false,
       "supports_audio_input": false,
@@ -12848,7 +12832,7 @@
     },
     "qwen3-coder-30b-a3b-instruct": {
       "max_input_tokens": 262144,
-      "max_output_tokens": 49152,
+      "max_output_tokens": 163840,
       "mode": "chat",
       "supports_vision": false,
       "supports_audio_input": false,
@@ -12865,7 +12849,8 @@
         "models.dev:alibaba/qwen3-coder-30b-a3b-instruct"
       ],
       "_conflicts": [
-        "supports_response_schema(openrouter:qwen/qwen3-coder-30b-a3b-instruct=True, models.dev:alibaba/qwen3-coder-30b-a3b-instruct=False)"
+        "supports_response_schema(openrouter:qwen/qwen3-coder-30b-a3b-instruct=True, models.dev:alibaba/qwen3-coder-30b-a3b-instruct=False)",
+        "max_output_tokens(openrouter:qwen/qwen3-coder-30b-a3b-instruct=262144, models.dev:alibaba/qwen3-coder-30b-a3b-instruct=65536)"
       ],
       "_authority": "merge"
     },
@@ -12890,7 +12875,7 @@
     },
     "qwen3-235b-a22b-thinking-2507": {
       "max_input_tokens": 262144,
-      "max_output_tokens": 32768,
+      "max_output_tokens": null,
       "mode": "chat",
       "supports_vision": false,
       "supports_audio_input": false,
@@ -12928,7 +12913,7 @@
     },
     "qwen3-235b-a22b-2507": {
       "max_input_tokens": 262144,
-      "max_output_tokens": 16384,
+      "max_output_tokens": 32768,
       "mode": "chat",
       "supports_vision": false,
       "supports_audio_input": false,
@@ -12947,7 +12932,7 @@
     },
     "mistral-small-3.2-24b-instruct": {
       "max_input_tokens": 256000,
-      "max_output_tokens": null,
+      "max_output_tokens": 16384,
       "mode": "chat",
       "supports_vision": true,
       "supports_audio_input": false,
@@ -13363,12 +13348,17 @@
       "supports_video_input": false,
       "supports_audio_output": false,
       "supports_image_output": false,
-      "supports_function_calling": false,
+      "supports_function_calling": true,
       "supports_reasoning": false,
       "supports_prompt_caching": false,
-      "supports_response_schema": true,
+      "supports_response_schema": false,
       "_sources": [
-        "openrouter:google/gemma-3-4b-it"
+        "openrouter:google/gemma-3-4b-it",
+        "models.dev:nvidia/google/gemma-3-4b-it"
+      ],
+      "_conflicts": [
+        "supports_function_calling(openrouter:google/gemma-3-4b-it=False, models.dev:nvidia/google/gemma-3-4b-it=True)",
+        "supports_response_schema(openrouter:google/gemma-3-4b-it=True, models.dev:nvidia/google/gemma-3-4b-it=False)"
       ],
       "_authority": "merge"
     },
@@ -13385,9 +13375,13 @@
       "supports_function_calling": true,
       "supports_reasoning": false,
       "supports_prompt_caching": false,
-      "supports_response_schema": true,
+      "supports_response_schema": false,
       "_sources": [
-        "openrouter:google/gemma-3-12b-it"
+        "openrouter:google/gemma-3-12b-it",
+        "models.dev:nvidia/google/gemma-3-12b-it"
+      ],
+      "_conflicts": [
+        "supports_response_schema(openrouter:google/gemma-3-12b-it=True, models.dev:nvidia/google/gemma-3-12b-it=False)"
       ],
       "_authority": "merge"
     },
@@ -14292,6 +14286,44 @@
       ],
       "_authority": "merge"
     },
+    "cosmos-reason2-8b": {
+      "max_input_tokens": 131072,
+      "max_output_tokens": 16384,
+      "mode": "chat",
+      "supports_vision": true,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_video_input": true,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": true,
+      "supports_reasoning": true,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "models.dev:nvidia/nvidia/cosmos-reason2-8b"
+      ],
+      "_authority": "merge"
+    },
+    "nemotron-nano-12b-v2-vl": {
+      "max_input_tokens": 128000,
+      "max_output_tokens": 128000,
+      "mode": "chat",
+      "supports_vision": true,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_video_input": true,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": true,
+      "supports_reasoning": true,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "models.dev:nvidia/nvidia/nemotron-nano-12b-v2-vl"
+      ],
+      "_authority": "merge"
+    },
     "bevformer": {
       "max_input_tokens": 128000,
       "max_output_tokens": 8192,
@@ -14311,6 +14343,25 @@
       ],
       "_authority": "merge"
     },
+    "llama-3.3-nemotron-super-49b-v1.5": {
+      "max_input_tokens": 131072,
+      "max_output_tokens": 65536,
+      "mode": "chat",
+      "supports_vision": false,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": true,
+      "supports_reasoning": true,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "models.dev:nvidia/nvidia/llama-3.3-nemotron-super-49b-v1.5"
+      ],
+      "_authority": "merge"
+    },
     "cosmos-transfer2_5-2b": {
       "max_input_tokens": null,
       "max_output_tokens": 4096,
@@ -14327,6 +14378,25 @@
       "supports_response_schema": false,
       "_sources": [
         "models.dev:nvidia/nvidia/cosmos-transfer2_5-2b"
+      ],
+      "_authority": "merge"
+    },
+    "llama-3.1-nemotron-nano-8b-v1": {
+      "max_input_tokens": 131072,
+      "max_output_tokens": 16384,
+      "mode": "chat",
+      "supports_vision": false,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": true,
+      "supports_reasoning": true,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "models.dev:nvidia/nvidia/llama-3.1-nemotron-nano-8b-v1"
       ],
       "_authority": "merge"
     },
@@ -14368,7 +14438,7 @@
       ],
       "_authority": "merge"
     },
-    "llama-3_1-nemotron-safety-guard-8b-v3": {
+    "llama-3.1-nemotron-safety-guard-8b-v3": {
       "max_input_tokens": 128000,
       "max_output_tokens": 4096,
       "mode": "chat",
@@ -14383,7 +14453,45 @@
       "supports_prompt_caching": false,
       "supports_response_schema": false,
       "_sources": [
-        "models.dev:nvidia/nvidia/llama-3_1-nemotron-safety-guard-8b-v3"
+        "models.dev:nvidia/nvidia/llama-3.1-nemotron-safety-guard-8b-v3"
+      ],
+      "_authority": "merge"
+    },
+    "llama-3.3-nemotron-super-49b-v1": {
+      "max_input_tokens": 131072,
+      "max_output_tokens": 65536,
+      "mode": "chat",
+      "supports_vision": false,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": true,
+      "supports_reasoning": true,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "models.dev:nvidia/nvidia/llama-3.3-nemotron-super-49b-v1"
+      ],
+      "_authority": "merge"
+    },
+    "llama-3.1-nemotron-70b-instruct": {
+      "max_input_tokens": 128000,
+      "max_output_tokens": 8192,
+      "mode": "chat",
+      "supports_vision": false,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": true,
+      "supports_reasoning": false,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "models.dev:nvidia/nvidia/llama-3.1-nemotron-70b-instruct"
       ],
       "_authority": "merge"
     },
@@ -14422,6 +14530,25 @@
       "supports_response_schema": false,
       "_sources": [
         "models.dev:nvidia/nvidia/cosmos-transfer1-7b"
+      ],
+      "_authority": "merge"
+    },
+    "llama-3.1-nemotron-ultra-253b-v1": {
+      "max_input_tokens": 128000,
+      "max_output_tokens": 16384,
+      "mode": "chat",
+      "supports_vision": false,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": true,
+      "supports_reasoning": true,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "models.dev:nvidia/nvidia/llama-3.1-nemotron-ultra-253b-v1"
       ],
       "_authority": "merge"
     },
@@ -14498,6 +14625,25 @@
       "supports_response_schema": false,
       "_sources": [
         "models.dev:nvidia/nvidia/rerank-qa-mistral-4b"
+      ],
+      "_authority": "merge"
+    },
+    "llama-3.1-nemotron-nano-vl-8b-v1": {
+      "max_input_tokens": 32768,
+      "max_output_tokens": 16384,
+      "mode": "chat",
+      "supports_vision": true,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": true,
+      "supports_reasoning": true,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "models.dev:nvidia/nvidia/llama-3.1-nemotron-nano-vl-8b-v1"
       ],
       "_authority": "merge"
     },
@@ -14593,6 +14739,25 @@
       "supports_response_schema": false,
       "_sources": [
         "models.dev:nvidia/nvidia/nvidia-nemotron-nano-9b-v2"
+      ],
+      "_authority": "merge"
+    },
+    "riva-translate-4b-instruct-v1.1": {
+      "max_input_tokens": 128000,
+      "max_output_tokens": 4096,
+      "mode": "chat",
+      "supports_vision": false,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": false,
+      "supports_reasoning": false,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "models.dev:nvidia/nvidia/riva-translate-4b-instruct-v1.1"
       ],
       "_authority": "merge"
     },
@@ -14710,25 +14875,6 @@
       ],
       "_authority": "merge"
     },
-    "riva-translate-4b-instruct-v1_1": {
-      "max_input_tokens": 128000,
-      "max_output_tokens": 4096,
-      "mode": "chat",
-      "supports_vision": false,
-      "supports_audio_input": false,
-      "supports_pdf_input": false,
-      "supports_video_input": false,
-      "supports_audio_output": false,
-      "supports_image_output": false,
-      "supports_function_calling": false,
-      "supports_reasoning": false,
-      "supports_prompt_caching": false,
-      "supports_response_schema": false,
-      "_sources": [
-        "models.dev:nvidia/nvidia/riva-translate-4b-instruct-v1_1"
-      ],
-      "_authority": "merge"
-    },
     "google-paligemma": {
       "max_input_tokens": 128000,
       "max_output_tokens": 8192,
@@ -14783,6 +14929,25 @@
       "supports_response_schema": false,
       "_sources": [
         "models.dev:nvidia/google/gemma-3n-e2b-it"
+      ],
+      "_authority": "merge"
+    },
+    "inkling": {
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 16384,
+      "mode": "chat",
+      "supports_vision": true,
+      "supports_audio_input": true,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": true,
+      "supports_reasoning": true,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "models.dev:nvidia/thinkingmachines/inkling"
       ],
       "_authority": "merge"
     },
@@ -14882,7 +15047,7 @@
       ],
       "_authority": "merge"
     },
-    "dracarys-llama-3_1-70b-instruct": {
+    "dracarys-llama-3.1-70b-instruct": {
       "max_input_tokens": 128000,
       "max_output_tokens": 8192,
       "mode": "chat",
@@ -14897,11 +15062,11 @@
       "supports_prompt_caching": false,
       "supports_response_schema": false,
       "_sources": [
-        "models.dev:nvidia/abacusai/dracarys-llama-3_1-70b-instruct"
+        "models.dev:nvidia/abacusai/dracarys-llama-3.1-70b-instruct"
       ],
       "_authority": "merge"
     },
-    "solar-10_7b-instruct": {
+    "solar-10.7b-instruct": {
       "max_input_tokens": 128000,
       "max_output_tokens": 8192,
       "mode": "chat",
@@ -14916,7 +15081,7 @@
       "supports_prompt_caching": false,
       "supports_response_schema": false,
       "_sources": [
-        "models.dev:nvidia/upstage/solar-10_7b-instruct"
+        "models.dev:nvidia/upstage/solar-10.7b-instruct"
       ],
       "_authority": "merge"
     },
@@ -14996,6 +15161,25 @@
       ],
       "_authority": "merge"
     },
+    "mistral-medium-3.5-128b": {
+      "max_input_tokens": 262144,
+      "max_output_tokens": 32768,
+      "mode": "chat",
+      "supports_vision": true,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": true,
+      "supports_reasoning": true,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "models.dev:nvidia/mistralai/mistral-medium-3.5-128b"
+      ],
+      "_authority": "merge"
+    },
     "mistral-nemotron": {
       "max_input_tokens": 128000,
       "max_output_tokens": 8192,
@@ -15072,7 +15256,26 @@
       ],
       "_authority": "merge"
     },
-    "mistral-7b-instruct-v03": {
+    "ministral-14b-instruct-2512": {
+      "max_input_tokens": 262144,
+      "max_output_tokens": 16384,
+      "mode": "chat",
+      "supports_vision": true,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": true,
+      "supports_reasoning": false,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "models.dev:nvidia/mistralai/ministral-14b-instruct-2512"
+      ],
+      "_authority": "merge"
+    },
+    "mistral-7b-instruct-v0.3": {
       "max_input_tokens": 65536,
       "max_output_tokens": 65536,
       "mode": "chat",
@@ -15087,7 +15290,7 @@
       "supports_prompt_caching": false,
       "supports_response_schema": false,
       "_sources": [
-        "models.dev:nvidia/mistralai/mistral-7b-instruct-v03"
+        "models.dev:nvidia/mistralai/mistral-7b-instruct-v0.3"
       ],
       "_authority": "merge"
     },
@@ -15202,6 +15405,25 @@
       "supports_response_schema": false,
       "_sources": [
         "models.dev:nvidia/meta/esm2-650m"
+      ],
+      "_authority": "merge"
+    },
+    "laguna-xs-2.1": {
+      "max_input_tokens": 262144,
+      "max_output_tokens": 16384,
+      "mode": "chat",
+      "supports_vision": false,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": true,
+      "supports_reasoning": true,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "models.dev:nvidia/poolside/laguna-xs-2.1"
       ],
       "_authority": "merge"
     },
@@ -15400,7 +15622,7 @@
       "max_output_tokens": null,
       "mode": "chat",
       "supports_vision": true,
-      "supports_audio_input": false,
+      "supports_audio_input": true,
       "supports_pdf_input": true,
       "supports_video_input": false,
       "supports_audio_output": false,
@@ -15528,6 +15750,25 @@
       ],
       "_authority": "merge"
     },
+    "voxtral-mini-tts-latest": {
+      "max_input_tokens": null,
+      "max_output_tokens": null,
+      "mode": "chat",
+      "supports_vision": false,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": true,
+      "supports_image_output": false,
+      "supports_function_calling": false,
+      "supports_reasoning": false,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "models.dev:mistral/voxtral-mini-tts-latest"
+      ],
+      "_authority": "merge"
+    },
     "ministral-3b-latest": {
       "max_input_tokens": 128000,
       "max_output_tokens": 128000,
@@ -15544,6 +15785,44 @@
       "supports_response_schema": false,
       "_sources": [
         "models.dev:mistral/ministral-3b-latest"
+      ],
+      "_authority": "merge"
+    },
+    "voxtral-mini-latest": {
+      "max_input_tokens": null,
+      "max_output_tokens": null,
+      "mode": "chat",
+      "supports_vision": false,
+      "supports_audio_input": true,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": false,
+      "supports_reasoning": false,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "models.dev:mistral/voxtral-mini-latest"
+      ],
+      "_authority": "merge"
+    },
+    "voxtral-small-latest": {
+      "max_input_tokens": 32000,
+      "max_output_tokens": 32000,
+      "mode": "chat",
+      "supports_vision": false,
+      "supports_audio_input": true,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": true,
+      "supports_reasoning": false,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "models.dev:mistral/voxtral-small-latest"
       ],
       "_authority": "merge"
     },
