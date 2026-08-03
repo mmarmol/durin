@@ -491,6 +491,19 @@ Because that conversion can *grow* text past a budget it fit before (a Markdown
 table expands into a longer bulleted rendering), the split is applied after
 conversion, not before.
 
+A hard-coded budget is a claim about someone else's API, and the failure above
+is what a stale claim costs. Slack therefore treats the constant as a starting
+point rather than a fact: when `chat.update` answers `msg_too_long` for a
+payload the budget said would fit, `_shrink_update_budget` halves the working
+budget, logs a warning, and the edit is retried at the smaller size — mid-stream
+that means rolling the buffer over instead of failing the send. The budget only
+shrinks, holds for the life of the process, and stops at `SLACK_UPDATE_MIN_LEN`,
+below which a rejection is no longer plausibly about size and is allowed to
+surface. Every other Slack error still propagates untouched, so a real fault
+(a missing channel, a revoked token) is not swallowed as a sizing problem. The
+warning is the operational signal that the constant needs revisiting; the
+adaptive path only buys the time to do it without losing answers meanwhile.
+
 `is_allowed(sender_id)` is a policy method called by the central gate — NOT by
 the channel itself. It checks: `"*"` in `allow_from`, exact match in
 `allow_from`, and `is_approved(channel, sender_id)` from the pairing store.

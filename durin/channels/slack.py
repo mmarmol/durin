@@ -88,6 +88,12 @@ SLACK_MAX_MESSAGE_LEN = 39_000  # chat.postMessage allows ~40k; leave margin
 # The margin under 4_000 absorbs the mrkdwn conversion, which can expand text
 # (a Markdown table becomes a longer bulleted rendering).
 SLACK_UPDATE_MAX_LEN = 3_900
+# A hard-coded limit is a claim about someone else's API, so treat it as one:
+# if Slack rejects a payload this budget said would fit, the channel halves the
+# budget at runtime rather than dropping the answer. This is the floor it will
+# not shrink past — below it the rejection is something other than size and
+# should surface instead of being retried into oblivion.
+SLACK_UPDATE_MIN_LEN = 500
 SLACK_DOWNLOAD_TIMEOUT = 30.0
 # Abort Socket Mode WSS handshake after this many seconds. REST auth_test can still
 # succeed while WSS blocks (firewall / region). slack-sdk does not apply HTTP(S)_PROXY
@@ -158,6 +164,10 @@ class SlackChannel(BaseChannel):
         self._dedup = MessageDeduplicator(max_size=SLACK_EVENT_DEDUP_MAX, ttl_seconds=SLACK_EVENT_DEDUP_TTL_S)
         self._stream_bufs: dict[str, _StreamBuf] = {}  # chat_id -> streaming state
         self._followed_threads: set[str] = set()  # "chat_id:thread_ts" the bot follows
+        # Working ceiling for chat.update payloads. Starts at the documented
+        # limit and only ever shrinks, when Slack rejects a payload we sized
+        # to fit — see _shrink_update_budget.
+        self._update_budget = SLACK_UPDATE_MAX_LEN
 
     async def start(self) -> None:
         """Start the Slack Socket Mode client and keep it connected."""
@@ -389,7 +399,7 @@ class SlackChannel(BaseChannel):
                 self.logger.warning("Stream initial send failed: {}", e)
                 raise  # Let ChannelManager handle retry
         elif (now - buf.last_edit) >= self.config.stream_edit_interval:
-            if len(buf.text) > SLACK_UPDATE_MAX_LEN:
+            if len(buf.text) > self._update_budget:
                 await self._flush_stream_overflow(chat_id, buf, thread_ts)
                 buf.last_edit = now
                 return
@@ -397,25 +407,71 @@ class SlackChannel(BaseChannel):
                 await self._web_client.chat_update(channel=chat_id, ts=buf.ts, text=buf.text)
                 buf.last_edit = now
             except Exception as e:
+                if self._shrink_update_budget(e, len(buf.text)):
+                    # The buffer no longer fits an edit: roll it over at the
+                    # new budget rather than losing the preview.
+                    await self._flush_stream_overflow(chat_id, buf, thread_ts)
+                    buf.last_edit = now
+                    return
                 self.logger.warning("Stream edit failed: {}", e)
                 raise  # Let ChannelManager handle retry
+
+    @staticmethod
+    def _is_msg_too_long(exc: Exception) -> bool:
+        """True when Slack rejected a payload for size rather than anything else."""
+        response = getattr(exc, "response", None)
+        if response is None:
+            return False
+        try:
+            return response.get("error") == "msg_too_long"
+        except Exception:
+            return False
+
+    def _shrink_update_budget(self, exc: Exception, attempted: int) -> bool:
+        """Halve the edit budget after Slack rejects a payload we sized to fit.
+
+        SLACK_UPDATE_MAX_LEN is a claim about Slack's API, and the whole reason
+        this channel lost answers is that such a claim went stale. So when the
+        API contradicts it, believe the API: shrink the working budget for the
+        rest of this process and let the caller retry at the smaller size,
+        instead of raising and letting the manager drop the response.
+
+        Returns True when the caller should retry. The warning is deliberate —
+        it is the signal that the constant needs revisiting, and it fires once
+        per shrink rather than once per edit.
+        """
+        if not self._is_msg_too_long(exc) or self._update_budget <= SLACK_UPDATE_MIN_LEN:
+            return False
+        self._update_budget = max(SLACK_UPDATE_MIN_LEN, min(self._update_budget, attempted) // 2)
+        self.logger.warning(
+            "Slack rejected a {}-char chat.update as too long; edit budget lowered to {}. "
+            "SLACK_UPDATE_MAX_LEN ({}) now sits above Slack's real limit.",
+            attempted, self._update_budget, SLACK_UPDATE_MAX_LEN,
+        )
+        return True
 
     async def _replace_stream_message(
         self, chat_id: str, ts: str, text: str, thread_ts: str | None
     ) -> None:
         """Rewrite a streamed message with ``text``, spilling what will not fit.
 
-        The single place that knows an edit is capped at SLACK_UPDATE_MAX_LEN.
-        Splitting here — rather than trusting the caller's budget — is what
-        keeps a long answer whole: mrkdwn conversion can push text past a size
-        that fit before it, and a rejected edit means the response is retried
-        three times and then dropped, since the manager suppresses the
-        non-streamed copy once a stream has run.
+        The single place that knows how big an edit may be. Splitting here —
+        rather than trusting the caller's budget — is what keeps a long answer
+        whole: mrkdwn conversion can push text past a size that fit before it,
+        and a rejected edit means the response is retried three times and then
+        dropped, since the manager suppresses the non-streamed copy once a
+        stream has run.
         """
-        chunks = split_message(text, SLACK_UPDATE_MAX_LEN)
-        if not chunks:
-            return
-        await self._web_client.chat_update(channel=chat_id, ts=ts, text=chunks[0])
+        while True:
+            chunks = split_message(text, self._update_budget)
+            if not chunks:
+                return
+            try:
+                await self._web_client.chat_update(channel=chat_id, ts=ts, text=chunks[0])
+                break
+            except Exception as e:
+                if not self._shrink_update_budget(e, len(chunks[0])):
+                    raise
         for chunk in chunks[1:]:
             await self._web_client.chat_postMessage(
                 channel=chat_id, text=chunk, thread_ts=thread_ts,
@@ -434,7 +490,7 @@ class SlackChannel(BaseChannel):
         mrkdwn now — nothing else will edit those messages again. The tail
         stays raw because it is still growing; ``_stream_end`` renders it.
         """
-        chunks = split_message(buf.text, SLACK_UPDATE_MAX_LEN)
+        chunks = split_message(buf.text, self._update_budget)
         if len(chunks) <= 1:
             return
         await self._replace_stream_message(

@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+from loguru import logger
 
 # Check optional Slack dependencies before running tests
 try:
@@ -29,7 +30,10 @@ SLACK_API_UPDATE_HARD_LIMIT = 4_000
 
 
 class _FakeAsyncWebClient:
-    def __init__(self) -> None:
+    def __init__(self, update_limit: int = SLACK_API_UPDATE_HARD_LIMIT) -> None:
+        # Slack's ceiling for chat.update, overridable so a test can pose as a
+        # workspace where the limit moved below what durin hard-codes.
+        self.update_limit = update_limit
         self.chat_post_calls: list[dict[str, object | None]] = []
         self.chat_update_calls: list[dict[str, object | None]] = []
         self.file_upload_calls: list[dict[str, object | None]] = []
@@ -72,7 +76,7 @@ class _FakeAsyncWebClient:
         # The real chat.update rejects anything past 4_000 characters, an
         # order of magnitude below what chat.postMessage accepts. Enforce it
         # here so an edit that would fail in production fails in tests too.
-        if len(text) > SLACK_API_UPDATE_HARD_LIMIT:
+        if len(text) > self.update_limit:
             raise SlackApiError(
                 "msg_too_long",
                 {"ok": False, "error": "msg_too_long"},
@@ -916,6 +920,71 @@ async def test_stream_overflow_converts_frozen_chunks_to_mrkdwn() -> None:
     await channel.send_delta("C123", "y" * (SLACK_UPDATE_MAX_LEN + 10), _delta_meta())
 
     assert fake_web.chat_update_calls[-1]["text"] == "*leading bold*"
+
+
+@pytest.mark.asyncio
+async def test_lower_slack_limit_shrinks_budget_instead_of_dropping() -> None:
+    """If Slack's real ceiling drops below the hard-coded one, still deliver.
+
+    The constant is a claim about someone else's API; this is the behaviour
+    that keeps a stale claim from costing an answer again.
+    """
+    channel = SlackChannel(SlackConfig(enabled=True, streaming=True), MessageBus())
+    fake_web = _FakeAsyncWebClient(update_limit=1_200)  # well under SLACK_UPDATE_MAX_LEN
+    channel._web_client = fake_web
+
+    body = "\n".join(f"line {i} of the analysis" for i in range(200))
+    warnings: list[str] = []
+    sink_id = logger.add(warnings.append, level="WARNING", format="{message}")
+    try:
+        await channel.send_delta("C123", body, _delta_meta())
+        await channel.send_delta("C123", "", _delta_meta(end=True))
+    finally:
+        logger.remove(sink_id)
+
+    assert channel._update_budget < SLACK_UPDATE_MAX_LEN
+    assert any("edit budget lowered" in m for m in warnings)
+    delivered = "".join(
+        str(call["text"])
+        for call in [*fake_web.chat_update_calls, *fake_web.chat_post_calls[1:]]
+    )
+    for i in (0, 100, 199):
+        assert f"line {i} of the analysis" in delivered
+
+
+@pytest.mark.asyncio
+async def test_mid_stream_edit_rolls_over_when_slack_rejects_the_budget() -> None:
+    """A rejected preview rolls the buffer over instead of failing the send."""
+    channel = SlackChannel(SlackConfig(enabled=True, streaming=True), MessageBus())
+    fake_web = _FakeAsyncWebClient(update_limit=1_200)
+    channel._web_client = fake_web
+
+    await channel.send_delta("C123", "opening\n", _delta_meta())
+    channel._stream_bufs["C123"].last_edit = 0.0
+    # Inside SLACK_UPDATE_MAX_LEN, so the rollover guard lets it through and the
+    # API is what rejects it.
+    await channel.send_delta("C123", "z" * 2_000, _delta_meta())
+
+    assert channel._update_budget < fake_web.update_limit
+    assert len(fake_web.chat_post_calls) > 1  # the buffer rolled into a new message
+
+
+@pytest.mark.asyncio
+async def test_non_size_update_errors_still_propagate() -> None:
+    """Only msg_too_long is absorbed; anything else must reach the manager."""
+    channel = SlackChannel(SlackConfig(enabled=True, streaming=True), MessageBus())
+    fake_web = _FakeAsyncWebClient()
+    channel._web_client = fake_web
+
+    await channel.send_delta("C123", "hello", _delta_meta())
+
+    async def _boom(**_kwargs):
+        raise SlackApiError("channel_not_found", {"ok": False, "error": "channel_not_found"})
+
+    fake_web.chat_update = _boom  # type: ignore[method-assign]
+    with pytest.raises(SlackApiError):
+        await channel.send_delta("C123", "", _delta_meta(end=True))
+    assert channel._update_budget == SLACK_UPDATE_MAX_LEN
 
 
 @pytest.mark.asyncio
