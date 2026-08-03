@@ -80,7 +80,14 @@ class SlackConfig(Base):
     stream_edit_interval: float = Field(default=1.2, ge=0.5)
 
 
-SLACK_MAX_MESSAGE_LEN = 39_000  # Slack API allows ~40k; leave margin
+SLACK_MAX_MESSAGE_LEN = 39_000  # chat.postMessage allows ~40k; leave margin
+# chat.update is a different budget entirely: its text field is capped at 4_000
+# characters and anything longer comes back as msg_too_long. Every edit — the
+# mid-stream previews and the final render — has to fit here, so a streamed
+# answer past this size rolls into a fresh message instead of growing in place.
+# The margin under 4_000 absorbs the mrkdwn conversion, which can expand text
+# (a Markdown table becomes a longer bulleted rendering).
+SLACK_UPDATE_MAX_LEN = 3_900
 SLACK_DOWNLOAD_TIMEOUT = 30.0
 # Abort Socket Mode WSS handshake after this many seconds. REST auth_test can still
 # succeed while WSS blocks (firewall / region). slack-sdk does not apply HTTP(S)_PROXY
@@ -347,17 +354,13 @@ class SlackChannel(BaseChannel):
                 return
             if stream_id is not None and buf.stream_id is not None and buf.stream_id != stream_id:
                 return
-            mrkdwn = self._to_mrkdwn(buf.text)
-            chunks = split_message(mrkdwn, SLACK_MAX_MESSAGE_LEN)
             try:
-                await self._web_client.chat_update(channel=chat_id, ts=buf.ts, text=chunks[0])
+                await self._replace_stream_message(
+                    chat_id, buf.ts, self._to_mrkdwn(buf.text), thread_ts
+                )
             except Exception as e:
                 self.logger.warning("Final stream edit failed: {}", e)
                 raise  # Let ChannelManager handle retry
-            for chunk in chunks[1:]:
-                await self._web_client.chat_postMessage(
-                    channel=chat_id, text=chunk, thread_ts=thread_ts,
-                )
             event = slack_meta.get("event", {}) or {}
             await self._update_react_emoji(chat_id, event.get("ts"))
             self._stream_bufs.pop(chat_id, None)
@@ -386,7 +389,7 @@ class SlackChannel(BaseChannel):
                 self.logger.warning("Stream initial send failed: {}", e)
                 raise  # Let ChannelManager handle retry
         elif (now - buf.last_edit) >= self.config.stream_edit_interval:
-            if len(buf.text) > SLACK_MAX_MESSAGE_LEN:
+            if len(buf.text) > SLACK_UPDATE_MAX_LEN:
                 await self._flush_stream_overflow(chat_id, buf, thread_ts)
                 buf.last_edit = now
                 return
@@ -397,6 +400,27 @@ class SlackChannel(BaseChannel):
                 self.logger.warning("Stream edit failed: {}", e)
                 raise  # Let ChannelManager handle retry
 
+    async def _replace_stream_message(
+        self, chat_id: str, ts: str, text: str, thread_ts: str | None
+    ) -> None:
+        """Rewrite a streamed message with ``text``, spilling what will not fit.
+
+        The single place that knows an edit is capped at SLACK_UPDATE_MAX_LEN.
+        Splitting here — rather than trusting the caller's budget — is what
+        keeps a long answer whole: mrkdwn conversion can push text past a size
+        that fit before it, and a rejected edit means the response is retried
+        three times and then dropped, since the manager suppresses the
+        non-streamed copy once a stream has run.
+        """
+        chunks = split_message(text, SLACK_UPDATE_MAX_LEN)
+        if not chunks:
+            return
+        await self._web_client.chat_update(channel=chat_id, ts=ts, text=chunks[0])
+        for chunk in chunks[1:]:
+            await self._web_client.chat_postMessage(
+                channel=chat_id, text=chunk, thread_ts=thread_ts,
+            )
+
     async def _flush_stream_overflow(
         self, chat_id: str, buf: _StreamBuf, thread_ts: str | None
     ) -> None:
@@ -405,14 +429,20 @@ class SlackChannel(BaseChannel):
         Edits the current stream message with the first chunk, posts any
         intermediate chunks as standalone messages, then opens a new message
         for the tail so subsequent deltas continue streaming into it.
+
+        Everything but the tail is final at this point, so it is rendered as
+        mrkdwn now — nothing else will edit those messages again. The tail
+        stays raw because it is still growing; ``_stream_end`` renders it.
         """
-        chunks = split_message(buf.text, SLACK_MAX_MESSAGE_LEN)
+        chunks = split_message(buf.text, SLACK_UPDATE_MAX_LEN)
         if len(chunks) <= 1:
             return
-        await self._web_client.chat_update(channel=chat_id, ts=buf.ts, text=chunks[0])
+        await self._replace_stream_message(
+            chat_id, buf.ts, self._to_mrkdwn(chunks[0]), thread_ts
+        )
         for chunk in chunks[1:-1]:
             await self._web_client.chat_postMessage(
-                channel=chat_id, text=chunk, thread_ts=thread_ts,
+                channel=chat_id, text=self._to_mrkdwn(chunk), thread_ts=thread_ts,
             )
         tail = chunks[-1]
         sent = await self._web_client.chat_postMessage(

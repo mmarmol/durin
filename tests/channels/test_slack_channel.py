@@ -12,9 +12,20 @@ try:
 except ImportError:
     pytest.skip("Slack dependencies not installed (slack-sdk)", allow_module_level=True)
 
+from slack_sdk.errors import SlackApiError
+
 from durin.bus.events import OutboundMessage
 from durin.bus.queue import MessageBus
-from durin.channels.slack import SLACK_MAX_MESSAGE_LEN, SlackChannel, SlackConfig
+from durin.channels.slack import (
+    SLACK_MAX_MESSAGE_LEN,
+    SLACK_UPDATE_MAX_LEN,
+    SlackChannel,
+    SlackConfig,
+)
+
+# Slack's documented ceiling for chat.update's text field. SLACK_UPDATE_MAX_LEN
+# is durin's budget under it; the gap is the margin the mrkdwn conversion needs.
+SLACK_API_UPDATE_HARD_LIMIT = 4_000
 
 
 class _FakeAsyncWebClient:
@@ -58,6 +69,14 @@ class _FakeAsyncWebClient:
         ts: str,
         text: str,
     ) -> dict[str, object]:
+        # The real chat.update rejects anything past 4_000 characters, an
+        # order of magnitude below what chat.postMessage accepts. Enforce it
+        # here so an edit that would fail in production fails in tests too.
+        if len(text) > SLACK_API_UPDATE_HARD_LIMIT:
+            raise SlackApiError(
+                "msg_too_long",
+                {"ok": False, "error": "msg_too_long"},
+            )
         self.chat_update_calls.append({"channel": channel, "ts": ts, "text": text})
         return {"ts": ts}
 
@@ -832,6 +851,71 @@ async def test_send_delta_posts_edits_and_finalizes_with_mrkdwn() -> None:
         {"channel": "C123", "name": "white_check_mark", "timestamp": "111.000"}
     ]
     assert "C123" not in channel._stream_bufs
+
+
+@pytest.mark.asyncio
+async def test_stream_end_over_update_limit_delivers_whole_response() -> None:
+    """A streamed answer past chat.update's ceiling must still arrive in full.
+
+    Reproduces the production failure: the final edit was rejected with
+    msg_too_long, the manager exhausted its retries, and the response was
+    dropped because the non-streamed copy is suppressed once a stream ran.
+    """
+    channel = SlackChannel(SlackConfig(enabled=True, streaming=True), MessageBus())
+    fake_web = _FakeAsyncWebClient()
+    channel._web_client = fake_web
+
+    body = "\n".join(f"line {i} of the analysis" for i in range(200))
+    assert len(body) > SLACK_UPDATE_MAX_LEN
+    await channel.send_delta("C123", body, _delta_meta())
+    await channel.send_delta("C123", "", _delta_meta(end=True))
+
+    delivered = "".join(
+        str(call["text"])
+        for call in [*fake_web.chat_update_calls, *fake_web.chat_post_calls[1:]]
+    )
+    for i in (0, 100, 199):
+        assert f"line {i} of the analysis" in delivered
+
+
+@pytest.mark.asyncio
+async def test_mid_stream_edits_roll_over_before_hitting_update_limit() -> None:
+    """Mid-stream previews roll into a new message instead of failing to edit."""
+    channel = SlackChannel(SlackConfig(enabled=True, streaming=True), MessageBus())
+    fake_web = _FakeAsyncWebClient()
+    channel._web_client = fake_web
+
+    await channel.send_delta("C123", "opening line\n", _delta_meta())
+    for i in range(6):
+        channel._stream_bufs["C123"].last_edit = 0.0
+        await channel.send_delta("C123", f"chunk {i} " + "x" * 900 + "\n", _delta_meta())
+    channel._stream_bufs["C123"].last_edit = 0.0
+    await channel.send_delta("C123", "", _delta_meta(end=True))
+
+    # The fake raises on oversized edits, so reaching here already proves every
+    # chat.update fit; assert the budget explicitly so a wider cap is caught.
+    assert fake_web.chat_update_calls
+    assert all(len(str(c["text"])) <= SLACK_UPDATE_MAX_LEN for c in fake_web.chat_update_calls)
+    delivered = "".join(
+        str(call["text"])
+        for call in [*fake_web.chat_update_calls, *fake_web.chat_post_calls[1:]]
+    )
+    for i in range(6):
+        assert f"chunk {i} " in delivered
+
+
+@pytest.mark.asyncio
+async def test_stream_overflow_converts_frozen_chunks_to_mrkdwn() -> None:
+    """Rolled-over segments are final, so they get mrkdwn before freezing."""
+    channel = SlackChannel(SlackConfig(enabled=True, streaming=True), MessageBus())
+    fake_web = _FakeAsyncWebClient()
+    channel._web_client = fake_web
+
+    await channel.send_delta("C123", "**leading bold**\n", _delta_meta())
+    channel._stream_bufs["C123"].last_edit = 0.0
+    await channel.send_delta("C123", "y" * (SLACK_UPDATE_MAX_LEN + 10), _delta_meta())
+
+    assert fake_web.chat_update_calls[-1]["text"] == "*leading bold*"
 
 
 @pytest.mark.asyncio
