@@ -39,6 +39,10 @@ class Scope(str, Enum):
     SESSIONS_WRITE = "sessions:write"
     CONFIG_READ = "config:read"
     CONFIG_WRITE = "config:write"
+    # Speaking outward as durin, in a conversation with an external party, is a
+    # different power from editing a session file — a token that may rename a
+    # chat has no business posting into a customer's Slack thread.
+    CHANNELS_WRITE = "channels:write"
     MEMORY_READ = "memory:read"
     MEMORY_WRITE = "memory:write"
     MCP_READ = "mcp:read"

@@ -66,6 +66,7 @@ def build_service_registry(
     from durin.security.api_tokens import ApiTokenStore
     from durin.service.auth import AuthService
     from durin.service.channels_discord import DiscordService
+    from durin.service.channels_post import ChannelPostService
     from durin.service.channels_runtime import ChannelsRuntimeService
     from durin.service.channels_slack import SlackService
     from durin.service.channels_telegram import TelegramService
@@ -114,6 +115,8 @@ def build_service_registry(
     registry.register("slack", SlackService())
     registry.register("whatsapp", WhatsAppService())
     registry.register("channels_runtime", ChannelsRuntimeService(channel_manager=channel_manager))
+    registry.register("channels_post", ChannelPostService(
+        channel_manager=channel_manager, session_manager=session_manager))
     registry.register("skills", SkillsService(workspace=_workspace()))
     registry.register("memory", MemoryService(workspace_resolver=_workspace))
     registry.register("personas", PersonasService(workspace_resolver=_workspace, on_config_changed=on_config_changed))

@@ -312,6 +312,26 @@ per-branch progress. See the generated OpenAPI contract
 (`contract/openapi-v1.json`) and `TasksService` (`durin/service/tasks.py`) for
 the authoritative field definitions.
 
+**`POST /api/v1/channels/post`** (scope `channels:write`,
+`ChannelPostService`) posts a message through a running channel *and records it
+in the session that conversation belongs to*. It exists because workflow script
+nodes run as subprocesses and cannot reach the in-process `ChannelManager`;
+without a door they post to the platform API directly, and the conversation
+then exists only on the platform. Recording is the point of the route rather
+than a side effect: a session is created solely by the loop consuming an
+inbound message, so an outbound send alone leaves no chat behind. The key it
+records under is the one the channel derives for that conversation
+(`channel:chat_id`, plus `:thread_id` where the channel threads), so a later
+human reply continues the same session instead of opening a second one beside
+it. The transcript is written directly rather than published as an inbound
+event — an inbound would run a turn and durin would answer its own post.
+
+This carries the workflow's own prose, not loop status: where an *outcome*
+goes is decided by `durin.loops.outcome.route`, which deliberately refuses to
+report internal status to the external party a channel origin identifies.
+`channels:write` is its own scope because speaking outward as durin, to a
+counterpart, is a different power from editing a session file.
+
 **`GET /api/v1/health`** is the only unauthenticated route *within the
 bearer-gated API surface* (the special routes outside it — webui bootstrap,
 signed media, the MCP OAuth callback — carry their own gating; see their

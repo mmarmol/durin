@@ -113,6 +113,84 @@
         "title": "BackgroundTask",
         "type": "object"
       },
+      "ChannelPostCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "channel": {
+            "title": "Channel",
+            "type": "string"
+          },
+          "chat_id": {
+            "title": "Chat Id",
+            "type": "string"
+          },
+          "record": {
+            "default": true,
+            "title": "Record",
+            "type": "boolean"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Thread Id"
+          }
+        },
+        "required": [
+          "channel",
+          "chat_id",
+          "text"
+        ],
+        "title": "ChannelPostCommand",
+        "type": "object"
+      },
+      "ChannelPostResult": {
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "session_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Session Key"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "ChannelPostResult",
+        "type": "object"
+      },
       "ChannelStartCommand": {
         "additionalProperties": false,
         "properties": {
@@ -7941,6 +8019,35 @@
         },
         "summary": "Validate a Discord bot token and report read permission (persists nothing)",
         "x-required-scope": "config:write"
+      }
+    },
+    "/api/v1/channels/post": {
+      "post": {
+        "operationId": "channels_post_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChannelPostCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelPostResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Post a message through a running channel and record it in the session",
+        "x-required-scope": "channels:write"
       }
     },
     "/api/v1/channels/runtime": {
