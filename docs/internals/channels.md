@@ -491,6 +491,37 @@ Because that conversion can *grow* text past a budget it fit before (a Markdown
 table expands into a longer bulleted rendering), the split is applied after
 conversion, not before.
 
+### Showing work while a turn runs
+
+A channel that only speaks when the model writes prose goes silent for as long
+as the turn spends in tools, and silence is indistinguishable from a hung bot.
+Slack sets its reaction emoji once on arrival and then shows nothing until the
+first text delta, so a tool-heavy turn — several minutes of `exec` calls is
+ordinary for an investigation — reads as a failure to the person waiting.
+
+The signal is gated by `send_tool_hints` (per-channel, defaulting off, since a
+hint stream is unwanted noise on some surfaces). What the channel does with a
+hint once it passes that gate is the channel's business, and posting one
+message per tool call trades silence for a wall of messages in a room people
+read. Slack therefore keeps **one** message per turn: it is posted as a status
+line, edited in place as the work moves (throttled by `stream_edit_interval`
+like any other edit, since `chat.update` is Tier-3), and then taken over by the
+answer — `send_delta` clears `status_only` on the first text delta and streams
+into the same `ts`. When the reply arrives through `send` instead of the
+streaming path, `_claim_status_message` hands the same message over, so a
+status line is never stranded above the answer it was announcing.
+
+The status message never overwrites answer text: once a buffer holds real
+content, later hints are dropped rather than painted over it.
+
+### Resolving where a stream goes
+
+`send` resolves its target (`_resolve_target_chat_id` turns a `#channel` name,
+an `@handle` or a user id into a conversation id) and the streaming path must
+do the same, or a stream aimed at anything but a concrete conversation id posts
+nowhere. The resolved id is cached on the stream buffer: resolution costs an
+API call, and a stream would otherwise repeat it on every delta.
+
 A hard-coded budget is a claim about someone else's API, and the failure above
 is what a stale claim costs. Slack therefore treats the constant as a starting
 point rather than a fact: when `chat.update` answers `msg_too_long` for a

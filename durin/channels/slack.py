@@ -115,6 +115,9 @@ SLACK_FATAL_AUTH_ERRORS = frozenset(
 SLACK_EVENT_DEDUP_TTL_S = 300.0
 SLACK_EVENT_DEDUP_MAX = 2000
 SLACK_FOLLOWED_THREADS_MAX = 5000
+# Longest status line shown while a turn works. A tool hint can carry a whole
+# script; the reader only needs to see that something is happening.
+SLACK_STATUS_MAX_LEN = 160
 _HTML_DOWNLOAD_PREFIXES = (b"<!doctype html", b"<html")
 
 
@@ -126,6 +129,16 @@ class _StreamBuf:
     ts: str | None = None  # ts of the Slack message being edited
     last_edit: float = 0.0
     stream_id: str | None = None
+    # Resolved Slack conversation id for ``ts``. A chat_id may be a name or a
+    # user id that has to be turned into a real conversation before anything
+    # can be posted to it; resolving costs an API call, so it is done once per
+    # stream rather than per delta.
+    target: str | None = None
+    # True while ``ts`` holds a "working on it" line rather than answer text.
+    # The status message is deliberately the same message the answer will land
+    # in: the alternative is a new post per tool call, which turns a long
+    # investigation into a wall of noise in a channel people actually read.
+    status_only: bool = False
 
 
 class SlackChannel(BaseChannel):
@@ -313,16 +326,30 @@ class SlackChannel(BaseChannel):
             is_progress = (msg.metadata or {}).get("_progress", False)
             if is_progress and not msg.content:
                 pass  # skip empty progress messages (e.g. tool-event-only updates)
+            elif is_progress:
+                await self._show_status(
+                    msg.chat_id, target_chat_id, msg.content, thread_ts_param
+                )
             elif msg.content or not (msg.media or []):
                 mrkdwn = self._to_mrkdwn(msg.content) if msg.content else " "
                 buttons = getattr(msg, "buttons", None) or []
                 chunks = split_message(mrkdwn, SLACK_MAX_MESSAGE_LEN)
+                # A status line left over from this turn becomes the answer, so
+                # the reader never ends up with a stale "working on it" sitting
+                # above the reply it was waiting for.
+                claimed = await self._claim_status_message(msg.chat_id)
                 for index, chunk in enumerate(chunks):
                     kwargs: dict[str, Any] = dict(
                         channel=target_chat_id, text=chunk, thread_ts=thread_ts_param,
                     )
                     if buttons and index == len(chunks) - 1:
                         kwargs["blocks"] = self._build_button_blocks(chunk, buttons)
+                    if claimed is not None and index == 0:
+                        status_target, status_ts = claimed
+                        await self._replace_stream_message(
+                            status_target, status_ts, chunk, thread_ts_param
+                        )
+                        continue
                     await self._web_client.chat_postMessage(**kwargs)
 
             for media_path in msg.media or []:
@@ -366,7 +393,7 @@ class SlackChannel(BaseChannel):
                 return
             try:
                 await self._replace_stream_message(
-                    chat_id, buf.ts, self._to_mrkdwn(buf.text), thread_ts
+                    buf.target or chat_id, buf.ts, self._to_mrkdwn(buf.text), thread_ts
                 )
             except Exception as e:
                 self.logger.warning("Final stream edit failed: {}", e)
@@ -382,16 +409,23 @@ class SlackChannel(BaseChannel):
             self._stream_bufs[chat_id] = buf
         elif buf.stream_id is None:
             buf.stream_id = stream_id
+        # Answer text takes over the status message rather than posting beside
+        # it: the "working on it" line and the answer are the same message, so
+        # the reader watches one thing become the other.
+        buf.status_only = False
         buf.text += delta
 
         if not buf.text.strip():
             return
 
         now = time.monotonic()
+        if buf.target is None:
+            buf.target = await self._resolve_target_chat_id(chat_id)
+        target = buf.target
         if buf.ts is None:
             try:
                 sent = await self._web_client.chat_postMessage(
-                    channel=chat_id, text=buf.text, thread_ts=thread_ts,
+                    channel=target, text=buf.text, thread_ts=thread_ts,
                 )
                 buf.ts = str(sent.get("ts") or "") or None
                 buf.last_edit = now
@@ -404,7 +438,7 @@ class SlackChannel(BaseChannel):
                 buf.last_edit = now
                 return
             try:
-                await self._web_client.chat_update(channel=chat_id, ts=buf.ts, text=buf.text)
+                await self._web_client.chat_update(channel=target, ts=buf.ts, text=buf.text)
                 buf.last_edit = now
             except Exception as e:
                 if self._shrink_update_budget(e, len(buf.text)):
@@ -450,6 +484,72 @@ class SlackChannel(BaseChannel):
         )
         return True
 
+    @staticmethod
+    def _status_line(text: str) -> str:
+        """Compress a progress update into one glanceable line.
+
+        A tool hint can be a whole invocation with an embedded script; the
+        reader only needs to know something is happening and roughly what.
+        """
+        first = next((ln.strip() for ln in (text or "").splitlines() if ln.strip()), "")
+        if len(first) > SLACK_STATUS_MAX_LEN:
+            first = first[: SLACK_STATUS_MAX_LEN - 1].rstrip() + "…"
+        return f":hourglass_flowing_sand: {first}" if first else ":hourglass_flowing_sand:"
+
+    async def _show_status(
+        self, chat_id: str, target: str, text: str, thread_ts: str | None
+    ) -> None:
+        """Report ongoing work in one message that keeps being rewritten.
+
+        Until now a Slack reader saw nothing at all while a turn ran tools: the
+        reaction is set once on arrival and the text stream only begins when the
+        model finally writes prose, so minutes of tool calls were
+        indistinguishable from a hung bot. Posting per tool call would fix the
+        silence and replace it with noise — a long investigation becomes a wall
+        of messages in a channel people actually read. So there is exactly one
+        message: it starts as the status line, is edited as the work moves, and
+        is then taken over by the answer itself (see ``send_delta``).
+        """
+        buf = self._stream_bufs.get(chat_id)
+        if buf is not None and not buf.status_only and buf.ts is not None:
+            return  # the answer is already on screen; never overwrite it
+        line = self._status_line(text)
+        now = time.monotonic()
+
+        if buf is None or buf.ts is None:
+            sent = await self._web_client.chat_postMessage(
+                channel=target, text=line, thread_ts=thread_ts,
+            )
+            buf = buf or _StreamBuf()
+            buf.ts = str(sent.get("ts") or "") or None
+            buf.target = target
+            buf.status_only = True
+            buf.last_edit = now
+            self._stream_bufs[chat_id] = buf
+            return
+
+        # Throttled like any other edit: chat.update is Tier-3 and a tool-heavy
+        # turn can emit hints far faster than the rate limit allows.
+        if (now - buf.last_edit) < self.config.stream_edit_interval:
+            return
+        await self._web_client.chat_update(
+            channel=buf.target or target, ts=buf.ts, text=line
+        )
+        buf.last_edit = now
+
+    async def _claim_status_message(self, chat_id: str) -> tuple[str, str] | None:
+        """Hand a pending status message over to a non-streamed final answer.
+
+        Without this the status line would be stranded reading "working on it"
+        under the real reply, whenever the answer arrives through ``send``
+        rather than the streaming path.
+        """
+        buf = self._stream_bufs.get(chat_id)
+        if buf is None or not buf.status_only or not buf.ts or not buf.target:
+            return None
+        self._stream_bufs.pop(chat_id, None)
+        return buf.target, buf.ts
+
     async def _replace_stream_message(
         self, chat_id: str, ts: str, text: str, thread_ts: str | None
     ) -> None:
@@ -490,19 +590,20 @@ class SlackChannel(BaseChannel):
         mrkdwn now — nothing else will edit those messages again. The tail
         stays raw because it is still growing; ``_stream_end`` renders it.
         """
+        target = buf.target or chat_id
         chunks = split_message(buf.text, self._update_budget)
         if len(chunks) <= 1:
             return
         await self._replace_stream_message(
-            chat_id, buf.ts, self._to_mrkdwn(chunks[0]), thread_ts
+            target, buf.ts, self._to_mrkdwn(chunks[0]), thread_ts
         )
         for chunk in chunks[1:-1]:
             await self._web_client.chat_postMessage(
-                channel=chat_id, text=self._to_mrkdwn(chunk), thread_ts=thread_ts,
+                channel=target, text=self._to_mrkdwn(chunk), thread_ts=thread_ts,
             )
         tail = chunks[-1]
         sent = await self._web_client.chat_postMessage(
-            channel=chat_id, text=tail, thread_ts=thread_ts,
+            channel=target, text=tail, thread_ts=thread_ts,
         )
         buf.ts = str(sent.get("ts") or "") or None
         buf.text = tail

@@ -987,6 +987,106 @@ async def test_non_size_update_errors_still_propagate() -> None:
     assert channel._update_budget == SLACK_UPDATE_MAX_LEN
 
 
+def _progress(content: str) -> OutboundMessage:
+    return OutboundMessage(
+        channel="slack", chat_id="C123", content=content,
+        metadata={"_progress": True, "_tool_hint": True,
+                  "slack": {"thread_ts": "111.000", "event": {"ts": "111.000"}}},
+    )
+
+
+@pytest.mark.asyncio
+async def test_tool_run_shows_status_in_one_edited_message() -> None:
+    """Eight tool calls must not become eight messages.
+
+    Reproduces the reported turn: minutes of exec calls with no text, which
+    looked to a Slack reader exactly like a hung bot.
+    """
+    channel = SlackChannel(SlackConfig(enabled=True, streaming=True), MessageBus())
+    fake_web = _FakeAsyncWebClient()
+    channel._web_client = fake_web
+
+    for i in range(8):
+        await channel.send(_progress(f'exec({{"command": "query {i}"}})'))
+        channel._stream_bufs["C123"].last_edit = 0.0  # open the throttle
+
+    assert len(fake_web.chat_post_calls) == 1  # one message, not eight
+    assert fake_web.chat_post_calls[0]["text"].startswith(":hourglass_flowing_sand:")
+    assert len(fake_web.chat_update_calls) == 7  # the rest are edits of it
+    assert "query 7" in str(fake_web.chat_update_calls[-1]["text"])
+
+
+@pytest.mark.asyncio
+async def test_answer_takes_over_the_status_message() -> None:
+    """The status line and the answer are the same message."""
+    channel = SlackChannel(SlackConfig(enabled=True, streaming=True), MessageBus())
+    fake_web = _FakeAsyncWebClient()
+    channel._web_client = fake_web
+
+    await channel.send(_progress('exec({"command": "athena"})'))
+    status_ts = fake_web.chat_post_calls[0]["text"]
+    assert status_ts.startswith(":hourglass_flowing_sand:")
+
+    channel._stream_bufs["C123"].last_edit = 0.0
+    await channel.send_delta("C123", "Encontré la causa", _delta_meta())
+    await channel.send_delta("C123", "", _delta_meta(end=True))
+
+    assert len(fake_web.chat_post_calls) == 1  # no second message was opened
+    assert fake_web.chat_update_calls[-1]["text"] == "Encontré la causa"
+
+
+@pytest.mark.asyncio
+async def test_status_never_overwrites_answer_text() -> None:
+    """A late tool hint must not paint over an answer already on screen."""
+    channel = SlackChannel(SlackConfig(enabled=True, streaming=True), MessageBus())
+    fake_web = _FakeAsyncWebClient()
+    channel._web_client = fake_web
+
+    await channel.send_delta("C123", "La respuesta es 42", _delta_meta())
+    channel._stream_bufs["C123"].last_edit = 0.0
+    await channel.send(_progress('exec({"command": "late"})'))
+
+    texts = [str(c["text"]) for c in fake_web.chat_update_calls]
+    assert not any("hourglass" in t for t in texts)
+    assert len(fake_web.chat_post_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_non_streamed_answer_claims_the_status_message() -> None:
+    """When the reply does not stream, the status becomes it rather than lingering."""
+    channel = SlackChannel(SlackConfig(enabled=True, streaming=True), MessageBus())
+    fake_web = _FakeAsyncWebClient()
+    channel._web_client = fake_web
+
+    await channel.send(_progress('exec({"command": "athena"})'))
+    await channel.send(OutboundMessage(
+        channel="slack", chat_id="C123", content="Listo, acá está el análisis",
+        metadata={"slack": {"thread_ts": "111.000", "event": {"ts": "111.000"}}},
+    ))
+
+    assert len(fake_web.chat_post_calls) == 1  # the status message was reused
+    assert fake_web.chat_update_calls[-1]["text"] == "Listo, acá está el análisis"
+    assert "C123" not in channel._stream_bufs
+
+
+@pytest.mark.asyncio
+async def test_stream_resolves_the_target_like_send_does() -> None:
+    """A chat_id needing resolution must not be posted to raw.
+
+    ``send`` resolved targets and ``send_delta`` did not, so a stream aimed at
+    anything other than a concrete conversation id would have gone nowhere.
+    """
+    channel = SlackChannel(SlackConfig(enabled=True, streaming=True), MessageBus())
+    fake_web = _FakeAsyncWebClient()
+    channel._web_client = fake_web
+
+    await channel.send_delta("U0HUMAN01", "hola", _delta_meta())
+
+    assert fake_web.conversations_open_calls  # a DM was opened for the user id
+    assert fake_web.chat_post_calls[0]["channel"] == "D_OPENED"
+    assert channel._stream_bufs["U0HUMAN01"].target == "D_OPENED"
+
+
 @pytest.mark.asyncio
 async def test_send_delta_new_stream_id_resets_buffer() -> None:
     channel = SlackChannel(SlackConfig(enabled=True, streaming=True), MessageBus())
