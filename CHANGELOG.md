@@ -5,6 +5,64 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.5.2 — 2026-08-04
+
+### Highlights
+
+- **A long answer in Slack no longer disappears.** Slack caps an edited
+  message at 4 000 characters — an order of magnitude below the 40 000 a new
+  message may carry — and durin sized every edit with the larger number. Any
+  streamed reply past 4 000 therefore failed every edit it attempted, and
+  failed the same way three times, at which point the reply was dropped: a
+  streamed turn suppresses the complete copy that would otherwise have been
+  the fallback, so what stayed in the thread was whichever half-written
+  preview happened to fit. A reply that outgrows an edit now rolls into a
+  fresh message and keeps going, and the segments left behind are converted
+  to Slack's formatting as they are frozen rather than stranded in raw
+  Markdown. (#507)
+- **And it survives Slack moving that limit.** The 4 000 is a claim about
+  someone else's API, which is exactly what went stale to cause the above. So
+  it is now a starting point, not a fact: a payload rejected for size halves
+  the working budget, warns, and is delivered at the smaller size instead of
+  being dropped. Any other Slack error still surfaces untouched — a revoked
+  token is not mistaken for a long message. (#508)
+- **A chat is labelled by what was last said in it.** The list sorts and dates
+  a row by its most recent activity but was labelling it with the *first*
+  message in the conversation. On a key that lives for weeks — a Slack channel
+  accumulates indefinitely — those are different conversations, so a thread
+  active this morning sat under "Today" wearing a greeting from a week ago.
+  As a side effect the list no longer reads message bodies at all, on an
+  endpoint the sidebar re-hits whenever any session changes. (#509)
+- **The chat list stops hiding every channel conversation.** The sidebar's
+  channel filter defaulted to web-only and reset on every page load, so Slack,
+  Telegram and Discord chats vanished each time the page was refreshed, with
+  nothing on screen indicating the list was filtered. The choice is now
+  remembered. (#509)
+
+### Models
+
+- A reasoning model no longer fails the connection test for thinking. The
+  dashboard's "Probar" button and `durin doctor --ping-model` send a
+  deliberately tiny output budget, and a reasoning model can spend all of it
+  before reaching visible text — so a model that worked perfectly well once
+  saved was reported as returning an empty response. The check now passes on
+  content, tool calls *or* reasoning. It also stopped reading a failure as
+  success: providers return API errors as ordinary response text rather than
+  raising, so a stalled stream used to ping green. (#502)
+
+### API
+
+- New `POST /api/v1/channels/post` (scope `channels:write`): post through a
+  running channel *and* record it in the session that conversation belongs to.
+  Workflow script nodes run as subprocesses and cannot reach the channel
+  layer, so automation posts straight to the platform and the conversation
+  ends up existing only there — an automated investigation nobody replied to
+  left no chat at all, and a human answering it started from a blank session
+  rather than continuing the work already posted. It records under the key the
+  channel itself derives, so a later reply continues that same session. Where
+  a loop's internal *status* goes is unchanged: it is still never reported to
+  the external party a channel origin identifies. (#510)
+
 ## 0.5.1 — 2026-07-28
 
 ### Highlights
