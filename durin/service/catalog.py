@@ -38,6 +38,7 @@ from pathlib import Path
 
 from durin.service.auth import AuthService
 from durin.service.channels_discord import DiscordService
+from durin.service.channels_post import ChannelPostService
 from durin.service.channels_runtime import ChannelsRuntimeService
 from durin.service.channels_slack import SlackService
 from durin.service.channels_telegram import TelegramService
@@ -83,6 +84,7 @@ SERVICE_CLASSES: list[type] = [
     SlackService,
     WhatsAppService,
     ChannelsRuntimeService,
+    ChannelPostService,
 ]
 
 
@@ -116,4 +118,5 @@ def build_catalog_registry() -> ServiceRegistry:
     registry.register("slack", SlackService())
     registry.register("whatsapp", WhatsAppService())
     registry.register("channels_runtime", ChannelsRuntimeService())
+    registry.register("channels_post", ChannelPostService())
     return registry
