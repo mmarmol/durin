@@ -574,6 +574,20 @@ these segments (newest first, byte-budgeted, off the event loop), labelling
 archived hits with their timestamp instead of a live index, since indexes are
 rebased on every trim.
 
+Line 0 also carries a **preview**: the text of the most recent user message,
+which is what labels the session's row in the WebUI list. It is stored rather
+than derived at read time because the row is sorted and dated by `updated_at`,
+so its label has to describe the same moment — and computing that from the body
+would mean reading every listed transcript on every refresh, on an endpoint the
+sidebar re-hits whenever any session changes. Storing it is free, since `save()`
+rewrites line 0 regardless. Sessions written before the field existed are read
+from the tail of the file instead, and heal on their next save.
+
+The distinction matters most for long-lived keys. A Slack channel session
+(`slack:<channel>`, no thread timestamp) accumulates for weeks, so labelling it
+by its *first* message left it under "Today" wearing whatever opened it a month
+earlier.
+
 Two metadata splits matter:
 
 - **Derived vs identity.** `_DERIVED_METADATA_KEYS` (LLM-projected state —
