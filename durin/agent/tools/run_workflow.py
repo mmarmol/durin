@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from contextvars import ContextVar
+from collections.abc import Callable
 from typing import Any
 
 from durin.agent.tools.base import Tool, tool_parameters
@@ -222,10 +223,12 @@ class RunWorkflowTool(Tool, ContextAware):
     # workflows compose via subworkflow nodes instead.
     _scopes = {"core"}
 
-    def __init__(self, workspace: str, sessions: Any, app_config: Any, live_tool_registry: Any = None, bus: Any = None) -> None:
+    def __init__(self, workspace: str, sessions: Any, app_config: Any, live_tool_registry: Any = None,
+                 bus: Any = None, config_loader: Callable[[], Any] | None = None) -> None:
         self._workspace = workspace
         self._sessions = sessions
         self._app_config = app_config
+        self._config_loader = config_loader
         self._live_tool_registry = live_tool_registry
         self._bus = bus
         self._session_key: ContextVar[str | None] = ContextVar("run_workflow_session_key", default=None)
@@ -245,11 +248,29 @@ class RunWorkflowTool(Tool, ContextAware):
 
     @classmethod
     def create(cls, ctx: Any) -> "RunWorkflowTool":
+        # A live surface (gateway/TUI) builds this tool once, at boot. The operator
+        # can change the default model at any time afterwards; that write lands on
+        # disk, so the run resolves its provider from a fresh read instead of the
+        # boot-time snapshot. Surfaces with no live context (embedded/SDK) pass no
+        # loader and keep using exactly the config object they were handed.
+        config_loader = None
+        if getattr(ctx, "provider_snapshot_loader", None) is not None:
+            def config_loader():
+                from durin.config.loader import load_config, resolve_config_env_vars
+                return resolve_config_env_vars(load_config())
         return cls(
             workspace=ctx.workspace, sessions=ctx.sessions, app_config=ctx.app_config,
             live_tool_registry=getattr(ctx, "live_tool_registry", None),
             bus=getattr(ctx, "bus", None),
+            config_loader=config_loader,
         )
+
+    def _live_config(self) -> Any:
+        """The config this run must obey: re-read when the surface is live, else
+        the injected snapshot."""
+        if self._config_loader is None:
+            return self._app_config
+        return self._config_loader()
 
     @property
     def name(self) -> str:
@@ -364,30 +385,31 @@ class RunWorkflowTool(Tool, ContextAware):
         # working folder in the summary so a file-producing run points the agent at its outputs.
         output_files = bool((workflow.output or {}).get("file"))
 
-        preset = self._app_config.resolve_default_preset()
-        provider = make_provider(self._app_config, preset=preset)
+        app_config = self._live_config()
+        preset = app_config.resolve_default_preset()
+        provider = make_provider(app_config, preset=preset)
         runner = AgentRunner(provider)
         # The MCP sessions live on this (the gateway's) event loop; the engine runs
         # in a worker thread, so node MCP calls are marshalled back here.
         main_loop = asyncio.get_running_loop()
         node_runner = AgentNodeRunner(
             runner, self._sessions, default_model=provider.get_default_model(),
-            tools_config=self._app_config.tools,
+            tools_config=app_config.tools,
             live_tool_registry=self._live_tool_registry,
             main_loop=main_loop,
-            app_config=self._app_config,
+            app_config=app_config,
         )
         from durin.workflow.script_runner import ScriptNodeRunner
         script_runner = ScriptNodeRunner(
             self._workspace,
-            default_timeout=self._app_config.workflow.script_timeout,
-            max_output_chars=self._app_config.workflow.script_output_max_chars,
+            default_timeout=app_config.workflow.script_timeout,
+            max_output_chars=app_config.workflow.script_output_max_chars,
         )
         judge_runner = AgentJudgeRunner(runner, default_model=provider.get_default_model())
         subworkflow_runner = SubworkflowRunner(
             self._workspace, node_runner, judge_runner, script_runner=script_runner,
-            parallel_llm_concurrency=self._app_config.workflow.parallel_llm_concurrency,
-            parallel_script_concurrency=self._app_config.workflow.parallel_script_concurrency,
+            parallel_llm_concurrency=app_config.workflow.parallel_llm_concurrency,
+            parallel_script_concurrency=app_config.workflow.parallel_script_concurrency,
         )
         bus = self._bus
         run_chat_id = self._chat_id.get()
@@ -438,12 +460,12 @@ class RunWorkflowTool(Tool, ContextAware):
             subworkflow_runner=subworkflow_runner,
             workspace=self._workspace,
             pick_runner=judge_runner.pick,
-            max_node_visits=self._app_config.workflow.max_node_visits,
+            max_node_visits=app_config.workflow.max_node_visits,
             progress_emit=progress_emit,
             cancel_check=lambda: _is_cancelled(run_id),
-            prune_keep=self._app_config.workflow.keep_runs,
-            parallel_llm_concurrency=self._app_config.workflow.parallel_llm_concurrency,
-            parallel_script_concurrency=self._app_config.workflow.parallel_script_concurrency,
+            prune_keep=app_config.workflow.keep_runs,
+            parallel_llm_concurrency=app_config.workflow.parallel_llm_concurrency,
+            parallel_script_concurrency=app_config.workflow.parallel_script_concurrency,
         )
         root_session_key = self._session_key.get()
         inject_target = {
