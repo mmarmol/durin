@@ -5,6 +5,34 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.5.3 — 2026-08-04
+
+### Highlights
+
+- **Slack shows what it is doing instead of going quiet.** The reaction emoji
+  is set once when a message arrives and the text stream only begins when the
+  model finally writes prose, so a turn spending minutes on tool calls — an
+  ordinary ticket investigation runs eight or more in a row — was
+  indistinguishable from a bot that had crashed. Reasoning would have covered
+  the gap, but Slack was the channel that never implemented it, so it was
+  discarded even with `showReasoning` on. There is now a status line that says
+  what is happening, and it is a *single* message per turn: it is edited in
+  place as the work moves and is then taken over by the answer itself, rather
+  than leaving one post per tool call in a channel people read. The reply never
+  gets painted over by a late update, and a status line is never left stranded
+  above the answer it announced. Turn it on per channel with
+  `channels.slack.sendToolHints` (still off by default, since a hint stream is
+  unwanted on some surfaces). (#514)
+
+### Channels
+
+- A streamed Slack reply resolves its destination the way a non-streamed one
+  already did. `send` turned a `#channel` name, an `@handle` or a user id into
+  a real conversation and `send_delta` did not, so a stream aimed at anything
+  but a concrete conversation id would have posted nowhere. Nothing was losing
+  messages over it — a streamed reply answers an inbound event, whose id is
+  already concrete — but the asymmetry was one caller away from doing so. (#514)
+
 ## 0.5.2 — 2026-08-04
 
 ### Highlights
