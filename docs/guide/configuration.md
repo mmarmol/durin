@@ -798,6 +798,14 @@ The value is typed at a hidden prompt, never on the command line. Re-running
 `durin secret set ANTHROPIC_KEY` without `--service` later rotates the value
 in place, keeping the secret's metadata and scope.
 
+`${secret:NAME}` is the only spelling durin accepts, `NAME` uppercase, and the
+reference must be the entire field value. Anything close but not exact —
+`{{secret:NAME}}`, `$secret:NAME`, a lowercase name, or a reference embedded in
+a longer string like `Bearer ${secret:TOKEN}` — is rejected with an error naming
+the correct form. It is not silently treated as a literal, because a placeholder
+handed to a provider or MCP server as if it were the credential fails much later
+with an opaque authentication error.
+
 ### Connect GitHub
 
 durin uses a single GitHub credential for everything that touches GitHub — importing

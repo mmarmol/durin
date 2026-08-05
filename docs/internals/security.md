@@ -167,6 +167,21 @@ and resolved only at the point of use via `resolve_secret()`, which delegates to
 the process-wide cached store. This keeps the plaintext out of the `Config` object,
 logs, and telemetry.
 
+`${secret:NAME}` is the only accepted spelling, and a near miss is an error rather
+than a literal. `resolve_secret()` returns anything that is not a reference
+untouched — correct for real literals, but a value like `{{secret:NAME}}`,
+`$secret:NAME` or a lowercase name is nobody's credential, and passing it through
+hands the placeholder itself to the consumer, which then fails with an opaque
+auth error nowhere near the typo. Such a value raises `MalformedSecretRefError`
+naming the canonical rewrite. A dangling reference already raised
+`SecretNotFoundError`; a mistyped one is no more usable, so it fails the same way.
+
+The same error covers a well-formed reference embedded in a larger string
+(`Bearer ${secret:TOKEN}`). durin does not interpolate — a reference is the whole
+field value — so the surrounding text would otherwise be shipped with the
+reference still literal in it. The fix is to store the full value, prefix
+included, as one secret and reference it alone.
+
 The `scope` field on a `SecretEntry` governs auto-injection only, not
 config-field resolution. When `ExecTool._build_env()` constructs the subprocess
 environment, it calls `collect_for("exec")`, which returns only entries whose scope
@@ -443,7 +458,8 @@ only callers with system-write authority can manage other tokens.
 | `SecretRedactor` | `durin/security/secrets.py` | Two-layer output scrubber: value-based (`«redacted:NAME»`) + pattern-based (`«redacted»`) for credential-shaped strings; both spare `${secret:NAME}` references |
 | `find_redacted_credentials` | `durin/security/secrets.py` | Returns the dotted paths of credential-keyed fields holding a redaction marker; used by `save_config` to refuse the write |
 | `RedactedValueError` | `durin/security/secrets.py` | Raised when a config write would persist a redaction marker into a credential field |
-| `resolve_secret` | `durin/security/secrets.py` | Module-level function; resolves a `${secret:NAME}` ref via the process-wide cached store; raises `SecretNotFoundError` on a dangling reference |
+| `resolve_secret` | `durin/security/secrets.py` | Module-level function; resolves a `${secret:NAME}` ref via the process-wide cached store; raises `SecretNotFoundError` on a dangling reference and `MalformedSecretRefError` on a near-miss spelling |
+| `MalformedSecretRefError` | `durin/security/secrets.py` | Raised when a config value is a placeholder naming a secret (`{{secret:X}}`, `$secret:X`, lowercase name) but not the canonical `${secret:NAME}`, or embeds a reference in a larger string |
 | `secret_stored_notice` | `durin/service/secrets.py` | Builds the agent-facing resume note from the stored `SecretItem` (never the write request), so a rotation still reports the scope the entry kept |
 | `ScanReport` | `durin/security/skill_scan.py` | Result of deterministic skill scan: `findings` list, `tools` list, `judge_verdict`; `.verdict` property merges both |
 | `Finding` | `durin/security/skill_scan.py` | Single scan result: `category`, `severity` (info/caution/high/dangerous), `where` (file/location), `detail` |
