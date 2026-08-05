@@ -205,8 +205,8 @@ MCP servers can request sampling (asking durin's LLM to generate text), declare 
 |---|---|---|---|
 | `enabled` | `bool` | `True` | Server-level on/off; disabled servers skip startup connect |
 | `type` | `"stdio" \| "sse" \| "streamableHttp" \| None` | `None` | Transport; auto-detected if omitted (stdio when `command` set; HTTP otherwise) |
-| `command` / `args` / `env` | `str / list / dict` | — | Stdio launch spec; `env` values may contain `${secret:NAME}` refs resolved at spawn |
-| `url` / `headers` | `str / dict` | — | HTTP/SSE endpoint; `headers` values may contain secret refs |
+| `command` / `args` / `env` | `str / list / dict` | — | Stdio launch spec; `env` values may contain `${secret:NAME}` refs resolved at spawn — a near-miss spelling fails the connect naming the key, rather than spawning with the placeholder as the credential |
+| `url` / `headers` | `str / dict` | — | HTTP/SSE endpoint; `headers` values may contain secret refs, resolved under the same rule |
 | `tool_timeout` | `int` | `30` | Per-call idle timeout in seconds |
 | `tool_timeouts` | `dict[str, int]` | `{}` | Per-tool override; keyed by raw MCP tool name |
 | `catalog_timeout` | `float` | `1.5` | `tools/list` timeout at connect; prevents a hung server from stalling startup |

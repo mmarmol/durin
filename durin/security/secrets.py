@@ -34,6 +34,7 @@ __all__ = [
     "SecretStore",
     "SecretError",
     "SecretNotFoundError",
+    "MalformedSecretRefError",
     "is_secret_ref",
     "parse_secret_ref",
     "make_ref",
@@ -54,6 +55,15 @@ _MIN_REDACTABLE_LEN = 8
 _NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 # A reference is the WHOLE field value — no partial interpolation.
 _REF_RE = re.compile(r"^\$\{secret:([A-Z][A-Z0-9_]*)\}$")
+# A whole-value placeholder that names a secret but misses the canonical form:
+# `{{secret:X}}`, `$secret:X`, `${secrets:x}`, a lowercase NAME. Left alone these
+# travel downstream as the credential itself, so the consumer fails with an
+# opaque auth error nowhere near the typo — a dangling reference already raises,
+# and a mistyped one is no more usable, so it raises too.
+_NEAR_REF_RE = re.compile(
+    r"^[${%<]{1,2}\s*secrets?\s*:\s*([A-Za-z][A-Za-z0-9_-]*)\s*[}%>]{0,2}$",
+    re.IGNORECASE,
+)
 
 
 class SecretError(Exception):
@@ -62,6 +72,10 @@ class SecretError(Exception):
 
 class SecretNotFoundError(SecretError):
     """A ``${secret:NAME}`` reference points at a name not in the store."""
+
+
+class MalformedSecretRefError(SecretError):
+    """A config value looks like a secret placeholder but isn't a valid reference."""
 
 
 class SecretScopeError(SecretError):
@@ -401,15 +415,32 @@ def resolve_secret(value: Any) -> Any:
 
     A ``${secret:NAME}`` reference becomes the stored plaintext; a
     literal (or ``None``) is returned untouched. Raises
-    :class:`SecretNotFoundError` for a dangling reference.
+    :class:`SecretNotFoundError` for a dangling reference, and
+    :class:`MalformedSecretRefError` for a near-miss placeholder.
 
     This is the function every config consumer calls right before
     using a credential — keeping the resolved plaintext out of the
     ``Config`` object, logs, and telemetry.
     """
     if not is_secret_ref(value):
+        _reject_near_miss_ref(value)
         return value
     return get_secret_store().resolve(value)
+
+
+def _reject_near_miss_ref(value: Any) -> None:
+    """Raise when *value* is a mistyped ``${secret:NAME}`` rather than a literal."""
+    if not isinstance(value, str):
+        return
+    m = _NEAR_REF_RE.match(value.strip())
+    if m is None:
+        return
+    raise MalformedSecretRefError(
+        f"{value.strip()!r} is not a secret reference. durin recognises exactly "
+        f"one form, with an uppercase name: ${{secret:NAME}}. Rewrite it as "
+        f"${{secret:{m.group(1).upper()}}} and confirm that secret exists "
+        f"(`durin secrets list`)."
+    )
 
 
 def store_secret(
