@@ -5,6 +5,24 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.5.4 — 2026-08-05
+
+### Highlights
+
+- **A mistyped `${secret:NAME}` no longer ships as the credential.** Only the
+  exact form is a reference, and anything that was not one came back untouched
+  — right for a real literal, but it meant a near miss like `{{secret:X}}`,
+  `$secret:X` or a lowercase name was handed downstream as if it were the
+  secret itself. A Sentry MCP server was spawned with the literal string
+  `{{secret:SENTRY_AUTH_TOKEN}}` as its token and failed inside the server with
+  an opaque authentication error, nothing pointing back at the config; the
+  hunt that followed went through wrapper scripts and process arguments and
+  never reached the brace that caused it. A dangling reference already failed
+  loudly, and a mistyped one is no more usable, so it now fails the same way —
+  naming the correct spelling, and for an MCP server naming the exact `env` or
+  header key. The same error covers a reference embedded in a longer string
+  (`Bearer ${secret:TOKEN}`), which durin never interpolated. (#517)
+
 ## 0.5.3 — 2026-08-04
 
 ### Highlights
