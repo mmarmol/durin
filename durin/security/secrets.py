@@ -64,6 +64,10 @@ _NEAR_REF_RE = re.compile(
     r"^[${%<]{1,2}\s*secrets?\s*:\s*([A-Za-z][A-Za-z0-9_-]*)\s*[}%>]{0,2}$",
     re.IGNORECASE,
 )
+# A well-formed reference embedded in a larger string (`Bearer ${secret:TOKEN}`).
+# Interpolation is not supported, so the surrounding text would be shipped with
+# the reference still in it — the same silent failure, one step further along.
+_EMBEDDED_REF_RE = re.compile(r"\$\{secret:([A-Z][A-Z0-9_]*)\}")
 
 
 class SecretError(Exception):
@@ -432,15 +436,23 @@ def _reject_near_miss_ref(value: Any) -> None:
     """Raise when *value* is a mistyped ``${secret:NAME}`` rather than a literal."""
     if not isinstance(value, str):
         return
-    m = _NEAR_REF_RE.match(value.strip())
-    if m is None:
-        return
-    raise MalformedSecretRefError(
-        f"{value.strip()!r} is not a secret reference. durin recognises exactly "
-        f"one form, with an uppercase name: ${{secret:NAME}}. Rewrite it as "
-        f"${{secret:{m.group(1).upper()}}} and confirm that secret exists "
-        f"(`durin secrets list`)."
-    )
+    stripped = value.strip()
+    m = _NEAR_REF_RE.match(stripped)
+    if m is not None:
+        raise MalformedSecretRefError(
+            f"{stripped!r} is not a secret reference. durin recognises exactly "
+            f"one form, with an uppercase name: ${{secret:NAME}}. Rewrite it as "
+            f"${{secret:{m.group(1).upper()}}} and confirm that secret exists "
+            f"(`durin secret list`)."
+        )
+    if _EMBEDDED_REF_RE.search(stripped):
+        raise MalformedSecretRefError(
+            f"{stripped!r} embeds a secret reference in a larger string. A "
+            f"reference must be the whole field value — durin does not "
+            f"interpolate. Store the full value (prefix included) as one secret "
+            f"and reference it alone, or use a field that takes the bare "
+            f"credential."
+        )
 
 
 def store_secret(

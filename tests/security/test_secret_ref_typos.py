@@ -51,6 +51,30 @@ def test_near_miss_reference_is_rejected(value):
 @pytest.mark.parametrize(
     "value",
     [
+        "Bearer ${secret:SENTRY_AUTH_TOKEN}",
+        "token=${secret:SENTRY_AUTH_TOKEN}",
+        "${secret:A}${secret:B}",
+    ],
+)
+def test_embedded_reference_is_rejected(value):
+    """A reference is the whole field value — durin does not interpolate."""
+    with pytest.raises(MalformedSecretRefError) as exc:
+        resolve_secret(value)
+    assert "whole field value" in str(exc.value)
+
+
+def test_surrounding_whitespace_still_resolves(secret_store_tmp):
+    """`is_secret_ref` strips, so a padded reference is a reference, not an embed."""
+    store_secret(
+        "SENTRY_AUTH_TOKEN", "s3cr3t-value-123",
+        service="mcp:sentry", scope=["mcp:sentry"], origin="user",
+    )
+    assert resolve_secret("  ${secret:SENTRY_AUTH_TOKEN}  ") == "s3cr3t-value-123"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
         "https://sentry.io/api/0/",
         "hunter2",
         "{{name}}",  # a template placeholder that is not about secrets
