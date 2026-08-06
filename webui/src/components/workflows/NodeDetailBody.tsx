@@ -3,11 +3,10 @@ import { useTranslation } from "react-i18next";
 import { ThreadMessages } from "@/components/thread/ThreadMessages";
 import { NodeActivityLine } from "@/components/work/NodeActivityLine";
 import { CopyableKey } from "@/components/workflows/RunDetail";
+import type { NodeTranscriptState } from "@/hooks/useNodeTranscript";
 import type { WorkflowRunNode } from "@/lib/api";
 import type { UIMessage, WorkActivity } from "@/lib/types";
 import { formatElapsed } from "@/lib/work-format";
-
-export type NodeTranscriptState = "idle" | "loading" | "missing";
 
 export interface NodeDetailBodyProps {
   row: WorkflowRunNode;
