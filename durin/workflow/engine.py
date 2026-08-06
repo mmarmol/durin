@@ -31,6 +31,7 @@ from loguru import logger
 from durin.workflow import run_log, workspace_fork
 from durin.workflow.artifacts import artifact_dir, prune_runs
 from durin.workflow.result import NodeRun, WorkflowResult
+from durin.workflow.session_keys import node_session_key
 from durin.workflow.spec import (
     NEEDS_INPUT_TARGET,
     ParallelNode,
@@ -635,6 +636,12 @@ class WorkflowEngine:
                     run_log.mark_node_started(
                         self._workspace, workflow.name, run_id,
                         node_id=node.id, label=node_label(node), started_at=node_started_at,
+                        iteration=iteration,
+                        # Only a work node persists a conversation. A script has no
+                        # session at all, and a sub-workflow's and a parallel's work
+                        # lives in their children's own rows.
+                        session_key=(node_session_key(run_id, node, iteration)
+                                     if isinstance(node, WorkNode) else None),
                     )
                 except Exception:  # noqa: BLE001 - observability write; never break the run
                     logger.exception("workflow node start marker failed for {}", workflow.name)

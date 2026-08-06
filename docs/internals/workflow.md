@@ -394,12 +394,18 @@ capped listing of the folder's current files); and `typical_s` / `typical_total_
 — median per-node and median whole-run seconds, computed once here from the
 workflow's prior completed runs (§4g), so every reader shows the same baseline for
 the life of the run instead of recomputing it.
-**While a node is executing**, `active_node` — `{node_id, label, started_at}` — names
-it: `mark_node_started` writes this the instant a node begins (skipped entirely by a
+**While a node is executing**, `active_node` — `{node_id, label, started_at,
+iteration, session_key}` — names it: `mark_node_started` writes this the instant a
+node begins (skipped entirely by a
 workspace-less engine, and a no-op when the run has no manifest at all, e.g. a nested
 run, rather than fabricating a partial record), so a reader arriving mid-node — a reloaded page, a
 late-attaching panel, the `tasks` tool — knows what is running and since when, not
-only what has already finished. The next `update_run` (the node's own completion)
+only what has already finished. The `iteration` and `session_key` are what make the
+running node *openable* rather than merely nameable: the key cannot be reconstructed
+from the node id (a persistent-session node omits the iteration suffix), so it is
+advertised instead of left to be guessed. It is `null` for every node kind that
+persists no conversation — script, sub-workflow, parallel. The next `update_run`
+(the node's own completion)
 clears it, and a run whose `status` is no longer `"running"` never reports one — a
 crashed run's last in-flight node does not linger as a phantom "still running" entry.
 On finalization: `needs_input_node` — the node
@@ -883,6 +889,7 @@ End-to-end for a single `run_workflow` call:
 | `ScriptNodeRunner` | `durin/workflow/script_runner.py` | The script-node runner: runs the node's `command`/`script` as a subprocess in the run's working folder (stdin = upstream edge text, capped stdout = edge text, stderr diagnostic-only), timeout-bounded with a process-group kill on expiry, exit code (or last stdout line for `cases`) drives routing. |
 | `NodeProgressHook`, `NodeCheckpointHook` | `durin/workflow/node_progress.py` | Agent hooks composed into a work node's turn: the first reports live `round`/`activity` for progress frames (from `before_execute_tools`, the leading edge of a tool call); the second persists the node's session after every round so a mid-turn failure or a crash keeps the rounds already completed instead of losing them all at once. |
 | `running_frame`, `finished_frames`, `pending_frames`, `tool_target` | `durin/workflow/progress.py` | The single builder for every node-frame shape the engine emits (running, finished, the certain-pending tail) and the tool reuses for the terminal frame — a field added to a frame is added here once. |
+| `node_session_key`, `is_persistent_session` | `durin/workflow/session_keys.py` | The single derivation of the key a node's conversation persists under, shared by the runner that saves the session and the engine that advertises it on `active_node`. Deriving it twice would drift on exactly the cases that matter (a persistent session omits the iteration suffix; a fan-out worker adds one). |
 | `refresh_seeds`, `list_suggestions`, `apply_suggestion`, `dismiss_suggestion` | `durin/workflow/seeds.py` | Provenance-aware seeding: install missing seeds, auto-refresh untouched ones from the wheel, and turn updates to user-edited seeds into reviewable suggestions (see the Seeds bullet below). `seed_workflows` in `durin/utils/helpers.py` is the `sync_workspace_templates` entry that delegates here. |
 | `load_workflow` | `durin/workflow/loader.py` | Load and parse a workflow by name from the workspace. |
 | `WorkflowResult`, `NodeRun` | `durin/workflow/result.py` | The typed run outcome and per-node trace. |
