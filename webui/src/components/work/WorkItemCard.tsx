@@ -60,7 +60,16 @@ function ItemStatusIcon({ status }: { status: WorkItem["status"] }) {
 }
 
 /** Presentational card for one WorkItem (workflow or sub-agent). */
-export function WorkItemCard({ item }: { item: WorkItem }): JSX.Element {
+export function WorkItemCard({
+  item,
+  onOpenNode,
+}: {
+  item: WorkItem;
+  // Opens one node's detail panel. A node that has not started, one belonging to
+  // a nested run, and any node of a run whose workflow name is unknown are never
+  // openable — see the guard at the node row.
+  onOpenNode?: (item: WorkItem, node: WorkNode) => void;
+}): JSX.Element {
   const { t } = useTranslation();
   // One ticker drives every live clock in this card; frozen (no re-render)
   // once the item is no longer running, so a finished node's clock never ticks.
@@ -125,6 +134,15 @@ export function WorkItemCard({ item }: { item: WorkItem }): JSX.Element {
               const showDetail =
                 node === runningNode &&
                 (node.activity != null || (node.round != null && node.maxRounds != null));
+              // A node is openable only when its detail can actually be fetched:
+              // the run's manifest is keyed by workflow name, a nested run's nodes
+              // have no row in the caller's manifest (their frames are re-keyed
+              // onto it), and a pending node has not run at all.
+              const openable =
+                onOpenNode != null &&
+                item.workflow != null &&
+                node.parentNode == null &&
+                node.status !== "pending";
               return (
                 <li key={`${node.id}-${ni}`}>
                   {/* A node running inside a sub-workflow is not part of this
@@ -137,18 +155,33 @@ export function WorkItemCard({ item }: { item: WorkItem }): JSX.Element {
                     )}
                   >
                     <NodeStatusIcon status={node.status} />
-                    <span
-                      className={cn(
-                        "text-foreground/80",
-                        node.status === "failed" && "text-destructive",
-                        node.status === "pending" && "text-muted-foreground/60",
-                      )}
-                      // The node's own sentence, too long for this width, offered
-                      // on hover instead of replacing the short label.
-                      title={node.description}
-                    >
-                      {node.label ?? node.id}
-                    </span>
+                    {openable ? (
+                      <button
+                        type="button"
+                        onClick={() => onOpenNode(item, node)}
+                        className={cn(
+                          "rounded text-left underline-offset-2 hover:underline",
+                          "text-foreground/80",
+                          node.status === "failed" && "text-destructive",
+                        )}
+                        // The node's own sentence, too long for this width, offered
+                        // on hover instead of replacing the short label.
+                        title={node.description}
+                      >
+                        {node.label ?? node.id}
+                      </button>
+                    ) : (
+                      <span
+                        className={cn(
+                          "text-foreground/80",
+                          node.status === "failed" && "text-destructive",
+                          node.status === "pending" && "text-muted-foreground/60",
+                        )}
+                        title={node.description}
+                      >
+                        {node.label ?? node.id}
+                      </span>
+                    )}
                     <PassChip iteration={node.iteration} budget={node.budget} />
                     {elapsed != null && (
                       <span className="ml-auto shrink-0 tabular-nums text-[11px] text-muted-foreground">

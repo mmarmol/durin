@@ -3,7 +3,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
-import type { WorkItem } from "@/lib/types";
+import type { WorkItem, WorkNode } from "@/lib/types";
 import { WorkItemCard } from "./WorkItemCard";
 
 /**
@@ -20,11 +20,16 @@ export function WorkPanel({
   finished,
   open,
   onClose,
+  onOpenNode,
 }: {
   active: WorkItem[];
   finished: WorkItem[];
   open: boolean;
   onClose: () => void;
+  // Asks the owner to open one node's detail drawer. The drawer itself is
+  // mounted by ThreadShell, not here: it reads the run's manifest, and this panel
+  // stays presentational — it is rendered in tests with no client around it.
+  onOpenNode?: (item: WorkItem, node: WorkNode) => void;
 }): JSX.Element {
   const { t } = useTranslation();
   const [finishedOpen, setFinishedOpen] = useState(false);
@@ -65,7 +70,11 @@ export function WorkPanel({
           ) : (
             <div className="flex flex-col gap-2">
               {active.map((item) => (
-                <WorkItemCard key={item.id} item={item} />
+                <WorkItemCard
+                  key={item.id}
+                  item={item}
+                  onOpenNode={onOpenNode}
+                />
               ))}
             </div>
           )}
@@ -90,7 +99,11 @@ export function WorkPanel({
             {finishedOpen && (
               <div className="flex flex-col gap-2">
                 {finished.map((item) => (
-                  <WorkItemCard key={item.id} item={item} />
+                  <WorkItemCard
+                    key={item.id}
+                    item={item}
+                    onOpenNode={onOpenNode}
+                  />
                 ))}
               </div>
             )}

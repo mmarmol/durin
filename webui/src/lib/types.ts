@@ -180,6 +180,10 @@ export interface WorkItem {
   nodes?: WorkNode[];
   /** Sub-agent live step count from progress.iteration. */
   steps?: number;
+  /** The workflow this run belongs to. Distinct from `label`, which falls back to
+   *  the run id when the frame did not name it — a panel that fetches the run's
+   *  manifest by name cannot use a fallback. Absent for sub-agents. */
+  workflow?: string;
   /** The task (user input) given to this workflow run; absent for sub-agents and older runs. */
   task?: string;
   /** The gate's questions when status=="needs_input"; absent otherwise. */

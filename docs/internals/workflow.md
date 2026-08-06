@@ -846,6 +846,27 @@ sums actual elapsed time (completed nodes plus the active node's running
 delta) alongside the run's recorded `typical_total_s`, so the two read as a
 direct comparison of like quantities.
 
+**The node detail panel.** A node's identity in that trace — and a node row in
+the chat's work strip — opens a drawer describing that one pass: its status,
+verdict, measured and typical durations, artifacts and session key, then
+whatever record the node kind kept. An agent node shows its read-only
+transcript, rendered from `GET /api/v1/sessions/{key}/webui-thread` (which falls
+back to converting the raw session for a headless one), so tool calls appear
+with their arguments AND their results, and the model's reasoning where the
+provider returned it. A script node shows the command it ran, its exit code and
+both captured streams (§4a). A row that kept neither — a sub-workflow or a
+parallel aggregate — says so, and its work is reached through its child run or
+its branch rows. While the node is in flight the drawer also names what it is
+doing right now, from the live `activity` frame, and re-reads the transcript on
+a short interval: the node checkpoints its conversation every agent round, so
+re-reading IS the live view — there is no separate stream, and the same drawer
+becomes the run's record once the node stops. The panel is read-only; the
+transcript conversion is cached server-side by session-file identity, so
+re-reading an unchanged session is nearly free. A node belonging to a nested
+sub-workflow run is not openable from the chat strip — its frames are re-keyed
+onto the caller's run, so the caller's manifest has no row for it — and is
+reached instead through the child run in the executions pane.
+
 ## 5. How it works
 
 End-to-end for a single `run_workflow` call:
