@@ -856,11 +856,15 @@ with their arguments AND their results, and the model's reasoning where the
 provider returned it. A script node shows the command it ran, its exit code and
 both captured streams (§4a). A row that kept neither — a sub-workflow or a
 parallel aggregate — says so, and its work is reached through its child run or
-its branch rows. While the node is in flight the drawer also names what it is
-doing right now, from the live `activity` frame, and re-reads the transcript on
-a short interval: the node checkpoints its conversation every agent round, so
+its branch rows. While the node is in flight the drawer re-reads the transcript
+on a short interval: the node checkpoints its conversation every agent round, so
 re-reading IS the live view — there is no separate stream, and the same drawer
-becomes the run's record once the node stops. The panel is read-only; the
+becomes the run's record once the node stops. Opened from the chat strip it
+additionally names what the node is doing *right now* (the tool and its target,
+plus the round counter) from the live `activity` frame; opened from the
+executions pane it does not, because progress frames are published to the chat's
+work state and the executions pane has no subscription to them — it shows the
+growing transcript alone. The panel is read-only; the
 transcript conversion is cached server-side by session-file identity, so
 re-reading an unchanged session is nearly free. A node belonging to a nested
 sub-workflow run is not openable from the chat strip — its frames are re-keyed
