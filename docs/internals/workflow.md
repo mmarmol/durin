@@ -162,7 +162,10 @@ diagnostic-only — never part of the edge text, though a failing binary gate fo
 tail of it into the loop-back feedback (below). Output is decoded with
 `errors="replace"` so non-UTF-8 bytes degrade rather than crashing the runner. A script
 node has no session — `session_key` is always `None` and it never persists a
-conversation.
+conversation. Its record is the manifest instead: the command it ran and both
+streams, redacted and capped at `workflow.script_log_max_chars`, on every exit
+path (§4a) — without which a script that succeeded would leave nothing at all to
+read.
 
 **Script routing is exit-code-driven, not text-parsed.** A binary script gate
 (`on_pass`/`on_fail`) routes on the process exit code: `0` is `PASS` (output = stdout);
@@ -383,6 +386,9 @@ The per-node entries in the manifest's `runs` array carry:
 | `route_label` | matched case label for multi-way nodes (`null` otherwise) |
 | `budget` | the node's effective visit budget at this pass (`null` for parallel branches/workers, which are not loop targets) |
 | `exit_code` | a script node's subprocess exit code (`null` for agent nodes, which have no exit code) |
+| `command` | a script node's command as a reader would recognize it — the inline command, or the workspace-relative script path — captured at run time, since definitions are versioned per run and a later reader consulting today's definition would show a past run the wrong command. Redacted like the streams: a command line carries credentials as readily as output does (`null` for agent nodes) |
+| `stdout` | a script node's captured stdout, redacted and capped at `workflow.script_log_max_chars` (`null` for agent nodes, whose record is their persisted conversation) |
+| `stderr` | a script node's captured stderr, same redaction and cap. Recorded on every exit path including a timeout or cancel kill, where the streams the process had already produced are drained and kept rather than discarded — a killed script has usually printed the very lines explaining where it got stuck |
 | `error` | failure detail (stderr tail / exception text, capped) for `node_failed`/`persist_failed` rows — the evidence the improve pass's script-repair lane reads (`null` otherwise) |
 | `duration_s` | wall-clock seconds this pass took (`null` where not measured — e.g. choose/union branches) |
 | `artifacts` | relative paths this pass added to the run's shared working folder — a before/after listing diffed around the node's turn, since the folder itself records no per-node ownership (`[]` when nothing new appeared). A static branch or dynamic fan-out worker is not individually diffed (concurrent writes into the same folder would make per-unit attribution racy or meaningless) and always reports `[]`; the parallel node's own aggregate row is diffed once, after its branches or workers finish |
@@ -394,12 +400,18 @@ capped listing of the folder's current files); and `typical_s` / `typical_total_
 — median per-node and median whole-run seconds, computed once here from the
 workflow's prior completed runs (§4g), so every reader shows the same baseline for
 the life of the run instead of recomputing it.
-**While a node is executing**, `active_node` — `{node_id, label, started_at}` — names
-it: `mark_node_started` writes this the instant a node begins (skipped entirely by a
+**While a node is executing**, `active_node` — `{node_id, label, started_at,
+iteration, session_key}` — names it: `mark_node_started` writes this the instant a
+node begins (skipped entirely by a
 workspace-less engine, and a no-op when the run has no manifest at all, e.g. a nested
 run, rather than fabricating a partial record), so a reader arriving mid-node — a reloaded page, a
 late-attaching panel, the `tasks` tool — knows what is running and since when, not
-only what has already finished. The next `update_run` (the node's own completion)
+only what has already finished. The `iteration` and `session_key` are what make the
+running node *openable* rather than merely nameable: the key cannot be reconstructed
+from the node id (a persistent-session node omits the iteration suffix), so it is
+advertised instead of left to be guessed. It is `null` for every node kind that
+persists no conversation — script, sub-workflow, parallel. The next `update_run`
+(the node's own completion)
 clears it, and a run whose `status` is no longer `"running"` never reports one — a
 crashed run's last in-flight node does not linger as a phantom "still running" entry.
 On finalization: `needs_input_node` — the node
@@ -834,6 +846,31 @@ sums actual elapsed time (completed nodes plus the active node's running
 delta) alongside the run's recorded `typical_total_s`, so the two read as a
 direct comparison of like quantities.
 
+**The node detail panel.** A node's identity in that trace — and a node row in
+the chat's work strip — opens a drawer describing that one pass: its status,
+verdict, measured and typical durations, artifacts and session key, then
+whatever record the node kind kept. An agent node shows its read-only
+transcript, rendered from `GET /api/v1/sessions/{key}/webui-thread` (which falls
+back to converting the raw session for a headless one), so tool calls appear
+with their arguments AND their results, and the model's reasoning where the
+provider returned it. A script node shows the command it ran, its exit code and
+both captured streams (§4a). A row that kept neither — a sub-workflow or a
+parallel aggregate — says so, and its work is reached through its child run or
+its branch rows. While the node is in flight the drawer re-reads the transcript
+on a short interval: the node checkpoints its conversation every agent round, so
+re-reading IS the live view — there is no separate stream, and the same drawer
+becomes the run's record once the node stops. Opened from the chat strip it
+additionally names what the node is doing *right now* (the tool and its target,
+plus the round counter) from the live `activity` frame; opened from the
+executions pane it does not, because progress frames are published to the chat's
+work state and the executions pane has no subscription to them — it shows the
+growing transcript alone. The panel is read-only; the
+transcript conversion is cached server-side by session-file identity, so
+re-reading an unchanged session is nearly free. A node belonging to a nested
+sub-workflow run is not openable from the chat strip — its frames are re-keyed
+onto the caller's run, so the caller's manifest has no row for it — and is
+reached instead through the child run in the executions pane.
+
 ## 5. How it works
 
 End-to-end for a single `run_workflow` call:
@@ -880,9 +917,10 @@ End-to-end for a single `run_workflow` call:
 | `SubworkflowRunner` | `durin/workflow/subworkflow.py` | Runs a named workflow as a nested run (depth-capped) for a sub-workflow node. |
 | `WorkflowEngine` | `durin/workflow/engine.py` | The graph executor: routing, loop-back with a visit cap, own/shared context, output threading, and concurrent parallel branches. |
 | `AgentNodeRunner` | `durin/workflow/node_runner.py` | The default node runner: one real `AgentRunner` turn per agent node (adds a verdict instruction when the node routes), persisted as a lineage'd node session, checkpointed every round. |
-| `ScriptNodeRunner` | `durin/workflow/script_runner.py` | The script-node runner: runs the node's `command`/`script` as a subprocess in the run's working folder (stdin = upstream edge text, capped stdout = edge text, stderr diagnostic-only), timeout-bounded with a process-group kill on expiry, exit code (or last stdout line for `cases`) drives routing. |
+| `ScriptNodeRunner` | `durin/workflow/script_runner.py` | The script-node runner: runs the node's `command`/`script` as a subprocess in the run's working folder (stdin = upstream edge text, capped stdout = edge text, stderr diagnostic-only), timeout-bounded with a process-group kill on expiry, exit code (or last stdout line for `cases`) drives routing. Records the command and both redacted streams on every exit path — a script node keeps no session, so this is its only record. |
 | `NodeProgressHook`, `NodeCheckpointHook` | `durin/workflow/node_progress.py` | Agent hooks composed into a work node's turn: the first reports live `round`/`activity` for progress frames (from `before_execute_tools`, the leading edge of a tool call); the second persists the node's session after every round so a mid-turn failure or a crash keeps the rounds already completed instead of losing them all at once. |
 | `running_frame`, `finished_frames`, `pending_frames`, `tool_target` | `durin/workflow/progress.py` | The single builder for every node-frame shape the engine emits (running, finished, the certain-pending tail) and the tool reuses for the terminal frame — a field added to a frame is added here once. |
+| `node_session_key`, `is_persistent_session` | `durin/workflow/session_keys.py` | The single derivation of the key a node's conversation persists under, shared by the runner that saves the session and the engine that advertises it on `active_node`. Deriving it twice would drift on exactly the cases that matter (a persistent session omits the iteration suffix; a fan-out worker adds one). |
 | `refresh_seeds`, `list_suggestions`, `apply_suggestion`, `dismiss_suggestion` | `durin/workflow/seeds.py` | Provenance-aware seeding: install missing seeds, auto-refresh untouched ones from the wheel, and turn updates to user-edited seeds into reviewable suggestions (see the Seeds bullet below). `seed_workflows` in `durin/utils/helpers.py` is the `sync_workspace_templates` entry that delegates here. |
 | `load_workflow` | `durin/workflow/loader.py` | Load and parse a workflow by name from the workspace. |
 | `WorkflowResult`, `NodeRun` | `durin/workflow/result.py` | The typed run outcome and per-node trace. |
@@ -933,7 +971,9 @@ End-to-end for a single `run_workflow` call:
   `workflow.script_timeout` (default 300s) is the default per-node timeout for a script
   node (a node's own `timeout` overrides it); `workflow.script_output_max_chars`
   (default 16000) caps a script node's captured stdout — the edge text it passes on
-  (excess is truncated with a notice).
+  (excess is truncated with a notice); `workflow.script_log_max_chars` (default 4000)
+  caps what that node's stdout and stderr contribute to the run manifest — a separate,
+  tighter bound because the manifest is rewritten in full after every node.
 - **A delete refuses while something still points at it.** A `subworkflow` node and a
   loop both name a workflow by name, so removing one they run breaks them silently.
   `DELETE …/{name}` consults the reverse graph (`durin/registry_graph.py`) and returns

@@ -698,6 +698,7 @@ Workflow-engine lifecycle: node-visit caps and run-folder retention.
 | `keep_runs` | `20` | Recent run working-folders (`.workflow/<run_id>/`) kept on disk |
 | `script_timeout` | `300` | Default per-node timeout (seconds) for script nodes; a node's own `timeout` overrides it |
 | `script_output_max_chars` | `16000` | Cap on a script node's captured stdout (the edge text); excess is truncated |
+| `script_log_max_chars` | `4000` | Cap, per stream and per pass, on the stdout/stderr a script node records in the run manifest — what the node panel shows you afterwards |
 
 ---
 

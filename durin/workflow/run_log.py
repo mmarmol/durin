@@ -100,6 +100,12 @@ def _node_records(result) -> list[dict]:
             # Files this node added to the run's shared working folder — the folder
             # is shared, so attribution only exists if it is captured per node.
             "artifacts": list(getattr(r, "artifacts", []) or []),
+            # Script nodes only: what ran and what it printed. Already capped and
+            # redacted by the runner — this is a durable readable file, so it must
+            # never be the place a credential first appears.
+            "command": getattr(r, "command", None),
+            "stdout": getattr(r, "stdout", None),
+            "stderr": getattr(r, "stderr", None),
         }
         for r in result.runs
     ]
@@ -192,6 +198,7 @@ def update_run(
 def mark_node_started(
     workspace: str | Path, name: str, run_id: str, *,
     node_id: str, label: str, started_at: float,
+    iteration: int | None = None, session_key: str | None = None,
 ) -> None:
     """Record which node is in flight, so a reader that arrives mid-node knows.
 
@@ -200,13 +207,23 @@ def mark_node_started(
     reloaded page finds the run alive and its finished nodes listed, but nothing
     about the node actually running. Cleared by the next ``update_run``.
 
+    ``iteration`` and ``session_key`` are what a reader needs to OPEN the node
+    rather than merely name it. The key cannot be reconstructed from the node id
+    (a persistent-session node omits the iteration suffix), so it is advertised
+    rather than left to be guessed. It is ``None`` for every node kind that
+    persists no conversation — script, sub-workflow, parallel — where a key
+    would point at a session that does not exist.
+
     No-op when no manifest exists — a nested run may not have written one, and
     fabricating a partial record here would confuse the crash sweep.
     """
     base = read_manifest(workspace, name, run_id)
     if base is None:
         return
-    base["active_node"] = {"node_id": node_id, "label": label, "started_at": started_at}
+    base["active_node"] = {
+        "node_id": node_id, "label": label, "started_at": started_at,
+        "iteration": iteration, "session_key": session_key,
+    }
     _record_path(workspace, name, run_id).write_text(json.dumps(base), encoding="utf-8")
 
 

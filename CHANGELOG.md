@@ -5,6 +5,39 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.5.5 — 2026-08-06
+
+### Highlights
+
+- **Every step of a workflow run can now be opened.** A run told you *that* a
+  step ran, how long it took and whether it passed — never what it actually
+  did. The only thread back to the work was a session key printed as text, to
+  be looked up by hand on disk. Clicking a step now opens a panel: an agent
+  step shows its whole conversation, every tool call with its arguments **and**
+  its result, and the model's reasoning where the provider returned it, drawn
+  with the same blocks the chat uses. A script step shows the command it ran,
+  its exit code and both streams. A step that keeps no record of its own — a
+  sub-workflow, a parallel group — says so and points at the runs or branches
+  that do. The panel opens from the executions screen and from the chat's work
+  strip, so watching a run does not mean leaving the conversation. (#519)
+
+- **A step still working shows its work as it happens.** The panel does not
+  wait for the step to finish: a step's conversation is saved after every
+  round, so the transcript fills in round by round while you watch, and the
+  same panel simply stops moving once the step ends — it is the run's record
+  afterwards, not a second screen. Opened from the chat it also names what the
+  step is doing right now, down to the tool and the file or command it is
+  working on. (#519)
+
+- **A script step that worked used to leave nothing behind.** Its output only
+  travelled onward to the next step and its errors were discarded, so a script
+  that behaved was unreadable after the fact and a broken one left a stub. Runs
+  now record what each script ran and everything it printed — including when it
+  is killed by a timeout or a cancellation, where a hung script has usually
+  already printed the very lines that explain where it got stuck. Stored
+  secrets are stripped from all of it, the command line included. How much is
+  kept is yours to set (`workflow.script_log_max_chars`). (#519)
+
 ## 0.5.4 — 2026-08-05
 
 ### Highlights

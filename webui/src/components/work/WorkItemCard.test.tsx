@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
 import type { WorkItem } from "@/lib/types";
 import { WorkItemCard } from "./WorkItemCard";
 
@@ -371,5 +372,64 @@ describe("WorkItemCard", () => {
     // The nested node's row is indented and railed; the run's own node's is not.
     expect(screen.getByText("Nested").parentElement?.className).toMatch(/border-l/);
     expect(screen.getByText("Own").parentElement?.className).not.toMatch(/border-l/);
+  });
+
+  it("opens a started node and leaves a pending one inert", async () => {
+    const onOpenNode = vi.fn();
+    const item: WorkItem = {
+      kind: "workflow",
+      id: "r1",
+      label: "review",
+      workflow: "review",
+      status: "running",
+      startedAt: 1,
+      endedAt: null,
+      nodes: [
+        { id: "analyze", label: "Analyze", status: "done" },
+        { id: "report", label: "Report", status: "pending" },
+      ],
+    };
+    render(<WorkItemCard item={item} onOpenNode={onOpenNode} />);
+
+    await userEvent.click(screen.getByRole("button", { name: /Analyze/ }));
+    expect(onOpenNode).toHaveBeenCalledTimes(1);
+    expect(onOpenNode.mock.calls[0][1].id).toBe("analyze");
+
+    // A pending node has not run: no manifest row, no session, nothing to show.
+    expect(screen.queryByRole("button", { name: /Report/ })).not.toBeInTheDocument();
+  });
+
+  it("leaves a nested sub-workflow node inert", () => {
+    const item: WorkItem = {
+      kind: "workflow",
+      id: "r1",
+      label: "review",
+      workflow: "review",
+      status: "running",
+      startedAt: 1,
+      endedAt: null,
+      nodes: [{ id: "inner", label: "Inner", status: "done", parentNode: "sub" }],
+    };
+    render(<WorkItemCard item={item} onOpenNode={vi.fn()} />);
+    // Its frames are re-keyed onto the caller's run, so the caller's manifest has
+    // no row for it — the executions pane is where it is reachable.
+    expect(screen.queryByRole("button", { name: /Inner/ })).not.toBeInTheDocument();
+  });
+
+  it("leaves every node inert when the run's workflow name is unknown", () => {
+    // `label` falls back to the run id when the frame did not name the workflow;
+    // without the real name the panel cannot fetch the run's manifest, so the
+    // affordance would open a drawer that can never fill.
+    const item: WorkItem = {
+      kind: "workflow",
+      id: "r1",
+      label: "r1",
+      status: "running",
+      startedAt: 1,
+      endedAt: null,
+      nodes: [{ id: "analyze", label: "Analyze", status: "done" }],
+    };
+    render(<WorkItemCard item={item} onOpenNode={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: /Analyze/ })).not.toBeInTheDocument();
   });
 });

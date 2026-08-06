@@ -8,7 +8,13 @@ def test_mark_node_started_records_the_active_node(tmp_path):
     run_log.mark_node_started(tmp_path, "wf", "r1", node_id="scan", label="Scan", started_at=140.0)
 
     rec = run_log.read_manifest(tmp_path, "wf", "r1")
-    assert rec["active_node"] == {"node_id": "scan", "label": "Scan", "started_at": 140.0}
+    assert rec["active_node"] == {
+        "node_id": "scan", "label": "Scan", "started_at": 140.0,
+        # A caller that does not know which pass this is, or which session the
+        # node will write, records their absence rather than a guess — the engine
+        # is what supplies them (see test_active_node_session.py).
+        "iteration": None, "session_key": None,
+    }
     # The rest of the running manifest survives the rewrite.
     assert rec["status"] == "running"
     assert rec["started_at"] == 100.0

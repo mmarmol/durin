@@ -6,6 +6,7 @@ import { ThreadComposer } from "@/components/thread/ThreadComposer";
 import { ThreadHeader } from "@/components/thread/ThreadHeader";
 import { StreamErrorNotice } from "@/components/thread/StreamErrorNotice";
 import { ThreadViewport } from "@/components/thread/ThreadViewport";
+import { WorkNodeSheet } from "@/components/work/WorkNodeSheet";
 import { WorkPanel } from "@/components/work/WorkPanel";
 import { WorkStrip } from "@/components/work/WorkStrip";
 import type { OrbState } from "@/components/voice/VoiceOrb";
@@ -15,7 +16,7 @@ import { useModes } from "@/hooks/useModes";
 import { useSessionHistory } from "@/hooks/useSessions";
 import { useWorkState } from "@/hooks/useWorkState";
 import { listSlashCommands, getModelCapabilities } from "@/lib/api";
-import type { ChatSummary, SlashCommand, UIMessage } from "@/lib/types";
+import type { ChatSummary, SlashCommand, UIMessage, WorkItem, WorkNode } from "@/lib/types";
 import { normalizeLegacyLongTaskMessages } from "@/lib/thread-display-compat";
 import { scrubSubagentUiMessages } from "@/lib/subagent-channel-display";
 import { useClient } from "@/providers/ClientProvider";
@@ -92,6 +93,10 @@ export function ThreadShell({
   // can display their history but cannot continue them on a different channel.
   const isReadOnlyChannel = session !== null && session.channel !== "websocket";
   const [panelOpen, setPanelOpen] = useState(false);
+  // Which workflow node's detail drawer is open, if any. One drawer for the whole
+  // shell: only one can be open at a time, and mounting a sheet per card would
+  // put a portal behind every row of the work panel.
+  const [openedNode, setOpenedNode] = useState<{ item: WorkItem; node: WorkNode } | null>(null);
   const work = useWorkState(chatId, historyKey);
   const {
     messages: historical,
@@ -665,7 +670,11 @@ export function ThreadShell({
           finished={work.finished}
           open={panelOpen}
           onClose={() => setPanelOpen(false)}
+          onOpenNode={(item, node) => setOpenedNode({ item, node })}
         />
+        {/* The node drawer lives here rather than inside WorkPanel: it reads the
+            run's manifest, and the panel is presentational by contract. */}
+        <WorkNodeSheet opened={openedNode} onClose={() => setOpenedNode(null)} />
       </div>
     </section>
     </ThreadActionsProvider>

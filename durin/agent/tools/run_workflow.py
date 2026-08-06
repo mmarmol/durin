@@ -382,6 +382,7 @@ class RunWorkflowTool(Tool, ContextAware):
             self._workspace,
             default_timeout=self._app_config.workflow.script_timeout,
             max_output_chars=self._app_config.workflow.script_output_max_chars,
+            log_max_chars=self._app_config.workflow.script_log_max_chars,
         )
         judge_runner = AgentJudgeRunner(runner, default_model=provider.get_default_model())
         subworkflow_runner = SubworkflowRunner(

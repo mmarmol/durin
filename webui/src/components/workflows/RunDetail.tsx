@@ -145,11 +145,16 @@ export function RunNodeRow({
   run,
   continuesSession,
   typicalS,
+  onOpen,
 }: {
   run: WorkflowRunNode;
   continuesSession: boolean;
   // Median seconds this node took across prior completed runs; absent with no history.
   typicalS?: number;
+  // Opens this pass's detail panel. Absent leaves the row inert. The identity
+  // alone is the affordance rather than the whole row: the row already holds
+  // other controls (copy, artifacts) and a button cannot nest inside a button.
+  onOpen?: () => void;
 }) {
   const { t } = useTranslation();
   const verdict =
@@ -179,11 +184,23 @@ export function RunNodeRow({
     <div className="flex flex-col gap-1 border-b border-border/60 px-2.5 py-1.5 last:border-b-0">
       <div className="flex flex-wrap items-center gap-1.5">
         <NodeStatusBadge status={run.status} />
-        <span className="font-mono text-[11.5px] font-medium">
-          {run.budget != null
-            ? `${run.node_id} · ${t("workflows.passOf", { iteration: run.iteration, budget: run.budget })}`
-            : `${run.node_id}#${run.iteration}`}
-        </span>
+        {onOpen ? (
+          <button
+            type="button"
+            onClick={onOpen}
+            className="rounded font-mono text-[11.5px] font-medium underline-offset-2 hover:underline"
+          >
+            {run.budget != null
+              ? `${run.node_id} · ${t("workflows.passOf", { iteration: run.iteration, budget: run.budget })}`
+              : `${run.node_id}#${run.iteration}`}
+          </button>
+        ) : (
+          <span className="font-mono text-[11.5px] font-medium">
+            {run.budget != null
+              ? `${run.node_id} · ${t("workflows.passOf", { iteration: run.iteration, budget: run.budget })}`
+              : `${run.node_id}#${run.iteration}`}
+          </span>
+        )}
         {isFinalPass && (
           <span className="rounded bg-warn/10 px-1 py-0.5 text-[10px] text-warn">
             {t("workflows.finalPass")}
@@ -278,6 +295,7 @@ export function RunDetail({
   resuming,
   childRuns,
   onOpenRun,
+  onOpenNode,
 }: {
   result: WorkflowRunResult;
   onResume: (answers: string) => void;
@@ -286,6 +304,8 @@ export function RunDetail({
   // execution order; rendered as a navigable section when provided.
   childRuns?: WorkflowGlobalRun[];
   onOpenRun?: (run: WorkflowGlobalRun) => void;
+  // Opens one node's detail panel. Absent leaves every row inert.
+  onOpenNode?: (row: WorkflowRunNode) => void;
 }) {
   const { t } = useTranslation();
   const [answers, setAnswers] = useState("");
@@ -413,12 +433,36 @@ export function RunDetail({
               run={run}
               continuesSession={continues[i]}
               typicalS={result.typical_s?.[run.node_id]}
+              onOpen={onOpenNode ? () => onOpenNode(run) : undefined}
             />
           ))}
           {activeNodeInfo && (
             <div className="flex flex-wrap items-center gap-1.5 bg-amber-500/5 px-2.5 py-1.5">
               <Loader2 className="h-3 w-3 shrink-0 animate-spin text-amber-600" aria-hidden />
-              <span className="font-mono text-[11.5px] font-medium">{activeNodeInfo.label}</span>
+              {/* Openable only once the marker names a session: a script node in
+                  flight persists no conversation, so there is nothing to show
+                  until its row lands with the captured streams. */}
+              {onOpenNode && activeNodeInfo.session_key ? (
+                <button
+                  type="button"
+                  onClick={() =>
+                    onOpenNode({
+                      node_id: activeNodeInfo.node_id,
+                      iteration: activeNodeInfo.iteration ?? 1,
+                      status: "ok",
+                      passed: null,
+                      route_label: null,
+                      session_key: activeNodeInfo.session_key ?? null,
+                      worker_index: null,
+                    })
+                  }
+                  className="rounded font-mono text-[11.5px] font-medium underline-offset-2 hover:underline"
+                >
+                  {activeNodeInfo.label}
+                </button>
+              ) : (
+                <span className="font-mono text-[11.5px] font-medium">{activeNodeInfo.label}</span>
+              )}
               <span className="rounded bg-amber-500/10 px-1 py-0.5 text-[10px] text-amber-700 dark:text-amber-400">
                 {t("workflows.runStatus.running", "running")}
               </span>

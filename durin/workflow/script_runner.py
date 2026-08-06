@@ -60,10 +60,15 @@ class ScriptNodeRunner:
         *,
         default_timeout: int = 300,
         max_output_chars: int = 16000,
+        log_max_chars: int = 4000,
     ) -> None:
         self._workspace = workspace
         self._default_timeout = default_timeout
         self._max_output_chars = max_output_chars
+        # Separate from _max_output_chars: that one bounds the edge text handed to
+        # the next node, this one bounds what the manifest stores. The manifest is
+        # rewritten in full after every node, so what it keeps stays tighter.
+        self._log_max_chars = log_max_chars
 
     def _argv(self, req: NodeRunRequest) -> list[str]:
         node = req.node
@@ -85,6 +90,23 @@ class ScriptNodeRunner:
             return text
         return (text[: self._max_output_chars].rstrip()
                 + f"\n[output truncated at {self._max_output_chars} chars]")
+
+    def _cap_log(self, text: str) -> str:
+        if len(text) <= self._log_max_chars:
+            return text
+        return (text[: self._log_max_chars].rstrip()
+                + f"\n[truncated at {self._log_max_chars} chars]")
+
+    @staticmethod
+    def _display_command(node) -> str:
+        """What this node ran, as a reader would recognize it: the inline command,
+        or the script's workspace-relative path. Not the resolved argv — the
+        absolute interpreter path is noise, and the point is recognition.
+
+        Redacted like the streams are: this text is written to the manifest, and a
+        command line is as capable of carrying a credential as the output is.
+        """
+        return redact_secrets(node.command or f"workflows/scripts/{node.script}")
 
     def _base_env(self, node) -> dict[str, str]:
         if node.env == "inherit":
@@ -120,7 +142,13 @@ class ScriptNodeRunner:
         return out
 
     @staticmethod
-    def _killpg(proc: subprocess.Popen) -> None:
+    def _killpg(proc: subprocess.Popen) -> tuple[str, str]:
+        """Kill the process group and return whatever it printed before dying.
+
+        Returns the drained streams rather than discarding them: a script killed
+        by a timeout or a cancel has usually printed the very lines that explain
+        where it got stuck.
+        """
         try:
             os.killpg(proc.pid, signal.SIGKILL)
         except (ProcessLookupError, PermissionError):
@@ -128,7 +156,8 @@ class ScriptNodeRunner:
         # Drain and close the pipes rather than a bare wait() — per the subprocess
         # docs, communicate() after a kill is what reaps the process AND closes
         # stdout/stderr, avoiding an fd leak.
-        proc.communicate()
+        out, err = proc.communicate()
+        return out or "", err or ""
 
     def __call__(self, req: NodeRunRequest) -> NodeRunResponse:
         node = req.node
@@ -172,31 +201,47 @@ class ScriptNodeRunner:
             while stdout is None:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    self._killpg(proc)
+                    killed_out, killed_err = self._killpg(proc)
                     raise NodeExecutionError(
                         node.id, req.iteration, None,
-                        TimeoutError(f"script timed out after {timeout}s")) from None
+                        TimeoutError(f"script timed out after {timeout}s"),
+                        command=self._display_command(node),
+                        stdout=self._cap_log(redact_secrets(killed_out)),
+                        stderr=self._cap_log(redact_secrets(killed_err)),
+                    ) from None
                 if req.cancel_check is not None and req.cancel_check():
-                    self._killpg(proc)
+                    killed_out, killed_err = self._killpg(proc)
                     raise NodeExecutionError(
                         node.id, req.iteration, None,
-                        ScriptCancelled("cancelled by user")) from None
+                        ScriptCancelled("cancelled by user"),
+                        command=self._display_command(node),
+                        stdout=self._cap_log(redact_secrets(killed_out)),
+                        stderr=self._cap_log(redact_secrets(killed_err)),
+                    ) from None
                 try:
                     stdout, stderr = proc.communicate(timeout=min(_POLL_SLICE_SECONDS, remaining))
                 except subprocess.TimeoutExpired:
                     continue
         rc = proc.returncode
-        # Redact stored secret values out of both streams before any edge/feedback
-        # text is built — stdout becomes edge text that lands in sessions, manifests
-        # and memory, so a script echoing a credential must never persist it.
+        # Redact stored secret values out of both streams before any edge, feedback
+        # or manifest text is built — all three persist, so a script echoing a
+        # credential must never leave it behind in any of them.
         stdout = redact_secrets(stdout or "")
-        stderr_tail = redact_secrets((stderr or "").strip()[-_STDERR_TAIL_CHARS:])
+        stderr = redact_secrets(stderr or "")
+        stderr_tail = stderr.strip()[-_STDERR_TAIL_CHARS:]
+        # What the manifest records: the same redacted streams, capped tighter
+        # than the edge text, plus the command as a reader would recognize it.
+        logs = {
+            "command": self._display_command(node),
+            "stdout": self._cap_log(stdout),
+            "stderr": self._cap_log(stderr),
+        }
 
         is_binary_gate = node.cases is None and (node.on_pass is not None or node.on_fail is not None)
         if is_binary_gate:
             if rc == 0:
                 return NodeRunResponse(output=self._cap(stdout), session_key=None,
-                                       route_label="PASS", exit_code=rc)
+                                       route_label="PASS", exit_code=rc, **logs)
             # A failing gate's output is the loop-back feedback: what the check
             # printed, plus why it failed (stderr + exit code).
             parts = [p for p in (
@@ -205,14 +250,15 @@ class ScriptNodeRunner:
                 f"[script gate failed: exit code {rc}]",
             ) if p]
             return NodeRunResponse(output="\n\n".join(parts), session_key=None,
-                                   route_label="FAIL", exit_code=rc)
+                                   route_label="FAIL", exit_code=rc, **logs)
 
         if rc != 0:
             # Linear or multi-way node: a non-zero exit is an error, not a verdict —
             # continuing with half-produced output would poison the rest of the run.
             detail = f"script exited with code {rc}" + (f": {stderr_tail}" if stderr_tail else "")
-            raise NodeExecutionError(node.id, req.iteration, None, RuntimeError(detail), exit_code=rc)
+            raise NodeExecutionError(node.id, req.iteration, None, RuntimeError(detail),
+                                     exit_code=rc, **logs)
 
         label = parse_label(stdout, node.cases) if node.cases is not None else None
         return NodeRunResponse(output=self._cap(stdout), session_key=None,
-                               route_label=label, exit_code=rc)
+                               route_label=label, exit_code=rc, **logs)
