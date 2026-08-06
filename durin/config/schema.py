@@ -1029,6 +1029,7 @@ class WorkflowConfig(Base):
     keep_runs: int = Field(default=20, ge=1, description="How many recent runs' working folders (.workflow/<run_id>/) to keep on disk")
     script_timeout: int = Field(default=300, ge=1, description="Default per-node timeout (seconds) for script nodes; a node's own 'timeout' overrides it")
     script_output_max_chars: int = Field(default=16000, ge=1000, description="Cap on a script node's captured stdout (the edge text); excess is truncated with a notice")
+    script_log_max_chars: int = Field(default=4000, ge=200, description="Cap on the stdout/stderr a script node records in the run manifest (per stream, per pass); separate from script_output_max_chars, which caps the edge text, because the manifest is rewritten in full after every node")
 
 
 class LoopsConfig(Base):

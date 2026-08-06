@@ -28,6 +28,14 @@ class NodeRun:
     exit_code: int | None = None     # script nodes: the subprocess exit code (None for agent nodes)
     duration_s: float | None = None  # wall-clock seconds this pass took (None where not measured)
     artifacts: list[str] = field(default_factory=list)  # new files (relative paths) this node added to the run's shared working folder
+    # Script nodes only: what actually ran and what it printed, redacted and
+    # capped. Captured at run time rather than read back from the definition —
+    # definitions are versioned per run, so a later reader consulting today's
+    # definition would show a past run the wrong command. None for agent nodes,
+    # whose record is their persisted conversation instead.
+    command: str | None = None
+    stdout: str | None = None
+    stderr: str | None = None
 
 
 @dataclass

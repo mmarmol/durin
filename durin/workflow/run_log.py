@@ -100,6 +100,12 @@ def _node_records(result) -> list[dict]:
             # Files this node added to the run's shared working folder — the folder
             # is shared, so attribution only exists if it is captured per node.
             "artifacts": list(getattr(r, "artifacts", []) or []),
+            # Script nodes only: what ran and what it printed. Already capped and
+            # redacted by the runner — this is a durable readable file, so it must
+            # never be the place a credential first appears.
+            "command": getattr(r, "command", None),
+            "stdout": getattr(r, "stdout", None),
+            "stderr": getattr(r, "stderr", None),
         }
         for r in result.runs
     ]
