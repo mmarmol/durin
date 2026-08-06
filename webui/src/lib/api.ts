@@ -415,6 +415,13 @@ export type WorkflowRunNode = {
   duration_s?: number | null;
   // Files this node added to the run's shared working folder.
   artifacts?: string[];
+  // Script nodes only: the subprocess exit code, what ran, and what it printed
+  // (redacted and capped server-side). Absent for agent nodes, whose record is
+  // their persisted session instead.
+  exit_code?: number | null;
+  command?: string | null;
+  stdout?: string | null;
+  stderr?: string | null;
 };
 
 export type WorkflowRunResult = {
@@ -432,7 +439,16 @@ export type WorkflowRunResult = {
   output_files?: string[];
   // The node currently in flight, while status=="running"; absent once the run
   // finishes or for a manifest recorded before this field shipped.
-  active_node?: { node_id: string; label: string; started_at: number } | null;
+  active_node?: {
+    node_id: string;
+    label: string;
+    started_at: number;
+    // Which pass this is, and the session the running node is writing — what a
+    // reader needs to OPEN it rather than only name it. The key is null for node
+    // kinds that persist no conversation (script, sub-workflow, parallel).
+    iteration?: number | null;
+    session_key?: string | null;
+  } | null;
   // Median seconds each node took across this workflow's recent completed runs,
   // keyed by node_id; absent (or empty) when the workflow has no run history yet.
   typical_s?: Record<string, number>;
