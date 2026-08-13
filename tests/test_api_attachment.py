@@ -420,12 +420,13 @@ def test_extract_documents_images_only(tmp_path) -> None:
 
 
 def test_extract_documents_skips_oversized_files(tmp_path) -> None:
-    """Files exceeding the size limit should be silently skipped."""
+    """Files exceeding the size limit are reported as skipped, not read."""
     big = tmp_path / "huge.txt"
     big.write_bytes(b"x" * 200)
 
     text, image_paths = extract_documents("hello", [str(big)], max_file_size=100)
-    assert text == "hello"
+    assert "huge.txt" in text
+    assert "too large" in text.lower()
     assert image_paths == []
 
 

@@ -321,3 +321,26 @@ class TestIsTextExtension:
         assert _is_text_extension(".txt") is True
         assert _is_text_extension(".TXT") is False
         assert _is_text_extension(".pdf") is False
+
+
+def test_extract_documents_honours_an_explicit_size_limit(tmp_path):
+    from durin.utils.document import extract_documents
+
+    big = tmp_path / "big.txt"
+    big.write_text("x" * 5000)
+
+    text, images = extract_documents("hello", [str(big)], max_file_size=1000)
+    assert "x" * 100 not in text
+    assert images == []
+
+
+def test_extract_documents_reports_a_skipped_oversized_file(tmp_path):
+    # A silently dropped attachment reads to the user as durin ignoring them.
+    from durin.utils.document import extract_documents
+
+    big = tmp_path / "huge.pdf"
+    big.write_bytes(b"%PDF-1.4" + b"0" * 5000)
+
+    text, _ = extract_documents("hello", [str(big)], max_file_size=1000)
+    assert "huge.pdf" in text
+    assert "too large" in text.lower()

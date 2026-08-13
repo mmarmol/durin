@@ -39,6 +39,8 @@ SUPPORTED_EXTENSIONS: set[str] = {
     ".webp",
 }
 
+# Fallback when no config is reachable (tests, direct library use). The live
+# value is documents.max_text_chars.
 _MAX_TEXT_LENGTH = 200_000
 
 
@@ -98,7 +100,7 @@ def _extract_via_markitdown(path: Path) -> str:
     except Exception as e:  # noqa: BLE001
         logger.exception("Failed to extract {}", path)
         return f"[error: failed to extract {path.suffix}: {e!s}]"
-    return _truncate(markdown, _MAX_TEXT_LENGTH)
+    return _truncate(markdown, _configured_max_text_chars())
 
 
 def _extract_text_file(path: Path) -> str:
@@ -109,7 +111,7 @@ def _extract_text_file(path: Path) -> str:
             content = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             content = path.read_text(encoding="latin-1")
-        return _truncate(content, _MAX_TEXT_LENGTH)
+        return _truncate(content, _configured_max_text_chars())
     except Exception as e:
         logger.exception("Failed to read text file {}", path)
         return f"[error: failed to read file: {e!s}]"
@@ -145,6 +147,8 @@ def _is_text_extension(ext: str) -> bool:
 # High-level helper: split media into images + extracted document text
 # ---------------------------------------------------------------------------
 
+# Fallback when no config is reachable. The live value is
+# documents.max_file_size_mb.
 _MAX_EXTRACT_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 
 
@@ -152,7 +156,7 @@ def extract_documents(
     text: str,
     media_paths: list[str],
     *,
-    max_file_size: int = _MAX_EXTRACT_FILE_SIZE,
+    max_file_size: int | None = None,
 ) -> tuple[str, list[str]]:
     """Separate images from documents in *media_paths*.
 
@@ -161,9 +165,14 @@ def extract_documents(
     returned list so that downstream layers only need to handle vision
     blocks.
 
-    Files larger than *max_file_size* bytes are skipped with a warning
-    to avoid unbounded memory / CPU usage.
+    Files larger than *max_file_size* bytes are skipped, and reported in
+    *text* rather than dropped silently, to avoid unbounded memory / CPU
+    usage. *max_file_size* of ``None`` (the default) reads the configured
+    ``documents.max_file_size_mb`` value.
     """
+    if max_file_size is None:
+        max_file_size = _configured_max_file_size()
+
     image_paths: list[str] = []
     doc_texts: list[str] = []
 
@@ -177,9 +186,17 @@ def extract_documents(
         except OSError:
             continue
         if size > max_file_size:
+            limit_mb = max_file_size // (1024 * 1024)
             logger.warning(
                 "Skipping oversized file for extraction: {} ({:.1f} MB > {} MB limit)",
-                p.name, size / (1024 * 1024), max_file_size // (1024 * 1024),
+                p.name, size / (1024 * 1024), limit_mb,
+            )
+            # Say so in the turn. Dropping it silently reads to the user as
+            # durin ignoring the file they just attached.
+            doc_texts.append(
+                f"[File: {p.name} — too large to read "
+                f"({size / (1024 * 1024):.1f} MB, limit {limit_mb} MB). "
+                f"Saved on disk at {p}]"
             )
             continue
 
@@ -203,3 +220,23 @@ def extract_documents(
         text = text + "\n\n" + "\n\n".join(doc_texts)
 
     return text, image_paths
+
+
+def _configured_max_file_size() -> int:
+    """Configured attachment size cap in bytes, falling back to the constant
+    when no config is loadable (tests, direct library use)."""
+    try:
+        from durin.config.loader import load_config
+
+        return load_config().documents.max_file_size_mb * 1024 * 1024
+    except Exception:  # noqa: BLE001
+        return _MAX_EXTRACT_FILE_SIZE
+
+
+def _configured_max_text_chars() -> int:
+    try:
+        from durin.config.loader import load_config
+
+        return load_config().documents.max_text_chars
+    except Exception:  # noqa: BLE001
+        return _MAX_TEXT_LENGTH
