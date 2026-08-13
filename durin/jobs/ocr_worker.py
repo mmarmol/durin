@@ -80,11 +80,24 @@ def run_job(job_id: str, *, registry: JobRegistry | None = None) -> None:
         # (durin.memory.ingestion), produced later: the document's full
         # per-page text with the transcribed pages filled in, joined the same
         # way convert_file_to_markdown joins them for the inline case.
-        texts = page_texts(pdf_path)
-        for unit, text in registry.units(job_id):
-            texts[unit - 1] = text
-        markdown = "\n\n".join(t for t in texts if t.strip())
-        atomic_write_text(Path(sidecar_dir) / "source.md", markdown)
+        #
+        # Guarded like the per-page loop above: an unguarded failure here
+        # would escape run_job entirely, skip registry.finish(), and leave
+        # the job stuck at "running" with no error recorded. Worse, a
+        # resumed run finds `todo` already empty and hits this same step
+        # again immediately — a persistent cause (permissions, a removed
+        # entry directory) would then loop forever with nothing to
+        # diagnose from. Recording it as a normal job failure instead means
+        # a retry is a deliberate requeue, not an infinite silent retry.
+        try:
+            texts = page_texts(pdf_path)
+            for unit, text in registry.units(job_id):
+                texts[unit - 1] = text
+            markdown = "\n\n".join(t for t in texts if t.strip())
+            atomic_write_text(Path(sidecar_dir) / "source.md", markdown)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("ocr worker: sidecar write failed for job {}", job_id)
+            error = f"sidecar write: {type(exc).__name__}: {exc}"
 
     registry.finish(job_id, error=error)
     _emit(job_id, len(pages), len(already), started, "failed" if error else "done")

@@ -61,6 +61,28 @@ def test_scan_over_the_budget_raises_needs_ocr_job(big_scan):
     assert excinfo.value.pages == list(range(1, 41))
 
 
+def test_exactly_the_budget_stays_inline_one_more_goes_to_a_job(tmp_path, monkeypatch):
+    # The check is `>`, not `>=`: a document needing exactly inline_max_pages
+    # pages of OCR must still be handled inline, and one more page over that
+    # must be the one that tips it into a background job.
+    from tests.tools.test_read_enhancements import _write_text_pdf
+
+    monkeypatch.setattr(
+        "durin.memory.doc_convert.transcribe_page",
+        lambda path, page, **kw: f"transcribed page {page}",
+    )
+
+    at_budget = tmp_path / "at_budget.pdf"
+    _write_text_pdf(at_budget, [""] * 5)
+    out = convert_file_to_markdown(at_budget, documents_config=_cfg(inline_max_pages=5))
+    assert "transcribed page 5" in out.markdown
+
+    over_budget = tmp_path / "over_budget.pdf"
+    _write_text_pdf(over_budget, [""] * 6)
+    with pytest.raises(NeedsOcrJob):
+        convert_file_to_markdown(over_budget, documents_config=_cfg(inline_max_pages=5))
+
+
 def test_budget_counts_pages_needing_ocr_not_document_pages(tmp_path, monkeypatch):
     # A long report with three scanned inserts stays inline.
     from tests.tools.test_read_enhancements import _write_text_pdf
