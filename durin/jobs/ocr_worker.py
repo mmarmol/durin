@@ -27,7 +27,8 @@ __all__ = ["run_job"]
 
 def run_job(job_id: str, *, registry: JobRegistry | None = None) -> None:
     """Transcribe every page named in the job's payload that is not done yet."""
-    registry = registry or JobRegistry()
+    if registry is None:
+        registry = JobRegistry()
     job = registry.get(job_id)
     if job is None:
         logger.warning("ocr worker: unknown job {}", job_id)
@@ -37,6 +38,21 @@ def run_job(job_id: str, *, registry: JobRegistry | None = None) -> None:
     pages: list[int] = list(job.payload["pages"])
     already = registry.done_units(job_id)
     todo = [p for p in pages if p not in already]
+
+    # Re-fetch immediately before claiming rather than trusting `job` above:
+    # interpreter boot, imports and the done_units() round trip all take real
+    # wall-clock time, and a cancellation landing in that window must not be
+    # silently overwritten by an unconditional claim. `queued` is the only
+    # status a fresh invocation may claim — `running` means another process
+    # already owns this job, `done`/`failed` mean it already has an outcome,
+    # and `cancelled` means nobody should touch it further.
+    current = registry.get(job_id)
+    if current is None or current.status != "queued":
+        logger.warning(
+            "ocr worker: job {} is {} at claim time, not queued; skipping",
+            job_id, current.status if current is not None else "gone",
+        )
+        return
 
     registry.claim(job_id, pid=os.getpid())
     started = time.monotonic()

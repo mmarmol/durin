@@ -109,5 +109,38 @@ def test_worker_stops_when_the_job_is_cancelled_midway(registry, scanned_pdf, mo
     assert registry.done_units(job.id) == {1}
 
 
+def test_worker_respects_a_cancellation_that_landed_before_it_started(registry, scanned_pdf, monkeypatch):
+    called = []
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page",
+        lambda path, page, **kw: called.append(page) or f"page {page}",
+    )
+    job = _enqueue(registry, scanned_pdf, [1, 2, 3])
+    registry.cancel(job.id)
+
+    run_job(job.id, registry=registry)
+
+    assert registry.get(job.id).status == "cancelled"
+    assert called == []
+    assert registry.done_units(job.id) == set()
+
+
+def test_worker_does_not_reclaim_a_job_already_running_elsewhere(registry, scanned_pdf, monkeypatch):
+    called = []
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page",
+        lambda path, page, **kw: called.append(page) or f"page {page}",
+    )
+    job = _enqueue(registry, scanned_pdf, [1, 2, 3])
+    registry.claim(job.id, pid=999999)  # another process already owns this job
+
+    run_job(job.id, registry=registry)
+
+    assert called == []
+    reread = registry.get(job.id)
+    assert reread.status == "running"
+    assert reread.pid == 999999
+
+
 def test_worker_on_an_unknown_job_is_a_noop(registry):
     run_job("does-not-exist", registry=registry)  # must not raise
