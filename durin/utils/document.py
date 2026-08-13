@@ -230,6 +230,11 @@ def _configured_max_file_size() -> int:
 
         return load_config().documents.max_file_size_mb * 1024 * 1024
     except Exception:  # noqa: BLE001
+        logger.exception(
+            "Could not read documents.max_file_size_mb from config; "
+            "using the built-in default of {} MB",
+            _MAX_EXTRACT_FILE_SIZE // (1024 * 1024),
+        )
         return _MAX_EXTRACT_FILE_SIZE
 
 
@@ -239,4 +244,9 @@ def _configured_max_text_chars() -> int:
 
         return load_config().documents.max_text_chars
     except Exception:  # noqa: BLE001
+        logger.exception(
+            "Could not read documents.max_text_chars from config; "
+            "using the built-in default of {} chars",
+            _MAX_TEXT_LENGTH,
+        )
         return _MAX_TEXT_LENGTH

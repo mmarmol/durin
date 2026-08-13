@@ -344,3 +344,32 @@ def test_extract_documents_reports_a_skipped_oversized_file(tmp_path):
     text, _ = extract_documents("hello", [str(big)], max_file_size=1000)
     assert "huge.pdf" in text
     assert "too large" in text.lower()
+
+
+def test_configured_max_file_size_reads_the_configured_value(tmp_path, monkeypatch):
+    # A non-default value, well clear of both the schema default (50) and the
+    # module's fallback constant (also 50) — the two cannot be told apart by
+    # a value that happens to equal either, so this pins the real read.
+    import json
+
+    from durin.utils.document import _configured_max_file_size
+
+    (tmp_path / "config.json").write_text(
+        json.dumps({"documents": {"maxFileSizeMb": 3}})
+    )
+    monkeypatch.setenv("DURIN_HOME", str(tmp_path))
+
+    assert _configured_max_file_size() == 3 * 1024 * 1024
+
+
+def test_configured_max_text_chars_reads_the_configured_value(tmp_path, monkeypatch):
+    import json
+
+    from durin.utils.document import _configured_max_text_chars
+
+    (tmp_path / "config.json").write_text(
+        json.dumps({"documents": {"maxTextChars": 1500}})
+    )
+    monkeypatch.setenv("DURIN_HOME", str(tmp_path))
+
+    assert _configured_max_text_chars() == 1500
