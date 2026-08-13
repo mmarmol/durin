@@ -13,33 +13,66 @@ from durin.memory.ocr import OcrUnavailable, engine_available, render_page, tran
 
 
 @pytest.fixture(autouse=True)
-def _quiet_rapidocr_console():
-    """Silence RapidOCR's own stderr handler for the duration of each test.
+def _quiet_rapidocr_model_load(monkeypatch):
+    """Silence RapidOCR's own stderr handler for exactly the ``RapidOCR()``
+    construction call inside ``_get_engine`` — not the rest of the test.
 
     RapidOCR resets its shared "RapidOCR" logger's level back to its
-    configured default (INFO) on every ``RapidOCR()`` construction, so
-    lowering the *logger's* level beforehand does not stick — the engine's own
-    __init__ overwrites it right back. The logger's handler is created once at
-    first import and never touched by that reset, so raising the *handler's*
-    level survives across constructions instead. This only trims routine
-    INFO/WARNING chatter (model loads, blank-page notices); ERROR/CRITICAL
-    output is untouched, and a real test failure (wrong text, a raised
-    exception) fails exactly as loudly as it would without this fixture.
+    configured default (INFO) on every ``RapidOCR()`` construction (rapidocr's
+    main.py calls ``logger.setLevel(cfg.Global.log_level.upper())`` in
+    __init__), so lowering the *logger's* level beforehand does not stick.
+    Raising the *handler's* level survives that reset instead.
+
+    The window is scoped to wrap only ``durin.memory.ocr._get_engine`` (via
+    monkeypatch), rather than the whole test body, for two reasons. First, so
+    any logging *after* construction — e.g. RapidOCR's own WARNING when a page
+    has no detected text — is never touched. Second, and more importantly:
+    pytest attaches its own diagnostic capture handler(s) to any
+    non-propagating logger it discovers (RapidOCR sets ``propagate = False``
+    on "RapidOCR"), and once that has happened for one test in a session, it
+    stays attached for the rest of it. An earlier version of this fixture
+    wrapped the whole test body and raised the level of *every* handler
+    currently on the logger — which also caught pytest's own handler from the
+    second relevant test onward in a session, silencing a genuine failure's
+    log trail along with the routine noise. Filtering to
+    ``type(h) is logging.StreamHandler`` — RapidOCR's own handler type
+    exactly, not a subclass — leaves pytest's handler alone regardless of test
+    order, so a failure elsewhere in the test (wrong text, a raised exception)
+    keeps its diagnostic trail exactly as if this fixture were not here.
+
+    Asserts the handler was actually found rather than silently doing
+    nothing: if a future rapidocr release renames the logger or changes its
+    handler's type, this must fail loudly, not quietly stop suppressing and
+    let the noise back in unnoticed.
     """
     if not engine_available():
         yield
         return
-    from rapidocr import RapidOCR  # noqa: F401 — forces the logger's handler to exist
 
-    handlers = logging.getLogger("RapidOCR").handlers
-    originals = [handler.level for handler in handlers]
-    for handler in handlers:
-        handler.setLevel(logging.ERROR)
-    try:
-        yield
-    finally:
-        for handler, level in zip(handlers, originals):
-            handler.setLevel(level)
+    import durin.memory.ocr as ocr_module
+
+    real_get_engine = ocr_module._get_engine
+
+    def quiet_get_engine():
+        from rapidocr import RapidOCR  # noqa: F401 — ensures the logger's handler exists
+
+        handlers = [
+            handler
+            for handler in logging.getLogger("RapidOCR").handlers
+            if type(handler) is logging.StreamHandler
+        ]
+        assert handlers, (
+            'expected to find RapidOCR\'s own StreamHandler on the "RapidOCR" '
+            "logger to silence it around construction; found none. Either "
+            "rapidocr stopped attaching one, or changed its type — this "
+            "filter needs updating, not silently skipping."
+        )
+        for handler in handlers:
+            monkeypatch.setattr(handler, "level", logging.ERROR)
+        return real_get_engine()
+
+    monkeypatch.setattr(ocr_module, "_get_engine", quiet_get_engine)
+    yield
 
 
 def test_engine_available_reports_a_bool():
