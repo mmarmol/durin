@@ -21,6 +21,8 @@ from loguru import logger
 
 from durin.jobs.registry import JobRegistry
 from durin.memory.ocr import transcribe_page
+from durin.memory.pdf_coverage import page_texts
+from durin.utils.atomic_write import atomic_write_text
 
 __all__ = ["run_job"]
 
@@ -71,6 +73,18 @@ def run_job(job_id: str, *, registry: JobRegistry | None = None) -> None:
             logger.exception("ocr worker: page {} of {} failed", page, pdf_path.name)
             error = f"page {page}: {type(exc).__name__}: {exc}"
             break
+
+    sidecar_dir = job.payload.get("sidecar_dir")
+    if error is None and sidecar_dir:
+        # The same sidecar the ordinary conversion path writes at ingest time
+        # (durin.memory.ingestion), produced later: the document's full
+        # per-page text with the transcribed pages filled in, joined the same
+        # way convert_file_to_markdown joins them for the inline case.
+        texts = page_texts(pdf_path)
+        for unit, text in registry.units(job_id):
+            texts[unit - 1] = text
+        markdown = "\n\n".join(t for t in texts if t.strip())
+        atomic_write_text(Path(sidecar_dir) / "source.md", markdown)
 
     registry.finish(job_id, error=error)
     _emit(job_id, len(pages), len(already), started, "failed" if error else "done")

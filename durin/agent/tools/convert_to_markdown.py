@@ -63,7 +63,12 @@ class ConvertToMarkdownTool(Tool):
             "formats: " + ", ".join(s.lstrip(".") for s in SUPPORTED_SUFFIXES)
             + ". Use this when the user points at a document they want read, "
             "summarized, or discussed NOW. It does NOT save anything to "
-            "memory — for that, use `memory_ingest`."
+            "memory — for that, use `memory_ingest`. "
+            "Scanned PDF pages with no text layer are transcribed with local "
+            "OCR when it is enabled. A document needing more OCR than the "
+            "inline limit is not read into the turn — ingest it instead, and "
+            "it is transcribed as a background job you can follow with the "
+            "tasks tool."
         )
 
     @property

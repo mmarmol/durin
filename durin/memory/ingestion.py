@@ -34,14 +34,29 @@ class IngestError(ValueError):
     """Raised when an artifact cannot be ingested."""
 
 
-def ingest_artifact(workspace: Path, source_path: Path) -> dict[str, Any]:
+def ingest_artifact(
+    workspace: Path,
+    source_path: Path,
+    *,
+    documents_config=None,
+    jobs=None,
+    session_key: str | None = None,
+) -> dict[str, Any]:
     """Copy a file into ``<workspace>/ingested/<id>/`` and persist meta.
 
     Returns a dict with: ``id``, ``source`` (path written), ``content``
-    (utf-8 text), ``meta_path``, ``size_bytes``.
+    (utf-8 text), ``meta_path``, ``size_bytes``, ``job_id``.
 
     Idempotent: the same ``(filename, content)`` pair always resolves
     to the same ``id``, so re-ingesting the same file is a no-op.
+
+    A PDF needing more OCR than the inline budget allows does not block:
+    the original is stored right away and ``job_id`` names the background job
+    transcribing it. ``content`` is empty in that case and the markdown
+    sidecar is written later, by the worker. ``documents_config`` is the
+    ``DocumentsConfig`` to use (``None`` loads it); ``jobs`` is the
+    ``JobRegistry`` such a job is enqueued on (``None`` opens the default
+    one); ``session_key`` tags the job with the session that requested it.
     """
     if not source_path.exists():
         raise IngestError(f"source does not exist: {source_path}")
@@ -50,17 +65,41 @@ def ingest_artifact(workspace: Path, source_path: Path) -> dict[str, Any]:
 
     from durin.memory.doc_convert import (
         DocConvertError,
+        NeedsOcrJob,
         convert_file_to_markdown,
         is_convertible,
     )
 
+    job_id: str | None = None
     converted = is_convertible(source_path.suffix)
     if converted:
         # A supported document (PDF/Office/EPUB/HTML/…): convert to markdown
         # for the reference, keep the original verbatim, key the id off the
         # ORIGINAL bytes so re-ingest stays idempotent for binaries.
         try:
-            content = convert_file_to_markdown(source_path).markdown
+            content = convert_file_to_markdown(
+                source_path, documents_config=documents_config
+            ).markdown
+        except NeedsOcrJob as exc:
+            # The text is not ready, but the document is: store the original
+            # now and let the worker fill in the markdown sidecar.
+            content = ""
+            entry_id = _bytes_id(source_path.name, source_path.read_bytes())
+            entry_dir = ingested_entry_dir(workspace, entry_id)
+            target = entry_dir / f"source{source_path.suffix or '.txt'}"
+            if not target.exists():
+                shutil.copy2(source_path, target)
+            from durin.jobs.registry import JobRegistry
+            from durin.jobs.spawn import spawn_ocr_job
+
+            job = spawn_ocr_job(
+                registry=jobs or JobRegistry(),
+                pdf_path=target,
+                pages=exc.pages,
+                session_key=session_key,
+                sidecar_dir=entry_dir,
+            )
+            job_id = job.id
         except DocConvertError as exc:
             raise IngestError(str(exc)) from exc
         entry_id = _bytes_id(source_path.name, source_path.read_bytes())
@@ -80,7 +119,9 @@ def ingest_artifact(workspace: Path, source_path: Path) -> dict[str, Any]:
     target = entry_dir / f"source{source_path.suffix or '.txt'}"
     if not target.exists():
         shutil.copy2(source_path, target)
-    if converted:
+    if converted and job_id is None:
+        # A pending job means `content` is a placeholder, not a conversion —
+        # the worker writes this sidecar itself once the real text exists.
         md_sidecar = entry_dir / "source.md"
         if not md_sidecar.exists():
             atomic_write_text(md_sidecar, content)
@@ -110,6 +151,7 @@ def ingest_artifact(workspace: Path, source_path: Path) -> dict[str, Any]:
         "content": content,
         "meta_path": str(meta_path),
         "size_bytes": size_bytes,
+        "job_id": job_id,
     }
 
 
