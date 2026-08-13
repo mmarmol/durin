@@ -38,6 +38,20 @@ def test_list_for_session_is_newest_first(registry):
     assert ids == [second.id, first.id]
 
 
+def test_list_for_session_breaks_ties_on_identical_created_at(registry, monkeypatch):
+    # Two jobs enqueued in the same clock tick get the same `created_at`.
+    # `ORDER BY created_at DESC` alone leaves that tie in implementation-defined
+    # order; freeze the clock so the tie is real (not a timing-margin accident)
+    # and prove the rowid tiebreaker still puts the later insert first.
+    monkeypatch.setattr("durin.jobs.registry.time.time", lambda: 1_700_000_000.0)
+    first = registry.enqueue(kind="ocr", label="one", payload={}, session_key="s", units_total=1)
+    second = registry.enqueue(kind="ocr", label="two", payload={}, session_key="s", units_total=1)
+    assert first.created_at == second.created_at  # confirm the tie actually happened
+
+    ids = [j.id for j in registry.list_for_session("s")]
+    assert ids == [second.id, first.id]
+
+
 def test_list_for_session_excludes_other_sessions(registry):
     registry.enqueue(kind="ocr", label="mine", payload={}, session_key="a", units_total=1)
     registry.enqueue(kind="ocr", label="theirs", payload={}, session_key="b", units_total=1)

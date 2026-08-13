@@ -127,7 +127,7 @@ class JobRegistry:
     def list_for_session(self, session_key: str) -> list[Job]:
         rows = self._conn.execute(
             f"SELECT {_COLUMNS} FROM jobs WHERE session_key = ?"
-            " ORDER BY created_at DESC",
+            " ORDER BY created_at DESC, rowid DESC",
             (session_key,),
         ).fetchall()
         return [_row_to_job(r) for r in rows]
