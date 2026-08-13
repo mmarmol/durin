@@ -74,6 +74,10 @@ dependencies = [
     # The docx/pptx/xlsx/xls/pdf extras pull the per-format converters;
     # html/csv/json/xml/epub/ipynb/zip work with the base install.
     "markitdown[docx,pptx,xlsx,xls,pdf]>=0.1.6,<0.2.0",
+    # Per-page PDF text, used to measure how much of a document has a text
+    # layer before deciding whether it needs OCR. Also arrives transitively
+    # via markitdown[pdf]; declared here because we import it directly.
+    "pdfplumber>=0.11.9,<1.0.0",
     # Markdown → HTML for outbound email bodies (multipart/alternative).
     # Pure Python, CommonMark-compliant.
     "markdown-it-py>=3.0,<5.0",
