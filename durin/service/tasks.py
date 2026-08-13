@@ -1,4 +1,4 @@
-"""Service: a unified per-chat list of background tasks (sub-agents + workflow runs).
+"""Service: a unified per-chat list of background tasks (sub-agents + workflow runs + jobs).
 
 Read-only. The merge of in-memory sub-agent statuses with on-disk workflow run
 manifests lives in :mod:`durin.agent.background_tasks` so this HTTP surface and the
@@ -27,7 +27,7 @@ __all__ = [
 
 
 class BackgroundTask(Result):
-    kind: str  # "subagent" | "workflow"
+    kind: str  # "subagent" | "workflow" | "job"
     id: str
     label: str
     status: str  # "running" | "needs_input" | "done" | "failed" | "cancelled"
@@ -37,6 +37,8 @@ class BackgroundTask(Result):
     nodes: list[dict] | None = None  # workflow node tree; None for sub-agents
     task: str | None = None  # workflow run task (the input given to this run); None for sub-agents
     needs_input_detail: str | None = None  # the gate's questions when status=="needs_input"; None otherwise
+    units_total: int | None = None  # job progress denominator; None for other kinds
+    units_done: int | None = None
 
 
 class TasksListQuery(Query):
@@ -48,10 +50,14 @@ class TasksListResult(Result):
 
 
 class TasksService:
-    def __init__(self, *, workspace: Any, subagent_manager: Any | None = None, sessions: Any | None = None) -> None:
+    def __init__(
+        self, *, workspace: Any, subagent_manager: Any | None = None,
+        sessions: Any | None = None, jobs: Any | None = None,
+    ) -> None:
         self._workspace = workspace
         self._subagents = subagent_manager
         self._sessions = sessions
+        self._jobs = jobs
 
     @route(
         "GET",
@@ -59,12 +65,12 @@ class TasksService:
         scope=Scope.SESSIONS_READ.value,
         request_model=TasksListQuery,
         response_model=TasksListResult,
-        summary="List background tasks (sub-agents + workflow runs) for a chat session",
+        summary="List background tasks (sub-agents + workflow runs + jobs) for a chat session",
     )
     async def list(self, query: TasksListQuery, principal: Principal) -> TasksListResult:
         principal.require(Scope.SESSIONS_READ)
         rows = collect_tasks(
             self._workspace, subagent_manager=self._subagents,
-            sessions=self._sessions, session_key=query.session,
+            sessions=self._sessions, jobs=self._jobs, session_key=query.session,
         )
         return TasksListResult(tasks=[BackgroundTask(**r) for r in rows])

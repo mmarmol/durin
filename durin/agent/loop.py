@@ -1867,6 +1867,20 @@ class AgentLoop:
         from durin.agent import pending_answers
 
         self._running = True
+        # A gateway restart used to leave running jobs untracked. Rows whose
+        # worker process is gone go back to the queue with their finished
+        # units intact, so the work resumes rather than restarting. Wrapped,
+        # like the other startup steps in __init__, so a reconcile failure
+        # (or a job kind respawn does not recognize) cannot take the whole
+        # gateway down with it.
+        try:
+            from durin.jobs.registry import JobRegistry
+            from durin.jobs.spawn import _pid_alive, respawn
+
+            for job in JobRegistry().reconcile(alive=_pid_alive):
+                respawn(job)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("job reconcile at startup failed (continuing): {}", exc)
         await self._connect_mcp()
         self._schedule_background(self._warmup_memory_embedding())
         # Blocking ask_user may only wait while this consumer is alive to

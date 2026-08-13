@@ -99,6 +99,30 @@
             ],
             "default": null,
             "title": "Task"
+          },
+          "units_done": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Units Done"
+          },
+          "units_total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Units Total"
           }
         },
         "required": [
@@ -12294,7 +12318,7 @@
             "description": "Success"
           }
         },
-        "summary": "List background tasks (sub-agents + workflow runs) for a chat session",
+        "summary": "List background tasks (sub-agents + workflow runs + jobs) for a chat session",
         "x-required-scope": "sessions:read"
       }
     },

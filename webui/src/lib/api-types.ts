@@ -2330,7 +2330,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List background tasks (sub-agents + workflow runs) for a chat session */
+        /** List background tasks (sub-agents + workflow runs + jobs) for a chat session */
         get: operations["tasks_list"];
         put?: never;
         post?: never;
@@ -2677,6 +2677,16 @@ export interface components {
              * @default null
              */
             task: string | null;
+            /**
+             * Units Done
+             * @default null
+             */
+            units_done: number | null;
+            /**
+             * Units Total
+             * @default null
+             */
+            units_total: number | null;
         };
         /** ChannelPostCommand */
         ChannelPostCommand: {

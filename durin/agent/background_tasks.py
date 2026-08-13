@@ -1,19 +1,23 @@
-"""The merged view of a session's background work: sub-agents + workflow runs.
+"""The merged view of a session's background work: sub-agents, workflow runs
+and long jobs.
 
 One place builds this list so the two consumers never diverge: the HTTP service
 (``GET /api/v1/tasks``, which the web UI's Tasks tray renders) and the agent's
 own ``tasks`` tool. It merges the in-memory sub-agent statuses (SubagentManager,
-scoped to the session) with the on-disk workflow run manifests (run_log), plus
-persisted sub-agent lineage so history survives a gateway restart.
+scoped to the session), the on-disk workflow run manifests (run_log), and the
+long-job registry (JobRegistry), plus persisted sub-agent lineage so history
+survives a gateway restart.
 
-Returns plain dicts with a stable shape — ``kind`` ("subagent" | "workflow"),
-``id``, ``label``, ``status`` ("running" | "needs_input" | "done" | "failed" |
-"cancelled"), ``started_at`` (wall-clock epoch), ``ended_at``, ``session_key``,
-and for workflows a ``nodes`` tree (each entry carrying ``duration_s``, plus a
-trailing running entry when a node is in flight), the run ``task``, and (only
-when the run's status is ``needs_input``) ``needs_input_detail`` — the gate's
-questions, capped at 500 chars. The service wraps these into its pydantic
-``BackgroundTask`` response model; the tool renders them.
+Returns plain dicts with a stable shape — ``kind`` ("subagent" | "workflow" |
+"job"), ``id``, ``label``, ``status`` ("running" | "needs_input" | "done" |
+"failed" | "cancelled"), ``started_at`` (wall-clock epoch), ``ended_at``,
+``session_key``, ``units_total``/``units_done`` (a job's progress; ``None`` for
+the other two kinds), and for workflows a ``nodes`` tree (each entry carrying
+``duration_s``, plus a trailing running entry when a node is in flight), the
+run ``task``, and (only when the run's status is ``needs_input``)
+``needs_input_detail`` — the gate's questions, capped at 500 chars. The service
+wraps these into its pydantic ``BackgroundTask`` response model; the tool
+renders them.
 
 Duration estimates are deliberately absent here: they belong to the wide
 executions surface, which reads the run manifest directly, not to the narrow
@@ -66,6 +70,13 @@ def _workflow_status(status: str) -> str:
     return "failed"  # exhausted | aborted | crashed
 
 
+def _job_status(status: str) -> str:
+    # The tray has no "queued": accepted-and-pending reads as running.
+    if status == "queued":
+        return "running"
+    return status  # running | done | failed | cancelled
+
+
 def _node_run_status(s: str) -> str:
     return "failed" if s in ("node_failed", "persist_failed") else "done"
 
@@ -116,12 +127,12 @@ def _node_tree(node_runs: list[dict], label_map: dict[str, str] | None = None,
 
 def collect_tasks(
     workspace: Any, *, subagent_manager: Any | None = None,
-    sessions: Any | None = None, session_key: str,
+    sessions: Any | None = None, jobs: Any | None = None, session_key: str,
 ) -> list[dict]:
-    """Merge sub-agents + workflow runs for one session, newest-first.
+    """Merge sub-agents + workflow runs + long jobs for one session, newest-first.
 
-    ``workspace`` is the workspace path (for workflow manifests). ``subagent_manager``
-    and ``sessions`` are optional — when absent, that source contributes nothing.
+    ``workspace`` is the workspace path (for workflow manifests). ``subagent_manager``,
+    ``sessions`` and ``jobs`` are optional — when absent, that source contributes nothing.
     """
     tasks: list[dict] = []
 
@@ -135,6 +146,7 @@ def collect_tasks(
                 "status": _subagent_status(s.phase),
                 "started_at": started, "ended_at": ended, "session_key": s.session_key,
                 "nodes": None, "task": None,
+                "units_total": None, "units_done": None,
             })
 
     from durin.workflow import run_log
@@ -175,6 +187,7 @@ def collect_tasks(
             "nodes": _node_tree(node_runs, label_map, active_node),
             "task": rec.get("task"),
             "needs_input_detail": needs_input_detail,
+            "units_total": None, "units_done": None,
         })
 
     # Reconstruct finished sub-agents from persisted session lineage so the history
@@ -195,6 +208,18 @@ def collect_tasks(
                 "started_at": _iso_to_epoch(c.get("created_at")),
                 "ended_at": None, "session_key": c.get("key"),
                 "nodes": None, "task": None,
+                "units_total": None, "units_done": None,
+            })
+
+    if jobs is not None:
+        for j in jobs.list_for_session(session_key):
+            tasks.append({
+                "kind": "job", "id": j.id, "label": j.label,
+                "status": _job_status(j.status),
+                "started_at": j.started_at or j.created_at, "ended_at": j.ended_at,
+                "session_key": j.session_key,
+                "nodes": None, "task": None,
+                "units_total": j.units_total, "units_done": j.units_done,
             })
 
     tasks.sort(key=lambda t: t["started_at"], reverse=True)
