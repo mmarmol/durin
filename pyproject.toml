@@ -160,6 +160,15 @@ cross-encoder = [
     # gated behind the extra rather than in `memory`.
     "sentence-transformers>=3.0,<6.0",
 ]
+ocr = [
+    # Local on-CPU OCR for PDF pages with no text layer. ONNX models ship in
+    # the wheel; nothing is downloaded at runtime and nothing leaves the box.
+    #
+    # Pinned to the maintained 3.x line. The legacy rapidocr-onnxruntime
+    # package caps at requires_python <3.13 and would silently drop durin's
+    # 3.13 support, so it must not be substituted here.
+    "rapidocr>=3.9,<4.0",
+]
 api = [
     # Starlette ASGI framework + uvicorn server for the new HTTP front door (SP4).
     # Both are transitively installed via mcp, but declared here so any install
