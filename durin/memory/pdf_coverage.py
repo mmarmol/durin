@@ -21,6 +21,7 @@ __all__ = [
     "SCANNED_RATIO",
     "PdfCoverage",
     "classify_coverage",
+    "coverage_note",
     "gap_ranges",
     "page_texts",
 ]
@@ -105,3 +106,64 @@ def page_texts(path: Path) -> list[str]:
 
     with pdfplumber.open(str(path)) as pdf:
         return [(page.extract_text() or "") for page in pdf.pages]
+
+
+# How much of the preceding page's text to quote when labelling a gap.
+_GAP_LABEL_CHARS = 60
+
+
+def _gap_label(texts: list[str], first_empty: int) -> str:
+    """Quote the last text seen before a gap, so the reader knows which part
+    of the document is missing rather than only which page numbers."""
+    for idx in range(first_empty - 2, -1, -1):
+        text = texts[idx].strip()
+        if len(text) >= EMPTY_PAGE_CHARS:
+            snippet = " ".join(text.split())[:_GAP_LABEL_CHARS]
+            return f' — after "{snippet}" (p{idx + 1})'
+    return ""
+
+
+def coverage_note(cov: PdfCoverage, texts: list[str], *, ocr_enabled: bool) -> str:
+    """A note about what could not be read, for the model reading this document.
+
+    Empty for a document whose text layer is intact. Callers prepend it to the
+    extracted text rather than appending: a long extraction is paginated, and a
+    footer would land on a page the reader may never fetch.
+    """
+    if cov.kind == "text":
+        return ""
+
+    if cov.kind == "scanned":
+        head = (
+            f"[SCANNED DOCUMENT: all {cov.total_pages} pages of this PDF are "
+            "images with no text layer. Nothing below was extracted from them."
+        )
+    else:
+        lines = []
+        for first, last in gap_ranges(cov.empty_pages):
+            span = f"page {first}" if first == last else f"pages {first}-{last}"
+            count = last - first + 1
+            plural = "" if count == 1 else "s"
+            label = _gap_label(texts, first)
+            lines.append(f"  {span} ({count} page{plural}){label}")
+        gaps = "\n".join(lines)
+        head = (
+            f"[EXTRACTION COVERAGE WARNING: {len(cov.empty_pages)} of "
+            f"{cov.total_pages} pages in this PDF yielded no text. Those pages "
+            "are scanned images; their content is MISSING below, including "
+            "where a section header appears with an empty body. Unreadable "
+            f"ranges:\n{gaps}"
+        )
+
+    if ocr_enabled:
+        tail = (
+            " These pages can be transcribed with local OCR — ingest the "
+            "document to have it done as a background job."
+        )
+    else:
+        tail = (
+            " Local OCR would transcribe these pages but is turned off. It is "
+            "enabled in the dashboard under Settings > Documents, or by setting "
+            "documents.ocr.enabled."
+        )
+    return head + tail + "]\n"

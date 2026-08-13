@@ -127,3 +127,54 @@ def test_classify_over_a_real_pdf(tmp_path):
     cov = classify_coverage(page_texts(pdf))
     assert cov.kind == "partial"
     assert cov.empty_pages == (2, 3, 4)
+
+
+from durin.memory.pdf_coverage import coverage_note
+
+
+def _texts(pattern: list[bool]) -> list[str]:
+    """True == a page with text, False == a scanned page."""
+    return ["body text long enough to count" if ok else "" for ok in pattern]
+
+
+def test_no_note_for_a_text_document():
+    texts = _texts([True] * 10)
+    cov = classify_coverage(texts)
+    assert coverage_note(cov, texts, ocr_enabled=True) == ""
+
+
+def test_partial_note_lists_gap_ranges():
+    texts = _texts([True, True, False, False, False, True, True, True, True, True])
+    cov = classify_coverage(texts)
+    note = coverage_note(cov, texts, ocr_enabled=True)
+    assert "3 of 10 pages" in note
+    assert "pages 3-5" in note
+
+
+def test_partial_note_labels_a_gap_with_the_text_before_it():
+    texts = ["Chapter Four: Financial Statements", "", "", *_texts([True] * 7)]
+    cov = classify_coverage(texts)
+    note = coverage_note(cov, texts, ocr_enabled=True)
+    assert "Chapter Four: Financial Statements" in note
+
+
+def test_scanned_note_does_not_list_every_page_as_a_gap():
+    texts = _texts([False] * 412)
+    cov = classify_coverage(texts)
+    note = coverage_note(cov, texts, ocr_enabled=True)
+    assert "412" in note
+    assert "pages 1-412" not in note
+
+
+def test_note_with_ocr_disabled_says_how_to_enable_it():
+    texts = _texts([False] * 50)
+    cov = classify_coverage(texts)
+    note = coverage_note(cov, texts, ocr_enabled=False)
+    assert "documents.ocr.enabled" in note
+
+
+def test_note_with_ocr_enabled_does_not_tell_the_model_to_enable_it():
+    texts = _texts([False] * 50)
+    cov = classify_coverage(texts)
+    note = coverage_note(cov, texts, ocr_enabled=True)
+    assert "documents.ocr.enabled" not in note
