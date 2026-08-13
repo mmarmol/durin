@@ -84,3 +84,10 @@ def get_legacy_sessions_dir() -> Path:
     from durin.config.home import durin_home
 
     return durin_home() / "sessions"
+
+
+def jobs_db_path() -> Path:
+    """Long-job registry database, under the active instance home (``DURIN_HOME``)."""
+    from durin.config.home import durin_home
+
+    return durin_home() / "jobs" / "jobs.db"

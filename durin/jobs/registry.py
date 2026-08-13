@@ -1,0 +1,214 @@
+"""A registry of work too long to run inside a turn.
+
+Generic over ``kind`` so the surface does not have to be rebuilt for the
+second client; OCR of scanned documents is the first.
+
+Progress is persisted per unit (a page, for OCR) rather than per job, which
+buys two things. A worker killed at unit 380 resumes at 380. And a gateway
+restart no longer loses track of running work: ``reconcile`` finds rows whose
+worker process is gone and puts them back in the queue with their finished
+units intact.
+
+The database is opened through :mod:`durin.utils.sqlite_util`, so the gateway
+and a worker subprocess can both write it.
+"""
+
+from __future__ import annotations
+
+import json
+import time
+import uuid
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable
+
+from durin.utils.sqlite_util import connect, execute_write
+
+__all__ = ["Job", "JobRegistry"]
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS jobs (
+    id           TEXT PRIMARY KEY,
+    kind         TEXT NOT NULL,
+    status       TEXT NOT NULL,
+    label        TEXT NOT NULL,
+    payload      TEXT NOT NULL,
+    session_key  TEXT,
+    units_total  INTEGER NOT NULL DEFAULT 0,
+    units_done   INTEGER NOT NULL DEFAULT 0,
+    pid          INTEGER,
+    created_at   REAL NOT NULL,
+    started_at   REAL,
+    ended_at     REAL,
+    error        TEXT
+);
+CREATE INDEX IF NOT EXISTS jobs_session ON jobs (session_key, created_at DESC);
+CREATE INDEX IF NOT EXISTS jobs_status ON jobs (status);
+
+CREATE TABLE IF NOT EXISTS job_units (
+    job_id  TEXT NOT NULL,
+    unit    INTEGER NOT NULL,
+    text    TEXT NOT NULL,
+    PRIMARY KEY (job_id, unit)
+);
+"""
+
+
+@dataclass(frozen=True)
+class Job:
+    id: str
+    kind: str
+    status: str  # queued | running | done | failed | cancelled
+    label: str
+    payload: dict[str, Any]
+    session_key: str | None
+    units_total: int
+    units_done: int
+    pid: int | None
+    created_at: float
+    started_at: float | None
+    ended_at: float | None
+    error: str | None
+
+
+def _row_to_job(row: Any) -> Job:
+    return Job(
+        id=row[0], kind=row[1], status=row[2], label=row[3],
+        payload=json.loads(row[4]), session_key=row[5],
+        units_total=row[6], units_done=row[7], pid=row[8],
+        created_at=row[9], started_at=row[10], ended_at=row[11], error=row[12],
+    )
+
+
+_COLUMNS = (
+    "id, kind, status, label, payload, session_key, units_total, "
+    "units_done, pid, created_at, started_at, ended_at, error"
+)
+
+
+class JobRegistry:
+    """Read/write access to the job database."""
+
+    def __init__(self, path: Path | None = None) -> None:
+        if path is None:
+            from durin.config.paths import jobs_db_path
+
+            path = jobs_db_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._path = path
+        self._conn = connect(path)
+        self._conn.executescript(_SCHEMA)
+
+    def enqueue(
+        self, *, kind: str, label: str, payload: dict[str, Any],
+        session_key: str | None, units_total: int,
+    ) -> Job:
+        job_id = uuid.uuid4().hex[:12]
+        now = time.time()
+        execute_write(
+            self._conn,
+            lambda c: c.execute(
+                "INSERT INTO jobs (id, kind, status, label, payload, session_key,"
+                " units_total, units_done, created_at)"
+                " VALUES (?, ?, 'queued', ?, ?, ?, ?, 0, ?)",
+                (job_id, kind, label, json.dumps(payload), session_key, units_total, now),
+            ),
+        )
+        job = self.get(job_id)
+        assert job is not None
+        return job
+
+    def get(self, job_id: str) -> Job | None:
+        row = self._conn.execute(
+            f"SELECT {_COLUMNS} FROM jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+        return _row_to_job(row) if row else None
+
+    def list_for_session(self, session_key: str) -> list[Job]:
+        rows = self._conn.execute(
+            f"SELECT {_COLUMNS} FROM jobs WHERE session_key = ?"
+            " ORDER BY created_at DESC",
+            (session_key,),
+        ).fetchall()
+        return [_row_to_job(r) for r in rows]
+
+    def claim(self, job_id: str, *, pid: int) -> None:
+        execute_write(
+            self._conn,
+            lambda c: c.execute(
+                "UPDATE jobs SET status = 'running', pid = ?, started_at = ?"
+                " WHERE id = ?",
+                (pid, time.time(), job_id),
+            ),
+        )
+
+    def record_unit(self, job_id: str, unit: int, text: str) -> None:
+        def _write(c: Any) -> None:
+            c.execute(
+                "INSERT INTO job_units (job_id, unit, text) VALUES (?, ?, ?)"
+                " ON CONFLICT(job_id, unit) DO UPDATE SET text = excluded.text",
+                (job_id, unit, text),
+            )
+            # Recount rather than increment: re-writing a unit must not inflate
+            # progress, and a resumed worker may redo a unit it already wrote.
+            c.execute(
+                "UPDATE jobs SET units_done ="
+                " (SELECT COUNT(*) FROM job_units WHERE job_id = ?) WHERE id = ?",
+                (job_id, job_id),
+            )
+
+        execute_write(self._conn, _write)
+
+    def units(self, job_id: str) -> list[tuple[int, str]]:
+        rows = self._conn.execute(
+            "SELECT unit, text FROM job_units WHERE job_id = ? ORDER BY unit",
+            (job_id,),
+        ).fetchall()
+        return [(r[0], r[1]) for r in rows]
+
+    def done_units(self, job_id: str) -> set[int]:
+        rows = self._conn.execute(
+            "SELECT unit FROM job_units WHERE job_id = ?", (job_id,)
+        ).fetchall()
+        return {r[0] for r in rows}
+
+    def finish(self, job_id: str, *, error: str | None = None) -> None:
+        execute_write(
+            self._conn,
+            lambda c: c.execute(
+                "UPDATE jobs SET status = ?, ended_at = ?, error = ?, pid = NULL"
+                " WHERE id = ?",
+                ("failed" if error else "done", time.time(), error, job_id),
+            ),
+        )
+
+    def cancel(self, job_id: str) -> None:
+        execute_write(
+            self._conn,
+            lambda c: c.execute(
+                "UPDATE jobs SET status = 'cancelled', ended_at = ?, pid = NULL"
+                " WHERE id = ?",
+                (time.time(), job_id),
+            ),
+        )
+
+    def reconcile(self, *, alive: Callable[[int], bool]) -> list[Job]:
+        """Requeue jobs marked running whose worker process is gone.
+
+        Called at gateway start. Finished units are kept, so a requeued job
+        resumes rather than restarting.
+        """
+        rows = self._conn.execute(
+            f"SELECT {_COLUMNS} FROM jobs WHERE status = 'running'"
+        ).fetchall()
+        orphans = [_row_to_job(r) for r in rows if not (r[8] and alive(r[8]))]
+        for job in orphans:
+            execute_write(
+                self._conn,
+                lambda c, jid=job.id: c.execute(
+                    "UPDATE jobs SET status = 'queued', pid = NULL,"
+                    " started_at = NULL WHERE id = ?",
+                    (jid,),
+                ),
+            )
+        return [j for j in (self.get(o.id) for o in orphans) if j is not None]
