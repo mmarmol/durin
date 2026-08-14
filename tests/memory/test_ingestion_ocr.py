@@ -340,6 +340,132 @@ def test_an_ordinary_markdown_document_re_ingest_also_short_circuits(tmp_path, r
     assert Path(second["meta_path"]).read_text(encoding="utf-8") == meta_before
 
 
+def test_a_re_ingest_upgrades_an_ocr_off_stub_once_ocr_is_enabled(
+    tmp_path, book, registry, monkeypatch
+):
+    """The coverage note left when OCR is off must not freeze the entry
+    forever: once OCR is turned on, the next re-ingest re-checks instead of
+    replaying the stale note -- and the upgrade has to land on disk, not
+    just in this call's return value, or the entry is still stuck the turn
+    after that."""
+    import json
+    from pathlib import Path
+
+    launcher = _CountingPopen()
+    monkeypatch.setattr("durin.jobs.spawn.subprocess", launcher)
+    cfg_off = DocumentsConfig.model_validate(
+        {"ocr": {"enabled": False, "inline_max_pages": 50}}
+    )
+
+    first = ingest_artifact(tmp_path / "ws", book, documents_config=cfg_off, jobs=registry)
+    assert first["job_id"] is None
+    assert "turned off" in first["content"]
+    entry_dir = Path(first["source"]).parent
+    meta_before = json.loads((entry_dir / "meta.json").read_text(encoding="utf-8"))
+    assert meta_before["derived"]["ocr_stub"] is True
+
+    monkeypatch.setattr(
+        "durin.memory.doc_convert.transcribe_pages_detached",
+        lambda path, pages: {p: f"Page {p}: fresh text." for p in pages},
+    )
+    cfg_on = DocumentsConfig.model_validate(
+        {"ocr": {"enabled": True, "inline_max_pages": 50}}
+    )
+
+    second = ingest_artifact(tmp_path / "ws", book, documents_config=cfg_on, jobs=registry)
+
+    assert second["job_id"] is None
+    assert "fresh text" in second["content"]
+    assert "turned off" not in second["content"]
+    # Persisted, not just returned in this call:
+    assert "fresh text" in (entry_dir / "source.md").read_text(encoding="utf-8")
+    meta_after = json.loads((entry_dir / "meta.json").read_text(encoding="utf-8"))
+    assert meta_after["derived"]["ocr_stub"] is False
+    assert launcher.calls == 0
+
+
+def test_a_stub_upgrade_that_is_now_over_budget_spawns_a_job(
+    tmp_path, book, registry, monkeypatch
+):
+    """Same upgrade, but this time OCR being enabled reveals the book is
+    over the inline budget: the upgrade check must fall through to the
+    ordinary over-budget spawn path, not get stuck on the stub because a
+    job wasn't spawned the first time either."""
+    launcher = _CountingPopen()
+    monkeypatch.setattr("durin.jobs.spawn.subprocess", launcher)
+    cfg_off = DocumentsConfig.model_validate(
+        {"ocr": {"enabled": False, "inline_max_pages": 5}}
+    )
+
+    first = ingest_artifact(tmp_path / "ws", book, documents_config=cfg_off, jobs=registry)
+    assert first["job_id"] is None
+
+    cfg_on = DocumentsConfig.model_validate(
+        {"ocr": {"enabled": True, "inline_max_pages": 5}}
+    )
+    second = ingest_artifact(tmp_path / "ws", book, documents_config=cfg_on, jobs=registry)
+
+    assert second["job_id"] is not None
+    assert second["job_pages"] == 40
+    assert launcher.calls == 1
+
+
+def test_a_stub_re_ingested_with_ocr_still_off_returns_it_honestly(
+    tmp_path, book, registry, monkeypatch
+):
+    """A stub is not upgradeable just because it exists. While OCR is still
+    off, returning the same note again is the honest, current answer, and
+    conversion must not re-run just to reconfirm nothing changed."""
+    launcher = _CountingPopen()
+    monkeypatch.setattr("durin.jobs.spawn.subprocess", launcher)
+    cfg_off = DocumentsConfig.model_validate(
+        {"ocr": {"enabled": False, "inline_max_pages": 50}}
+    )
+
+    first = ingest_artifact(tmp_path / "ws", book, documents_config=cfg_off, jobs=registry)
+
+    def _must_not_convert(*a, **kw):
+        raise AssertionError(
+            "convert_file_to_markdown must not run while OCR is still unavailable"
+        )
+
+    monkeypatch.setattr("durin.memory.doc_convert.convert_file_to_markdown", _must_not_convert)
+
+    second = ingest_artifact(tmp_path / "ws", book, documents_config=cfg_off, jobs=registry)
+
+    assert second["job_id"] is None
+    assert second["content"] == first["content"]
+    assert launcher.calls == 0
+
+
+def test_a_half_state_missing_meta_rebuilds_instead_of_short_circuiting(
+    tmp_path, book, registry, monkeypatch
+):
+    """The sidecar write and the meta.json write are each individually
+    atomic but not one transaction. A crash between them (simulated here by
+    deleting meta.json after a normal ingest) must not become a permanent
+    trap: the next ingest has to rebuild both rather than trusting a
+    sidecar it cannot verify."""
+    from pathlib import Path
+
+    launcher = _CountingPopen()
+    monkeypatch.setattr("durin.jobs.spawn.subprocess", launcher)
+    monkeypatch.setattr(
+        "durin.memory.doc_convert.transcribe_pages_detached",
+        lambda path, pages: {p: f"Page {p}: real text." for p in pages},
+    )
+    cfg = DocumentsConfig.model_validate({"ocr": {"enabled": True, "inline_max_pages": 50}})
+
+    first = ingest_artifact(tmp_path / "ws", book, documents_config=cfg, jobs=registry)
+    entry_dir = Path(first["source"]).parent
+    (entry_dir / "meta.json").unlink()
+
+    second = ingest_artifact(tmp_path / "ws", book, documents_config=cfg, jobs=registry)
+
+    assert second["content"] == first["content"]
+    assert (entry_dir / "meta.json").exists()
+
+
 class _RecordingVectorIndex:
     def __init__(self):
         self.upserts = []

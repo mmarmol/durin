@@ -62,9 +62,23 @@ class DocConvertError(ValueError):
 
 @dataclass(frozen=True)
 class ConvertedDoc:
+    """The result of converting one document to markdown.
+
+    ``ocr_stub`` is True when ``markdown`` is a coverage note standing in for
+    pages that need OCR but could not get it right now (the setting is off,
+    or the engine is missing/failed) rather than a real transcription. A
+    caller that persists this document should record the flag: it is what
+    lets a later re-ingest tell "nothing more to do" apart from "OCR's
+    situation may have changed, worth trying again" without re-running the
+    conversion just to find out. Defaults False -- every other return path
+    (a real transcription, or a document that never needed OCR at all) is
+    final and never needs a second look.
+    """
+
     markdown: str
     suffix: str
     coverage: PdfCoverage | None = None
+    ocr_stub: bool = False
 
 
 class NeedsOcrJob(DocConvertError):
@@ -301,10 +315,14 @@ def convert_file_to_markdown(path: Path, *, documents_config=None) -> ConvertedD
             # the wording differs.
             if not ocr_cfg.enabled or not engine_available():
                 # Still return the document. What text exists is worth having,
-                # and the note tells the reader what is missing and how to fix it.
+                # and the note tells the reader what is missing and how to fix
+                # it. ocr_stub=True: a caller that persists this must not treat
+                # it as the last word -- OCR being turned on later is exactly
+                # the situation change that makes this note stale.
                 note = coverage_note(cov, texts, engine_missing=ocr_cfg.enabled)
                 return ConvertedDoc(
-                    markdown=note + markitdown_text(), suffix=suffix, coverage=cov
+                    markdown=note + markitdown_text(), suffix=suffix, coverage=cov,
+                    ocr_stub=True,
                 )
             pages = list(cov.empty_pages)
             if len(pages) > ocr_cfg.inline_max_pages:
@@ -336,8 +354,11 @@ def convert_file_to_markdown(path: Path, *, documents_config=None) -> ConvertedD
                     "coverage note", path.name, exc,
                 )
                 note = coverage_note(cov, texts, engine_missing=True)
+                # Same ocr_stub=True as the engine-missing branch above: the
+                # engine merely failing THIS run does not mean it always will.
                 return ConvertedDoc(
-                    markdown=note + markitdown_text(), suffix=suffix, coverage=cov
+                    markdown=note + markitdown_text(), suffix=suffix, coverage=cov,
+                    ocr_stub=True,
                 )
             markdown = "\n\n".join(t for t in texts if t.strip())
             if not markdown:

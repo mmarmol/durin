@@ -299,13 +299,30 @@ runs — renaming the file before re-ingest produces a new id and a new entry.
 That ordering is what makes re-ingesting the same file genuinely idempotent:
 `ingest_artifact` (`durin/memory/ingestion.py`) checks the entry's own state
 under that id before doing any work, rather than redoing the work and only
-then discovering nothing needed to change. A finished entry (`source.md`
-already on disk) short-circuits to a true no-op, returning that content with
-`job_id: null`. A document whose OCR job is still `queued`/`running` — tracked
-by an `ocr_job.json` marker in the entry directory — returns that SAME job
-instead of starting a second one. A marker naming a `failed`/`cancelled` job,
-or one no longer in the registry, is a legitimate retry: conversion runs
-again and a fresh job is spawned, overwriting the marker.
+then discovering nothing needed to change. A finished entry with a real
+transcription (`source.md` on disk, and `meta.json`'s `derived.ocr_stub` not
+set) short-circuits to a true no-op, returning that content with
+`job_id: null` and never touching `meta.json`.
+
+`source.md` alone does not prove an entry is finished and final, though.
+`convert_file_to_markdown` can return a coverage-note STUB instead of a real
+transcription — OCR was off, or the engine was missing or failed
+(`ConvertedDoc.ocr_stub`) — and `ingest_artifact` persists that flag into
+`meta.json`'s `derived.ocr_stub` right alongside it. A re-ingest reads the
+flag before trusting the sidecar: while OCR still cannot do better, the stub
+is returned as-is (honest — it is still the current answer, not a stale one);
+once OCR is enabled and the engine is available, the next re-ingest
+re-converts instead, and the upgrade is written back to `source.md` and the
+flag on disk, not just returned for that one call. The same re-check applies
+to a half state — `source.md` present but `meta.json` missing, which the two
+writes being individually atomic rather than one transaction makes possible
+on a crash between them — treated as no finished entry at all.
+
+A document whose OCR job is still `queued`/`running` — tracked by an
+`ocr_job.json` marker in the entry directory — returns that SAME job instead
+of starting a second one. A marker naming a `failed`/`cancelled` job, or one
+no longer in the registry, is a legitimate retry: conversion runs again and a
+fresh job is spawned, overwriting the marker.
 
 `id` and `reference` are emitted first in the response so they survive the 16 KB
 agent-result head-truncation on large documents.

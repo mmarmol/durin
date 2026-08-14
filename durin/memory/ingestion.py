@@ -54,14 +54,28 @@ def ingest_artifact(
     re-ingest of the same ``(filename, bytes)`` pair is decided by the
     entry's own state on disk rather than by re-running the work:
 
-    - Finished (``source.md`` already there): a true no-op. Conversion is
-      skipped and ``content`` comes back from that file, ``job_id=None``.
+    - Finished with a real transcription (``source.md`` there, and
+      ``meta.json``'s ``derived.ocr_stub`` is not set): never redone.
+      Conversion is skipped and ``content`` comes back from that file,
+      ``job_id=None``.
+    - Finished with an OCR-off/engine-missing STUB (``derived.ocr_stub`` is
+      true) while OCR still cannot do better: returned as-is, honestly —
+      the note is still the current answer, not a stale one.
+    - The same stub, but OCR is now enabled and the engine is now available:
+      not returned as-is. Conversion runs again — the situation that made it
+      a stub has changed, so the next re-ingest re-checks instead of
+      trusting a note that may now be wrong. The sidecar and the flag are
+      refreshed on disk, not just in this call's return value.
     - A background OCR job for it is still ``queued``/``running`` (tracked by
       the entry's ``ocr_job.json`` marker): also skipped, returning that SAME
       ``job_id`` instead of spawning a second one.
     - The marker names a job that is ``failed``/``cancelled``, or one the
       registry no longer has: a legitimate retry — conversion runs again and
       a fresh job is spawned, overwriting the marker.
+    - A half state (``source.md`` present but ``meta.json`` missing — the two
+      writes are each atomic but not one transaction, so a crash between them
+      is possible) is treated as no finished entry at all: conversion runs
+      again and both files are rebuilt.
 
     A PDF needing more OCR than the inline budget allows does not block:
     the original is stored right away, ``job_id`` names the background job
@@ -85,6 +99,7 @@ def ingest_artifact(
         DocConvertError,
         NeedsOcrJob,
         convert_file_to_markdown,
+        engine_available,
         is_convertible,
     )
 
@@ -114,21 +129,53 @@ def ingest_artifact(
     meta_path = entry_dir / "meta.json"
     md_sidecar = entry_dir / "source.md"
 
+    # A sidecar alone does not prove the entry is finished and final: it can
+    # be an OCR-off/engine-missing STUB (a coverage note, not a real
+    # transcription -- see ConvertedDoc.ocr_stub), and the two writes below
+    # (sidecar, then meta.json) are each individually atomic but not one
+    # transaction, so a crash between them is a real state to handle, not a
+    # hypothetical. `sidecar_needs_rewrite` tracks the two cases that fall
+    # through this block without returning: rebuild-both (meta missing) and
+    # upgrade-in-place (stub, OCR can now do better) both mean the eventual
+    # write below must overwrite rather than skip because the file exists.
+    sidecar_needs_rewrite = False
     if md_sidecar.exists():
-        # True no-op: this exact (filename, bytes) pair already finished an
-        # ingest, converted or not. meta.json is left exactly as whichever
-        # call wrote it — rewriting it here would reset ingested_at and, for
-        # a document a dream pass has since distilled, wipe its derived
-        # summary/entities/relations back to empty on every casual re-mention.
-        return {
-            "id": entry_id,
-            "source": str(target),
-            "content": md_sidecar.read_text(encoding="utf-8"),
-            "meta_path": str(meta_path),
-            "size_bytes": size_bytes,
-            "job_id": None,
-            "job_pages": None,
-        }
+        if not meta_path.exists():
+            # Half state: something crashed between the sidecar write and
+            # the meta write. Trusting a sidecar with no meta to verify it
+            # against is exactly the "no-op forever" trap re-ingest must not
+            # fall into -- treat it as no finished entry at all.
+            sidecar_needs_rewrite = True
+        else:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            is_stub = bool((meta.get("derived") or {}).get("ocr_stub"))
+            upgrade_available = False
+            if is_stub:
+                if documents_config is None:
+                    from durin.config.loader import load_config
+
+                    documents_config = load_config().documents
+                upgrade_available = documents_config.ocr.enabled and engine_available()
+            if not is_stub or not upgrade_available:
+                # Either a real transcription (never redone) or a stub OCR
+                # still cannot improve on (returned honestly, as the current
+                # answer, not a stale one) -- both are the correct response
+                # right now, so meta.json is left untouched: rewriting it
+                # would reset ingested_at and, for a document a dream pass
+                # has since distilled, wipe its derived summary/entities/
+                # relations back to empty on every casual re-mention.
+                return {
+                    "id": entry_id,
+                    "source": str(target),
+                    "content": md_sidecar.read_text(encoding="utf-8"),
+                    "meta_path": str(meta_path),
+                    "size_bytes": size_bytes,
+                    "job_id": None,
+                    "job_pages": None,
+                }
+            # A stub, and OCR can now do better: fall through and re-convert,
+            # overwriting the stale note instead of replaying it.
+            sidecar_needs_rewrite = True
 
     registry = jobs
     ocr_job_marker = entry_dir / "ocr_job.json"
@@ -165,13 +212,16 @@ def ingest_artifact(
 
     pending_ocr_pages: list[int] | None = None
     pending_ocr_total = 0
+    is_ocr_stub = False
     if converted:
         # A supported document (PDF/Office/EPUB/HTML/…): convert to markdown
         # for the reference, keep the original verbatim.
         try:
-            content = convert_file_to_markdown(
+            converted_doc = convert_file_to_markdown(
                 source_path, documents_config=documents_config
-            ).markdown
+            )
+            content = converted_doc.markdown
+            is_ocr_stub = converted_doc.ocr_stub
         except NeedsOcrJob as exc:
             # The text is not ready, but the document is: store the original
             # now and let a background job fill in the markdown sidecar. The
@@ -185,14 +235,19 @@ def ingest_artifact(
             pending_ocr_total = exc.estimated_pages
         except DocConvertError as exc:
             raise IngestError(str(exc)) from exc
-    # else: `content` was already read above, decoding entry_id's identity.
+    # else: `content` was already read above, decoding entry_id's identity;
+    # a plain text/markdown source has no OCR-stub concept, is_ocr_stub stays
+    # False.
 
     if not target.exists():
         shutil.copy2(source_path, target)
     if converted and pending_ocr_pages is None:
         # A pending job means `content` is a placeholder, not a conversion —
         # the worker writes this sidecar itself once the real text exists.
-        if not md_sidecar.exists():
+        # sidecar_needs_rewrite (rebuilding a half state, or upgrading a
+        # stub) means the file has to be overwritten even though it already
+        # exists -- an existing sidecar is otherwise trusted and left alone.
+        if not md_sidecar.exists() or sidecar_needs_rewrite:
             atomic_write_text(md_sidecar, content)
 
     payload = {
@@ -201,6 +256,11 @@ def ingest_artifact(
             "ingested_at": datetime.now(timezone.utc).isoformat(),
             "source_path": str(source_path),
             "size_bytes": size_bytes,
+            # True when `content` is an OCR-off/engine-missing coverage note
+            # rather than a real transcription -- read back by the
+            # short-circuit above to decide whether a future re-ingest can
+            # trust this sidecar or should re-check it.
+            "ocr_stub": is_ocr_stub,
             # LLM-derived fields stay empty until dream or a
             # follow-up memory_store call fills them in.
             "summary": "",
