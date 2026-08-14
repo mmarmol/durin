@@ -793,38 +793,8 @@ class TestChannelCommonRegistration:
         assert config.channels.feishu["appId"] == "test123"
 
 
-class TestApiServerRegistration:
-    """Tests for API Server menu registration."""
-
-    def test_api_server_in_settings_sections(self):
-        """API Server should be registered in _SETTINGS_SECTIONS."""
-        from durin.cli.onboard import _SETTINGS_SECTIONS
-
-        assert "API Server" in _SETTINGS_SECTIONS
-
-    def test_api_server_getter_returns_api(self):
-        """API Server getter should return config.api."""
-        from durin.cli.onboard import _SETTINGS_GETTER
-
-        config = Config()
-        result = _SETTINGS_GETTER["API Server"](config)
-        assert result is config.api
-
-    def test_api_server_setter_writes_api(self):
-        """API Server setter should update config.api."""
-        from durin.cli.onboard import _SETTINGS_SETTER
-
-        config = Config()
-        from durin.config.schema import ApiConfig
-
-        new_api = ApiConfig(host="0.0.0.0", port=9999)
-        _SETTINGS_SETTER["API Server"](config, new_api)
-        assert config.api.host == "0.0.0.0"
-        assert config.api.port == 9999
-
-
 class TestMainMenuUpdate:
-    """Tests for main menu including new Channel Common and API Server items."""
+    """Tests for main menu including the Channel Common item."""
 
     def test_main_menu_dispatch_includes_channel_common(self):
         """Main menu dispatch should route [H] to Channel Common."""
@@ -837,14 +807,6 @@ class TestMainMenuUpdate:
         assert "Channel Common" in _SETTINGS_SECTIONS
         assert "Channel Common" in _SETTINGS_GETTER
         assert "Channel Common" in _SETTINGS_SETTER
-
-    def test_main_menu_dispatch_includes_api_server(self):
-        """Main menu dispatch should route [I] to API Server."""
-        from durin.cli.onboard import _SETTINGS_GETTER, _SETTINGS_SECTIONS, _SETTINGS_SETTER
-
-        assert "API Server" in _SETTINGS_SECTIONS
-        assert "API Server" in _SETTINGS_GETTER
-        assert "API Server" in _SETTINGS_SETTER
 
     def test_run_onboard_channel_common_edit(self, monkeypatch):
         """run_onboard should handle [H] Channel Common correctly."""
@@ -880,41 +842,6 @@ class TestMainMenuUpdate:
 
         assert result.should_save is True
         assert result.config.channels.send_tool_hints is True
-
-    def test_run_onboard_api_server_edit(self, monkeypatch):
-        """run_onboard should handle [I] API Server correctly."""
-        initial_config = Config()
-
-        responses = iter([
-            "[I] API Server",
-            KeyboardInterrupt(),
-            "[S] Save and Exit",
-        ])
-
-        class FakePrompt:
-            def __init__(self, response):
-                self.response = response
-
-            def ask(self):
-                if isinstance(self.response, BaseException):
-                    raise self.response
-                return self.response
-
-        def fake_select(*_args, **_kwargs):
-            return FakePrompt(next(responses))
-
-        def fake_configure_general_settings(config, section):
-            if section == "API Server":
-                config.api.port = 9999
-
-        monkeypatch.setattr(onboard_wizard, "_show_main_menu_header", lambda: None)
-        monkeypatch.setattr(onboard_wizard, "questionary", SimpleNamespace(select=fake_select))
-        monkeypatch.setattr(onboard_wizard, "_configure_general_settings", fake_configure_general_settings)
-
-        result = run_onboard(initial_config=initial_config)
-
-        assert result.should_save is True
-        assert result.config.api.port == 9999
 
     def test_view_summary_calls_pause(self, monkeypatch):
         """[V] View Summary should pause before returning to main menu."""

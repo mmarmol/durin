@@ -1177,49 +1177,6 @@ def _patch_cli_command_runtime(
         monkeypatch.setattr("durin.config.paths.get_cron_dir", get_cron_dir)
 
 
-def _patch_serve_runtime(monkeypatch, config: Config, seen: dict[str, object]) -> None:
-    pytest.importorskip("aiohttp")
-
-    class _FakeApiApp:
-        def __init__(self) -> None:
-            self.on_startup: list[object] = []
-            self.on_cleanup: list[object] = []
-
-    class _FakeAgentLoop:
-        @classmethod
-        def from_config(cls, config, bus=None, **extra):
-            return cls(workspace=config.workspace_path, **extra)
-        def __init__(self, **kwargs) -> None:
-            seen["workspace"] = kwargs["workspace"]
-
-        async def _connect_mcp(self) -> None:
-            return None
-
-        async def close_mcp(self) -> None:
-            return None
-
-    def _fake_create_app(agent_loop, model_name: str, request_timeout: float):
-        seen["agent_loop"] = agent_loop
-        seen["model_name"] = model_name
-        seen["request_timeout"] = request_timeout
-        return _FakeApiApp()
-
-    def _fake_run_app(api_app, host: str, port: int, print):
-        seen["api_app"] = api_app
-        seen["host"] = host
-        seen["port"] = port
-
-    _patch_cli_command_runtime(
-        monkeypatch,
-        config,
-        message_bus=lambda: object(),
-        session_manager=lambda _workspace: object(),
-    )
-    monkeypatch.setattr("durin.cli.commands.AgentLoop", _FakeAgentLoop)
-    monkeypatch.setattr("durin.api.server.create_app", _fake_create_app)
-    monkeypatch.setattr("aiohttp.web.run_app", _fake_run_app)
-
-
 def test_gateway_uses_workspace_from_config_by_default(monkeypatch, tmp_path: Path) -> None:
     config_file = _write_instance_config(tmp_path)
     config = Config()
@@ -1989,63 +1946,6 @@ def test_gateway_starts_the_loops_orphan_sweep_task(monkeypatch, tmp_path: Path)
     assert result.exit_code == 0
     assert cli_commands._loops_sweep_task is not None
     assert isinstance(cli_commands._loops_sweep_task, asyncio.Task)
-
-
-def test_serve_uses_api_config_defaults_and_workspace_override(
-    monkeypatch, tmp_path: Path
-) -> None:
-    config_file = _write_instance_config(tmp_path)
-    config = Config()
-    config.agents.defaults.workspace = str(tmp_path / "config-workspace")
-    config.api.host = "127.0.0.2"
-    config.api.port = 18900
-    config.api.timeout = 45.0
-    override_workspace = tmp_path / "override-workspace"
-    seen: dict[str, object] = {}
-
-    _patch_serve_runtime(monkeypatch, config, seen)
-
-    result = runner.invoke(
-        app,
-        ["serve", "--config", str(config_file), "--workspace", str(override_workspace)],
-    )
-
-    assert result.exit_code == 0
-    assert seen["workspace"] == override_workspace
-    assert seen["host"] == "127.0.0.2"
-    assert seen["port"] == 18900
-    assert seen["request_timeout"] == 45.0
-
-
-def test_serve_cli_options_override_api_config(monkeypatch, tmp_path: Path) -> None:
-    config_file = _write_instance_config(tmp_path)
-    config = Config()
-    config.api.host = "127.0.0.2"
-    config.api.port = 18900
-    config.api.timeout = 45.0
-    seen: dict[str, object] = {}
-
-    _patch_serve_runtime(monkeypatch, config, seen)
-
-    result = runner.invoke(
-        app,
-        [
-            "serve",
-            "--config",
-            str(config_file),
-            "--host",
-            "127.0.0.1",
-            "--port",
-            "18901",
-            "--timeout",
-            "46",
-        ],
-    )
-
-    assert result.exit_code == 0
-    assert seen["host"] == "127.0.0.1"
-    assert seen["port"] == 18901
-    assert seen["request_timeout"] == 46.0
 
 
 def test_channels_login_requires_channel_name() -> None:

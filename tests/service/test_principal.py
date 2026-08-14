@@ -73,3 +73,13 @@ def test_scope_values_are_domain_colon_action():
 def test_mcp_scopes_defined():
     assert Scope.MCP_READ.value == "mcp:read"
     assert Scope.MCP_WRITE.value == "mcp:write"
+
+
+def test_chat_write_scope_exists_and_gates():
+    assert Scope.CHAT_WRITE.value == "chat:write"
+    holder = Principal.remote("t1", frozenset({"chat:write"}))
+    admin = Principal.remote("t2", frozenset({"admin"}))
+    other = Principal.remote("t3", frozenset({"sessions:read"}))
+    assert holder.has_scope(Scope.CHAT_WRITE)
+    assert admin.has_scope(Scope.CHAT_WRITE)
+    assert not other.has_scope(Scope.CHAT_WRITE)

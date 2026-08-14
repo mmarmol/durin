@@ -27,8 +27,11 @@ durin agent -m "hola"    # one-shot
 durin gateway start      # background daemon: webui dashboard + channels + cron
 durin gateway status     # is it running? where's the dashboard?
 durin gateway stop
-durin serve              # OpenAI-compatible API on :8900
 ```
+
+The gateway also serves the OpenAI-compatible API (`/v1/chat/completions`)
+that remote agents and OpenAI clients talk to — see
+[OpenAI-compatible API](openai-api.md).
 
 The browser dashboard is served by `durin gateway` when
 `config.gateway.webui_enabled` is true (default). `durin gateway status`
