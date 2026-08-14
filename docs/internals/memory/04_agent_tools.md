@@ -237,8 +237,9 @@ one batch of them, one more than the budget allows, confirmed accurately
 pages are a subset of the truly empty ones and a subset over the budget puts
 the whole set over it. If they do not, the branch gives up on the shortcut and
 falls through to the full accurate pass described above, which answers exactly
-— a second confirmation batch would cost about a quarter of that pass, so
-walking a long document in batches is the slower way to a worse answer.
+— a second confirmation batch would cost about a fifth of that pass (opening a
+PDF is O(total pages) whatever gets read afterwards), so walking a long
+document in batches is the slower way to a worse answer.
 `NeedsOcrJob` then carries the confirmed floor as `pages` (the worker widens it
 to the exhaustive set itself — see [jobs](../jobs.md)) and the probe's flagged
 count as `estimated_pages`, which is what sizes the job for the reader.

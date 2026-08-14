@@ -143,13 +143,23 @@ floor rather than the whole set: the conversion path stops confirming empty
 pages the moment a document is plainly over the inline budget (see
 [the memory tools doc](memory/04_agent_tools.md)), and its cheap probe can miss
 an empty page outright. So the worker runs the accurate per-page extraction
-itself — seconds against the minutes of OCR that follow — unions the empty
-pages it finds with the payload's, and reports the widened count through
-`set_units_total`, a `claim`-style guarded `UPDATE` that only writes while the
-row is still this worker's running job. The widening is best-effort: a PDF the
-accurate extractor cannot read is exactly the kind of document that was sent
-for OCR, so a failure there leaves the payload alone rather than failing the
-job.
+itself — seconds against the minutes of OCR that follow — and unions the empty
+pages it finds with the payload's and with any page an earlier run already
+recorded, which is what keeps the progress denominator from falling below its
+numerator. The widened count is reported through `set_units_total`, a
+`claim`-style guarded `UPDATE` that only writes while the row is still this
+worker's running job, and only on a successful recompute.
+
+That pass is **load-bearing, not best-effort**. Without it there is no way to
+tell a floor from a finished list, so a worker that cannot read the document
+fails the job with a recorded reason rather than transcribing the floor: doing
+the latter would publish a forty-page book holding six pages and report it
+`done`, with the pages left out decided by omission and nobody downstream able
+to tell. The failure costs little — every path that enqueues one of these jobs
+read the document with the same extractor first, and a document that stays
+unreadable already fails this job at the sidecar step, which reads it the same
+way. Failing at the check says so before spending the OCR, and leaves
+`units_total` untouched rather than rewriting it down to the floor.
 
 ### Restart reconciliation
 
@@ -230,13 +240,14 @@ layer knows only that name; what a Library entry is and how it is indexed
 stays behind it (see [Memory: agent
 tools](memory/04_agent_tools.md#memory_ingest)).
 
-A failure at any step — a page's transcription, the sidecar assembly, or the
-Library indexing — is recorded as `status="failed"` with an `error` string
-rather than left `running` forever; a resumed run that finds nothing left to
-transcribe would otherwise hit the same broken step again on every retry.
-Indexing counts as a step that can fail the job on purpose: a job reported
-"done" whose document cannot be found is the exact outcome the step exists to
-prevent. A pass that transcribed nothing at all fails there too — the inline
+A failure at any step — the completeness check, a page's transcription, the
+sidecar assembly, or the Library indexing — is recorded as `status="failed"`
+with an `error` string rather than left `running` forever; a resumed run that
+finds nothing left to transcribe would otherwise hit the same broken step again
+on every retry. The completeness check and the indexing both count as steps
+that can fail the job on purpose: a job reported "done" whose document cannot
+be found, or whose book was published with the pages nobody confirmed left out,
+is the exact outcome each step exists to prevent. A pass that transcribed nothing at all fails there too — the inline
 conversion path already refuses a document with no extractable text, and an
 empty Library entry is no more useful for having arrived late.
 
