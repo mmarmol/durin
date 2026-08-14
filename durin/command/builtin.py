@@ -1930,8 +1930,8 @@ async def cmd_sources(ctx: CommandContext) -> OutboundMessage:
                 f"Stored `{result['id']}` ({result['size_bytes']} bytes) — "
                 "its text is not readable yet.",
                 f"Source: `{result['source']}`",
-                f"This document is scanned: {result['job_pages']} pages are "
-                f"being transcribed in the background (job `{result['job_id']}`). "
+                f"This document is scanned: about {result['job_pages']} pages "
+                f"are being transcribed in the background (job `{result['job_id']}`). "
                 "It becomes readable and searchable when that finishes.",
             ]
             return OutboundMessage(

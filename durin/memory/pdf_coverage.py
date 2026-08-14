@@ -171,8 +171,12 @@ def page_texts(path: Path) -> list[str]:
 def page_texts_subset(path: Path, pages: Sequence[int]) -> dict[int, str]:
     """The same extraction as :func:`page_texts`, for named 1-based pages only.
 
-    One open, only the pages asked for. A caller that has to settle a question
-    about a handful of pages of a four-hundred-page book pays for the handful.
+    What it saves is the per-page extraction, not the open. Opening is
+    O(total pages) whatever gets read afterwards — pdfplumber parses the
+    document's structure before any page can be addressed — so on an 800-page
+    PDF this costs about a fifth of :func:`page_texts` to read six pages, not a
+    hundredth of it. Ask for every page needed in one call: five calls cost
+    more than reading the whole document once.
 
     Absent, not empty, for a page number the document does not have: "the
     extractor cannot see this page" and "this page has no text layer" are

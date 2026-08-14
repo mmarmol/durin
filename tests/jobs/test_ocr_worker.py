@@ -4,6 +4,7 @@ import pytest
 
 from durin.jobs.ocr_worker import run_job
 from durin.jobs.registry import JobRegistry
+from durin.memory.pdf_coverage import page_texts
 
 
 @pytest.fixture()
@@ -101,27 +102,74 @@ def test_worker_resizes_a_job_that_was_enqueued_expecting_more_pages(
     assert reread.units_done == 1
 
 
-def test_worker_transcribes_its_payload_when_the_completeness_pass_fails(
-    registry, scanned_pdf, monkeypatch,
+def test_worker_refuses_to_publish_a_book_it_could_not_check(
+    registry, tmp_path, monkeypatch,
 ):
-    """Widening the payload is a backstop, not a precondition. A PDF the
-    accurate extractor chokes on is exactly the kind of document that was sent
-    for OCR in the first place — refusing to transcribe it because the check
-    failed would turn a recoverable job into a dead one."""
-    def _boom(path):
-        raise OSError("pdfplumber cannot open this")
+    """The payload is a floor. If the pass that turns it into the whole set
+    cannot run, transcribing the floor and reporting "done" publishes a
+    forty-page book with six pages in it and no way for anyone to tell — the
+    remaining pages would have been decided by omission, from the probe's
+    unsafe direction, with nothing confirming them. A recorded failure is
+    visible and resumable; a silent partial success is neither.
 
-    monkeypatch.setattr("durin.jobs.ocr_worker.page_texts", _boom)
+    A transient failure is the case that matters: a permanently unreadable PDF
+    already fails at the sidecar step, which reads the same way."""
+    entry_dir, pdf = _ingested_entry(tmp_path / "ws", pages=("",) * 40)
+    real_page_texts = page_texts
+    calls = []
+
+    def _fails_the_first_time(path):
+        calls.append(path)
+        if len(calls) == 1:
+            raise OSError("transient read failure")
+        return real_page_texts(path)
+
+    monkeypatch.setattr("durin.jobs.ocr_worker.page_texts", _fails_the_first_time)
     monkeypatch.setattr(
         "durin.jobs.ocr_worker.transcribe_page",
         lambda path, page, **kw: f"text of page {page}",
     )
-    job = _enqueue(registry, scanned_pdf, [1, 2])
+    job = _enqueue(
+        registry, pdf, [1, 2, 3, 4, 5, 6], sidecar_dir=entry_dir, units_total=40,
+    )
 
     run_job(job.id, registry=registry)
 
-    assert registry.get(job.id).status == "done"
-    assert registry.done_units(job.id) == {1, 2}
+    reread = registry.get(job.id)
+    assert reread.status == "failed"
+    assert "confirm" in reread.error
+    assert registry.done_units(job.id) == set()
+    assert not (entry_dir / "source.md").exists()
+    # The count nobody could verify is left alone rather than rewritten down to
+    # the floor -- that rewrite is what would have made "6 of 6, done" look
+    # like a finished book.
+    assert reread.units_total == 40
+
+
+def test_worker_never_reports_more_pages_done_than_it_has_to_do(
+    registry, tmp_path, monkeypatch,
+):
+    """A resumed run re-derives the page set, and it can come back smaller than
+    what an earlier run already recorded. Sizing the job from that alone puts
+    the tray at "3 of 1"; pages already transcribed are this job's work
+    whatever the recheck says about them now."""
+    from tests.tools.test_read_enhancements import _write_text_pdf
+
+    pdf = tmp_path / "one_gap.pdf"
+    _write_text_pdf(pdf, ["", *["Real body text on this page, plenty of it"] * 2])
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page",
+        lambda path, page, **kw: f"text of page {page}",
+    )
+    job = _enqueue(registry, pdf, [1], units_total=1)
+    for page in (1, 2, 3):  # an earlier run found more than this one will
+        registry.record_unit(job.id, page, f"already transcribed {page}")
+
+    run_job(job.id, registry=registry)
+
+    reread = registry.get(job.id)
+    assert reread.units_done == 3
+    assert reread.units_total == 3
 
 
 def test_worker_writes_the_sidecar_with_pages_merged_in_order(registry, tmp_path, monkeypatch):
@@ -310,10 +358,13 @@ def test_worker_records_a_failure_when_the_sidecar_write_breaks(registry, scanne
         lambda path, page, **kw: f"page {page}",
     )
 
-    def _boom(path):
+    def _boom(path, text):
         raise OSError("disk gone")
 
-    monkeypatch.setattr("durin.jobs.ocr_worker.page_texts", _boom)
+    # The write itself, not the extraction that feeds it: an extraction that
+    # fails is caught earlier now, by the completeness check, and would never
+    # reach this step.
+    monkeypatch.setattr("durin.jobs.ocr_worker.atomic_write_text", _boom)
     job = _enqueue(registry, scanned_pdf, [1], sidecar_dir=sidecar_dir)
 
     run_job(job.id, registry=registry)
@@ -321,9 +372,10 @@ def test_worker_records_a_failure_when_the_sidecar_write_breaks(registry, scanne
     reread = registry.get(job.id)
     assert reread.status == "failed"
     assert "disk gone" in reread.error
-    # The page was safely transcribed and recorded before the sidecar step
-    # broke — a retry would not need to redo it.
-    assert registry.done_units(job.id) == {1}
+    # The pages were safely transcribed and recorded before the sidecar step
+    # broke — a retry would not need to redo them. All three of this fixture's
+    # pages are empty, and the worker widens a payload that named one.
+    assert registry.done_units(job.id) == {1, 2, 3}
     assert not (sidecar_dir / "source.md").exists()
 
 

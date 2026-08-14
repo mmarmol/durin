@@ -209,8 +209,9 @@ class MemoryIngestTool(Tool, ContextAware):
                 "No text yet: this scanned document's pages are being "
                 "transcribed by a background job. It is not readable or "
                 "searchable until that finishes — tell the user that instead "
-                "of reporting the document as read or remembered. `tasks` "
-                "reports the progress."
+                "of reporting the document as read or remembered. "
+                "`pages_pending` is an estimate; say \"about\" that many. "
+                "`tasks` reports the progress and the settled count."
             )
         out["saved_to"] = result["source"]
         out["meta_path"] = result["meta_path"]

@@ -217,24 +217,33 @@ threshold and lose both its note and its transcription.
 
 That probe runs **first**, before markitdown, and what it finds decides what
 else runs at all. A PDF it flags no page on is the majority case and stops
-there, paying for nothing but the conversion. Otherwise the accurate
+there, paying for nothing but the conversion. On any other PDF the accurate
 `page_texts` (pdfplumber) re-classifies the document, and its verdict — never
 the probe's — is what decides which pages are empty; the probe can miss one, on
 a font pypdfium2 decodes and pdfplumber does not. That accurate text is also
 what labels the gaps in the coverage note and what transcribed pages are merged
-into.
+into. The one case that skips it is the over-budget decision below, which
+returns no text at all.
 
 Local OCR (`documents.ocr.enabled`) transcribes the empty pages inline, as part
 of this same call, as long as there are at or under
-`documents.ocr.inline_max_pages` (default 5) of them. Over that budget nothing
-is converted or fully extracted at all — both would be thrown away unread. A
-document whose flagged pages could exceed the budget has them confirmed
-accurately one batch at a time (`page_texts_subset`) and stops the moment one
-more than the budget is confirmed: confirmed pages are a subset of the truly
-empty ones, so a subset over the budget puts the whole set over it. `NeedsOcrJob`
-then carries that confirmed floor as `pages` (the worker widens it to the
-exhaustive set itself — see [jobs](../jobs.md)) and the probe's flagged count as
-`estimated_pages`, which is what sizes the job for the reader.
+`documents.ocr.inline_max_pages` (default 5) of them.
+
+Over that budget the document is never converted or fully extracted — both
+outputs would be thrown away unread — so the decision to go over is taken
+before either runs. A document whose flagged pages could exceed the budget has
+one batch of them, one more than the budget allows, confirmed accurately
+(`page_texts_subset`); if they all confirm, that settles it, because confirmed
+pages are a subset of the truly empty ones and a subset over the budget puts
+the whole set over it. If they do not, the branch gives up on the shortcut and
+falls through to the full accurate pass described above, which answers exactly
+— a second confirmation batch would cost about a quarter of that pass, so
+walking a long document in batches is the slower way to a worse answer.
+`NeedsOcrJob` then carries the confirmed floor as `pages` (the worker widens it
+to the exhaustive set itself — see [jobs](../jobs.md)) and the probe's flagged
+count as `estimated_pages`, which is what sizes the job for the reader.
+
+Catching that exception is where the deferral actually happens:
 `ingest_artifact` copies the original immediately and enqueues a
 [background job](../jobs.md) to transcribe it page by page instead,
 returning that job's `job_id` alongside an empty `content`.
@@ -242,9 +251,10 @@ returning that job's `job_id` alongside an empty `content`.
 In that case the tool writes **no** reference: `content` is an empty
 placeholder, and storing it would put an empty document in the Library and
 hand the agent a ref that resolves to nothing. What it returns instead is
-`job_id`, `pages_pending` and a `note` saying the document is not readable or
-searchable yet — steps 2 and 3 above have not happened, and the response does
-not pretend otherwise.
+`job_id`, `pages_pending` (the estimate — the exact count is the worker's to
+settle) and a `note` saying the document is not readable or searchable yet —
+steps 2 and 3 above have not happened, and the response does not pretend
+otherwise.
 
 They happen when the transcription lands. The worker assembles
 `ingested/<id>/source.md` and then calls `index_ingested_entry`

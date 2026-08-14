@@ -156,15 +156,21 @@ def test_a_reconciled_job_gets_a_real_live_worker_again(tmp_path, monkeypatch):
     An empty page list keeps this independent of the OCR engine (already
     exercised, mocked, in test_ocr_worker.py) while still proving the exact
     property this task adds: a reconciled job gets a live worker again, not
-    merely a status flip.
+    merely a status flip. The document itself has to be real and readable
+    though — a worker that cannot read the document it was given cannot work
+    out what it was meant to transcribe, and fails the job rather than
+    reporting a success it did not have.
     """
     monkeypatch.setenv("DURIN_HOME", str(tmp_path))
     from durin.config.paths import jobs_db_path
+    from tests.tools.test_read_enhancements import _write_text_pdf
 
+    pdf = tmp_path / "book.pdf"
+    _write_text_pdf(pdf, ["Plenty of ordinary body text on this page"])
     registry = JobRegistry(jobs_db_path())
     job = registry.enqueue(
         kind="ocr", label="book.pdf",
-        payload={"path": str(tmp_path / "book.pdf"), "pages": [], "sidecar_dir": None},
+        payload={"path": str(pdf), "pages": [], "sidecar_dir": None},
         session_key="chat:1", units_total=0,
     )
     registry.claim(job.id, pid=999999)  # the "old" worker that crashed

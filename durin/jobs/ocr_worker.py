@@ -85,20 +85,54 @@ def run_job(job_id: str, *, registry: JobRegistry | None = None) -> None:
     # probe can miss an empty page outright on a font it decodes and
     # pdfplumber does not. Neither gap may reach the finished document, and
     # here the exhaustive pass is affordable: seconds of extraction against
-    # minutes of OCR. Union rather than replace, so a page already promised
-    # stays promised.
-    #
-    # What comes out is exactly what this run will transcribe, so it is also
-    # the honest denominator for progress — in both directions. The enqueued
-    # count can overshoot as easily as undershoot (it is the probe's estimate,
-    # and the probe over-flags), and a job that stops at "38 of 40" having done
-    # all its work reads as one that gave up.
-    pages = sorted(set(pages) | set(_empty_pages(pdf_path)))
-    if len(pages) != job.units_total:
-        registry.set_units_total(job_id, len(pages), pid=os.getpid())
-    todo = [p for p in pages if p not in already]
+    # minutes of OCR.
+    accurate_empty = _empty_pages(pdf_path)
 
     error: str | None = None
+    todo: list[int] = []
+    if accurate_empty is None:
+        # Without that pass there is no way to tell a floor from a finished
+        # list, and transcribing the floor would publish a forty-page book
+        # holding six pages, reported "done". The pages left out would have
+        # been decided by omission — from the probe's unsafe direction, with
+        # nothing confirming them — and nobody downstream could tell. So this
+        # is a job failure: visible, resumable, and honest about what it is.
+        #
+        # It costs little. Every path that enqueues one of these jobs read the
+        # document with this same extractor first, so a PDF it cannot read is
+        # a change of circumstances rather than the norm; and a permanent
+        # failure already fails this job at the sidecar step below, which
+        # reads the document the same way. Failing here just says so sooner,
+        # before spending an hour of OCR on a document that cannot be
+        # published.
+        error = (
+            f"completeness check: could not read {pdf_path.name} to confirm "
+            "which pages need transcribing"
+        )
+    else:
+        # Union rather than replace, so a page already promised stays promised
+        # — including pages an earlier run already transcribed, which are this
+        # job's work whatever this run's re-check says about them now. That is
+        # also what keeps the denominator from falling below the numerator.
+        pages = sorted(set(pages) | set(accurate_empty) | already)
+        # What comes out is exactly what this run will transcribe, so it is
+        # the honest denominator for progress — in both directions. The
+        # enqueued count can overshoot as easily as undershoot (it is the
+        # probe's estimate, and the probe over-flags), and a job that stops at
+        # "38 of 40" having done all its work reads as one that gave up.
+        if len(pages) != job.units_total and not registry.set_units_total(
+            job_id, len(pages), pid=os.getpid()
+        ):
+            # Same contract as claim() and finish(): a write that did not
+            # happen is not a write to assume. The row stopped being this
+            # worker's between the claim and here — the per-page loop's own
+            # check below is what acts on that.
+            logger.warning(
+                "ocr worker: job {} was not this worker's to resize; "
+                "its progress count is left as it was", job_id,
+            )
+        todo = [p for p in pages if p not in already]
+
     for page in todo:
         # Re-read rather than trusting the local copy: cancellation arrives
         # from the gateway, in another process.
@@ -171,13 +205,13 @@ def run_job(job_id: str, *, registry: JobRegistry | None = None) -> None:
     _emit(job_id, len(pages), len(already), started, status)
 
 
-def _empty_pages(pdf_path: Path) -> list[int]:
+def _empty_pages(pdf_path: Path) -> list[int] | None:
     """Every 1-based page of *pdf_path* with no text layer, measured accurately.
 
-    Best effort by design: a PDF the accurate extractor chokes on is exactly
-    the kind of document that was sent for OCR in the first place, so failing
-    to widen the page list must not stop the transcription that was already
-    asked for.
+    ``None`` when the document could not be read, which is emphatically not
+    the same answer as ``[]``. "No page needs transcribing" and "nobody could
+    find out which pages need transcribing" lead to opposite decisions, and a
+    caller handed the same value for both takes the wrong one silently.
     """
     try:
         return list(classify_coverage(page_texts(pdf_path)).empty_pages)
@@ -186,7 +220,7 @@ def _empty_pages(pdf_path: Path) -> list[int]:
             "ocr worker: could not re-check {} for missed empty pages: {}",
             pdf_path.name, exc,
         )
-        return []
+        return None
 
 
 def _emit(job_id: str, pages: int, resumed: int, started: float, status: str) -> None:

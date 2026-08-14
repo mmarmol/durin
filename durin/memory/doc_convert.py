@@ -12,6 +12,7 @@ verbatim. This module owns the binary/office/PDF formats markitdown parses.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -116,14 +117,20 @@ def _markitdown_text(path: Path) -> str:
     return (result.text_content or "").strip()
 
 
-def _confirm_empty_pages(path: Path, flagged: list[int], stop_at: int) -> list[int]:
-    """Which of *flagged* really have no text layer, giving up at *stop_at*.
+def _confirm_empty_pages(path: Path, candidates: Sequence[int]) -> list[int]:
+    """Which of *candidates* really have no text layer. One extraction pass.
 
     The probe says a page might be empty; only the accurate extractor says it
-    is. This confirms flagged pages in document order and stops the moment
-    *stop_at* of them are confirmed, because the only question being asked is
-    "are there more than a budget's worth", and confirming the rest cannot
-    change that answer.
+    is. The caller hands over just enough candidates to settle its question —
+    one more than the inline budget allows — and this confirms them in a single
+    call.
+
+    Deliberately one call and no more. Confirmation is an attempt at a
+    shortcut, not a search: if this batch does not settle it, the caller falls
+    through to the full accurate pass, which answers exactly. Walking the rest
+    of the flagged pages instead would re-open the PDF per batch, and opening
+    is O(total pages) — on a long document whose pages all sit in the probe's
+    slack that costs many times the pass it was avoiding.
 
     Sound in the one direction that matters. Every page in the result was
     measured exactly the way the classifier measures it, so the result is a
@@ -132,21 +139,14 @@ def _confirm_empty_pages(path: Path, flagged: list[int], stop_at: int) -> list[i
     does. A page the extractor cannot see at all is not a page confirmed empty,
     so it does not count.
     """
+    texts = page_texts_subset(path, candidates)
     confirmed: list[int] = []
-    remaining = list(flagged)
-    while remaining and len(confirmed) < stop_at:
-        # Only as many pages as are still needed to settle it, in one open: for
-        # the ordinary scanned book that is a single pass over a handful of
-        # pages of a document that may have four hundred.
-        chunk = remaining[: stop_at - len(confirmed)]
-        remaining = remaining[len(chunk):]
-        texts = page_texts_subset(path, chunk)
-        for page in chunk:
-            text = texts.get(page)
-            # len(text.strip()) is the measure EMPTY_PAGE_CHARS is calibrated
-            # against, and the one classify_coverage applies to the same string.
-            if text is not None and len(text.strip()) < EMPTY_PAGE_CHARS:
-                confirmed.append(page)
+    for page in candidates:
+        text = texts.get(page)
+        # len(text.strip()) is the measure EMPTY_PAGE_CHARS is calibrated
+        # against, and the one classify_coverage applies to the same string.
+        if text is not None and len(text.strip()) < EMPTY_PAGE_CHARS:
+            confirmed.append(page)
     return confirmed
 
 
@@ -241,8 +241,12 @@ def convert_file_to_markdown(path: Path, *, documents_config=None) -> ConvertedD
                     # so a subset over the budget puts the whole set over it —
                     # and it costs a handful of pages instead of the document.
                     # The worker derives the exhaustive list itself.
+                    #
+                    # One attempt only. If these do not settle it the code
+                    # below answers exactly, for about four times what another
+                    # confirmation batch would cost.
                     confirmed = _confirm_empty_pages(
-                        path, flagged, ocr_cfg.inline_max_pages + 1
+                        path, flagged[: ocr_cfg.inline_max_pages + 1]
                     )
                     if len(confirmed) > ocr_cfg.inline_max_pages:
                         raise NeedsOcrJob(

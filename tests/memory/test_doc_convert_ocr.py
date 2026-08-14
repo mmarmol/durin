@@ -246,6 +246,43 @@ def test_the_over_budget_decision_confirms_only_as_many_pages_as_it_needs(
     assert asked == [1, 2, 3, 4, 5, 6]
 
 
+# 19 glyphs over 3 lines: the probe counts 19 and flags the page, pdfplumber
+# reads 21 once its line separators are counted and does not call it empty.
+# The probe's designed slack, and the shape that makes confirmation useless.
+_SLACK = "ABCDEFG\nHIJKLMN\nOPQRS"
+
+
+def test_confirmation_is_one_batch_however_many_pages_are_flagged(
+    tmp_path, monkeypatch
+):
+    """Confirmation is an attempt at a shortcut, not a search. On a document
+    whose pages all sit in the probe's slack, nothing confirms — and walking
+    the rest of them re-opens the PDF once per batch, which on a long document
+    costs many times the accurate pass it was avoiding. One batch, then give up
+    and pay for the accurate pass, whose answer is exact anyway."""
+    from durin.memory.pdf_coverage import page_texts_subset as real_subset
+    from tests.tools.test_read_enhancements import _write_text_pdf
+
+    pdf = tmp_path / "slack.pdf"
+    _write_text_pdf(pdf, [_SLACK] * 60)
+
+    calls = []
+
+    def _record(path, pages):
+        pages = list(pages)
+        calls.append(pages)
+        return real_subset(path, pages)
+
+    monkeypatch.setattr("durin.memory.doc_convert.page_texts_subset", _record)
+
+    out = convert_file_to_markdown(pdf, documents_config=_cfg(inline_max_pages=5))
+
+    assert calls == [[1, 2, 3, 4, 5, 6]]
+    # Nothing was empty after all, so the accurate pass has the last word.
+    assert out.coverage is not None
+    assert out.coverage.empty_pages == ()
+
+
 @pytest.mark.parametrize("budget", [2, 5, 9])
 def test_the_early_exit_raises_at_exactly_one_page_over_the_budget(
     big_scan, budget, monkeypatch
