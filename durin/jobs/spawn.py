@@ -20,17 +20,23 @@ __all__ = ["spawn_ocr_job", "respawn"]
 
 def spawn_ocr_job(
     *, registry: JobRegistry, pdf_path: Path, pages: list[int],
-    session_key: str | None, sidecar_dir: Path | None = None,
+    session_key: str | None, label: str, sidecar_dir: Path | None = None,
 ) -> Job:
     """Enqueue an OCR job and start its worker.
 
     ``sidecar_dir`` is the ingested entry directory. When set, the worker
     writes the assembled ``source.md`` there on success — the same sidecar the
     ordinary conversion path writes, produced later instead of inline.
+
+    ``label`` is what a human reads in the tasks tray, and it is passed rather
+    than derived: ``pdf_path`` points at the entry's normalized copy, which is
+    named ``source.<ext>`` for every document there, so two books ingested in
+    one session would be indistinguishable. Callers pass the name the user
+    handed over.
     """
     job = registry.enqueue(
         kind="ocr",
-        label=pdf_path.name,
+        label=label,
         payload={
             "path": str(pdf_path),
             "pages": pages,

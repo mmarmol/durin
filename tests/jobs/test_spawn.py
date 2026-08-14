@@ -7,7 +7,7 @@ import sys
 import pytest
 
 from durin.jobs.registry import Job, JobRegistry
-from durin.jobs.spawn import _pid_alive, respawn
+from durin.jobs.spawn import _pid_alive, respawn, spawn_ocr_job
 
 
 def _job(**overrides):
@@ -54,6 +54,30 @@ def test_pid_alive_false_when_no_such_process(monkeypatch):
 
     monkeypatch.setattr("durin.jobs.spawn.os.kill", _raise_lookup)
     assert _pid_alive(4242) is False
+
+
+# ---------------------------------------------------------------------------
+# spawn_ocr_job
+# ---------------------------------------------------------------------------
+
+
+def test_the_job_is_labelled_with_the_name_it_is_given(tmp_path, monkeypatch):
+    """The path the worker gets is the ingested entry's normalized copy, and
+    every one of those is named source.pdf -- so the label cannot be derived
+    from it, or two books in one session read identically in the tray."""
+    registry = JobRegistry(tmp_path / "jobs.db")
+    monkeypatch.setattr("durin.jobs.spawn.subprocess.Popen", lambda args, **kw: None)
+    entry_dir = tmp_path / "ingested" / "a3f9c0112b44"
+    entry_dir.mkdir(parents=True)
+
+    job = spawn_ocr_job(
+        registry=registry, pdf_path=entry_dir / "source.pdf", pages=[1, 2],
+        session_key="chat:1", sidecar_dir=entry_dir,
+        label="Critique of Pure Reason.pdf",
+    )
+
+    assert job.label == "Critique of Pure Reason.pdf"
+    assert job.payload["path"].endswith("source.pdf")  # the worker still reads the copy
 
 
 # ---------------------------------------------------------------------------

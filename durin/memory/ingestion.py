@@ -148,6 +148,10 @@ def ingest_artifact(
             pdf_path=target,
             pages=pending_ocr_pages,
             session_key=session_key,
+            # `target` is the entry's normalized copy (source.pdf); the name
+            # the user handed over is the only one that identifies the job in
+            # a tray holding more than one of them.
+            label=source_path.name,
             sidecar_dir=entry_dir,
         )
         job_id = job.id

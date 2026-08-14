@@ -73,10 +73,10 @@ def test_a_session_scoped_job_appears_in_that_sessions_tray(tmp_path, book, regi
     tasks = collect_tasks(tmp_path / "ws", jobs=registry, session_key="chat:1")
 
     assert [t["kind"] for t in tasks] == ["job"]
-    # The label is the normalized ingested-entry filename ("source.<ext>"),
-    # not the original name -- ingest_artifact copies to entry_dir/source.pdf
-    # before spawn_ocr_job ever sees a path, and its label is the path's name.
-    assert tasks[0]["label"] == "source.pdf"
+    # The name the user handed over, not the normalized copy the entry holds:
+    # ingest_artifact copies to entry_dir/source.pdf before spawn_ocr_job sees
+    # a path, so every job in the tray would otherwise read "source.pdf".
+    assert tasks[0]["label"] == "book.pdf"
     assert tasks[0]["units_total"] == 40
     # A different session must not see it -- the filter has to actually filter.
     assert collect_tasks(tmp_path / "ws", jobs=registry, session_key="chat:other") == []
@@ -124,12 +124,12 @@ def test_the_entry_is_complete_before_its_job_is_spawned(tmp_path, book, registr
     the entry has to be finished before that call, not after it."""
     seen = {}
 
-    def _probe(*, registry, pdf_path, pages, session_key, sidecar_dir=None):
+    def _probe(*, registry, pdf_path, pages, session_key, label, sidecar_dir=None):
         from pathlib import Path
 
         seen["meta"] = (Path(sidecar_dir) / "meta.json").is_file()
         return registry.enqueue(
-            kind="ocr", label=pdf_path.name, payload={}, session_key=session_key,
+            kind="ocr", label=label, payload={}, session_key=session_key,
             units_total=len(pages),
         )
 

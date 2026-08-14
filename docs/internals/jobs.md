@@ -82,9 +82,9 @@ jobs(
   id           TEXT PRIMARY KEY,   -- 12-char hex, uuid4-derived
   kind         TEXT NOT NULL,      -- "ocr" today
   status       TEXT NOT NULL,      -- queued | running | done | failed | cancelled
-  label        TEXT NOT NULL,      -- human line for the tray (today, OCR sets this to the
-                                    -- stored copy's on-disk name, "source.<ext>" -- not the
-                                    -- original filename the user gave durin)
+  label        TEXT NOT NULL,      -- human line for the tray; passed in by the caller, not
+                                    -- derived from the payload path (that path is the entry's
+                                    -- normalized copy, "source.<ext>" for every document)
   payload      TEXT NOT NULL,      -- kind-specific JSON: for OCR, {path, pages, sidecar_dir}
   session_key  TEXT,               -- who asked, for session-scoped listing
   units_total  INTEGER NOT NULL,
