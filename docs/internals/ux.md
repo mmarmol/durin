@@ -216,7 +216,12 @@ text is extracted and folded into the message by `extract_documents`
 **saved on-disk path** (`[File: <name> — saved on disk at <path>]`), not just the
 name, so when the user asks to *remember* an attached document the agent can
 `memory_ingest("<path>")` it directly instead of asking for a path it doesn't
-have.
+have. When extraction fails instead — a corrupt file, or a scanned PDF needing
+more OCR than `documents.ocr.inline_max_pages` allows — the reason is folded in
+the same way rather than dropped: `[File: <name> — could not be read inline:
+<reason>. Saved on disk at <path>]`. For an over-budget scan the reason is
+itself the instruction to ingest the document as a background job, so the agent
+can act on it without asking the user for anything.
 
 **Rich fenced blocks.** Code blocks tagged `html`, `svg`, `mermaid`, or
 `vega-lite` render inline as a `RichBlock`. Each block shows a header strip with

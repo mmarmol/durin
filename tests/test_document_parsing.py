@@ -373,3 +373,65 @@ def test_configured_max_text_chars_reads_the_configured_value(tmp_path, monkeypa
     monkeypatch.setenv("DURIN_HOME", str(tmp_path))
 
     assert _configured_max_text_chars() == 1500
+
+
+def test_extract_documents_reports_an_over_budget_scan_instead_of_dropping_it(
+    tmp_path, monkeypatch
+):
+    # The flagship OCR case: a scanned book attached in chat with OCR on.
+    # convert_file_to_markdown raises NeedsOcrJob because its page count
+    # blows the inline budget; that used to vanish as an [error:] string the
+    # drop gate discarded. The model must see the filename, the on-disk
+    # path, and the "Ingest" instruction instead.
+    import json
+
+    from durin.utils.document import extract_documents
+    from tests.tools.test_read_enhancements import _write_text_pdf
+
+    monkeypatch.setenv("DURIN_HOME", str(tmp_path))
+    (tmp_path / "config.json").write_text(
+        json.dumps({"documents": {"ocr": {"enabled": True, "inline_max_pages": 2}}})
+    )
+
+    pdf = tmp_path / "book.pdf"
+    _write_text_pdf(pdf, [""] * 8)
+
+    text, images = extract_documents("please remember this book", [str(pdf)])
+
+    assert "book.pdf" in text
+    assert str(pdf) in text
+    assert "Ingest" in text
+    assert images == []
+
+
+def test_extract_documents_reports_a_corrupt_file_instead_of_dropping_it(tmp_path):
+    # The [error:] gate predates the OCR branch — it silently dropped
+    # corrupt files too. The fix covers the whole defect class, not just
+    # NeedsOcrJob.
+    from durin.utils.document import extract_documents
+
+    corrupt = tmp_path / "broken.pdf"
+    corrupt.write_bytes(b"not a real pdf, just garbage bytes" * 5)
+
+    text, images = extract_documents("hello", [str(corrupt)])
+
+    assert "broken.pdf" in text
+    assert "could not be read inline" in text
+    assert images == []
+
+
+def test_extract_documents_still_inlines_an_ordinary_pdf(tmp_path):
+    # Regression: a normal text PDF must keep inlining cleanly with no
+    # error line — the fix only changes what happens to [error:] strings.
+    from durin.utils.document import extract_documents
+    from tests.tools.test_read_enhancements import _write_text_pdf
+
+    pdf = tmp_path / "report.pdf"
+    _write_text_pdf(pdf, ["Quarterly revenue is $5M"])
+
+    text, images = extract_documents("summarize", [str(pdf)])
+
+    assert "Quarterly revenue is $5M" in text
+    assert "[error:" not in text
+    assert "could not be read inline" not in text
+    assert images == []
