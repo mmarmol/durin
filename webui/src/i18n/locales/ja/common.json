@@ -2290,6 +2290,7 @@
       "statusRunning": "実行中",
       "statusDone": "完了",
       "statusFailed": "失敗",
+      "statusCancelled": "キャンセル済み",
       "runningMany": "{{count}} 件のタスクを実行中",
       "needsInput": "{{label}} が回答を待っています",
       "needsInputMany": "{{count}} 件のタスクが回答を待っています",

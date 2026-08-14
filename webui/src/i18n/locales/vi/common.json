@@ -2290,6 +2290,7 @@
       "statusRunning": "đang chạy",
       "statusDone": "hoàn tất",
       "statusFailed": "thất bại",
+      "statusCancelled": "đã hủy",
       "runningMany": "{{count}} tác vụ đang chạy",
       "needsInput": "{{label}} cần bạn trả lời",
       "needsInputMany": "{{count}} tác vụ cần bạn trả lời",

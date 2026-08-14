@@ -2290,6 +2290,7 @@
       "statusRunning": "进行中",
       "statusDone": "已完成",
       "statusFailed": "失败",
+      "statusCancelled": "已取消",
       "runningMany": "{{count}} 个任务进行中",
       "needsInput": "{{label}} 需要你的回复",
       "needsInputMany": "{{count}} 个任务需要你的回复",

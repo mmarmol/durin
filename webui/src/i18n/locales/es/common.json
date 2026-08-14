@@ -2389,6 +2389,7 @@
       "statusRunning": "en curso",
       "statusDone": "finalizado",
       "statusFailed": "falló",
+      "statusCancelled": "cancelado",
       "runningMany": "{{count}} trabajos en curso",
       "needsInput": "{{label}} necesita tu respuesta",
       "needsInputMany": "{{count}} trabajos necesitan tu respuesta",

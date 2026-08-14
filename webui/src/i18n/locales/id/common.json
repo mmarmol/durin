@@ -2290,6 +2290,7 @@
       "statusRunning": "berjalan",
       "statusDone": "selesai",
       "statusFailed": "gagal",
+      "statusCancelled": "dibatalkan",
       "runningMany": "{{count}} tugas sedang berjalan",
       "needsInput": "{{label}} membutuhkan jawaban Anda",
       "needsInputMany": "{{count}} tugas membutuhkan jawaban Anda",

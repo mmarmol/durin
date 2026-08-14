@@ -2290,6 +2290,7 @@
       "statusRunning": "진행 중",
       "statusDone": "완료",
       "statusFailed": "실패",
+      "statusCancelled": "취소됨",
       "runningMany": "작업 {{count}}개 진행 중",
       "needsInput": "{{label}}이(가) 응답을 기다리는 중입니다",
       "needsInputMany": "작업 {{count}}개가 응답을 기다리는 중입니다",

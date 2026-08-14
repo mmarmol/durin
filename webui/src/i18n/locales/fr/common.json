@@ -2290,6 +2290,7 @@
       "statusRunning": "en cours",
       "statusDone": "terminé",
       "statusFailed": "échoué",
+      "statusCancelled": "annulé",
       "runningMany": "{{count}} tâches en cours",
       "needsInput": "{{label}} attend votre réponse",
       "needsInputMany": "{{count}} tâches attendent votre réponse",

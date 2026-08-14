@@ -2389,6 +2389,7 @@
       "statusRunning": "in progress",
       "statusDone": "finished",
       "statusFailed": "failed",
+      "statusCancelled": "cancelled",
       "runningMany": "{{count}} tasks in progress",
       "needsInput": "{{label}} needs your response",
       "needsInputMany": "{{count}} tasks need your response",

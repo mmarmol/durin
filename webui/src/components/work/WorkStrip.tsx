@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, HelpCircle, Loader2, PanelRight, X } from "lucide-react";
+import { Ban, Check, HelpCircle, Loader2, PanelRight, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { cn } from "@/lib/utils";
@@ -115,12 +115,25 @@ export function WorkStrip({
         </span>
       );
   } else {
+    // Three endings, not two: a cancelled item lands in `finished` too (a job
+    // the user just stopped is precisely what this flash tends to catch), and
+    // a green tick reading "finished" over it is a lie. Icon vocabulary
+    // matches WorkItemCard's ItemStatusIcon so the same ending reads the same
+    // way in the strip and in the panel.
     const failed = shown!.status === "failed";
-    icon = failed ? (
-      <X className="h-3.5 w-3.5 shrink-0 text-destructive" aria-hidden />
-    ) : (
-      <Check className="h-3.5 w-3.5 shrink-0 text-emerald-500" aria-hidden />
-    );
+    const cancelled = shown!.status === "cancelled";
+    if (failed) {
+      icon = <X className="h-3.5 w-3.5 shrink-0 text-destructive" aria-hidden />;
+    } else if (cancelled) {
+      icon = <Ban className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />;
+    } else {
+      icon = <Check className="h-3.5 w-3.5 shrink-0 text-emerald-500" aria-hidden />;
+    }
+    const statusText = failed
+      ? t("work.strip.statusFailed")
+      : cancelled
+        ? t("work.strip.statusCancelled")
+        : t("work.strip.statusDone");
     body = (
       <>
         <span className="truncate font-medium text-foreground/90">
@@ -128,7 +141,7 @@ export function WorkStrip({
         </span>
         <span className={cn("shrink-0", failed && "text-destructive")}>
           {" "}
-          · {failed ? t("work.strip.statusFailed") : t("work.strip.statusDone")}
+          · {statusText}
         </span>
       </>
     );
