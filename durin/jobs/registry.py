@@ -141,15 +141,25 @@ class JobRegistry:
         ).fetchall()
         return [_row_to_job(r) for r in rows]
 
-    def claim(self, job_id: str, *, pid: int) -> None:
-        execute_write(
-            self._conn,
-            lambda c: c.execute(
+    def claim(self, job_id: str, *, pid: int) -> bool:
+        """Claim a queued job for this worker process.
+
+        The UPDATE is conditional on the row still being "queued" at write
+        time, not just at some earlier read: a cancel landing between a
+        caller's own status check and this call must win, not be silently
+        overwritten by an unconditional UPDATE. Returns whether this call
+        actually won the claim — a caller that gets False does not own the
+        job and must not proceed as if it does.
+        """
+        def _write(c: Any) -> bool:
+            cur = c.execute(
                 "UPDATE jobs SET status = 'running', pid = ?, started_at = ?"
-                " WHERE id = ?",
+                " WHERE id = ? AND status = 'queued'",
                 (pid, time.time(), job_id),
-            ),
-        )
+            )
+            return cur.rowcount > 0
+
+        return execute_write(self._conn, _write)
 
     def record_unit(self, job_id: str, unit: int, text: str) -> None:
         def _write(c: Any) -> None:

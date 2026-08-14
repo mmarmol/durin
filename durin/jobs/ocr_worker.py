@@ -43,11 +43,13 @@ def run_job(job_id: str, *, registry: JobRegistry | None = None) -> None:
 
     # Re-fetch immediately before claiming rather than trusting `job` above:
     # interpreter boot, imports and the done_units() round trip all take real
-    # wall-clock time, and a cancellation landing in that window must not be
-    # silently overwritten by an unconditional claim. `queued` is the only
-    # status a fresh invocation may claim — `running` means another process
-    # already owns this job, `done`/`failed` mean it already has an outcome,
-    # and `cancelled` means nobody should touch it further.
+    # wall-clock time. `queued` is the only status a fresh invocation may
+    # claim — `running` means another process already owns this job,
+    # `done`/`failed` mean it already has an outcome, and `cancelled` means
+    # nobody should touch it further. This is a fast, informative pre-check,
+    # not the actual guarantee: registry.claim() below is what makes the
+    # read-then-write atomic against a cancel (or a second worker) landing
+    # in the gap between this read and that call.
     current = registry.get(job_id)
     if current is None or current.status != "queued":
         logger.warning(
@@ -56,7 +58,20 @@ def run_job(job_id: str, *, registry: JobRegistry | None = None) -> None:
         )
         return
 
-    registry.claim(job_id, pid=os.getpid())
+    if not registry.claim(job_id, pid=os.getpid()):
+        # Lost the race this pre-check cannot close: something else (a
+        # cancel, or another worker instance) changed the status away from
+        # "queued" between the read above and this claim's own conditional
+        # UPDATE. Bailing here — rather than trusting the claim call
+        # unconditionally — matters most when there is nothing left to do:
+        # with every page already transcribed, the per-page loop below never
+        # runs at all, so this is the only check that stops a job that just
+        # lost a race from being marked "done" anyway.
+        logger.warning(
+            "ocr worker: job {} was claimed or changed status between the "
+            "status check and the claim; skipping", job_id,
+        )
+        return
     started = time.monotonic()
 
     error: str | None = None

@@ -199,5 +199,60 @@ def test_worker_does_not_reclaim_a_job_already_running_elsewhere(registry, scann
     assert reread.pid == 999999
 
 
+def _lose_the_claim_race_to_a_cancel(registry, monkeypatch):
+    """Makes the worker's own claim() call, at the exact moment it runs,
+    trigger a cancel first — indistinguishable from the outside from a real
+    concurrent cancel landing in the window between the worker's status read
+    and its claim, since claim()'s own conditional UPDATE is what decides
+    who wins either way."""
+    real_claim = registry.claim
+
+    def _claim_after_a_race_lost_cancel(job_id, *, pid):
+        registry.cancel(job_id)
+        return real_claim(job_id, pid=pid)
+
+    monkeypatch.setattr(registry, "claim", _claim_after_a_race_lost_cancel)
+
+
+def test_worker_bails_when_a_cancel_wins_the_claim_race(registry, scanned_pdf, monkeypatch):
+    """The interleaving that matters: status read says "queued", then a
+    cancel lands, then the claim itself runs and — now that claim() is
+    conditional on status='queued' — loses. The worker must not transcribe
+    anything after that, and must not leave the row silently flipped back to
+    "running"."""
+    called = []
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page",
+        lambda path, page, **kw: called.append(page) or f"page {page}",
+    )
+    job = _enqueue(registry, scanned_pdf, [1, 2, 3])
+    _lose_the_claim_race_to_a_cancel(registry, monkeypatch)
+
+    run_job(job.id, registry=registry)
+
+    assert called == []
+    reread = registry.get(job.id)
+    assert reread.status == "cancelled"
+    assert reread.pid is None
+
+
+def test_worker_bails_when_a_cancel_wins_the_claim_race_with_no_pages_left(
+    registry, scanned_pdf, monkeypatch,
+):
+    """The case that specifically requires checking claim()'s return value,
+    rather than relying on the per-page loop's own cancellation check: with
+    every page already done, `todo` is empty and that loop never runs at
+    all, so a lost claim that went unchecked would fall straight through to
+    `registry.finish(job_id, error=None)` — marking a cancelled job "done"."""
+    job = _enqueue(registry, scanned_pdf, [1])
+    registry.record_unit(job.id, 1, "already transcribed")
+    _lose_the_claim_race_to_a_cancel(registry, monkeypatch)
+
+    run_job(job.id, registry=registry)
+
+    reread = registry.get(job.id)
+    assert reread.status == "cancelled"  # not silently marked "done"
+
+
 def test_worker_on_an_unknown_job_is_a_noop(registry):
     run_job("does-not-exist", registry=registry)  # must not raise

@@ -173,6 +173,9 @@ async def test_stop_running_job_requests_cancel(tmp_path):
         action="stop", id=job.id)
     assert "asked to cancel" in out
     assert jobs.get(job.id).status == "cancelled"
+    # Unlike a sub-agent or workflow run, nothing in durin/jobs ever publishes
+    # a follow-up message -- the stop message must not claim one is coming.
+    assert "follow-up" not in out
 
 
 @pytest.mark.asyncio
@@ -293,3 +296,23 @@ async def test_create_wires_a_real_jobs_registry(tmp_path, monkeypatch):
     tool.set_context(RequestContext(channel="websocket", chat_id="chatA", session_key=SESSION))
     out = await tool.execute(action="list")
     assert "book.pdf" in out
+
+
+def test_description_does_not_promise_a_notification_for_a_finished_job(tmp_path):
+    """Sub-agents and workflow runs genuinely publish a follow-up message on
+    completion (durin/agent/subagent.py, durin/agent/tools/run_workflow.py);
+    nothing in durin/jobs publishes anything at all. Extending the same
+    "arrives on its own, do not loop waiting" promise to jobs would tell the
+    model to end its turn and wait for a message that never comes."""
+    tool = _tool(tmp_path, _FakeManager([], running=[]))
+    desc = tool.description
+    assert "job" in desc.lower()
+    assert "a job pushes nothing" in desc.lower()
+
+
+def test_id_parameter_description_names_all_three_kinds(tmp_path):
+    tool = _tool(tmp_path, _FakeManager([], running=[]))
+    id_desc = tool.parameters["properties"]["id"]["description"].lower()
+    assert "sub-agent id" in id_desc
+    assert "workflow run id" in id_desc
+    assert "job id" in id_desc

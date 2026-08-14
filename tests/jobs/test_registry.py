@@ -60,11 +60,39 @@ def test_list_for_session_excludes_other_sessions(registry):
 
 def test_claim_marks_running_with_a_pid(registry):
     job = registry.enqueue(kind="ocr", label="a", payload={}, session_key=None, units_total=2)
-    registry.claim(job.id, pid=4242)
+    won = registry.claim(job.id, pid=4242)
+    assert won is True
     reread = registry.get(job.id)
     assert reread.status == "running"
     assert reread.pid == 4242
     assert reread.started_at is not None
+
+
+def test_claim_loses_to_a_cancel_that_landed_first(registry):
+    # The exact interleaving that matters: a worker reads "queued", then a
+    # cancel lands, then the worker's claim runs. The claim must not win —
+    # an unconditional UPDATE would silently flip a cancelled job back to
+    # "running" and the worker would transcribe the whole document anyway.
+    job = registry.enqueue(kind="ocr", label="a", payload={}, session_key=None, units_total=5)
+    registry.cancel(job.id)
+
+    won = registry.claim(job.id, pid=4242)
+
+    assert won is False
+    reread = registry.get(job.id)
+    assert reread.status == "cancelled"  # not overwritten back to "running"
+    assert reread.pid is None
+
+
+def test_claim_loses_when_another_worker_already_claimed_it(registry):
+    job = registry.enqueue(kind="ocr", label="a", payload={}, session_key=None, units_total=5)
+    assert registry.claim(job.id, pid=1111) is True
+
+    won_again = registry.claim(job.id, pid=2222)
+
+    assert won_again is False
+    reread = registry.get(job.id)
+    assert reread.pid == 1111  # the second claim did not steal ownership
 
 
 def test_record_unit_advances_progress(registry):

@@ -66,7 +66,10 @@ def _age_mono(started_at: float, ended_at: float | None) -> str:
             enum=["list", "status", "stop"],
         ),
         id=StringSchema(
-            description="The task id (a sub-agent id or a workflow run id) — required for status and stop.",
+            description=(
+                "The task id (a sub-agent id, a workflow run id, or a job id) "
+                "— required for status and stop."
+            ),
             min_length=1, max_length=64, nullable=True,
         ),
         required=["action"],
@@ -135,9 +138,11 @@ class TasksTool(Tool, ContextAware):
             "or a job's page progress); action=stop with an id cancels one "
             "(best-effort). Use it when the user asks how the work is going, "
             "when you need a mid-run look at a workflow's files, or before "
-            "stopping something. Finished results arrive on their own as "
-            "follow-up messages — do not loop sleep+status waiting for them; "
-            "end your turn instead."
+            "stopping something. A finished sub-agent or workflow run arrives "
+            "on its own as a follow-up message — do not loop sleep+status "
+            "waiting for one; end your turn instead. A job pushes nothing: "
+            "nobody tells you when it finishes, so check back with "
+            "action=status (or list) instead of expecting a message."
         )
 
     def _rows(self, session_key: str) -> list[dict]:
@@ -343,8 +348,9 @@ class TasksTool(Tool, ContextAware):
             self._jobs.cancel(task_id)
             return (
                 f"Job [{task_id}] asked to cancel. It stops at its next page "
-                "boundary (a page already being transcribed finishes first); "
-                "its result still arrives as a follow-up, with status 'cancelled'."
+                "boundary (a page already being transcribed finishes first). "
+                "Nothing pushes a message when it does — check action=status "
+                "if you need to confirm it stopped."
             )
         # workflow
         healed = self._heal_orphaned_workflow(row)
