@@ -287,9 +287,40 @@ async def test_startup_queued_pickup_launches_distinct_jobs_at_a_higher_cap(tmp_
 
 # --- the periodic sweep: startup's two loops, on a timer -------------------
 #
-# Every test below builds its stranded state *inside* ``_live_loop``'s body,
-# after startup has already run and found nothing. What repairs it can only be
-# the sweep.
+# The two tests that need stranded rows build them BEFORE the loop is live and
+# neutralize startup's own pass (see ``_skip_startup_resume``). Building them
+# inside the live window instead races the sweep: with the interval patched to
+# 10 ms, a tick can land between an ``enqueue`` and its ``claim``, where the
+# row is genuinely still queued -- the pickup then launches it correctly, and
+# the test reads a state it created itself rather than the one it meant to set
+# up. Either way the repair can only come from a sweep tick, which is the
+# property these tests exist to hold.
+
+
+def _skip_startup_resume(monkeypatch) -> None:
+    """Make gateway startup's own reconcile/pickup pass a no-op, leaving every
+    later call (i.e. every sweep tick) real.
+
+    Needed because the stranded state has to exist before the loop starts (to
+    keep the sweep from racing the setup), and startup would otherwise repair
+    it first -- leaving the test passing with the sweep body removed entirely,
+    which is exactly the regression it must catch. Skipping precisely the
+    startup call models the production sequence faithfully: the gateway starts
+    against a healthy registry, its pass finds nothing to do, and the worker is
+    killed afterwards.
+    """
+    import durin.agent.loop as loop_module
+
+    real = loop_module._resume_jobs
+    seen: list[int] = []
+
+    def resume() -> None:
+        seen.append(1)
+        if len(seen) == 1:
+            return
+        real()
+
+    monkeypatch.setattr(loop_module, "_resume_jobs", resume)
 
 
 async def test_the_sweep_requeues_a_holder_whose_worker_was_killed(tmp_path, monkeypatch):
@@ -312,12 +343,20 @@ async def test_the_sweep_requeues_a_holder_whose_worker_was_killed(tmp_path, mon
         lambda args, **kw: calls.append(args),
     )
 
-    async with _live_loop(loop):
-        held = _enqueue(registry, "book.pdf")
-        blocked = _enqueue(registry, "next.pdf")
-        registry.claim(held.id, pid=dead)
+    # The whole wedge is in place before anything can observe it half-built.
+    held = _enqueue(registry, "book.pdf")
+    blocked = _enqueue(registry, "next.pdf")
+    registry.claim(held.id, pid=dead)
+    _skip_startup_resume(monkeypatch)
 
-        await _wait_for(lambda: calls, what="the sweep to launch a worker")
+    async with _live_loop(loop):
+        # Waits for the repair itself, not merely for "a launch happened":
+        # only reconcile can move this row, so this cannot be satisfied by
+        # anything else the sweep does.
+        await _wait_for(
+            lambda: registry.get(held.id).status == "queued",
+            what="the sweep to requeue the dead holder",
+        )
 
     reread = registry.get(held.id)
     assert reread.status == "queued"  # the self-heal that had no trigger before
@@ -344,9 +383,12 @@ async def test_the_sweep_picks_up_a_queued_job_nothing_ever_launched(tmp_path, m
         lambda args, **kw: calls.append(args),
     )
 
-    async with _live_loop(loop):
-        stranded = _enqueue(registry, "stranded.pdf")
+    # Before the loop, and with startup's pass neutralized -- same reasoning as
+    # the wedge test above, so no registry write ever races a sweep tick.
+    stranded = _enqueue(registry, "stranded.pdf")
+    _skip_startup_resume(monkeypatch)
 
+    async with _live_loop(loop):
         await _wait_for(lambda: calls, what="the sweep to launch the stranded job")
 
     assert calls[0] == [sys.executable, "-m", "durin.jobs.ocr_worker", stranded.id]
