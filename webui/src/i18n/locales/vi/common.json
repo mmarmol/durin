@@ -580,6 +580,7 @@
       "description": "Cách durin đọc các tài liệu bạn đính kèm hoặc yêu cầu mở — giới hạn trích xuất và OCR cục bộ cho PDF dạng quét.",
       "loadError": "Không thể tải cài đặt tài liệu.",
       "saveError": "Không thể lưu {{path}}.",
+      "saveRowLabel": "Lưu {{row}}",
       "sections": {
         "ocr": "OCR cục bộ",
         "limits": "Giới hạn đọc"

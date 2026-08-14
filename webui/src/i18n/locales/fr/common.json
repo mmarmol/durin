@@ -580,6 +580,7 @@
       "description": "Comment durin lit les documents que vous joignez ou lui demandez d’ouvrir — limites d’extraction et OCR local pour les PDF scannés.",
       "loadError": "Impossible de charger les paramètres des documents.",
       "saveError": "Impossible d’enregistrer {{path}}.",
+      "saveRowLabel": "Enregistrer {{row}}",
       "sections": {
         "ocr": "OCR local",
         "limits": "Limites de lecture"

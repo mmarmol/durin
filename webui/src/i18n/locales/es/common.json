@@ -547,6 +547,7 @@
       "description": "Cómo lee durin los documentos que adjuntás o le pedís abrir — límites de extracción y OCR local para PDFs escaneados.",
       "loadError": "No se pudo cargar la configuración de documentos.",
       "saveError": "No se pudo guardar {{path}}.",
+      "saveRowLabel": "Guardar {{row}}",
       "sections": {
         "ocr": "OCR local",
         "limits": "Límites de lectura"

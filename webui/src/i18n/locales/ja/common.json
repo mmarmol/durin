@@ -580,6 +580,7 @@
       "description": "durin が添付されたドキュメントや開くよう指示されたドキュメントをどう読み取るか — 抽出の上限と、スキャンされた PDF 向けのローカル OCR です。",
       "loadError": "ドキュメント設定を読み込めませんでした。",
       "saveError": "{{path}} を保存できませんでした。",
+      "saveRowLabel": "{{row}}を保存",
       "sections": {
         "ocr": "ローカル OCR",
         "limits": "読み取りの上限"

@@ -580,6 +580,7 @@
       "description": "How durin reads the documents you attach or ask it to open — extraction limits and local OCR for scanned PDFs.",
       "loadError": "Could not load document settings.",
       "saveError": "Could not save {{path}}.",
+      "saveRowLabel": "Save {{row}}",
       "sections": {
         "ocr": "Local OCR",
         "limits": "Reading limits"

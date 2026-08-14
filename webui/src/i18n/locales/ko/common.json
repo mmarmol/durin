@@ -580,6 +580,7 @@
       "description": "durin이 첨부하거나 열어달라고 요청받은 문서를 읽는 방식입니다 — 추출 한도와 스캔된 PDF를 위한 로컬 OCR입니다.",
       "loadError": "문서 설정을 불러오지 못했습니다.",
       "saveError": "{{path}}을(를) 저장하지 못했습니다.",
+      "saveRowLabel": "{{row}} 저장",
       "sections": {
         "ocr": "로컬 OCR",
         "limits": "읽기 한도"

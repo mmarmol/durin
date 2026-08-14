@@ -181,20 +181,20 @@ export function DocumentsSettings({ token }: { token: string }) {
         <SettingsSectionTitle>{t("settings.documents.sections.limits")}</SettingsSectionTitle>
         <SettingsGroup>
           <NumberRow
-            title={t("settings.documents.rows.maxTextChars")}
-            description={t("settings.documents.help.maxTextChars")}
-            value={state.maxTextChars}
-            min={1000}
-            saving={savingPath === "documents.max_text_chars"}
-            onSave={(n) => void onSave("documents.max_text_chars", n)}
-          />
-          <NumberRow
             title={t("settings.documents.rows.maxFileSizeMb")}
             description={t("settings.documents.help.maxFileSizeMb")}
             value={state.maxFileSizeMb}
             min={1}
             saving={savingPath === "documents.max_file_size_mb"}
             onSave={(n) => void onSave("documents.max_file_size_mb", n)}
+          />
+          <NumberRow
+            title={t("settings.documents.rows.maxTextChars")}
+            description={t("settings.documents.help.maxTextChars")}
+            value={state.maxTextChars}
+            min={1000}
+            saving={savingPath === "documents.max_text_chars"}
+            onSave={(n) => void onSave("documents.max_text_chars", n)}
           />
         </SettingsGroup>
       </section>
@@ -289,6 +289,7 @@ function NumberRow({
           variant="outline"
           disabled={!dirty || saving}
           onClick={commit}
+          aria-label={t("settings.documents.saveRowLabel", { row: title })}
           className="rounded-full"
         >
           {t("settings.config.save")}

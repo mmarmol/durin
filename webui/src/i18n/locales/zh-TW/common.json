@@ -580,6 +580,7 @@
       "description": "durin 如何讀取你附加或要求開啟的文件 — 擷取限制，以及針對掃描版 PDF 的本機 OCR。",
       "loadError": "無法載入文件設定。",
       "saveError": "無法儲存 {{path}}。",
+      "saveRowLabel": "儲存{{row}}",
       "sections": {
         "ocr": "本機 OCR",
         "limits": "讀取限制"

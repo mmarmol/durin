@@ -82,7 +82,10 @@ describe("DocumentsSettings", () => {
     renderCard();
     const input = await screen.findByDisplayValue("5");
     fireEvent.change(input, { target: { value: "20" } });
-    const save = screen.getAllByRole("button", { name: /save/i })[0];
+    // Scoped by the row's own accessible name, not DOM position: every
+    // Save button in this pane would otherwise share the name "Save", so
+    // a reorder of the rows must not silently point this at the wrong one.
+    const save = screen.getByRole("button", { name: /save inline page limit/i });
     fireEvent.click(save);
     await waitFor(() =>
       expect(vi.mocked(setConfigValue)).toHaveBeenCalledWith(
@@ -97,8 +100,8 @@ describe("DocumentsSettings", () => {
     renderCard();
     const input = await screen.findByDisplayValue("50");
     fireEvent.change(input, { target: { value: "120" } });
-    const saves = screen.getAllByRole("button", { name: /save/i });
-    fireEvent.click(saves[saves.length - 1]);
+    const save = screen.getByRole("button", { name: /save largest file to read/i });
+    fireEvent.click(save);
     await waitFor(() =>
       expect(vi.mocked(setConfigValue)).toHaveBeenCalledWith(
         "tok",

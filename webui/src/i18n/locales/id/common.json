@@ -580,6 +580,7 @@
       "description": "Cara durin membaca dokumen yang Anda lampirkan atau minta untuk dibuka — batas ekstraksi dan OCR lokal untuk PDF hasil pindaian.",
       "loadError": "Tidak dapat memuat pengaturan dokumen.",
       "saveError": "Tidak dapat menyimpan {{path}}.",
+      "saveRowLabel": "Simpan {{row}}",
       "sections": {
         "ocr": "OCR lokal",
         "limits": "Batas pembacaan"
