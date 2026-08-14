@@ -81,3 +81,99 @@ def test_a_normal_document_ingests_with_no_job(tmp_path, registry):
 
     assert result["job_id"] is None
     assert "readable body text" in result["content"]
+
+
+def test_the_result_carries_how_many_pages_are_pending(tmp_path, book, registry):
+    """What the agent needs to tell the user how big the wait is."""
+    cfg = DocumentsConfig.model_validate({"ocr": {"enabled": True, "inline_max_pages": 5}})
+
+    result = ingest_artifact(tmp_path / "ws", book, documents_config=cfg, jobs=registry)
+
+    assert result["job_pages"] == 40
+
+
+def test_the_entry_is_complete_before_its_job_is_spawned(tmp_path, book, registry, monkeypatch):
+    """The worker learns which document it is transcribing from the entry's
+    meta.json, and it can be reading it the moment spawn_ocr_job returns. So
+    the entry has to be finished before that call, not after it."""
+    seen = {}
+
+    def _probe(*, registry, pdf_path, pages, session_key, sidecar_dir=None):
+        from pathlib import Path
+
+        seen["meta"] = (Path(sidecar_dir) / "meta.json").is_file()
+        return registry.enqueue(
+            kind="ocr", label=pdf_path.name, payload={}, session_key=session_key,
+            units_total=len(pages),
+        )
+
+    monkeypatch.setattr("durin.jobs.spawn.spawn_ocr_job", _probe)
+    cfg = DocumentsConfig.model_validate({"ocr": {"enabled": True, "inline_max_pages": 5}})
+
+    ingest_artifact(tmp_path / "ws", book, documents_config=cfg, jobs=registry)
+
+    assert seen["meta"] is True
+
+
+class _RecordingVectorIndex:
+    def __init__(self):
+        self.upserts = []
+
+    def upsert_reference_chunk(self, *, ref, idx, text, path, breadcrumb=""):
+        self.upserts.append(idx)
+
+
+def test_indexing_an_entry_embeds_its_chunks_with_the_configured_model(tmp_path, monkeypatch):
+    """The vector half only ever runs in the product -- CI has neither
+    fastembed nor lancedb -- so the wiring that builds the index from the
+    active config is what this covers, with both stood in for."""
+    import json
+
+    from durin.config.schema import Config
+    from durin.memory.ingestion import index_ingested_entry
+
+    entry_dir = tmp_path / "ws" / "ingested" / "e1"
+    entry_dir.mkdir(parents=True)
+    (entry_dir / "source.md").write_text("# Book\n\nthe zorptastic protocol\n", encoding="utf-8")
+    (entry_dir / "meta.json").write_text(
+        json.dumps({"derived": {"source_path": "/somewhere/zorpbook.pdf"}}), encoding="utf-8")
+
+    cfg = Config()
+    cfg.memory.enabled = True
+    vi = _RecordingVectorIndex()
+    monkeypatch.setattr("durin.config.loader.load_config", lambda *a, **k: cfg)
+    monkeypatch.setattr("durin.memory.vector_index.vector_index_available", lambda: True)
+    monkeypatch.setattr(
+        "durin.memory.embedding.provider_from_config",
+        lambda cfg, model=None: ("provider", model))
+    monkeypatch.setattr(
+        "durin.memory.vector_index.VectorIndex", lambda workspace, provider: vi)
+
+    ref = index_ingested_entry(entry_dir)
+
+    assert ref == "reference:zorpbook"
+    assert vi.upserts == [0]
+
+
+def test_indexing_an_entry_skips_the_vector_half_when_memory_is_off(tmp_path, monkeypatch):
+    import json
+
+    from durin.config.schema import Config
+    from durin.memory.ingestion import index_ingested_entry
+
+    entry_dir = tmp_path / "ws" / "ingested" / "e1"
+    entry_dir.mkdir(parents=True)
+    (entry_dir / "source.md").write_text("# Book\n\nthe zorptastic protocol\n", encoding="utf-8")
+    (entry_dir / "meta.json").write_text(
+        json.dumps({"derived": {"source_path": "/somewhere/zorpbook.pdf"}}), encoding="utf-8")
+
+    cfg = Config()
+    cfg.memory.enabled = False
+    monkeypatch.setattr("durin.config.loader.load_config", lambda *a, **k: cfg)
+
+    def _never(*a, **kw):
+        raise AssertionError("built a vector index with memory disabled")
+
+    monkeypatch.setattr("durin.memory.vector_index.VectorIndex", _never)
+
+    assert index_ingested_entry(entry_dir) == "reference:zorpbook"

@@ -8,6 +8,11 @@ database the gateway is already reading.
 
 Every page is committed as it finishes, so an interrupted run resumes instead
 of restarting.
+
+The last step of a successful run hands the assembled text back to the memory
+layer, which stores and indexes it: transcribing a scanned book is only worth
+anything once the book is searchable, and this process is where its text first
+exists.
 """
 
 from __future__ import annotations
@@ -20,6 +25,7 @@ from pathlib import Path
 from loguru import logger
 
 from durin.jobs.registry import JobRegistry
+from durin.memory.ingestion import index_ingested_entry
 from durin.memory.ocr import transcribe_page
 from durin.memory.pdf_coverage import page_texts
 from durin.utils.atomic_write import atomic_write_text
@@ -113,6 +119,22 @@ def run_job(job_id: str, *, registry: JobRegistry | None = None) -> None:
         except Exception as exc:  # noqa: BLE001
             logger.exception("ocr worker: sidecar write failed for job {}", job_id)
             error = f"sidecar write: {type(exc).__name__}: {exc}"
+
+    if error is None and sidecar_dir:
+        # A sidecar nobody indexed is not a document anybody can find, and
+        # being findable is the only reason these pages were transcribed. The
+        # memory layer owns what a Library entry is and how it is indexed;
+        # this hands it the finished entry and lets it decide.
+        #
+        # Guarded like the sidecar write above, for the same reason, and
+        # recorded as a job failure rather than swallowed: a job reported
+        # "done" whose document cannot be found is precisely the outcome this
+        # step exists to prevent, so it must not be reported that way.
+        try:
+            index_ingested_entry(Path(sidecar_dir))
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("ocr worker: library indexing failed for job {}", job_id)
+            error = f"library index: {type(exc).__name__}: {exc}"
 
     registry.finish(job_id, error=error)
     _emit(job_id, len(pages), len(already), started, "failed" if error else "done")

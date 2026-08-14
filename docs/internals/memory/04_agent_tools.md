@@ -213,17 +213,22 @@ same call, as long as there are at or under `documents.ocr.inline_max_pages`
 [background job](../jobs.md) to transcribe it page by page instead,
 returning that job's `job_id` alongside an empty `content`.
 
-The **tool**, however, does not currently forward `job_id` into its own
-response — the agent has no signal from this call alone that a job exists —
-and it writes the Library reference unconditionally from whatever `content`
-it received, so an over-budget document gets a real but empty
-`memory/references/<slug>.md` (`chunk_count: 0`). The worker's completion
-writes the transcribed text only to the verbatim-copy sidecar
-(`ingested/<id>/source.md`), never back to the reference, its FTS row, or its
-vector chunks — so as things stand, that reference stays empty even after the
-job finishes. Verified against a live run over a 40-page scanned fixture;
-`tests/memory/test_ingestion_ocr.py` covers `ingest_artifact` directly but not
-the tool layer above it, which is where this falls through.
+In that case the tool writes **no** reference: `content` is an empty
+placeholder, and storing it would put an empty document in the Library and
+hand the agent a ref that resolves to nothing. What it returns instead is
+`job_id`, `pages_pending` and a `note` saying the document is not readable or
+searchable yet — steps 2 and 3 above have not happened, and the response does
+not pretend otherwise.
+
+They happen when the transcription lands. The worker assembles
+`ingested/<id>/source.md` and then calls `index_ingested_entry`
+(`durin/memory/ingestion.py`), which reads the entry's markdown and its
+`meta.json` (for the original filename the Library entry is titled after) and
+runs the same store-and-index step an inline ingest runs —
+`durin.memory.reference.store_and_index_reference`, shared by both callers so
+a deferred document cannot end up indexed differently from an inline one. The
+document becomes searchable at that point, not before; if that step fails the
+[job](../jobs.md) is recorded as `failed` rather than `done`.
 
 To read a document's text **without** persisting it to the Library, the agent
 uses the separate `convert_to_markdown` tool
@@ -254,6 +259,10 @@ agent-result head-truncation on large documents.
 `reference` is present only when the reference write succeeded. `content` is
 the full file text, returned so the agent can read it in the same turn without a
 follow-up `memory_drill`.
+
+A document waiting on a background transcription returns the same keys minus
+`reference`, with `content` empty, plus `job_id`, `pages_pending` and the
+`note` described above.
 
 **Scope is deliberately local files only.** URL fetch and inline content are not
 supported. Web content should go through `web_fetch` first; facts about a

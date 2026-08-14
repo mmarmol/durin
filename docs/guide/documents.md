@@ -42,6 +42,11 @@ the original is kept right away and its pages are transcribed in the
 background. Watch its progress from the dashboard's work panel, or just ask
 durin how it's going.
 
+Until that finishes there is no text to work with, and durin says so rather
+than guessing at what the book contains. When it does finish, the book joins
+your Library like any other document — searchable, and understood overnight
+along with everything else.
+
 See [Jobs internals](../internals/jobs.md) for how the background
 transcription queue works.
 

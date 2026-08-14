@@ -10,7 +10,7 @@ The job registry is durin's home for work too long to run inside a single
 turn — minutes to hours of CPU, running in its own process, with progress a
 user can come back and check. It is generic over a `kind` column, but it has
 exactly one client today: transcribing a scanned PDF with local OCR (see
-[Memory: document conversion](memory/00_overview.md) for the coverage
+[Memory: agent tools](memory/04_agent_tools.md#memory_ingest) for the coverage
 measurement and inline-vs-job decision that leads here). The registry does not
 know anything about OCR, pages, or PDFs — it only knows a job has a total unit
 count and a per-unit result, which is enough to host a second, unrelated kind
@@ -51,7 +51,7 @@ The registry's *own* `kind` column is one layer more specific: it names which
 
 ```mermaid
 flowchart TD
-    ING["memory_ingest\ndurin/memory/ingestion.py"] -->|NeedsOcrJob\nover the inline budget| SPAWN["spawn_ocr_job\ndurin/jobs/spawn.py"]
+    ING["ingest_artifact\ndurin/memory/ingestion.py"] -->|NeedsOcrJob\nover the inline budget| SPAWN["spawn_ocr_job\ndurin/jobs/spawn.py"]
     SPAWN -->|enqueue| REG[(jobs.db\nJobRegistry)]
     SPAWN -->|Popen, detached| WORKER["ocr_worker.run_job\npython -m durin.jobs.ocr_worker &lt;id&gt;"]
 
@@ -59,6 +59,7 @@ flowchart TD
     WORKER -->|record_unit per page| REG
     WORKER -->|finish: done / failed| REG
     WORKER -->|assemble source.md| SIDECAR["ingested/&lt;id&gt;/source.md"]
+    WORKER -->|index_ingested_entry| LIB["memory/references/&lt;slug&gt;.md\n+ FTS row + vector chunks"]
 
     GWSTART(["gateway start\nAgentLoop.run()"]) -->|reconcile: running rows\nwith a dead pid or too old| REG
     GWSTART -->|respawn per orphan| WORKER
@@ -193,10 +194,27 @@ On success, a job whose payload carries a `sidecar_dir` (an ingested Library
 entry) has the worker assemble `source.md` there: the document's per-page
 text with every OCR'd page filled in, joined the same way the inline
 conversion path joins pages — the same sidecar shape either way, just
-produced later. A failure at any step — a page's transcription, or the final
-sidecar assembly — is recorded as `status="failed"` with an `error` string
+produced later.
+
+The worker then hands that entry back to the memory layer —
+`index_ingested_entry` (`durin/memory/ingestion.py`) — which stores it as a
+Library reference and indexes it, exactly as an inline ingest does at ingest
+time. This is the step that makes a transcribed document *findable*, and it
+belongs at the end of the job because this process is where the text first
+exists: `memory_ingest` returned before any of it had been produced. The jobs
+layer knows only that name; what a Library entry is and how it is indexed
+stays behind it (see [Memory: agent
+tools](memory/04_agent_tools.md#memory_ingest)).
+
+A failure at any step — a page's transcription, the sidecar assembly, or the
+Library indexing — is recorded as `status="failed"` with an `error` string
 rather than left `running` forever; a resumed run that finds nothing left to
 transcribe would otherwise hit the same broken step again on every retry.
+Indexing counts as a step that can fail the job on purpose: a job reported
+"done" whose document cannot be found is the exact outcome the step exists to
+prevent. A pass that transcribed nothing at all fails there too — the inline
+conversion path already refuses a document with no extractable text, and an
+empty Library entry is no more useful for having arrived late.
 
 ### How a new job `kind` is added
 
@@ -232,8 +250,9 @@ copy there.
 | `RECONCILE_AGE_S` | `durin/jobs/registry.py` | Six hours — the pid-liveness-is-unreliable fallback age used by `reconcile`. |
 | `spawn_ocr_job` | `durin/jobs/spawn.py` | Enqueues an OCR job and `Popen`s its worker; called from `ingest_artifact` when a document needs more OCR than the inline budget. |
 | `respawn` | `durin/jobs/spawn.py` | Re-launches the worker for a job `reconcile` already requeued; dispatches on `job.kind`. |
-| `run_job` | `durin/jobs/ocr_worker.py` | The OCR worker's whole lifecycle: claim, per-page transcribe loop, sidecar assembly, finish. |
+| `run_job` | `durin/jobs/ocr_worker.py` | The OCR worker's whole lifecycle: claim, per-page transcribe loop, sidecar assembly, Library indexing, finish. |
 | `transcribe_page` | `durin/memory/ocr.py` | Renders one PDF page (`pypdfium2`) and runs it through the lazily-constructed, process-local `RapidOCR` engine. |
+| `index_ingested_entry` | `durin/memory/ingestion.py` | Turns a finished `ingested/<id>/` entry into an indexed Library reference; the one memory-layer call the worker makes on success. |
 | `collect_tasks` | `durin/agent/background_tasks.py` | Merges sub-agents, workflow runs, and jobs into the one list the tray and `tasks` tool both read. |
 | `TasksTool` | `durin/agent/tools/tasks_tool.py` | Agent-facing `tasks` tool: `list` / `status` / `stop`, across all three background-work categories. |
 | `TasksService` | `durin/service/tasks.py` | `GET /api/v1/tasks` — read-only HTTP mirror of `collect_tasks`. |

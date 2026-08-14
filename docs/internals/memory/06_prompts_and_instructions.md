@@ -80,6 +80,8 @@ Supported formats are converted to markdown on the way in: PDF, Word (docx), Pow
 
 `path` is the absolute or workspace-relative path to the file. Re-ingesting the same file is idempotent. The result includes a `reference:<slug>`; when you then author an entity distilled from this document, pass that ref in `memory_upsert_entity(derived_from=[...])` so the entity links back to its source.
 
+One case returns no text and no reference: a scanned PDF with more pages than can be transcribed on the spot. The result carries `job_id`, `pages_pending` and a `note` instead, and the document is neither readable nor searchable until that background job finishes. Say so — do not report it as read or remembered — and use `tasks` to report progress.
+
 For web content, use `web_fetch(url=...)` first, then `memory_ingest` on the saved file. For a fact about a *thing* (a person, company, product, topic…), use `memory_upsert_entity` instead — `memory_ingest` is for whole documents, not individual facts. To just READ a document in this turn without saving it, use `convert_to_markdown`.
 ```
 

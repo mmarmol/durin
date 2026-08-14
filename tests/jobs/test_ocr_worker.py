@@ -49,26 +49,124 @@ def test_worker_transcribes_every_requested_page(registry, scanned_pdf, monkeypa
 
 
 def test_worker_writes_the_sidecar_with_pages_merged_in_order(registry, tmp_path, monkeypatch):
-    from tests.tools.test_read_enhancements import _write_text_pdf
-
-    pdf = tmp_path / "mixed.pdf"
-    _write_text_pdf(pdf, ["Real text on page one", "", "Real text on page three"])
-    sidecar_dir = tmp_path / "entry"
-    sidecar_dir.mkdir()
+    entry_dir, pdf = _ingested_entry(
+        tmp_path / "ws", original_name="mixed.pdf",
+        pages=("Real text on page one", "", "Real text on page three"),
+    )
 
     monkeypatch.setattr(
         "durin.jobs.ocr_worker.transcribe_page",
         lambda path, page, **kw: f"OCR'd text for page {page}",
     )
-    job = _enqueue(registry, pdf, [2], sidecar_dir=sidecar_dir)
+    job = _enqueue(registry, pdf, [2], sidecar_dir=entry_dir)
 
     run_job(job.id, registry=registry)
 
     assert registry.get(job.id).status == "done"
-    content = (sidecar_dir / "source.md").read_text()
+    content = (entry_dir / "source.md").read_text()
     assert content == (
         "Real text on page one\n\nOCR'd text for page 2\n\nReal text on page three"
     )
+
+
+def _ingested_entry(workspace, original_name="zorpbook.pdf", pages=("", "", "")):
+    """Build the ``ingested/<id>/`` entry ``ingest_artifact`` leaves behind for
+    a scanned PDF whose OCR was deferred: the verbatim original copied in as
+    ``source.pdf``, plus the ``meta.json`` naming the file the user handed
+    over (which is what the Library entry is titled after)."""
+    import json
+
+    from tests.tools.test_read_enhancements import _write_text_pdf
+
+    entry_dir = workspace / "ingested" / "e1"
+    entry_dir.mkdir(parents=True)
+    pdf = entry_dir / "source.pdf"
+    _write_text_pdf(pdf, list(pages))
+    (entry_dir / "meta.json").write_text(
+        json.dumps({
+            "id": "e1",
+            "derived": {"source_path": f"/somewhere/{original_name}", "size_bytes": 1},
+        }),
+        encoding="utf-8",
+    )
+    return entry_dir, pdf
+
+
+def test_worker_makes_the_finished_transcription_searchable(
+    registry, tmp_path, monkeypatch,
+):
+    """Writing the sidecar is not the end of the job: until the transcription
+    is in the Library and indexed, the user's scanned book is still not
+    findable, which is the only outcome they asked for."""
+    from durin.memory.fts_index import FTSIndex
+
+    ws = tmp_path / "ws"
+    entry_dir, pdf = _ingested_entry(ws)
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page",
+        lambda path, page, **kw: f"Page {page} of the zorptastic protocol.",
+    )
+    job = _enqueue(registry, pdf, [1, 2, 3], sidecar_dir=entry_dir)
+
+    run_job(job.id, registry=registry)
+
+    assert registry.get(job.id).status == "done"
+    ref_md = ws / "memory" / "references" / "zorpbook.md"
+    assert "zorptastic protocol" in ref_md.read_text(encoding="utf-8")
+    with FTSIndex.open(ws) as idx:
+        assert [h.uri for h in idx.search("zorptastic")] == ["reference:zorpbook"]
+
+
+def test_worker_records_a_failure_when_the_transcription_produced_no_text(
+    registry, tmp_path, monkeypatch,
+):
+    """An OCR pass that read nothing has nothing to put in the Library. The
+    inline conversion path already refuses a document with no extractable
+    text; a deferred one must not quietly report "done" over an empty entry
+    the user would go looking for."""
+    ws = tmp_path / "ws"
+    entry_dir, pdf = _ingested_entry(ws)
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page", lambda path, page, **kw: "")
+    job = _enqueue(registry, pdf, [1, 2, 3], sidecar_dir=entry_dir)
+
+    run_job(job.id, registry=registry)
+
+    reread = registry.get(job.id)
+    assert reread.status == "failed"
+    assert "no text" in reread.error
+    assert not (ws / "memory" / "references").exists()
+
+
+def test_worker_records_a_failure_when_the_library_write_breaks(
+    registry, tmp_path, monkeypatch,
+):
+    """Same contract as the sidecar step: an unguarded failure here would
+    escape run_job, skip registry.finish() and wedge the job at "running"
+    forever. A recorded failure is retryable -- and honest, because a job
+    reported "done" whose document is not searchable is the exact defect this
+    step exists to close."""
+    ws = tmp_path / "ws"
+    entry_dir, pdf = _ingested_entry(ws)
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page",
+        lambda path, page, **kw: f"page {page}",
+    )
+
+    def _boom(entry_dir):
+        raise OSError("references directory is read-only")
+
+    monkeypatch.setattr("durin.jobs.ocr_worker.index_ingested_entry", _boom)
+    job = _enqueue(registry, pdf, [1], sidecar_dir=entry_dir)
+
+    run_job(job.id, registry=registry)
+
+    reread = registry.get(job.id)
+    assert reread.status == "failed"
+    assert "read-only" in reread.error
+    # The transcription itself survived: a retry resumes instead of redoing it.
+    assert registry.done_units(job.id) == {1}
+    assert (entry_dir / "source.md").exists()
 
 
 def test_worker_marks_itself_running_with_its_pid(registry, scanned_pdf, monkeypatch):
