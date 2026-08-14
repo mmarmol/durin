@@ -187,12 +187,17 @@ for the ordinary reason. This accepts the same edge gateway startup's own
 `reconcile` call already does: the 6h age fallback can requeue a holder that
 is genuinely alive but slow, briefly letting two workers hold one job —
 `finish`'s `pid` guard and `record_unit`'s idempotence are what keep that
-window safe, not this retry. The edge's likelihood changed with this
-self-heal, though: `reconcile` used to run only at gateway startup, so a
-job running past 6h tripped the fallback only if a restart happened to land
-during that window. Now every cap refusal runs it too, so a >6h job with a
-sibling queued behind it reliably trips the fallback the moment that
-sibling's worker is spawned and refused, rather than rarely.
+window safe, not this retry. The edge's *likelihood* has since changed twice,
+while nothing about its safety has. `reconcile` used to run only at gateway
+startup, so a job running past 6h tripped the fallback only if a restart
+happened to land during that window. This self-heal made every cap refusal
+run it too, so a >6h job with a sibling queued behind it trips the fallback
+the moment that sibling's worker is spawned and refused. The [periodic
+sweep](#the-periodic-sweep) then removed the last of the conditionality: it
+runs `reconcile` on a 60-second timer regardless of what else is happening, so
+*any* job crossing 6h is requeued within a minute of doing so — no sibling, no
+refusal and no restart required. Plan for a legitimately >6h job to be taken
+over, not for it to be rare.
 
 A worker looks for more work before it exits, from every point after a
 successful claim where the row it held reaches a terminal state: its own
@@ -485,7 +490,7 @@ transcribed at a time").
 | `_resume_jobs` | `durin/agent/loop.py` | The reconcile-then-capped-pickup pass itself, shared by gateway startup and the periodic sweep so the two cannot drift apart. |
 | `AgentLoop._sweep_jobs_periodically` | `durin/agent/loop.py` | Re-runs that pass every `_JOB_SWEEP_INTERVAL_S`, guarded per tick; what un-wedges a queue whose cap slot is held by a worker that was killed outright. |
 | `transcribe_page` | `durin/memory/ocr.py` | Renders one PDF page (`pypdfium2`) and runs it through the lazily-constructed, process-local `RapidOCR` engine. The worker calls this directly — its own process is already short-lived, so the engine's memory leaves with it. |
-| `transcribe_pages_detached` | `durin/memory/ocr.py` | The inline conversion path's transcription entry point: runs `transcribe_page` per page inside a short-lived child (`durin/memory/ocr_subproc.py`), so the engine's memory never enters the long-lived gateway process. |
+| `transcribe_pages_detached` | `durin/memory/ocr.py` | The inline conversion path's transcription entry point: runs `transcribe_page` per page inside a short-lived child (`durin/memory/ocr_subproc.py`), so the engine's memory never enters the long-lived gateway process. Admits one child at a time (a module-level semaphore in the same file) for the same measured reason `MAX_CONCURRENT_OCR_JOBS` exists — the registry's cap governs workers only and never sees this path. |
 | `index_ingested_entry` | `durin/memory/ingestion.py` | Turns a finished `ingested/<id>/` entry into an indexed Library reference; the one memory-layer call the worker makes on success. |
 | `collect_tasks` | `durin/agent/background_tasks.py` | Merges sub-agents, workflow runs, and jobs into the one list the tray and `tasks` tool both read. |
 | `TasksTool` | `durin/agent/tools/tasks_tool.py` | Agent-facing `tasks` tool: `list` / `status` / `stop`, across all three background-work categories. |

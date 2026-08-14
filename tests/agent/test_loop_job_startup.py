@@ -357,6 +357,10 @@ async def test_the_sweep_requeues_a_holder_whose_worker_was_killed(tmp_path, mon
             lambda: registry.get(held.id).status == "queued",
             what="the sweep to requeue the dead holder",
         )
+        # And then for the launch that follows it: reconcile commits the
+        # requeue before respawn appends to `calls`, so the condition above
+        # can go true one poll before there is anything to index into.
+        await _wait_for(lambda: calls, what="the respawn that follows it")
 
     reread = registry.get(held.id)
     assert reread.status == "queued"  # the self-heal that had no trigger before

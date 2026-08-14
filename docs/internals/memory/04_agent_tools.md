@@ -233,7 +233,14 @@ long-lived, so it never loads the OCR engine itself: `transcribe_pages_detached`
 (`durin/memory/ocr_subproc.py`, run as `python -m durin.memory.ocr_subproc`),
 which renders and transcribes them and returns the text over stdout. The
 engine's memory is released when that subprocess exits rather than
-accumulating in the gateway across conversions. The background-job worker
+accumulating in the gateway across conversions. Only one of those children
+runs at a time across the whole process: an engine costs roughly 1.4 GB
+resident and most of the machine's cores for as long as it runs, so several
+conversions arriving together — a message with several scanned attachments,
+or two chats converting at once — would otherwise start that many engines
+side by side. Callers wait for the slot rather than being refused, and it is
+enforced here because the background lane's own cap (`MAX_CONCURRENT_OCR_JOBS`)
+lives in the job registry and never sees this path. The background-job worker
 (below) transcribes with the same engine in-process instead, because its own
 process is already short-lived.
 
