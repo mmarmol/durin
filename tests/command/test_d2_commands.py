@@ -239,6 +239,53 @@ async def test_sources_ingest_threads_the_session_key(tmp_path: Path, monkeypatc
     assert captured.get("session_key") == "cli:mysession"
 
 
+@pytest.mark.asyncio
+async def test_sources_ingest_offloads_conversion_to_a_thread(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """ingest_artifact can block for seconds (markitdown/pdfplumber/OCR).
+    cmd_sources runs on the gateway's singleton AgentLoop, so a synchronous
+    call there freezes every other session's streams and heartbeats too.
+    Prove liveness directly: a ticker task must keep advancing WHILE the
+    (stubbed, slow) conversion is in flight, not just finish quickly overall.
+    """
+    import asyncio
+    import time
+
+    def _slow_ingest(workspace, source, **kwargs):
+        time.sleep(0.5)
+        return {"id": "x", "source": str(source), "size_bytes": 1}
+
+    monkeypatch.setattr("durin.memory.ingestion.ingest_artifact", _slow_ingest)
+
+    loop = _make_loop(tmp_path)
+    src = tmp_path / "doc.md"
+    src.write_text("# doc", encoding="utf-8")
+
+    ticks = {"n": 0}
+    stop = asyncio.Event()
+
+    async def _tick_while() -> None:
+        while not stop.is_set():
+            ticks["n"] += 1
+            await asyncio.sleep(0.02)
+
+    ticker_task = asyncio.create_task(_tick_while())
+    try:
+        out = await cmd_sources(
+            _ctx(loop, f"/sources ingest {src}", args=f"ingest {src}")
+        )
+    finally:
+        stop.set()
+        await ticker_task
+
+    assert "Ingested as" in out.content
+    assert ticks["n"] >= 10, (
+        f"event loop only ticked {ticks['n']} times during a 0.5s conversion "
+        "-- cmd_sources is blocking the loop instead of ingesting in a thread"
+    )
+
+
 class _NoLaunch:
     """Stands in for the ``subprocess`` module inside ``durin.jobs.spawn``."""
 

@@ -1,11 +1,12 @@
 import asyncio
+import time
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from durin.agent.context import ContextBuilder
-from durin.agent.loop import AgentLoop
+from durin.agent.loop import AgentLoop, TurnContext, TurnState
 from durin.bus.events import InboundMessage
 from durin.bus.queue import MessageBus
 from durin.providers.base import LLMResponse
@@ -1059,3 +1060,52 @@ async def test_system_subagent_followup_uses_email_thread_metadata(tmp_path: Pat
     assert outbound.chat_id == "alice@example.com"
     assert outbound.metadata == {"email": {"thread": digest}}
     assert "thread question" in seen["initial_messages"][1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_state_restore_offloads_document_conversion_to_a_thread(tmp_path: Path) -> None:
+    """extract_documents can block for seconds (markitdown/pdfplumber/OCR).
+    _state_restore runs on the gateway's singleton AgentLoop, so a blocking
+    call there freezes every other session's streams and heartbeats too.
+    Prove liveness directly: a ticker task must keep advancing WHILE the
+    (stubbed, slow) conversion is in flight, not just finish quickly overall.
+    """
+    def _slow_extract_documents(text, media, **_kwargs):
+        time.sleep(0.5)
+        return text, []
+
+    loop = _make_full_loop(tmp_path)
+    msg = InboundMessage(
+        channel="websocket",
+        sender_id="u1",
+        chat_id="c-restore",
+        content="look at this scan",
+        media=["/fake/scan.pdf"],
+    )
+    ctx = TurnContext(
+        msg=msg,
+        session_key="websocket:c-restore",
+        state=TurnState.RESTORE,
+        turn_id="t-restore-offload",
+    )
+
+    ticks = {"n": 0}
+    stop = asyncio.Event()
+
+    async def _tick_while() -> None:
+        while not stop.is_set():
+            ticks["n"] += 1
+            await asyncio.sleep(0.02)
+
+    with patch("durin.agent.loop.extract_documents", _slow_extract_documents):
+        ticker_task = asyncio.create_task(_tick_while())
+        try:
+            await loop._state_restore(ctx)
+        finally:
+            stop.set()
+            await ticker_task
+
+    assert ticks["n"] >= 10, (
+        f"event loop only ticked {ticks['n']} times during a 0.5s conversion "
+        "-- extract_documents is blocking the loop instead of running in a thread"
+    )

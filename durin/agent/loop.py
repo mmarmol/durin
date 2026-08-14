@@ -1671,17 +1671,23 @@ class AgentLoop:
                 user_content = self.context._build_user_content(content, media)
                 return {"role": "user", "content": user_content}
 
-            items: list[dict[str, Any]] = []
+            # Messages are only COLLECTED here (raw InboundMessage); conversion
+            # (extract_documents + _build_user_content, both blocking disk/CPU
+            # work) happens in one batch below, off the event loop. `pending`
+            # and `consumed` always grow in lockstep -- one InboundMessage
+            # appended to each, at the same point -- so `pending` stays a
+            # faithful stand-in for the pre-conversion `items` this replaces.
+            pending: list[InboundMessage] = []
             consumed: list[InboundMessage] = []
 
             def _pull(queue: asyncio.Queue) -> None:
-                while len(items) < limit:
+                while len(pending) < limit:
                     try:
                         pending_msg = queue.get_nowait()
                     except asyncio.QueueEmpty:
                         break
                     consumed.append(pending_msg)
-                    items.append(_to_user_message(pending_msg))
+                    pending.append(pending_msg)
 
             _pull(pending_queues.inject)
             if not steer_only:
@@ -1694,7 +1700,7 @@ class AgentLoop:
             # final drain also wakes on deferred user messages — with the final
             # response already produced, attending the user immediately cannot
             # derail any work.
-            if (not items
+            if (not pending
                     and session is not None
                     and self.subagents.get_running_count_by_session(session.key) > 0):
                 getters = [asyncio.ensure_future(pending_queues.inject.get())]
@@ -1713,17 +1719,30 @@ class AgentLoop:
                     if fut.done() and not fut.cancelled():
                         pending_msg = fut.result()
                         consumed.append(pending_msg)
-                        items.append(_to_user_message(pending_msg))
-                if not items:
+                        pending.append(pending_msg)
+                if not pending:
                     logger.warning(
                         "Timeout waiting for sub-agent completion in session {}",
                         session.key,
                     )
                     await self._ack_queued_consumed(consumed)
-                    return items
+                    return []
                 _pull(pending_queues.inject)
                 if not steer_only:
                     _pull(pending_queues.deferred)
+
+            items: list[dict[str, Any]] = []
+            if pending:
+                # Off-loop: _to_user_message calls extract_documents and
+                # _build_user_content (media-from-disk) -- multi-second
+                # blocking work for OCR'd attachments. Convert the whole
+                # batch in one hop rather than per-message, since `_pull`
+                # above is synchronous (get_nowait loops) and must stay that
+                # way to drain what's immediately available without yielding
+                # mid-scan.
+                items.extend(await asyncio.to_thread(
+                    lambda: [_to_user_message(m) for m in pending]
+                ))
 
             await self._ack_queued_consumed(consumed)
             return items
@@ -2516,7 +2535,13 @@ class AgentLoop:
         msg = ctx.msg
 
         if msg.media:
-            new_content, image_only = extract_documents(msg.content, msg.media)
+            # Off-loop: extract_documents converts attachments (markitdown /
+            # pdfplumber / OCR) -- multi-second blocking work that would
+            # freeze the whole gateway (every session, stream, heartbeat),
+            # since this AgentLoop is a per-gateway singleton.
+            new_content, image_only = await asyncio.to_thread(
+                extract_documents, msg.content, msg.media
+            )
             ctx.msg = dataclasses.replace(msg, content=new_content, media=image_only)
             msg = ctx.msg
 

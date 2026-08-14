@@ -255,6 +255,59 @@ async def test_drain_pending_final_takes_inject_before_deferred(tmp_path):
     assert "user question" in str(final[1]["content"])
 
 
+@pytest.mark.asyncio
+async def test_drain_pending_offloads_document_conversion_to_a_thread(tmp_path):
+    """_to_user_message calls extract_documents (and _build_user_content,
+    which reads media from disk), which can block for seconds on
+    markitdown/pdfplumber/OCR. _drain_pending runs on the gateway's singleton
+    AgentLoop, so a synchronous conversion there freezes every other
+    session's streams and heartbeats too. Prove liveness directly: a ticker
+    task must keep advancing WHILE the (stubbed, slow) conversion is in
+    flight, not just finish quickly overall.
+    """
+    from durin.agent.loop import AgentLoop
+    from durin.bus.events import InboundMessage
+    from durin.bus.queue import MessageBus
+
+    def _slow_extract_documents(text, media, **_kwargs):
+        time.sleep(0.5)
+        return text, []
+
+    bus = MessageBus()
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    loop = AgentLoop(bus=bus, provider=provider, workspace=tmp_path, model="test-model")
+
+    callback, pending = await _capture_injection_callback(loop)
+
+    await pending.inject.put(InboundMessage(
+        channel="websocket", sender_id="u", chat_id="c1",
+        content="look at this scan", media=["/fake/scan.pdf"],
+    ))
+
+    ticks = {"n": 0}
+    stop = asyncio.Event()
+
+    async def _tick_while() -> None:
+        while not stop.is_set():
+            ticks["n"] += 1
+            await asyncio.sleep(0.02)
+
+    with patch("durin.agent.loop.extract_documents", _slow_extract_documents):
+        ticker_task = asyncio.create_task(_tick_while())
+        try:
+            result = await callback(steer_only=True)
+        finally:
+            stop.set()
+            await ticker_task
+
+    assert len(result) == 1
+    assert ticks["n"] >= 10, (
+        f"event loop only ticked {ticks['n']} times during a 0.5s conversion "
+        "-- the drain is blocking the loop instead of converting in a thread"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Consumer: routing into inject vs deferred
 # ---------------------------------------------------------------------------
