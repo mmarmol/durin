@@ -237,6 +237,80 @@ def build_openai_routes(
             return _error_json(500, "Internal server error", "server_error")
         return JSONResponse(_chat_completion_response(response_text, model_name))
 
+    def _stream_response(
+        text: str, media_paths: list[str], session_key: str, lock: asyncio.Lock
+    ) -> StreamingResponse:
+        chunk_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+        queue: asyncio.Queue[str | None] = asyncio.Queue()
+        state = {"failed": False, "emitted": False}
+
+        async def _on_stream(token: str) -> None:
+            if token:
+                state["emitted"] = True
+            await queue.put(token)
+
+        async def _on_stream_end(*_a: Any, **_kw: Any) -> None:
+            # Stream-end callbacks mark generation-segment boundaries (e.g.
+            # before a tool call). Tool-backed turns continue after a segment,
+            # so the HTTP stream closes only when process_direct returns.
+            return None
+
+        async def _run() -> None:
+            try:
+                async with lock:
+                    response = await asyncio.wait_for(
+                        agent_loop.process_direct(
+                            content=text,
+                            media=media_paths or None,
+                            session_key=session_key,
+                            channel="api",
+                            chat_id=API_CHAT_ID,
+                            on_stream=_on_stream,
+                            on_stream_end=_on_stream_end,
+                        ),
+                        timeout=request_timeout,
+                    )
+                    if not state["emitted"]:
+                        tail = _response_text(response)
+                        if tail.strip():
+                            await queue.put(tail)
+            except Exception:
+                state["failed"] = True
+                logger.exception(
+                    "OpenAI API streaming error for session {}", session_key
+                )
+            finally:
+                await queue.put(None)
+
+        async def _gen():
+            task = asyncio.create_task(_run())
+            try:
+                while True:
+                    token = await queue.get()
+                    if token is None:
+                        break
+                    yield _sse_chunk(token, model_name, chunk_id)
+                if state["failed"]:
+                    err = {
+                        "error": {"message": "stream failed", "type": "server_error"}
+                    }
+                    yield f"data: {json.dumps(err)}\n\n".encode()
+                else:
+                    yield _sse_chunk("", model_name, chunk_id, finish_reason="stop")
+                    yield _SSE_DONE
+            finally:
+                # Client disconnect cancels the generator; take the turn down too.
+                if not task.done():
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await task
+
+        return StreamingResponse(
+            _gen(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache"},
+        )
+
     async def chat_completions(request: Request) -> Response:
         err = _auth_or_error(request)
         if err is not None:
@@ -280,8 +354,7 @@ def build_openai_routes(
             stream,
         )
         if stream:
-            # Task 5 fills this branch in.
-            return _error_json(400, "stream is not supported yet")
+            return _stream_response(text, media_paths, session_key, lock)
         return await _plain_response(text, media_paths, session_key, lock)
 
     return [

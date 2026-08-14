@@ -270,6 +270,78 @@ def test_chat_timeout_maps_to_504(tmp_path, monkeypatch):
     assert r.json()["error"]["type"] == "server_error"
 
 
+def _sse_events(raw: str) -> list[str]:
+    return [
+        line[len("data: ") :] for line in raw.splitlines() if line.startswith("data: ")
+    ]
+
+
+def test_stream_chunks_then_done(tmp_path, monkeypatch):
+    async def _fake_process(**kwargs):
+        await kwargs["on_stream"]("Hel")
+        await kwargs["on_stream"]("lo")
+        return SimpleNamespace(content="Hello")
+
+    loop = MagicMock()
+    loop.process_direct = AsyncMock(side_effect=_fake_process)
+    client = TestClient(_build_app(tmp_path, monkeypatch, agent_loop=loop))
+    tok = _mint(["chat:write"])
+    with client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "a"}], "stream": True},
+        headers=_hdr(tok),
+    ) as r:
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("text/event-stream")
+        raw = "".join(r.iter_text())
+    events = _sse_events(raw)
+    assert events[-1] == "[DONE]"
+    deltas = [
+        json.loads(e)["choices"][0]["delta"].get("content", "") for e in events[:-1]
+    ]
+    assert "".join(deltas) == "Hello"
+    finish = json.loads(events[-2])
+    assert finish["choices"][0]["finish_reason"] == "stop"
+
+
+def test_stream_tail_flush_when_no_tokens_emitted(tmp_path, monkeypatch):
+    loop = _make_loop("full answer")  # returns content but never calls on_stream
+    client = TestClient(_build_app(tmp_path, monkeypatch, agent_loop=loop))
+    tok = _mint(["chat:write"])
+    with client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "a"}], "stream": True},
+        headers=_hdr(tok),
+    ) as r:
+        raw = "".join(r.iter_text())
+    events = _sse_events(raw)
+    assert events[-1] == "[DONE]"
+    deltas = [
+        json.loads(e)["choices"][0]["delta"].get("content", "") for e in events[:-1]
+    ]
+    assert "".join(deltas) == "full answer"
+
+
+def test_stream_failure_emits_error_frame_and_no_done(tmp_path, monkeypatch):
+    loop = MagicMock()
+    loop.process_direct = AsyncMock(side_effect=RuntimeError("boom"))
+    client = TestClient(_build_app(tmp_path, monkeypatch, agent_loop=loop))
+    tok = _mint(["chat:write"])
+    with client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "a"}], "stream": True},
+        headers=_hdr(tok),
+    ) as r:
+        raw = "".join(r.iter_text())
+    events = _sse_events(raw)
+    assert events, "expected at least the error frame"
+    assert events[-1] != "[DONE]"
+    assert "error" in json.loads(events[-1])
+
+
 def test_same_session_requests_serialize():
     """Two concurrent turns on one session run one-at-a-time (the lock queues them)."""
     from durin.api.openai_routes import build_openai_routes
