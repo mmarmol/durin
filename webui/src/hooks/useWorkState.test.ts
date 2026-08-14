@@ -734,4 +734,27 @@ describe("useWorkState", () => {
     expect(item!.unitsTotal).toBe(40);
     expect(item!.unitsDone).toBe(40);
   });
+
+  it("carries a failed job's reason onto the WorkItem", async () => {
+    // The worker's error is the only account of why a job failed that reaches
+    // a person: its stderr goes to the gateway's truncated boot log.
+    const { result } = await renderHookWithPolled([
+      {
+        kind: "job",
+        id: "job3",
+        label: "scanned-book.pdf",
+        status: "failed",
+        started_at: 1000,
+        ended_at: 1500,
+        session_key: null,
+        units_total: 40,
+        units_done: 7,
+        error: "page 7: OSError: no space left on device",
+      },
+    ]);
+
+    const item = result.current.finished.find((w) => w.id === "job3");
+    expect(item).toBeDefined();
+    expect(item!.error).toBe("page 7: OSError: no space left on device");
+  });
 });

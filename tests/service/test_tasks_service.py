@@ -246,6 +246,26 @@ async def test_service_forwards_a_jobs_registry_to_collect_tasks(tmp_path):
     assert res.tasks[0].units_total == 10
 
 
+@pytest.mark.asyncio
+async def test_a_failed_jobs_reason_reaches_the_response(tmp_path):
+    """The tray is the surface a person actually looks at, and this route is
+    how it learns anything. A reason that stops at the registry explains
+    nothing to anybody."""
+    from durin.jobs.registry import JobRegistry
+
+    jobs = JobRegistry(tmp_path / "jobs.db")
+    job = jobs.enqueue(
+        kind="ocr", label="book.pdf", payload={}, session_key="chat:1", units_total=10,
+    )
+    jobs.claim(job.id, pid=4242)
+    jobs.finish(job.id, pid=4242, error="library index: OSError: read-only")
+
+    svc = TasksService(workspace=tmp_path, jobs=jobs)
+    res = await svc.list(TasksListQuery(session="chat:1"), _principal())
+
+    assert res.tasks[0].error == "library index: OSError: read-only"
+
+
 @dataclass
 class _FakeSessionManager:
     workspace: object

@@ -139,6 +139,21 @@ async def test_status_job_detail_shows_progress(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_status_of_a_failed_job_says_why_it_failed(tmp_path):
+    """"failed" on its own is not an answer anyone can act on. The worker
+    already records a usable reason; this is the surface that has to show it."""
+    jobs = _job_registry(tmp_path)
+    job = jobs.enqueue(kind="ocr", label="book.pdf", payload={}, session_key=SESSION, units_total=40)
+    jobs.claim(job.id, pid=4242)
+    jobs.finish(job.id, pid=4242, error="page 7: OSError: no space left on device")
+
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(
+        action="status", id=job.id)
+
+    assert "no space left on device" in out
+
+
+@pytest.mark.asyncio
 async def test_stop_subagent_delegates_to_manager(tmp_path):
     mgr = _FakeManager([_SAStatus("sa01", "research", "awaiting_tools")], running=["sa01"])
     out = await _tool(tmp_path, mgr).execute(action="stop", id="sa01")

@@ -51,6 +51,25 @@ def test_a_failed_job_reads_as_failed(tmp_path, registry):
     assert collect_tasks(tmp_path, session_key="s", jobs=registry)[0]["status"] == "failed"
 
 
+def test_a_failed_job_carries_the_reason_it_failed(tmp_path, registry):
+    """The worker records a usable reason ("page 7: ...", "sidecar write: ...",
+    "library index: ..."). Dropping it here is what makes a failed job
+    unexplainable everywhere downstream: this row is all the tray and the
+    tasks tool ever see."""
+    job = registry.enqueue(kind="ocr", label="a", payload={}, session_key="s", units_total=1)
+    registry.claim(job.id, pid=4242)
+    registry.finish(job.id, pid=4242, error="page 7: OSError: disk gone")
+
+    row = collect_tasks(tmp_path, session_key="s", jobs=registry)[0]
+
+    assert row["error"] == "page 7: OSError: disk gone"
+
+
+def test_a_job_that_did_not_fail_has_no_error(tmp_path, registry):
+    registry.enqueue(kind="ocr", label="a", payload={}, session_key="s", units_total=1)
+    assert collect_tasks(tmp_path, session_key="s", jobs=registry)[0]["error"] is None
+
+
 def test_jobs_from_another_session_are_not_listed(tmp_path, registry):
     registry.enqueue(kind="ocr", label="theirs", payload={}, session_key="other", units_total=1)
     assert collect_tasks(tmp_path, session_key="mine", jobs=registry) == []

@@ -184,6 +184,11 @@ export interface WorkItem {
   unitsDone?: number;
   /** Job pages total; present only for kind=="job". */
   unitsTotal?: number;
+  /** Why a failed job failed, as its worker recorded it ("page 7: ...",
+   *  "sidecar write: ..."). Present only for kind=="job", and only on failure:
+   *  the worker's own output goes to a log nobody reads, so this is the only
+   *  account of the failure that reaches a person. */
+  error?: string;
   /** The workflow this run belongs to. Distinct from `label`, which falls back to
    *  the run id when the frame did not name it — a panel that fetches the run's
    *  manifest by name cannot use a fallback. Absent for sub-agents. */

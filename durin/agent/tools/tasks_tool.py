@@ -263,6 +263,12 @@ class TasksTool(Tool, ContextAware):
         total = row.get("units_total")
         if total is not None:
             out.append(f"  progress: {row.get('units_done') or 0}/{total}")
+        # The worker's own reason, and the only place anyone can read it: its
+        # stderr is inherited from the gateway daemon's boot log, which is
+        # truncated on every start and not served by the log reader.
+        error = row.get("error")
+        if error:
+            out.append(f"  error:  {error}")
         return "\n".join(out)
 
     def _render_workflow_status(self, row: dict) -> str:

@@ -12,7 +12,10 @@ Returns plain dicts with a stable shape — ``kind`` ("subagent" | "workflow" |
 "job"), ``id``, ``label``, ``status`` ("running" | "needs_input" | "done" |
 "failed" | "cancelled"), ``started_at`` (wall-clock epoch), ``ended_at``,
 ``session_key``, ``units_total``/``units_done`` (a job's progress; ``None`` for
-the other two kinds), and for workflows a ``nodes`` tree (each entry carrying
+the other two kinds), ``error`` (why a failed job failed; ``None`` for the
+other two kinds, whose failures are diagnosed from their own artifacts — a run
+manifest, a sub-agent transcript — while a job's worker leaves none),
+and for workflows a ``nodes`` tree (each entry carrying
 ``duration_s``, plus a trailing running entry when a node is in flight), the
 run ``task``, and (only when the run's status is ``needs_input``)
 ``needs_input_detail`` — the gate's questions, capped at 500 chars. The service
@@ -146,7 +149,7 @@ def collect_tasks(
                 "status": _subagent_status(s.phase),
                 "started_at": started, "ended_at": ended, "session_key": s.session_key,
                 "nodes": None, "task": None,
-                "units_total": None, "units_done": None,
+                "units_total": None, "units_done": None, "error": None,
             })
 
     from durin.workflow import run_log
@@ -187,7 +190,7 @@ def collect_tasks(
             "nodes": _node_tree(node_runs, label_map, active_node),
             "task": rec.get("task"),
             "needs_input_detail": needs_input_detail,
-            "units_total": None, "units_done": None,
+            "units_total": None, "units_done": None, "error": None,
         })
 
     # Reconstruct finished sub-agents from persisted session lineage so the history
@@ -208,7 +211,7 @@ def collect_tasks(
                 "started_at": _iso_to_epoch(c.get("created_at")),
                 "ended_at": None, "session_key": c.get("key"),
                 "nodes": None, "task": None,
-                "units_total": None, "units_done": None,
+                "units_total": None, "units_done": None, "error": None,
             })
 
     if jobs is not None:
@@ -220,6 +223,12 @@ def collect_tasks(
                 "session_key": j.session_key,
                 "nodes": None, "task": None,
                 "units_total": j.units_total, "units_done": j.units_done,
+                # The worker's own reason ("page 7: ...", "sidecar write: ...").
+                # This row is everything the tray and the tasks tool get, so a
+                # reason dropped here is a failure nobody can explain: the
+                # worker's stderr goes to the gateway's boot log, which is
+                # truncated on every start and excluded from the log reader.
+                "error": j.error,
             })
 
     tasks.sort(key=lambda t: t["started_at"], reverse=True)

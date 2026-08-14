@@ -475,6 +475,27 @@ describe("WorkItemCard", () => {
     expect(screen.queryByText(/137/)).not.toBeInTheDocument();
   });
 
+  it("shows why a failed job failed", () => {
+    render(
+      <WorkItemCard
+        item={{
+          kind: "job",
+          id: "job4",
+          label: "scanned-book.pdf",
+          status: "failed",
+          unitsDone: 7,
+          unitsTotal: 412,
+          error: "page 7: OSError: no space left on device",
+          startedAt: 0,
+          endedAt: 100,
+        }}
+      />,
+    );
+    expect(
+      screen.getByText(/page 7: OSError: no space left on device/),
+    ).toBeInTheDocument();
+  });
+
   it("renders a distinct icon for a cancelled job instead of the needs-input one", () => {
     const { container } = render(
       <WorkItemCard

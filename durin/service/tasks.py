@@ -39,6 +39,7 @@ class BackgroundTask(Result):
     needs_input_detail: str | None = None  # the gate's questions when status=="needs_input"; None otherwise
     units_total: int | None = None  # job progress denominator; None for other kinds
     units_done: int | None = None
+    error: str | None = None  # why a failed job failed; None for other kinds
 
 
 class TasksListQuery(Query):

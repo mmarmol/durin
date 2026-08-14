@@ -2648,6 +2648,11 @@ export interface components {
         BackgroundTask: {
             /** Ended At */
             ended_at: number | null;
+            /**
+             * Error
+             * @default null
+             */
+            error: string | null;
             /** Id */
             id: string;
             /** Kind */

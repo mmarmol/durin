@@ -286,8 +286,8 @@ itself — the registry has no config of its own.
 
 `action="list"` shows every sub-agent, workflow run, and job in the calling
 session; `action="status"` with an id gives a job's page progress
-(`done/total`) alongside its status and age; `action="stop"` cancels a job
-(cooperative — see above). The id namespace is shared and resolved
+(`done/total`) alongside its status and age, plus the recorded reason when it
+failed; `action="stop"` cancels a job (cooperative — see above). The id namespace is shared and resolved
 automatically across all three kinds, so the agent does not need to know
 which one it is asking about.
 
@@ -302,7 +302,9 @@ which one it is asking about.
 The web dashboard's work panel (opened from the chat header, or its
 collapsed work-strip form) renders a job exactly like a workflow run or
 sub-agent card, with a job-specific footer line showing pages transcribed of
-pages total. It is read-only today: no cancel button is wired to a job row.
+pages total, and — for a failed job — the reason its worker recorded, verbatim
+and untranslated. It is read-only today: no cancel button is wired to a job
+row.
 The Textual TUI's WORK sidebar section tracks only workflow runs and
 sub-agents; it does not read the job registry, so a running job is not
 visible there.

@@ -251,6 +251,16 @@ export function WorkItemCard({
           {t("work.pages", { done: item.unitsDone ?? 0, total: item.unitsTotal ?? 0 })}
         </div>
       )}
+
+      {/* Why it failed, as the worker recorded it. Nothing else surfaces this:
+          the worker's stderr goes to the gateway's boot log, which is
+          truncated on every start and not served by the log reader. Not
+          translated — it is a verbatim error string, not durin's own prose. */}
+      {item.error && (
+        <div className="mt-1 break-words pl-5 text-[12px] text-destructive">
+          {item.error}
+        </div>
+      )}
     </div>
   );
 }
