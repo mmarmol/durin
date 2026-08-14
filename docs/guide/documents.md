@@ -25,8 +25,7 @@ button in the web dashboard accepts documents, not just images), by pointing at 
 
 **Supported formats:** PDF, Word (`.docx`), PowerPoint (`.pptx`), Excel
 (`.xls`/`.xlsx`), EPUB, HTML, CSV, JSON, XML, Jupyter notebooks (`.ipynb`), and
-ZIP archives of these. Scanned/image-only PDFs need a local OCR pass — off by
-default, turn it on from the dashboard's **Settings → Documents**. A few office
+ZIP archives of these. Scanned/image-only PDFs (which need OCR) and a few office
 formats like ODT/RTF are not covered yet.
 
 ## The Library — kept apart from your everyday memory
