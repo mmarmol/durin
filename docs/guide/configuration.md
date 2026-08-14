@@ -652,6 +652,7 @@ HTTP gateway and embedded web dashboard settings.
 | `daemon` | `false` | Run detached with a PID file and log file; easier to debug when off |
 | `webui_enabled` | `true` | Auto-enable the websocket channel so the embedded web dashboard is served |
 | `public_url` | `null` | How this gateway is reached from the outside (e.g. `https://durin.tailXXXX.ts.net`) |
+| `api_request_timeout` | `120.0` | Per-request timeout in seconds for the OpenAI-compatible `/v1` chat endpoint |
 
 Set `public_url` when the webui is reached over a tailnet, VPN, or public
 HTTPS domain rather than `localhost` or a plain `host:port`. It has two
@@ -662,18 +663,6 @@ either consumer — MCP OAuth sign-ins fall back to the browser's own origin,
 and the status dashboard URL falls back to the websocket channel's
 `host:port`. CLI `durin mcp login` is unaffected either way; it always uses
 its own `127.0.0.1` loopback callback.
-
----
-
-### `api`
-
-OpenAI-compatible API server settings.
-
-| Key | Default | Meaning |
-|---|---|---|
-| `host` | `127.0.0.1` | Bind address; local-only by default |
-| `port` | `8900` | API server listen port |
-| `timeout` | `120.0` | Per-request timeout in seconds |
 
 ---
 
