@@ -319,6 +319,36 @@ class JobRegistry:
             ),
         )
 
+    def requeue(self, job_id: str) -> bool:
+        """Return a failed or cancelled job to the queue for another attempt.
+
+        One guarded UPDATE, conditional the same way :meth:`finish` is: the
+        row must still be ``failed`` or ``cancelled`` at write time, so a
+        retry racing another actor (a second retry, a fresh claim) writes
+        nothing rather than yanking a job out from under a live worker —
+        flipping a ``running`` row back to ``queued`` would let a second
+        worker claim it while the first is still transcribing. Returns
+        whether this call actually requeued it; a caller that gets False
+        must not launch a worker.
+
+        Only the failed attempt's outcome is cleared (``pid``,
+        ``started_at``, ``ended_at``, ``error``). The ``job_units`` rows and
+        both counters stay, so the next worker resumes from the pages
+        already transcribed and the tray keeps showing progress that
+        genuinely exists; ``created_at`` stays too, so the job keeps its
+        place in the age-ordered queue — it already waited its turn once.
+        """
+        def _write(c: Any) -> bool:
+            cur = c.execute(
+                "UPDATE jobs SET status = 'queued', pid = NULL,"
+                " started_at = NULL, ended_at = NULL, error = NULL"
+                " WHERE id = ? AND status IN ('failed', 'cancelled')",
+                (job_id,),
+            )
+            return cur.rowcount > 0
+
+        return execute_write(self._conn, _write)
+
     def reconcile(
         self, *, alive: Callable[[int], bool],
         now: float | None = None, max_age_s: float = RECONCILE_AGE_S,

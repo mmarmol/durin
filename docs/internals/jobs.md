@@ -87,6 +87,8 @@ flowchart TD
     TASKS --> TRAY["webui work panel\nWorkItemCard (kind=job)"]
 
     CANCEL["tasks(action=stop)"] -->|status=cancelled| REG
+    RETRY["tasks(action=retry)"] -->|requeue: failed/cancelled\nto queued, units kept| REG
+    RETRY -->|respawn| WORKER
     WORKER -.checks status\nat each claim + page boundary.-> REG
 ```
 
@@ -384,6 +386,42 @@ Today the only caller is the agent's own `tasks` tool (`action="stop"`) — see
 [Configuration and surfaces](#6-configuration-and-surfaces) below. There is no
 webui button wired to it yet; the tray is read-only.
 
+### Retry
+
+A `failed` or `cancelled` job can be returned to the queue in place:
+`JobRegistry.requeue` flips its status back to `queued` and clears the
+attempt's outcome — `pid`, `started_at`, `ended_at`, `error` — touching
+nothing else. It is one guarded `UPDATE` of the same shape as `finish`'s,
+conditional on the row still being `failed` or `cancelled` at write time, so
+a retry racing another actor (a second retry, a fresh claim) writes nothing
+rather than yanking a job out from under a live worker. Everything the
+failed attempt produced survives: the `job_units` rows and both counters
+stay, so the next worker resumes from the first missing page exactly like a
+reconciled orphan does, and the tray keeps showing progress that genuinely
+exists. `created_at` survives too, and since `next_queued`/`queued_jobs`
+order by it, a requeued job re-enters *ahead* of jobs enqueued after it —
+accepted on purpose: it already waited its turn once.
+
+The caller is the `tasks` tool's `action="retry"` (jobs only — a sub-agent
+or workflow run is redone by launching a new one). After a successful
+requeue the tool hands the row to `respawn`, the same never-claiming launch
+used for a reconciled orphan. Under `MAX_CONCURRENT_OCR_JOBS = 1` the
+launched worker's claim is refused while another OCR job holds the slot, and
+the retried job simply stays `queued` for the running worker's finish-time
+chain or the [periodic sweep](#the-periodic-sweep) to pick up — which is why
+the tool's success message promises "queued", never "running". A `requeue`
+that returns `False` is answered with the row's fresh status and no respawn:
+a worker must never be launched for a row the requeue did not actually
+return to the queue.
+
+Retry composes with the re-ingest path instead of fighting it. The entry's
+`ocr_job.json` marker still names the retried job's id, and the marker
+branch in `ingest_artifact` reads the row's *current* status, so re-ingesting
+the same document while the retried job is `queued`/`running` returns that
+same job as pending rather than spawning a second one. Re-ingesting after a
+failure *without* retrying remains the other legitimate recovery — that one
+spawns a fresh job and overwrites the marker.
+
 ### The subprocess worker
 
 `ocr_worker.run_job` (`python -m durin.jobs.ocr_worker <job_id>`) is a
@@ -479,7 +517,7 @@ transcribed at a time").
 | Symbol | File | Role |
 |---|---|---|
 | `Job` | `durin/jobs/registry.py` | Frozen dataclass mirroring one `jobs` row. |
-| `JobRegistry` | `durin/jobs/registry.py` | `enqueue`, `get`, `list_for_session`, `claim`, `next_queued`, `queued_jobs`, `set_units_total`, `record_unit`, `units`, `done_units`, `finish`, `cancel`, `reconcile`. |
+| `JobRegistry` | `durin/jobs/registry.py` | `enqueue`, `get`, `list_for_session`, `claim`, `next_queued`, `queued_jobs`, `set_units_total`, `record_unit`, `units`, `done_units`, `finish`, `cancel`, `requeue`, `reconcile`. |
 | `RECONCILE_AGE_S` | `durin/jobs/registry.py` | Six hours — the pid-liveness-is-unreliable fallback age used by `reconcile`. |
 | `MAX_CONCURRENT_OCR_JOBS` | `durin/jobs/spawn.py` | The per-kind concurrency cap `claim` enforces; currently `1`. No config key — see [Concurrency cap and chaining](#concurrency-cap-and-chaining). |
 | `spawn_ocr_job` | `durin/jobs/spawn.py` | Enqueues an OCR job and launches its worker; called from `ingest_artifact` when a document needs more OCR than the inline budget and no job for it is already pending — an `ocr_job.json` marker in the entry directory short-circuits a re-ingest while one is still `queued`/`running` instead of calling this again (see [Memory: agent tools](memory/04_agent_tools.md#memory_ingest)). |
@@ -521,7 +559,12 @@ OCR slot instead, because an age beside a job reads as time spent working and
 a queued job has no worker. `action="stop"` cancels a job: cooperative for a
 running one (see above), immediate and final for a queued one, since `claim`
 only ever moves a row *out* of `queued` and nothing can pick it up
-afterwards. The id namespace is shared and resolved automatically across all
+afterwards. `action="retry"` requeues a failed or cancelled job and launches
+a worker for it, keeping the pages already transcribed (see
+[Retry](#retry)); a failed or cancelled job's `status` output names that
+recovery next to the recorded error — in the tool's render only, never
+inside the stored error string, which the webui tray shows to humans
+verbatim. The id namespace is shared and resolved automatically across all
 three kinds, so the agent does not need to know which one it is asking about.
 
 ### API routes

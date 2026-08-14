@@ -293,6 +293,50 @@ def test_re_ingest_after_a_failed_job_spawns_a_fresh_one(
     assert len(registry.list_for_session("chat:1")) == 2
 
 
+def test_a_retried_job_reads_as_pending_to_a_concurrent_re_ingest(
+    tmp_path, book, registry, monkeypatch
+):
+    """The two recovery gestures compose instead of fighting: tasks(retry)
+    revives the FAILED job in place, and the entry's ocr_job.json marker still
+    names that id — so a re-ingest of the same bytes right after the retry
+    must find the row queued again and return the SAME job as pending, not
+    spawn a second one. Exactly one worker launch in the whole sequence: the
+    retry's own respawn."""
+    from durin.agent.tools.context import RequestContext
+    from durin.agent.tools.tasks_tool import TasksTool
+
+    launcher = _CountingPopen()
+    monkeypatch.setattr("durin.jobs.spawn.subprocess", launcher)
+    cfg = DocumentsConfig.model_validate({"ocr": {"enabled": True, "inline_max_pages": 5}})
+    session = "websocket:chatA"
+
+    first = ingest_artifact(
+        tmp_path / "ws", book, documents_config=cfg, jobs=registry, session_key=session
+    )
+    job_id = first["job_id"]
+    assert registry.claim(job_id, pid=4242)
+    assert registry.finish(job_id, pid=4242, error="page 3: engine exploded")
+    launcher.calls = 0  # the sequence under test starts here
+
+    tool = TasksTool(
+        workspace=str(tmp_path / "ws"), subagent_manager=None, sessions=None, jobs=registry
+    )
+    tool.set_context(RequestContext(channel="websocket", chat_id="chatA", session_key=session))
+    import asyncio
+
+    out = asyncio.run(tool.execute(action="retry", id=job_id))
+    assert "requeued" in out
+    assert registry.get(job_id).status == "queued"
+
+    second = ingest_artifact(
+        tmp_path / "ws", book, documents_config=cfg, jobs=registry, session_key=session
+    )
+
+    assert second["job_id"] == job_id
+    assert launcher.calls == 1  # the retry's respawn; the re-ingest launched nothing
+    assert len(registry.list_for_session(session)) == 1
+
+
 def test_a_marker_naming_a_vanished_job_behaves_as_a_retry(
     tmp_path, book, registry, monkeypatch
 ):

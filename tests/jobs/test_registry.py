@@ -354,6 +354,76 @@ def test_cancel_marks_cancelled(registry):
     assert registry.get(job.id).status == "cancelled"
 
 
+def test_requeue_returns_a_failed_job_to_the_queue_keeping_its_progress(registry):
+    """The attempt's outcome (pid, timestamps, error) is cleared; everything
+    the attempt produced (job_units rows, both counters) and the job's place
+    in the age-ordered queue (created_at) survive, so the next worker resumes
+    instead of restarting and the tray keeps showing real progress."""
+    job = registry.enqueue(kind="ocr", label="a", payload={}, session_key=None, units_total=40)
+    registry.claim(job.id, pid=4242)
+    registry.record_unit(job.id, 1, "page one")
+    registry.record_unit(job.id, 2, "page two")
+    registry.finish(job.id, pid=4242, error="page 3: engine exploded")
+    failed = registry.get(job.id)
+
+    assert registry.requeue(job.id) is True
+
+    reread = registry.get(job.id)
+    assert reread.status == "queued"
+    assert reread.pid is None
+    assert reread.started_at is None
+    assert reread.ended_at is None
+    assert reread.error is None
+    assert reread.units_total == 40
+    assert reread.units_done == 2
+    assert reread.created_at == failed.created_at
+    assert registry.done_units(job.id) == {1, 2}
+    assert registry.units(job.id) == [(1, "page one"), (2, "page two")]
+
+
+def test_requeue_returns_a_cancelled_job_to_the_queue(registry):
+    job = registry.enqueue(kind="ocr", label="a", payload={}, session_key=None, units_total=5)
+    registry.claim(job.id, pid=4242)
+    registry.record_unit(job.id, 1, "page one")
+    registry.cancel(job.id)
+
+    assert registry.requeue(job.id) is True
+
+    reread = registry.get(job.id)
+    assert reread.status == "queued"
+    assert reread.pid is None
+    assert reread.ended_at is None
+    assert reread.units_done == 1
+
+
+def test_requeue_refuses_a_running_job_and_leaves_it_untouched(registry):
+    """The status guard is what keeps a retry from yanking a job out from
+    under its live worker: flipping a running row back to queued would let a
+    second worker claim it while the first is still transcribing."""
+    job = registry.enqueue(kind="ocr", label="a", payload={}, session_key=None, units_total=5)
+    registry.claim(job.id, pid=4242)
+    before = registry.get(job.id)
+
+    assert registry.requeue(job.id) is False
+
+    assert registry.get(job.id) == before  # still running, pid intact
+
+
+def test_requeue_refuses_queued_done_and_unknown_ids(registry):
+    queued = registry.enqueue(kind="ocr", label="q", payload={}, session_key=None, units_total=1)
+    done = registry.enqueue(kind="ocr", label="d", payload={}, session_key=None, units_total=1)
+    registry.claim(done.id, pid=4242)
+    registry.finish(done.id, pid=4242)
+    before = {j.id: registry.get(j.id) for j in (queued, done)}
+
+    assert registry.requeue(queued.id) is False
+    assert registry.requeue(done.id) is False
+    assert registry.requeue("nope") is False
+
+    assert registry.get(queued.id) == before[queued.id]
+    assert registry.get(done.id) == before[done.id]
+
+
 def test_reconcile_requeues_a_job_whose_worker_died(registry):
     job = registry.enqueue(kind="ocr", label="a", payload={}, session_key=None, units_total=5)
     registry.claim(job.id, pid=999999)

@@ -383,6 +383,219 @@ async def test_create_wires_a_real_jobs_registry(tmp_path, monkeypatch):
     assert "book.pdf" in out
 
 
+class _CountingPopen:
+    """Stands in for the ``subprocess`` module inside ``durin.jobs.spawn`` so a
+    test can assert how many workers were actually launched (see the sibling
+    convention in test_ingestion_ocr.py)."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def Popen(self, *args, **kwargs):
+        self.calls += 1
+        return None
+
+
+def _failed_job(jobs, *, units_done=0, error="page 3: engine exploded"):
+    job = jobs.enqueue(
+        kind="ocr", label="book.pdf", payload={"path": "/tmp/book.pdf"},
+        session_key=SESSION, units_total=40,
+    )
+    jobs.claim(job.id, pid=4242)
+    for unit in range(1, units_done + 1):
+        jobs.record_unit(job.id, unit, f"page {unit}")
+    jobs.finish(job.id, pid=4242, error=error)
+    return job
+
+
+@pytest.mark.asyncio
+async def test_retry_of_a_failed_job_requeues_it_and_launches_a_worker(
+    tmp_path, monkeypatch
+):
+    """The whole recovery in one gesture: the row goes back to queued with its
+    finished pages kept, exactly one worker process is launched for it, and
+    the response promises "queued" (the cap may refuse the claim) rather than
+    "running", naming the progress that survives."""
+    launcher = _CountingPopen()
+    monkeypatch.setattr("durin.jobs.spawn.subprocess", launcher)
+    jobs = _job_registry(tmp_path)
+    job = _failed_job(jobs, units_done=3)
+
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(
+        action="retry", id=job.id)
+
+    assert jobs.get(job.id).status == "queued"
+    assert launcher.calls == 1
+    assert "requeued" in out
+    assert "3/40" in out
+    assert "running" not in out.lower()
+    # Same contract as stop's wording: nothing pushes a completion message.
+    assert "action=status" in out
+
+
+@pytest.mark.asyncio
+async def test_retry_refuses_a_running_job_without_spawning(tmp_path, monkeypatch):
+    launcher = _CountingPopen()
+    monkeypatch.setattr("durin.jobs.spawn.subprocess", launcher)
+    jobs = _job_registry(tmp_path)
+    job = jobs.enqueue(kind="ocr", label="book.pdf", payload={}, session_key=SESSION, units_total=40)
+    jobs.claim(job.id, pid=4242)
+
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(
+        action="retry", id=job.id)
+
+    assert "is running" in out
+    assert "only a failed or cancelled job can be retried" in out
+    assert jobs.get(job.id).status == "running"
+    assert launcher.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_retry_refuses_a_queued_job(tmp_path, monkeypatch):
+    launcher = _CountingPopen()
+    monkeypatch.setattr("durin.jobs.spawn.subprocess", launcher)
+    jobs = _job_registry(tmp_path)
+    job = jobs.enqueue(kind="ocr", label="book.pdf", payload={}, session_key=SESSION, units_total=40)
+
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(
+        action="retry", id=job.id)
+
+    assert "is queued" in out
+    assert jobs.get(job.id).status == "queued"
+    assert launcher.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_retry_of_a_done_job_points_at_re_ingesting_instead(tmp_path, monkeypatch):
+    """"Redo a finished document" is a legitimate wish with a designed path —
+    re-ingesting spawns a fresh job — and the refusal should say so instead of
+    dead-ending."""
+    launcher = _CountingPopen()
+    monkeypatch.setattr("durin.jobs.spawn.subprocess", launcher)
+    jobs = _job_registry(tmp_path)
+    job = jobs.enqueue(kind="ocr", label="book.pdf", payload={}, session_key=SESSION, units_total=1)
+    jobs.claim(job.id, pid=4242)
+    jobs.finish(job.id, pid=4242)
+
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(
+        action="retry", id=job.id)
+
+    assert "is done" in out
+    assert "ingest" in out
+    assert jobs.get(job.id).status == "done"
+    assert launcher.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_retry_refuses_a_subagent_and_a_workflow(tmp_path):
+    mgr = _FakeManager([_SAStatus("sa01", "research", "error")], running=[])
+    _write_manifest(tmp_path, "qa", "wf01abcd", status="aborted")
+
+    tool = _tool(tmp_path, mgr)
+    for task_id, kind in (("sa01", "subagent"), ("wf01abcd", "workflow")):
+        out = await tool.execute(action="retry", id=task_id)
+        assert "retry only applies to background jobs" in out
+        assert kind in out
+
+
+@pytest.mark.asyncio
+async def test_retry_of_an_unknown_id_is_the_ordinary_unknown_id_error(tmp_path):
+    """A pruned terminal row is exactly an id the registry no longer has — the
+    resolver's existing miss path must answer for it, no dedicated branch."""
+    jobs = _job_registry(tmp_path)
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(
+        action="retry", id="pruned0000")
+    assert "unknown task id" in out
+
+
+@pytest.mark.asyncio
+async def test_retry_that_loses_the_requeue_race_reports_the_fresh_status_and_never_spawns(
+    tmp_path, monkeypatch
+):
+    """Between the tool's read (row: failed) and its requeue, another actor can
+    move the row — here a competing retry lands first. The guarded UPDATE then
+    writes nothing, and the tool must answer with the row's fresh status
+    instead of respawning a worker for a requeue that never happened."""
+    launcher = _CountingPopen()
+    monkeypatch.setattr("durin.jobs.spawn.subprocess", launcher)
+    jobs = _job_registry(tmp_path)
+    job = _failed_job(jobs)
+
+    real_requeue = jobs.requeue
+
+    def _racing_requeue(job_id):
+        real_requeue(job_id)  # the competing retry lands first
+        return real_requeue(job_id)  # this call's own write finds nothing to do
+
+    monkeypatch.setattr(jobs, "requeue", _racing_requeue)
+
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(
+        action="retry", id=job.id)
+
+    assert "is queued" in out
+    assert launcher.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_retry_requires_an_id(tmp_path):
+    out = await _tool(tmp_path, _FakeManager([], running=[])).execute(action="retry")
+    assert "'id' is required" in out
+
+
+@pytest.mark.asyncio
+async def test_description_action_enum_and_unknown_action_all_name_retry(tmp_path):
+    tool = _tool(tmp_path, _FakeManager([], running=[]))
+    assert "retry" in tool.description
+    assert "retry" in tool.parameters["properties"]["action"]["enum"]
+    assert "retry" in tool.parameters["properties"]["action"]["description"]
+    out = await tool.execute(action="frobnicate")
+    assert "retry" in out
+
+
+@pytest.mark.asyncio
+async def test_failed_job_status_names_the_recovery_and_keeps_the_stored_error_verbatim(
+    tmp_path
+):
+    """The render layer is where recovery advice belongs: only the model reads
+    it. The stored error is shown verbatim to humans in the webui tray, so
+    "action=retry" must appear next to the error line, never inside it."""
+    jobs = _job_registry(tmp_path)
+    job = _failed_job(jobs, error="page 7: OSError: no space left on device")
+
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(
+        action="status", id=job.id)
+
+    assert "action=retry" in out
+    assert "re-ingest" in out
+    assert "page 7: OSError: no space left on device" in out
+    assert jobs.get(job.id).error == "page 7: OSError: no space left on device"
+
+
+@pytest.mark.asyncio
+async def test_cancelled_job_status_names_the_recovery_too(tmp_path):
+    jobs = _job_registry(tmp_path)
+    job = jobs.enqueue(kind="ocr", label="book.pdf", payload={}, session_key=SESSION, units_total=40)
+    jobs.claim(job.id, pid=4242)
+    jobs.cancel(job.id)
+
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(
+        action="status", id=job.id)
+
+    assert "action=retry" in out
+
+
+@pytest.mark.asyncio
+async def test_a_running_job_status_offers_no_retry(tmp_path):
+    jobs = _job_registry(tmp_path)
+    job = jobs.enqueue(kind="ocr", label="book.pdf", payload={}, session_key=SESSION, units_total=40)
+    jobs.claim(job.id, pid=4242)
+
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(
+        action="status", id=job.id)
+
+    assert "action=retry" not in out
+
+
 def test_description_does_not_promise_a_notification_for_a_finished_job(tmp_path):
     """Sub-agents and workflow runs genuinely publish a follow-up message on
     completion (durin/agent/subagent.py, durin/agent/tools/run_workflow.py);
