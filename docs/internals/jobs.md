@@ -133,8 +133,9 @@ for the shared mechanism.
 and immediately `Popen`s the worker with `start_new_session=True`, so the
 worker outlives the request that launched it. If the `Popen` call itself
 fails (e.g. the OS is out of processes), the row is left `queued` — the next
-gateway start's reconcile sweep picks it up, since a `queued` job with no
-`pid` reads the same as an orphaned one.
+gateway start's queued-pickup loop finds it (`reconcile` only ever selects
+`running` rows, so a `queued` job with no worker is invisible to it; see
+[Restart reconciliation](#restart-reconciliation)).
 
 A worker claims its own job rather than trusting the caller: `JobRegistry.claim`
 runs `UPDATE jobs SET status='running', pid=? WHERE id=? AND status='queued'`
@@ -182,15 +183,26 @@ for the ordinary reason. This accepts the same edge gateway startup's own
 `reconcile` call already does: the 6h age fallback can requeue a holder that
 is genuinely alive but slow, briefly letting two workers hold one job —
 `finish`'s `pid` guard and `record_unit`'s idempotence are what keep that
-window safe, not this retry.
+window safe, not this retry. The edge's likelihood changed with this
+self-heal, though: `reconcile` used to run only at gateway startup, so a
+job running past 6h tripped the fallback only if a restart happened to land
+during that window. Now every cap refusal runs it too, so a >6h job with a
+sibling queued behind it reliably trips the fallback the moment that
+sibling's worker is spawned and refused, rather than rarely.
 
 A worker looks for more work before it exits, from every point after a
 successful claim where the row it held reaches a terminal state: its own
 `finish()` succeeding, a cancellation noticed mid-loop (`registry.cancel`
-already wrote `cancelled` by then), or `finish()` losing to something else
-(a late cancel, or a second worker via `reconcile`'s age fallback — the row
-is terminal regardless of who wrote it). `JobRegistry.next_queued(kind)`
-returns the oldest still-`queued` job of its kind, and if one exists the
+already wrote `cancelled` by then), or `finish()` losing to something else.
+The first two genuinely leave the row no longer `running`; the third might
+not — a late cancel is terminal, but a takeover by a second worker via
+`reconcile`'s age fallback leaves the row `running` under its new owner
+instead. The worker chains regardless: it is safe because the worker
+launched for the next queued job still has to win `claim`'s own atomic cap
+check, so a chain fired while the slot is not really free just costs that
+launched worker a refused claim — one wasted spawn, not a second worker on
+the same job. `JobRegistry.next_queued(kind)` returns the oldest
+still-`queued` job of its kind, and if one exists the
 worker launches a fresh process for it through `_launch_worker`, the same
 `Popen` call `spawn_ocr_job` and `respawn` use. The launch happens strictly
 *after* the terminal write, never before — launching earlier could let the
@@ -399,6 +411,16 @@ chaining](#concurrency-cap-and-chaining)). A second kind that needs the same
 protection adds its own cap constant and wires its own `kind_cap`, chain, and
 startup pickup the same way — none of that is inherited automatically.
 
+One more gap worth knowing before adding a second kind: `ocr_worker.run_job`'s
+own inline `reconcile()` call (the cap-refusal self-heal, see
+[above](#concurrency-cap-and-chaining)) is not scoped to `"ocr"` either —
+`reconcile` itself takes no `kind` argument, so it requeues *any* kind's
+orphaned `running` row it finds stale. But that call site only retries its
+own claim on success; unlike gateway startup, it never calls `respawn()` for
+the orphans it requeues. A second kind's job requeued by that inline call
+sits `queued` with nothing launched for it until the next gateway restart,
+or its own kind's chain/pickup mechanism if it wires one.
+
 Nothing else needs to change to reach the tray: `collect_tasks` and
 `TasksTool` render any registry row from its generic fields (label, status,
 `units_total`/`units_done`) with no kind-specific branching, and the webui's
@@ -420,7 +442,8 @@ copy there.
 | `_launch_worker` | `durin/jobs/spawn.py` | The one `Popen` call shared by `spawn_ocr_job`, `respawn`, and the worker's own chain. |
 | `run_job` | `durin/jobs/ocr_worker.py` | The OCR worker's whole lifecycle: kind-capped claim (self-healing a stale holder once via an inline `reconcile` on refusal), per-page transcribe loop, sidecar assembly, Library indexing, finish or cancellation, then chain to the next queued job. |
 | `queued_jobs` | `durin/jobs/registry.py` | The oldest up to *n* still-`queued` jobs of a kind in one query; what gateway startup's pickup loop uses instead of looping `next_queued`. |
-| `transcribe_page` | `durin/memory/ocr.py` | Renders one PDF page (`pypdfium2`) and runs it through the lazily-constructed, process-local `RapidOCR` engine. |
+| `transcribe_page` | `durin/memory/ocr.py` | Renders one PDF page (`pypdfium2`) and runs it through the lazily-constructed, process-local `RapidOCR` engine. The worker calls this directly — its own process is already short-lived, so the engine's memory leaves with it. |
+| `transcribe_pages_detached` | `durin/memory/ocr.py` | The inline conversion path's transcription entry point: runs `transcribe_page` per page inside a short-lived child (`durin/memory/ocr_subproc.py`), so the engine's memory never enters the long-lived gateway process. |
 | `index_ingested_entry` | `durin/memory/ingestion.py` | Turns a finished `ingested/<id>/` entry into an indexed Library reference; the one memory-layer call the worker makes on success. |
 | `collect_tasks` | `durin/agent/background_tasks.py` | Merges sub-agents, workflow runs, and jobs into the one list the tray and `tasks` tool both read. |
 | `TasksTool` | `durin/agent/tools/tasks_tool.py` | Agent-facing `tasks` tool: `list` / `status` / `stop`, across all three background-work categories. |

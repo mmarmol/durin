@@ -104,6 +104,7 @@ pip install -e ".[memory,mcp,web]"
 |---|---|---|
 | `memory` | `fastembed`, `lancedb` | Vector recall + lexical FTS over `memory/`. Default embedding is `intfloat/multilingual-e5-small` (~450 MB, 100+ langs, MIT). |
 | `cross-encoder` | `sentence-transformers` (+ `torch` ~1 GB) | Optional reranker for `memory_search`. Default model `BAAI/bge-reranker-base` (~100M params, MIT). Off by default — opt in via the wizard or `memory.search.cross_encoder.enabled = true`. |
+| `ocr` | `rapidocr` (~200 MB) | Local OCR for scanned PDF pages. Off by default — opt in via the dashboard's Settings → Documents toggle or `documents.ocr.enabled = true`. A reinstall or redeploy that omits this extra while `documents.ocr.enabled` stays on does not disable the feature: durin keeps returning those documents, with a coverage note in place of the transcription. |
 | `mcp` | `mcp` | Use durin as an MCP server. |
 | `web` | `ddgs`, `readability-lxml` | The web-search and reader tools. |
 | `slack` | `slack-sdk`, `slackify-markdown` | Slack channel. |

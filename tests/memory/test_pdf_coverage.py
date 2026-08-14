@@ -271,13 +271,13 @@ def _texts(pattern: list[bool]) -> list[str]:
 def test_no_note_for_a_text_document():
     texts = _texts([True] * 10)
     cov = classify_coverage(texts)
-    assert coverage_note(cov, texts, ocr_enabled=True) == ""
+    assert coverage_note(cov, texts) == ""
 
 
 def test_partial_note_lists_gap_ranges():
     texts = _texts([True, True, False, False, False, True, True, True, True, True])
     cov = classify_coverage(texts)
-    note = coverage_note(cov, texts, ocr_enabled=True)
+    note = coverage_note(cov, texts)
     assert "3 of 10 pages" in note
     assert "pages 3-5" in note
 
@@ -285,14 +285,14 @@ def test_partial_note_lists_gap_ranges():
 def test_partial_note_labels_a_gap_with_the_text_before_it():
     texts = ["Chapter Four: Financial Statements", "", "", *_texts([True] * 7)]
     cov = classify_coverage(texts)
-    note = coverage_note(cov, texts, ocr_enabled=True)
+    note = coverage_note(cov, texts)
     assert "Chapter Four: Financial Statements" in note
 
 
 def test_scanned_note_does_not_list_every_page_as_a_gap():
     texts = _texts([False] * 412)
     cov = classify_coverage(texts)
-    note = coverage_note(cov, texts, ocr_enabled=True)
+    note = coverage_note(cov, texts)
     assert "412" in note
     assert "pages 1-412" not in note
 
@@ -300,12 +300,13 @@ def test_scanned_note_does_not_list_every_page_as_a_gap():
 def test_note_with_ocr_disabled_says_how_to_enable_it():
     texts = _texts([False] * 50)
     cov = classify_coverage(texts)
-    note = coverage_note(cov, texts, ocr_enabled=False)
+    note = coverage_note(cov, texts)
     assert "documents.ocr.enabled" in note
 
 
-def test_note_with_ocr_enabled_does_not_tell_the_model_to_enable_it():
+def test_note_with_engine_missing_says_the_engine_is_the_reason():
     texts = _texts([False] * 50)
     cov = classify_coverage(texts)
-    note = coverage_note(cov, texts, ocr_enabled=True)
+    note = coverage_note(cov, texts, engine_missing=True)
     assert "documents.ocr.enabled" not in note
+    assert "[ocr] extra" in note

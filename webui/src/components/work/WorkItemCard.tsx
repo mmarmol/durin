@@ -244,8 +244,10 @@ export function WorkItemCard({
       )}
 
       {/* Job: pages transcribed of pages total. Unlike touchedNodeCount above,
-          a job's total is known upfront (the PDF's page count), so "done of
-          total" is a real fraction, not a false promise. */}
+          a job's total starts as an estimate (the inline probe's flagged-page
+          count) that the worker corrects once it re-checks the document
+          itself, so "done of total" is a real, if revisable, fraction — not
+          a false promise. */}
       {item.kind === "job" && (
         <div className="mt-1 pl-5 text-[12px] text-muted-foreground">
           {t("work.pages", { done: item.unitsDone ?? 0, total: item.unitsTotal ?? 0 })}

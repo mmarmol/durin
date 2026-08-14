@@ -210,8 +210,7 @@ def _gap_label(texts: list[str], first_empty: int) -> str:
 
 
 def coverage_note(
-    cov: PdfCoverage, texts: list[str], *, ocr_enabled: bool,
-    engine_missing: bool = False,
+    cov: PdfCoverage, texts: list[str], *, engine_missing: bool = False,
 ) -> str:
     """A note about what could not be read, for the model reading this document.
 
@@ -219,9 +218,11 @@ def coverage_note(
     extracted text rather than appending: a long extraction is paginated, and a
     footer would land on a page the reader may never fetch.
 
-    ``engine_missing`` distinguishes the two ways OCR did not run: the setting
-    is off (the reader is told to turn it on), or the setting is on and the
-    engine is not installed (turning it on again would achieve nothing).
+    Both production callers (`durin/memory/doc_convert.py`) reach this only
+    after OCR has already not run, so the note always describes OCR as off.
+    ``engine_missing`` distinguishes the two reasons: the setting is off (the
+    reader is told to turn it on), or the setting is on and the engine is not
+    installed (turning it on again would achieve nothing).
     """
     if cov.kind == "text":
         return ""
@@ -248,12 +249,7 @@ def coverage_note(
             f"ranges:\n{gaps}"
         )
 
-    if ocr_enabled:
-        tail = (
-            " These pages can be transcribed with local OCR — ingest the "
-            "document to have it done as a background job."
-        )
-    elif engine_missing:
+    if engine_missing:
         tail = (
             " Local OCR is turned on but its engine is not installed here, so "
             "nothing transcribed these pages. Installing durin's [ocr] extra "

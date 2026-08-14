@@ -278,9 +278,7 @@ def convert_file_to_markdown(path: Path, *, documents_config=None) -> ConvertedD
             if not ocr_cfg.enabled or not engine_available():
                 # Still return the document. What text exists is worth having,
                 # and the note tells the reader what is missing and how to fix it.
-                note = coverage_note(
-                    cov, texts, ocr_enabled=False, engine_missing=ocr_cfg.enabled
-                )
+                note = coverage_note(cov, texts, engine_missing=ocr_cfg.enabled)
                 return ConvertedDoc(
                     markdown=note + markitdown_text(), suffix=suffix, coverage=cov
                 )
@@ -308,7 +306,7 @@ def convert_file_to_markdown(path: Path, *, documents_config=None) -> ConvertedD
                     "%s: local OCR is enabled but its engine failed to load; "
                     "returning the document with a coverage note", path.name,
                 )
-                note = coverage_note(cov, texts, ocr_enabled=False, engine_missing=True)
+                note = coverage_note(cov, texts, engine_missing=True)
                 return ConvertedDoc(
                     markdown=note + markitdown_text(), suffix=suffix, coverage=cov
                 )

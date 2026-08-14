@@ -1158,11 +1158,12 @@ def _lazy_default(module_path: str, class_name: str) -> Any:
 class DocumentsOcrConfig(Base):
     """Local OCR for PDF pages with no text layer.
 
-    Off by default: the engine is an optional extra, so the toggle both
-    activates the feature and triggers the extra's install.
+    Off by default: the engine is an optional extra. The Settings pane's
+    toggle installs it when turning this on; setting `enabled` any other
+    way (e.g. `durin config set`) does not.
     """
 
-    enabled: bool = Field(default=False, description="Transcribe PDF pages that have no text layer using the local OCR engine; installs the [ocr] extra on activation")
+    enabled: bool = Field(default=False, description="Transcribe PDF pages that have no text layer using the local OCR engine; the Settings > Documents toggle installs the [ocr] extra when turning this on, but `durin config set` does not")
     inline_max_pages: int = Field(
         default=5,
         ge=0,

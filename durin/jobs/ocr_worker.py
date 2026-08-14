@@ -257,11 +257,16 @@ def run_job(job_id: str, *, registry: JobRegistry | None = None) -> None:
         "not recording its outcome", job_id, status,
     )
     _emit(job_id, len(pages), len(already), started, status)
-    # The row is terminal either way -- cancelled, or finished by whoever
-    # actually won it -- so the cap slot it held is free regardless of who
-    # wrote that outcome. This worker is the one about to exit; if it does
-    # not chain here, nothing else is positioned to notice a queued sibling
-    # waiting behind a job it never got to finish itself.
+    # This is usually terminal -- cancelled, or finished by whoever actually
+    # won it -- but not always: a takeover via reconcile's age fallback can
+    # leave the row `running` under its new owner instead, so the cap slot
+    # this job held may not really be free. Chaining anyway is safe: the
+    # launched worker still has to win claim()'s own atomic cap check before
+    # doing any work, so a chain fired while the slot is not really free
+    # just costs that worker a refused claim -- one wasted spawn, not a
+    # second worker on the same job. This worker is the one about to exit;
+    # if it does not chain here, nothing else is positioned to notice a
+    # queued sibling waiting behind a job it never got to finish itself.
     _chain_to_next_queued(registry)
 
 
@@ -271,14 +276,18 @@ def _chain_to_next_queued(registry: JobRegistry) -> None:
     Called from every exit of ``run_job`` that follows a successful claim
     and reaches a terminal state for the row this worker held: its own
     successful ``finish()``, a cancellation noticed mid-loop, and a
-    ``finish()`` that lost to something else. All three leave the row no
-    longer ``running``, so the cap slot it held is free in every case,
-    whichever of the three actually wrote the terminal status. Deliberately
-    NOT called from the refused-claim exit above: a worker whose own claim
-    was refused never held a slot to free, so chaining from there would be
-    an extra launch on top of whatever the live holder already does when
-    it finishes — the live holder owns the chain, not a worker that never
-    claimed anything.
+    ``finish()`` that lost to something else. The first two genuinely leave
+    the row no longer ``running``; the third might not -- a takeover via
+    ``reconcile``'s age fallback can leave it ``running`` under its new
+    owner instead of freeing the cap slot. Calling this anyway is safe: the
+    worker launched below still has to win ``claim()``'s own atomic cap
+    check, so a chain fired while the slot is not really free just costs
+    that worker a refused claim -- one wasted spawn, not a second worker on
+    the same job. Deliberately NOT called from the refused-claim exit above:
+    a worker whose own claim was refused never held a slot to free, so
+    chaining from there would be an extra launch on top of whatever the
+    live holder already does when it finishes — the live holder owns the
+    chain, not a worker that never claimed anything.
     """
     next_job = registry.next_queued("ocr")
     if next_job is None:

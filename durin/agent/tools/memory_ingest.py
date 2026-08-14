@@ -211,7 +211,9 @@ class MemoryIngestTool(Tool, ContextAware):
                 "searchable until that finishes — tell the user that instead "
                 "of reporting the document as read or remembered. "
                 "`pages_pending` is an estimate; say \"about\" that many. "
-                "`tasks` reports the progress and the settled count."
+                "`tasks` reports the progress and the settled count. "
+                "Progress is also visible in the dashboard's work panel, at "
+                "roughly 1-2 seconds per page."
             )
         out["saved_to"] = result["source"]
         out["meta_path"] = result["meta_path"]

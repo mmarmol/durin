@@ -142,7 +142,9 @@ class TasksTool(Tool, ContextAware):
             "on its own as a follow-up message — do not loop sleep+status "
             "waiting for one; end your turn instead. A job pushes nothing: "
             "nobody tells you when it finishes, so check back with "
-            "action=status (or list) instead of expecting a message."
+            "action=status (or list) instead of expecting a message. A "
+            "job's progress is also visible in the dashboard's work panel, "
+            "at roughly 1-2 seconds per page."
         )
 
     def _rows(self, session_key: str) -> list[dict]:

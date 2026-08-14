@@ -58,7 +58,10 @@ def _get_engine():
     if _engine is None:
         if not engine_available():
             raise OcrUnavailable(
-                "local OCR needs the [ocr] extra: pip install durin-agent[ocr]"
+                "local OCR needs the [ocr] extra: install it via the "
+                "Settings > Documents toggle, or manually with `pipx inject "
+                'durin-agent "durin-agent[ocr]"` / `uv tool install '
+                '"durin-agent[ocr]"`'
             )
         from rapidocr import RapidOCR
 
