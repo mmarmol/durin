@@ -256,7 +256,6 @@ async def test_sources_ingest_does_not_call_a_pending_scan_ingested(
     tool returns a careful note for exactly this case; reporting a plain
     "Ingested as <id>" here tells the user the opposite."""
     from durin.config.schema import Config
-
     from tests.tools.test_read_enhancements import _write_text_pdf
 
     cfg = Config()
