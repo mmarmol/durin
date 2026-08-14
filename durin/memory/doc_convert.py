@@ -16,7 +16,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from durin.memory.ocr import OcrUnavailable, engine_available, transcribe_page
+from durin.memory.ocr import OcrUnavailable, engine_available, transcribe_pages_detached
 from durin.memory.pdf_coverage import (
     EMPTY_PAGE_CHARS,
     PdfCoverage,
@@ -294,14 +294,16 @@ def convert_file_to_markdown(path: Path, *, documents_config=None) -> ConvertedD
                     total_pages=cov.total_pages,
                 )
             try:
+                transcribed = transcribe_pages_detached(path, pages)
                 for page in pages:
-                    texts[page - 1] = transcribe_page(path, page)
+                    texts[page - 1] = transcribed[page]
             except (OcrUnavailable, ImportError):
                 # engine_available() above only proves ``import rapidocr``
-                # works; the engine's own imports can still fail underneath it,
-                # and OcrUnavailable is a RuntimeError no caller of this
-                # function catches. Same outcome as finding it missing before
-                # starting: the document, and a note saying why it has gaps.
+                # works; the subprocess's own imports can still fail
+                # underneath it, and OcrUnavailable is a RuntimeError no
+                # caller of this function catches. Same outcome as finding it
+                # missing before starting: the document, and a note saying
+                # why it has gaps.
                 logger.warning(
                     "%s: local OCR is enabled but its engine failed to load; "
                     "returning the document with a coverage note", path.name,

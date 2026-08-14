@@ -42,9 +42,10 @@ def _engine_present(monkeypatch):
     """Stand in for an installed OCR engine.
 
     The [ocr] extra is absent in CI, and every test here that transcribes
-    fakes ``transcribe_page`` anyway — so it must fake the availability probe
-    too, or it exercises the missing-engine path instead of the one it means
-    to. The tests that are *about* a missing engine override this.
+    fakes ``transcribe_pages_detached`` anyway — so it must fake the
+    availability probe too, or it exercises the missing-engine path instead
+    of the one it means to. The tests that are *about* a missing engine
+    override this.
     """
     monkeypatch.setattr("durin.memory.doc_convert.engine_available", lambda: True)
 
@@ -137,15 +138,15 @@ def test_stamped_scanned_inserts_are_transcribed_like_blank_ones(tmp_path, monke
     pdf = tmp_path / "stamped_report.pdf"
     _write_text_pdf(pdf, texts)
 
-    transcribed = []
+    requested = []
     monkeypatch.setattr(
-        "durin.memory.doc_convert.transcribe_page",
-        lambda path, page, **kw: transcribed.append(page) or f"insert {page}",
+        "durin.memory.doc_convert.transcribe_pages_detached",
+        lambda path, pages: requested.extend(pages) or {p: f"insert {p}" for p in pages},
     )
 
     out = convert_file_to_markdown(pdf, documents_config=_cfg(inline_max_pages=5))
 
-    assert transcribed == [4, 5, 6]
+    assert requested == [4, 5, 6]
     assert "insert 5" in out.markdown
 
 
@@ -162,8 +163,8 @@ def test_text_pdf_is_unchanged_by_the_ocr_path(tmp_path):
 
 def test_small_scan_is_transcribed_inline(two_page_scan, monkeypatch):
     monkeypatch.setattr(
-        "durin.memory.doc_convert.transcribe_page",
-        lambda path, page, **kw: f"transcribed page {page}",
+        "durin.memory.doc_convert.transcribe_pages_detached",
+        lambda path, pages: {p: f"transcribed page {p}" for p in pages},
     )
     out = convert_file_to_markdown(two_page_scan, documents_config=_cfg())
     assert "transcribed page 1" in out.markdown
@@ -189,8 +190,8 @@ def test_exactly_the_budget_stays_inline_one_more_goes_to_a_job(tmp_path, monkey
     from tests.tools.test_read_enhancements import _write_text_pdf
 
     monkeypatch.setattr(
-        "durin.memory.doc_convert.transcribe_page",
-        lambda path, page, **kw: f"transcribed page {page}",
+        "durin.memory.doc_convert.transcribe_pages_detached",
+        lambda path, pages: {p: f"transcribed page {p}" for p in pages},
     )
 
     at_budget = tmp_path / "at_budget.pdf"
@@ -291,8 +292,8 @@ def test_the_early_exit_raises_at_exactly_one_page_over_the_budget(
     # budget+1 confirmed pages -- one fewer would be a document that still fits
     # inline, one more is work the decision did not need to do.
     monkeypatch.setattr(
-        "durin.memory.doc_convert.transcribe_page",
-        lambda path, page, **kw: f"transcribed page {page}",
+        "durin.memory.doc_convert.transcribe_pages_detached",
+        lambda path, pages: {p: f"transcribed page {p}" for p in pages},
     )
 
     with pytest.raises(NeedsOcrJob) as excinfo:
@@ -340,8 +341,8 @@ def test_the_under_budget_partial_path_does_not_convert_the_document_either(
 
     conv = _watch_markitdown(monkeypatch)
     monkeypatch.setattr(
-        "durin.memory.doc_convert.transcribe_page",
-        lambda path, page, **kw: f"ocr {page}",
+        "durin.memory.doc_convert.transcribe_pages_detached",
+        lambda path, pages: {p: f"ocr {p}" for p in pages},
     )
 
     out = convert_file_to_markdown(pdf, documents_config=_cfg())
@@ -375,15 +376,15 @@ def test_a_page_the_probe_reads_as_full_is_still_transcribed_when_it_is_empty(
     monkeypatch.setattr(
         "durin.memory.doc_convert.page_char_counts", _probe_over_reads_page_five
     )
-    transcribed = []
+    requested = []
     monkeypatch.setattr(
-        "durin.memory.doc_convert.transcribe_page",
-        lambda path, page, **kw: transcribed.append(page) or f"ocr {page}",
+        "durin.memory.doc_convert.transcribe_pages_detached",
+        lambda path, pages: requested.extend(pages) or {p: f"ocr {p}" for p in pages},
     )
 
     convert_file_to_markdown(pdf, documents_config=_cfg())
 
-    assert transcribed == [4, 5]
+    assert requested == [4, 5]
 
 
 def test_a_failed_probe_converts_before_it_extracts(tmp_path, monkeypatch):
@@ -452,8 +453,8 @@ def test_budget_counts_pages_needing_ocr_not_document_pages(tmp_path, monkeypatc
     _write_text_pdf(pdf, texts)
 
     monkeypatch.setattr(
-        "durin.memory.doc_convert.transcribe_page",
-        lambda path, page, **kw: f"insert {page}",
+        "durin.memory.doc_convert.transcribe_pages_detached",
+        lambda path, pages: {p: f"insert {p}" for p in pages},
     )
     out = convert_file_to_markdown(pdf, documents_config=_cfg(inline_max_pages=5))
     assert "insert 11" in out.markdown
@@ -494,18 +495,19 @@ def test_no_job_is_enqueued_for_a_book_no_engine_can_transcribe(big_scan, monkey
     "boom",
     [
         pytest.param(OcrUnavailable("no extra"), id="ocr-unavailable"),
-        # engine_available() only proves `import rapidocr` works; its own
-        # imports can still fail underneath.
+        # engine_available() only proves `import rapidocr` works; the
+        # subprocess's own imports can still fail underneath, which
+        # transcribe_pages_detached surfaces as OcrUnavailable itself.
         pytest.param(ImportError("onnxruntime is broken"), id="broken-lazy-import"),
     ],
 )
 def test_an_engine_that_fails_at_transcribe_time_is_handled_the_same_way(
     two_page_scan, monkeypatch, boom
 ):
-    def _raise(path, page, **kw):
+    def _raise(path, pages):
         raise boom
 
-    monkeypatch.setattr("durin.memory.doc_convert.transcribe_page", _raise)
+    monkeypatch.setattr("durin.memory.doc_convert.transcribe_pages_detached", _raise)
 
     out = convert_file_to_markdown(two_page_scan, documents_config=_cfg())
 
@@ -521,13 +523,13 @@ def test_partial_scan_only_transcribes_the_empty_pages(tmp_path, monkeypatch):
     pdf = tmp_path / "mixed.pdf"
     _write_text_pdf(pdf, texts)
 
-    transcribed = []
+    requested = []
     monkeypatch.setattr(
-        "durin.memory.doc_convert.transcribe_page",
-        lambda path, page, **kw: transcribed.append(page) or f"ocr {page}",
+        "durin.memory.doc_convert.transcribe_pages_detached",
+        lambda path, pages: requested.extend(pages) or {p: f"ocr {p}" for p in pages},
     )
     convert_file_to_markdown(pdf, documents_config=_cfg())
-    assert transcribed == [4, 5]
+    assert requested == [4, 5]
 
 
 def test_coverage_is_reported_on_the_result(tmp_path):

@@ -227,7 +227,15 @@ returns no text at all.
 
 Local OCR (`documents.ocr.enabled`) transcribes the empty pages inline, as part
 of this same call, as long as there are at or under
-`documents.ocr.inline_max_pages` (default 5) of them.
+`documents.ocr.inline_max_pages` (default 5) of them. The gateway is
+long-lived, so it never loads the OCR engine itself: `transcribe_pages_detached`
+(`durin/memory/ocr.py`) hands the page numbers to a short-lived subprocess
+(`durin/memory/ocr_subproc.py`, run as `python -m durin.memory.ocr_subproc`),
+which renders and transcribes them and returns the text over stdout. The
+engine's memory is released when that subprocess exits rather than
+accumulating in the gateway across conversions. The background-job worker
+(below) transcribes with the same engine in-process instead, because its own
+process is already short-lived.
 
 Over that budget the document is never converted or fully extracted — both
 outputs would be thrown away unread — so the decision to go over is taken
