@@ -176,6 +176,42 @@ it("counts only the nodes the run has touched, excluding the pending tail", () =
   expect(screen.queryByText(/4 nodes/)).not.toBeInTheDocument();
 });
 
+it("says queued, not in progress, when the only active job is waiting for a slot", () => {
+  // A queued OCR job is active work, but nothing has started it: the strip's
+  // spinner and "in progress" over it is the same lie the card used to tell.
+  const queued = item({ kind: "job", id: "j1", label: "second-book.pdf", status: "queued" });
+  const { container } = render(
+    wrap(<WorkStrip active={[queued]} finished={[]} onOpen={() => {}} />),
+  );
+  expect(screen.getByText("second-book.pdf")).toBeInTheDocument();
+  expect(screen.getByText(/queued/)).toBeInTheDocument();
+  expect(screen.queryByText(/in progress/)).not.toBeInTheDocument();
+  expect(container.querySelector(".animate-spin")).not.toBeInTheDocument();
+});
+
+it("counts several waiting jobs as queued", () => {
+  const active = [
+    item({ kind: "job", id: "j1", label: "one.pdf", status: "queued" }),
+    item({ kind: "job", id: "j2", label: "two.pdf", status: "queued" }),
+  ];
+  render(wrap(<WorkStrip active={active} finished={[]} onOpen={() => {}} />));
+  expect(screen.getByText("2 tasks queued")).toBeInTheDocument();
+});
+
+it("still reads as in progress while one job runs and others queue behind it", () => {
+  // Only an all-queued list is "queued": with a worker actually transcribing,
+  // the strip must keep spinning.
+  const active = [
+    item({ kind: "job", id: "j1", label: "one.pdf", status: "running" }),
+    item({ kind: "job", id: "j2", label: "two.pdf", status: "queued" }),
+  ];
+  const { container } = render(
+    wrap(<WorkStrip active={active} finished={[]} onOpen={() => {}} />),
+  );
+  expect(screen.getByText("2 tasks in progress")).toBeInTheDocument();
+  expect(container.querySelector(".animate-spin")).toBeInTheDocument();
+});
+
 it("uses the singular node count when only one node has been touched", () => {
   vi.setSystemTime(new Date(2024, 0, 1, 0, 0, 0));
   const startedAt = Math.floor(Date.now() / 1000);

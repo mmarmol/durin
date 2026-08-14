@@ -496,6 +496,35 @@ describe("WorkItemCard", () => {
     ).toBeInTheDocument();
   });
 
+  it("renders a queued job as waiting, with no spinner and no ticker", () => {
+    // Under the one-worker OCR cap, every book but the first in a
+    // multi-document ingest sits here. Rendering it as running gave it the
+    // amber spinner and a live clock over work nobody had started.
+    const { container } = render(
+      <WorkItemCard
+        item={{
+          kind: "job",
+          id: "job5",
+          label: "second-book.pdf",
+          status: "queued",
+          unitsDone: 0,
+          unitsTotal: 300,
+          startedAt: 0,
+          endedAt: null,
+        }}
+      />,
+    );
+    expect(screen.getByText("Queued")).toBeInTheDocument();
+    expect(
+      screen.getByText("Waiting to start — one document is transcribed at a time."),
+    ).toBeInTheDocument();
+    // A still clock, not the running spinner.
+    expect(container.querySelector(".lucide-clock")).toBeInTheDocument();
+    expect(container.querySelector(".animate-spin")).not.toBeInTheDocument();
+    // The page count is still shown: it is the size of the work ahead.
+    expect(screen.getByText("0 of 300 pages")).toBeInTheDocument();
+  });
+
   it("renders a distinct icon for a cancelled job instead of the needs-input one", () => {
     const { container } = render(
       <WorkItemCard

@@ -142,7 +142,9 @@ class TasksTool(Tool, ContextAware):
             "on its own as a follow-up message — do not loop sleep+status "
             "waiting for one; end your turn instead. A job pushes nothing: "
             "nobody tells you when it finishes, so check back with "
-            "action=status (or list) instead of expecting a message."
+            "action=status (or list) instead of expecting a message. A "
+            "job's progress is also visible in the dashboard's work panel, "
+            "at roughly 1-2 seconds per page."
         )
 
     def _rows(self, session_key: str) -> list[dict]:
@@ -172,9 +174,15 @@ class TasksTool(Tool, ContextAware):
         if not rows:
             return "No background tasks (sub-agents, workflow runs, or jobs) in this session."
         running = sum(1 for r in rows if r["status"] == "running")
+        # Counted apart from both buckets: a queued job has not started, so
+        # folding it into "finished" (which is what "everything not running"
+        # did) says the opposite of the truth. Named only when there is one --
+        # a permanent "0 queued" is noise on a line read every check.
+        queued = sum(1 for r in rows if r["status"] == "queued")
+        counts = f"{running} running, " + (f"{queued} queued, " if queued else "")
         lines = [
             f"{len(rows)} background task(s) in this session "
-            f"({running} running, {len(rows) - running} finished):"
+            f"({counts}{len(rows) - running - queued} finished):"
         ]
         for r in rows:
             age = _age_epoch(r["started_at"], r.get("ended_at"))
@@ -254,12 +262,18 @@ class TasksTool(Tool, ContextAware):
         return "\n".join(out)
 
     def _render_job_status(self, row: dict) -> str:
-        age = _age_epoch(row["started_at"], row.get("ended_at"))
         out = [
             f"Job [{row['id']}] — {row['label']}",
             f"  status: {row['status']}",
-            f"  age:    {age}",
         ]
+        if row["status"] == "queued":
+            # No age line: an age next to a job reads as time spent working,
+            # and a queued job has no worker at all. It is waiting for the one
+            # OCR slot (durin/jobs/spawn.py's MAX_CONCURRENT_OCR_JOBS), which
+            # the job holding it frees when it finishes.
+            out.append("  waiting for the OCR slot; no worker has started it yet")
+        else:
+            out.append(f"  age:    {_age_epoch(row['started_at'], row.get('ended_at'))}")
         total = row.get("units_total")
         if total is not None:
             out.append(f"  progress: {row.get('units_done') or 0}/{total}")
@@ -349,6 +363,16 @@ class TasksTool(Tool, ContextAware):
                 return f"Sub-agent [{task_id}] had already finished — nothing to cancel."
             return f"Error: unknown sub-agent id {task_id!r} in this session."
         if row["kind"] == "job":
+            if row["status"] == "queued":
+                # The cleanest cancel there is: nothing has claimed the row,
+                # and claim()'s UPDATE only ever moves a row out of "queued",
+                # so no worker can pick it up afterwards. No page boundary to
+                # wait for either -- no page has been read.
+                self._jobs.cancel(task_id)
+                return (
+                    f"Job [{task_id}] cancelled while it was still waiting for "
+                    "the OCR slot; no worker will pick it up."
+                )
             if row["status"] != "running":
                 return f"Job [{task_id}] is already {row['status']} — nothing to cancel."
             self._jobs.cancel(task_id)

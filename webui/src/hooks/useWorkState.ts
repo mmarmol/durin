@@ -292,6 +292,7 @@ export function useWorkState(
       const decided =
         polledItem != null &&
         polledItem.status !== "running" &&
+        polledItem.status !== "queued" &&
         polledItem.status !== "needs_input";
       if (decided) continue;
       // A live item's startedAt is only when THIS browser saw its first frame;
@@ -309,11 +310,16 @@ export function useWorkState(
 
     return Array.from(byId.values());
   }, [polled, liveVersion]);
+  // "queued" belongs with the active work, not the finished list: a job
+  // waiting for the single OCR worker slot has not run yet, and sorting it
+  // among finished items by an endedAt it does not have would bury it.
   const active = all.filter(
-    (w) => w.status === "running" || w.status === "needs_input",
+    (w) => w.status === "running" || w.status === "queued" || w.status === "needs_input",
   );
   const finished = all
-    .filter((w) => w.status !== "running" && w.status !== "needs_input")
+    .filter(
+      (w) => w.status !== "running" && w.status !== "queued" && w.status !== "needs_input",
+    )
     .sort((a, b) => (b.endedAt ?? b.startedAt) - (a.endedAt ?? a.startedAt));
 
   const refresh = useCallback(() => {

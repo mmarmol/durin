@@ -1909,7 +1909,14 @@ async def cmd_sources(ctx: CommandContext) -> OutboundMessage:
             # is the pattern every other handler in this module uses) — tag any
             # background OCR job this triggers with it, or the job's session_key
             # stays NULL and it never appears in anyone's tasks tray.
-            result = ingest_artifact(workspace, source, session_key=ctx.key)
+            #
+            # Off-loop: ingest_artifact converts the document (markitdown /
+            # pdfplumber / OCR) -- multi-second blocking work that would freeze
+            # the whole gateway (every session, stream, heartbeat), since the
+            # AgentLoop this command dispatches through is a per-gateway singleton.
+            result = await asyncio.to_thread(
+                ingest_artifact, workspace, source, session_key=ctx.key
+            )
         except IngestError as exc:
             return OutboundMessage(
                 channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
@@ -1923,8 +1930,8 @@ async def cmd_sources(ctx: CommandContext) -> OutboundMessage:
                 f"Stored `{result['id']}` ({result['size_bytes']} bytes) — "
                 "its text is not readable yet.",
                 f"Source: `{result['source']}`",
-                f"This document is scanned: {result['job_pages']} pages are "
-                f"being transcribed in the background (job `{result['job_id']}`). "
+                f"This document is scanned: about {result['job_pages']} pages "
+                f"are being transcribed in the background (job `{result['job_id']}`). "
                 "It becomes readable and searchable when that finishes.",
             ]
             return OutboundMessage(

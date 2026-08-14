@@ -394,8 +394,14 @@ def test_extract_documents_separates_images_from_docs(tmp_path) -> None:
     assert "summarize" in text
 
 
-def test_extract_documents_skips_extraction_errors(tmp_path, monkeypatch) -> None:
-    """Document extraction errors should not leak into user text."""
+def test_extract_documents_surfaces_extraction_errors_instead_of_dropping_them(
+    tmp_path, monkeypatch
+) -> None:
+    """Document extraction errors are reported to the model, not dropped.
+
+    A silent drop reads to the model as no file ever having been attached —
+    the same failure mode the oversized-file branch avoids.
+    """
     bad_file = tmp_path / "broken.docx"
     bad_file.write_text("not a docx", encoding="utf-8")
 
@@ -406,7 +412,9 @@ def test_extract_documents_skips_extraction_errors(tmp_path, monkeypatch) -> Non
     )
 
     text, image_paths = extract_documents("hello", [str(bad_file)])
-    assert text == "hello"
+    assert "broken.docx" in text
+    assert "could not be read inline" in text
+    assert "boom" in text
     assert image_paths == []
 
 

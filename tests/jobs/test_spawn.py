@@ -7,7 +7,13 @@ import sys
 import pytest
 
 from durin.jobs.registry import Job, JobRegistry
-from durin.jobs.spawn import _pid_alive, respawn, spawn_ocr_job
+from durin.jobs.spawn import (
+    MAX_CONCURRENT_OCR_JOBS,
+    _launch_worker,
+    _pid_alive,
+    respawn,
+    spawn_ocr_job,
+)
 
 
 def _job(**overrides):
@@ -54,6 +60,44 @@ def test_pid_alive_false_when_no_such_process(monkeypatch):
 
     monkeypatch.setattr("durin.jobs.spawn.os.kill", _raise_lookup)
     assert _pid_alive(4242) is False
+
+
+# ---------------------------------------------------------------------------
+# _launch_worker — the Popen call shared by spawn_ocr_job, respawn, and the
+# worker's own chain
+# ---------------------------------------------------------------------------
+
+
+def test_max_concurrent_ocr_jobs_is_one():
+    # No config knob (YAGNI) -- this pins the measured-rationale constant
+    # itself, so a change to it is a deliberate edit, not a silent drift.
+    assert MAX_CONCURRENT_OCR_JOBS == 1
+
+
+def test_launch_worker_starts_the_ocr_worker_module_with_the_job_id(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "durin.jobs.spawn.subprocess.Popen",
+        lambda args, **kw: calls.append((args, kw)),
+    )
+    _launch_worker("j99")
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert args == [sys.executable, "-m", "durin.jobs.ocr_worker", "j99"]
+    assert kwargs.get("start_new_session") is True
+
+
+def test_launch_worker_raises_on_a_popen_failure(monkeypatch):
+    # Unlike spawn_ocr_job/respawn, _launch_worker itself does not swallow --
+    # each of its three callers has its own log message and its own contract
+    # for what "queued" means afterward, so the decision to catch and how to
+    # log it stays with them.
+    def _boom(*_args, **_kwargs):
+        raise OSError("no more processes")
+
+    monkeypatch.setattr("durin.jobs.spawn.subprocess.Popen", _boom)
+    with pytest.raises(OSError):
+        _launch_worker("j1")
 
 
 # ---------------------------------------------------------------------------
@@ -156,15 +200,21 @@ def test_a_reconciled_job_gets_a_real_live_worker_again(tmp_path, monkeypatch):
     An empty page list keeps this independent of the OCR engine (already
     exercised, mocked, in test_ocr_worker.py) while still proving the exact
     property this task adds: a reconciled job gets a live worker again, not
-    merely a status flip.
+    merely a status flip. The document itself has to be real and readable
+    though — a worker that cannot read the document it was given cannot work
+    out what it was meant to transcribe, and fails the job rather than
+    reporting a success it did not have.
     """
     monkeypatch.setenv("DURIN_HOME", str(tmp_path))
     from durin.config.paths import jobs_db_path
+    from tests.tools.test_read_enhancements import _write_text_pdf
 
+    pdf = tmp_path / "book.pdf"
+    _write_text_pdf(pdf, ["Plenty of ordinary body text on this page"])
     registry = JobRegistry(jobs_db_path())
     job = registry.enqueue(
         kind="ocr", label="book.pdf",
-        payload={"path": str(tmp_path / "book.pdf"), "pages": [], "sidecar_dir": None},
+        payload={"path": str(pdf), "pages": [], "sidecar_dir": None},
         session_key="chat:1", units_total=0,
     )
     registry.claim(job.id, pid=999999)  # the "old" worker that crashed

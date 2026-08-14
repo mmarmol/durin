@@ -4,14 +4,25 @@ Rasterise with pypdfium2, transcribe with RapidOCR on CPU. Both stay inside
 this module so the rest of the codebase never imports the engine directly and
 an install without the [ocr] extra fails in exactly one place.
 
-The engine is loaded lazily and held per process. A worker process is
-short-lived by design, so its memory goes away with it rather than sitting in
-the gateway for the whole uptime.
+The engine is loaded lazily and held per process, so which process calls
+``transcribe_page`` decides where that memory ends up. The OCR worker
+(``durin/jobs/ocr_worker.py``) calls it directly: that worker is itself a
+short-lived subprocess, so its engine goes away when it exits. The gateway is
+not short-lived, so inline callers never call ``transcribe_page`` in this
+process — they call ``transcribe_pages_detached``, which runs the engine in
+its own short-lived child (``durin/memory/ocr_subproc.py``) and hands back
+only the transcribed text, keeping the engine's memory out of the gateway
+either way.
 """
 
 from __future__ import annotations
 
 import io
+import json
+import subprocess
+import sys
+import threading
+from collections.abc import Sequence
 from pathlib import Path
 
 __all__ = [
@@ -19,6 +30,7 @@ __all__ = [
     "engine_available",
     "render_page",
     "transcribe_page",
+    "transcribe_pages_detached",
 ]
 
 # 200 dpi is the usual floor for reliable OCR of body text; below it small
@@ -26,6 +38,20 @@ __all__ = [
 _DEFAULT_DPI = 200
 
 _engine = None
+
+# Measured (durin v0.6.0 audit): one OCR engine costs ~1.4 GB resident and
+# ~4.8 cores for as long as it runs, wherever it runs -- the same budget the
+# background lane's cap is built from (~2.1 GB peak over a whole book). Two or
+# three of them together saturate a laptop and OOM small servers. That cap is
+# enforced in the job registry and never sees this path, so inline
+# transcription admits one child at a time here: callers reach this from
+# ``asyncio.to_thread``'s executor, whose several worker threads would
+# otherwise let N scanned attachments spawn N children at once. A threading
+# semaphore, not an asyncio one, because that executor is what contends. No
+# config knob, for the same reason the job cap has none: raising it changes
+# the resource budget the number is built from, which is a code change, not a
+# per-install preference.
+_INLINE_OCR_SLOT = threading.Semaphore(1)
 
 
 class OcrUnavailable(RuntimeError):
@@ -47,7 +73,10 @@ def _get_engine():
     if _engine is None:
         if not engine_available():
             raise OcrUnavailable(
-                "local OCR needs the [ocr] extra: pip install durin-agent[ocr]"
+                "local OCR needs the [ocr] extra: install it via the "
+                "Settings > Documents toggle, or manually with `pipx inject "
+                'durin-agent "durin-agent[ocr]"` / `uv tool install '
+                '"durin-agent[ocr]"`'
             )
         from rapidocr import RapidOCR
 
@@ -86,3 +115,94 @@ def transcribe_page(pdf_path: Path, page: int, *, dpi: int = _DEFAULT_DPI) -> st
     if not lines:
         return ""
     return "\n".join(str(line) for line in lines).strip()
+
+
+def _child_failure(stdout: str | None, stderr: str | None) -> str:
+    """Why the OCR child exited non-zero, in its own words where it has any.
+
+    The child catches its own failures, prints ``{"error": "<message>"}`` to
+    stdout and exits 1 — that is the ordinary failure, and stderr is empty for
+    it. Only a death it never got to report (a module-scope import error, an
+    OOM kill) leaves the reason on stderr instead. Reading stdout first is
+    what makes the ordinary case say anything at all; anything else on stdout
+    is treated as no answer and falls through to stderr's tail, so a truncated
+    or garbled line never shadows the real reason.
+    """
+    try:
+        message = json.loads(stdout or "").get("error")
+    except Exception:  # noqa: BLE001 — no usable JSON: the child never printed one
+        message = None
+    return str(message) if message else (stderr or "")[-500:]
+
+
+def transcribe_pages_detached(
+    pdf_path: Path,
+    pages: Sequence[int],
+    *,
+    dpi: int = _DEFAULT_DPI,
+    timeout_s: float | None = None,
+) -> dict[int, str]:
+    """Transcribe *pages* of *pdf_path* in a short-lived child process.
+
+    Spawns ``python -m durin.memory.ocr_subproc`` and waits for it
+    synchronously — one process per call, never pooled or cached, so the
+    engine's memory is released the moment the child exits rather than
+    living in the caller. The child renders its own pages from *pdf_path*;
+    only the page numbers cross the process boundary, not image data.
+
+    Raises :class:`OcrUnavailable` — the same exception a broken in-process
+    engine raises — on a non-zero exit, a timeout, an unparseable result, or
+    a result missing one of the requested pages. Every one of those is a
+    failure of the whole call: there is no partial result to salvage, so
+    existing callers degrade exactly as they already do for a missing
+    engine, via the ``except (OcrUnavailable, ImportError)`` they already
+    have. That reuse is deliberate — this adds no new exception type.
+
+    Holds ``_INLINE_OCR_SLOT`` for the whole call, so concurrent callers
+    queue instead of putting several engines on the machine at once.
+    """
+    with _INLINE_OCR_SLOT:
+        if timeout_s is None:
+            # 60s covers interpreter startup plus RapidOCR's model load; 10s
+            # per page covers rendering and inference on CPU with slack for a
+            # slow host. Measured from the child's own start, not from this
+            # call's: waiting for the slot above spends none of it. Not
+            # configurable: a hung child should fail loudly into the
+            # coverage-note path, not wait on a knob nobody will tune
+            # correctly.
+            timeout_s = 60 + 10 * len(pages)
+
+        cmd = [
+            sys.executable, "-m", "durin.memory.ocr_subproc",
+            str(pdf_path), str(dpi), *(str(page) for page in pages),
+        ]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
+        except subprocess.TimeoutExpired as exc:
+            tail = (exc.stderr or "")[-500:]
+            raise OcrUnavailable(
+                f"OCR subprocess timed out after {timeout_s:.0f}s: {tail}"
+            ) from exc
+
+        if proc.returncode != 0:
+            raise OcrUnavailable(
+                f"OCR subprocess exited {proc.returncode}: "
+                f"{_child_failure(proc.stdout, proc.stderr)}"
+            )
+
+        try:
+            payload = json.loads(proc.stdout)
+            result = {int(page): text for page, text in payload["pages"].items()}
+        except Exception as exc:  # noqa: BLE001 — any parse-shape surprise is OcrUnavailable too
+            tail = (proc.stderr or "")[-500:]
+            raise OcrUnavailable(
+                f"OCR subprocess produced no parseable result: {tail}"
+            ) from exc
+
+        missing = [page for page in pages if page not in result]
+        if missing:
+            raise OcrUnavailable(
+                f"OCR subprocess did not return page(s) {missing} of the "
+                f"{len(pages)} requested"
+            )
+        return result

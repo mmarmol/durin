@@ -2272,9 +2272,11 @@
   },
   "tasks": {
     "status": {
-      "needs_input": "Cần nhập"
+      "needs_input": "Cần nhập",
+      "queued": "Đang chờ"
     },
     "needsInputHint": "Đã chuyển cho tác tử gọi nó — tác tử có thể tự trả lời từ ngữ cảnh của mình hoặc hỏi bạn, rồi tiếp tục lượt chạy này.",
+    "queuedHint": "Đang chờ để bắt đầu — mỗi lần chỉ một tài liệu được chép lại.",
     "questions": "Câu hỏi"
   },
   "work": {
@@ -2288,10 +2290,12 @@
     "close": "Đóng bảng công việc",
     "strip": {
       "statusRunning": "đang chạy",
+      "statusQueued": "đang chờ",
       "statusDone": "hoàn tất",
       "statusFailed": "thất bại",
       "statusCancelled": "đã hủy",
       "runningMany": "{{count}} tác vụ đang chạy",
+      "queuedMany": "{{count}} tác vụ đang chờ",
       "needsInput": "{{label}} cần bạn trả lời",
       "needsInputMany": "{{count}} tác vụ cần bạn trả lời",
       "view": "Xem",

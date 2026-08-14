@@ -12,17 +12,20 @@ verbatim. This module owns the binary/office/PDF formats markitdown parses.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from durin.memory.ocr import OcrUnavailable, engine_available, transcribe_page
+from durin.memory.ocr import OcrUnavailable, engine_available, transcribe_pages_detached
 from durin.memory.pdf_coverage import (
+    EMPTY_PAGE_CHARS,
     PdfCoverage,
     classify_counts,
     classify_coverage,
     coverage_note,
     page_char_counts,
     page_texts,
+    page_texts_subset,
 )
 
 __all__ = [
@@ -69,12 +72,26 @@ class NeedsOcrJob(DocConvertError):
 
     Carries what a caller needs to enqueue the work: which pages, and how big
     the document is.
+
+    ``pages`` is a floor, not necessarily the whole set. Deciding that a
+    document is over budget only takes confirming one page more than the budget
+    allows, and confirming the rest of a four-hundred-page book is exactly the
+    work this exception exists to defer — so the caller's worker widens the
+    list itself before it starts. ``estimated_pages`` is how many pages are
+    expected to need OCR: it sizes the job for the reader, and nothing decides
+    anything from it.
     """
 
-    def __init__(self, message: str, *, pages: list[int], total_pages: int) -> None:
+    def __init__(
+        self, message: str, *, pages: list[int], total_pages: int,
+        estimated_pages: int | None = None,
+    ) -> None:
         super().__init__(message)
         self.pages = pages
         self.total_pages = total_pages
+        self.estimated_pages = (
+            len(pages) if estimated_pages is None else estimated_pages
+        )
 
 
 _converter = None
@@ -87,6 +104,50 @@ def _get_converter():
 
         _converter = MarkItDown()
     return _converter
+
+
+def _markitdown_text(path: Path) -> str:
+    """markitdown's own extraction of the whole file, as a stripped string."""
+    from markitdown import MarkItDownException
+
+    try:
+        result = _get_converter().convert(str(path))
+    except MarkItDownException as exc:
+        raise DocConvertError(f"conversion failed: {exc}") from exc
+    return (result.text_content or "").strip()
+
+
+def _confirm_empty_pages(path: Path, candidates: Sequence[int]) -> list[int]:
+    """Which of *candidates* really have no text layer. One extraction pass.
+
+    The probe says a page might be empty; only the accurate extractor says it
+    is. The caller hands over just enough candidates to settle its question —
+    one more than the inline budget allows — and this confirms them in a single
+    call.
+
+    Deliberately one call and no more. Confirmation is an attempt at a
+    shortcut, not a search: if this batch does not settle it, the caller falls
+    through to the full accurate pass, which answers exactly. Walking the rest
+    of the flagged pages instead would re-open the PDF per batch, and opening
+    is O(total pages) — on a long document whose pages all sit in the probe's
+    slack that costs many times the pass it was avoiding.
+
+    Sound in the one direction that matters. Every page in the result was
+    measured exactly the way the classifier measures it, so the result is a
+    subset of the pages a full classification would call empty, never a
+    superset — and a subset that already exceeds a budget proves the whole set
+    does. A page the extractor cannot see at all is not a page confirmed empty,
+    so it does not count.
+    """
+    texts = page_texts_subset(path, candidates)
+    confirmed: list[int] = []
+    for page in candidates:
+        text = texts.get(page)
+        # len(text.strip()) is the measure EMPTY_PAGE_CHARS is calibrated
+        # against, and the one classify_coverage applies to the same string.
+        if text is not None and len(text.strip()) < EMPTY_PAGE_CHARS:
+            confirmed.append(page)
+    return confirmed
 
 
 def is_convertible(suffix: str) -> bool:
@@ -119,38 +180,95 @@ def convert_file_to_markdown(path: Path, *, documents_config=None) -> ConvertedD
 
         documents_config = load_config().documents
 
-    from markitdown import MarkItDownException
-
-    try:
-        result = _get_converter().convert(str(path))
-    except MarkItDownException as exc:
-        raise DocConvertError(f"conversion failed: {exc}") from exc
-
-    markdown = (result.text_content or "").strip()
     coverage: PdfCoverage | None = None
+    _markitdown_memo: str | None = None
+
+    def markitdown_text() -> str:
+        """markitdown's extraction, converted on first use and at most once.
+
+        Deliberately lazy. Every path that transcribes pages returns the
+        accurate per-page text joined instead, and the over-budget path returns
+        nothing at all — for a scanned book, converting first means a full
+        conversion thrown away unread.
+        """
+        nonlocal _markitdown_memo
+        if _markitdown_memo is None:
+            _markitdown_memo = _markitdown_text(path)
+        return _markitdown_memo
 
     if suffix == ".pdf":
-        # Two-stage on purpose. Stage one is a cheap per-page glyph count — a
-        # deliberate under-estimate of what the classifier measures, so it can
-        # only err towards calling a page empty. The majority of PDFs have a
-        # real text layer on every page and stop here, paying only for the
-        # conversion above. Stage two — the accurate, expensive extraction —
-        # runs whenever a page looks empty, and re-classifies from it, so the
-        # verdict a caller sees is always the accurate one. That is also the
-        # only case whose text is actually read: to label the gaps in the note,
-        # and to merge the transcribed pages back in. The probe failing is not
-        # fatal; the accurate path answers the same question, just slowly.
-        cov: PdfCoverage | None = None
+        ocr_cfg = documents_config.ocr
+        cov: PdfCoverage
+        texts: list[str] = []
+        # Probe first, and let what it finds decide what else has to run. The
+        # probe is a cheap per-page glyph count and a deliberate under-estimate
+        # of what the classifier measures, so it can only err towards calling a
+        # page empty. That is the only direction it is safe to trust: a page it
+        # does NOT flag is a page both extractors agree has text, while a page
+        # it flags has to be confirmed by the accurate extractor before
+        # anything is decided from it.
         try:
-            cov = classify_counts(page_char_counts(path))
+            counts = page_char_counts(path)
         except Exception as exc:  # noqa: BLE001
             logger.debug("pdf coverage probe failed for %s: %s", path.name, exc)
-        texts: list[str] = []
-        if cov is None or cov.empty_pages:
+            # No probe, no shortcut: the order this branch had before the probe
+            # existed. markitdown runs first because it is what turns a file no
+            # library can read into a DocConvertError, rather than letting a
+            # raw extractor exception escape to callers that catch neither.
+            markitdown_text()
             texts = page_texts(path)
             cov = classify_coverage(texts)
+        else:
+            # Through the classifier rather than against the threshold
+            # directly, so what counts as an empty page is decided in exactly
+            # one place whichever measurement it is applied to.
+            probe_cov = classify_counts(counts)
+            flagged = list(probe_cov.empty_pages)
+            if not flagged:
+                # The majority of PDFs: a real text layer on every page. The
+                # probe alone settles it, and this is the only path that pays
+                # for nothing but the conversion.
+                cov = probe_cov
+            else:
+                if (
+                    ocr_cfg.enabled
+                    and engine_available()
+                    and len(flagged) > ocr_cfg.inline_max_pages
+                ):
+                    # A scanned book on its way to a background job. Confirming
+                    # one page more than the budget allows is the whole proof —
+                    # the confirmed pages are a subset of the truly empty ones,
+                    # so a subset over the budget puts the whole set over it —
+                    # and it costs a handful of pages instead of the document.
+                    # The worker derives the exhaustive list itself.
+                    #
+                    # One attempt only. If these do not settle it the code
+                    # below answers exactly, for about four times what another
+                    # confirmation batch would cost.
+                    confirmed = _confirm_empty_pages(
+                        path, flagged[: ocr_cfg.inline_max_pages + 1]
+                    )
+                    if len(confirmed) > ocr_cfg.inline_max_pages:
+                        raise NeedsOcrJob(
+                            f"{path.name}: at least {len(confirmed)} of "
+                            f"{len(counts)} pages need OCR, over the inline "
+                            f"limit of {ocr_cfg.inline_max_pages}. Ingest the "
+                            "document to have it transcribed as a background job.",
+                            pages=confirmed,
+                            total_pages=len(counts),
+                            estimated_pages=len(flagged),
+                        )
+                # Either OCR is not going to run, or confirmation could not
+                # blow the budget. Both want the accurate, expensive extraction
+                # and a classification from it: it is what labels the gaps in
+                # the note, what the transcribed pages are merged into, and the
+                # only measure allowed to decide which pages are empty — the
+                # probe can miss one, on a font it decodes and pdfplumber does
+                # not.
+                texts = page_texts(path)
+                cov = classify_coverage(texts)
+
         if cov.empty_pages:
-            ocr_cfg = documents_config.ocr
             # Two ways OCR does not happen, and they are not the same thing to
             # a reader: the setting is off, or the setting is on but the engine
             # is not installed (documents.ocr.enabled is a config key, the
@@ -160,11 +278,9 @@ def convert_file_to_markdown(path: Path, *, documents_config=None) -> ConvertedD
             if not ocr_cfg.enabled or not engine_available():
                 # Still return the document. What text exists is worth having,
                 # and the note tells the reader what is missing and how to fix it.
-                note = coverage_note(
-                    cov, texts, ocr_enabled=False, engine_missing=ocr_cfg.enabled
-                )
+                note = coverage_note(cov, texts, engine_missing=ocr_cfg.enabled)
                 return ConvertedDoc(
-                    markdown=note + markdown, suffix=suffix, coverage=cov
+                    markdown=note + markitdown_text(), suffix=suffix, coverage=cov
                 )
             pages = list(cov.empty_pages)
             if len(pages) > ocr_cfg.inline_max_pages:
@@ -176,28 +292,39 @@ def convert_file_to_markdown(path: Path, *, documents_config=None) -> ConvertedD
                     total_pages=cov.total_pages,
                 )
             try:
+                transcribed = transcribe_pages_detached(path, pages)
                 for page in pages:
-                    texts[page - 1] = transcribe_page(path, page)
-            except (OcrUnavailable, ImportError):
+                    texts[page - 1] = transcribed[page]
+            except (OcrUnavailable, ImportError) as exc:
                 # engine_available() above only proves ``import rapidocr``
-                # works; the engine's own imports can still fail underneath it,
-                # and OcrUnavailable is a RuntimeError no caller of this
-                # function catches. Same outcome as finding it missing before
+                # works; the subprocess's own imports can still fail
+                # underneath it, it can be killed, and it can time out — the
+                # transcription call raises the same OcrUnavailable for all of
+                # them, and it is a RuntimeError no caller of this function
+                # catches. Same outcome as finding the engine missing before
                 # starting: the document, and a note saying why it has gaps.
+                # The exception's own message is the only account of which
+                # failure this was, and this log line is the only place it is
+                # written down, so it goes in verbatim.
                 logger.warning(
-                    "%s: local OCR is enabled but its engine failed to load; "
-                    "returning the document with a coverage note", path.name,
+                    "%s: local OCR is enabled but its engine failed to produce "
+                    "a transcription (%s); returning the document with a "
+                    "coverage note", path.name, exc,
                 )
-                note = coverage_note(cov, texts, ocr_enabled=False, engine_missing=True)
+                note = coverage_note(cov, texts, engine_missing=True)
                 return ConvertedDoc(
-                    markdown=note + markdown, suffix=suffix, coverage=cov
+                    markdown=note + markitdown_text(), suffix=suffix, coverage=cov
                 )
-            markdown = "\n\n".join(t for t in texts if t.strip())
-            return ConvertedDoc(markdown=markdown, suffix=suffix, coverage=cov)
+            return ConvertedDoc(
+                markdown="\n\n".join(t for t in texts if t.strip()),
+                suffix=suffix,
+                coverage=cov,
+            )
         # No pages need OCR: fall through to the shared empty-extraction
         # guard below, same as any other format, just carrying coverage.
         coverage = cov
 
+    markdown = markitdown_text()
     if not markdown:
         raise DocConvertError(
             f"{path.name} yielded no extractable text — scanned or image-only "

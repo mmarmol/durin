@@ -215,6 +215,24 @@ def extract_documents(
                 # file "isn't on disk", then asks the user for a path they don't
                 # have (they attached it in chat).
                 doc_texts.append(f"[File: {p.name} — saved on disk at {p}]\n{extracted}")
+            elif extracted and extracted.startswith("[error:"):
+                # An extraction failure used to be dropped here silently — the
+                # model saw neither the file nor a reason, so an attachment it
+                # was just given would vanish as if never sent. That is a
+                # regular occurrence with OCR enabled: a scanned document over
+                # the inline page budget raises NeedsOcrJob, whose message is
+                # the actionable "ingest this as a background job" instruction
+                # the model needs — dropped along with everything else. Report
+                # it instead, mirroring the oversized branch above.
+                reason = (
+                    extracted.removeprefix("[error: ")
+                    .removesuffix("]")
+                    .removesuffix(".")
+                )
+                doc_texts.append(
+                    f"[File: {p.name} — could not be read inline: {reason}. "
+                    f"Saved on disk at {p}]"
+                )
 
     if doc_texts:
         text = text + "\n\n" + "\n\n".join(doc_texts)

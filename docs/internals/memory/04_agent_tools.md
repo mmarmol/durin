@@ -210,16 +210,56 @@ ordinary PDF does not pay for text it never reads: `page_char_counts`
 (pypdfium2) counts non-whitespace glyphs per page — orders of magnitude
 cheaper, and deliberately an under-estimate of the `len(text.strip())` the
 threshold is calibrated against, so it can only err towards calling a page
-empty — and the accurate `page_texts` (pdfplumber) runs whenever some page
-looks empty, re-classifying from it so the verdict is always the accurate one.
-That is also when its text is actually used (labelling the gaps in the coverage
-note, and merging transcribed pages back in). Counting glyphs rather than
-string length is what makes the two comparable at all: the extractors disagree
-on line separators (`\r\n` vs `\n`), which is enough to lift a sparsely stamped
-scanned page over the threshold and lose both its note and its transcription. Local OCR
-(`documents.ocr.enabled`) transcribes the empty pages inline, as part of this
-same call, as long as there are at or under `documents.ocr.inline_max_pages`
-(default 5) of them. Over that budget, conversion does not run at all:
+empty. Counting glyphs rather than string length is what makes the two
+comparable at all: the extractors disagree on line separators (`\r\n` vs
+`\n`), which is enough to lift a sparsely stamped scanned page over the
+threshold and lose both its note and its transcription.
+
+That probe runs **first**, before markitdown, and what it finds decides what
+else runs at all. A PDF it flags no page on is the majority case and stops
+there, paying for nothing but the conversion. On any other PDF the accurate
+`page_texts` (pdfplumber) re-classifies the document, and its verdict — never
+the probe's — is what decides which pages are empty; the probe can miss one, on
+a font pypdfium2 decodes and pdfplumber does not. That accurate text is also
+what labels the gaps in the coverage note and what transcribed pages are merged
+into. The one case that skips it is the over-budget decision below, which
+returns no text at all.
+
+Local OCR (`documents.ocr.enabled`) transcribes the empty pages inline, as part
+of this same call, as long as there are at or under
+`documents.ocr.inline_max_pages` (default 5) of them. The gateway is
+long-lived, so it never loads the OCR engine itself: `transcribe_pages_detached`
+(`durin/memory/ocr.py`) hands the page numbers to a short-lived subprocess
+(`durin/memory/ocr_subproc.py`, run as `python -m durin.memory.ocr_subproc`),
+which renders and transcribes them and returns the text over stdout. The
+engine's memory is released when that subprocess exits rather than
+accumulating in the gateway across conversions. Only one of those children
+runs at a time across the whole process: an engine costs roughly 1.4 GB
+resident and most of the machine's cores for as long as it runs, so several
+conversions arriving together — a message with several scanned attachments,
+or two chats converting at once — would otherwise start that many engines
+side by side. Callers wait for the slot rather than being refused, and it is
+enforced here because the background lane's own cap (`MAX_CONCURRENT_OCR_JOBS`)
+lives in the job registry and never sees this path. The background-job worker
+(below) transcribes with the same engine in-process instead, because its own
+process is already short-lived.
+
+Over that budget the document is never converted or fully extracted — both
+outputs would be thrown away unread — so the decision to go over is taken
+before either runs. A document whose flagged pages could exceed the budget has
+one batch of them, one more than the budget allows, confirmed accurately
+(`page_texts_subset`); if they all confirm, that settles it, because confirmed
+pages are a subset of the truly empty ones and a subset over the budget puts
+the whole set over it. If they do not, the branch gives up on the shortcut and
+falls through to the full accurate pass described above, which answers exactly
+— a second confirmation batch would cost about a fifth of that pass (opening a
+PDF is O(total pages) whatever gets read afterwards), so walking a long
+document in batches is the slower way to a worse answer.
+`NeedsOcrJob` then carries the confirmed floor as `pages` (the worker widens it
+to the exhaustive set itself — see [jobs](../jobs.md)) and the probe's flagged
+count as `estimated_pages`, which is what sizes the job for the reader.
+
+Catching that exception is where the deferral actually happens:
 `ingest_artifact` copies the original immediately and enqueues a
 [background job](../jobs.md) to transcribe it page by page instead,
 returning that job's `job_id` alongside an empty `content`.
@@ -227,9 +267,10 @@ returning that job's `job_id` alongside an empty `content`.
 In that case the tool writes **no** reference: `content` is an empty
 placeholder, and storing it would put an empty document in the Library and
 hand the agent a ref that resolves to nothing. What it returns instead is
-`job_id`, `pages_pending` and a `note` saying the document is not readable or
-searchable yet — steps 2 and 3 above have not happened, and the response does
-not pretend otherwise.
+`job_id`, `pages_pending` (the estimate — the exact count is the worker's to
+settle) and a `note` saying the document is not readable or searchable yet —
+steps 2 and 3 above have not happened, and the response does not pretend
+otherwise.
 
 They happen when the transcription lands. The worker assembles
 `ingested/<id>/source.md` and then calls `index_ingested_entry`

@@ -55,8 +55,10 @@ def ingest_artifact(
 
     A PDF needing more OCR than the inline budget allows does not block:
     the original is stored right away, ``job_id`` names the background job
-    transcribing it and ``job_pages`` is how many pages that job has to get
-    through. ``content`` is empty in that case, and the markdown sidecar —
+    transcribing it and ``job_pages`` is how many pages that job is expected
+    to get through — an estimate, because deciding a document is over budget
+    stops short of counting every page of it, and the worker settles the exact
+    number itself. ``content`` is empty in that case, and the markdown sidecar —
     plus the Library entry indexed from it — is produced later, by the
     worker. ``documents_config`` is the ``DocumentsConfig`` to use (``None``
     loads it); ``jobs`` is the ``JobRegistry`` such a job is enqueued on
@@ -76,6 +78,7 @@ def ingest_artifact(
     )
 
     pending_ocr_pages: list[int] | None = None
+    pending_ocr_total = 0
     converted = is_convertible(source_path.suffix)
     if converted:
         # A supported document (PDF/Office/EPUB/HTML/…): convert to markdown
@@ -92,7 +95,10 @@ def ingest_artifact(
             # worker reads the entry to learn what it is transcribing, and it
             # can be doing so before spawn even returns.
             content = ""
+            # `pages` is the floor the conversion stopped confirming at, not
+            # the whole set — how big the wait is comes from the estimate.
             pending_ocr_pages = exc.pages
+            pending_ocr_total = exc.estimated_pages
         except DocConvertError as exc:
             raise IngestError(str(exc)) from exc
         entry_id = _bytes_id(source_path.name, source_path.read_bytes())
@@ -153,6 +159,7 @@ def ingest_artifact(
             # a tray holding more than one of them.
             label=source_path.name,
             sidecar_dir=entry_dir,
+            units_total=pending_ocr_total,
         )
         job_id = job.id
 
@@ -163,7 +170,7 @@ def ingest_artifact(
         "meta_path": str(meta_path),
         "size_bytes": size_bytes,
         "job_id": job_id,
-        "job_pages": len(pending_ocr_pages) if pending_ocr_pages is not None else None,
+        "job_pages": pending_ocr_total if pending_ocr_pages is not None else None,
     }
 
 

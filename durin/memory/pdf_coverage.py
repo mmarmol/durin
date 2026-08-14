@@ -10,6 +10,7 @@ Measurement only. Deciding what to do about the gaps belongs to the caller.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -26,6 +27,7 @@ __all__ = [
     "gap_ranges",
     "page_char_counts",
     "page_texts",
+    "page_texts_subset",
 ]
 
 # A page holding fewer than this many non-whitespace characters is treated as
@@ -166,6 +168,32 @@ def page_texts(path: Path) -> list[str]:
         return [(page.extract_text() or "") for page in pdf.pages]
 
 
+def page_texts_subset(path: Path, pages: Sequence[int]) -> dict[int, str]:
+    """The same extraction as :func:`page_texts`, for named 1-based pages only.
+
+    What it saves is the per-page extraction, not the open. Opening is
+    O(total pages) whatever gets read afterwards — pdfplumber parses the
+    document's structure before any page can be addressed — so on an 800-page
+    PDF this costs about a fifth of :func:`page_texts` to read six pages, not a
+    hundredth of it. Ask for every page needed in one call: five calls cost
+    more than reading the whole document once.
+
+    Absent, not empty, for a page number the document does not have: "the
+    extractor cannot see this page" and "this page has no text layer" are
+    different answers, and a caller confirming which pages are empty must not
+    read the first as the second — that would confirm a page nobody looked at.
+    """
+    import pdfplumber
+
+    with pdfplumber.open(str(path)) as pdf:
+        total = len(pdf.pages)
+        return {
+            page: (pdf.pages[page - 1].extract_text() or "")
+            for page in pages
+            if 1 <= page <= total
+        }
+
+
 # How much of the preceding page's text to quote when labelling a gap.
 _GAP_LABEL_CHARS = 60
 
@@ -182,8 +210,7 @@ def _gap_label(texts: list[str], first_empty: int) -> str:
 
 
 def coverage_note(
-    cov: PdfCoverage, texts: list[str], *, ocr_enabled: bool,
-    engine_missing: bool = False,
+    cov: PdfCoverage, texts: list[str], *, engine_missing: bool = False,
 ) -> str:
     """A note about what could not be read, for the model reading this document.
 
@@ -191,9 +218,15 @@ def coverage_note(
     extracted text rather than appending: a long extraction is paginated, and a
     footer would land on a page the reader may never fetch.
 
-    ``engine_missing`` distinguishes the two ways OCR did not run: the setting
-    is off (the reader is told to turn it on), or the setting is on and the
-    engine is not installed (turning it on again would achieve nothing).
+    Both production callers (`durin/memory/doc_convert.py`) reach this only
+    after OCR has already not run, so the note always describes pages nothing
+    transcribed. ``engine_missing`` distinguishes why: the setting is off (the
+    reader is told to turn it on), or the setting is on and the engine still
+    produced nothing (turning it on again would achieve nothing). That second
+    case covers more than a missing install — the transcription child can also
+    fail to start or time out, and all three arrive here identically — so its
+    text names the possibilities instead of asserting one, and offers the
+    install advice conditionally rather than as the fix.
     """
     if cov.kind == "text":
         return ""
@@ -220,17 +253,15 @@ def coverage_note(
             f"ranges:\n{gaps}"
         )
 
-    if ocr_enabled:
+    if engine_missing:
         tail = (
-            " These pages can be transcribed with local OCR — ingest the "
-            "document to have it done as a background job."
-        )
-    elif engine_missing:
-        tail = (
-            " Local OCR is turned on but its engine is not installed here, so "
-            "nothing transcribed these pages. Installing durin's [ocr] extra "
-            "is what fixes it; in the dashboard, switching local OCR off and "
-            "on again under Settings > Documents offers to install it."
+            " Local OCR is turned on, but its engine did not produce a "
+            "transcription for these pages: it may not be installed here, it "
+            "may have failed to start, or it may have timed out. If it is not "
+            "installed, durin's [ocr] extra is what adds it — in the "
+            "dashboard, switching local OCR off and on again under Settings > "
+            "Documents offers to install it. If it is installed, the gateway "
+            "log records why the attempt failed."
         )
     else:
         tail = (

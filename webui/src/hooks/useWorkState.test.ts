@@ -186,6 +186,29 @@ describe("useWorkState", () => {
     });
   });
 
+  it("a queued job is active work, not finished", async () => {
+    // The active/finished split was "running or needs_input" vs everything
+    // else, so a job waiting for the OCR slot fell into finished — sorted by
+    // an endedAt it does not have, and buried under work that really ended.
+    const { result } = await renderHookWithPolled([
+      {
+        kind: "job",
+        id: "j1",
+        label: "second-book.pdf",
+        status: "queued",
+        started_at: 1000,
+        ended_at: null,
+        session_key: "websocket:c1",
+        units_total: 300,
+        units_done: 0,
+      },
+    ]);
+
+    expect(result.current.active.map((w) => w.id)).toEqual(["j1"]);
+    expect(result.current.active[0].status).toBe("queued");
+    expect(result.current.finished).toEqual([]);
+  });
+
   it("a poll result with a done task surfaces under finished (no live counterpart)", async () => {
     const { client, emit: _emit } = makeFakeClient();
     mockUseClient.mockReturnValue({

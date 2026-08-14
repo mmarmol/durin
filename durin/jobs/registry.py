@@ -141,7 +141,9 @@ class JobRegistry:
         ).fetchall()
         return [_row_to_job(r) for r in rows]
 
-    def claim(self, job_id: str, *, pid: int) -> bool:
+    def claim(
+        self, job_id: str, *, pid: int, kind_cap: tuple[str, int] | None = None,
+    ) -> bool:
         """Claim a queued job for this worker process.
 
         The UPDATE is conditional on the row still being "queued" at write
@@ -150,12 +152,102 @@ class JobRegistry:
         overwritten by an unconditional UPDATE. Returns whether this call
         actually won the claim — a caller that gets False does not own the
         job and must not proceed as if it does.
+
+        ``kind_cap=(kind, n)`` additionally refuses the claim while *n* jobs
+        of *kind* are already ``running`` — the count and the write are one
+        ``BEGIN IMMEDIATE`` transaction (see ``execute_write``), so nothing
+        can observe the count and then race the write; a concurrent claim
+        under the same cap either lands first and is counted, or lands after
+        and finds this one already counted. A claim refused by the cap
+        returns False exactly like a claim refused by the status race above
+        — the row is left untouched either way, which is what makes the two
+        cases safe to treat identically: a caller with no claim never acts
+        as though it has one.
+        """
+        def _write(c: Any) -> bool:
+            if kind_cap is None:
+                cur = c.execute(
+                    "UPDATE jobs SET status = 'running', pid = ?, started_at = ?"
+                    " WHERE id = ? AND status = 'queued'",
+                    (pid, time.time(), job_id),
+                )
+            else:
+                kind, limit = kind_cap
+                cur = c.execute(
+                    "UPDATE jobs SET status = 'running', pid = ?, started_at = ?"
+                    " WHERE id = ? AND status = 'queued' AND"
+                    " (SELECT COUNT(*) FROM jobs WHERE kind = ? AND status = 'running') < ?",
+                    (pid, time.time(), job_id, kind, limit),
+                )
+            return cur.rowcount > 0
+
+        return execute_write(self._conn, _write)
+
+    def next_queued(self, kind: str) -> Job | None:
+        """The oldest still-``queued`` job of *kind*, or ``None``.
+
+        Feeds two callers that both want "the next job nobody has started
+        yet": a worker chaining to the next one right after it finishes its
+        own, and gateway startup picking up a row that was never claimed in
+        the first place (its spawn's ``Popen`` failed, or the worker that
+        would have chained to it crashed first). Ordered oldest-first by
+        ``created_at``, breaking a same-tick tie by ``rowid`` — the opposite
+        tiebreak direction from ``list_for_session``, which wants newest
+        first.
+
+        Callers that want up to *n* jobs at once — not just the next one —
+        must use :meth:`queued_jobs` instead of looping this method: nothing
+        launched from this single-job result claims it (that stays the
+        launched worker's own job, done later and in another process), so a
+        second call before that happens returns the identical row again
+        rather than moving on to the next one.
+        """
+        row = self._conn.execute(
+            f"SELECT {_COLUMNS} FROM jobs WHERE kind = ? AND status = 'queued'"
+            " ORDER BY created_at, rowid LIMIT 1",
+            (kind,),
+        ).fetchone()
+        return _row_to_job(row) if row else None
+
+    def queued_jobs(self, kind: str, limit: int) -> list[Job]:
+        """The oldest up to *limit* still-``queued`` jobs of *kind*, oldest
+        first — the same ordering :meth:`next_queued` uses.
+
+        Exists specifically for a caller that wants several distinct queued
+        jobs in one pass, such as gateway startup picking up work under a
+        concurrency cap greater than one: calling :meth:`next_queued` in a
+        loop instead would return the SAME row every iteration; the pickup
+        loop's own launches never claim a job, so nothing changes between
+        iterations for the row already found to no longer be the oldest
+        queued one. One query naming how many to take avoids that trap.
+        """
+        rows = self._conn.execute(
+            f"SELECT {_COLUMNS} FROM jobs WHERE kind = ? AND status = 'queued'"
+            " ORDER BY created_at, rowid LIMIT ?",
+            (kind, limit),
+        ).fetchall()
+        return [_row_to_job(r) for r in rows]
+
+    def set_units_total(self, job_id: str, units_total: int, *, pid: int) -> bool:
+        """Resize the work of the job this worker owns.
+
+        A job is enqueued with as much as its caller knew about, which can be
+        less than there turns out to be: an OCR job's page list is a floor the
+        conversion path stopped counting at, and the worker settles the real
+        extent itself before it starts. Progress has to be reported against
+        what will actually be done, not against that floor.
+
+        Conditional on the row still being this worker's running job, for the
+        same reason :meth:`finish` is: a cancel can land while the worker is
+        still working out how much there is to do, and ``reconcile``'s age
+        fallback can leave two workers holding one job. Returns whether this
+        call actually wrote.
         """
         def _write(c: Any) -> bool:
             cur = c.execute(
-                "UPDATE jobs SET status = 'running', pid = ?, started_at = ?"
-                " WHERE id = ? AND status = 'queued'",
-                (pid, time.time(), job_id),
+                "UPDATE jobs SET units_total = ?"
+                " WHERE id = ? AND status = 'running' AND pid = ?",
+                (units_total, job_id, pid),
             )
             return cur.rowcount > 0
 
@@ -239,7 +331,9 @@ class JobRegistry:
         after a host reboot, pid allocation restarts from a low number, so a
         stale "running" row's pid can end up matching a completely unrelated
         live process, and `alive` would report a job as fine that has no
-        worker at all. Called at gateway start. Finished units are kept, so a
+        worker at all. Called at gateway start, and again inline by
+        `ocr_worker.run_job` when the concurrency cap refuses a claim (a
+        self-heal for a stale holder). Finished units are kept, so a
         requeued job resumes rather than restarting.
         """
         if now is None:

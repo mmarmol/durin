@@ -175,7 +175,10 @@ export interface WorkItem {
   kind: "workflow" | "subagent" | "job";
   id: string;
   label: string;
-  status: "running" | "needs_input" | "done" | "failed" | "cancelled";
+  /** "queued" is a job that has been accepted but not started: one OCR worker
+   *  runs at a time, so every book but the first in a multi-document ingest
+   *  sits here. Neither of the other two kinds can produce it. */
+  status: "queued" | "running" | "needs_input" | "done" | "failed" | "cancelled";
   /** Workflow node tree; live frames override polled history. */
   nodes?: WorkNode[];
   /** Sub-agent live step count from progress.iteration. */

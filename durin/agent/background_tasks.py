@@ -9,8 +9,9 @@ long-job registry (JobRegistry), plus persisted sub-agent lineage so history
 survives a gateway restart.
 
 Returns plain dicts with a stable shape — ``kind`` ("subagent" | "workflow" |
-"job"), ``id``, ``label``, ``status`` ("running" | "needs_input" | "done" |
-"failed" | "cancelled"), ``started_at`` (wall-clock epoch), ``ended_at``,
+"job"), ``id``, ``label``, ``status`` ("queued" | "running" | "needs_input" |
+"done" | "failed" | "cancelled" — only a job is ever "queued", and only a
+workflow run is ever "needs_input"), ``started_at`` (wall-clock epoch), ``ended_at``,
 ``session_key``, ``units_total``/``units_done`` (a job's progress; ``None`` for
 the other two kinds), ``error`` (why a failed job failed; ``None`` for the
 other two kinds, whose failures are diagnosed from their own artifacts — a run
@@ -74,10 +75,17 @@ def _workflow_status(status: str) -> str:
 
 
 def _job_status(status: str) -> str:
-    # The tray has no "queued": accepted-and-pending reads as running.
-    if status == "queued":
-        return "running"
-    return status  # running | done | failed | cancelled
+    # The registry's job statuses are already the tray's vocabulary, "queued"
+    # included: an identity mapping, kept as a function so the three kinds
+    # read the same way here and so this stays the one place that says which
+    # words a job may produce.
+    #
+    # "queued" used to be collapsed into "running", written when queueing
+    # lasted milliseconds. The OCR concurrency cap made it the normal state of
+    # every book but the first, and a queued row rendered as running gets a
+    # live clock counting time nothing is working on it -- and hides the very
+    # stall the cap's self-heal exists to fix.
+    return status  # queued | running | done | failed | cancelled
 
 
 def _node_run_status(s: str) -> str:

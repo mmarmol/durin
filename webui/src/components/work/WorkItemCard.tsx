@@ -1,4 +1,4 @@
-import { Ban, Check, GitBranch, HelpCircle, Loader2, X } from "lucide-react";
+import { Ban, Check, Clock, GitBranch, HelpCircle, Loader2, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { cn } from "@/lib/utils";
@@ -57,6 +57,10 @@ function ItemStatusIcon({ status }: { status: WorkItem["status"] }) {
   if (status === "done") return <Check className="h-3.5 w-3.5 text-emerald-600" aria-hidden />;
   if (status === "failed") return <X className="h-3.5 w-3.5 text-destructive" aria-hidden />;
   if (status === "running") return <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-600" aria-hidden />;
+  // queued — a still clock, deliberately not the spinner: nothing is turning,
+  // the job is waiting for the one OCR worker slot. Muted like the pending
+  // node dot above, for the same reason: it has not started.
+  if (status === "queued") return <Clock className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />;
   if (status === "cancelled") return <Ban className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />;
   // needs_input — accent-tinted: the run paused, it did not fail.
   return <HelpCircle className="h-3.5 w-3.5 text-accent-foreground" aria-hidden />;
@@ -75,7 +79,9 @@ export function WorkItemCard({
 }): JSX.Element {
   const { t } = useTranslation();
   // One ticker drives every live clock in this card; frozen (no re-render)
-  // once the item is no longer running, so a finished node's clock never ticks.
+  // once the item is no longer running, so a finished node's clock never
+  // ticks. "queued" is deliberately not running for this purpose either: a
+  // job waiting for the OCR slot has nothing to count.
   const now = useTicker(item.status === "running");
   // The single node the round/activity detail attaches to — shared with the chat
   // strip's own lookup rather than re-derived here, so the panel and the strip
@@ -104,8 +110,23 @@ export function WorkItemCard({
             {t("tasks.status.needs_input")}
           </span>
         )}
+        {/* Muted, not accent-tinted: queued is the ordinary state of the
+            second book in an ingest, not something asking for attention. */}
+        {item.status === "queued" && (
+          <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+            {t("tasks.status.queued")}
+          </span>
+        )}
         <ItemStatusIcon status={item.status} />
       </div>
+
+      {/* queued: say why nothing is happening. Without this the card shows a
+          page count that never moves and no reason for it. */}
+      {item.status === "queued" && (
+        <div className="mt-1 pl-5 text-[11px] text-muted-foreground">
+          {t("tasks.queuedHint")}
+        </div>
+      )}
 
       {/* needs_input: neutral hand-off copy — the calling agent owns the resume,
           not this card, so there is no resume form here. */}
@@ -244,8 +265,10 @@ export function WorkItemCard({
       )}
 
       {/* Job: pages transcribed of pages total. Unlike touchedNodeCount above,
-          a job's total is known upfront (the PDF's page count), so "done of
-          total" is a real fraction, not a false promise. */}
+          a job's total starts as an estimate (the inline probe's flagged-page
+          count) that the worker corrects once it re-checks the document
+          itself, so "done of total" is a real, if revisable, fraction — not
+          a false promise. */}
       {item.kind === "job" && (
         <div className="mt-1 pl-5 text-[12px] text-muted-foreground">
           {t("work.pages", { done: item.unitsDone ?? 0, total: item.unitsTotal ?? 0 })}

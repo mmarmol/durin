@@ -137,7 +137,9 @@ export interface BackgroundTask {
   kind: "subagent" | "workflow" | "job";
   id: string;
   label: string;
-  status: "running" | "needs_input" | "done" | "failed" | "cancelled";
+  /** Only a job is ever "queued" (accepted, waiting for the one OCR worker
+   *  slot, nothing started); only a workflow run is ever "needs_input". */
+  status: "queued" | "running" | "needs_input" | "done" | "failed" | "cancelled";
   started_at: number;
   ended_at: number | null;
   session_key: string | null;

@@ -9,6 +9,7 @@ from durin.memory.pdf_coverage import (
     gap_ranges,
     page_char_counts,
     page_texts,
+    page_texts_subset,
 )
 
 # A corner stamp on an otherwise image-only page: 15 glyphs over 4 lines. Under
@@ -134,6 +135,55 @@ def test_page_texts_returns_empty_string_for_a_page_without_text(tmp_path):
     assert texts[1].strip() == ""
 
 
+def test_page_texts_subset_reads_only_the_pages_it_was_asked_for(tmp_path):
+    from tests.tools.test_read_enhancements import _write_text_pdf
+
+    pdf = tmp_path / "three.pdf"
+    _write_text_pdf(pdf, ["Alpha page one", "Beta page two", "Gamma page three"])
+
+    subset = page_texts_subset(pdf, [1, 3])
+
+    assert sorted(subset) == [1, 3]
+    assert "Alpha" in subset[1]
+    assert "Gamma" in subset[3]
+
+
+def test_page_texts_subset_says_exactly_what_the_full_extraction_says(tmp_path):
+    # The whole point of the subset extractor is to stand in for page_texts on
+    # the pages a caller cares about. If a page's text differs between the two,
+    # a page confirmed empty from the subset is not the same fact as a page
+    # classified empty from the full pass, and the classification stops being
+    # comparable. Same extractor, same measure, 1-based both.
+    from tests.tools.test_read_enhancements import _write_text_pdf
+
+    pdf = tmp_path / "mixed.pdf"
+    _write_text_pdf(
+        pdf,
+        ["Chapter one opens with plenty of body text", "", _STAMP,
+         "Real body text here\nspread over three lines\nof a genuine page", ""],
+    )
+
+    full = page_texts(pdf)
+    subset = page_texts_subset(pdf, range(1, len(full) + 1))
+
+    assert subset == {i + 1: text for i, text in enumerate(full)}
+
+
+def test_page_texts_subset_leaves_out_a_page_the_document_does_not_have(tmp_path):
+    # Absent, not empty. "pdfplumber cannot see this page" and "this page has
+    # no text layer" are different answers, and a caller confirming which pages
+    # are empty must never read the first as the second — that would confirm a
+    # page it never actually looked at.
+    from tests.tools.test_read_enhancements import _write_text_pdf
+
+    pdf = tmp_path / "two.pdf"
+    _write_text_pdf(pdf, ["Alpha page one", "Beta page two"])
+
+    subset = page_texts_subset(pdf, [2, 9])
+
+    assert sorted(subset) == [2]
+
+
 def test_page_char_counts_counts_glyphs_not_whitespace(tmp_path):
     # Glyphs only, no whitespace of any kind: the two extractors disagree about
     # whitespace (line separators most of all), and a count that includes it
@@ -221,13 +271,13 @@ def _texts(pattern: list[bool]) -> list[str]:
 def test_no_note_for_a_text_document():
     texts = _texts([True] * 10)
     cov = classify_coverage(texts)
-    assert coverage_note(cov, texts, ocr_enabled=True) == ""
+    assert coverage_note(cov, texts) == ""
 
 
 def test_partial_note_lists_gap_ranges():
     texts = _texts([True, True, False, False, False, True, True, True, True, True])
     cov = classify_coverage(texts)
-    note = coverage_note(cov, texts, ocr_enabled=True)
+    note = coverage_note(cov, texts)
     assert "3 of 10 pages" in note
     assert "pages 3-5" in note
 
@@ -235,14 +285,14 @@ def test_partial_note_lists_gap_ranges():
 def test_partial_note_labels_a_gap_with_the_text_before_it():
     texts = ["Chapter Four: Financial Statements", "", "", *_texts([True] * 7)]
     cov = classify_coverage(texts)
-    note = coverage_note(cov, texts, ocr_enabled=True)
+    note = coverage_note(cov, texts)
     assert "Chapter Four: Financial Statements" in note
 
 
 def test_scanned_note_does_not_list_every_page_as_a_gap():
     texts = _texts([False] * 412)
     cov = classify_coverage(texts)
-    note = coverage_note(cov, texts, ocr_enabled=True)
+    note = coverage_note(cov, texts)
     assert "412" in note
     assert "pages 1-412" not in note
 
@@ -250,12 +300,26 @@ def test_scanned_note_does_not_list_every_page_as_a_gap():
 def test_note_with_ocr_disabled_says_how_to_enable_it():
     texts = _texts([False] * 50)
     cov = classify_coverage(texts)
-    note = coverage_note(cov, texts, ocr_enabled=False)
+    note = coverage_note(cov, texts)
     assert "documents.ocr.enabled" in note
 
 
-def test_note_with_ocr_enabled_does_not_tell_the_model_to_enable_it():
+def test_note_with_engine_missing_covers_every_way_the_engine_produced_nothing():
+    """Three different failures reach this note, not one: the extra is absent,
+    the transcription child failed to start, or it timed out — they all land
+    in the caller's one ``except (OcrUnavailable, ImportError)``. Telling a
+    user whose engine timed out to install software they already have is a
+    false instruction, so the install advice has to be offered conditionally
+    and the note has to point somewhere else for the other two."""
     texts = _texts([False] * 50)
     cov = classify_coverage(texts)
-    note = coverage_note(cov, texts, ocr_enabled=True)
+    note = coverage_note(cov, texts, engine_missing=True)
+    # Turning the setting on again would achieve nothing — still not offered.
     assert "documents.ocr.enabled" not in note
+    # The install path is still named, but as one possibility among three.
+    assert "[ocr] extra" in note
+    assert "did not produce a transcription" in note
+    assert "failed to start" in note
+    assert "timed out" in note
+    assert "If it is not installed" in note
+    assert "gateway log" in note
