@@ -138,8 +138,18 @@ def _confirm_empty_pages(path: Path, candidates: Sequence[int]) -> list[int]:
     superset — and a subset that already exceeds a budget proves the whole set
     does. A page the extractor cannot see at all is not a page confirmed empty,
     so it does not count.
+
+    Raises :class:`DocConvertError` if the extraction pass itself fails (a
+    corrupt PDF, pdfplumber raising) — a raw exception here would otherwise
+    escape past the taxonomy every caller of :func:`convert_file_to_markdown`
+    already handles.
     """
-    texts = page_texts_subset(path, candidates)
+    try:
+        texts = page_texts_subset(path, candidates)
+    except Exception as exc:  # noqa: BLE001
+        raise DocConvertError(
+            f"{path.name}: confirming flagged pages: {exc}"
+        ) from exc
     confirmed: list[int] = []
     for page in candidates:
         text = texts.get(page)
@@ -215,8 +225,17 @@ def convert_file_to_markdown(path: Path, *, documents_config=None) -> ConvertedD
             # existed. markitdown runs first because it is what turns a file no
             # library can read into a DocConvertError, rather than letting a
             # raw extractor exception escape to callers that catch neither.
+            # That guard only helps when markitdown ALSO fails, though — when
+            # it succeeds and this extraction independently raises, the raw
+            # exception needs its own wrap.
             markitdown_text()
-            texts = page_texts(path)
+            try:
+                texts = page_texts(path)
+            except Exception as page_exc:  # noqa: BLE001
+                raise DocConvertError(
+                    f"{path.name}: extracting page text after the coverage "
+                    f"probe failed: {page_exc}"
+                ) from page_exc
             cov = classify_coverage(texts)
         else:
             # Through the classifier rather than against the threshold
@@ -265,7 +284,12 @@ def convert_file_to_markdown(path: Path, *, documents_config=None) -> ConvertedD
                 # only measure allowed to decide which pages are empty — the
                 # probe can miss one, on a font it decodes and pdfplumber does
                 # not.
-                texts = page_texts(path)
+                try:
+                    texts = page_texts(path)
+                except Exception as exc:  # noqa: BLE001
+                    raise DocConvertError(
+                        f"{path.name}: extracting page text: {exc}"
+                    ) from exc
                 cov = classify_coverage(texts)
 
         if cov.empty_pages:
@@ -315,11 +339,13 @@ def convert_file_to_markdown(path: Path, *, documents_config=None) -> ConvertedD
                 return ConvertedDoc(
                     markdown=note + markitdown_text(), suffix=suffix, coverage=cov
                 )
-            return ConvertedDoc(
-                markdown="\n\n".join(t for t in texts if t.strip()),
-                suffix=suffix,
-                coverage=cov,
-            )
+            markdown = "\n\n".join(t for t in texts if t.strip())
+            if not markdown:
+                raise DocConvertError(
+                    f"{path.name} yielded no extractable text even after OCR — every "
+                    "transcribed page came back blank"
+                )
+            return ConvertedDoc(markdown=markdown, suffix=suffix, coverage=cov)
         # No pages need OCR: fall through to the shared empty-extraction
         # guard below, same as any other format, just carrying coverage.
         coverage = cov

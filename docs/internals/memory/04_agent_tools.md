@@ -244,6 +244,12 @@ lives in the job registry and never sees this path. The background-job worker
 (below) transcribes with the same engine in-process instead, because its own
 process is already short-lived.
 
+If every transcribed page still comes back blank — nothing OCR could read
+either — `convert_file_to_markdown` raises `DocConvertError` rather than
+returning a document with an empty body; `ingest_artifact` converts that into
+`IngestError` the same way it does every other conversion failure, so the
+tool reports it and writes no reference.
+
 Over that budget the document is never converted or fully extracted — both
 outputs would be thrown away unread — so the decision to go over is taken
 before either runs. A document whose flagged pages could exceed the budget has

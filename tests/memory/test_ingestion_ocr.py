@@ -4,7 +4,7 @@ import pytest
 
 from durin.config.schema import DocumentsConfig
 from durin.jobs.registry import JobRegistry
-from durin.memory.ingestion import ingest_artifact
+from durin.memory.ingestion import IngestError, ingest_artifact
 
 
 @pytest.fixture(autouse=True)
@@ -107,6 +107,27 @@ def test_a_normal_document_ingests_with_no_job(tmp_path, registry):
 
     assert result["job_id"] is None
     assert "readable body text" in result["content"]
+
+
+def test_ingest_raises_when_ocr_transcribes_every_flagged_page_blank(
+    tmp_path, registry, monkeypatch
+):
+    """convert_file_to_markdown's empty-after-OCR guard must reach this
+    caller as IngestError -- the same taxonomy ingest_artifact already
+    converts every other DocConvertError into (see the except clause right
+    below the convert_file_to_markdown call in ingest_artifact)."""
+    from tests.tools.test_read_enhancements import _write_text_pdf
+
+    pdf = tmp_path / "blank.pdf"
+    _write_text_pdf(pdf, ["", ""])
+    monkeypatch.setattr(
+        "durin.memory.doc_convert.transcribe_pages_detached",
+        lambda path, pages: {p: "" for p in pages},
+    )
+    cfg = DocumentsConfig.model_validate({"ocr": {"enabled": True, "inline_max_pages": 5}})
+
+    with pytest.raises(IngestError, match="even after OCR"):
+        ingest_artifact(tmp_path / "ws", pdf, documents_config=cfg, jobs=registry)
 
 
 def test_the_result_carries_how_many_pages_are_pending(tmp_path, book, registry):

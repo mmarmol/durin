@@ -410,6 +410,40 @@ def test_extract_documents_reports_an_over_budget_scan_instead_of_dropping_it(
     assert images == []
 
 
+def test_extract_documents_reports_a_blank_scan_instead_of_a_silent_empty_file(
+    tmp_path, monkeypatch
+):
+    # A scanned PDF whose pages ALL transcribe blank must not vanish the way
+    # an unraised empty string used to -- it has to name the file and say
+    # why, like every other extraction failure this gate already covers.
+    import json
+
+    from durin.utils.document import extract_documents
+    from tests.tools.test_read_enhancements import _write_text_pdf
+
+    monkeypatch.setenv("DURIN_HOME", str(tmp_path))
+    (tmp_path / "config.json").write_text(
+        json.dumps({"documents": {"ocr": {"enabled": True, "inline_max_pages": 5}}})
+    )
+    # engine_available() would read False in CI (no [ocr] extra installed
+    # there), taking the engine-missing coverage-note branch instead of ever
+    # reaching the blank-after-OCR raise this test is about.
+    monkeypatch.setattr("durin.memory.doc_convert.engine_available", lambda: True)
+    monkeypatch.setattr(
+        "durin.memory.doc_convert.transcribe_pages_detached",
+        lambda path, pages: {p: "" for p in pages},
+    )
+
+    pdf = tmp_path / "blank_scan.pdf"
+    _write_text_pdf(pdf, ["", ""])
+
+    text, images = extract_documents("please remember this", [str(pdf)])
+
+    assert "blank_scan.pdf" in text
+    assert "could not be read inline" in text
+    assert images == []
+
+
 def test_extract_documents_reports_a_corrupt_file_instead_of_dropping_it(tmp_path):
     # The [error:] gate predates the OCR branch — it silently dropped
     # corrupt files too. The fix covers the whole defect class, not just

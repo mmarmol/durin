@@ -191,3 +191,34 @@ def test_the_result_says_the_text_is_still_being_transcribed(tmp_path, monkeypat
     assert "transcrib" in out["note"].lower()
     assert out["content"] == ""
     assert "reference" not in out          # nothing to cite until the text lands
+
+
+def test_a_blank_scan_produces_no_reference_and_reports_the_error(tmp_path, monkeypatch):
+    """The tool must not mint a Library reference for a document that
+    transcribed to nothing -- ingest_artifact raises before this tool's
+    execute() ever reaches _create_reference, so the empty-after-OCR guard
+    has to surface as an error here, the same as any other unreadable
+    document, with no reference written to disk."""
+    from durin.config.schema import Config
+    from tests.tools.test_read_enhancements import _write_text_pdf
+
+    cfg = Config()
+    cfg.documents.ocr.enabled = True
+    cfg.documents.ocr.inline_max_pages = 5
+    monkeypatch.setattr("durin.config.loader.load_config", lambda *a, **k: cfg)
+    monkeypatch.setattr("durin.memory.doc_convert.engine_available", lambda: True)
+    monkeypatch.setattr(
+        "durin.memory.doc_convert.transcribe_pages_detached",
+        lambda path, pages: {p: "" for p in pages},
+    )
+
+    pdf = tmp_path / "blank.pdf"
+    _write_text_pdf(pdf, ["", ""])
+    ws = tmp_path / "ws"
+
+    out = asyncio.run(MemoryIngestTool(workspace=str(ws)).execute(path=str(pdf)))
+
+    assert "error" in out
+    assert "even after OCR" in out["error"]
+    assert "reference" not in out
+    assert not (ws / "memory" / "references").exists()
