@@ -270,6 +270,49 @@ def test_chat_timeout_maps_to_504(tmp_path, monkeypatch):
     assert r.json()["error"]["type"] == "server_error"
 
 
+def test_multipart_message_files_and_session(tmp_path, monkeypatch):
+    loop = _make_loop("got it")
+    client = TestClient(_build_app(tmp_path, monkeypatch, agent_loop=loop))
+    tok = _mint(["chat:write"])
+    r = client.post(
+        "/v1/chat/completions",
+        data={"message": "analyze this", "session_id": "agent-9"},
+        files=[("files", ("notes.txt", b"hello world", "text/plain"))],
+        headers=_hdr(tok),
+    )
+    assert r.status_code == 200
+    kwargs = loop.process_direct.await_args.kwargs
+    assert kwargs["session_key"] == "api:agent-9"
+    assert kwargs["content"] == "analyze this"
+    assert kwargs["media"] and kwargs["media"][0].endswith("_notes.txt")
+
+
+def test_multipart_without_message_uses_fallback_text(tmp_path, monkeypatch):
+    loop = _make_loop()
+    client = TestClient(_build_app(tmp_path, monkeypatch, agent_loop=loop))
+    tok = _mint(["chat:write"])
+    r = client.post(
+        "/v1/chat/completions",
+        files=[("files", ("notes.txt", b"hello", "text/plain"))],
+        headers=_hdr(tok),
+    )
+    assert r.status_code == 200
+    assert loop.process_direct.await_args.kwargs["content"].strip()
+
+
+def test_multipart_oversize_file_maps_to_413(tmp_path, monkeypatch):
+    monkeypatch.setattr("durin.api.openai_routes.MAX_FILE_SIZE", 1024)
+    client = TestClient(_build_app(tmp_path, monkeypatch))
+    tok = _mint(["chat:write"])
+    r = client.post(
+        "/v1/chat/completions",
+        data={"message": "hi"},
+        files=[("files", ("big.bin", b"x" * 2048, "application/octet-stream"))],
+        headers=_hdr(tok),
+    )
+    assert r.status_code == 413
+
+
 def _sse_events(raw: str) -> list[str]:
     return [
         line[len("data: ") :] for line in raw.splitlines() if line.startswith("data: ")

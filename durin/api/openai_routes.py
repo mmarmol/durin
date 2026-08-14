@@ -311,6 +311,34 @@ def build_openai_routes(
             headers={"Cache-Control": "no-cache"},
         )
 
+    async def _parse_multipart(
+        request: Request,
+    ) -> tuple[str, list[str], str | None, str | None]:
+        media_dir = get_media_dir("api")
+        form = await request.form()
+        text = str(form.get("message") or "")
+        raw_session = form.get("session_id")
+        session_id = (str(raw_session).strip() or None) if raw_session else None
+        raw_model = form.get("model")
+        model = (str(raw_model).strip() or None) if raw_model else None
+        media_paths: list[str] = []
+        for upload in form.getlist("files"):
+            if isinstance(upload, str):
+                continue
+            raw = await upload.read()
+            if len(raw) > MAX_FILE_SIZE:
+                raise FileSizeExceeded(
+                    f"File '{upload.filename}' exceeds "
+                    f"{MAX_FILE_SIZE // (1024 * 1024)}MB limit"
+                )
+            base = safe_filename(upload.filename or "upload.bin")
+            dest = media_dir / f"{uuid.uuid4().hex[:12]}_{base}"
+            dest.write_bytes(raw)
+            media_paths.append(str(dest))
+        if not text:
+            text = "Analyze the uploaded file(s)."
+        return text, media_paths, session_id, model
+
     async def chat_completions(request: Request) -> Response:
         err = _auth_or_error(request)
         if err is not None:
@@ -320,16 +348,18 @@ def build_openai_routes(
         stream = False
         try:
             if content_type.startswith("multipart/"):
-                # Task 6 fills this branch in.
-                return _error_json(400, "multipart is not supported yet")
-            try:
-                body = await request.json()
-            except Exception:
-                return _error_json(400, "Invalid JSON body")
-            stream = bool(body.get("stream", False))
-            requested_model = body.get("model")
-            text, media_paths = _parse_json_content(body)
-            session_id = body.get("session_id")
+                text, media_paths, session_id, requested_model = await _parse_multipart(
+                    request
+                )
+            else:
+                try:
+                    body = await request.json()
+                except Exception:
+                    return _error_json(400, "Invalid JSON body")
+                stream = bool(body.get("stream", False))
+                requested_model = body.get("model")
+                text, media_paths = _parse_json_content(body)
+                session_id = body.get("session_id")
         except ValueError as e:
             return _error_json(400, str(e))
         except FileSizeExceeded as e:

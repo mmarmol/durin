@@ -181,6 +181,10 @@ api = [
     # path without [mcp] still gets them.
     "starlette>=1.3,<2",
     "uvicorn>=0.49,<1",
+    # Starlette's request.form() parser, used by the /v1 chat endpoint's
+    # multipart file uploads. Same rationale as above: transitively present
+    # via mcp, declared here so an install without [mcp] still has it.
+    "python-multipart>=0.0.9,<0.1",
 ]
 dev = [
     "pytest>=9.0.0,<10.0.0",
