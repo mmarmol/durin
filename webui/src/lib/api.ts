@@ -159,6 +159,8 @@ export interface BackgroundTask {
   /** Job progress denominator/numerator (pages); null for sub-agent and workflow rows. */
   units_total?: number | null;
   units_done?: number | null;
+  /** Why a failed job failed, as its worker recorded it; null otherwise. */
+  error?: string | null;
 }
 
 export async function listBackgroundTasks(
