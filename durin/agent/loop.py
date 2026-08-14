@@ -1811,8 +1811,16 @@ class AgentLoop:
                         "Failed to convert a queued message to a user turn (session={})",
                         pending_msg.session_key,
                     )
+                    # Rebuilt from pending_msg.content (never mutated by
+                    # _to_user_message -- that rebinds its own local), so the
+                    # steer check below is re-derived rather than lost: this
+                    # handler runs precisely because the normal path didn't
+                    # finish, so its framing has to be applied here too.
+                    content = pending_msg.content
+                    if pending_msg.metadata.get("steer") is True:
+                        content = f"{_STEER_FRAMING}\n\n{content}"
                     content = (
-                        f"{pending_msg.content}\n\n"
+                        f"{content}\n\n"
                         f"[error: attached media could not be read: {exc}]"
                     )
                     return {"role": "user", "content": content}

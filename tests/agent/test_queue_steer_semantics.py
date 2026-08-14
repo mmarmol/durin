@@ -358,6 +358,55 @@ async def test_drain_pending_isolates_one_message_conversion_failure(tmp_path, m
     assert result[2]["content"] == "third message"
 
 
+@pytest.mark.asyncio
+async def test_drain_pending_conversion_failure_keeps_steer_framing(tmp_path, monkeypatch):
+    """A steer message whose media conversion fails must keep its steer
+    framing in the fallback error content. The except-handler in
+    _to_user_message_or_error used to rebuild the fallback straight from
+    pending_msg.content, never re-checking metadata["steer"] -- so a steer
+    that hit a conversion failure silently lost the framing that tells the
+    model this is mid-work guidance rather than a fresh, unrelated request.
+    """
+    from durin.agent.loop import _STEER_FRAMING, AgentLoop
+    from durin.bus.events import InboundMessage
+    from durin.bus.queue import MessageBus
+
+    def _raising_extract_documents(text, media, **_kwargs):
+        raise FileNotFoundError("No such file or directory: '/fake/deleted.pdf'")
+
+    monkeypatch.setattr("durin.agent.loop.extract_documents", _raising_extract_documents)
+
+    bus = MessageBus()
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    loop = AgentLoop(bus=bus, provider=provider, workspace=tmp_path, model="test-model")
+
+    callback, pending = await _capture_injection_callback(loop)
+
+    await pending.inject.put(InboundMessage(
+        channel="websocket", sender_id="u", chat_id="c1", content="first message",
+    ))
+    await pending.inject.put(InboundMessage(
+        channel="websocket", sender_id="u", chat_id="c1",
+        content="second message, media deleted mid-drain", media=["/fake/deleted.pdf"],
+        metadata={"steer": True},
+    ))
+    await pending.inject.put(InboundMessage(
+        channel="websocket", sender_id="u", chat_id="c1", content="third message",
+    ))
+
+    result = await callback(steer_only=True)
+
+    assert len(result) == 3
+    steer_content = str(result[1]["content"])
+    assert _STEER_FRAMING in steer_content
+    assert "second message, media deleted mid-drain" in steer_content
+    assert "[error: attached media could not be read" in steer_content
+    # The other two batch-mates are untouched -- no framing, no error.
+    assert _STEER_FRAMING not in str(result[0]["content"])
+    assert _STEER_FRAMING not in str(result[2]["content"])
+
+
 # ---------------------------------------------------------------------------
 # Consumer: routing into inject vs deferred
 # ---------------------------------------------------------------------------
