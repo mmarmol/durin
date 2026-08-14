@@ -1921,16 +1921,42 @@ class AgentLoop:
         # individually, not the whole loop, so one bad orphan (an unrecognized
         # job kind raises ValueError) does not stop every orphan after it from
         # being respawned too.
+        #
+        # Reconcile only ever returns rows that were "running" with a dead or
+        # stale-aged pid — a row that never got a worker in the first place
+        # (its own spawn's Popen failed, or a cap-refused worker's chain
+        # launch crashed before it could start one) is left "queued" the
+        # whole time and that loop never sees it. The second loop below picks
+        # those up directly. Together with the concurrency cap enforced
+        # atomically in JobRegistry.claim (see durin/jobs/registry.py) and the
+        # chain a worker runs after finishing (durin/jobs/ocr_worker.py), the
+        # full startup flow is: reconcile requeues orphans -> respawn launches
+        # a worker for each -> those workers race the cap in claim() -> every
+        # loser exits leaving its row queued -> the second loop below has
+        # already launched at most one more (cap=1 needs no more than that) ->
+        # the chain drains whatever is left, one fresh process at a time,
+        # after each job finishes.
         try:
             from durin.jobs.registry import JobRegistry
-            from durin.jobs.spawn import _pid_alive, respawn
+            from durin.jobs.spawn import MAX_CONCURRENT_OCR_JOBS, _pid_alive, respawn
 
-            for job in JobRegistry().reconcile(alive=_pid_alive):
+            registry = JobRegistry()
+            for job in registry.reconcile(alive=_pid_alive):
                 try:
                     respawn(job)
                 except Exception:
                     logger.exception(
                         "could not respawn job {} (kind={})", job.id, job.kind)
+            for _ in range(MAX_CONCURRENT_OCR_JOBS):
+                queued = registry.next_queued("ocr")
+                if queued is None:
+                    break
+                try:
+                    respawn(queued)
+                except Exception:
+                    logger.exception(
+                        "could not launch queued job {} (kind={})",
+                        queued.id, queued.kind)
         except Exception:
             logger.exception("job reconcile at startup failed (continuing)")
         await self._connect_mcp()

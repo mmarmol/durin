@@ -39,6 +39,17 @@ enqueues a row and starts `python -m durin.jobs.ocr_worker <job_id>` as a
 detached subprocess. The gateway's event loop never runs the transcription
 loop itself; it only reads the rows the worker writes.
 
+**At most one worker of a kind runs at a time, and a finishing one chains to
+the next.** OCR workers are heavy enough (~2.1 GB peak RSS, ~4.8 cores
+measured) that several running together can saturate a laptop or OOM a small
+server. `JobRegistry.claim` enforces a per-kind cap atomically — the same
+transaction that flips a row to `running` also counts how many of that kind
+already are — so the database's own locking, not an external scheduler,
+decides who gets to work. A worker that finishes looks for the oldest still
+`queued` job of its kind and launches a fresh process for it, so a backlog of
+several scanned books drains one at a time instead of needing an outside
+trigger for every one. See [below](#concurrency-cap-and-chaining).
+
 **"Job" names two different things at two layers, on purpose.** The tray, the
 `tasks` tool, and the HTTP route all merge three *categories* of background
 work — sub-agents, workflow runs, and jobs — under a `kind` field whose value
@@ -55,14 +66,16 @@ flowchart TD
     SPAWN -->|enqueue| REG[(jobs.db\nJobRegistry)]
     SPAWN -->|Popen, detached| WORKER["ocr_worker.run_job\npython -m durin.jobs.ocr_worker &lt;id&gt;"]
 
-    WORKER -->|claim: queued to running| REG
+    WORKER -->|claim: queued to running,\nkind-capped| REG
     WORKER -->|record_unit per page| REG
     WORKER -->|finish: done / failed| REG
     WORKER -->|assemble source.md| SIDECAR["ingested/&lt;id&gt;/source.md"]
     WORKER -->|index_ingested_entry| LIB["memory/references/&lt;slug&gt;.md\n+ FTS row + vector chunks"]
+    WORKER -->|after finish: next_queued\nthen launch a fresh process| WORKER
 
     GWSTART(["gateway start\nAgentLoop.run()"]) -->|reconcile: running rows\nwith a dead pid or too old| REG
     GWSTART -->|respawn per orphan| WORKER
+    GWSTART -->|then: next_queued, capped\nfor rows nothing ever claimed| WORKER
 
     TASKS["tasks tool / GET /api/v1/tasks\ncollect_tasks()"] -->|read-only| REG
     TASKS --> TRAY["webui work panel\nWorkItemCard (kind=job)"]
@@ -128,6 +141,39 @@ and reports whether that specific call won. This closes the gap between
 conditional `UPDATE` then matches zero rows, and the worker sees it lost the
 claim and returns without transcribing anything.
 
+### Concurrency cap and chaining
+
+An OCR worker measured ~2.1 GB peak RSS and ~4.8 cores; a handful running
+together can saturate a laptop or OOM a small server. `MAX_CONCURRENT_OCR_JOBS`
+(`durin/jobs/spawn.py`, currently `1`) bounds how many `"ocr"` jobs may be
+`running` at once. There is no config key for it — the number is a measured
+resource budget, not a per-install preference.
+
+The cap is enforced inside `claim` itself, not by a separate check before or
+after it: passing `kind_cap=(kind, n)` adds `AND (SELECT COUNT(*) FROM jobs
+WHERE kind = ? AND status = 'running') < ?` to the same conditional `UPDATE`
+described above. The count and the write are one `BEGIN IMMEDIATE`
+transaction (see [above](#the-table-shape)), so nothing can read the count,
+decide there is room, and then lose a race before writing — the database's
+own locking is what admits at most one claimant. A claim the cap refuses
+returns `False` exactly like one the status guard refuses, and the worker
+handles both identically: walk away, touch nothing. The row is left precisely
+as it was, ready for another attempt.
+
+A worker that finishes — successfully or not — looks for more work before it
+exits: `JobRegistry.next_queued(kind)` returns the oldest still-`queued` job
+of its kind, and if one exists the worker launches a fresh process for it
+through `_launch_worker`, the same `Popen` call `spawn_ocr_job` and `respawn`
+use. The launch happens strictly *after* the worker's own outcome is written,
+never before — launching earlier could let the cap briefly see two workers of
+one job's kind at once. This is how several scanned books drain one at a time
+without an external scheduler: each finished job hands off to the next, and
+memory genuinely leaves the machine between books because every worker is a
+fresh process. A launch failure here is logged and swallowed the same way
+`spawn_ocr_job`'s own `Popen` failure is (above) — the row stays `queued`, and
+the next reconcile or startup pickup ([below](#restart-reconciliation))
+retries it.
+
 ### Per-unit persistence and resumption
 
 `record_unit` upserts one `job_units` row and then **recounts**
@@ -182,6 +228,22 @@ the right worker module for the job's `kind`. Both the reconcile call and each
 individual `respawn` are wrapped so that one bad orphan (an unrecognized
 `kind`, a `Popen` failure) cannot stop the rest from being respawned or take
 the gateway down on the way up.
+
+Reconcile only ever returns rows that were `running` with a dead or stale
+pid — a row that never had a worker in the first place (its own spawn's
+`Popen` call failed, or a cap-refused worker's chain launch crashed before it
+could start one, see [above](#concurrency-cap-and-chaining)) is left `queued`
+the whole time, and that loop never touches it. Right after it, the same
+startup routine picks up jobs already `queued`: it calls `next_queued("ocr")`
+in a loop capped at `MAX_CONCURRENT_OCR_JOBS` and `respawn`s whatever it
+finds, un-stranding both of those cases. The two loops can overlap — the
+oldest orphan reconcile just respawned is still `queued` until its new worker
+actually claims it, so the pickup loop can launch a second, redundant process
+for that same job — and that is fine: the cap inside `claim` admits at most
+one of the two, and the loser exits having touched nothing. Between these two
+loops and the chain a worker runs after finishing, startup only ever needs to
+launch at most one worker per kind directly; the chain drains whatever is
+left, one fresh process at a time.
 
 ### Cancellation
 
@@ -268,6 +330,15 @@ kind-specific:
 4. Add a branch to `respawn()` (`durin/jobs/spawn.py`) so a restart can bring
    the new kind's worker back.
 
+Unlike `reconcile` and the tray rendering, the concurrency cap, the
+finish-time chain, and gateway startup's queued-job pickup are not generic
+across kinds today: `MAX_CONCURRENT_OCR_JOBS`, the `kind_cap` passed to
+`claim` in `ocr_worker.run_job`, and the `next_queued("ocr")` call in
+`AgentLoop.run()` are all specific to `"ocr"` (see [Concurrency cap and
+chaining](#concurrency-cap-and-chaining)). A second kind that needs the same
+protection adds its own cap constant and wires its own `kind_cap`, chain, and
+startup pickup the same way — none of that is inherited automatically.
+
 Nothing else needs to change to reach the tray: `collect_tasks` and
 `TasksTool` render any registry row from its generic fields (label, status,
 `units_total`/`units_done`) with no kind-specific branching, and the webui's
@@ -281,11 +352,13 @@ copy there.
 | Symbol | File | Role |
 |---|---|---|
 | `Job` | `durin/jobs/registry.py` | Frozen dataclass mirroring one `jobs` row. |
-| `JobRegistry` | `durin/jobs/registry.py` | `enqueue`, `get`, `list_for_session`, `claim`, `set_units_total`, `record_unit`, `units`, `done_units`, `finish`, `cancel`, `reconcile`. |
+| `JobRegistry` | `durin/jobs/registry.py` | `enqueue`, `get`, `list_for_session`, `claim`, `next_queued`, `set_units_total`, `record_unit`, `units`, `done_units`, `finish`, `cancel`, `reconcile`. |
 | `RECONCILE_AGE_S` | `durin/jobs/registry.py` | Six hours — the pid-liveness-is-unreliable fallback age used by `reconcile`. |
-| `spawn_ocr_job` | `durin/jobs/spawn.py` | Enqueues an OCR job and `Popen`s its worker; called from `ingest_artifact` when a document needs more OCR than the inline budget. |
-| `respawn` | `durin/jobs/spawn.py` | Re-launches the worker for a job `reconcile` already requeued; dispatches on `job.kind`. |
-| `run_job` | `durin/jobs/ocr_worker.py` | The OCR worker's whole lifecycle: claim, per-page transcribe loop, sidecar assembly, Library indexing, finish. |
+| `MAX_CONCURRENT_OCR_JOBS` | `durin/jobs/spawn.py` | The per-kind concurrency cap `claim` enforces; currently `1`. No config key — see [Concurrency cap and chaining](#concurrency-cap-and-chaining). |
+| `spawn_ocr_job` | `durin/jobs/spawn.py` | Enqueues an OCR job and launches its worker; called from `ingest_artifact` when a document needs more OCR than the inline budget. |
+| `respawn` | `durin/jobs/spawn.py` | (Re)launches the worker for a job that needs one and is not this process's to claim: an orphan `reconcile` just requeued, or a row gateway startup found `queued` with nothing claiming it. Dispatches on `job.kind`. |
+| `_launch_worker` | `durin/jobs/spawn.py` | The one `Popen` call shared by `spawn_ocr_job`, `respawn`, and the worker's own chain. |
+| `run_job` | `durin/jobs/ocr_worker.py` | The OCR worker's whole lifecycle: kind-capped claim, per-page transcribe loop, sidecar assembly, Library indexing, finish, then chain to the next queued job. |
 | `transcribe_page` | `durin/memory/ocr.py` | Renders one PDF page (`pypdfium2`) and runs it through the lazily-constructed, process-local `RapidOCR` engine. |
 | `index_ingested_entry` | `durin/memory/ingestion.py` | Turns a finished `ingested/<id>/` entry into an indexed Library reference; the one memory-layer call the worker makes on success. |
 | `collect_tasks` | `durin/agent/background_tasks.py` | Merges sub-agents, workflow runs, and jobs into the one list the tray and `tasks` tool both read. |

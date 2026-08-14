@@ -7,7 +7,13 @@ import sys
 import pytest
 
 from durin.jobs.registry import Job, JobRegistry
-from durin.jobs.spawn import _pid_alive, respawn, spawn_ocr_job
+from durin.jobs.spawn import (
+    MAX_CONCURRENT_OCR_JOBS,
+    _launch_worker,
+    _pid_alive,
+    respawn,
+    spawn_ocr_job,
+)
 
 
 def _job(**overrides):
@@ -54,6 +60,44 @@ def test_pid_alive_false_when_no_such_process(monkeypatch):
 
     monkeypatch.setattr("durin.jobs.spawn.os.kill", _raise_lookup)
     assert _pid_alive(4242) is False
+
+
+# ---------------------------------------------------------------------------
+# _launch_worker — the Popen call shared by spawn_ocr_job, respawn, and the
+# worker's own chain
+# ---------------------------------------------------------------------------
+
+
+def test_max_concurrent_ocr_jobs_is_one():
+    # No config knob (YAGNI) -- this pins the measured-rationale constant
+    # itself, so a change to it is a deliberate edit, not a silent drift.
+    assert MAX_CONCURRENT_OCR_JOBS == 1
+
+
+def test_launch_worker_starts_the_ocr_worker_module_with_the_job_id(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "durin.jobs.spawn.subprocess.Popen",
+        lambda args, **kw: calls.append((args, kw)),
+    )
+    _launch_worker("j99")
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert args == [sys.executable, "-m", "durin.jobs.ocr_worker", "j99"]
+    assert kwargs.get("start_new_session") is True
+
+
+def test_launch_worker_raises_on_a_popen_failure(monkeypatch):
+    # Unlike spawn_ocr_job/respawn, _launch_worker itself does not swallow --
+    # each of its three callers has its own log message and its own contract
+    # for what "queued" means afterward, so the decision to catch and how to
+    # log it stays with them.
+    def _boom(*_args, **_kwargs):
+        raise OSError("no more processes")
+
+    monkeypatch.setattr("durin.jobs.spawn.subprocess.Popen", _boom)
+    with pytest.raises(OSError):
+        _launch_worker("j1")
 
 
 # ---------------------------------------------------------------------------

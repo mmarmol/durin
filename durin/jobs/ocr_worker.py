@@ -25,6 +25,7 @@ from pathlib import Path
 from loguru import logger
 
 from durin.jobs.registry import JobRegistry
+from durin.jobs.spawn import MAX_CONCURRENT_OCR_JOBS, _launch_worker
 from durin.memory.ingestion import index_ingested_entry
 from durin.memory.ocr import transcribe_page
 from durin.memory.pdf_coverage import classify_coverage, page_texts
@@ -63,19 +64,34 @@ def run_job(job_id: str, *, registry: JobRegistry | None = None) -> None:
         )
         return
 
-    if not registry.claim(job_id, pid=os.getpid()):
-        # Lost the race this pre-check cannot close: something else (a
-        # cancel, or another worker instance) changed the status away from
-        # "queued" between the read above and this claim's own conditional
-        # UPDATE. Bailing here — rather than trusting the claim call
-        # unconditionally — matters most when there is nothing left to do:
-        # with every page already transcribed, the per-page loop below never
-        # runs at all, so this is the only check that stops a job that just
-        # lost a race from being marked "done" anyway.
-        logger.warning(
-            "ocr worker: job {} was claimed or changed status between the "
-            "status check and the claim; skipping", job_id,
-        )
+    if not registry.claim(
+        job_id, pid=os.getpid(), kind_cap=("ocr", MAX_CONCURRENT_OCR_JOBS),
+    ):
+        # False here means one of two things, and claim()'s own atomic
+        # UPDATE is what makes them indistinguishable from the return value
+        # alone: something else changed the row's status away from "queued"
+        # (a cancel, or another worker instance) between the read above and
+        # this claim, or the row is still "queued" but MAX_CONCURRENT_OCR_JOBS
+        # is already reached. Bailing either way — rather than trusting the
+        # claim call unconditionally — matters most when there is nothing
+        # left to do: with every page already transcribed, the per-page loop
+        # below never runs at all, so this is the only check that stops a
+        # job that just lost either race from being marked "done" anyway.
+        #
+        # The re-read below is only to log something useful, not to decide
+        # what to do (both cases already returned False and both must walk
+        # away): a row still "queued" can only mean the cap refused it,
+        # since a status race would have left some other status behind.
+        after = registry.get(job_id)
+        if after is not None and after.status == "queued":
+            logger.info(
+                "ocr worker: another ocr worker is running; leaving {} queued", job_id,
+            )
+        else:
+            logger.warning(
+                "ocr worker: job {} was claimed or changed status between the "
+                "status check and the claim; skipping", job_id,
+            )
         return
     started = time.monotonic()
 
@@ -190,6 +206,23 @@ def run_job(job_id: str, *, registry: JobRegistry | None = None) -> None:
 
     if registry.finish(job_id, pid=os.getpid(), error=error):
         _emit(job_id, len(pages), len(already), started, "failed" if error else "done")
+        # Chain: hand the cap slot this job just freed straight to the next
+        # queued job, so a backlog drains one fresh process at a time instead
+        # of waiting for the next external trigger (another finish, or a
+        # gateway restart's queued pickup). Strictly after finish()'s write
+        # above, never before — launching earlier could let two workers
+        # briefly hold cap=1's one slot at once.
+        next_job = registry.next_queued("ocr")
+        if next_job is not None:
+            try:
+                _launch_worker(next_job.id)
+            except OSError:
+                # Same contract as spawn_ocr_job's own Popen call: the row
+                # stays queued, and the next reconcile/startup sweep retries.
+                logger.exception(
+                    "ocr worker: could not chain to the next queued job {}",
+                    next_job.id,
+                )
         return
     # The row is no longer this worker's to finish: a cancel landed while the
     # sidecar and the Library indexing were running (the per-page loop's checks

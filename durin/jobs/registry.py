@@ -141,7 +141,9 @@ class JobRegistry:
         ).fetchall()
         return [_row_to_job(r) for r in rows]
 
-    def claim(self, job_id: str, *, pid: int) -> bool:
+    def claim(
+        self, job_id: str, *, pid: int, kind_cap: tuple[str, int] | None = None,
+    ) -> bool:
         """Claim a queued job for this worker process.
 
         The UPDATE is conditional on the row still being "queued" at write
@@ -150,16 +152,55 @@ class JobRegistry:
         overwritten by an unconditional UPDATE. Returns whether this call
         actually won the claim — a caller that gets False does not own the
         job and must not proceed as if it does.
+
+        ``kind_cap=(kind, n)`` additionally refuses the claim while *n* jobs
+        of *kind* are already ``running`` — the count and the write are one
+        ``BEGIN IMMEDIATE`` transaction (see ``execute_write``), so nothing
+        can observe the count and then race the write; a concurrent claim
+        under the same cap either lands first and is counted, or lands after
+        and finds this one already counted. A claim refused by the cap
+        returns False exactly like a claim refused by the status race above
+        — the row is left untouched either way, which is what makes the two
+        cases safe to treat identically: a caller with no claim never acts
+        as though it has one.
         """
         def _write(c: Any) -> bool:
-            cur = c.execute(
-                "UPDATE jobs SET status = 'running', pid = ?, started_at = ?"
-                " WHERE id = ? AND status = 'queued'",
-                (pid, time.time(), job_id),
-            )
+            if kind_cap is None:
+                cur = c.execute(
+                    "UPDATE jobs SET status = 'running', pid = ?, started_at = ?"
+                    " WHERE id = ? AND status = 'queued'",
+                    (pid, time.time(), job_id),
+                )
+            else:
+                kind, limit = kind_cap
+                cur = c.execute(
+                    "UPDATE jobs SET status = 'running', pid = ?, started_at = ?"
+                    " WHERE id = ? AND status = 'queued' AND"
+                    " (SELECT COUNT(*) FROM jobs WHERE kind = ? AND status = 'running') < ?",
+                    (pid, time.time(), job_id, kind, limit),
+                )
             return cur.rowcount > 0
 
         return execute_write(self._conn, _write)
+
+    def next_queued(self, kind: str) -> Job | None:
+        """The oldest still-``queued`` job of *kind*, or ``None``.
+
+        Feeds two callers that both want "the next job nobody has started
+        yet": a worker chaining to the next one right after it finishes its
+        own, and gateway startup picking up a row that was never claimed in
+        the first place (its spawn's ``Popen`` failed, or the worker that
+        would have chained to it crashed first). Ordered oldest-first by
+        ``created_at``, breaking a same-tick tie by ``rowid`` — the opposite
+        tiebreak direction from ``list_for_session``, which wants newest
+        first.
+        """
+        row = self._conn.execute(
+            f"SELECT {_COLUMNS} FROM jobs WHERE kind = ? AND status = 'queued'"
+            " ORDER BY created_at, rowid LIMIT 1",
+            (kind,),
+        ).fetchone()
+        return _row_to_job(row) if row else None
 
     def set_units_total(self, job_id: str, units_total: int, *, pid: int) -> bool:
         """Resize the work of the job this worker owns.

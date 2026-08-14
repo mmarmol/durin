@@ -4,6 +4,7 @@ import pytest
 
 from durin.jobs.ocr_worker import run_job
 from durin.jobs.registry import JobRegistry
+from durin.jobs.spawn import MAX_CONCURRENT_OCR_JOBS
 from durin.memory.pdf_coverage import page_texts
 
 
@@ -435,9 +436,9 @@ def _lose_the_claim_race_to_a_cancel(registry, monkeypatch):
     who wins either way."""
     real_claim = registry.claim
 
-    def _claim_after_a_race_lost_cancel(job_id, *, pid):
+    def _claim_after_a_race_lost_cancel(job_id, *, pid, **kwargs):
         registry.cancel(job_id)
-        return real_claim(job_id, pid=pid)
+        return real_claim(job_id, pid=pid, **kwargs)
 
     monkeypatch.setattr(registry, "claim", _claim_after_a_race_lost_cancel)
 
@@ -519,3 +520,145 @@ def test_a_cancel_during_the_post_loop_work_is_not_overwritten(
     reread = registry.get(job.id)
     assert reread.status == "cancelled"
     assert emitted == ["cancelled"]
+
+
+# ---------------------------------------------------------------------------
+# The concurrency cap (MAX_CONCURRENT_OCR_JOBS) and the chain that drains a
+# queue behind it one fresh process at a time.
+# ---------------------------------------------------------------------------
+
+
+def test_worker_exits_quietly_when_the_cap_refuses_its_claim(registry, scanned_pdf, monkeypatch):
+    """MAX_CONCURRENT_OCR_JOBS=1: a worker that finds another ocr job already
+    running must not claim its own -- it leaves the row exactly as enqueue
+    left it, for the chain (or a later startup pickup) to claim later."""
+    assert MAX_CONCURRENT_OCR_JOBS == 1  # the scenario this test builds
+    called = []
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page",
+        lambda path, page, **kw: called.append(page) or f"page {page}",
+    )
+    running = _enqueue(registry, scanned_pdf, [1])
+    registry.claim(running.id, pid=999999)  # occupies the one cap slot
+
+    job = _enqueue(registry, scanned_pdf, [1, 2, 3])
+    run_job(job.id, registry=registry)
+
+    assert called == []
+    reread = registry.get(job.id)
+    assert reread.status == "queued"
+    assert reread.pid is None
+    assert reread.started_at is None
+    # The job holding the cap slot is untouched by the refusal.
+    assert registry.get(running.id).status == "running"
+
+
+def test_worker_chains_to_the_next_queued_job_after_finishing(registry, scanned_pdf, monkeypatch):
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page",
+        lambda path, page, **kw: f"page {page}",
+    )
+    launched = []
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker._launch_worker",
+        lambda job_id: launched.append(job_id),
+    )
+    job = _enqueue(registry, scanned_pdf, [1])
+    next_job = _enqueue(registry, scanned_pdf, [1])  # left queued behind it
+
+    run_job(job.id, registry=registry)
+
+    assert launched == [next_job.id]
+
+
+def test_worker_does_not_chain_when_nothing_is_queued(registry, scanned_pdf, monkeypatch):
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page",
+        lambda path, page, **kw: f"page {page}",
+    )
+    launched = []
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker._launch_worker",
+        lambda job_id: launched.append(job_id),
+    )
+    job = _enqueue(registry, scanned_pdf, [1])
+
+    run_job(job.id, registry=registry)
+
+    assert launched == []
+
+
+def test_worker_chains_only_after_its_own_finish_write(registry, scanned_pdf, monkeypatch):
+    """The chain launches a fresh process while cap=1 has exactly one slot --
+    if the launch happened before finish()'s write, that slot would briefly
+    look held by two jobs at once. Proving the order rather than just "both
+    happened eventually" is what rules that out."""
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page",
+        lambda path, page, **kw: f"page {page}",
+    )
+    order = []
+    real_finish = registry.finish
+
+    def _tracked_finish(*args, **kwargs):
+        result = real_finish(*args, **kwargs)
+        order.append("finish")
+        return result
+
+    monkeypatch.setattr(registry, "finish", _tracked_finish)
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker._launch_worker",
+        lambda job_id: order.append("launch"),
+    )
+    job = _enqueue(registry, scanned_pdf, [1])
+    _enqueue(registry, scanned_pdf, [1])  # next queued job to chain to
+
+    run_job(job.id, registry=registry)
+
+    assert order == ["finish", "launch"]
+
+
+def test_worker_chain_failure_is_logged_and_swallowed(registry, scanned_pdf, monkeypatch):
+    """Same contract spawn_ocr_job already documents for its own Popen call:
+    a launch failure must not raise out of run_job -- the row it would have
+    started stays queued, and the next reconcile/startup sweep retries it."""
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page",
+        lambda path, page, **kw: f"page {page}",
+    )
+
+    def _boom(job_id):
+        raise OSError("no more processes")
+
+    monkeypatch.setattr("durin.jobs.ocr_worker._launch_worker", _boom)
+    job = _enqueue(registry, scanned_pdf, [1])
+    next_job = _enqueue(registry, scanned_pdf, [1])
+
+    run_job(job.id, registry=registry)  # must not raise
+
+    assert registry.get(job.id).status == "done"
+    reread_next = registry.get(next_job.id)
+    assert reread_next.status == "queued"
+    assert reread_next.pid is None
+
+
+def test_worker_chain_drains_a_queue_of_several_jobs(registry, scanned_pdf, monkeypatch):
+    """Startup under cap=1 with several queued jobs only ever needs to launch
+    one worker directly -- the chain drains the rest, one fresh process at a
+    time. Simulated here by making _launch_worker re-invoke run_job
+    synchronously instead of spawning a real subprocess, which proves the
+    drain property without needing real processes: dropping the chain call
+    would leave the second and third job queued forever."""
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page",
+        lambda path, page, **kw: f"page {page}",
+    )
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker._launch_worker",
+        lambda job_id: run_job(job_id, registry=registry),
+    )
+    jobs = [_enqueue(registry, scanned_pdf, [1]) for _ in range(3)]
+
+    run_job(jobs[0].id, registry=registry)  # only this one is "launched" directly
+
+    assert [registry.get(j.id).status for j in jobs] == ["done", "done", "done"]
