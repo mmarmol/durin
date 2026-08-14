@@ -1935,7 +1935,8 @@ class AgentLoop:
         # loser exits leaving its row queued -> the second loop below has
         # already launched at most one more (cap=1 needs no more than that) ->
         # the chain drains whatever is left, one fresh process at a time,
-        # after each job finishes.
+        # after each job reaches a terminal state (done, failed, or
+        # cancelled — see ocr_worker.run_job's _chain_to_next_queued).
         try:
             from durin.jobs.registry import JobRegistry
             from durin.jobs.spawn import MAX_CONCURRENT_OCR_JOBS, _pid_alive, respawn
@@ -1947,10 +1948,14 @@ class AgentLoop:
                 except Exception:
                     logger.exception(
                         "could not respawn job {} (kind={})", job.id, job.kind)
-            for _ in range(MAX_CONCURRENT_OCR_JOBS):
-                queued = registry.next_queued("ocr")
-                if queued is None:
-                    break
+            # queued_jobs, not a next_queued() loop: respawn() never claims,
+            # so a row just handed to it is still "queued" afterward, and a
+            # loop re-querying "the oldest queued job" would keep finding
+            # that identical row instead of moving on to the next one --
+            # launching it MAX_CONCURRENT_OCR_JOBS times while the rest of
+            # the backlog goes untouched. One query naming how many to take
+            # avoids that.
+            for queued in registry.queued_jobs("ocr", MAX_CONCURRENT_OCR_JOBS):
                 try:
                     respawn(queued)
                 except Exception:

@@ -25,7 +25,7 @@ from pathlib import Path
 from loguru import logger
 
 from durin.jobs.registry import JobRegistry
-from durin.jobs.spawn import MAX_CONCURRENT_OCR_JOBS, _launch_worker
+from durin.jobs.spawn import MAX_CONCURRENT_OCR_JOBS, _launch_worker, _pid_alive
 from durin.memory.ingestion import index_ingested_entry
 from durin.memory.ocr import transcribe_page
 from durin.memory.pdf_coverage import classify_coverage, page_texts
@@ -64,35 +64,59 @@ def run_job(job_id: str, *, registry: JobRegistry | None = None) -> None:
         )
         return
 
-    if not registry.claim(
+    won = registry.claim(
         job_id, pid=os.getpid(), kind_cap=("ocr", MAX_CONCURRENT_OCR_JOBS),
-    ):
+    )
+    if not won:
         # False here means one of two things, and claim()'s own atomic
         # UPDATE is what makes them indistinguishable from the return value
         # alone: something else changed the row's status away from "queued"
         # (a cancel, or another worker instance) between the read above and
         # this claim, or the row is still "queued" but MAX_CONCURRENT_OCR_JOBS
-        # is already reached. Bailing either way — rather than trusting the
-        # claim call unconditionally — matters most when there is nothing
-        # left to do: with every page already transcribed, the per-page loop
-        # below never runs at all, so this is the only check that stops a
-        # job that just lost either race from being marked "done" anyway.
-        #
-        # The re-read below is only to log something useful, not to decide
-        # what to do (both cases already returned False and both must walk
-        # away): a row still "queued" can only mean the cap refused it,
-        # since a status race would have left some other status behind.
+        # is already reached. The re-read below is only to tell those two
+        # apart for logging (nothing below decides what to do based on it
+        # beyond the self-heal case) — a row still "queued" can only mean
+        # the cap refused it, since a status race would have left some other
+        # status behind.
         after = registry.get(job_id)
         if after is not None and after.status == "queued":
-            logger.info(
-                "ocr worker: another ocr worker is running; leaving {} queued", job_id,
-            )
+            # A cap refusal specifically can mean the "running" job holding
+            # the slot is not really running any more: its worker was
+            # OOM-killed, kill -9'd, or lost power without ever reaching
+            # finish() — the very failure this cap makes MORE likely, being
+            # now the one thing standing between "one worker" and the
+            # resource pressure that kills workers. Left alone, that row
+            # stays "running" forever and the cap's own COUNT keeps counting
+            # it, wedging every later job of this kind — reconcile has
+            # exactly one other call site, gateway startup, which could be
+            # hours away. So a refused claim runs the same probe right here,
+            # at the moment someone is actually being blocked by a stale
+            # holder, and retries once if it requeued anything: a dead
+            # holder is cleaned at exactly the moment its absence matters. A
+            # live holder means reconcile requeues nothing and the retry
+            # refuses again for the ordinary reason — walk away exactly as
+            # before.
+            #
+            # Accepted edge, same one gateway startup's own reconcile call
+            # already accepts: the 6h age fallback can requeue a holder that
+            # is genuinely alive but slow, briefly letting two workers hold
+            # one job. finish()'s pid guard and record_unit's idempotence
+            # are what keep that window safe, not this retry.
+            if registry.reconcile(alive=_pid_alive):
+                won = registry.claim(
+                    job_id, pid=os.getpid(), kind_cap=("ocr", MAX_CONCURRENT_OCR_JOBS),
+                )
+            if not won:
+                logger.info(
+                    "ocr worker: another ocr worker is running; leaving {} queued", job_id,
+                )
         else:
             logger.warning(
                 "ocr worker: job {} was claimed or changed status between the "
                 "status check and the claim; skipping", job_id,
             )
-        return
+        if not won:
+            return
     started = time.monotonic()
 
     # The payload is a floor, not the whole set. The conversion path stops
@@ -155,6 +179,13 @@ def run_job(job_id: str, *, registry: JobRegistry | None = None) -> None:
         current = registry.get(job_id)
         if current is None or current.status == "cancelled":
             _emit(job_id, len(pages), len(already), started, "cancelled")
+            # registry.cancel() already wrote the terminal status, so the cap
+            # slot this job held is free from this instant -- chain exactly
+            # as a normal finish would, or a queued sibling waits for a
+            # trigger that may never come (stop is user-facing, and under
+            # cap=1 "one running, one queued behind it" is the ordinary
+            # state for a multi-book ingest).
+            _chain_to_next_queued(registry)
             return
         try:
             registry.record_unit(job_id, page, transcribe_page(pdf_path, page))
@@ -212,17 +243,7 @@ def run_job(job_id: str, *, registry: JobRegistry | None = None) -> None:
         # gateway restart's queued pickup). Strictly after finish()'s write
         # above, never before — launching earlier could let two workers
         # briefly hold cap=1's one slot at once.
-        next_job = registry.next_queued("ocr")
-        if next_job is not None:
-            try:
-                _launch_worker(next_job.id)
-            except OSError:
-                # Same contract as spawn_ocr_job's own Popen call: the row
-                # stays queued, and the next reconcile/startup sweep retries.
-                logger.exception(
-                    "ocr worker: could not chain to the next queued job {}",
-                    next_job.id,
-                )
+        _chain_to_next_queued(registry)
         return
     # The row is no longer this worker's to finish: a cancel landed while the
     # sidecar and the Library indexing were running (the per-page loop's checks
@@ -236,6 +257,40 @@ def run_job(job_id: str, *, registry: JobRegistry | None = None) -> None:
         "not recording its outcome", job_id, status,
     )
     _emit(job_id, len(pages), len(already), started, status)
+    # The row is terminal either way -- cancelled, or finished by whoever
+    # actually won it -- so the cap slot it held is free regardless of who
+    # wrote that outcome. This worker is the one about to exit; if it does
+    # not chain here, nothing else is positioned to notice a queued sibling
+    # waiting behind a job it never got to finish itself.
+    _chain_to_next_queued(registry)
+
+
+def _chain_to_next_queued(registry: JobRegistry) -> None:
+    """Launch a fresh worker for the oldest still-``queued`` OCR job, if any.
+
+    Called from every exit of ``run_job`` that follows a successful claim
+    and reaches a terminal state for the row this worker held: its own
+    successful ``finish()``, a cancellation noticed mid-loop, and a
+    ``finish()`` that lost to something else. All three leave the row no
+    longer ``running``, so the cap slot it held is free in every case,
+    whichever of the three actually wrote the terminal status. Deliberately
+    NOT called from the refused-claim exit above: a worker whose own claim
+    was refused never held a slot to free, so chaining from there would be
+    an extra launch on top of whatever the live holder already does when
+    it finishes — the live holder owns the chain, not a worker that never
+    claimed anything.
+    """
+    next_job = registry.next_queued("ocr")
+    if next_job is None:
+        return
+    try:
+        _launch_worker(next_job.id)
+    except OSError:
+        # Same contract as spawn_ocr_job's own Popen call: the row stays
+        # queued, and the next reconcile/startup sweep retries.
+        logger.exception(
+            "ocr worker: could not chain to the next queued job {}", next_job.id,
+        )
 
 
 def _empty_pages(pdf_path: Path) -> list[int] | None:

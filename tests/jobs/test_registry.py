@@ -96,11 +96,18 @@ def test_claim_loses_when_another_worker_already_claimed_it(registry):
 
 
 def test_claim_with_a_kind_cap_admits_one_and_refuses_the_next(tmp_path):
-    # Two independent connections onto the same file -- as close to the real
-    # cross-process shape as a single test can get. BEGIN IMMEDIATE gives the
-    # whole database one writer at a time, so the cap's count-then-write
-    # cannot interleave between them: this is the atomicity the cap depends
-    # on, not just "the second call happens to lose."
+    # Two independent connections onto the same file, not two threads: the
+    # two claim() calls below are sequential Python calls, so this cannot by
+    # itself exercise a genuine concurrent race. What it does prove is
+    # cross-connection visibility -- reg_b's claim() runs its COUNT query
+    # after reg_a's write has already committed, on a *different* sqlite3
+    # connection, and correctly sees it; a caching or stale-read bug specific
+    # to a second connection could break that in a way no single-connection
+    # test would ever catch. The guarantee that two truly concurrent claims
+    # under the same cap serialize correctly instead of double-admitting is
+    # BEGIN IMMEDIATE's own design contract (one writer at a time for the
+    # whole database, see sqlite_util.execute_write) -- a property of SQLite,
+    # not something this sequential test demonstrates on its own.
     path = tmp_path / "jobs.db"
     reg_a = JobRegistry(path)
     reg_b = JobRegistry(path)
@@ -201,6 +208,34 @@ def test_next_queued_ignores_non_queued_jobs(registry):
 
 def test_next_queued_returns_none_when_nothing_queued(registry):
     assert registry.next_queued("ocr") is None
+
+
+def test_queued_jobs_returns_up_to_limit_oldest_first(registry):
+    first = registry.enqueue(kind="ocr", label="one", payload={}, session_key=None, units_total=1)
+    second = registry.enqueue(kind="ocr", label="two", payload={}, session_key=None, units_total=1)
+    registry.enqueue(kind="ocr", label="three", payload={}, session_key=None, units_total=1)
+
+    ids = [j.id for j in registry.queued_jobs("ocr", 2)]
+
+    assert ids == [first.id, second.id]
+
+
+def test_queued_jobs_returns_fewer_than_limit_when_that_is_all_there_is(registry):
+    only = registry.enqueue(kind="ocr", label="a", payload={}, session_key=None, units_total=1)
+    assert [j.id for j in registry.queued_jobs("ocr", 5)] == [only.id]
+
+
+def test_queued_jobs_returns_empty_when_nothing_queued(registry):
+    assert registry.queued_jobs("ocr", 3) == []
+
+
+def test_queued_jobs_ignores_other_kinds_and_non_queued_statuses(registry):
+    registry.enqueue(kind="reindex", label="a", payload={}, session_key=None, units_total=1)
+    claimed = registry.enqueue(kind="ocr", label="b", payload={}, session_key=None, units_total=1)
+    registry.claim(claimed.id, pid=111)  # now "running", not "queued"
+    queued = registry.enqueue(kind="ocr", label="c", payload={}, session_key=None, units_total=1)
+
+    assert [j.id for j in registry.queued_jobs("ocr", 5)] == [queued.id]
 
 
 def test_set_units_total_resizes_the_job_this_worker_owns(registry):

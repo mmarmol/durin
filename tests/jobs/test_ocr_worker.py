@@ -1,5 +1,9 @@
 """The OCR worker: transcription, resumption, failure handling."""
 
+import os
+import subprocess
+import sys
+
 import pytest
 
 from durin.jobs.ocr_worker import run_job
@@ -522,16 +526,64 @@ def test_a_cancel_during_the_post_loop_work_is_not_overwritten(
     assert emitted == ["cancelled"]
 
 
+def test_worker_chains_even_when_finish_loses_to_something_else(
+    registry, tmp_path, scanned_pdf, monkeypatch,
+):
+    """Important: finish() returning False means something else already
+    decided this job's outcome (the late cancel above, or a second worker
+    via reconcile's age fallback) -- the row is terminal either way, so the
+    cap slot it held is free either way too. This worker is the one about to
+    exit; if it does not chain, nothing else here is going to notice a
+    queued sibling is waiting."""
+    ws = tmp_path / "ws"
+    entry_dir, pdf = _ingested_entry(ws)
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page",
+        lambda path, page, **kw: f"page {page}",
+    )
+
+    def _cancel_midway(entry_dir):
+        registry.cancel(job.id)
+
+    monkeypatch.setattr("durin.jobs.ocr_worker.index_ingested_entry", _cancel_midway)
+    launched = []
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker._launch_worker",
+        lambda job_id: launched.append(job_id),
+    )
+    job = _enqueue(registry, pdf, [1], sidecar_dir=entry_dir)
+    next_job = _enqueue(registry, scanned_pdf, [1])  # queued sibling behind it
+
+    run_job(job.id, registry=registry)
+
+    reread = registry.get(job.id)
+    assert reread.status == "cancelled"
+    assert launched == [next_job.id]
+
+
 # ---------------------------------------------------------------------------
 # The concurrency cap (MAX_CONCURRENT_OCR_JOBS) and the chain that drains a
 # queue behind it one fresh process at a time.
 # ---------------------------------------------------------------------------
 
 
+def _dead_pid() -> int:
+    """A pid that definitely does not belong to a live process: spawn a
+    child and wait on it, rather than guessing an arbitrary "probably free"
+    integer (mirrors tests/jobs/test_spawn.py's own ``_pid_alive`` fixture).
+    Load-bearing here specifically: the self-healing cap-refusal path below
+    calls the real ``_pid_alive`` probe, so a pid that merely *looks* free by
+    convention is not good enough -- it has to actually be dead."""
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait(timeout=10)
+    return proc.pid
+
+
 def test_worker_exits_quietly_when_the_cap_refuses_its_claim(registry, scanned_pdf, monkeypatch):
     """MAX_CONCURRENT_OCR_JOBS=1: a worker that finds another ocr job already
-    running must not claim its own -- it leaves the row exactly as enqueue
-    left it, for the chain (or a later startup pickup) to claim later."""
+    running -- genuinely alive, unlike the dead-holder case below -- must not
+    claim its own. It leaves the row exactly as enqueue left it, for the
+    chain (or a later startup pickup) to claim later."""
     assert MAX_CONCURRENT_OCR_JOBS == 1  # the scenario this test builds
     called = []
     monkeypatch.setattr(
@@ -539,7 +591,10 @@ def test_worker_exits_quietly_when_the_cap_refuses_its_claim(registry, scanned_p
         lambda path, page, **kw: called.append(page) or f"page {page}",
     )
     running = _enqueue(registry, scanned_pdf, [1])
-    registry.claim(running.id, pid=999999)  # occupies the one cap slot
+    # This test's own process: guaranteed alive for its whole duration, so
+    # the cap-refused claim's inline self-healing reconcile (see the test
+    # below) correctly finds nothing to clean up and refuses again.
+    registry.claim(running.id, pid=os.getpid())
 
     job = _enqueue(registry, scanned_pdf, [1, 2, 3])
     run_job(job.id, registry=registry)
@@ -550,7 +605,40 @@ def test_worker_exits_quietly_when_the_cap_refuses_its_claim(registry, scanned_p
     assert reread.pid is None
     assert reread.started_at is None
     # The job holding the cap slot is untouched by the refusal.
-    assert registry.get(running.id).status == "running"
+    running_reread = registry.get(running.id)
+    assert running_reread.status == "running"
+    assert running_reread.pid == os.getpid()
+
+
+def test_worker_reclaims_the_cap_slot_from_a_dead_holder(registry, scanned_pdf, monkeypatch):
+    """Critical: a worker that dies without finish() -- OOM-killed, kill -9,
+    power loss, or an escaping DB error -- the very failure the cap makes
+    MORE likely, since it is now the one thing standing between "one worker"
+    and the resource pressure that kills workers -- leaves its row "running"
+    forever. reconcile has exactly one other call site, gateway startup,
+    which could be hours away. Before this fix a cap refusal just walked
+    away, and every later job of this kind stayed queued forever behind a
+    dead row with no symptom but an info log. A refused claim must instead
+    self-heal: run the same probe inline and retry once."""
+    called = []
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page",
+        lambda path, page, **kw: called.append(page) or f"page {page}",
+    )
+    stale = _enqueue(registry, scanned_pdf, [1])
+    registry.claim(stale.id, pid=_dead_pid())  # holds the one cap slot, but is dead
+
+    job = _enqueue(registry, scanned_pdf, [1, 2, 3])
+    run_job(job.id, registry=registry)
+
+    assert called == [1, 2, 3]
+    reread = registry.get(job.id)
+    assert reread.status == "done"
+    # The stale holder was requeued by the inline reconcile -- not silently
+    # left "running" forever, wedging every job behind it.
+    stale_reread = registry.get(stale.id)
+    assert stale_reread.status == "queued"
+    assert stale_reread.pid is None
 
 
 def test_worker_chains_to_the_next_queued_job_after_finishing(registry, scanned_pdf, monkeypatch):
@@ -616,6 +704,60 @@ def test_worker_chains_only_after_its_own_finish_write(registry, scanned_pdf, mo
     run_job(job.id, registry=registry)
 
     assert order == ["finish", "launch"]
+
+
+def test_worker_chains_after_a_cancel_is_noticed_mid_loop(registry, scanned_pdf, monkeypatch):
+    """Important: the per-page loop's own cancellation exit is a terminal
+    write too (registry.cancel already ran), and the cap slot the cancelled
+    job held is free from that instant -- exactly like a normal finish. Under
+    cap=1, "one job running, one queued behind it" is the NORMAL state for a
+    multi-book ingest, and stop is a user-facing button: a queued sibling
+    must not sit there forever just because the job ahead of it was
+    cancelled instead of finishing."""
+    def _cancel_after_first(path, page, **kw):
+        if page == 1:
+            registry.cancel(job.id)
+        return f"page {page}"
+
+    monkeypatch.setattr("durin.jobs.ocr_worker.transcribe_page", _cancel_after_first)
+    launched = []
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker._launch_worker",
+        lambda job_id: launched.append(job_id),
+    )
+    job = _enqueue(registry, scanned_pdf, [1, 2, 3])
+    next_job = _enqueue(registry, scanned_pdf, [1])  # queued sibling behind it
+
+    run_job(job.id, registry=registry)
+
+    assert registry.get(job.id).status == "cancelled"
+    assert launched == [next_job.id]
+
+
+def test_worker_does_not_chain_when_its_own_claim_was_refused(registry, scanned_pdf, monkeypatch):
+    """The refused-claim exit must NOT chain: this worker never held a cap
+    slot to free, so launching from here would be an extra process on top of
+    whatever the live holder is already going to chain to when it finishes --
+    the live holder owns the chain, not a worker that never claimed
+    anything."""
+    called = []
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page",
+        lambda path, page, **kw: called.append(page) or f"page {page}",
+    )
+    running = _enqueue(registry, scanned_pdf, [1])
+    registry.claim(running.id, pid=os.getpid())  # genuinely alive: refused, not self-healed
+    launched = []
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker._launch_worker",
+        lambda job_id: launched.append(job_id),
+    )
+    job = _enqueue(registry, scanned_pdf, [1])
+
+    run_job(job.id, registry=registry)
+
+    assert called == []
+    assert launched == []
 
 
 def test_worker_chain_failure_is_logged_and_swallowed(registry, scanned_pdf, monkeypatch):

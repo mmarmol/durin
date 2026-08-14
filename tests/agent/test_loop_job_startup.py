@@ -191,3 +191,42 @@ async def test_startup_caps_the_queued_pickup_at_the_ocr_limit(tmp_path, monkeyp
     assert launched_ids.issubset({j.id for j in jobs})
     # Every job -- launched or not -- is untouched by the launch itself.
     assert {registry.get(j.id).status for j in jobs} == {"queued"}
+
+
+async def test_startup_queued_pickup_launches_distinct_jobs_at_a_higher_cap(tmp_path, monkeypatch):
+    """Important: regression for a duplicate-launch bug that cap=1 hides
+    completely. respawn() never claims, so a row the pickup loop just handed
+    to it is STILL "queued" afterward -- a loop that re-reads "the oldest
+    queued job" on every iteration keeps finding that identical row instead
+    of moving on, launching it N times while the rest of the backlog is
+    never reached at all. Invisible at cap=1 (a single iteration can't repeat
+    anything), which is exactly why this needs its own test at a higher cap
+    rather than trusting the cap=1 test above to cover it."""
+    monkeypatch.setattr("durin.jobs.spawn.MAX_CONCURRENT_OCR_JOBS", 2)
+    registry = JobRegistry()
+    jobs = [
+        registry.enqueue(
+            kind="ocr", label=f"book{i}.pdf",
+            payload={"path": f"/tmp/book{i}.pdf", "pages": [1], "sidecar_dir": None},
+            session_key="chat:1", units_total=1,
+        )
+        for i in range(3)
+    ]
+    loop = _make_loop(tmp_path)  # built before patching Popen -- see the first test
+    calls = []
+    monkeypatch.setattr(
+        "durin.jobs.spawn.subprocess.Popen",
+        lambda args, **kw: calls.append(args),
+    )
+
+    await _run_briefly_and_stop(loop, until=lambda: len(calls) >= 2)
+
+    assert len(calls) == 2
+    launched_ids = [args[-1] for args in calls]
+    assert len(set(launched_ids)) == 2, (
+        f"expected 2 distinct jobs launched, got {launched_ids}"
+    )
+    # The two oldest, specifically -- next_queued/queued_jobs both order
+    # oldest-first, and the third (newest) is left for the chain to reach.
+    assert set(launched_ids) == {jobs[0].id, jobs[1].id}
+    assert {registry.get(j.id).status for j in jobs} == {"queued"}

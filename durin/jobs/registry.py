@@ -194,6 +194,13 @@ class JobRegistry:
         ``created_at``, breaking a same-tick tie by ``rowid`` — the opposite
         tiebreak direction from ``list_for_session``, which wants newest
         first.
+
+        Callers that want up to *n* jobs at once — not just the next one —
+        must use :meth:`queued_jobs` instead of looping this method: nothing
+        launched from this single-job result claims it (that stays the
+        launched worker's own job, done later and in another process), so a
+        second call before that happens returns the identical row again
+        rather than moving on to the next one.
         """
         row = self._conn.execute(
             f"SELECT {_COLUMNS} FROM jobs WHERE kind = ? AND status = 'queued'"
@@ -201,6 +208,25 @@ class JobRegistry:
             (kind,),
         ).fetchone()
         return _row_to_job(row) if row else None
+
+    def queued_jobs(self, kind: str, limit: int) -> list[Job]:
+        """The oldest up to *limit* still-``queued`` jobs of *kind*, oldest
+        first — the same ordering :meth:`next_queued` uses.
+
+        Exists specifically for a caller that wants several distinct queued
+        jobs in one pass, such as gateway startup picking up work under a
+        concurrency cap greater than one: calling :meth:`next_queued` in a
+        loop instead would return the SAME row every iteration; the pickup
+        loop's own launches never claim a job, so nothing changes between
+        iterations for the row already found to no longer be the oldest
+        queued one. One query naming how many to take avoids that trap.
+        """
+        rows = self._conn.execute(
+            f"SELECT {_COLUMNS} FROM jobs WHERE kind = ? AND status = 'queued'"
+            " ORDER BY created_at, rowid LIMIT ?",
+            (kind, limit),
+        ).fetchall()
+        return [_row_to_job(r) for r in rows]
 
     def set_units_total(self, job_id: str, units_total: int, *, pid: int) -> bool:
         """Resize the work of the job this worker owns.
