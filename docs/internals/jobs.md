@@ -502,7 +502,7 @@ itself — the registry has no config of its own.
 
 | Key | Default | Effect |
 |---|---|---|
-| `documents.ocr.enabled` | `false` | Whether scanned pages are transcribed at all; also gates installing the `[ocr]` extra. |
+| `documents.ocr.enabled` | `false` | Whether scanned pages are transcribed at all. Turning it on through the dashboard's Settings > Documents toggle also installs the `[ocr]` extra; `durin config set` does not — the setting is then on with no engine behind it, which reads as a coverage note on every scanned document. |
 | `documents.ocr.inline_max_pages` | `5` | Pages needing OCR at or under this are transcribed inline; more than this enqueues a job instead. |
 
 ### Agent tool (`tasks`)
