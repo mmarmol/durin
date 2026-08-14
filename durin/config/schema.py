@@ -1067,6 +1067,12 @@ class GatewayConfig(Base):
             "browser-origin/loopback behavior."
         ),
     )
+    api_request_timeout: float = Field(
+        default=120.0,
+        validation_alias=AliasChoices("apiRequestTimeout", "api_request_timeout"),
+        serialization_alias="apiRequestTimeout",
+        description="Per-request timeout in seconds for the OpenAI-compatible /v1 chat endpoint",
+    )
 
 
 class MCPOAuthConfig(Base):
