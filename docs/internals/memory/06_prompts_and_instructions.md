@@ -78,7 +78,7 @@ Add a local document to durin's memory as a REFERENCE — coherent source materi
 
 Supported formats are converted to markdown on the way in: PDF, Word (docx), PowerPoint (pptx), Excel (xlsx/xls), EPUB, HTML, CSV, JSON, XML, Jupyter notebooks; markdown and plain text are stored as-is. The verbatim original is always preserved.
 
-`path` is the absolute or workspace-relative path to the file. Re-ingesting the same file is idempotent. The result includes a `reference:<slug>`; when you then author an entity distilled from this document, pass that ref in `memory_upsert_entity(derived_from=[...])` so the entity links back to its source.
+`path` is the absolute or workspace-relative path to the file. Re-ingesting the same file is a no-op once it has finished — the same content comes back, nothing is redone. While its background OCR job is still pending, re-ingesting returns that SAME job instead of starting a second one; only a failed or cancelled job is retried this way. The result includes a `reference:<slug>`; when you then author an entity distilled from this document, pass that ref in `memory_upsert_entity(derived_from=[...])` so the entity links back to its source.
 
 One case returns no text and no reference: a scanned PDF with more pages than can be transcribed on the spot. The result carries `job_id`, `pages_pending` and a `note` instead, and the document is neither readable nor searchable until that background job finishes. Say so — do not report it as read or remembered — and use `tasks` to report progress.
 

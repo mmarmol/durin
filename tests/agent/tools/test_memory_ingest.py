@@ -193,6 +193,29 @@ def test_the_result_says_the_text_is_still_being_transcribed(tmp_path, monkeypat
     assert "reference" not in out          # nothing to cite until the text lands
 
 
+def test_a_pending_scan_re_ingested_through_the_tool_returns_the_same_job(
+    tmp_path, monkeypatch,
+):
+    """End to end, through the surface the broken promise was actually read
+    from: calling memory_ingest twice on the same still-queued book must not
+    spawn a second worker -- the second call has to come back with the SAME
+    job instead."""
+    registry = _defer_ocr_to_a_job(tmp_path, monkeypatch)
+    book = _scanned_book(tmp_path, pages=8)
+    ws = tmp_path / "ws"
+
+    tool = MemoryIngestTool(workspace=str(ws))
+    tool.set_context(RequestContext(channel="websocket", chat_id="c1"))
+
+    first = asyncio.run(tool.execute(path=str(book)))
+    second = asyncio.run(tool.execute(path=str(book)))
+
+    assert first["job_id"]
+    assert second["job_id"] == first["job_id"]
+    assert second["pages_pending"] == first["pages_pending"]
+    assert len(registry.list_for_session("websocket:c1")) == 1
+
+
 def test_a_blank_scan_produces_no_reference_and_reports_the_error(tmp_path, monkeypatch):
     """The tool must not mint a Library reference for a document that
     transcribed to nothing -- ingest_artifact raises before this tool's

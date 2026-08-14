@@ -181,6 +181,165 @@ def test_the_entry_is_complete_before_its_job_is_spawned(tmp_path, book, registr
     assert seen["meta"] is True
 
 
+class _CountingPopen:
+    """Stands in for the ``subprocess`` module inside ``durin.jobs.spawn``, so
+    a test can assert how many OCR workers were actually launched instead of
+    only observing job rows. A fresh instance per test avoids any counter
+    leaking between them (see ``_NoLaunch`` in test_memory_ingest.py for the
+    sibling convention this mirrors)."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def Popen(self, *args, **kwargs):
+        self.calls += 1
+        return None
+
+
+def test_a_pending_re_ingest_returns_the_same_job_not_a_second_one(
+    tmp_path, book, registry, monkeypatch
+):
+    """Reproduced pre-fix: two ingest_artifact calls for the same still-queued
+    book each converted independently and each spawned, leaving two queued
+    rows for one document. Re-ingesting while pending must instead return the
+    SAME job untouched."""
+    launcher = _CountingPopen()
+    monkeypatch.setattr("durin.jobs.spawn.subprocess", launcher)
+    cfg = DocumentsConfig.model_validate({"ocr": {"enabled": True, "inline_max_pages": 5}})
+
+    first = ingest_artifact(
+        tmp_path / "ws", book, documents_config=cfg, jobs=registry, session_key="chat:1"
+    )
+    second = ingest_artifact(
+        tmp_path / "ws", book, documents_config=cfg, jobs=registry, session_key="chat:1"
+    )
+
+    assert second["job_id"] == first["job_id"]
+    assert second["job_pages"] == 40
+    assert second["content"] == ""
+    assert launcher.calls == 1
+    assert len(registry.list_for_session("chat:1")) == 1
+
+
+def test_re_ingest_after_done_is_a_true_no_op(tmp_path, book, registry, monkeypatch):
+    """Reproduced pre-fix: a third ingest_artifact call for a document whose
+    OCR job had already finished re-ran the whole conversion and spawned a
+    THIRD job, even though the finished source.md was already on disk.
+    Re-ingesting after done must skip conversion entirely."""
+    from durin.config.schema import Config
+    from durin.jobs.ocr_worker import run_job
+
+    launcher = _CountingPopen()
+    monkeypatch.setattr("durin.jobs.spawn.subprocess", launcher)
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page",
+        lambda path, page, **kw: f"Page {page}: settled text.",
+    )
+    # memory.enabled=False keeps this test off the vector/embedding half --
+    # index_ingested_entry (called by run_job) still runs its lexical half.
+    mem_cfg = Config()
+    mem_cfg.memory.enabled = False
+    monkeypatch.setattr("durin.config.loader.load_config", lambda *a, **k: mem_cfg)
+    cfg = DocumentsConfig.model_validate({"ocr": {"enabled": True, "inline_max_pages": 5}})
+
+    first = ingest_artifact(tmp_path / "ws", book, documents_config=cfg, jobs=registry)
+    run_job(first["job_id"], registry=registry)
+    assert registry.get(first["job_id"]).status == "done"
+
+    def _must_not_convert(*a, **kw):
+        raise AssertionError("convert_file_to_markdown must not run for a finished entry")
+
+    monkeypatch.setattr("durin.memory.doc_convert.convert_file_to_markdown", _must_not_convert)
+
+    second = ingest_artifact(tmp_path / "ws", book, documents_config=cfg, jobs=registry)
+
+    assert second["job_id"] is None
+    assert "settled text" in second["content"]
+    assert launcher.calls == 1  # no second job spawned
+
+
+def test_re_ingest_after_a_failed_job_spawns_a_fresh_one(
+    tmp_path, book, registry, monkeypatch
+):
+    """A failed job is not a pending one: re-ingesting must retry -- a NEW
+    job spawned, marker overwritten to name it, the old failed row left
+    exactly as it was."""
+    import json
+    from pathlib import Path
+
+    launcher = _CountingPopen()
+    monkeypatch.setattr("durin.jobs.spawn.subprocess", launcher)
+    cfg = DocumentsConfig.model_validate({"ocr": {"enabled": True, "inline_max_pages": 5}})
+
+    first = ingest_artifact(
+        tmp_path / "ws", book, documents_config=cfg, jobs=registry, session_key="chat:1"
+    )
+    old_job_id = first["job_id"]
+    assert registry.claim(old_job_id, pid=4242)
+    assert registry.finish(old_job_id, pid=4242, error="boom")
+
+    second = ingest_artifact(
+        tmp_path / "ws", book, documents_config=cfg, jobs=registry, session_key="chat:1"
+    )
+
+    assert second["job_id"] is not None
+    assert second["job_id"] != old_job_id
+    old_job = registry.get(old_job_id)
+    assert old_job.status == "failed"
+    assert old_job.error == "boom"
+    marker = json.loads((Path(second["source"]).parent / "ocr_job.json").read_text())
+    assert marker["job_id"] == second["job_id"]
+    assert launcher.calls == 2
+    assert len(registry.list_for_session("chat:1")) == 2
+
+
+def test_a_marker_naming_a_vanished_job_behaves_as_a_retry(
+    tmp_path, book, registry, monkeypatch
+):
+    """A marker can outlive the row it names (a pruned terminal job); this
+    must read as a retry, not a crash."""
+    import json
+    from pathlib import Path
+
+    launcher = _CountingPopen()
+    monkeypatch.setattr("durin.jobs.spawn.subprocess", launcher)
+    cfg = DocumentsConfig.model_validate({"ocr": {"enabled": True, "inline_max_pages": 5}})
+
+    first = ingest_artifact(tmp_path / "ws", book, documents_config=cfg, jobs=registry)
+    marker_path = Path(first["source"]).parent / "ocr_job.json"
+    marker_path.write_text(json.dumps({"job_id": "vanished-000"}), encoding="utf-8")
+
+    second = ingest_artifact(tmp_path / "ws", book, documents_config=cfg, jobs=registry)
+
+    assert second["job_id"] is not None
+    assert second["job_id"] != "vanished-000"
+    assert registry.get(second["job_id"]) is not None
+    assert launcher.calls == 2
+
+
+def test_an_ordinary_markdown_document_re_ingest_also_short_circuits(tmp_path, registry):
+    """The no-op promise finally holds for the common, non-OCR case too: a
+    second ingest of an unchanged markdown file must not rewrite meta.json --
+    the old code rewrote it (fresh ingested_at) on every call regardless of
+    whether anything had changed."""
+    from pathlib import Path
+
+    doc = tmp_path / "notes.md"
+    doc.write_text("# Notes\n\nFirst version.\n", encoding="utf-8")
+
+    first = ingest_artifact(tmp_path / "ws", doc, jobs=registry)
+    assert first["content"] == "# Notes\n\nFirst version.\n"
+    assert first["job_id"] is None
+    meta_before = Path(first["meta_path"]).read_text(encoding="utf-8")
+
+    second = ingest_artifact(tmp_path / "ws", doc, jobs=registry)
+
+    assert second["id"] == first["id"]
+    assert second["content"] == first["content"]
+    assert second["job_id"] is None
+    assert Path(second["meta_path"]).read_text(encoding="utf-8") == meta_before
+
+
 class _RecordingVectorIndex:
     def __init__(self):
         self.upserts = []

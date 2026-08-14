@@ -50,8 +50,18 @@ def ingest_artifact(
     Returns a dict with: ``id``, ``source`` (path written), ``content``
     (utf-8 text), ``meta_path``, ``size_bytes``, ``job_id``, ``job_pages``.
 
-    Idempotent: the same ``(filename, content)`` pair always resolves
-    to the same ``id``, so re-ingesting the same file is a no-op.
+    ``entry_id`` is computed first, before any conversion runs, so a
+    re-ingest of the same ``(filename, bytes)`` pair is decided by the
+    entry's own state on disk rather than by re-running the work:
+
+    - Finished (``source.md`` already there): a true no-op. Conversion is
+      skipped and ``content`` comes back from that file, ``job_id=None``.
+    - A background OCR job for it is still ``queued``/``running`` (tracked by
+      the entry's ``ocr_job.json`` marker): also skipped, returning that SAME
+      ``job_id`` instead of spawning a second one.
+    - The marker names a job that is ``failed``/``cancelled``, or one the
+      registry no longer has: a legitimate retry — conversion runs again and
+      a fresh job is spawned, overwriting the marker.
 
     A PDF needing more OCR than the inline budget allows does not block:
     the original is stored right away, ``job_id`` names the background job
@@ -61,9 +71,10 @@ def ingest_artifact(
     number itself. ``content`` is empty in that case, and the markdown sidecar —
     plus the Library entry indexed from it — is produced later, by the
     worker. ``documents_config`` is the ``DocumentsConfig`` to use (``None``
-    loads it); ``jobs`` is the ``JobRegistry`` such a job is enqueued on
-    (``None`` opens the default one); ``session_key`` tags the job with the
-    session that requested it.
+    loads it); ``jobs`` is the ``JobRegistry`` used for both a spawned job
+    (enqueued on it) and an existing one named by the marker (looked up in
+    it) (``None`` opens the default one); ``session_key`` tags a freshly
+    spawned job with the session that requested it.
     """
     if not source_path.exists():
         raise IngestError(f"source does not exist: {source_path}")
@@ -77,13 +88,86 @@ def ingest_artifact(
         is_convertible,
     )
 
-    pending_ocr_pages: list[int] | None = None
-    pending_ocr_total = 0
+    # Identity first, before anything that could be a conversion. A converted
+    # document keys off its raw bytes (legal to read before deciding anything
+    # about them) so re-ingest stays idempotent regardless of any
+    # non-determinism in the markdown rendering; a plain text/markdown source
+    # keys off its decoded content, which reading it for identity already
+    # required — that read is not the expensive "conversion" step the
+    # short-circuits below exist to skip.
     converted = is_convertible(source_path.suffix)
     if converted:
+        entry_id = _bytes_id(source_path.name, source_path.read_bytes())
+    else:
+        try:
+            content = source_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            raise IngestError(
+                f"source is not utf-8 text and not a supported document format "
+                f"(.odt, .rtf, images are unsupported): {source_path}"
+            ) from exc
+        entry_id = _content_id(source_path.name, content)
+
+    size_bytes = source_path.stat().st_size
+    entry_dir = ingested_entry_dir(workspace, entry_id)
+    target = entry_dir / f"source{source_path.suffix or '.txt'}"
+    meta_path = entry_dir / "meta.json"
+    md_sidecar = entry_dir / "source.md"
+
+    if md_sidecar.exists():
+        # True no-op: this exact (filename, bytes) pair already finished an
+        # ingest, converted or not. meta.json is left exactly as whichever
+        # call wrote it — rewriting it here would reset ingested_at and, for
+        # a document a dream pass has since distilled, wipe its derived
+        # summary/entities/relations back to empty on every casual re-mention.
+        return {
+            "id": entry_id,
+            "source": str(target),
+            "content": md_sidecar.read_text(encoding="utf-8"),
+            "meta_path": str(meta_path),
+            "size_bytes": size_bytes,
+            "job_id": None,
+            "job_pages": None,
+        }
+
+    registry = jobs
+    ocr_job_marker = entry_dir / "ocr_job.json"
+    if ocr_job_marker.exists():
+        from durin.jobs.registry import JobRegistry
+
+        registry = registry or JobRegistry()
+        marker_job_id = json.loads(ocr_job_marker.read_text(encoding="utf-8"))["job_id"]
+        existing_job = registry.get(marker_job_id)
+        # Branch on the row's CURRENT status only, never on whether it was
+        # ever failed: a job later revived from failed back to queued by some
+        # other action must read as pending here, exactly like one that was
+        # always queued, or the two would fight over the same row. A vanished
+        # row (get() -> None -- terminal jobs can be pruned), a
+        # failed/cancelled one, and a `done` one with no sidecar all fall
+        # through to the same retry below. That last case is not the ordinary
+        # race it sounds like: since the sidecar check above already returned
+        # if source.md existed, reaching this point with status `done` means
+        # the sidecar that job wrote (the worker always writes it before
+        # calling finish(), see durin/jobs/ocr_worker.py) is no longer there —
+        # a half state from something removed after the fact, not from the
+        # worker's own sequencing. Retrying is the safe, self-healing
+        # response either way.
+        if existing_job is not None and existing_job.status in ("queued", "running"):
+            return {
+                "id": entry_id,
+                "source": str(target),
+                "content": "",
+                "meta_path": str(meta_path),
+                "size_bytes": size_bytes,
+                "job_id": existing_job.id,
+                "job_pages": existing_job.units_total,
+            }
+
+    pending_ocr_pages: list[int] | None = None
+    pending_ocr_total = 0
+    if converted:
         # A supported document (PDF/Office/EPUB/HTML/…): convert to markdown
-        # for the reference, keep the original verbatim, key the id off the
-        # ORIGINAL bytes so re-ingest stays idempotent for binaries.
+        # for the reference, keep the original verbatim.
         try:
             content = convert_file_to_markdown(
                 source_path, documents_config=documents_config
@@ -101,31 +185,16 @@ def ingest_artifact(
             pending_ocr_total = exc.estimated_pages
         except DocConvertError as exc:
             raise IngestError(str(exc)) from exc
-        entry_id = _bytes_id(source_path.name, source_path.read_bytes())
-    else:
-        try:
-            content = source_path.read_text(encoding="utf-8")
-        except UnicodeDecodeError as exc:
-            raise IngestError(
-                f"source is not utf-8 text and not a supported document format "
-                f"(.odt, .rtf, images are unsupported): {source_path}"
-            ) from exc
-        entry_id = _content_id(source_path.name, content)
+    # else: `content` was already read above, decoding entry_id's identity.
 
-    size_bytes = source_path.stat().st_size
-
-    entry_dir = ingested_entry_dir(workspace, entry_id)
-    target = entry_dir / f"source{source_path.suffix or '.txt'}"
     if not target.exists():
         shutil.copy2(source_path, target)
     if converted and pending_ocr_pages is None:
         # A pending job means `content` is a placeholder, not a conversion —
         # the worker writes this sidecar itself once the real text exists.
-        md_sidecar = entry_dir / "source.md"
         if not md_sidecar.exists():
             atomic_write_text(md_sidecar, content)
 
-    meta_path = entry_dir / "meta.json"
     payload = {
         "id": entry_id,
         "derived": {
@@ -150,7 +219,7 @@ def ingest_artifact(
         from durin.jobs.spawn import spawn_ocr_job
 
         job = spawn_ocr_job(
-            registry=jobs or JobRegistry(),
+            registry=registry or JobRegistry(),
             pdf_path=target,
             pages=pending_ocr_pages,
             session_key=session_key,
@@ -162,6 +231,20 @@ def ingest_artifact(
             units_total=pending_ocr_total,
         )
         job_id = job.id
+        # Written strictly after a successful spawn, so a marker never names
+        # a job that does not exist. This is still a check-then-act across
+        # processes, not an atomic reservation: two ingests of the identical
+        # bytes that both observe no marker/sidecar before either one's
+        # spawn+write lands can both spawn. The window is narrow (a
+        # probe/confirm pass, not a full OCR run) and its cost is bounded --
+        # two queued rows for the same book, which the existing concurrency
+        # cap and chaining drain one after another without corrupting
+        # anything. What this fixes is the guaranteed-every-time duplicate
+        # from a plain sequential re-ingest, not this rare simultaneous race.
+        atomic_write_text(
+            ocr_job_marker,
+            json.dumps({"job_id": job_id}, indent=2),
+        )
 
     return {
         "id": entry_id,
