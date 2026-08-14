@@ -308,6 +308,56 @@ async def test_drain_pending_offloads_document_conversion_to_a_thread(tmp_path):
     )
 
 
+@pytest.mark.asyncio
+async def test_drain_pending_isolates_one_message_conversion_failure(tmp_path, monkeypatch):
+    """A batch drains up to _MAX_INJECTIONS_PER_TURN messages (get_nowait,
+    destructive) before any of them convert. If one message's conversion
+    raises -- e.g. its media file was deleted between drain and convert --
+    and that exception is allowed to propagate out of the batched to_thread
+    call, AgentRunner._drain_injections (durin/agent/runner.py) catches it
+    and returns [], discarding every OTHER already-dequeued message too,
+    not just the one that failed. The failing message must instead surface
+    as an inline error so its batch-mates are not collateral damage.
+    """
+    from durin.agent.loop import AgentLoop
+    from durin.bus.events import InboundMessage
+    from durin.bus.queue import MessageBus
+
+    def _raising_extract_documents(text, media, **_kwargs):
+        raise FileNotFoundError("No such file or directory: '/fake/deleted.pdf'")
+
+    monkeypatch.setattr("durin.agent.loop.extract_documents", _raising_extract_documents)
+
+    bus = MessageBus()
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    loop = AgentLoop(bus=bus, provider=provider, workspace=tmp_path, model="test-model")
+
+    callback, pending = await _capture_injection_callback(loop)
+
+    await pending.inject.put(InboundMessage(
+        channel="websocket", sender_id="u", chat_id="c1", content="first message",
+    ))
+    await pending.inject.put(InboundMessage(
+        channel="websocket", sender_id="u", chat_id="c1",
+        content="second message, media deleted mid-drain", media=["/fake/deleted.pdf"],
+    ))
+    await pending.inject.put(InboundMessage(
+        channel="websocket", sender_id="u", chat_id="c1", content="third message",
+    ))
+
+    result = await callback(steer_only=True)
+
+    assert len(result) == 3, (
+        f"expected all 3 batch-mates to survive, got {len(result)} -- "
+        "one message's conversion failure dropped the whole batch"
+    )
+    assert result[0]["content"] == "first message"
+    assert "second message, media deleted mid-drain" in str(result[1]["content"])
+    assert "[error: attached media could not be read" in str(result[1]["content"])
+    assert result[2]["content"] == "third message"
+
+
 # ---------------------------------------------------------------------------
 # Consumer: routing into inject vs deferred
 # ---------------------------------------------------------------------------

@@ -1671,6 +1671,33 @@ class AgentLoop:
                 user_content = self.context._build_user_content(content, media)
                 return {"role": "user", "content": user_content}
 
+            def _to_user_message_or_error(pending_msg: InboundMessage) -> dict[str, Any]:
+                """``_to_user_message``, with a failure isolated to this message.
+
+                extract_documents (an unguarded ``open()`` past its own
+                ``is_file()`` check) and ``_build_user_content`` (an unguarded
+                ``read_bytes()``) can both raise on a media file deleted
+                between drain and convert. The batch below converts every
+                pending message in one ``to_thread`` hop, and `_pull` above
+                has already dequeued the whole batch destructively
+                (``get_nowait``) before any of it runs — letting one
+                message's failure propagate out of the list comprehension
+                would abort the whole hop and silently drop every OTHER
+                already-dequeued message too, not just the one that failed.
+                """
+                try:
+                    return _to_user_message(pending_msg)
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception(
+                        "Failed to convert a queued message to a user turn (session={})",
+                        pending_msg.session_key,
+                    )
+                    content = (
+                        f"{pending_msg.content}\n\n"
+                        f"[error: attached media could not be read: {exc}]"
+                    )
+                    return {"role": "user", "content": content}
+
             # Messages are only COLLECTED here (raw InboundMessage); conversion
             # (extract_documents + _build_user_content, both blocking disk/CPU
             # work) happens in one batch below, off the event loop. `pending`
@@ -1739,9 +1766,9 @@ class AgentLoop:
                 # batch in one hop rather than per-message, since `_pull`
                 # above is synchronous (get_nowait loops) and must stay that
                 # way to drain what's immediately available without yielding
-                # mid-scan.
+                # mid-scan. Per-message: see _to_user_message_or_error.
                 items.extend(await asyncio.to_thread(
-                    lambda: [_to_user_message(m) for m in pending]
+                    lambda: [_to_user_message_or_error(m) for m in pending]
                 ))
 
             await self._ack_queued_consumed(consumed)
