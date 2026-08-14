@@ -30,11 +30,34 @@ def test_a_job_carries_its_page_progress(tmp_path, registry):
     assert tasks[0]["units_done"] == 1
 
 
-def test_a_queued_job_reads_as_running_in_the_tray(tmp_path, registry):
-    # The tray's vocabulary has no "queued"; from the user's side the work is
-    # accepted and pending, which is what "running" communicates.
+def test_a_queued_job_reads_as_queued_in_the_tray(tmp_path, registry):
+    """Not "running". Under the OCR concurrency cap, queued is the normal
+    state of every book but the first in a multi-document ingest, and calling
+    it running gives it a live clock counting time nothing is working on it."""
     registry.enqueue(kind="ocr", label="a", payload={}, session_key="s", units_total=1)
+    assert collect_tasks(tmp_path, session_key="s", jobs=registry)[0]["status"] == "queued"
+
+
+def test_a_claimed_job_reads_as_running(tmp_path, registry):
+    """The other side of the same distinction: once a worker holds the row,
+    the tray says running and means it."""
+    job = registry.enqueue(kind="ocr", label="a", payload={}, session_key="s", units_total=1)
+    registry.claim(job.id, pid=4242)
     assert collect_tasks(tmp_path, session_key="s", jobs=registry)[0]["status"] == "running"
+
+
+def test_only_jobs_ever_report_queued(tmp_path, registry):
+    """Sub-agents and workflow runs have no queued state to report -- their
+    mappers cannot produce the word, so a consumer that handles it only needs
+    to handle it for jobs."""
+    from durin.agent.background_tasks import _subagent_status, _workflow_status
+
+    phases = ["initializing", "awaiting_tools", "tools_completed", "final_response",
+              "done", "error", "cancelled"]
+    run_statuses = ["running", "completed", "needs_input", "exhausted", "aborted",
+                    "cancelled", "crashed"]
+    assert "queued" not in {_subagent_status(p) for p in phases}
+    assert "queued" not in {_workflow_status(s) for s in run_statuses}
 
 
 def test_a_finished_job_reads_as_done(tmp_path, registry):

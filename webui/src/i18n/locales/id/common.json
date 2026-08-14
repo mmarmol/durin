@@ -2272,9 +2272,11 @@
   },
   "tasks": {
     "status": {
-      "needs_input": "Butuh input"
+      "needs_input": "Butuh input",
+      "queued": "Dalam antrean"
     },
     "needsInputHint": "Diserahkan ke agen pemanggil — agen ini bisa menjawab dari konteksnya sendiri atau bertanya ke Anda, lalu melanjutkan run ini.",
+    "queuedHint": "Menunggu untuk mulai — dokumen ditranskripsi satu per satu.",
     "questions": "Pertanyaan"
   },
   "work": {
@@ -2288,10 +2290,12 @@
     "close": "Tutup panel kerja",
     "strip": {
       "statusRunning": "berjalan",
+      "statusQueued": "dalam antrean",
       "statusDone": "selesai",
       "statusFailed": "gagal",
       "statusCancelled": "dibatalkan",
       "runningMany": "{{count}} tugas sedang berjalan",
+      "queuedMany": "{{count}} tugas dalam antrean",
       "needsInput": "{{label}} membutuhkan jawaban Anda",
       "needsInputMany": "{{count}} tugas membutuhkan jawaban Anda",
       "view": "Lihat",

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Ban, Check, HelpCircle, Loader2, PanelRight, X } from "lucide-react";
+import { Ban, Check, Clock, HelpCircle, Loader2, PanelRight, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { cn } from "@/lib/utils";
@@ -66,6 +66,10 @@ export function WorkStrip({
 
   const needsInput = active.filter((w) => w.status === "needs_input");
   const running = active.length > 0;
+  // Everything active is merely waiting for a worker slot (a multi-document
+  // ingest: one OCR job runs, the rest queue). A spinner and "in progress"
+  // over work that has not started is the same lie the card used to tell.
+  const allQueued = running && active.every((w) => w.status === "queued");
   const shown = running ? null : flash;
   const warn = needsInput.length > 0;
   // Only meaningful for the single-item, non-warn case (see body below);
@@ -91,7 +95,11 @@ export function WorkStrip({
       </span>
     );
   } else if (running) {
-    icon = <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden />;
+    icon = allQueued ? (
+      <Clock className="h-3.5 w-3.5 shrink-0" aria-hidden />
+    ) : (
+      <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden />
+    );
     // Falls back to the plain status text when nothing is running yet (no
     // node list, or none of the nodes have started) — old behavior preserved.
     const runningSuffix =
@@ -100,7 +108,7 @@ export function WorkStrip({
             "work.strip.nodes",
             { count: touchedNodeCount(active[0]) },
           )}`
-        : t("work.strip.statusRunning");
+        : t(allQueued ? "work.strip.statusQueued" : "work.strip.statusRunning");
     body =
       active.length === 1 ? (
         <>
@@ -111,7 +119,9 @@ export function WorkStrip({
         </>
       ) : (
         <span className="truncate">
-          {t("work.strip.runningMany", { count: active.length })}
+          {t(allQueued ? "work.strip.queuedMany" : "work.strip.runningMany", {
+            count: active.length,
+          })}
         </span>
       );
   } else {

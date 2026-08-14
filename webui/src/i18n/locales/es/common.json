@@ -2357,9 +2357,11 @@
   },
   "tasks": {
     "status": {
-      "needs_input": "Necesita input"
+      "needs_input": "Necesita input",
+      "queued": "En cola"
     },
     "needsInputHint": "En manos del agente que lo llamó — puede responder con su propio contexto o preguntarte, y luego reanuda este run.",
+    "queuedHint": "Esperando para empezar — se transcribe un documento a la vez.",
     "questions": "Preguntas"
   },
   "work": {
@@ -2387,10 +2389,12 @@
     },
     "strip": {
       "statusRunning": "en curso",
+      "statusQueued": "en cola",
       "statusDone": "finalizado",
       "statusFailed": "falló",
       "statusCancelled": "cancelado",
       "runningMany": "{{count}} trabajos en curso",
+      "queuedMany": "{{count}} trabajos en cola",
       "needsInput": "{{label}} necesita tu respuesta",
       "needsInputMany": "{{count}} trabajos necesitan tu respuesta",
       "nodes_one": "{{count}} nodo",

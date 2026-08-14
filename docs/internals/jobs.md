@@ -135,10 +135,11 @@ for the shared mechanism.
 `spawn_ocr_job` (`durin/jobs/spawn.py`) writes the row with `status="queued"`
 and immediately `Popen`s the worker with `start_new_session=True`, so the
 worker outlives the request that launched it. If the `Popen` call itself
-fails (e.g. the OS is out of processes), the row is left `queued` — the next
-gateway start's queued-pickup loop finds it (`reconcile` only ever selects
-`running` rows, so a `queued` job with no worker is invisible to it; see
-[Restart reconciliation](#restart-reconciliation)).
+fails (e.g. the OS is out of processes), the row is left `queued` — the
+queued-pickup loop finds it, within the minute from the [periodic
+sweep](#the-periodic-sweep) and again at the next gateway start (`reconcile`
+only ever selects `running` rows, so a `queued` job with no worker is
+invisible to it; see [Restart reconciliation](#restart-reconciliation)).
 
 A worker claims its own job rather than trusting the caller: `JobRegistry.claim`
 runs `UPDATE jobs SET status='running', pid=? WHERE id=? AND status='queued'`
@@ -441,17 +442,21 @@ across kinds today: `MAX_CONCURRENT_OCR_JOBS`, the `kind_cap` passed to
 `AgentLoop.run()` are all specific to `"ocr"` (see [Concurrency cap and
 chaining](#concurrency-cap-and-chaining)). A second kind that needs the same
 protection adds its own cap constant and wires its own `kind_cap`, chain, and
-startup pickup the same way — none of that is inherited automatically.
+pickup the same way — none of that is inherited automatically, including the
+[periodic sweep](#the-periodic-sweep)'s pickup, which reads `"ocr"` for the
+same reason `AgentLoop.run()`'s startup pickup does (`reconcile` inside that
+same pass is kind-agnostic and does cover a second kind's orphans).
 
 One more gap worth knowing before adding a second kind: `ocr_worker.run_job`'s
 own inline `reconcile()` call (the cap-refusal self-heal, see
 [above](#concurrency-cap-and-chaining)) is not scoped to `"ocr"` either —
 `reconcile` itself takes no `kind` argument, so it requeues *any* kind's
 orphaned `running` row it finds stale. But that call site only retries its
-own claim on success; unlike gateway startup, it never calls `respawn()` for
-the orphans it requeues. A second kind's job requeued by that inline call
-sits `queued` with nothing launched for it until the next gateway restart,
-or its own kind's chain/pickup mechanism if it wires one.
+own claim on success; unlike the gateway's own pass, it never calls
+`respawn()` for the orphans it requeues. A second kind's job requeued by that
+inline call sits `queued` with nothing launched for it — the sweep's pickup
+would not reach it either, since that names `"ocr"` — until its own kind's
+chain/pickup mechanism, if it wires one.
 
 Nothing else needs to change to reach the tray: `collect_tasks` and
 `TasksTool` render any registry row from its generic fields (label, status,
@@ -459,7 +464,10 @@ Nothing else needs to change to reach the tray: `collect_tasks` and
 `WorkItemCard` already renders a job's progress as "N of M" — though its
 current label text says "pages" specifically (`work.pages` in the i18n
 catalog), so a kind whose units are not pages would want its own progress
-copy there.
+copy there. The `queued` wording is the same kind of trap: nothing branches
+on kind to produce it, but the copy assumes OCR in both places it appears
+(the tool's "waiting for the OCR slot", the card's "one document is
+transcribed at a time").
 
 ## 5. Key types and entry points
 
@@ -500,11 +508,16 @@ itself — the registry has no config of its own.
 ### Agent tool (`tasks`)
 
 `action="list"` shows every sub-agent, workflow run, and job in the calling
-session; `action="status"` with an id gives a job's page progress
-(`done/total`) alongside its status and age, plus the recorded reason when it
-failed; `action="stop"` cancels a job (cooperative — see above). The id namespace is shared and resolved
-automatically across all three kinds, so the agent does not need to know
-which one it is asking about.
+session, counting queued jobs apart from both running and finished work;
+`action="status"` with an id gives a job's page progress (`done/total`)
+alongside its status, plus the recorded reason when it failed. A `running`
+job also reports its age; a `queued` one reports that it is waiting for the
+OCR slot instead, because an age beside a job reads as time spent working and
+a queued job has no worker. `action="stop"` cancels a job: cooperative for a
+running one (see above), immediate and final for a queued one, since `claim`
+only ever moves a row *out* of `queued` and nothing can pick it up
+afterwards. The id namespace is shared and resolved automatically across all
+three kinds, so the agent does not need to know which one it is asking about.
 
 ### API routes
 
@@ -520,6 +533,16 @@ sub-agent card, with a job-specific footer line showing pages transcribed of
 pages total, and — for a failed job — the reason its worker recorded, verbatim
 and untranslated. It is read-only today: no cancel button is wired to a job
 row.
+
+A `queued` job renders as its own state on both surfaces, and the panel
+counts it as active work rather than finished. The card shows a still clock
+(never the running spinner), a muted "Queued" tag and a line saying one
+document is transcribed at a time; no live clock ticks on it, because nothing
+has started. The strip says "queued" instead of "in progress" when everything
+active is waiting; with one job actually transcribing it keeps spinning. This
+is not cosmetic: the OCR cap makes `queued` the normal state of every book but
+the first in a multi-document ingest, and rendering those as `running` with a
+live ticker hid both the wait and any stall in it.
 The Textual TUI's WORK sidebar section tracks only workflow runs and
 sub-agents; it does not read the job registry, so a running job is not
 visible there.

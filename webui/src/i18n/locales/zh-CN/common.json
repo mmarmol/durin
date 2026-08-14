@@ -2272,9 +2272,11 @@
   },
   "tasks": {
     "status": {
-      "needs_input": "需要输入"
+      "needs_input": "需要输入",
+      "queued": "排队中"
     },
     "needsInputHint": "已交给调用方代理——它可能会根据自身上下文直接回答，或向你提问，然后继续这次运行。",
+    "queuedHint": "等待开始——一次只转写一个文档。",
     "questions": "问题"
   },
   "work": {
@@ -2288,10 +2290,12 @@
     "close": "关闭工作面板",
     "strip": {
       "statusRunning": "进行中",
+      "statusQueued": "排队中",
       "statusDone": "已完成",
       "statusFailed": "失败",
       "statusCancelled": "已取消",
       "runningMany": "{{count}} 个任务进行中",
+      "queuedMany": "{{count}} 个任务排队中",
       "needsInput": "{{label}} 需要你的回复",
       "needsInputMany": "{{count}} 个任务需要你的回复",
       "view": "查看",

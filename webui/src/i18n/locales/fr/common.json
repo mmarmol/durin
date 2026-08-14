@@ -2272,9 +2272,11 @@
   },
   "tasks": {
     "status": {
-      "needs_input": "Réponse requise"
+      "needs_input": "Réponse requise",
+      "queued": "En file d’attente"
     },
     "needsInputHint": "Transmis à l’agent appelant — il peut répondre depuis son propre contexte ou vous demander, puis reprendre cette exécution.",
+    "queuedHint": "En attente de démarrage — un seul document est transcrit à la fois.",
     "questions": "Questions"
   },
   "work": {
@@ -2288,10 +2290,12 @@
     "close": "Fermer le panneau de travail",
     "strip": {
       "statusRunning": "en cours",
+      "statusQueued": "en file d’attente",
       "statusDone": "terminé",
       "statusFailed": "échoué",
       "statusCancelled": "annulé",
       "runningMany": "{{count}} tâches en cours",
+      "queuedMany": "{{count}} tâches en file d’attente",
       "needsInput": "{{label}} attend votre réponse",
       "needsInputMany": "{{count}} tâches attendent votre réponse",
       "view": "Voir",

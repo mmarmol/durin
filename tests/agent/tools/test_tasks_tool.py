@@ -139,6 +139,52 @@ async def test_status_job_detail_shows_progress(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_status_of_a_queued_job_says_it_is_waiting_and_shows_no_clock(tmp_path):
+    """A job behind the OCR cap has not started. Reporting an age for it reads
+    as time spent transcribing, which is exactly what nobody is doing."""
+    jobs = _job_registry(tmp_path)
+    job = jobs.enqueue(kind="ocr", label="book.pdf", payload={}, session_key=SESSION, units_total=40)
+
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(
+        action="status", id=job.id)
+
+    assert "status: queued" in out
+    assert "age:" not in out
+    assert "waiting" in out
+    # Progress still shows: the denominator is what the job will be.
+    assert "0/40" in out
+
+
+@pytest.mark.asyncio
+async def test_list_counts_a_queued_job_as_neither_running_nor_finished(tmp_path):
+    """The header's two buckets used to absorb queued rows into "finished",
+    which is the opposite of true for work that has not started."""
+    jobs = _job_registry(tmp_path)
+    started = jobs.enqueue(
+        kind="ocr", label="first.pdf", payload={}, session_key=SESSION, units_total=1)
+    jobs.claim(started.id, pid=4242)
+    jobs.enqueue(kind="ocr", label="second.pdf", payload={}, session_key=SESSION, units_total=1)
+
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(action="list")
+
+    assert "1 running, 1 queued, 0 finished" in out
+    assert "queued" in out.split("\n")[-1] or "queued" in out
+
+
+@pytest.mark.asyncio
+async def test_list_says_nothing_about_queueing_when_nothing_is_queued(tmp_path):
+    """The count only earns its place when there is one -- an always-present
+    "0 queued" is noise in a line the model reads on every check."""
+    jobs = _job_registry(tmp_path)
+    job = jobs.enqueue(kind="ocr", label="book.pdf", payload={}, session_key=SESSION, units_total=1)
+    jobs.claim(job.id, pid=4242)
+
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(action="list")
+
+    assert "1 running, 0 finished" in out
+
+
+@pytest.mark.asyncio
 async def test_status_of_a_failed_job_says_why_it_failed(tmp_path):
     """"failed" on its own is not an answer anyone can act on. The worker
     already records a usable reason; this is the surface that has to show it."""
@@ -184,13 +230,36 @@ async def test_stop_finished_workflow_is_noop(tmp_path):
 async def test_stop_running_job_requests_cancel(tmp_path):
     jobs = _job_registry(tmp_path)
     job = jobs.enqueue(kind="ocr", label="book.pdf", payload={}, session_key=SESSION, units_total=40)
+    # Claimed, so this really is the running path: the row used to reach the
+    # tray as "running" whether or not anything had claimed it.
+    jobs.claim(job.id, pid=4242)
+
     out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(
         action="stop", id=job.id)
+
     assert "asked to cancel" in out
+    assert "page boundary" in out
     assert jobs.get(job.id).status == "cancelled"
     # Unlike a sub-agent or workflow run, nothing in durin/jobs ever publishes
     # a follow-up message -- the stop message must not claim one is coming.
     assert "follow-up" not in out
+
+
+@pytest.mark.asyncio
+async def test_stop_queued_job_cancels_it_outright(tmp_path):
+    """A job waiting for the OCR slot is the most cancellable state there is:
+    nothing has claimed it, and `claim` only ever moves a row out of "queued",
+    so the cancel is final with no page boundary to wait for. Naming it
+    "queued" in the tray must not make it look uncancellable."""
+    jobs = _job_registry(tmp_path)
+    job = jobs.enqueue(kind="ocr", label="book.pdf", payload={}, session_key=SESSION, units_total=40)
+
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(
+        action="stop", id=job.id)
+
+    assert jobs.get(job.id).status == "cancelled"
+    assert "nothing to cancel" not in out
+    assert "page boundary" not in out
 
 
 @pytest.mark.asyncio

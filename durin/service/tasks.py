@@ -30,7 +30,10 @@ class BackgroundTask(Result):
     kind: str  # "subagent" | "workflow" | "job"
     id: str
     label: str
-    status: str  # "running" | "needs_input" | "done" | "failed" | "cancelled"
+    # "queued" | "running" | "needs_input" | "done" | "failed" | "cancelled".
+    # Only a job is ever "queued" (waiting for the OCR concurrency cap's slot,
+    # nothing started yet) and only a workflow run is ever "needs_input".
+    status: str
     started_at: float  # wall-clock epoch seconds
     ended_at: float | None
     session_key: str | None  # for drill-in into the chat thread view
