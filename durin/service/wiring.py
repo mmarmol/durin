@@ -63,6 +63,7 @@ def build_service_registry(
     ``LoopsRuntime`` so ``LoopsService`` can fire/answer runs; surfaces
     without one leave it ``None`` and those two routes report unavailable.
     """
+    from durin.jobs.registry import JobRegistry
     from durin.security.api_tokens import ApiTokenStore
     from durin.service.auth import AuthService
     from durin.service.channels_discord import DiscordService
@@ -130,9 +131,14 @@ def build_service_registry(
     registry.register("workflows", WorkflowsService(
         workspace=_workspace(), app_config=config, sessions=session_manager))
     from durin.service.tasks import TasksService
+    # Unlike subagent_manager/session_manager, a JobRegistry is a stateless
+    # database handle rather than live in-memory state, so a fresh instance
+    # here is equivalent to reusing one — it just opens its own connection to
+    # the same jobs.db the gateway's other JobRegistry instances (reconcile at
+    # startup, the OCR worker subprocess) already read and write.
     registry.register("tasks", TasksService(
         workspace=_workspace(), subagent_manager=subagent_manager,
-        sessions=session_manager))
+        sessions=session_manager, jobs=JobRegistry()))
     registry.register("loops", LoopsService(
         workspace=_workspace(), cron_service=cron_service, runtime=loops_runtime,
         hooks_secret=lambda: ApiTokenStore().get_or_create_hooks_secret()))

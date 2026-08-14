@@ -1905,7 +1905,11 @@ async def cmd_sources(ctx: CommandContext) -> OutboundMessage:
         if not source.is_absolute():
             source = (workspace / source).resolve()
         try:
-            result = ingest_artifact(workspace, source)
+            # ctx.key IS the session key here (loop.sessions.get_or_create(ctx.key)
+            # is the pattern every other handler in this module uses) — tag any
+            # background OCR job this triggers with it, or the job's session_key
+            # stays NULL and it never appears in anyone's tasks tray.
+            result = ingest_artifact(workspace, source, session_key=ctx.key)
         except IngestError as exc:
             return OutboundMessage(
                 channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,

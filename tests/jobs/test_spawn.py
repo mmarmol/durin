@@ -38,6 +38,24 @@ def test_pid_alive_false_for_a_reaped_process():
     assert _pid_alive(proc.pid) is False
 
 
+def test_pid_alive_true_for_a_pid_owned_by_another_user(monkeypatch):
+    # os.kill raises PermissionError when the pid exists but is owned by a
+    # different uid -- that process is alive, just not ours to signal.
+    def _raise_permission(pid, sig):
+        raise PermissionError("not our process")
+
+    monkeypatch.setattr("durin.jobs.spawn.os.kill", _raise_permission)
+    assert _pid_alive(4242) is True
+
+
+def test_pid_alive_false_when_no_such_process(monkeypatch):
+    def _raise_lookup(pid, sig):
+        raise ProcessLookupError("no such process")
+
+    monkeypatch.setattr("durin.jobs.spawn.os.kill", _raise_lookup)
+    assert _pid_alive(4242) is False
+
+
 # ---------------------------------------------------------------------------
 # respawn — dispatch and process-launch behaviour (subprocess.Popen mocked)
 # ---------------------------------------------------------------------------

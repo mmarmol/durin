@@ -72,9 +72,13 @@ def respawn(job: Job) -> None:
 
 def _pid_alive(pid: int) -> bool:
     """Best-effort liveness probe: signal 0 sends nothing, it only checks
-    whether *pid* exists and is reachable from this process."""
+    whether *pid* exists. A PermissionError means the process exists but is
+    owned by another uid -- alive, just not ours to signal; only
+    ProcessLookupError (and other OSErrors) mean the pid is actually free."""
     try:
         os.kill(pid, 0)
+    except PermissionError:
+        return True
     except OSError:
         return False
     return True

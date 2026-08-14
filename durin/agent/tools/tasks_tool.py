@@ -1,19 +1,23 @@
 """The ``tasks`` tool — one surface to observe and cancel background work.
 
-After launching work in the background (``spawn`` a sub-agent or
-``run_workflow``), the agent reaches for this single tool — regardless of work
-type — to see what it launched and how it is going, and to cancel it. It mirrors
-the ``BackgroundTask`` list the web UI's Tasks tray renders (``GET /api/v1/tasks``):
+After launching work in the background (``spawn`` a sub-agent, ``run_workflow``,
+or an ingest that needs more OCR than the inline budget allows), the agent
+reaches for this single tool — regardless of work type — to see what it
+launched and how it is going, and to cancel it. It mirrors the
+``BackgroundTask`` list the web UI's Tasks tray renders (``GET /api/v1/tasks``):
 both read the same merged view via :func:`durin.agent.background_tasks.collect_tasks`.
 
 Actions:
 
-- ``list``   — every sub-agent and workflow run in this session (running + recent).
-- ``status`` — detail for one by id: a sub-agent's phase/iteration/tool calls, or
-  a workflow run's per-node tree and final output. The id is resolved across both
-  kinds, so the caller does not say which kind it is.
+- ``list``   — every sub-agent, workflow run and job in this session (running +
+  recent).
+- ``status`` — detail for one by id: a sub-agent's phase/iteration/tool calls, a
+  workflow run's per-node tree and final output, or a job's page progress. The
+  id is resolved across all three kinds, so the caller does not say which kind
+  it is.
 - ``stop``   — cancel one by id: a sub-agent via the manager, a workflow run via
-  the cooperative cancel flag (it stops between nodes — best-effort).
+  the cooperative cancel flag, a job via the registry (both stop at their next
+  boundary — node or page — best-effort).
 
 Scoped to ``core`` (the main agent). Sub-agents do not introspect each other.
 """
@@ -69,14 +73,18 @@ def _age_mono(started_at: float, ended_at: float | None) -> str:
     )
 )
 class TasksTool(Tool, ContextAware):
-    """Observe and cancel background work (sub-agents + workflow runs) in this session."""
+    """Observe and cancel background work (sub-agents + workflow runs + jobs) in this session."""
 
     _scopes = {"core"}
 
-    def __init__(self, workspace: str, subagent_manager: Any | None, sessions: Any | None) -> None:
+    def __init__(
+        self, workspace: str, subagent_manager: Any | None, sessions: Any | None,
+        jobs: Any | None = None,
+    ) -> None:
         self._workspace = workspace
         self._manager = subagent_manager
         self._sessions = sessions
+        self._jobs = jobs
         self._request_ctx: RequestContext | None = None
 
     @classmethod
@@ -85,10 +93,17 @@ class TasksTool(Tool, ContextAware):
 
     @classmethod
     def create(cls, ctx: Any) -> "TasksTool":
+        # A JobRegistry is a stateless database handle, not live in-memory
+        # state like subagent_manager/sessions — a fresh instance here is
+        # equivalent to reusing one, since it just opens its own connection
+        # to the same jobs.db every other JobRegistry in the process reads.
+        from durin.jobs.registry import JobRegistry
+
         return cls(
             workspace=ctx.workspace,
             subagent_manager=getattr(ctx, "subagent_manager", None),
             sessions=getattr(ctx, "sessions", None),
+            jobs=JobRegistry(),
         )
 
     def set_context(self, ctx: RequestContext) -> None:
@@ -112,21 +127,23 @@ class TasksTool(Tool, ContextAware):
     def description(self) -> str:
         return (
             "Observe and cancel the background work you launched in this session — "
-            "sub-agents (spawn) and workflow runs (run_workflow), in one place. "
+            "sub-agents (spawn), workflow runs (run_workflow), and jobs (a large "
+            "scanned document ingested for background OCR), in one place. "
             "action=list shows everything running or recently finished; "
-            "action=status with an id gives detail (a sub-agent's progress, or a "
-            "workflow run's per-node tree, work dir, current files and output); "
-            "action=stop with an id cancels one (best-effort). Use it when the user "
-            "asks how the work is going, when you need a mid-run look at a "
-            "workflow's files, or before stopping something. Finished results "
-            "arrive on their own as follow-up messages — do not loop sleep+status "
-            "waiting for them; end your turn instead."
+            "action=status with an id gives detail (a sub-agent's progress, a "
+            "workflow run's per-node tree, work dir, current files and output, "
+            "or a job's page progress); action=stop with an id cancels one "
+            "(best-effort). Use it when the user asks how the work is going, "
+            "when you need a mid-run look at a workflow's files, or before "
+            "stopping something. Finished results arrive on their own as "
+            "follow-up messages — do not loop sleep+status waiting for them; "
+            "end your turn instead."
         )
 
     def _rows(self, session_key: str) -> list[dict]:
         return collect_tasks(
             self._workspace, subagent_manager=self._manager,
-            sessions=self._sessions, session_key=session_key,
+            sessions=self._sessions, jobs=self._jobs, session_key=session_key,
         )
 
     async def execute(self, action: str | None = None, id: str | None = None, **kwargs: Any) -> str:  # type: ignore[override]
@@ -148,7 +165,7 @@ class TasksTool(Tool, ContextAware):
 
     def _render_list(self, rows: list[dict]) -> str:
         if not rows:
-            return "No background tasks (sub-agents or workflow runs) in this session."
+            return "No background tasks (sub-agents, workflow runs, or jobs) in this session."
         running = sum(1 for r in rows if r["status"] == "running")
         lines = [
             f"{len(rows)} background task(s) in this session "
@@ -188,6 +205,8 @@ class TasksTool(Tool, ContextAware):
             return f"Error: unknown task id {task_id!r} in this session."
         if row["kind"] == "subagent":
             return self._render_subagent_status(session_key, task_id, row)
+        if row["kind"] == "job":
+            return self._render_job_status(row)
         healed = self._heal_orphaned_workflow(row)
         if healed:
             return healed
@@ -227,6 +246,18 @@ class TasksTool(Tool, ContextAware):
             out.append(f"  error:     {status.error[:200]}")
         if not is_running and status.stop_reason:
             out.append(f"  stop:      {status.stop_reason}")
+        return "\n".join(out)
+
+    def _render_job_status(self, row: dict) -> str:
+        age = _age_epoch(row["started_at"], row.get("ended_at"))
+        out = [
+            f"Job [{row['id']}] — {row['label']}",
+            f"  status: {row['status']}",
+            f"  age:    {age}",
+        ]
+        total = row.get("units_total")
+        if total is not None:
+            out.append(f"  progress: {row.get('units_done') or 0}/{total}")
         return "\n".join(out)
 
     def _render_workflow_status(self, row: dict) -> str:
@@ -306,6 +337,15 @@ class TasksTool(Tool, ContextAware):
             if outcome == "not_running":
                 return f"Sub-agent [{task_id}] had already finished — nothing to cancel."
             return f"Error: unknown sub-agent id {task_id!r} in this session."
+        if row["kind"] == "job":
+            if row["status"] != "running":
+                return f"Job [{task_id}] is already {row['status']} — nothing to cancel."
+            self._jobs.cancel(task_id)
+            return (
+                f"Job [{task_id}] asked to cancel. It stops at its next page "
+                "boundary (a page already being transcribed finishes first); "
+                "its result still arrives as a follow-up, with status 'cancelled'."
+            )
         # workflow
         healed = self._heal_orphaned_workflow(row)
         if healed:

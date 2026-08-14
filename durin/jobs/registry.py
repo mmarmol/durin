@@ -24,7 +24,16 @@ from typing import Any, Callable
 
 from durin.utils.sqlite_util import connect, execute_write
 
-__all__ = ["Job", "JobRegistry"]
+__all__ = ["RECONCILE_AGE_S", "Job", "JobRegistry"]
+
+# A "running" row whose pid still looks alive is assumed to be that job's own
+# worker -- except once it has been running longer than this, where pid reuse
+# (a rebooted host restarts pid allocation from a low number) is more likely
+# than a single job legitimately taking that long. Kept independent of
+# durin.workflow.run_log.RECONCILE_AGE_S (same value, same reasoning) rather
+# than imported: jobs is generic infrastructure workflow runs happen to be a
+# client of, not the other way around, and the two may want to diverge later.
+RECONCILE_AGE_S = 6 * 3600
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -192,16 +201,33 @@ class JobRegistry:
             ),
         )
 
-    def reconcile(self, *, alive: Callable[[int], bool]) -> list[Job]:
-        """Requeue jobs marked running whose worker process is gone.
+    def reconcile(
+        self, *, alive: Callable[[int], bool],
+        now: float | None = None, max_age_s: float = RECONCILE_AGE_S,
+    ) -> list[Job]:
+        """Requeue jobs marked running whose worker process is gone, or that
+        have been running longer than *max_age_s* regardless of what their
+        pid looks like.
 
-        Called at gateway start. Finished units are kept, so a requeued job
-        resumes rather than restarting.
+        The age fallback exists because pid-liveness alone is not enough:
+        after a host reboot, pid allocation restarts from a low number, so a
+        stale "running" row's pid can end up matching a completely unrelated
+        live process, and `alive` would report a job as fine that has no
+        worker at all. Called at gateway start. Finished units are kept, so a
+        requeued job resumes rather than restarting.
         """
+        if now is None:
+            now = time.time()
         rows = self._conn.execute(
             f"SELECT {_COLUMNS} FROM jobs WHERE status = 'running'"
         ).fetchall()
-        orphans = [_row_to_job(r) for r in rows if not (r[8] and alive(r[8]))]
+        orphans = []
+        for r in rows:
+            pid, started_at = r[8], r[10]
+            pid_dead = not (pid and alive(pid))
+            too_old = started_at is not None and (now - started_at) > max_age_s
+            if pid_dead or too_old:
+                orphans.append(_row_to_job(r))
         for job in orphans:
             execute_write(
                 self._conn,

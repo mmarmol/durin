@@ -45,6 +45,31 @@ def test_the_original_is_stored_even_though_the_text_is_pending(tmp_path, book, 
     assert Path(result["source"]).exists()
 
 
+def test_a_session_scoped_job_appears_in_that_sessions_tray(tmp_path, book, registry):
+    """The chain this task's findings depend on, proven rather than assumed:
+    a job carrying a session key must actually come back out of
+    collect_tasks for that exact session. If session_key never reached the
+    enqueued row, or collect_tasks never filtered by it, this fails --
+    passing here is what a correctly wired tasks tray requires."""
+    from durin.agent.background_tasks import collect_tasks
+
+    cfg = DocumentsConfig.model_validate({"ocr": {"enabled": True, "inline_max_pages": 5}})
+    ingest_artifact(
+        tmp_path / "ws", book, documents_config=cfg, jobs=registry, session_key="chat:1"
+    )
+
+    tasks = collect_tasks(tmp_path / "ws", jobs=registry, session_key="chat:1")
+
+    assert [t["kind"] for t in tasks] == ["job"]
+    # The label is the normalized ingested-entry filename ("source.<ext>"),
+    # not the original name -- ingest_artifact copies to entry_dir/source.pdf
+    # before spawn_ocr_job ever sees a path, and its label is the path's name.
+    assert tasks[0]["label"] == "source.pdf"
+    assert tasks[0]["units_total"] == 40
+    # A different session must not see it -- the filter has to actually filter.
+    assert collect_tasks(tmp_path / "ws", jobs=registry, session_key="chat:other") == []
+
+
 def test_a_normal_document_ingests_with_no_job(tmp_path, registry):
     from tests.tools.test_read_enhancements import _write_text_pdf
 

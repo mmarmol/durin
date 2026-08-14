@@ -2,7 +2,7 @@
 
 import pytest
 
-from durin.jobs.registry import Job, JobRegistry
+from durin.jobs.registry import RECONCILE_AGE_S, Job, JobRegistry
 
 
 @pytest.fixture()
@@ -139,6 +139,33 @@ def test_reconcile_leaves_a_live_worker_alone(registry):
     job = registry.enqueue(kind="ocr", label="a", payload={}, session_key=None, units_total=5)
     registry.claim(job.id, pid=1234)
     assert registry.reconcile(alive=lambda pid: True) == []
+    assert registry.get(job.id).status == "running"
+
+
+def test_reconcile_requeues_a_live_seeming_pid_once_it_is_too_old(registry):
+    # After a host reboot, pid allocation restarts low, so a stale "running"
+    # row's pid can coincidentally match a completely unrelated live process.
+    # `alive` alone cannot see that — the age fallback is what catches it.
+    job = registry.enqueue(kind="ocr", label="a", payload={}, session_key=None, units_total=5)
+    registry.claim(job.id, pid=1234)
+    claimed_at = registry.get(job.id).started_at
+
+    requeued = registry.reconcile(
+        alive=lambda pid: True, now=claimed_at + RECONCILE_AGE_S + 1, max_age_s=RECONCILE_AGE_S)
+
+    assert [j.id for j in requeued] == [job.id]
+    assert registry.get(job.id).status == "queued"
+
+
+def test_reconcile_leaves_a_live_pid_alone_when_still_within_the_age_window(registry):
+    job = registry.enqueue(kind="ocr", label="a", payload={}, session_key=None, units_total=5)
+    registry.claim(job.id, pid=1234)
+    claimed_at = registry.get(job.id).started_at
+
+    requeued = registry.reconcile(
+        alive=lambda pid: True, now=claimed_at + RECONCILE_AGE_S - 1, max_age_s=RECONCILE_AGE_S)
+
+    assert requeued == []
     assert registry.get(job.id).status == "running"
 
 

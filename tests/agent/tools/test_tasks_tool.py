@@ -66,10 +66,15 @@ def _write_manifest(workspace, name, run_id, *, status, final_output=None, task=
     (d / f"{run_id}.json").write_text(json.dumps(rec), encoding="utf-8")
 
 
-def _tool(workspace, manager):
-    t = TasksTool(workspace=str(workspace), subagent_manager=manager, sessions=None)
+def _tool(workspace, manager, jobs=None):
+    t = TasksTool(workspace=str(workspace), subagent_manager=manager, sessions=None, jobs=jobs)
     t.set_context(RequestContext(channel="websocket", chat_id="chatA", session_key=SESSION))
     return t
+
+
+def _job_registry(tmp_path):
+    from durin.jobs.registry import JobRegistry
+    return JobRegistry(tmp_path / "jobs.db")
 
 
 @pytest.mark.asyncio
@@ -80,6 +85,18 @@ async def test_list_shows_both_kinds(tmp_path):
     assert "background task(s)" in out
     assert "sa01" in out and "subagent" in out
     assert "wf01abcd" in out and "workflow" in out
+
+
+@pytest.mark.asyncio
+async def test_list_shows_the_job_kind_too(tmp_path):
+    """convert_to_markdown's tool description already tells the model a large
+    scanned PDF "is transcribed as a background job you can follow with the
+    tasks tool" -- list must actually carry it, or that description is a lie
+    the model repeats to the user."""
+    jobs = _job_registry(tmp_path)
+    jobs.enqueue(kind="ocr", label="book.pdf", payload={}, session_key=SESSION, units_total=40)
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(action="list")
+    assert "book.pdf" in out and "job" in out
 
 
 @pytest.mark.asyncio
@@ -111,6 +128,17 @@ async def test_status_unknown_id(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_status_job_detail_shows_progress(tmp_path):
+    jobs = _job_registry(tmp_path)
+    job = jobs.enqueue(kind="ocr", label="book.pdf", payload={}, session_key=SESSION, units_total=40)
+    jobs.record_unit(job.id, 1, "page one text")
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(
+        action="status", id=job.id)
+    assert f"Job [{job.id}]" in out
+    assert "1/40" in out
+
+
+@pytest.mark.asyncio
 async def test_stop_subagent_delegates_to_manager(tmp_path):
     mgr = _FakeManager([_SAStatus("sa01", "research", "awaiting_tools")], running=["sa01"])
     out = await _tool(tmp_path, mgr).execute(action="stop", id="sa01")
@@ -135,6 +163,27 @@ async def test_stop_finished_workflow_is_noop(tmp_path):
     out = await _tool(tmp_path, _FakeManager([], running=[])).execute(action="stop", id="wfdone001")
     assert "already" in out
     assert cancellation.is_cancelled("wfdone001") is False
+
+
+@pytest.mark.asyncio
+async def test_stop_running_job_requests_cancel(tmp_path):
+    jobs = _job_registry(tmp_path)
+    job = jobs.enqueue(kind="ocr", label="book.pdf", payload={}, session_key=SESSION, units_total=40)
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(
+        action="stop", id=job.id)
+    assert "asked to cancel" in out
+    assert jobs.get(job.id).status == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_stop_finished_job_is_noop(tmp_path):
+    jobs = _job_registry(tmp_path)
+    job = jobs.enqueue(kind="ocr", label="book.pdf", payload={}, session_key=SESSION, units_total=1)
+    jobs.finish(job.id)
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(
+        action="stop", id=job.id)
+    assert "already" in out
+    assert jobs.get(job.id).status == "done"  # unchanged, not force-cancelled
 
 
 @pytest.mark.asyncio
@@ -223,3 +272,24 @@ async def test_stop_live_owner_run_still_cancels(tmp_path):
         # No engine consumes this flag in the test — drop it so the global
         # cancellation registry stays empty for later tests.
         cancellation.clear("alive789")
+
+
+@pytest.mark.asyncio
+async def test_create_wires_a_real_jobs_registry(tmp_path, monkeypatch):
+    """TasksTool.create(ctx) is the path the real agent loop uses to build
+    every tool — proves the wiring the loop actually exercises, not just that
+    __init__ accepts a jobs= argument when a test passes one explicitly."""
+    from types import SimpleNamespace
+
+    from durin.config.paths import jobs_db_path
+    from durin.jobs.registry import JobRegistry
+
+    monkeypatch.setenv("DURIN_HOME", str(tmp_path))
+    JobRegistry(jobs_db_path()).enqueue(
+        kind="ocr", label="book.pdf", payload={}, session_key=SESSION, units_total=5,
+    )
+
+    tool = TasksTool.create(SimpleNamespace(workspace=str(tmp_path)))
+    tool.set_context(RequestContext(channel="websocket", chat_id="chatA", session_key=SESSION))
+    out = await tool.execute(action="list")
+    assert "book.pdf" in out

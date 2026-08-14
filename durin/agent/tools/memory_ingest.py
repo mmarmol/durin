@@ -20,6 +20,7 @@ from typing import Any, Optional
 
 from durin.agent.tools._telemetry import emit_tool_event
 from durin.agent.tools.base import Tool, tool_parameters
+from durin.agent.tools.context import ContextAware, RequestContext
 from durin.agent.tools.schema import StringSchema, tool_parameters_schema
 from durin.memory.ingestion import IngestError, ingest_artifact
 from durin.memory.vector_index import (
@@ -59,7 +60,7 @@ _PARAMETERS = tool_parameters_schema(
 
 
 @tool_parameters(_PARAMETERS)
-class MemoryIngestTool(Tool):
+class MemoryIngestTool(Tool, ContextAware):
     """memory_ingest tool — persist a document for later recall."""
 
     _scopes = {"core", "subagent"}
@@ -75,6 +76,23 @@ class MemoryIngestTool(Tool):
         self._embedding_model = embedding_model
         self._vector_index: Optional[VectorIndex] = None
         self._vector_index_attempted = False
+        self._request_ctx: RequestContext | None = None
+
+    def set_context(self, ctx: RequestContext) -> None:
+        self._request_ctx = ctx
+
+    def _session_key(self) -> str | None:
+        # Mirrors TasksTool._session_key: an ingest that triggers a background
+        # OCR job must tag it with the requesting session, or the job's
+        # session_key stays NULL and it is invisible to every session's tray.
+        ctx = self._request_ctx
+        if ctx is None:
+            return None
+        if ctx.session_key:
+            return ctx.session_key
+        if ctx.channel and ctx.chat_id:
+            return f"{ctx.channel}:{ctx.chat_id}"
+        return None
 
     @property
     def name(self) -> str:
@@ -132,7 +150,10 @@ class MemoryIngestTool(Tool):
             # parsing) — multi-second blocking work that would freeze the gateway
             # loop for large docs.
             import asyncio
-            result = await asyncio.to_thread(ingest_artifact, self._workspace, source)
+            result = await asyncio.to_thread(
+                ingest_artifact, self._workspace, source,
+                session_key=self._session_key(),
+            )
         except IngestError as exc:
             return {"error": str(exc)}
         except OSError as exc:

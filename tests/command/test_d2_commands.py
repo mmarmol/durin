@@ -215,6 +215,31 @@ async def test_sources_ingest_then_list(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_sources_ingest_threads_the_session_key(tmp_path: Path, monkeypatch) -> None:
+    """A document ingested via /sources must tag any background OCR job it
+    enqueues with the calling session -- otherwise the job's session_key
+    stays NULL in the registry and it is invisible to every session's tray
+    (JobRegistry.list_for_session filters `WHERE session_key = ?`, which SQL
+    never matches NULL)."""
+    captured: dict = {}
+
+    def _fake_ingest(workspace, source, **kwargs):
+        captured.update(kwargs)
+        return {"id": "x", "source": str(source), "size_bytes": 1}
+
+    monkeypatch.setattr("durin.memory.ingestion.ingest_artifact", _fake_ingest)
+
+    loop = _make_loop(tmp_path)
+    src = tmp_path / "doc.md"
+    src.write_text("# doc", encoding="utf-8")
+    await cmd_sources(
+        _ctx(loop, f"/sources ingest {src}", args=f"ingest {src}", key="cli:mysession")
+    )
+
+    assert captured.get("session_key") == "cli:mysession"
+
+
+@pytest.mark.asyncio
 async def test_sources_ingest_missing_path(tmp_path: Path) -> None:
     loop = _make_loop(tmp_path)
     out = await cmd_sources(
