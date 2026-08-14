@@ -429,6 +429,41 @@ def test_same_session_requests_serialize():
     assert not running["overlap"]
 
 
+def test_v1_wins_over_the_spa_mount(tmp_path, monkeypatch):
+    """The SPA is mounted at "/" and would swallow /v1 on a first-match router."""
+    data_dir = tmp_path / "durin_data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("durin.config.paths.get_data_dir", lambda: data_dir)
+    spa = tmp_path / "dist"
+    spa.mkdir()
+    (spa / "index.html").write_text("<!doctype html><title>durin</title>", encoding="utf-8")
+
+    from durin.api.asgi import build_gateway_http_app
+    from durin.channels.websocket import WebSocketChannel
+
+    cfg = {
+        "enabled": True,
+        "allowFrom": ["*"],
+        "host": "127.0.0.1",
+        "port": 8765,
+        "path": "/",
+    }
+    channel = WebSocketChannel(cfg, MessageBus())
+    app = build_gateway_http_app(
+        channel,
+        channel._services,
+        auth=channel._services.get("auth"),
+        static_dist_path=spa,
+        agent_loop=_make_loop(),
+        model_name="test-model",
+    )
+    client = TestClient(app)
+    tok = _mint(["chat:write"])
+    r = client.get("/v1/models", headers=_hdr(tok))
+    assert r.status_code == 200
+    assert r.json()["data"][0]["id"] == "test-model"
+
+
 def test_v1_absent_when_no_agent_loop(tmp_path, monkeypatch):
     from durin.api.asgi import build_gateway_http_app
     from durin.channels.websocket import WebSocketChannel
