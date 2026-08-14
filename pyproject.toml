@@ -78,6 +78,12 @@ dependencies = [
     # layer before deciding whether it needs OCR. Also arrives transitively
     # via markitdown[pdf]; declared here because we import it directly.
     "pdfplumber>=0.11.9,<1.0.0",
+    # Per-page character counts (to decide whether a page has a text layer at
+    # all) and page rasterisation for OCR. Two orders of magnitude cheaper than
+    # pdfplumber for the counting, so every PDF conversion runs it. Also
+    # arrives transitively via pdfplumber; declared here because we import it
+    # directly.
+    "pypdfium2>=5.9.0,<6",
     # Markdown → HTML for outbound email bodies (multipart/alternative).
     # Pure Python, CommonMark-compliant.
     "markdown-it-py>=3.0,<5.0",

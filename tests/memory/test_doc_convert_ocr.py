@@ -33,6 +33,41 @@ def big_scan(tmp_path):
     return pdf
 
 
+def test_an_ordinary_pdf_never_runs_the_expensive_extractor(tmp_path, monkeypatch):
+    # The common case — every page has a text layer — must not pay for a second
+    # full text extraction on top of the conversion it already did. The cheap
+    # per-page probe answers "does any page need attention" on its own.
+    from tests.tools.test_read_enhancements import _write_text_pdf
+
+    pdf = tmp_path / "ordinary.pdf"
+    _write_text_pdf(pdf, ["A page with plenty of ordinary body text on it"] * 8)
+
+    calls = []
+    monkeypatch.setattr(
+        "durin.memory.doc_convert.page_texts",
+        lambda path: calls.append(path) or [],
+    )
+    out = convert_file_to_markdown(pdf, documents_config=_cfg())
+    assert calls == []
+    assert out.coverage is not None
+    assert out.coverage.total_pages == 8
+    assert out.coverage.empty_pages == ()
+
+
+def test_a_pdf_with_gaps_still_gets_the_accurate_extraction(tmp_path):
+    # The note labels each gap with the text that precedes it, and that label
+    # comes from the accurate extractor — the probe counts characters only.
+    from tests.tools.test_read_enhancements import _write_text_pdf
+
+    pdf = tmp_path / "gapped.pdf"
+    _write_text_pdf(pdf, ["Chapter Four: Financial Statements", "", "", ""])
+
+    out = convert_file_to_markdown(pdf, documents_config=_cfg(enabled=False))
+    assert "Chapter Four: Financial Statements" in out.markdown
+    assert out.coverage is not None
+    assert out.coverage.empty_pages == (2, 3, 4)
+
+
 def test_text_pdf_is_unchanged_by_the_ocr_path(tmp_path):
     from tests.tools.test_read_enhancements import _write_text_pdf
 

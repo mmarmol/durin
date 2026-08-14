@@ -203,9 +203,14 @@ as-is. The storage model has three steps, all in a single call:
 Steps 2 and 3 are best-effort: a failure does not roll back the verbatim copy.
 When memory is disabled (no embedding model), only step 1 runs.
 
-**Scanned PDFs.** Before conversion, `convert_file_to_markdown` measures a
-PDF's per-page text coverage (`durin/memory/pdf_coverage.py`) and classifies
-it as ordinary, partially scanned, or fully scanned; local OCR
+**Scanned PDFs.** `convert_file_to_markdown` measures a PDF's per-page text
+coverage (`durin/memory/pdf_coverage.py`) and classifies it as ordinary,
+partially scanned, or fully scanned. The measurement is two-stage, so an
+ordinary PDF does not pay for text it never reads: `page_char_counts`
+(pypdfium2) counts characters per page — enough for the classifier and orders
+of magnitude cheaper — and the accurate `page_texts` (pdfplumber) runs only
+when some page looks empty, which is when its text is actually used (labelling
+the gaps in the coverage note, and merging transcribed pages back in). Local OCR
 (`documents.ocr.enabled`) transcribes the empty pages inline, as part of this
 same call, as long as there are at or under `documents.ocr.inline_max_pages`
 (default 5) of them. Over that budget, conversion does not run at all:

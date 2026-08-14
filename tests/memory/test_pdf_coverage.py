@@ -4,8 +4,10 @@ import pytest
 
 from durin.memory.pdf_coverage import (
     PdfCoverage,
+    classify_counts,
     classify_coverage,
     gap_ranges,
+    page_char_counts,
     page_texts,
 )
 
@@ -116,6 +118,39 @@ def test_page_texts_returns_empty_string_for_a_page_without_text(tmp_path):
     texts = page_texts(pdf)
     assert len(texts) == 3
     assert texts[1].strip() == ""
+
+
+def test_page_char_counts_reports_one_count_per_page(tmp_path):
+    from tests.tools.test_read_enhancements import _write_text_pdf
+
+    pdf = tmp_path / "gap.pdf"
+    _write_text_pdf(pdf, ["Alpha page one and some more text", "", "Gamma page three"])
+
+    counts = page_char_counts(pdf)
+    assert len(counts) == 3
+    assert counts[0] >= len("Alpha page one and some more text")
+    assert counts[1] == 0
+
+
+def test_the_cheap_probe_classifies_a_real_pdf_the_same_way(tmp_path):
+    # The probe exists only to skip the accurate extractor when no page needs
+    # attention. It earns that only if it reaches the same verdict.
+    from tests.tools.test_read_enhancements import _write_text_pdf
+
+    for pages in (
+        ["Chapter one opens with plenty of body text", "", "", ""],
+        ["Body text long enough to count as a real page"] * 6,
+        [""] * 5,
+        ["Only page here, with plenty of body text on it"],
+    ):
+        pdf = tmp_path / f"probe{len(pages)}{pages[0][:3]}.pdf"
+        _write_text_pdf(pdf, pages)
+        assert classify_counts(page_char_counts(pdf)) == classify_coverage(page_texts(pdf))
+
+
+def test_classify_counts_and_classify_coverage_are_the_same_classifier():
+    texts = ["", "x" * 19, "y" * 20, "body text long enough to count"]
+    assert classify_counts([len(t.strip()) for t in texts]) == classify_coverage(texts)
 
 
 def test_classify_over_a_real_pdf(tmp_path):

@@ -11,14 +11,17 @@ verbatim. This module owns the binary/office/PDF formats markitdown parses.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 from durin.memory.ocr import transcribe_page
 from durin.memory.pdf_coverage import (
     PdfCoverage,
+    classify_counts,
     classify_coverage,
     coverage_note,
+    page_char_counts,
     page_texts,
 )
 
@@ -30,6 +33,8 @@ __all__ = [
     "convert_file_to_markdown",
     "is_convertible",
 ]
+
+logger = logging.getLogger(__name__)
 
 SUPPORTED_SUFFIXES = (
     ".pdf",
@@ -125,8 +130,23 @@ def convert_file_to_markdown(path: Path, *, documents_config=None) -> ConvertedD
     coverage: PdfCoverage | None = None
 
     if suffix == ".pdf":
-        texts = page_texts(path)
-        cov = classify_coverage(texts)
+        # Two-stage on purpose. Stage one is a character count per page, which
+        # is all the classifier needs and costs almost nothing; the majority of
+        # PDFs have a text layer on every page and stop here, paying only for
+        # the conversion above. Stage two — the accurate, expensive extraction —
+        # runs only when a page looks empty, because that is the only case whose
+        # text is actually read: to label the gaps in the note, and to merge the
+        # transcribed pages back in. The probe failing is not fatal; the
+        # accurate path answers the same question, just slowly.
+        cov: PdfCoverage | None = None
+        try:
+            cov = classify_counts(page_char_counts(path))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("pdf coverage probe failed for %s: %s", path.name, exc)
+        texts: list[str] = []
+        if cov is None or cov.empty_pages:
+            texts = page_texts(path)
+            cov = classify_coverage(texts)
         if cov.empty_pages:
             ocr_cfg = documents_config.ocr
             if not ocr_cfg.enabled:

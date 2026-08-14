@@ -20,9 +20,11 @@ __all__ = [
     "MIN_RATIO",
     "SCANNED_RATIO",
     "PdfCoverage",
+    "classify_counts",
     "classify_coverage",
     "coverage_note",
     "gap_ranges",
+    "page_char_counts",
     "page_texts",
 ]
 
@@ -62,11 +64,20 @@ class PdfCoverage:
 
 def classify_coverage(page_texts: list[str]) -> PdfCoverage:
     """Classify a document from its per-page extracted text."""
-    total = len(page_texts)
+    return classify_counts([len(text.strip()) for text in page_texts])
+
+
+def classify_counts(char_counts: list[int]) -> PdfCoverage:
+    """Classify a document from its per-page character counts.
+
+    The same classifier as :func:`classify_coverage` — that one measures the
+    text it is handed and calls this. Split out so a caller that only needs
+    the verdict can count characters the cheap way instead of paying for a
+    full layout-aware extraction it would throw away.
+    """
+    total = len(char_counts)
     empty = tuple(
-        i + 1
-        for i, text in enumerate(page_texts)
-        if len(text.strip()) < EMPTY_PAGE_CHARS
+        i + 1 for i, count in enumerate(char_counts) if count < EMPTY_PAGE_CHARS
     )
     # ``empty_pages`` always lists every page without a text layer, whatever
     # ``kind`` comes out as. The thresholds decide whether the gaps are worth
@@ -94,6 +105,34 @@ def gap_ranges(empty_pages: tuple[int, ...]) -> list[tuple[int, int]]:
         else:
             ranges.append((page, page))
     return ranges
+
+
+def page_char_counts(path: Path) -> list[int]:
+    """How many characters each page carries, one count per page.
+
+    A cheap stand-in for ``len(page_texts(path)[i].strip())``. pypdfium2 reads
+    the page's text objects straight out; pdfplumber reconstructs reading order
+    from per-character geometry, which is what makes it accurate and what makes
+    it two orders of magnitude slower. Reading order does not change a
+    character count, and a page with a text layer clears ``EMPTY_PAGE_CHARS``
+    by orders of magnitude either way — so this is enough to decide *whether* a
+    page needs a closer look, and nothing more. Anything that reads the text
+    itself must call :func:`page_texts`.
+    """
+    import pypdfium2
+
+    doc = pypdfium2.PdfDocument(str(path))
+    try:
+        counts = []
+        for page in doc:
+            textpage = page.get_textpage()
+            try:
+                counts.append(len(textpage.get_text_range().strip()))
+            finally:
+                textpage.close()
+        return counts
+    finally:
+        doc.close()
 
 
 def page_texts(path: Path) -> list[str]:
