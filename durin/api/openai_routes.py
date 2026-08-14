@@ -195,11 +195,94 @@ def build_openai_routes(
             }
         )
 
+    async def _plain_response(
+        text: str, media_paths: list[str], session_key: str, lock: asyncio.Lock
+    ) -> Response:
+        try:
+            async with lock:
+                response = await asyncio.wait_for(
+                    agent_loop.process_direct(
+                        content=text,
+                        media=media_paths or None,
+                        session_key=session_key,
+                        channel="api",
+                        chat_id=API_CHAT_ID,
+                    ),
+                    timeout=request_timeout,
+                )
+                response_text = _response_text(response)
+                if not response_text.strip():
+                    logger.warning(
+                        "Empty API response for session {}, retrying", session_key
+                    )
+                    retry = await asyncio.wait_for(
+                        agent_loop.process_direct(
+                            content=text,
+                            media=media_paths or None,
+                            session_key=session_key,
+                            channel="api",
+                            chat_id=API_CHAT_ID,
+                        ),
+                        timeout=request_timeout,
+                    )
+                    response_text = _response_text(retry)
+                    if not response_text.strip():
+                        response_text = EMPTY_FINAL_RESPONSE_MESSAGE
+        except asyncio.TimeoutError:
+            return _error_json(
+                504, f"Request timed out after {request_timeout}s", "server_error"
+            )
+        except Exception:
+            logger.exception("OpenAI API error for session {}", session_key)
+            return _error_json(500, "Internal server error", "server_error")
+        return JSONResponse(_chat_completion_response(response_text, model_name))
+
     async def chat_completions(request: Request) -> Response:
         err = _auth_or_error(request)
         if err is not None:
             return err
-        return _error_json(500, "not implemented yet", "server_error")
+
+        content_type = request.headers.get("content-type", "")
+        stream = False
+        try:
+            if content_type.startswith("multipart/"):
+                # Task 6 fills this branch in.
+                return _error_json(400, "multipart is not supported yet")
+            try:
+                body = await request.json()
+            except Exception:
+                return _error_json(400, "Invalid JSON body")
+            stream = bool(body.get("stream", False))
+            requested_model = body.get("model")
+            text, media_paths = _parse_json_content(body)
+            session_id = body.get("session_id")
+        except ValueError as e:
+            return _error_json(400, str(e))
+        except FileSizeExceeded as e:
+            return _error_json(413, str(e))
+
+        if requested_model and requested_model != model_name:
+            return _error_json(
+                400, f"Only configured model '{model_name}' is available"
+            )
+
+        session_key = (
+            f"{API_SESSION_PREFIX}{session_id}"
+            if session_id
+            else API_DEFAULT_SESSION_KEY
+        )
+        lock = session_locks.setdefault(session_key, asyncio.Lock())
+
+        logger.info(
+            "API request session_key={} media={} stream={}",
+            session_key,
+            len(media_paths),
+            stream,
+        )
+        if stream:
+            # Task 5 fills this branch in.
+            return _error_json(400, "stream is not supported yet")
+        return await _plain_response(text, media_paths, session_key, lock)
 
     return [
         Route("/v1/chat/completions", chat_completions, methods=["POST"]),

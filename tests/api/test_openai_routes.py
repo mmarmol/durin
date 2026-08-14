@@ -107,6 +107,213 @@ def test_chat_requires_token(client):
     assert r.status_code == 401
 
 
+def _chat(client, token, payload):
+    return client.post("/v1/chat/completions", json=payload, headers=_hdr(token))
+
+
+def test_chat_single_message_round_trip(tmp_path, monkeypatch):
+    loop = _make_loop("hello from durin")
+    client = TestClient(_build_app(tmp_path, monkeypatch, agent_loop=loop))
+    tok = _mint(["chat:write"])
+    r = _chat(client, tok, {"messages": [{"role": "user", "content": "hola"}]})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["object"] == "chat.completion"
+    assert body["choices"][0]["message"]["content"] == "hello from durin"
+    kwargs = loop.process_direct.await_args.kwargs
+    assert kwargs["session_key"] == "api:default"
+    assert kwargs["channel"] == "api"
+    assert kwargs["chat_id"] == "default"
+    assert kwargs["content"] == "hola"
+
+
+def test_chat_session_id_routes_to_api_session(tmp_path, monkeypatch):
+    loop = _make_loop()
+    client = TestClient(_build_app(tmp_path, monkeypatch, agent_loop=loop))
+    tok = _mint(["chat:write"])
+    r = _chat(
+        client,
+        tok,
+        {"messages": [{"role": "user", "content": "x"}], "session_id": "agent-7"},
+    )
+    assert r.status_code == 200
+    assert loop.process_direct.await_args.kwargs["session_key"] == "api:agent-7"
+
+
+def test_chat_rejects_message_history(client):
+    tok = _mint(["chat:write"])
+    r = _chat(
+        client,
+        tok,
+        {
+            "messages": [
+                {"role": "user", "content": "a"},
+                {"role": "assistant", "content": "b"},
+            ]
+        },
+    )
+    assert r.status_code == 400
+    assert "single user message" in r.json()["error"]["message"]
+
+
+def test_chat_rejects_non_user_message(client):
+    tok = _mint(["chat:write"])
+    r = _chat(client, tok, {"messages": [{"role": "system", "content": "a"}]})
+    assert r.status_code == 400
+
+
+def test_chat_rejects_client_tools(client):
+    tok = _mint(["chat:write"])
+    r = _chat(
+        client,
+        tok,
+        {
+            "messages": [{"role": "user", "content": "a"}],
+            "tools": [{"type": "function", "function": {"name": "f"}}],
+        },
+    )
+    assert r.status_code == 400
+    assert "server-side" in r.json()["error"]["message"]
+
+
+def test_chat_rejects_model_mismatch(client):
+    tok = _mint(["chat:write"])
+    r = _chat(
+        client,
+        tok,
+        {"messages": [{"role": "user", "content": "a"}], "model": "gpt-4o"},
+    )
+    assert r.status_code == 400
+
+
+def test_chat_accepts_matching_model(tmp_path, monkeypatch):
+    client = TestClient(_build_app(tmp_path, monkeypatch))
+    tok = _mint(["chat:write"])
+    r = _chat(
+        client,
+        tok,
+        {"messages": [{"role": "user", "content": "a"}], "model": "test-model"},
+    )
+    assert r.status_code == 200
+
+
+def test_chat_rejects_remote_image_url(client):
+    tok = _mint(["chat:write"])
+    r = _chat(
+        client,
+        tok,
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "look"},
+                        {"type": "image_url", "image_url": {"url": "https://x/y.png"}},
+                    ],
+                }
+            ]
+        },
+    )
+    assert r.status_code == 400
+
+
+def test_chat_saves_base64_image(tmp_path, monkeypatch):
+    loop = _make_loop()
+    client = TestClient(_build_app(tmp_path, monkeypatch, agent_loop=loop))
+    tok = _mint(["chat:write"])
+    data_url = "data:image/png;base64,aGVsbG8="
+    r = _chat(
+        client,
+        tok,
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "look"},
+                        {"type": "image_url", "image_url": {"url": data_url}},
+                    ],
+                }
+            ]
+        },
+    )
+    assert r.status_code == 200
+    media = loop.process_direct.await_args.kwargs["media"]
+    assert media and len(media) == 1
+
+
+def test_chat_empty_response_retries_then_falls_back(tmp_path, monkeypatch):
+    from durin.utils.runtime import EMPTY_FINAL_RESPONSE_MESSAGE
+
+    loop = MagicMock()
+    loop.process_direct = AsyncMock(return_value=SimpleNamespace(content=""))
+    client = TestClient(_build_app(tmp_path, monkeypatch, agent_loop=loop))
+    tok = _mint(["chat:write"])
+    r = _chat(client, tok, {"messages": [{"role": "user", "content": "a"}]})
+    assert r.status_code == 200
+    assert r.json()["choices"][0]["message"]["content"] == EMPTY_FINAL_RESPONSE_MESSAGE
+    assert loop.process_direct.await_count == 2
+
+
+def test_chat_timeout_maps_to_504(tmp_path, monkeypatch):
+    async def _hang(**_kwargs):
+        await asyncio.sleep(30)
+
+    loop = MagicMock()
+    loop.process_direct = AsyncMock(side_effect=_hang)
+    client = TestClient(
+        _build_app(tmp_path, monkeypatch, agent_loop=loop, api_request_timeout=0.05)
+    )
+    tok = _mint(["chat:write"])
+    r = _chat(client, tok, {"messages": [{"role": "user", "content": "a"}]})
+    assert r.status_code == 504
+    assert r.json()["error"]["type"] == "server_error"
+
+
+def test_same_session_requests_serialize():
+    """Two concurrent turns on one session run one-at-a-time (the lock queues them)."""
+    from durin.api.openai_routes import build_openai_routes
+    from durin.service.principal import Principal
+
+    running = {"count": 0, "overlap": False}
+
+    async def _slow(**_kwargs):
+        running["count"] += 1
+        if running["count"] > 1:
+            running["overlap"] = True
+        await asyncio.sleep(0.05)
+        running["count"] -= 1
+        return SimpleNamespace(content="ok")
+
+    loop = MagicMock()
+    loop.process_direct = AsyncMock(side_effect=_slow)
+    routes = build_openai_routes(
+        loop,
+        model_name="test-model",
+        request_timeout=5.0,
+        resolve_principal=lambda _h: Principal.remote("t", frozenset({"chat:write"})),
+    )
+    chat_endpoint = next(
+        r for r in routes if r.path == "/v1/chat/completions"
+    ).endpoint
+
+    class _Req:
+        headers = {"content-type": "application/json"}
+
+        async def json(self):
+            return {
+                "messages": [{"role": "user", "content": "x"}],
+                "session_id": "same",
+            }
+
+    async def _drive():
+        await asyncio.gather(chat_endpoint(_Req()), chat_endpoint(_Req()))
+
+    asyncio.run(_drive())
+    assert loop.process_direct.await_count == 2
+    assert not running["overlap"]
+
+
 def test_v1_absent_when_no_agent_loop(tmp_path, monkeypatch):
     from durin.api.asgi import build_gateway_http_app
     from durin.channels.websocket import WebSocketChannel
