@@ -1,1 +1,1 @@
-"""OpenAI-compatible HTTP API for durin."""
+"""durin's HTTP surface: the gateway ASGI app and its OpenAI-compatible routes."""
