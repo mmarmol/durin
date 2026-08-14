@@ -2130,6 +2130,7 @@ def _run_gateway(
                     _static_token_raw = ""
                 _static_token_u = _resolve_static_token(_static_token_raw)
 
+                _model_name_u, _ = _model_display(config)
                 _unified_app = _build_gw_app(
                     _ws_channel,
                     _unified_registry,
@@ -2137,6 +2138,9 @@ def _run_gateway(
                     static_token=_static_token_u,
                     static_dist_path=_ws_channel._static_dist_path,
                     hook_dispatcher=loops_hook_dispatcher,
+                    agent_loop=agent,
+                    model_name=_model_name_u,
+                    api_request_timeout=config.gateway.api_request_timeout,
                 )
                 _ws_port = _ws_channel.config.port  # type: ignore[attr-defined]
                 _ws_host = _ws_channel.config.host  # type: ignore[attr-defined]
