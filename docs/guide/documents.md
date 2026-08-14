@@ -34,7 +34,11 @@ anything with no text underneath the image — reads like any other document
 once **local OCR** is turned on. It runs entirely on your machine, and it is
 **off by default**: turn it on from the web dashboard's **Settings →
 Documents**, where the toggle also notes roughly what it costs you in disk
-space, memory, and processing time.
+space, memory, and processing time. Turning it on installs the OCR engine the
+first time, so that switch is what enables the feature — not the setting on
+its own. If the engine is ever missing while the setting says on (an install
+that skipped it, say), durin still gives you whatever text the document does
+have, and says the engine is the reason the rest is blank.
 
 A short scan is read on the spot, the same as any other document. Ask durin to
 remember a longer one — a whole scanned book — and it does not make you wait:

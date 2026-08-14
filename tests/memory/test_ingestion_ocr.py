@@ -7,6 +7,18 @@ from durin.jobs.registry import JobRegistry
 from durin.memory.ingestion import ingest_artifact
 
 
+@pytest.fixture(autouse=True)
+def _engine_present(monkeypatch):
+    """Stand in for an installed OCR engine.
+
+    The [ocr] extra is absent in CI, and an install without it transcribes
+    nothing and enqueues nothing — so these tests, which are about the job
+    hand-off rather than the engine, have to say an engine exists. The test
+    that is *about* a missing engine overrides this.
+    """
+    monkeypatch.setattr("durin.memory.doc_convert.engine_available", lambda: True)
+
+
 @pytest.fixture()
 def registry(tmp_path):
     return JobRegistry(tmp_path / "jobs.db")
@@ -68,6 +80,20 @@ def test_a_session_scoped_job_appears_in_that_sessions_tray(tmp_path, book, regi
     assert tasks[0]["units_total"] == 40
     # A different session must not see it -- the filter has to actually filter.
     assert collect_tasks(tmp_path / "ws", jobs=registry, session_key="chat:other") == []
+
+
+def test_ingest_survives_ocr_enabled_without_the_extra(tmp_path, book, registry, monkeypatch):
+    """OcrUnavailable is a RuntimeError: neither IngestError nor OSError, so an
+    ingest that let it escape would raise straight through every caller. It has
+    to be handled where the conversion happens, not left to each caller to
+    catch a type none of them mention."""
+    monkeypatch.setattr("durin.memory.doc_convert.engine_available", lambda: False)
+    cfg = DocumentsConfig.model_validate({"ocr": {"enabled": True, "inline_max_pages": 5}})
+
+    result = ingest_artifact(tmp_path / "ws", book, documents_config=cfg, jobs=registry)
+
+    assert result["job_id"] is None
+    assert "[ocr]" in result["content"]
 
 
 def test_a_normal_document_ingests_with_no_job(tmp_path, registry):

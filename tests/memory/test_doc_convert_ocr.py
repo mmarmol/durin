@@ -7,12 +7,25 @@ from durin.memory.doc_convert import (
     NeedsOcrJob,
     convert_file_to_markdown,
 )
+from durin.memory.ocr import OcrUnavailable
 
 
 def _cfg(*, enabled=True, inline_max_pages=5):
     return DocumentsConfig.model_validate(
         {"ocr": {"enabled": enabled, "inline_max_pages": inline_max_pages}}
     )
+
+
+@pytest.fixture(autouse=True)
+def _engine_present(monkeypatch):
+    """Stand in for an installed OCR engine.
+
+    The [ocr] extra is absent in CI, and every test here that transcribes
+    fakes ``transcribe_page`` anyway — so it must fake the availability probe
+    too, or it exercises the missing-engine path instead of the one it means
+    to. The tests that are *about* a missing engine override this.
+    """
+    monkeypatch.setattr("durin.memory.doc_convert.engine_available", lambda: True)
 
 
 @pytest.fixture()
@@ -141,6 +154,52 @@ def test_ocr_disabled_keeps_the_document_readable_with_a_note(big_scan):
     # note saying what is missing and how to turn OCR on.
     out = convert_file_to_markdown(big_scan, documents_config=_cfg(enabled=False))
     assert "documents.ocr.enabled" in out.markdown
+
+
+def test_ocr_enabled_without_the_engine_reads_like_ocr_being_off(big_scan, monkeypatch):
+    # documents.ocr.enabled is a config key; the engine is an install extra.
+    # Turning the key on without installing the extra must not break every PDF
+    # conversion in the process — the document still comes back, with a note
+    # that names the real problem.
+    monkeypatch.setattr("durin.memory.doc_convert.engine_available", lambda: False)
+
+    out = convert_file_to_markdown(big_scan, documents_config=_cfg())
+
+    assert "[ocr]" in out.markdown
+    assert out.coverage is not None
+
+
+def test_no_job_is_enqueued_for_a_book_no_engine_can_transcribe(big_scan, monkeypatch):
+    # big_scan is 40 pages over a budget of 5, so this is the NeedsOcrJob path.
+    # A background job would fail on page 1 and leave the document with no
+    # sidecar and no Library entry; the note is the useful answer instead.
+    monkeypatch.setattr("durin.memory.doc_convert.engine_available", lambda: False)
+
+    out = convert_file_to_markdown(big_scan, documents_config=_cfg(inline_max_pages=5))
+
+    assert "[ocr]" in out.markdown
+
+
+@pytest.mark.parametrize(
+    "boom",
+    [
+        pytest.param(OcrUnavailable("no extra"), id="ocr-unavailable"),
+        # engine_available() only proves `import rapidocr` works; its own
+        # imports can still fail underneath.
+        pytest.param(ImportError("onnxruntime is broken"), id="broken-lazy-import"),
+    ],
+)
+def test_an_engine_that_fails_at_transcribe_time_is_handled_the_same_way(
+    two_page_scan, monkeypatch, boom
+):
+    def _raise(path, page, **kw):
+        raise boom
+
+    monkeypatch.setattr("durin.memory.doc_convert.transcribe_page", _raise)
+
+    out = convert_file_to_markdown(two_page_scan, documents_config=_cfg())
+
+    assert "[ocr]" in out.markdown
 
 
 def test_partial_scan_only_transcribes_the_empty_pages(tmp_path, monkeypatch):

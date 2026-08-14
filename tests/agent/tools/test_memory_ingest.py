@@ -89,10 +89,15 @@ def test_execute_passes_no_session_key_without_a_request_context(tmp_path, monke
 
 
 def _defer_ocr_to_a_job(tmp_path, monkeypatch):
-    """Set up the deferred-OCR path end to end, without an OCR engine, an
-    embedder or a worker process: OCR on with a 5-page inline budget, the job
+    """Set up the deferred-OCR path end to end, with no real OCR engine, no
+    embedder and no worker process: OCR on with a 5-page inline budget, the job
     registry redirected into tmp, and the worker launch stubbed out so the
     test drives ``run_job`` itself. Returns the job registry.
+
+    The engine is *reported* as installed (it is not, in CI): an install
+    without the [ocr] extra transcribes nothing and enqueues nothing, so a
+    test about the deferred path has to say one exists. What it would
+    transcribe is stubbed per test.
 
     ``memory.enabled`` is off so nothing tries to load an embedding model:
     that pins these tests to the lexical half of search, which is the half CI
@@ -106,6 +111,7 @@ def _defer_ocr_to_a_job(tmp_path, monkeypatch):
     cfg.documents.ocr.inline_max_pages = 5
     cfg.memory.enabled = False
     monkeypatch.setattr("durin.config.loader.load_config", lambda *a, **k: cfg)
+    monkeypatch.setattr("durin.memory.doc_convert.engine_available", lambda: True)
 
     db = tmp_path / "jobs" / "jobs.db"
     monkeypatch.setattr("durin.config.paths.jobs_db_path", lambda: db)

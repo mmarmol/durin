@@ -15,7 +15,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from durin.memory.ocr import transcribe_page
+from durin.memory.ocr import OcrUnavailable, engine_available, transcribe_page
 from durin.memory.pdf_coverage import (
     PdfCoverage,
     classify_counts,
@@ -149,10 +149,18 @@ def convert_file_to_markdown(path: Path, *, documents_config=None) -> ConvertedD
             cov = classify_coverage(texts)
         if cov.empty_pages:
             ocr_cfg = documents_config.ocr
-            if not ocr_cfg.enabled:
+            # Two ways OCR does not happen, and they are not the same thing to
+            # a reader: the setting is off, or the setting is on but the engine
+            # is not installed (documents.ocr.enabled is a config key, the
+            # engine is an install extra — a redeploy without it leaves exactly
+            # this state). Both keep the document readable with a note; only
+            # the wording differs.
+            if not ocr_cfg.enabled or not engine_available():
                 # Still return the document. What text exists is worth having,
                 # and the note tells the reader what is missing and how to fix it.
-                note = coverage_note(cov, texts, ocr_enabled=False)
+                note = coverage_note(
+                    cov, texts, ocr_enabled=False, engine_missing=ocr_cfg.enabled
+                )
                 return ConvertedDoc(
                     markdown=note + markdown, suffix=suffix, coverage=cov
                 )
@@ -165,8 +173,23 @@ def convert_file_to_markdown(path: Path, *, documents_config=None) -> ConvertedD
                     pages=pages,
                     total_pages=cov.total_pages,
                 )
-            for page in pages:
-                texts[page - 1] = transcribe_page(path, page)
+            try:
+                for page in pages:
+                    texts[page - 1] = transcribe_page(path, page)
+            except (OcrUnavailable, ImportError):
+                # engine_available() above only proves ``import rapidocr``
+                # works; the engine's own imports can still fail underneath it,
+                # and OcrUnavailable is a RuntimeError no caller of this
+                # function catches. Same outcome as finding it missing before
+                # starting: the document, and a note saying why it has gaps.
+                logger.warning(
+                    "%s: local OCR is enabled but its engine failed to load; "
+                    "returning the document with a coverage note", path.name,
+                )
+                note = coverage_note(cov, texts, ocr_enabled=False, engine_missing=True)
+                return ConvertedDoc(
+                    markdown=note + markdown, suffix=suffix, coverage=cov
+                )
             markdown = "\n\n".join(t for t in texts if t.strip())
             return ConvertedDoc(markdown=markdown, suffix=suffix, coverage=cov)
         # No pages need OCR: fall through to the shared empty-extraction
