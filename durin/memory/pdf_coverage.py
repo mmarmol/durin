@@ -219,10 +219,14 @@ def coverage_note(
     footer would land on a page the reader may never fetch.
 
     Both production callers (`durin/memory/doc_convert.py`) reach this only
-    after OCR has already not run, so the note always describes OCR as off.
-    ``engine_missing`` distinguishes the two reasons: the setting is off (the
-    reader is told to turn it on), or the setting is on and the engine is not
-    installed (turning it on again would achieve nothing).
+    after OCR has already not run, so the note always describes pages nothing
+    transcribed. ``engine_missing`` distinguishes why: the setting is off (the
+    reader is told to turn it on), or the setting is on and the engine still
+    produced nothing (turning it on again would achieve nothing). That second
+    case covers more than a missing install — the transcription child can also
+    fail to start or time out, and all three arrive here identically — so its
+    text names the possibilities instead of asserting one, and offers the
+    install advice conditionally rather than as the fix.
     """
     if cov.kind == "text":
         return ""
@@ -251,10 +255,13 @@ def coverage_note(
 
     if engine_missing:
         tail = (
-            " Local OCR is turned on but its engine is not installed here, so "
-            "nothing transcribed these pages. Installing durin's [ocr] extra "
-            "is what fixes it; in the dashboard, switching local OCR off and "
-            "on again under Settings > Documents offers to install it."
+            " Local OCR is turned on, but its engine did not produce a "
+            "transcription for these pages: it may not be installed here, it "
+            "may have failed to start, or it may have timed out. If it is not "
+            "installed, durin's [ocr] extra is what adds it — in the "
+            "dashboard, switching local OCR off and on again under Settings > "
+            "Documents offers to install it. If it is installed, the gateway "
+            "log records why the attempt failed."
         )
     else:
         tail = (

@@ -1,5 +1,6 @@
 """Conversion with OCR: the inline budget, the coverage note, the job hand-off."""
 
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -512,6 +513,32 @@ def test_an_engine_that_fails_at_transcribe_time_is_handled_the_same_way(
     out = convert_file_to_markdown(two_page_scan, documents_config=_cfg())
 
     assert "[ocr]" in out.markdown
+
+
+def test_a_timed_out_engine_is_not_reported_as_a_missing_install(
+    two_page_scan, monkeypatch, caplog
+):
+    """A timeout and a crashed child raise the same ``OcrUnavailable`` a
+    missing extra does, so this path can no longer claim the engine "failed to
+    load" or that it is not installed — the user would go reinstall software
+    they already have. The child's own reason has to travel with it: the
+    gateway log is the only place it is recorded."""
+    def _raise(path, pages):
+        raise OcrUnavailable("OCR subprocess timed out after 80s: stuck loading model")
+
+    monkeypatch.setattr("durin.memory.doc_convert.transcribe_pages_detached", _raise)
+
+    with caplog.at_level(logging.WARNING, logger="durin.memory.doc_convert"):
+        out = convert_file_to_markdown(two_page_scan, documents_config=_cfg())
+
+    logged = "\n".join(rec.getMessage() for rec in caplog.records)
+    assert "failed to produce a transcription" in logged
+    assert "timed out after 80s: stuck loading model" in logged
+    assert "failed to load" not in logged
+    assert two_page_scan.name in logged
+    # Still readable, and the note no longer asserts the engine is missing.
+    assert "[ocr] extra" in out.markdown
+    assert "did not produce a transcription" in out.markdown
 
 
 def test_partial_scan_only_transcribes_the_empty_pages(tmp_path, monkeypatch):

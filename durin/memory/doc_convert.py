@@ -295,16 +295,21 @@ def convert_file_to_markdown(path: Path, *, documents_config=None) -> ConvertedD
                 transcribed = transcribe_pages_detached(path, pages)
                 for page in pages:
                     texts[page - 1] = transcribed[page]
-            except (OcrUnavailable, ImportError):
+            except (OcrUnavailable, ImportError) as exc:
                 # engine_available() above only proves ``import rapidocr``
                 # works; the subprocess's own imports can still fail
-                # underneath it, and OcrUnavailable is a RuntimeError no
-                # caller of this function catches. Same outcome as finding it
-                # missing before starting: the document, and a note saying
-                # why it has gaps.
+                # underneath it, it can be killed, and it can time out — the
+                # transcription call raises the same OcrUnavailable for all of
+                # them, and it is a RuntimeError no caller of this function
+                # catches. Same outcome as finding the engine missing before
+                # starting: the document, and a note saying why it has gaps.
+                # The exception's own message is the only account of which
+                # failure this was, and this log line is the only place it is
+                # written down, so it goes in verbatim.
                 logger.warning(
-                    "%s: local OCR is enabled but its engine failed to load; "
-                    "returning the document with a coverage note", path.name,
+                    "%s: local OCR is enabled but its engine failed to produce "
+                    "a transcription (%s); returning the document with a "
+                    "coverage note", path.name, exc,
                 )
                 note = coverage_note(cov, texts, engine_missing=True)
                 return ConvertedDoc(

@@ -304,9 +304,22 @@ def test_note_with_ocr_disabled_says_how_to_enable_it():
     assert "documents.ocr.enabled" in note
 
 
-def test_note_with_engine_missing_says_the_engine_is_the_reason():
+def test_note_with_engine_missing_covers_every_way_the_engine_produced_nothing():
+    """Three different failures reach this note, not one: the extra is absent,
+    the transcription child failed to start, or it timed out — they all land
+    in the caller's one ``except (OcrUnavailable, ImportError)``. Telling a
+    user whose engine timed out to install software they already have is a
+    false instruction, so the install advice has to be offered conditionally
+    and the note has to point somewhere else for the other two."""
     texts = _texts([False] * 50)
     cov = classify_coverage(texts)
     note = coverage_note(cov, texts, engine_missing=True)
+    # Turning the setting on again would achieve nothing — still not offered.
     assert "documents.ocr.enabled" not in note
+    # The install path is still named, but as one possibility among three.
     assert "[ocr] extra" in note
+    assert "did not produce a transcription" in note
+    assert "failed to start" in note
+    assert "timed out" in note
+    assert "If it is not installed" in note
+    assert "gateway log" in note

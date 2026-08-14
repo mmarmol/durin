@@ -222,6 +222,46 @@ def test_transcribe_pages_detached_raises_on_nonzero_exit(monkeypatch, tmp_path)
     assert "boom" in str(excinfo.value)
 
 
+def test_transcribe_pages_detached_reports_the_childs_own_error_on_a_clean_failure(
+    monkeypatch, tmp_path
+):
+    """``ocr_subproc`` catches its own failures, prints ``{"error": ...}`` to
+    stdout and exits 1 — the ordinary failure shape, not the exceptional one.
+    Reading stderr alone made every one of those raise "exited 1: " with
+    nothing after the colon, and that message is what the coverage-note path
+    and the gateway log both quote."""
+    monkeypatch.setattr(
+        "durin.memory.ocr.subprocess.run",
+        _fake_run(
+            stdout=json.dumps({"error": "OcrUnavailable: local OCR needs the [ocr] extra"}),
+            stderr="",
+            returncode=1,
+        ),
+    )
+
+    with pytest.raises(OcrUnavailable) as excinfo:
+        transcribe_pages_detached(tmp_path / "doc.pdf", [1])
+
+    assert "local OCR needs the [ocr] extra" in str(excinfo.value)
+
+
+def test_transcribe_pages_detached_falls_back_to_stderr_when_stdout_says_nothing(
+    monkeypatch, tmp_path
+):
+    """A child killed before it could print its JSON (OOM, a failed import at
+    module scope) leaves stdout empty and the reason on stderr. Garbage on
+    stdout must not shadow it either."""
+    monkeypatch.setattr(
+        "durin.memory.ocr.subprocess.run",
+        _fake_run(stdout="not json at all", stderr="Killed: 9", returncode=137),
+    )
+
+    with pytest.raises(OcrUnavailable) as excinfo:
+        transcribe_pages_detached(tmp_path / "doc.pdf", [1])
+
+    assert "Killed: 9" in str(excinfo.value)
+
+
 def test_transcribe_pages_detached_raises_on_timeout(monkeypatch, tmp_path):
     def run(cmd, *, capture_output, text, timeout):
         raise subprocess.TimeoutExpired(cmd, timeout, output="", stderr="stuck loading model")

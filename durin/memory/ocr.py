@@ -117,6 +117,24 @@ def transcribe_page(pdf_path: Path, page: int, *, dpi: int = _DEFAULT_DPI) -> st
     return "\n".join(str(line) for line in lines).strip()
 
 
+def _child_failure(stdout: str | None, stderr: str | None) -> str:
+    """Why the OCR child exited non-zero, in its own words where it has any.
+
+    The child catches its own failures, prints ``{"error": "<message>"}`` to
+    stdout and exits 1 — that is the ordinary failure, and stderr is empty for
+    it. Only a death it never got to report (a module-scope import error, an
+    OOM kill) leaves the reason on stderr instead. Reading stdout first is
+    what makes the ordinary case say anything at all; anything else on stdout
+    is treated as no answer and falls through to stderr's tail, so a truncated
+    or garbled line never shadows the real reason.
+    """
+    try:
+        message = json.loads(stdout or "").get("error")
+    except Exception:  # noqa: BLE001 — no usable JSON: the child never printed one
+        message = None
+    return str(message) if message else (stderr or "")[-500:]
+
+
 def transcribe_pages_detached(
     pdf_path: Path,
     pages: Sequence[int],
@@ -167,8 +185,10 @@ def transcribe_pages_detached(
             ) from exc
 
         if proc.returncode != 0:
-            tail = (proc.stderr or "")[-500:]
-            raise OcrUnavailable(f"OCR subprocess exited {proc.returncode}: {tail}")
+            raise OcrUnavailable(
+                f"OCR subprocess exited {proc.returncode}: "
+                f"{_child_failure(proc.stdout, proc.stderr)}"
+            )
 
         try:
             payload = json.loads(proc.stdout)
