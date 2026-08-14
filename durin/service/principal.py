@@ -43,6 +43,10 @@ class Scope(str, Enum):
     # different power from editing a session file — a token that may rename a
     # chat has no business posting into a customer's Slack thread.
     CHANNELS_WRITE = "channels:write"
+    # Conversing with durin over the OpenAI-compatible /v1 endpoint is its own
+    # power: a remote agent may hold a conversation without being able to read
+    # or administer sessions, config, or secrets.
+    CHAT_WRITE = "chat:write"
     MEMORY_READ = "memory:read"
     MEMORY_WRITE = "memory:write"
     MCP_READ = "mcp:read"
