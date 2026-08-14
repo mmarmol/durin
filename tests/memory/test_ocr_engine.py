@@ -24,9 +24,14 @@ def _quiet_rapidocr_model_load(monkeypatch):
     Raising the *handler's* level survives that reset instead.
 
     The window is scoped to wrap only ``durin.memory.ocr._get_engine`` (via
-    monkeypatch), rather than the whole test body, for two reasons. First, so
-    any logging *after* construction — e.g. RapidOCR's own WARNING when a page
-    has no detected text — is never touched. Second, and more importantly:
+    monkeypatch), rather than the whole test body, for two reasons. First, a
+    test that never constructs an engine keeps its logging untouched, and the
+    handler lookup runs where ``import rapidocr`` has certainly happened — the
+    handler does not exist before that import. Note what the scoping does not
+    buy: ``monkeypatch.setattr(handler, "level", ...)`` is undone at fixture
+    teardown, not when the wrapped call returns, so from the first construction
+    onward the suppression lasts the rest of that test — RapidOCR's own WARNING
+    for a page with no detected text included. Second, and more importantly:
     pytest attaches its own diagnostic capture handler(s) to any
     non-propagating logger it discovers (RapidOCR sets ``propagate = False``
     on "RapidOCR"), and once that has happened for one test in a session, it
