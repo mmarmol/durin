@@ -239,6 +239,47 @@ async def test_sources_ingest_threads_the_session_key(tmp_path: Path, monkeypatc
     assert captured.get("session_key") == "cli:mysession"
 
 
+class _NoLaunch:
+    """Stands in for the ``subprocess`` module inside ``durin.jobs.spawn``."""
+
+    @staticmethod
+    def Popen(*args, **kwargs):  # noqa: N802 - mirrors the name it replaces
+        return None
+
+
+@pytest.mark.asyncio
+async def test_sources_ingest_does_not_call_a_pending_scan_ingested(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """A scanned book over the inline budget is stored but not readable: its
+    text does not exist until a background job produces it. The memory_ingest
+    tool returns a careful note for exactly this case; reporting a plain
+    "Ingested as <id>" here tells the user the opposite."""
+    from durin.config.schema import Config
+
+    from tests.tools.test_read_enhancements import _write_text_pdf
+
+    cfg = Config()
+    cfg.documents.ocr.enabled = True
+    cfg.documents.ocr.inline_max_pages = 5
+    cfg.memory.enabled = False
+    monkeypatch.setenv("DURIN_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr("durin.config.loader.load_config", lambda *a, **k: cfg)
+    monkeypatch.setattr("durin.memory.doc_convert.engine_available", lambda: True)
+    monkeypatch.setattr("durin.jobs.spawn.subprocess", _NoLaunch)
+
+    book = tmp_path / "zorpbook.pdf"
+    _write_text_pdf(book, [""] * 8)
+
+    loop = _make_loop(tmp_path)
+    out = await cmd_sources(
+        _ctx(loop, f"/sources ingest {book}", args=f"ingest {book}")
+    )
+
+    assert "8 pages" in out.content
+    assert "not readable" in out.content.lower()
+
+
 @pytest.mark.asyncio
 async def test_sources_ingest_missing_path(tmp_path: Path) -> None:
     loop = _make_loop(tmp_path)

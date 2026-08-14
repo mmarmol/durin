@@ -1915,6 +1915,22 @@ async def cmd_sources(ctx: CommandContext) -> OutboundMessage:
                 channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
                 content=f"Ingest failed: {exc}", metadata=metadata_text,
             )
+        if result.get("job_id"):
+            # A scanned document over the inline OCR budget: the original is
+            # stored, but its text does not exist yet, so it is neither
+            # readable nor searchable. Saying "Ingested" would claim otherwise.
+            lines = [
+                f"Stored `{result['id']}` ({result['size_bytes']} bytes) — "
+                "its text is not readable yet.",
+                f"Source: `{result['source']}`",
+                f"This document is scanned: {result['job_pages']} pages are "
+                f"being transcribed in the background (job `{result['job_id']}`). "
+                "It becomes readable and searchable when that finishes.",
+            ]
+            return OutboundMessage(
+                channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+                content="\n".join(lines), metadata=metadata_text,
+            )
         return OutboundMessage(
             channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
             content=(
