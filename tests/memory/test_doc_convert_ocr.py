@@ -1,9 +1,12 @@
 """Conversion with OCR: the inline budget, the coverage note, the job hand-off."""
 
+from types import SimpleNamespace
+
 import pytest
 
 from durin.config.schema import DocumentsConfig
 from durin.memory.doc_convert import (
+    DocConvertError,
     NeedsOcrJob,
     convert_file_to_markdown,
 )
@@ -14,6 +17,24 @@ def _cfg(*, enabled=True, inline_max_pages=5):
     return DocumentsConfig.model_validate(
         {"ocr": {"enabled": enabled, "inline_max_pages": inline_max_pages}}
     )
+
+
+class _RecordingConverter:
+    """Stands in for markitdown and remembers whether anything asked it to run."""
+
+    def __init__(self, text="markitdown extraction"):
+        self.calls = []
+        self._text = text
+
+    def convert(self, path):
+        self.calls.append(path)
+        return SimpleNamespace(text_content=self._text)
+
+
+def _watch_markitdown(monkeypatch, text="markitdown extraction"):
+    conv = _RecordingConverter(text)
+    monkeypatch.setattr("durin.memory.doc_convert._get_converter", lambda: conv)
+    return conv
 
 
 @pytest.fixture(autouse=True)
@@ -150,10 +171,15 @@ def test_small_scan_is_transcribed_inline(two_page_scan, monkeypatch):
 
 
 def test_scan_over_the_budget_raises_needs_ocr_job(big_scan):
+    # `pages` is the confirmed floor the decision stopped at, not the whole
+    # document: the exhaustive list is the worker's to derive, and deriving it
+    # here is the work this path exists to avoid. `estimated_pages` is what
+    # sizes the job for the reader.
     with pytest.raises(NeedsOcrJob) as excinfo:
         convert_file_to_markdown(big_scan, documents_config=_cfg(inline_max_pages=5))
     assert excinfo.value.total_pages == 40
-    assert excinfo.value.pages == list(range(1, 41))
+    assert excinfo.value.pages == [1, 2, 3, 4, 5, 6]
+    assert excinfo.value.estimated_pages == 40
 
 
 def test_exactly_the_budget_stays_inline_one_more_goes_to_a_job(tmp_path, monkeypatch):
@@ -176,6 +202,206 @@ def test_exactly_the_budget_stays_inline_one_more_goes_to_a_job(tmp_path, monkey
     _write_text_pdf(over_budget, [""] * 6)
     with pytest.raises(NeedsOcrJob):
         convert_file_to_markdown(over_budget, documents_config=_cfg(inline_max_pages=5))
+
+
+def test_an_over_budget_scan_is_decided_without_converting_the_document(
+    big_scan, monkeypatch
+):
+    # The enqueue decision throws away everything it computes, so it must
+    # compute as little as possible: no markitdown, and no full accurate
+    # extraction either. The cheap probe plus a confirmation of just enough
+    # pages settles it.
+    conv = _watch_markitdown(monkeypatch)
+
+    def _never(path):
+        raise AssertionError("the full accurate extraction ran")
+
+    monkeypatch.setattr("durin.memory.doc_convert.page_texts", _never)
+
+    with pytest.raises(NeedsOcrJob):
+        convert_file_to_markdown(big_scan, documents_config=_cfg(inline_max_pages=5))
+
+    assert conv.calls == []
+
+
+def test_the_over_budget_decision_confirms_only_as_many_pages_as_it_needs(
+    big_scan, monkeypatch
+):
+    # Confirming one page past the budget is what proves the budget is blown;
+    # confirming the other 34 proves nothing and costs the whole document.
+    from durin.memory.pdf_coverage import page_texts_subset as real_subset
+
+    asked = []
+
+    def _record(path, pages):
+        pages = list(pages)
+        asked.extend(pages)
+        return real_subset(path, pages)
+
+    monkeypatch.setattr("durin.memory.doc_convert.page_texts_subset", _record)
+
+    with pytest.raises(NeedsOcrJob):
+        convert_file_to_markdown(big_scan, documents_config=_cfg(inline_max_pages=5))
+
+    assert asked == [1, 2, 3, 4, 5, 6]
+
+
+@pytest.mark.parametrize("budget", [2, 5, 9])
+def test_the_early_exit_raises_at_exactly_one_page_over_the_budget(
+    big_scan, budget, monkeypatch
+):
+    # Both sides of the boundary in one assertion: the job is handed exactly
+    # budget+1 confirmed pages -- one fewer would be a document that still fits
+    # inline, one more is work the decision did not need to do.
+    monkeypatch.setattr(
+        "durin.memory.doc_convert.transcribe_page",
+        lambda path, page, **kw: f"transcribed page {page}",
+    )
+
+    with pytest.raises(NeedsOcrJob) as excinfo:
+        convert_file_to_markdown(
+            big_scan, documents_config=_cfg(inline_max_pages=budget)
+        )
+
+    assert excinfo.value.pages == list(range(1, budget + 2))
+    assert excinfo.value.total_pages == 40
+
+
+def test_the_over_budget_message_reports_a_lower_bound(big_scan):
+    # The early exit stops counting the moment the budget is blown, so the
+    # exact number of pages needing OCR is not known here. Saying "6 of 40"
+    # would be a number this path did not measure.
+    with pytest.raises(NeedsOcrJob) as excinfo:
+        convert_file_to_markdown(big_scan, documents_config=_cfg(inline_max_pages=5))
+
+    assert "at least 6 of 40 pages need OCR" in str(excinfo.value)
+
+
+def test_the_job_is_sized_from_the_probe_not_from_the_early_exit(big_scan):
+    # `pages` is the confirmed floor the worker starts from; `estimated_pages`
+    # is what the user is told is coming. Handing the tray the floor would show
+    # a forty-page scan as six pages of work.
+    with pytest.raises(NeedsOcrJob) as excinfo:
+        convert_file_to_markdown(big_scan, documents_config=_cfg(inline_max_pages=5))
+
+    assert excinfo.value.pages == [1, 2, 3, 4, 5, 6]
+    assert excinfo.value.estimated_pages == 40
+
+
+def test_the_under_budget_partial_path_does_not_convert_the_document_either(
+    tmp_path, monkeypatch
+):
+    # This path joins the accurate per-page text and returns that; markitdown's
+    # own output is discarded unread, so running it is pure cost.
+    from tests.tools.test_read_enhancements import _write_text_pdf
+
+    texts = ["Real body text on this page, plenty of it"] * 10
+    texts[3] = ""
+    texts[4] = ""
+    pdf = tmp_path / "mixed.pdf"
+    _write_text_pdf(pdf, texts)
+
+    conv = _watch_markitdown(monkeypatch)
+    monkeypatch.setattr(
+        "durin.memory.doc_convert.transcribe_page",
+        lambda path, page, **kw: f"ocr {page}",
+    )
+
+    out = convert_file_to_markdown(pdf, documents_config=_cfg())
+
+    assert "ocr 4" in out.markdown
+    assert conv.calls == []
+
+
+def test_a_page_the_probe_reads_as_full_is_still_transcribed_when_it_is_empty(
+    tmp_path, monkeypatch
+):
+    """The probe is only ever a reason to look closer, never the last word on
+    which pages are empty. pdfium can decode a font pdfplumber cannot, and then
+    a genuinely empty page comes back with a character count -- so the pages
+    that get transcribed have to come from the accurate pass, not from what the
+    probe flagged."""
+    from durin.memory.pdf_coverage import page_char_counts as real_counts
+    from tests.tools.test_read_enhancements import _write_text_pdf
+
+    texts = ["Real body text on this page, plenty of it"] * 10
+    texts[3] = ""
+    texts[4] = ""
+    pdf = tmp_path / "exotic.pdf"
+    _write_text_pdf(pdf, texts)
+
+    def _probe_over_reads_page_five(path):
+        counts = real_counts(path)
+        counts[4] = 120  # pdfium found glyphs pdfplumber will not
+        return counts
+
+    monkeypatch.setattr(
+        "durin.memory.doc_convert.page_char_counts", _probe_over_reads_page_five
+    )
+    transcribed = []
+    monkeypatch.setattr(
+        "durin.memory.doc_convert.transcribe_page",
+        lambda path, page, **kw: transcribed.append(page) or f"ocr {page}",
+    )
+
+    convert_file_to_markdown(pdf, documents_config=_cfg())
+
+    assert transcribed == [4, 5]
+
+
+def test_a_failed_probe_converts_before_it_extracts(tmp_path, monkeypatch):
+    """Without the probe there is no shortcut left, so the branch falls back to
+    the order it had before the probe existed -- markitdown first. That order
+    is what turns an unreadable file into a DocConvertError instead of letting
+    a raw extractor exception escape to a caller that catches neither."""
+    from markitdown import MarkItDownException
+
+    from tests.tools.test_read_enhancements import _write_text_pdf
+
+    pdf = tmp_path / "gapped.pdf"
+    _write_text_pdf(pdf, ["Chapter Four: Financial Statements", "", "", ""])
+
+    def _no_probe(path):
+        raise RuntimeError("pypdfium2 could not open this")
+
+    class _BrokenConverter:
+        def convert(self, path):
+            raise MarkItDownException("markitdown cannot read this either")
+
+    def _never(path):
+        raise AssertionError("the accurate extraction ran before markitdown")
+
+    monkeypatch.setattr("durin.memory.doc_convert.page_char_counts", _no_probe)
+    monkeypatch.setattr(
+        "durin.memory.doc_convert._get_converter", lambda: _BrokenConverter()
+    )
+    monkeypatch.setattr("durin.memory.doc_convert.page_texts", _never)
+
+    with pytest.raises(DocConvertError) as excinfo:
+        convert_file_to_markdown(pdf, documents_config=_cfg())
+
+    assert "conversion failed" in str(excinfo.value)
+
+
+def test_a_failed_probe_still_classifies_the_document_the_same_way(
+    tmp_path, monkeypatch
+):
+    # The fallback is slower, not different: same verdict, same note, same text.
+    from tests.tools.test_read_enhancements import _write_text_pdf
+
+    pdf = tmp_path / "gapped.pdf"
+    _write_text_pdf(pdf, ["Chapter Four: Financial Statements", "", "", ""])
+    expected = convert_file_to_markdown(pdf, documents_config=_cfg(enabled=False))
+
+    def _no_probe(path):
+        raise RuntimeError("pypdfium2 could not open this")
+
+    monkeypatch.setattr("durin.memory.doc_convert.page_char_counts", _no_probe)
+
+    out = convert_file_to_markdown(pdf, documents_config=_cfg(enabled=False))
+
+    assert out.coverage == expected.coverage
+    assert out.markdown == expected.markdown
 
 
 def test_budget_counts_pages_needing_ocr_not_document_pages(tmp_path, monkeypatch):

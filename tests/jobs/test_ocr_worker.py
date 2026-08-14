@@ -20,7 +20,7 @@ def scanned_pdf(tmp_path):
     return pdf
 
 
-def _enqueue(registry, pdf, pages, *, sidecar_dir=None):
+def _enqueue(registry, pdf, pages, *, sidecar_dir=None, units_total=None):
     payload = {"path": str(pdf), "pages": pages}
     if sidecar_dir is not None:
         payload["sidecar_dir"] = str(sidecar_dir)
@@ -29,7 +29,7 @@ def _enqueue(registry, pdf, pages, *, sidecar_dir=None):
         label=pdf.name,
         payload=payload,
         session_key="chat:1",
-        units_total=len(pages),
+        units_total=len(pages) if units_total is None else units_total,
     )
 
 
@@ -46,6 +46,82 @@ def test_worker_transcribes_every_requested_page(registry, scanned_pdf, monkeypa
     assert registry.units(job.id) == [
         (1, "text of page 1"), (2, "text of page 2"), (3, "text of page 3"),
     ]
+
+
+def test_worker_transcribes_the_empty_pages_its_payload_left_out(
+    registry, tmp_path, monkeypatch,
+):
+    """The payload is a floor, not the whole set: the conversion path stops
+    confirming empty pages the moment a document is plainly over the inline
+    budget, and a probe that reads a font pdfplumber cannot can hide an empty
+    page from it entirely. Background time is free next to OCR, so the worker
+    settles the exhaustive list itself before transcribing — otherwise the
+    pages nobody confirmed stay missing from the document forever."""
+    from tests.tools.test_read_enhancements import _write_text_pdf
+
+    pdf = tmp_path / "gapped.pdf"
+    _write_text_pdf(
+        pdf,
+        ["Real body text on page one, plenty of it", "", "",
+         "Real body text on page four, plenty of it"],
+    )
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page",
+        lambda path, page, **kw: f"text of page {page}",
+    )
+    job = _enqueue(registry, pdf, [2])  # page 3 is just as empty and left out
+
+    run_job(job.id, registry=registry)
+
+    assert registry.done_units(job.id) == {2, 3}
+    assert registry.get(job.id).units_total == 2
+
+
+def test_worker_resizes_a_job_that_was_enqueued_expecting_more_pages(
+    registry, tmp_path, monkeypatch,
+):
+    """The enqueued count is the probe's estimate, and the probe over-flags:
+    it can name more pages than really have no text layer. A job that
+    transcribes everything there was and still reads "1 of 5" looks like one
+    that gave up partway."""
+    from tests.tools.test_read_enhancements import _write_text_pdf
+
+    pdf = tmp_path / "one_gap.pdf"
+    _write_text_pdf(pdf, ["", *["Real body text on this page, plenty of it"] * 4])
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page",
+        lambda path, page, **kw: f"text of page {page}",
+    )
+    job = _enqueue(registry, pdf, [1], units_total=5)
+
+    run_job(job.id, registry=registry)
+
+    reread = registry.get(job.id)
+    assert reread.units_total == 1
+    assert reread.units_done == 1
+
+
+def test_worker_transcribes_its_payload_when_the_completeness_pass_fails(
+    registry, scanned_pdf, monkeypatch,
+):
+    """Widening the payload is a backstop, not a precondition. A PDF the
+    accurate extractor chokes on is exactly the kind of document that was sent
+    for OCR in the first place — refusing to transcribe it because the check
+    failed would turn a recoverable job into a dead one."""
+    def _boom(path):
+        raise OSError("pdfplumber cannot open this")
+
+    monkeypatch.setattr("durin.jobs.ocr_worker.page_texts", _boom)
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page",
+        lambda path, page, **kw: f"text of page {page}",
+    )
+    job = _enqueue(registry, scanned_pdf, [1, 2])
+
+    run_job(job.id, registry=registry)
+
+    assert registry.get(job.id).status == "done"
+    assert registry.done_units(job.id) == {1, 2}
 
 
 def test_worker_writes_the_sidecar_with_pages_merged_in_order(registry, tmp_path, monkeypatch):
@@ -165,7 +241,9 @@ def test_worker_records_a_failure_when_the_library_write_breaks(
     assert reread.status == "failed"
     assert "read-only" in reread.error
     # The transcription itself survived: a retry resumes instead of redoing it.
-    assert registry.done_units(job.id) == {1}
+    # All three pages of this entry are empty, and the worker widens a payload
+    # that named only one of them before it starts.
+    assert registry.done_units(job.id) == {1, 2, 3}
     assert (entry_dir / "source.md").exists()
 
 

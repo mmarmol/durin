@@ -118,13 +118,32 @@ def test_the_result_carries_how_many_pages_are_pending(tmp_path, book, registry)
     assert result["job_pages"] == 40
 
 
+def test_the_job_is_sized_for_the_whole_book_not_the_pages_it_starts_from(
+    tmp_path, book, registry,
+):
+    """Deciding a forty-page scan is over budget only takes confirming six
+    pages, so the payload the job starts from is six pages long. What the user
+    is told is waiting must still be the book — the worker widens the payload
+    to the whole of it before transcribing anything."""
+    cfg = DocumentsConfig.model_validate({"ocr": {"enabled": True, "inline_max_pages": 5}})
+
+    result = ingest_artifact(tmp_path / "ws", book, documents_config=cfg, jobs=registry)
+
+    job = registry.get(result["job_id"])
+    assert job.payload["pages"] == [1, 2, 3, 4, 5, 6]
+    assert job.units_total == 40
+
+
 def test_the_entry_is_complete_before_its_job_is_spawned(tmp_path, book, registry, monkeypatch):
     """The worker learns which document it is transcribing from the entry's
     meta.json, and it can be reading it the moment spawn_ocr_job returns. So
     the entry has to be finished before that call, not after it."""
     seen = {}
 
-    def _probe(*, registry, pdf_path, pages, session_key, label, sidecar_dir=None):
+    def _probe(
+        *, registry, pdf_path, pages, session_key, label, sidecar_dir=None,
+        units_total=None,
+    ):
         from pathlib import Path
 
         seen["meta"] = (Path(sidecar_dir) / "meta.json").is_file()

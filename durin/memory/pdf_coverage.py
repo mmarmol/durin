@@ -10,6 +10,7 @@ Measurement only. Deciding what to do about the gaps belongs to the caller.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -26,6 +27,7 @@ __all__ = [
     "gap_ranges",
     "page_char_counts",
     "page_texts",
+    "page_texts_subset",
 ]
 
 # A page holding fewer than this many non-whitespace characters is treated as
@@ -164,6 +166,28 @@ def page_texts(path: Path) -> list[str]:
 
     with pdfplumber.open(str(path)) as pdf:
         return [(page.extract_text() or "") for page in pdf.pages]
+
+
+def page_texts_subset(path: Path, pages: Sequence[int]) -> dict[int, str]:
+    """The same extraction as :func:`page_texts`, for named 1-based pages only.
+
+    One open, only the pages asked for. A caller that has to settle a question
+    about a handful of pages of a four-hundred-page book pays for the handful.
+
+    Absent, not empty, for a page number the document does not have: "the
+    extractor cannot see this page" and "this page has no text layer" are
+    different answers, and a caller confirming which pages are empty must not
+    read the first as the second — that would confirm a page nobody looked at.
+    """
+    import pdfplumber
+
+    with pdfplumber.open(str(path)) as pdf:
+        total = len(pdf.pages)
+        return {
+            page: (pdf.pages[page - 1].extract_text() or "")
+            for page in pages
+            if 1 <= page <= total
+        }
 
 
 # How much of the preceding page's text to quote when labelling a gap.

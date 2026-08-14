@@ -27,7 +27,7 @@ from loguru import logger
 from durin.jobs.registry import JobRegistry
 from durin.memory.ingestion import index_ingested_entry
 from durin.memory.ocr import transcribe_page
-from durin.memory.pdf_coverage import page_texts
+from durin.memory.pdf_coverage import classify_coverage, page_texts
 from durin.utils.atomic_write import atomic_write_text
 
 __all__ = ["run_job"]
@@ -45,7 +45,6 @@ def run_job(job_id: str, *, registry: JobRegistry | None = None) -> None:
     pdf_path = Path(job.payload["path"])
     pages: list[int] = list(job.payload["pages"])
     already = registry.done_units(job_id)
-    todo = [p for p in pages if p not in already]
 
     # Re-fetch immediately before claiming rather than trusting `job` above:
     # interpreter boot, imports and the done_units() round trip all take real
@@ -79,6 +78,25 @@ def run_job(job_id: str, *, registry: JobRegistry | None = None) -> None:
         )
         return
     started = time.monotonic()
+
+    # The payload is a floor, not the whole set. The conversion path stops
+    # confirming empty pages the moment a document is plainly over the inline
+    # budget — that is what makes the enqueue decision cheap — and its cheap
+    # probe can miss an empty page outright on a font it decodes and
+    # pdfplumber does not. Neither gap may reach the finished document, and
+    # here the exhaustive pass is affordable: seconds of extraction against
+    # minutes of OCR. Union rather than replace, so a page already promised
+    # stays promised.
+    #
+    # What comes out is exactly what this run will transcribe, so it is also
+    # the honest denominator for progress — in both directions. The enqueued
+    # count can overshoot as easily as undershoot (it is the probe's estimate,
+    # and the probe over-flags), and a job that stops at "38 of 40" having done
+    # all its work reads as one that gave up.
+    pages = sorted(set(pages) | set(_empty_pages(pdf_path)))
+    if len(pages) != job.units_total:
+        registry.set_units_total(job_id, len(pages), pid=os.getpid())
+    todo = [p for p in pages if p not in already]
 
     error: str | None = None
     for page in todo:
@@ -151,6 +169,24 @@ def run_job(job_id: str, *, registry: JobRegistry | None = None) -> None:
         "not recording its outcome", job_id, status,
     )
     _emit(job_id, len(pages), len(already), started, status)
+
+
+def _empty_pages(pdf_path: Path) -> list[int]:
+    """Every 1-based page of *pdf_path* with no text layer, measured accurately.
+
+    Best effort by design: a PDF the accurate extractor chokes on is exactly
+    the kind of document that was sent for OCR in the first place, so failing
+    to widen the page list must not stop the transcription that was already
+    asked for.
+    """
+    try:
+        return list(classify_coverage(page_texts(pdf_path)).empty_pages)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "ocr worker: could not re-check {} for missed empty pages: {}",
+            pdf_path.name, exc,
+        )
+        return []
 
 
 def _emit(job_id: str, pages: int, resumed: int, started: float, status: str) -> None:

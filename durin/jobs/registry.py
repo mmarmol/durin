@@ -161,6 +161,31 @@ class JobRegistry:
 
         return execute_write(self._conn, _write)
 
+    def set_units_total(self, job_id: str, units_total: int, *, pid: int) -> bool:
+        """Resize the work of the job this worker owns.
+
+        A job is enqueued with as much as its caller knew about, which can be
+        less than there turns out to be: an OCR job's page list is a floor the
+        conversion path stopped counting at, and the worker settles the real
+        extent itself before it starts. Progress has to be reported against
+        what will actually be done, not against that floor.
+
+        Conditional on the row still being this worker's running job, for the
+        same reason :meth:`finish` is: a cancel can land while the worker is
+        still working out how much there is to do, and ``reconcile``'s age
+        fallback can leave two workers holding one job. Returns whether this
+        call actually wrote.
+        """
+        def _write(c: Any) -> bool:
+            cur = c.execute(
+                "UPDATE jobs SET units_total = ?"
+                " WHERE id = ? AND status = 'running' AND pid = ?",
+                (units_total, job_id, pid),
+            )
+            return cur.rowcount > 0
+
+        return execute_write(self._conn, _write)
+
     def record_unit(self, job_id: str, unit: int, text: str) -> None:
         def _write(c: Any) -> None:
             c.execute(

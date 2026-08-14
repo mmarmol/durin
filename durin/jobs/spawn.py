@@ -21,6 +21,7 @@ __all__ = ["spawn_ocr_job", "respawn"]
 def spawn_ocr_job(
     *, registry: JobRegistry, pdf_path: Path, pages: list[int],
     session_key: str | None, label: str, sidecar_dir: Path | None = None,
+    units_total: int | None = None,
 ) -> Job:
     """Enqueue an OCR job and start its worker.
 
@@ -33,6 +34,13 @@ def spawn_ocr_job(
     named ``source.<ext>`` for every document there, so two books ingested in
     one session would be indistinguishable. Callers pass the name the user
     handed over.
+
+    ``units_total`` is how much work the tray reports, and defaults to the
+    number of pages handed over. A caller that knows ``pages`` is only a floor
+    — the conversion path stops confirming pages once a document is plainly
+    over the inline budget — passes the size it expects instead, so a scanned
+    book does not show up as six pages of work. The worker corrects it against
+    its own exhaustive pass before transcribing anything.
     """
     job = registry.enqueue(
         kind="ocr",
@@ -43,7 +51,7 @@ def spawn_ocr_job(
             "sidecar_dir": str(sidecar_dir) if sidecar_dir else None,
         },
         session_key=session_key,
-        units_total=len(pages),
+        units_total=len(pages) if units_total is None else units_total,
     )
     try:
         subprocess.Popen(  # noqa: S603

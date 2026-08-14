@@ -210,16 +210,31 @@ ordinary PDF does not pay for text it never reads: `page_char_counts`
 (pypdfium2) counts non-whitespace glyphs per page — orders of magnitude
 cheaper, and deliberately an under-estimate of the `len(text.strip())` the
 threshold is calibrated against, so it can only err towards calling a page
-empty — and the accurate `page_texts` (pdfplumber) runs whenever some page
-looks empty, re-classifying from it so the verdict is always the accurate one.
-That is also when its text is actually used (labelling the gaps in the coverage
-note, and merging transcribed pages back in). Counting glyphs rather than
-string length is what makes the two comparable at all: the extractors disagree
-on line separators (`\r\n` vs `\n`), which is enough to lift a sparsely stamped
-scanned page over the threshold and lose both its note and its transcription. Local OCR
-(`documents.ocr.enabled`) transcribes the empty pages inline, as part of this
-same call, as long as there are at or under `documents.ocr.inline_max_pages`
-(default 5) of them. Over that budget, conversion does not run at all:
+empty. Counting glyphs rather than string length is what makes the two
+comparable at all: the extractors disagree on line separators (`\r\n` vs
+`\n`), which is enough to lift a sparsely stamped scanned page over the
+threshold and lose both its note and its transcription.
+
+That probe runs **first**, before markitdown, and what it finds decides what
+else runs at all. A PDF it flags no page on is the majority case and stops
+there, paying for nothing but the conversion. Otherwise the accurate
+`page_texts` (pdfplumber) re-classifies the document, and its verdict — never
+the probe's — is what decides which pages are empty; the probe can miss one, on
+a font pypdfium2 decodes and pdfplumber does not. That accurate text is also
+what labels the gaps in the coverage note and what transcribed pages are merged
+into.
+
+Local OCR (`documents.ocr.enabled`) transcribes the empty pages inline, as part
+of this same call, as long as there are at or under
+`documents.ocr.inline_max_pages` (default 5) of them. Over that budget nothing
+is converted or fully extracted at all — both would be thrown away unread. A
+document whose flagged pages could exceed the budget has them confirmed
+accurately one batch at a time (`page_texts_subset`) and stops the moment one
+more than the budget is confirmed: confirmed pages are a subset of the truly
+empty ones, so a subset over the budget puts the whole set over it. `NeedsOcrJob`
+then carries that confirmed floor as `pages` (the worker widens it to the
+exhaustive set itself — see [jobs](../jobs.md)) and the probe's flagged count as
+`estimated_pages`, which is what sizes the job for the reader.
 `ingest_artifact` copies the original immediately and enqueues a
 [background job](../jobs.md) to transcribe it page by page instead,
 returning that job's `job_id` alongside an empty `content`.

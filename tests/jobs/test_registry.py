@@ -95,6 +95,33 @@ def test_claim_loses_when_another_worker_already_claimed_it(registry):
     assert reread.pid == 1111  # the second claim did not steal ownership
 
 
+def test_set_units_total_resizes_the_job_this_worker_owns(registry):
+    # A worker that finds more work than its payload named says so, so the
+    # tray's denominator is the work that will actually be done.
+    job = registry.enqueue(kind="ocr", label="a", payload={}, session_key=None, units_total=6)
+    registry.claim(job.id, pid=4242)
+
+    assert registry.set_units_total(job.id, 40, pid=4242) is True
+    assert registry.get(job.id).units_total == 40
+
+
+def test_set_units_total_is_refused_for_a_job_this_worker_no_longer_owns(registry):
+    # Guarded like finish(), and for the same reason: a cancel can land while
+    # the worker is still deciding how much work there is, and reconcile's age
+    # fallback can leave two workers holding one job. Neither may write over
+    # the row it does not own.
+    job = registry.enqueue(kind="ocr", label="a", payload={}, session_key=None, units_total=6)
+    registry.claim(job.id, pid=4242)
+    registry.cancel(job.id)
+
+    assert registry.set_units_total(job.id, 40, pid=4242) is False
+    assert registry.get(job.id).units_total == 6
+
+    registry.claim(job.id, pid=4242)  # cancelled, so this cannot win either
+    assert registry.set_units_total(job.id, 40, pid=9999) is False
+    assert registry.get(job.id).units_total == 6
+
+
 def test_record_unit_advances_progress(registry):
     job = registry.enqueue(kind="ocr", label="a", payload={}, session_key=None, units_total=3)
     registry.record_unit(job.id, 1, "page one text")

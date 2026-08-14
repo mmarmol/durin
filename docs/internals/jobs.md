@@ -138,6 +138,19 @@ job's full unit list against `done_units()` and only work through what is
 missing — so a worker restarted after crashing at page 380 of 400 transcribes
 20 pages, not 400.
 
+That unit list is widened before the diff. An OCR job's payload pages are a
+floor rather than the whole set: the conversion path stops confirming empty
+pages the moment a document is plainly over the inline budget (see
+[the memory tools doc](memory/04_agent_tools.md)), and its cheap probe can miss
+an empty page outright. So the worker runs the accurate per-page extraction
+itself — seconds against the minutes of OCR that follow — unions the empty
+pages it finds with the payload's, and reports the widened count through
+`set_units_total`, a `claim`-style guarded `UPDATE` that only writes while the
+row is still this worker's running job. The widening is best-effort: a PDF the
+accurate extractor cannot read is exactly the kind of document that was sent
+for OCR, so a failure there leaves the payload alone rather than failing the
+job.
+
 ### Restart reconciliation
 
 A gateway restart used to strand a `process_registry.py`-tracked background
@@ -257,7 +270,7 @@ copy there.
 | Symbol | File | Role |
 |---|---|---|
 | `Job` | `durin/jobs/registry.py` | Frozen dataclass mirroring one `jobs` row. |
-| `JobRegistry` | `durin/jobs/registry.py` | `enqueue`, `get`, `list_for_session`, `claim`, `record_unit`, `units`, `done_units`, `finish`, `cancel`, `reconcile`. |
+| `JobRegistry` | `durin/jobs/registry.py` | `enqueue`, `get`, `list_for_session`, `claim`, `set_units_total`, `record_unit`, `units`, `done_units`, `finish`, `cancel`, `reconcile`. |
 | `RECONCILE_AGE_S` | `durin/jobs/registry.py` | Six hours — the pid-liveness-is-unreliable fallback age used by `reconcile`. |
 | `spawn_ocr_job` | `durin/jobs/spawn.py` | Enqueues an OCR job and `Popen`s its worker; called from `ingest_artifact` when a document needs more OCR than the inline budget. |
 | `respawn` | `durin/jobs/spawn.py` | Re-launches the worker for a job `reconcile` already requeued; dispatches on `job.kind`. |
