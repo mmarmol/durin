@@ -300,8 +300,8 @@ That ordering is what makes re-ingesting the same file genuinely idempotent:
 `ingest_artifact` (`durin/memory/ingestion.py`) checks the entry's own state
 under that id before doing any work, rather than redoing the work and only
 then discovering nothing needed to change. A finished entry with a real
-transcription (`source.md` on disk, and `meta.json`'s `derived.ocr_stub` not
-set) short-circuits to a true no-op, returning that content with
+transcription (`source.md` on disk, and `meta.json`'s `derived.ocr_stub`
+false) short-circuits to a true no-op, returning that content with
 `job_id: null` and never touching `meta.json`.
 
 `source.md` alone does not prove an entry is finished and final, though.
@@ -313,10 +313,17 @@ flag before trusting the sidecar: while OCR still cannot do better, the stub
 is returned as-is (honest — it is still the current answer, not a stale one);
 once OCR is enabled and the engine is available, the next re-ingest
 re-converts instead, and the upgrade is written back to `source.md` and the
-flag on disk, not just returned for that one call. The same re-check applies
-to a half state — `source.md` present but `meta.json` missing, which the two
-writes being individually atomic rather than one transaction makes possible
-on a crash between them — treated as no finished entry at all.
+flag on disk, not just returned for that one call. A `meta.json` that
+predates the flag — no `ocr_stub` key at all, which is everything flag-less
+versions wrote — is not read as "real": the sidecar is classified once
+against the two frozen note heads those versions prepended to every stub
+(`is_pre_flag_stub_note` in `durin/memory/pdf_coverage.py`, a deliberately
+closed corpus that never follows the live note's wording), and the verdict
+is written back into `meta.json` with nothing else in it changed, so the
+sniff never re-runs. The same re-check applies to a half state — `source.md`
+present but `meta.json` missing, which the two writes being individually
+atomic rather than one transaction makes possible on a crash between them —
+treated as no finished entry at all.
 
 A document whose OCR job is still `queued`/`running` — tracked by an
 `ocr_job.json` marker in the entry directory — returns that SAME job instead

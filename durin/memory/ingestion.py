@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from durin.memory.paths import ingested_entry_dir
+from durin.memory.pdf_coverage import is_pre_flag_stub_note
 from durin.utils.atomic_write import atomic_write_text
 
 __all__ = ["IngestError", "index_ingested_entry", "ingest_artifact"]
@@ -55,9 +56,13 @@ def ingest_artifact(
     entry's own state on disk rather than by re-running the work:
 
     - Finished with a real transcription (``source.md`` there, and
-      ``meta.json``'s ``derived.ocr_stub`` is not set): never redone.
-      Conversion is skipped and ``content`` comes back from that file,
-      ``job_id=None``.
+      ``meta.json``'s ``derived.ocr_stub`` false): never redone. Conversion
+      is skipped and ``content`` comes back from that file, ``job_id=None``.
+    - A ``meta.json`` predating the flag (no ``derived.ocr_stub`` key at
+      all — flag-less versions never wrote one): the sidecar is classified
+      once by the frozen note heads those versions prepended to every stub,
+      the verdict is persisted back into ``meta.json`` with nothing else in
+      it changed, and the entry then behaves as whichever case it really is.
     - Finished with an OCR-off/engine-missing STUB (``derived.ocr_stub`` is
       true) while OCR still cannot do better: returned as-is, honestly —
       the note is still the current answer, not a stale one.
@@ -148,7 +153,28 @@ def ingest_artifact(
             sidecar_needs_rewrite = True
         else:
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
-            is_stub = bool((meta.get("derived") or {}).get("ocr_stub"))
+            sidecar_content = md_sidecar.read_text(encoding="utf-8")
+            derived = meta.get("derived") or {}
+            if "ocr_stub" in derived:
+                is_stub = bool(derived["ocr_stub"])
+            else:
+                # meta.json predates the flag: flag-less versions wrote no
+                # key at all, so an absent key is "no verdict recorded", not
+                # "not a stub" -- reading it as False replayed a stale stub
+                # note forever for every entry those versions ingested. The
+                # sidecar's own first bytes are the remaining evidence:
+                # classify it once by the frozen pre-flag note heads and
+                # persist the verdict so the sniff never re-runs. The write
+                # is surgical -- the loaded dict round-trips with just this
+                # key added, so ingested_at and any dream-derived summary/
+                # entities/relations ride along untouched.
+                is_stub = is_pre_flag_stub_note(sidecar_content)
+                derived["ocr_stub"] = is_stub
+                meta["derived"] = derived
+                atomic_write_text(
+                    meta_path,
+                    json.dumps(meta, indent=2, sort_keys=True, ensure_ascii=False),
+                )
             upgrade_available = False
             if is_stub:
                 if documents_config is None:
@@ -160,14 +186,16 @@ def ingest_artifact(
                 # Either a real transcription (never redone) or a stub OCR
                 # still cannot improve on (returned honestly, as the current
                 # answer, not a stale one) -- both are the correct response
-                # right now, so meta.json is left untouched: rewriting it
-                # would reset ingested_at and, for a document a dream pass
-                # has since distilled, wipe its derived summary/entities/
-                # relations back to empty on every casual re-mention.
+                # right now, so meta.json is not rewritten with a fresh
+                # payload: that would reset ingested_at and, for a document a
+                # dream pass has since distilled, wipe its derived summary/
+                # entities/relations back to empty on every casual
+                # re-mention. (The legacy resolve above adds one key to the
+                # loaded dict precisely so everything else survives.)
                 return {
                     "id": entry_id,
                     "source": str(target),
-                    "content": md_sidecar.read_text(encoding="utf-8"),
+                    "content": sidecar_content,
                     "meta_path": str(meta_path),
                     "size_bytes": size_bytes,
                     "job_id": None,
@@ -190,15 +218,15 @@ def ingest_artifact(
         # other action must read as pending here, exactly like one that was
         # always queued, or the two would fight over the same row. A vanished
         # row (get() -> None -- terminal jobs can be pruned), a
-        # failed/cancelled one, and a `done` one with no sidecar all fall
-        # through to the same retry below. That last case is not the ordinary
-        # race it sounds like: since the sidecar check above already returned
-        # if source.md existed, reaching this point with status `done` means
-        # the sidecar that job wrote (the worker always writes it before
-        # calling finish(), see durin/jobs/ocr_worker.py) is no longer there —
-        # a half state from something removed after the fact, not from the
-        # worker's own sequencing. Retrying is the safe, self-healing
-        # response either way.
+        # failed/cancelled one, and a `done` one all fall through to the same
+        # retry below. `done` is not the ordinary race it sounds like; it
+        # arrives here on two routes. Either the sidecar its worker wrote
+        # (always before calling finish(), see durin/jobs/ocr_worker.py) is
+        # no longer there -- removed after the fact, not by the worker's own
+        # sequencing -- or the sidecar IS there and the block above fell
+        # through instead of returning: no meta.json to verify it against,
+        # or a stub OCR can now upgrade. Retrying is the safe, self-healing
+        # response on every route.
         if existing_job is not None and existing_job.status in ("queued", "running"):
             return {
                 "id": entry_id,

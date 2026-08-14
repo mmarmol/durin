@@ -466,6 +466,194 @@ def test_a_half_state_missing_meta_rebuilds_instead_of_short_circuiting(
     assert (entry_dir / "meta.json").exists()
 
 
+def _delete_ocr_stub_key(meta_path):
+    """Rewrite ``meta.json`` without its ``derived.ocr_stub`` key.
+
+    Exactly the shape every flag-less durin version left behind — same
+    payload, same formatting, no verdict. The legacy tests below all start
+    from an entry doctored this way after a normal ingest."""
+    import json
+
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    del meta["derived"]["ocr_stub"]
+    meta_path.write_text(
+        json.dumps(meta, indent=2, sort_keys=True, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def test_a_legacy_stub_meta_predating_the_flag_still_upgrades(
+    tmp_path, book, registry, monkeypatch
+):
+    """Reproduced pre-fix: a meta.json with no ``ocr_stub`` key at all — what
+    every flag-less durin version wrote — read as ``bool(None) == False``,
+    i.e. "real transcription, never redone". The stale coverage note came
+    back on every re-ingest forever, even after the user did exactly what the
+    note says and turned OCR on. An absent key must instead be resolved from
+    the sidecar itself, and the stub then upgraded like any other."""
+    import json
+    from pathlib import Path
+
+    launcher = _CountingPopen()
+    monkeypatch.setattr("durin.jobs.spawn.subprocess", launcher)
+    cfg_off = DocumentsConfig.model_validate(
+        {"ocr": {"enabled": False, "inline_max_pages": 50}}
+    )
+
+    first = ingest_artifact(tmp_path / "ws", book, documents_config=cfg_off, jobs=registry)
+    assert "turned off" in first["content"]
+    entry_dir = Path(first["source"]).parent
+    _delete_ocr_stub_key(entry_dir / "meta.json")
+
+    monkeypatch.setattr(
+        "durin.memory.doc_convert.transcribe_pages_detached",
+        lambda path, pages: {p: f"Page {p}: fresh text." for p in pages},
+    )
+    cfg_on = DocumentsConfig.model_validate(
+        {"ocr": {"enabled": True, "inline_max_pages": 50}}
+    )
+
+    second = ingest_artifact(tmp_path / "ws", book, documents_config=cfg_on, jobs=registry)
+
+    assert "fresh text" in second["content"]
+    assert "turned off" not in second["content"]
+    # Persisted, not just returned: the upgrade landed on disk...
+    assert "fresh text" in (entry_dir / "source.md").read_text(encoding="utf-8")
+    # ...and meta.json carries the new conversion's own verdict.
+    meta_after = json.loads((entry_dir / "meta.json").read_text(encoding="utf-8"))
+    assert meta_after["derived"]["ocr_stub"] is False
+    assert launcher.calls == 0
+
+
+def test_a_legacy_stub_kept_while_ocr_is_off_persists_its_verdict_surgically(
+    tmp_path, book, registry, monkeypatch
+):
+    """While OCR stays off, a legacy stub is still the honest current answer:
+    returned as-is, no conversion. But the classification must be written
+    back (``ocr_stub: true``) so the sniff never re-runs — and that write
+    must be surgical: a ``derived.summary`` added meanwhile (a dream pass
+    distilling the entry) survives untouched."""
+    import json
+    from pathlib import Path
+
+    cfg_off = DocumentsConfig.model_validate(
+        {"ocr": {"enabled": False, "inline_max_pages": 50}}
+    )
+    first = ingest_artifact(tmp_path / "ws", book, documents_config=cfg_off, jobs=registry)
+    meta_path = Path(first["meta_path"])
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    del meta["derived"]["ocr_stub"]
+    meta["derived"]["summary"] = "a dream pass distilled this"
+    meta_path.write_text(
+        json.dumps(meta, indent=2, sort_keys=True, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    def _must_not_convert(*a, **kw):
+        raise AssertionError("classifying a legacy sidecar must not re-convert it")
+
+    monkeypatch.setattr(
+        "durin.memory.doc_convert.convert_file_to_markdown", _must_not_convert
+    )
+
+    second = ingest_artifact(tmp_path / "ws", book, documents_config=cfg_off, jobs=registry)
+
+    assert second["content"] == first["content"]
+    assert second["job_id"] is None
+    meta_after = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert meta_after["derived"]["ocr_stub"] is True
+    assert meta_after["derived"]["summary"] == "a dream pass distilled this"
+
+
+def test_a_legacy_real_transcription_is_sniffed_once_and_never_again(
+    tmp_path, registry, monkeypatch
+):
+    """A flag-less meta.json over an ordinary conversion must be classified
+    real from the sidecar itself (no note head) without converting anything,
+    and the verdict persisted — after which a further re-ingest must not
+    touch meta.json at all. Sniff once, ever."""
+    import json
+    from pathlib import Path
+
+    from tests.tools.test_read_enhancements import _write_text_pdf
+
+    pdf = tmp_path / "plain.pdf"
+    _write_text_pdf(pdf, ["Plenty of readable body text on this page"])
+    cfg = DocumentsConfig.model_validate({"ocr": {"enabled": True}})
+
+    first = ingest_artifact(tmp_path / "ws", pdf, documents_config=cfg, jobs=registry)
+    meta_path = Path(first["meta_path"])
+    _delete_ocr_stub_key(meta_path)
+
+    def _must_not_convert(*a, **kw):
+        raise AssertionError("a legacy real transcription must not be re-converted")
+
+    monkeypatch.setattr(
+        "durin.memory.doc_convert.convert_file_to_markdown", _must_not_convert
+    )
+
+    second = ingest_artifact(tmp_path / "ws", pdf, documents_config=cfg, jobs=registry)
+
+    assert "readable body text" in second["content"]
+    meta_after = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert meta_after["derived"]["ocr_stub"] is False
+
+    stat_before = meta_path.stat()
+    third = ingest_artifact(tmp_path / "ws", pdf, documents_config=cfg, jobs=registry)
+    assert third["content"] == second["content"]
+    stat_after = meta_path.stat()
+    assert (stat_after.st_ino, stat_after.st_mtime_ns) == (
+        stat_before.st_ino,
+        stat_before.st_mtime_ns,
+    )
+
+
+def test_a_legacy_partial_coverage_stub_is_recognized_by_its_warning_head(
+    tmp_path, registry, monkeypatch
+):
+    """Flag-less stubs open with one of two heads: an all-scanned document
+    with "[SCANNED DOCUMENT: " and a partially scanned one with
+    "[EXTRACTION COVERAGE WARNING: ". The classifier must catch the second
+    kind too — a partial stub misread as "real" would freeze half a document
+    forever: the same trap, behind the other head."""
+    import json
+    from pathlib import Path
+
+    from tests.tools.test_read_enhancements import _write_text_pdf
+
+    pdf = tmp_path / "half.pdf"
+    _write_text_pdf(
+        pdf,
+        [
+            "Plenty of readable body text right here on this page",
+            "",
+            "More readable body text continues over on this page",
+            "",
+        ],
+    )
+    cfg_off = DocumentsConfig.model_validate(
+        {"ocr": {"enabled": False, "inline_max_pages": 50}}
+    )
+
+    first = ingest_artifact(tmp_path / "ws", pdf, documents_config=cfg_off, jobs=registry)
+    assert first["content"].startswith("[EXTRACTION COVERAGE WARNING: ")
+    meta_path = Path(first["meta_path"])
+    _delete_ocr_stub_key(meta_path)
+
+    def _must_not_convert(*a, **kw):
+        raise AssertionError("classifying a legacy sidecar must not re-convert it")
+
+    monkeypatch.setattr(
+        "durin.memory.doc_convert.convert_file_to_markdown", _must_not_convert
+    )
+
+    second = ingest_artifact(tmp_path / "ws", pdf, documents_config=cfg_off, jobs=registry)
+
+    assert second["content"] == first["content"]
+    meta_after = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert meta_after["derived"]["ocr_stub"] is True
+
+
 class _RecordingVectorIndex:
     def __init__(self):
         self.upserts = []
