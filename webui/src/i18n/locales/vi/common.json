@@ -592,7 +592,7 @@
         "maxFileSizeMb": "Tệp lớn nhất có thể đọc"
       },
       "help": {
-        "ocrEnabled": "Chuyển văn bản các trang PDF dạng quét không có lớp văn bản bằng một công cụ OCR cục bộ chạy trên CPU. Tắt theo mặc định — bật lên sẽ cài đặt công cụ này và làm tăng thời gian xử lý trên các trang dạng quét.",
+        "ocrEnabled": "Chuyển văn bản các trang PDF dạng quét không có lớp văn bản bằng một công cụ OCR cục bộ chạy trên CPU. Tắt theo mặc định — bật lên sẽ cài đặt khoảng 200 MB, dùng khoảng 2 GB RAM trong khi chuyển văn bản, và mất khoảng 1-2 giây mỗi trang với bản quét rõ nét.",
         "ocrInlineMaxPages": "Số trang cần OCR có thể được chuyển văn bản ngay trong khi bạn chờ. Tài liệu cần nhiều hơn sẽ trở thành một tác vụ nền mà bạn có thể theo dõi từ bảng công việc.",
         "maxTextChars": "Kết quả trích xuất dài nhất được chèn vào một lượt trước khi bị cắt bớt.",
         "maxFileSizeMb": "Tệp đính kèm lớn nhất mà durin sẽ trích xuất văn bản. Các tệp lớn hơn sẽ được báo là bị bỏ qua thay vì được đọc."

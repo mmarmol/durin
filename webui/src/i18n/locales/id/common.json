@@ -592,7 +592,7 @@
         "maxFileSizeMb": "Berkas terbesar yang dibaca"
       },
       "help": {
-        "ocrEnabled": "Mentranskripsikan halaman PDF hasil pindaian yang tidak memiliki lapisan teks menggunakan mesin OCR lokal yang berjalan di CPU. Nonaktif secara default — mengaktifkannya akan menginstal mesin dan menambah waktu pemrosesan pada halaman hasil pindaian.",
+        "ocrEnabled": "Mentranskripsikan halaman PDF hasil pindaian yang tidak memiliki lapisan teks menggunakan mesin OCR lokal yang berjalan di CPU. Nonaktif secara default — mengaktifkannya akan menginstal ~200 MB, menggunakan ~2 GB RAM saat mentranskripsi, dan membutuhkan sekitar 1-2 detik per halaman pada pindaian yang bersih.",
         "ocrInlineMaxPages": "Halaman yang perlu OCR dan dapat ditranskripsikan sambil Anda menunggu. Dokumen yang butuh lebih banyak akan menjadi tugas latar belakang yang dapat dipantau dari panel kerja.",
         "maxTextChars": "Ekstraksi terpanjang yang disisipkan ke dalam satu giliran sebelum dipotong.",
         "maxFileSizeMb": "Lampiran terbesar yang teksnya akan diekstrak oleh durin. Berkas yang lebih besar dilaporkan sebagai dilewati, bukan dibaca."

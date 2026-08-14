@@ -203,6 +203,28 @@ as-is. The storage model has three steps, all in a single call:
 Steps 2 and 3 are best-effort: a failure does not roll back the verbatim copy.
 When memory is disabled (no embedding model), only step 1 runs.
 
+**Scanned PDFs.** Before conversion, `convert_file_to_markdown` measures a
+PDF's per-page text coverage (`durin/memory/pdf_coverage.py`) and classifies
+it as ordinary, partially scanned, or fully scanned; local OCR
+(`documents.ocr.enabled`) transcribes the empty pages inline, as part of this
+same call, as long as there are at or under `documents.ocr.inline_max_pages`
+(default 5) of them. Over that budget, conversion does not run at all:
+`ingest_artifact` copies the original immediately and enqueues a
+[background job](../jobs.md) to transcribe it page by page instead,
+returning that job's `job_id` alongside an empty `content`.
+
+The **tool**, however, does not currently forward `job_id` into its own
+response — the agent has no signal from this call alone that a job exists —
+and it writes the Library reference unconditionally from whatever `content`
+it received, so an over-budget document gets a real but empty
+`memory/references/<slug>.md` (`chunk_count: 0`). The worker's completion
+writes the transcribed text only to the verbatim-copy sidecar
+(`ingested/<id>/source.md`), never back to the reference, its FTS row, or its
+vector chunks — so as things stand, that reference stays empty even after the
+job finishes. Verified against a live run over a 40-page scanned fixture;
+`tests/memory/test_ingestion_ocr.py` covers `ingest_artifact` directly but not
+the tool layer above it, which is where this falls through.
+
 To read a document's text **without** persisting it to the Library, the agent
 uses the separate `convert_to_markdown` tool
 (`durin/agent/tools/convert_to_markdown.py`) instead — a transient conversion

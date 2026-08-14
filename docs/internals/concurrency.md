@@ -372,10 +372,11 @@ refuse to fire again); a boot-time reconciliation sweep flips any `running`
 manifest older than six hours to `error` to close that window, mirroring the
 equivalent sweep for workflow run manifests.
 
-### The SQLite index
+### SQLite databases with cross-process writers
 
-The FTS5 index (`fts.sqlite`) is the one place durin opens a SQLite database with
-concurrent cross-process writers, so it gets dedicated helpers in
+Two databases have concurrent cross-process writers: the FTS5 index
+(`fts.sqlite`) and the [job registry](jobs.md) (`jobs.db` — the gateway and an
+OCR worker subprocess both write it). Both get the same dedicated helpers in
 `durin/utils/sqlite_util.py`:
 
 - `connect()` opens in WAL mode (falling back to DELETE journaling on
@@ -385,9 +386,9 @@ concurrent cross-process writers, so it gets dedicated helpers in
   takes the write lock at transaction start so writers cannot interleave, and
   retries with jitter on `SQLITE_BUSY`.
 
-These apply **only** to the derived SQLite index. Sessions and config are plain
-`.jsonl`/`.json` files coordinated by `cross_process_lock`, not by SQLite
-transactions.
+These apply **only** to those two SQLite databases. Sessions and config are
+plain `.jsonl`/`.json` files coordinated by `cross_process_lock`, not by
+SQLite transactions.
 
 ### Provider snapshots
 
@@ -449,7 +450,7 @@ without a restart (see [loop](loop.md)).
 | `CronService._lock` / `_tick_lock` | `durin/cron/service.py` | Two independent `FileLock` instances: store read-modify-write serialization, and non-blocking at-most-once tick guard. |
 | `git_worktree_lock_path` | `durin/memory/memory_writer.py` | Canonical `.git-worktree` lock target shared by writers and the indexer/vector prune paths. |
 | `_root_write_lock` (RLock dict) | `durin/memory/memory_writer.py` | In-process per-repo `threading.RLock`; outermost memory lock around the whole read-apply-CAS-reset section. |
-| `sqlite_util.connect` / `execute_write` | `durin/utils/sqlite_util.py` | WAL + `busy_timeout` connection and `BEGIN IMMEDIATE` + retry write wrapper, for the derived FTS5 index only. |
+| `sqlite_util.connect` / `execute_write` | `durin/utils/sqlite_util.py` | WAL + `busy_timeout` connection and `BEGIN IMMEDIATE` + retry write wrapper, shared by the derived FTS5 index and the job registry (`jobs.db`). |
 | `loops.store.save_loop` / `.delete_loop` | `durin/loops/store.py` | Per-loop-name `cross_process_lock` around the atomic full-file rewrite of a loop definition. |
 | `loops.claims` (`register`/`release`/`release_run`/`prune`) | `durin/loops/claims.py` | Single `cross_process_lock` over the whole `claims.json` file; last-claim-on-a-key wins. |
 | `loops.queue` (`push`/`pop_fresh`/`pending`) | `durin/loops/queue.py` | Per-loop `cross_process_lock` over that loop's `queue/<loop>.jsonl`, independent of other loops' queues and of the claims lock. |

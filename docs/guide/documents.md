@@ -25,8 +25,25 @@ button in the web dashboard accepts documents, not just images), by pointing at 
 
 **Supported formats:** PDF, Word (`.docx`), PowerPoint (`.pptx`), Excel
 (`.xls`/`.xlsx`), EPUB, HTML, CSV, JSON, XML, Jupyter notebooks (`.ipynb`), and
-ZIP archives of these. Scanned/image-only PDFs (which need OCR) and a few office
-formats like ODT/RTF are not covered yet.
+ZIP archives of these. A few office formats like ODT/RTF are not covered yet.
+
+## Scanned PDFs
+
+A PDF that is really a photograph of a page — a scanned book, an old contract,
+anything with no text underneath the image — reads like any other document
+once **local OCR** is turned on. It runs entirely on your machine, and it is
+**off by default**: turn it on from the web dashboard's **Settings →
+Documents**, where the toggle also notes roughly what it costs you in disk
+space, memory, and processing time.
+
+A short scan is read on the spot, the same as any other document. Ask durin to
+remember a longer one — a whole scanned book — and it does not make you wait:
+the original is kept right away and its pages are transcribed in the
+background. Watch its progress from the dashboard's work panel, or just ask
+durin how it's going.
+
+See [Jobs internals](../internals/jobs.md) for how the background
+transcription queue works.
 
 ## The Library — kept apart from your everyday memory
 

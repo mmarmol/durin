@@ -592,7 +592,7 @@
         "maxFileSizeMb": "Fichier le plus volumineux à lire"
       },
       "help": {
-        "ocrEnabled": "Transcrit les pages de PDF scannées sans couche de texte à l’aide d’un moteur OCR local qui s’exécute sur le CPU. Désactivé par défaut — l’activer installe le moteur et ajoute du temps de traitement sur les pages scannées.",
+        "ocrEnabled": "Transcrit les pages de PDF scannées sans couche de texte à l’aide d’un moteur OCR local qui s’exécute sur le CPU. Désactivé par défaut — l’activer installe environ 200 Mo, utilise environ 2 Go de RAM pendant la transcription, et prend 1-2 secondes par page sur un scan propre.",
         "ocrInlineMaxPages": "Pages nécessitant l’OCR qui peuvent être transcrites pendant l’attente. Un document qui en nécessite plus devient une tâche en arrière-plan à suivre depuis le panneau de travail.",
         "maxTextChars": "Extraction la plus longue insérée dans un tour avant d’être tronquée.",
         "maxFileSizeMb": "La plus grande pièce jointe dont durin extraira le texte. Les fichiers plus volumineux sont signalés comme ignorés plutôt que lus."
