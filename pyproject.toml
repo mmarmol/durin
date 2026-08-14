@@ -74,6 +74,16 @@ dependencies = [
     # The docx/pptx/xlsx/xls/pdf extras pull the per-format converters;
     # html/csv/json/xml/epub/ipynb/zip work with the base install.
     "markitdown[docx,pptx,xlsx,xls,pdf]>=0.1.6,<0.2.0",
+    # Per-page PDF text, used to measure how much of a document has a text
+    # layer before deciding whether it needs OCR. Also arrives transitively
+    # via markitdown[pdf]; declared here because we import it directly.
+    "pdfplumber>=0.11.9,<1.0.0",
+    # Per-page character counts (to decide whether a page has a text layer at
+    # all) and page rasterisation for OCR. Two orders of magnitude cheaper than
+    # pdfplumber for the counting, so every PDF conversion runs it. Also
+    # arrives transitively via pdfplumber; declared here because we import it
+    # directly.
+    "pypdfium2>=5.9.0,<6",
     # Markdown → HTML for outbound email bodies (multipart/alternative).
     # Pure Python, CommonMark-compliant.
     "markdown-it-py>=3.0,<5.0",
@@ -155,6 +165,15 @@ cross-encoder = [
     # sentence-transformers pulls in torch (~1 GB) — large dep, hence
     # gated behind the extra rather than in `memory`.
     "sentence-transformers>=3.0,<6.0",
+]
+ocr = [
+    # Local on-CPU OCR for PDF pages with no text layer. ONNX models ship in
+    # the wheel; nothing is downloaded at runtime and nothing leaves the box.
+    #
+    # Pinned to the maintained 3.x line. The legacy rapidocr-onnxruntime
+    # package caps at requires_python <3.13 and would silently drop durin's
+    # 3.13 support, so it must not be substituted here.
+    "rapidocr>=3.9,<4.0",
 ]
 api = [
     # Starlette ASGI framework + uvicorn server for the new HTTP front door (SP4).

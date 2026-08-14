@@ -1155,6 +1155,44 @@ def _lazy_default(module_path: str, class_name: str) -> Any:
     return getattr(module, class_name)()
 
 
+class DocumentsOcrConfig(Base):
+    """Local OCR for PDF pages with no text layer.
+
+    Off by default: the engine is an optional extra, so the toggle both
+    activates the feature and triggers the extra's install.
+    """
+
+    enabled: bool = Field(default=False, description="Transcribe PDF pages that have no text layer using the local OCR engine; installs the [ocr] extra on activation")
+    inline_max_pages: int = Field(
+        default=5,
+        ge=0,
+        validation_alias=AliasChoices("inlineMaxPages", "inline_max_pages"),
+        description="Pages needing OCR that may be transcribed inside a conversion call; a document needing more becomes a background job. 0 sends every scanned document to a job",
+    )
+
+
+class DocumentsConfig(Base):
+    """How durin reads the documents it is given.
+
+    Shared by the three surfaces that convert a document: chat attachments,
+    the convert_to_markdown tool, and memory_ingest.
+    """
+
+    ocr: DocumentsOcrConfig = Field(default_factory=DocumentsOcrConfig, description="Local OCR for scanned PDF pages")
+    max_file_size_mb: int = Field(
+        default=50,
+        ge=1,
+        validation_alias=AliasChoices("maxFileSizeMb", "max_file_size_mb"),
+        description="Largest attachment durin will extract text from; larger files are reported as skipped rather than read",
+    )
+    max_text_chars: int = Field(
+        default=200_000,
+        ge=1000,
+        validation_alias=AliasChoices("maxTextChars", "max_text_chars"),
+        description="Longest extraction inlined into a turn before truncation",
+    )
+
+
 class ToolsConfig(Base):
     """Tools configuration.
 
@@ -1321,6 +1359,7 @@ class Config(BaseSettings):
     tts: TtsConfig = Field(default_factory=TtsConfig, description="Text-to-speech for spoken replies in conversational voice mode")
     voice: VoiceConfig = Field(default_factory=VoiceConfig, description="Hands-free conversational voice mode (the gateway loop)")
     memory: MemoryConfig = Field(default_factory=MemoryConfig, description="Memory subsystem: vector retrieval, dream passes, file watcher, health checks")
+    documents: DocumentsConfig = Field(default_factory=DocumentsConfig, description="Document reading: extraction limits and local OCR for scanned PDFs")
     cron: CronConfig = Field(default_factory=CronConfig, description="Cron scheduler: run history and per-run session retention")
     workflow: WorkflowConfig = Field(default_factory=WorkflowConfig, description="Workflow engine: node-visit caps and run-folder retention")
     loops: LoopsConfig = Field(default_factory=LoopsConfig, description="Loops subsystem settings.")

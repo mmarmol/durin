@@ -72,6 +72,7 @@
       "web-search": "Recherche web",
       "channels": "Canaux",
       "memory": "Mémoire",
+      "documents": "Documents",
       "transcription": "Voix",
       "skills-security": "Sécurité des skills",
       "personas": "Personas",
@@ -574,6 +575,28 @@
       "crossEncoderModelPlaceholder": "id du modèle (p. ex. BAAI/bge-reranker-base)",
       "crossEncoderTest": "Tester",
       "dreamDescription": "Le dream consolide les sessions en pages d’entités + skills et déduplique les entités en double. Il s’exécute selon un cron quotidien, plus des déclencheurs réactifs optionnels."
+    },
+    "documents": {
+      "description": "Comment durin lit les documents que vous joignez ou lui demandez d’ouvrir — limites d’extraction et OCR local pour les PDF scannés.",
+      "loadError": "Impossible de charger les paramètres des documents.",
+      "saveError": "Impossible d’enregistrer {{path}}.",
+      "saveRowLabel": "Enregistrer {{row}}",
+      "sections": {
+        "ocr": "OCR local",
+        "limits": "Limites de lecture"
+      },
+      "rows": {
+        "ocrEnabled": "OCR local",
+        "ocrInlineMaxPages": "Limite de pages en direct",
+        "maxTextChars": "Extraction la plus longue",
+        "maxFileSizeMb": "Fichier le plus volumineux à lire"
+      },
+      "help": {
+        "ocrEnabled": "Transcrit les pages de PDF scannées sans couche de texte à l’aide d’un moteur OCR local qui s’exécute sur le CPU. Désactivé par défaut — l’activer installe environ 200 Mo, utilise environ 2 Go de RAM pendant la transcription, et prend 1-2 secondes par page sur un scan propre.",
+        "ocrInlineMaxPages": "Pages nécessitant l’OCR qui peuvent être transcrites pendant l’attente. Un document qui en nécessite plus devient une tâche en arrière-plan à suivre depuis le panneau de travail.",
+        "maxTextChars": "Extraction la plus longue insérée dans un tour avant d’être tronquée.",
+        "maxFileSizeMb": "La plus grande pièce jointe dont durin extraira le texte. Les fichiers plus volumineux sont signalés comme ignorés plutôt que lus."
+      }
     },
     "extras": {
       "willInstall": "Ceci installera {{extra}} (téléchargement d’environ {{size}}).",
@@ -2257,6 +2280,7 @@
   "work": {
     "steps": "{{count}} étapes",
     "steps_one": "1 étape",
+    "pages": "{{done}} sur {{total}} pages",
     "panelTitle": "Travail",
     "inProgress": "En cours",
     "finished": "Terminé ({{count}})",
@@ -2266,6 +2290,7 @@
       "statusRunning": "en cours",
       "statusDone": "terminé",
       "statusFailed": "échoué",
+      "statusCancelled": "annulé",
       "runningMany": "{{count}} tâches en cours",
       "needsInput": "{{label}} attend votre réponse",
       "needsInputMany": "{{count}} tâches attendent votre réponse",

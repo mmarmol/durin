@@ -72,6 +72,7 @@
       "web-search": "웹 검색",
       "channels": "채널",
       "memory": "메모리",
+      "documents": "문서",
       "transcription": "음성",
       "skills-security": "스킬 보안",
       "personas": "페르소나",
@@ -574,6 +575,28 @@
       "crossEncoderModelPlaceholder": "모델 ID (예: BAAI/bge-reranker-base)",
       "crossEncoderTest": "테스트",
       "dreamDescription": "Dream은 세션을 엔터티 페이지와 스킬로 통합하고 중복 엔터티를 제거합니다. 일일 cron과 선택적인 반응형 트리거로 실행됩니다."
+    },
+    "documents": {
+      "description": "durin이 첨부하거나 열어달라고 요청받은 문서를 읽는 방식입니다 — 추출 한도와 스캔된 PDF를 위한 로컬 OCR입니다.",
+      "loadError": "문서 설정을 불러오지 못했습니다.",
+      "saveError": "{{path}}을(를) 저장하지 못했습니다.",
+      "saveRowLabel": "{{row}} 저장",
+      "sections": {
+        "ocr": "로컬 OCR",
+        "limits": "읽기 한도"
+      },
+      "rows": {
+        "ocrEnabled": "로컬 OCR",
+        "ocrInlineMaxPages": "인라인 페이지 한도",
+        "maxTextChars": "최대 추출 길이",
+        "maxFileSizeMb": "읽을 수 있는 최대 파일 크기"
+      },
+      "help": {
+        "ocrEnabled": "텍스트 레이어가 없는 스캔 PDF 페이지를 CPU에서 실행되는 로컬 OCR 엔진으로 텍스트화합니다. 기본값은 비활성화이며, 활성화하면 약 200MB가 설치되고, 텍스트화하는 동안 약 2GB RAM을 사용하며, 깨끗한 스캔 기준으로 페이지당 1~2초가 걸립니다.",
+        "ocrInlineMaxPages": "기다리는 동안 바로 텍스트화할 수 있는, OCR이 필요한 페이지 수입니다. 이보다 많은 페이지가 필요한 문서는 백그라운드 작업이 되며 작업 패널에서 진행 상황을 확인할 수 있습니다.",
+        "maxTextChars": "한 턴에 포함되는 추출 결과의 최대 길이이며, 이를 넘으면 잘립니다.",
+        "maxFileSizeMb": "durin이 텍스트를 추출할 수 있는 첨부 파일의 최대 크기입니다. 이보다 큰 파일은 읽지 않고 건너뛴 것으로 보고됩니다."
+      }
     },
     "extras": {
       "willInstall": "{{extra}}을(를) 설치합니다 (다운로드 약 {{size}}).",
@@ -2257,6 +2280,7 @@
   "work": {
     "steps": "{{count}} 단계",
     "steps_one": "1 단계",
+    "pages": "{{done}}/{{total}} 페이지",
     "panelTitle": "작업",
     "inProgress": "진행 중",
     "finished": "완료 ({{count}})",
@@ -2266,6 +2290,7 @@
       "statusRunning": "진행 중",
       "statusDone": "완료",
       "statusFailed": "실패",
+      "statusCancelled": "취소됨",
       "runningMany": "작업 {{count}}개 진행 중",
       "needsInput": "{{label}}이(가) 응답을 기다리는 중입니다",
       "needsInputMany": "작업 {{count}}개가 응답을 기다리는 중입니다",

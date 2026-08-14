@@ -72,6 +72,7 @@
       "web-search": "网络搜索",
       "channels": "频道",
       "memory": "记忆",
+      "documents": "文档",
       "transcription": "语音",
       "skills-security": "技能安全",
       "personas": "人设",
@@ -574,6 +575,28 @@
       "crossEncoderModelPlaceholder": "模型 ID（例如 BAAI/bge-reranker-base）",
       "crossEncoderTest": "测试",
       "dreamDescription": "Dream 会将会话整理为实体页面 + 技能，并对重复实体去重。它按每日 cron 运行，也可选配响应式触发。"
+    },
+    "documents": {
+      "description": "durin 如何读取你附加或要求打开的文档 — 提取限制，以及针对扫描版 PDF 的本地 OCR。",
+      "loadError": "无法加载文档设置。",
+      "saveError": "无法保存 {{path}}。",
+      "saveRowLabel": "保存{{row}}",
+      "sections": {
+        "ocr": "本地 OCR",
+        "limits": "读取限制"
+      },
+      "rows": {
+        "ocrEnabled": "本地 OCR",
+        "ocrInlineMaxPages": "即时处理页数上限",
+        "maxTextChars": "最长提取长度",
+        "maxFileSizeMb": "可读取的最大文件"
+      },
+      "help": {
+        "ocrEnabled": "使用运行在 CPU 上的本地 OCR 引擎，转录没有文本层的扫描版 PDF 页面。默认关闭 — 开启后会安装约 200 MB，转录时使用约 2 GB 内存，在清晰的扫描件上每页大约需要 1-2 秒。",
+        "ocrInlineMaxPages": "需要 OCR 且可以在等待时立即转录的页数。超出这个数量的文档会变成后台任务，可以在工作面板中查看进度。",
+        "maxTextChars": "插入到一轮对话中的最长提取内容，超出部分会被截断。",
+        "maxFileSizeMb": "durin 会提取文本的最大附件大小。更大的文件会被报告为跳过，而不会被读取。"
+      }
     },
     "extras": {
       "willInstall": "这将安装 {{extra}}（下载约 {{size}}）。",
@@ -2257,6 +2280,7 @@
   "work": {
     "steps": "{{count}} 步",
     "steps_one": "1 步",
+    "pages": "{{done}} / {{total}} 页",
     "panelTitle": "工作",
     "inProgress": "进行中",
     "finished": "已完成（{{count}}）",
@@ -2266,6 +2290,7 @@
       "statusRunning": "进行中",
       "statusDone": "已完成",
       "statusFailed": "失败",
+      "statusCancelled": "已取消",
       "runningMany": "{{count}} 个任务进行中",
       "needsInput": "{{label}} 需要你的回复",
       "needsInputMany": "{{count}} 个任务需要你的回复",

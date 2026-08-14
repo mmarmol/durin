@@ -72,6 +72,7 @@
       "advanced": "Todos los ajustes",
       "channels": "Canales",
       "memory": "Memoria",
+      "documents": "Documentos",
       "transcription": "Voz",
       "skills-security": "Seguridad de skills",
       "modes": "Modos",
@@ -541,6 +542,28 @@
         "rerank": "Reranking de búsqueda"
       },
       "dreamDescription": "El dream consolida las sesiones en páginas de entidad + skills y deduplica entidades repetidas. Corre en un cron diario más disparadores reactivos opcionales."
+    },
+    "documents": {
+      "description": "Cómo lee durin los documentos que adjuntás o le pedís abrir — límites de extracción y OCR local para PDFs escaneados.",
+      "loadError": "No se pudo cargar la configuración de documentos.",
+      "saveError": "No se pudo guardar {{path}}.",
+      "saveRowLabel": "Guardar {{row}}",
+      "sections": {
+        "ocr": "OCR local",
+        "limits": "Límites de lectura"
+      },
+      "rows": {
+        "ocrEnabled": "OCR local",
+        "ocrInlineMaxPages": "Límite de páginas en línea",
+        "maxTextChars": "Extracción más larga",
+        "maxFileSizeMb": "Archivo más grande a leer"
+      },
+      "help": {
+        "ocrEnabled": "Transcribe páginas de PDF escaneadas sin capa de texto usando un motor de OCR local que corre en CPU. Desactivado por defecto — activarlo instala ~200 MB, usa ~2 GB de RAM mientras transcribe, y toma 1-2 segundos por página en un escaneo limpio.",
+        "ocrInlineMaxPages": "Páginas que necesitan OCR y se pueden transcribir mientras esperás. Un documento que necesita más se convierte en un job en segundo plano que podés seguir desde el panel de trabajo.",
+        "maxTextChars": "Extracción más larga que se incluye en un turno antes de truncarse.",
+        "maxFileSizeMb": "El adjunto más grande del que durin extraerá texto. Los archivos más grandes se reportan como omitidos en lugar de leerse."
+      }
     },
     "extras": {
       "willInstall": "Esto instalará {{extra}} (~{{size}} de descarga).",
@@ -2342,6 +2365,7 @@
   "work": {
     "steps": "{{count}} pasos",
     "steps_one": "1 paso",
+    "pages": "{{done}} de {{total}} páginas",
     "panelTitle": "Trabajo",
     "inProgress": "En curso",
     "finished": "Finalizadas ({{count}})",
@@ -2365,6 +2389,7 @@
       "statusRunning": "en curso",
       "statusDone": "finalizado",
       "statusFailed": "falló",
+      "statusCancelled": "cancelado",
       "runningMany": "{{count}} trabajos en curso",
       "needsInput": "{{label}} necesita tu respuesta",
       "needsInputMany": "{{count}} trabajos necesitan tu respuesta",

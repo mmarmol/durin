@@ -72,6 +72,7 @@
       "web-search": "Web search",
       "channels": "Channels",
       "memory": "Memory",
+      "documents": "Documents",
       "transcription": "Voice",
       "skills-security": "Skills security",
       "personas": "Personas",
@@ -574,6 +575,28 @@
       "crossEncoderModelPlaceholder": "model id (e.g. BAAI/bge-reranker-base)",
       "crossEncoderTest": "Test",
       "dreamDescription": "The dream consolidates sessions into entity pages + skills and dedups duplicate entities. It runs on a daily cron plus optional reactive triggers."
+    },
+    "documents": {
+      "description": "How durin reads the documents you attach or ask it to open — extraction limits and local OCR for scanned PDFs.",
+      "loadError": "Could not load document settings.",
+      "saveError": "Could not save {{path}}.",
+      "saveRowLabel": "Save {{row}}",
+      "sections": {
+        "ocr": "Local OCR",
+        "limits": "Reading limits"
+      },
+      "rows": {
+        "ocrEnabled": "Local OCR",
+        "ocrInlineMaxPages": "Inline page limit",
+        "maxTextChars": "Longest extraction",
+        "maxFileSizeMb": "Largest file to read"
+      },
+      "help": {
+        "ocrEnabled": "Transcribe scanned PDF pages that have no text layer using a local OCR engine that runs on CPU. Off by default — turning it on installs ~200 MB, uses ~2 GB RAM while it transcribes, and takes roughly 1-2 seconds per page on a clean scan.",
+        "ocrInlineMaxPages": "Pages needing OCR that can be transcribed while you wait. A document that needs more becomes a background job you can track from the work panel.",
+        "maxTextChars": "Longest extraction inlined into a turn before it's truncated.",
+        "maxFileSizeMb": "Largest attachment durin will extract text from. Larger files are reported as skipped rather than read."
+      }
     },
     "extras": {
       "willInstall": "This will install {{extra}} (~{{size}} download).",
@@ -2342,6 +2365,7 @@
   "work": {
     "steps": "{{count}} steps",
     "steps_one": "1 step",
+    "pages": "{{done}} of {{total}} pages",
     "panelTitle": "Work",
     "inProgress": "In progress",
     "finished": "Finished ({{count}})",
@@ -2365,6 +2389,7 @@
       "statusRunning": "in progress",
       "statusDone": "finished",
       "statusFailed": "failed",
+      "statusCancelled": "cancelled",
       "runningMany": "{{count}} tasks in progress",
       "needsInput": "{{label}} needs your response",
       "needsInputMany": "{{count}} tasks need your response",

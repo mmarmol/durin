@@ -1,4 +1,4 @@
-import { Check, GitBranch, HelpCircle, Loader2, X } from "lucide-react";
+import { Ban, Check, GitBranch, HelpCircle, Loader2, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { cn } from "@/lib/utils";
@@ -50,16 +50,19 @@ function BranchStatusIcon({ status }: { status: WorkBranch["status"] }) {
   return <Loader2 className="h-3 w-3 animate-spin text-amber-600" aria-hidden />;
 }
 
-// Header-level status indicator for the WorkItem as a whole.
+// Header-level status indicator for the WorkItem as a whole. Icon vocabulary
+// matches RunStatusIcon in RunDetail.tsx (the executions screen) so a run
+// reads the same way in both places.
 function ItemStatusIcon({ status }: { status: WorkItem["status"] }) {
   if (status === "done") return <Check className="h-3.5 w-3.5 text-emerald-600" aria-hidden />;
   if (status === "failed") return <X className="h-3.5 w-3.5 text-destructive" aria-hidden />;
   if (status === "running") return <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-600" aria-hidden />;
+  if (status === "cancelled") return <Ban className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />;
   // needs_input — accent-tinted: the run paused, it did not fail.
   return <HelpCircle className="h-3.5 w-3.5 text-accent-foreground" aria-hidden />;
 }
 
-/** Presentational card for one WorkItem (workflow or sub-agent). */
+/** Presentational card for one WorkItem (workflow, sub-agent, or job). */
 export function WorkItemCard({
   item,
   onOpenNode,
@@ -237,6 +240,25 @@ export function WorkItemCard({
       {item.kind === "subagent" && (
         <div className="mt-1 pl-5 text-[12px] text-muted-foreground">
           {t("work.steps", { count: item.steps ?? 0 })}
+        </div>
+      )}
+
+      {/* Job: pages transcribed of pages total. Unlike touchedNodeCount above,
+          a job's total is known upfront (the PDF's page count), so "done of
+          total" is a real fraction, not a false promise. */}
+      {item.kind === "job" && (
+        <div className="mt-1 pl-5 text-[12px] text-muted-foreground">
+          {t("work.pages", { done: item.unitsDone ?? 0, total: item.unitsTotal ?? 0 })}
+        </div>
+      )}
+
+      {/* Why it failed, as the worker recorded it. Nothing else surfaces this:
+          the worker's stderr goes to the gateway's boot log, which is
+          truncated on every start and not served by the log reader. Not
+          translated — it is a verbatim error string, not durin's own prose. */}
+      {item.error && (
+        <div className="mt-1 break-words pl-5 text-[12px] text-destructive">
+          {item.error}
         </div>
       )}
     </div>

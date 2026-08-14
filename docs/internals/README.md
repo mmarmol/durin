@@ -173,6 +173,7 @@ End-to-end flow for a single inbound message:
 | Cron | [cron.md](cron.md) | Scheduled work: reminders and agent tasks, per-run isolated sessions, run history. |
 | Workflow engine | [workflow.md](workflow.md) | User-defined flow graphs: work/script/subworkflow/parallel nodes, routing, loop-back, per-node model/context/tools, the `run_workflow` tool. |
 | Loops | [loops.md](loops.md) | Goal-driven recurring work: firing a workflow on a trigger, verifying the result against a goal, escalation, and the `loops` tool. |
+| Jobs | [jobs.md](jobs.md) | The long-work registry: work too slow for a turn (local OCR of scanned PDFs today), per-unit resumable progress, restart reconciliation, the `tasks` tool and tray. |
 | Channels & bus | [channels.md](channels.md) | Chat surfaces, the async message bus, inbound/outbound routing and session keys. |
 | Voice | [voice.md](voice.md) | Conversational speech: gateway voice sessions, the STT→agent→TTS loop, spoken-rendition, the browser thin client. |
 | Providers | [providers.md](providers.md) | LLM provider adapters, model presets, capability resolution, per-turn snapshots. |

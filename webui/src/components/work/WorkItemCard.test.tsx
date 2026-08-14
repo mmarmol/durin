@@ -432,4 +432,89 @@ describe("WorkItemCard", () => {
     render(<WorkItemCard item={item} onOpenNode={vi.fn()} />);
     expect(screen.queryByRole("button", { name: /Analyze/ })).not.toBeInTheDocument();
   });
+
+  it("renders page progress for a running job", () => {
+    render(
+      <WorkItemCard
+        item={{
+          kind: "job",
+          id: "job1",
+          label: "scanned-book.pdf",
+          status: "running",
+          unitsDone: 137,
+          unitsTotal: 412,
+          startedAt: 0,
+          endedAt: null,
+        }}
+      />,
+    );
+    expect(screen.getByText("scanned-book.pdf")).toBeInTheDocument();
+    // work.pages with done=137, total=412 renders as "137 of 412 pages"
+    expect(screen.getByText("137 of 412 pages")).toBeInTheDocument();
+  });
+
+  it("shows the full page count on a finished job, not a stale partial one", () => {
+    // A job at "done" always has unitsDone === unitsTotal (the worker only
+    // calls finish() after every page is recorded) — the card must read the
+    // props it was given, not something that could lag behind at completion.
+    render(
+      <WorkItemCard
+        item={{
+          kind: "job",
+          id: "job2",
+          label: "scanned-book.pdf",
+          status: "done",
+          unitsDone: 412,
+          unitsTotal: 412,
+          startedAt: 0,
+          endedAt: 100,
+        }}
+      />,
+    );
+    expect(screen.getByText("412 of 412 pages")).toBeInTheDocument();
+    expect(screen.queryByText(/137/)).not.toBeInTheDocument();
+  });
+
+  it("shows why a failed job failed", () => {
+    render(
+      <WorkItemCard
+        item={{
+          kind: "job",
+          id: "job4",
+          label: "scanned-book.pdf",
+          status: "failed",
+          unitsDone: 7,
+          unitsTotal: 412,
+          error: "page 7: OSError: no space left on device",
+          startedAt: 0,
+          endedAt: 100,
+        }}
+      />,
+    );
+    expect(
+      screen.getByText(/page 7: OSError: no space left on device/),
+    ).toBeInTheDocument();
+  });
+
+  it("renders a distinct icon for a cancelled job instead of the needs-input one", () => {
+    const { container } = render(
+      <WorkItemCard
+        item={{
+          kind: "job",
+          id: "job3",
+          label: "scanned-book.pdf",
+          status: "cancelled",
+          unitsDone: 50,
+          unitsTotal: 412,
+          startedAt: 0,
+          endedAt: 100,
+        }}
+      />,
+    );
+    // Ban is lucide-react's cancelled glyph (className "lucide-ban"); without a
+    // dedicated cancelled arm, ItemStatusIcon falls through to the needs_input
+    // HelpCircle instead.
+    expect(container.querySelector(".lucide-ban")).toBeInTheDocument();
+    expect(container.querySelector(".lucide-help-circle")).not.toBeInTheDocument();
+  });
 });

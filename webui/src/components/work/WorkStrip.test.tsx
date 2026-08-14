@@ -107,6 +107,24 @@ it("flashes failed with the failed status word", () => {
   expect(screen.getByText(/failed/)).toBeInTheDocument();
 });
 
+it("flashes a cancelled item as cancelled, not as a green Done", () => {
+  // useWorkState sorts cancelled into `finished` by endedAt desc, so a job the
+  // user just stopped is exactly what the flash picks up. Anything that is not
+  // "failed" used to take the Check + "finished" arm.
+  const { rerender, container } = render(
+    wrap(<WorkStrip active={[item({ kind: "job" })]} finished={[]} onOpen={() => {}} />),
+  );
+  const cancelled = item({ kind: "job", status: "cancelled", endedAt: 2 });
+  rerender(
+    wrap(<WorkStrip active={[]} finished={[cancelled]} onOpen={() => {}} />),
+  );
+  expect(screen.getByText(/cancelled/)).toBeInTheDocument();
+  expect(screen.queryByText(/finished/)).not.toBeInTheDocument();
+  // Ban is lucide-react's cancelled glyph, the same one WorkItemCard uses.
+  expect(container.querySelector(".lucide-ban")).toBeInTheDocument();
+  expect(container.querySelector(".lucide-check")).not.toBeInTheDocument();
+});
+
 it("does not flash on first mount with empty active and old finished items", () => {
   const done = item({ status: "done", endedAt: 2 });
   const { container } = render(

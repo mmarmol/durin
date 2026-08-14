@@ -1,5 +1,7 @@
 """Tests for TasksService node-tree enrichment on workflow tasks."""
 
+from dataclasses import dataclass
+
 import pytest
 
 from durin.service.principal import Principal
@@ -225,4 +227,71 @@ async def test_node_tree_all_entries_have_label(tmp_workspace_with_manifest):
     wf = [t for t in res.tasks if t.kind == "workflow"][0]
     for node in wf.nodes:
         assert "label" in node, f"node {node['id']!r} missing 'label'"
+
+
+@pytest.mark.asyncio
+async def test_service_forwards_a_jobs_registry_to_collect_tasks(tmp_path):
+    """TasksService's own jobs= forwarding, independent of how the gateway
+    wires it (see test_build_service_registry_wires_a_jobs_registry below)."""
+    from durin.jobs.registry import JobRegistry
+
+    jobs = JobRegistry(tmp_path / "jobs.db")
+    jobs.enqueue(
+        kind="ocr", label="book.pdf", payload={}, session_key="chat:1", units_total=10,
+    )
+    svc = TasksService(workspace=tmp_path, jobs=jobs)
+    res = await svc.list(TasksListQuery(session="chat:1"), _principal())
+    assert [t.kind for t in res.tasks] == ["job"]
+    assert res.tasks[0].label == "book.pdf"
+    assert res.tasks[0].units_total == 10
+
+
+@pytest.mark.asyncio
+async def test_a_failed_jobs_reason_reaches_the_response(tmp_path):
+    """The tray is the surface a person actually looks at, and this route is
+    how it learns anything. A reason that stops at the registry explains
+    nothing to anybody."""
+    from durin.jobs.registry import JobRegistry
+
+    jobs = JobRegistry(tmp_path / "jobs.db")
+    job = jobs.enqueue(
+        kind="ocr", label="book.pdf", payload={}, session_key="chat:1", units_total=10,
+    )
+    jobs.claim(job.id, pid=4242)
+    jobs.finish(job.id, pid=4242, error="library index: OSError: read-only")
+
+    svc = TasksService(workspace=tmp_path, jobs=jobs)
+    res = await svc.list(TasksListQuery(session="chat:1"), _principal())
+
+    assert res.tasks[0].error == "library index: OSError: read-only"
+
+
+@dataclass
+class _FakeSessionManager:
+    workspace: object
+
+
+def test_build_service_registry_wires_a_jobs_registry_into_tasks(tmp_path, monkeypatch):
+    """The gateway's real wiring, not just TasksService's own constructor —
+    this is the actual fix for the tray showing nothing in production: before
+    it, TasksService(workspace=..., subagent_manager=..., sessions=...) never
+    received jobs=, so the live /api/v1/tasks route could never emit a job row
+    no matter how correct collect_tasks was."""
+    monkeypatch.setenv("DURIN_HOME", str(tmp_path))
+    from durin.config.paths import jobs_db_path
+    from durin.jobs.registry import JobRegistry
+    from durin.service.wiring import build_service_registry
+
+    JobRegistry(jobs_db_path()).enqueue(
+        kind="ocr", label="book.pdf", payload={}, session_key="chat:1", units_total=10,
+    )
+
+    registry = build_service_registry(
+        config=None, session_manager=_FakeSessionManager(tmp_path))
+    tasks_service = registry.get("tasks")
+
+    import asyncio
+    res = asyncio.run(tasks_service.list(TasksListQuery(session="chat:1"), _principal()))
+    assert [t.kind for t in res.tasks] == ["job"]
+    assert res.tasks[0].label == "book.pdf"
 

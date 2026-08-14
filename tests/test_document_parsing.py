@@ -321,3 +321,55 @@ class TestIsTextExtension:
         assert _is_text_extension(".txt") is True
         assert _is_text_extension(".TXT") is False
         assert _is_text_extension(".pdf") is False
+
+
+def test_extract_documents_honours_an_explicit_size_limit(tmp_path):
+    from durin.utils.document import extract_documents
+
+    big = tmp_path / "big.txt"
+    big.write_text("x" * 5000)
+
+    text, images = extract_documents("hello", [str(big)], max_file_size=1000)
+    assert "x" * 100 not in text
+    assert images == []
+
+
+def test_extract_documents_reports_a_skipped_oversized_file(tmp_path):
+    # A silently dropped attachment reads to the user as durin ignoring them.
+    from durin.utils.document import extract_documents
+
+    big = tmp_path / "huge.pdf"
+    big.write_bytes(b"%PDF-1.4" + b"0" * 5000)
+
+    text, _ = extract_documents("hello", [str(big)], max_file_size=1000)
+    assert "huge.pdf" in text
+    assert "too large" in text.lower()
+
+
+def test_configured_max_file_size_reads_the_configured_value(tmp_path, monkeypatch):
+    # A non-default value, well clear of both the schema default (50) and the
+    # module's fallback constant (also 50) — the two cannot be told apart by
+    # a value that happens to equal either, so this pins the real read.
+    import json
+
+    from durin.utils.document import _configured_max_file_size
+
+    (tmp_path / "config.json").write_text(
+        json.dumps({"documents": {"maxFileSizeMb": 3}})
+    )
+    monkeypatch.setenv("DURIN_HOME", str(tmp_path))
+
+    assert _configured_max_file_size() == 3 * 1024 * 1024
+
+
+def test_configured_max_text_chars_reads_the_configured_value(tmp_path, monkeypatch):
+    import json
+
+    from durin.utils.document import _configured_max_text_chars
+
+    (tmp_path / "config.json").write_text(
+        json.dumps({"documents": {"maxTextChars": 1500}})
+    )
+    monkeypatch.setenv("DURIN_HOME", str(tmp_path))
+
+    assert _configured_max_text_chars() == 1500

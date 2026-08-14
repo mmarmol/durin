@@ -11,16 +11,30 @@ verbatim. This module owns the binary/office/PDF formats markitdown parses.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
+
+from durin.memory.ocr import OcrUnavailable, engine_available, transcribe_page
+from durin.memory.pdf_coverage import (
+    PdfCoverage,
+    classify_counts,
+    classify_coverage,
+    coverage_note,
+    page_char_counts,
+    page_texts,
+)
 
 __all__ = [
     "SUPPORTED_SUFFIXES",
     "ConvertedDoc",
     "DocConvertError",
+    "NeedsOcrJob",
     "convert_file_to_markdown",
     "is_convertible",
 ]
+
+logger = logging.getLogger(__name__)
 
 SUPPORTED_SUFFIXES = (
     ".pdf",
@@ -47,6 +61,20 @@ class DocConvertError(ValueError):
 class ConvertedDoc:
     markdown: str
     suffix: str
+    coverage: PdfCoverage | None = None
+
+
+class NeedsOcrJob(DocConvertError):
+    """Raised when a PDF needs more OCR than the inline budget allows.
+
+    Carries what a caller needs to enqueue the work: which pages, and how big
+    the document is.
+    """
+
+    def __init__(self, message: str, *, pages: list[int], total_pages: int) -> None:
+        super().__init__(message)
+        self.pages = pages
+        self.total_pages = total_pages
 
 
 _converter = None
@@ -66,12 +94,18 @@ def is_convertible(suffix: str) -> bool:
     return suffix.lower() in SUPPORTED_SUFFIXES
 
 
-def convert_file_to_markdown(path: Path) -> ConvertedDoc:
+def convert_file_to_markdown(path: Path, *, documents_config=None) -> ConvertedDoc:
     """Convert a supported document to clean markdown.
 
     Raises :class:`DocConvertError` for an unsupported format, a converter
     failure, or an empty extraction (e.g. a scanned, image-only PDF with no
     text layer). ``OSError`` from reading the file propagates to the caller.
+
+    For a PDF, pages with no text layer are transcribed with local OCR
+    (subject to ``documents_config.ocr``). Raises :class:`NeedsOcrJob` when
+    transcribing them inline would exceed the configured page budget — the
+    caller enqueues the work as a background job instead. ``documents_config``
+    is the ``DocumentsConfig`` to use; ``None`` loads the active config.
     """
     suffix = path.suffix.lower()
     if suffix not in SUPPORTED_SUFFIXES:
@@ -79,6 +113,11 @@ def convert_file_to_markdown(path: Path) -> ConvertedDoc:
             f"unsupported format: {suffix or 'no extension'} — "
             f"supported formats are {', '.join(SUPPORTED_SUFFIXES)}"
         )
+
+    if documents_config is None:
+        from durin.config.loader import load_config
+
+        documents_config = load_config().documents
 
     from markitdown import MarkItDownException
 
@@ -88,9 +127,80 @@ def convert_file_to_markdown(path: Path) -> ConvertedDoc:
         raise DocConvertError(f"conversion failed: {exc}") from exc
 
     markdown = (result.text_content or "").strip()
+    coverage: PdfCoverage | None = None
+
+    if suffix == ".pdf":
+        # Two-stage on purpose. Stage one is a cheap per-page glyph count — a
+        # deliberate under-estimate of what the classifier measures, so it can
+        # only err towards calling a page empty. The majority of PDFs have a
+        # real text layer on every page and stop here, paying only for the
+        # conversion above. Stage two — the accurate, expensive extraction —
+        # runs whenever a page looks empty, and re-classifies from it, so the
+        # verdict a caller sees is always the accurate one. That is also the
+        # only case whose text is actually read: to label the gaps in the note,
+        # and to merge the transcribed pages back in. The probe failing is not
+        # fatal; the accurate path answers the same question, just slowly.
+        cov: PdfCoverage | None = None
+        try:
+            cov = classify_counts(page_char_counts(path))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("pdf coverage probe failed for %s: %s", path.name, exc)
+        texts: list[str] = []
+        if cov is None or cov.empty_pages:
+            texts = page_texts(path)
+            cov = classify_coverage(texts)
+        if cov.empty_pages:
+            ocr_cfg = documents_config.ocr
+            # Two ways OCR does not happen, and they are not the same thing to
+            # a reader: the setting is off, or the setting is on but the engine
+            # is not installed (documents.ocr.enabled is a config key, the
+            # engine is an install extra — a redeploy without it leaves exactly
+            # this state). Both keep the document readable with a note; only
+            # the wording differs.
+            if not ocr_cfg.enabled or not engine_available():
+                # Still return the document. What text exists is worth having,
+                # and the note tells the reader what is missing and how to fix it.
+                note = coverage_note(
+                    cov, texts, ocr_enabled=False, engine_missing=ocr_cfg.enabled
+                )
+                return ConvertedDoc(
+                    markdown=note + markdown, suffix=suffix, coverage=cov
+                )
+            pages = list(cov.empty_pages)
+            if len(pages) > ocr_cfg.inline_max_pages:
+                raise NeedsOcrJob(
+                    f"{path.name}: {len(pages)} of {cov.total_pages} pages need "
+                    f"OCR, over the inline limit of {ocr_cfg.inline_max_pages}. "
+                    "Ingest the document to have it transcribed as a background job.",
+                    pages=pages,
+                    total_pages=cov.total_pages,
+                )
+            try:
+                for page in pages:
+                    texts[page - 1] = transcribe_page(path, page)
+            except (OcrUnavailable, ImportError):
+                # engine_available() above only proves ``import rapidocr``
+                # works; the engine's own imports can still fail underneath it,
+                # and OcrUnavailable is a RuntimeError no caller of this
+                # function catches. Same outcome as finding it missing before
+                # starting: the document, and a note saying why it has gaps.
+                logger.warning(
+                    "%s: local OCR is enabled but its engine failed to load; "
+                    "returning the document with a coverage note", path.name,
+                )
+                note = coverage_note(cov, texts, ocr_enabled=False, engine_missing=True)
+                return ConvertedDoc(
+                    markdown=note + markdown, suffix=suffix, coverage=cov
+                )
+            markdown = "\n\n".join(t for t in texts if t.strip())
+            return ConvertedDoc(markdown=markdown, suffix=suffix, coverage=cov)
+        # No pages need OCR: fall through to the shared empty-extraction
+        # guard below, same as any other format, just carrying coverage.
+        coverage = cov
+
     if not markdown:
         raise DocConvertError(
             f"{path.name} yielded no extractable text — scanned or image-only "
             "documents need OCR, which this converter does not do"
         )
-    return ConvertedDoc(markdown=markdown, suffix=suffix)
+    return ConvertedDoc(markdown=markdown, suffix=suffix, coverage=coverage)

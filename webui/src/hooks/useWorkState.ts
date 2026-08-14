@@ -238,6 +238,9 @@ export function useWorkState(
             status: r.status,
             ...(r.task != null ? { task: r.task } : {}),
             ...(r.needs_input_detail != null ? { needsInputDetail: r.needs_input_detail } : {}),
+            ...(r.units_total != null ? { unitsTotal: r.units_total } : {}),
+            ...(r.units_done != null ? { unitsDone: r.units_done } : {}),
+            ...(r.error != null ? { error: r.error } : {}),
             // The API sends epoch seconds (Python time.time()); WorkItem.startedAt/
             // endedAt are epoch milliseconds everywhere else (the live WS path below
             // sets them from Date.now()) — convert here, at the boundary, so a

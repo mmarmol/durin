@@ -43,6 +43,7 @@ REGISTRY: dict[str, FeatureExtra] = {
     "stt": FeatureExtra("stt", "stt", "sherpa_onnx", True, "~30 MB", "Audio transcription (Parakeet/SenseVoice)"),
     "voice": FeatureExtra("voice", "voice", "sounddevice", False, "~5 MB", "Microphone recording"),
     "tts": FeatureExtra("tts", "tts", "supertonic", True, "~260 MB", "Speech synthesis (Supertonic)"),
+    "ocr": FeatureExtra("ocr", "ocr", "rapidocr", True, "~200 MB", "Local OCR (scanned PDFs)"),
 }
 
 _LOCKS: dict[str, threading.Lock] = {}

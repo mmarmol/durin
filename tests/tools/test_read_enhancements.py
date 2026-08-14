@@ -171,6 +171,13 @@ def _write_text_pdf(path, texts):
     the ``fitz``-only PDF path shipped broken. pypdf (a declared dependency)
     reads the text back out. Inputs are controlled, so PDF string escaping is
     intentionally omitted.
+
+    A page's text may contain newlines, which become real laid-out lines
+    (``T*``). Single-line pages are emitted exactly as before. Line count is
+    not cosmetic for every caller: extractors differ in the line separator
+    they report, so a page's character count depends on how many lines it is
+    split across, and a fixture that can only produce one line per page cannot
+    exercise that.
     """
     n = len(texts)
     font_num = 2 * n + 3
@@ -180,7 +187,11 @@ def _write_text_pdf(path, texts):
     kids = b" ".join(b"%d 0 R" % p for p in page_nums)
     objs[2] = b"<< /Type /Pages /Kids [%s] /Count %d >>" % (kids, n)
     for i, text in enumerate(texts):
-        stream = b"BT /F1 24 Tf 72 700 Td (%s) Tj ET" % text.encode()
+        if "\n" in text:
+            lines = b" ".join(b"(%s) Tj T*" % ln.encode() for ln in text.split("\n"))
+            stream = b"BT /F1 24 Tf 72 700 Td 28 TL %s ET" % lines
+        else:
+            stream = b"BT /F1 24 Tf 72 700 Td (%s) Tj ET" % text.encode()
         objs[content_nums[i]] = b"<< /Length %d >>\nstream\n%s\nendstream" % (len(stream), stream)
         objs[page_nums[i]] = (
             b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "

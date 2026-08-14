@@ -134,10 +134,10 @@ export async function listSessions(
 }
 
 export interface BackgroundTask {
-  kind: "subagent" | "workflow";
+  kind: "subagent" | "workflow" | "job";
   id: string;
   label: string;
-  status: "running" | "needs_input" | "done" | "failed";
+  status: "running" | "needs_input" | "done" | "failed" | "cancelled";
   started_at: number;
   ended_at: number | null;
   session_key: string | null;
@@ -156,6 +156,11 @@ export interface BackgroundTask {
   }> | null;
   task?: string | null;
   needs_input_detail?: string | null;
+  /** Job progress denominator/numerator (pages); null for sub-agent and workflow rows. */
+  units_total?: number | null;
+  units_done?: number | null;
+  /** Why a failed job failed, as its worker recorded it; null otherwise. */
+  error?: string | null;
 }
 
 export async function listBackgroundTasks(

@@ -203,6 +203,44 @@ as-is. The storage model has three steps, all in a single call:
 Steps 2 and 3 are best-effort: a failure does not roll back the verbatim copy.
 When memory is disabled (no embedding model), only step 1 runs.
 
+**Scanned PDFs.** `convert_file_to_markdown` measures a PDF's per-page text
+coverage (`durin/memory/pdf_coverage.py`) and classifies it as ordinary,
+partially scanned, or fully scanned. The measurement is two-stage, so an
+ordinary PDF does not pay for text it never reads: `page_char_counts`
+(pypdfium2) counts non-whitespace glyphs per page — orders of magnitude
+cheaper, and deliberately an under-estimate of the `len(text.strip())` the
+threshold is calibrated against, so it can only err towards calling a page
+empty — and the accurate `page_texts` (pdfplumber) runs whenever some page
+looks empty, re-classifying from it so the verdict is always the accurate one.
+That is also when its text is actually used (labelling the gaps in the coverage
+note, and merging transcribed pages back in). Counting glyphs rather than
+string length is what makes the two comparable at all: the extractors disagree
+on line separators (`\r\n` vs `\n`), which is enough to lift a sparsely stamped
+scanned page over the threshold and lose both its note and its transcription. Local OCR
+(`documents.ocr.enabled`) transcribes the empty pages inline, as part of this
+same call, as long as there are at or under `documents.ocr.inline_max_pages`
+(default 5) of them. Over that budget, conversion does not run at all:
+`ingest_artifact` copies the original immediately and enqueues a
+[background job](../jobs.md) to transcribe it page by page instead,
+returning that job's `job_id` alongside an empty `content`.
+
+In that case the tool writes **no** reference: `content` is an empty
+placeholder, and storing it would put an empty document in the Library and
+hand the agent a ref that resolves to nothing. What it returns instead is
+`job_id`, `pages_pending` and a `note` saying the document is not readable or
+searchable yet — steps 2 and 3 above have not happened, and the response does
+not pretend otherwise.
+
+They happen when the transcription lands. The worker assembles
+`ingested/<id>/source.md` and then calls `index_ingested_entry`
+(`durin/memory/ingestion.py`), which reads the entry's markdown and its
+`meta.json` (for the original filename the Library entry is titled after) and
+runs the same store-and-index step an inline ingest runs —
+`durin.memory.reference.store_and_index_reference`, shared by both callers so
+a deferred document cannot end up indexed differently from an inline one. The
+document becomes searchable at that point, not before; if that step fails the
+[job](../jobs.md) is recorded as `failed` rather than `done`.
+
 To read a document's text **without** persisting it to the Library, the agent
 uses the separate `convert_to_markdown` tool
 (`durin/agent/tools/convert_to_markdown.py`) instead — a transient conversion
@@ -232,6 +270,10 @@ agent-result head-truncation on large documents.
 `reference` is present only when the reference write succeeded. `content` is
 the full file text, returned so the agent can read it in the same turn without a
 follow-up `memory_drill`.
+
+A document waiting on a background transcription returns the same keys minus
+`reference`, with `content` empty, plus `job_id`, `pages_pending` and the
+`note` described above.
 
 **Scope is deliberately local files only.** URL fetch and inline content are not
 supported. Web content should go through `web_fetch` first; facts about a
