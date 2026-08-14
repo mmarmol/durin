@@ -174,6 +174,17 @@ pre-claim status read and the claim itself makes that `UPDATE` match zero
 rows, so the worker still notices it lost the job rather than marking a
 cancelled run "done".
 
+The per-page loop is not the last thing a worker does, so its checks are not
+the last word either: the sidecar write and the Library indexing that follow
+chunk, index and embed a whole book, which is minutes with no cancellation
+check in it. `finish` is therefore conditional the same way `claim` is —
+`UPDATE ... WHERE id=? AND status='running' AND pid=?` — and returns whether
+it wrote anything. A cancel landing in that window survives, `ended_at`
+included, and the worker reports the row's real status instead of its own
+result. The `pid` clause covers the other way two writers meet: the age
+fallback above can requeue a job whose worker is genuinely alive, and the
+superseded worker must not flip the outcome of the one that now owns the row.
+
 Today the only caller is the agent's own `tasks` tool (`action="stop"`) — see
 [Configuration and surfaces](#6-configuration-and-surfaces) below. There is no
 webui button wired to it yet; the tray is read-only.

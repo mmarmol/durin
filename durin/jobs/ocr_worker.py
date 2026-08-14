@@ -136,8 +136,21 @@ def run_job(job_id: str, *, registry: JobRegistry | None = None) -> None:
             logger.exception("ocr worker: library indexing failed for job {}", job_id)
             error = f"library index: {type(exc).__name__}: {exc}"
 
-    registry.finish(job_id, error=error)
-    _emit(job_id, len(pages), len(already), started, "failed" if error else "done")
+    if registry.finish(job_id, pid=os.getpid(), error=error):
+        _emit(job_id, len(pages), len(already), started, "failed" if error else "done")
+        return
+    # The row is no longer this worker's to finish: a cancel landed while the
+    # sidecar and the Library indexing were running (the per-page loop's checks
+    # are all behind us by then), or a second worker took the job over. Either
+    # way something else already decided the outcome, and that decision stands
+    # — reporting this run's own result over it would be a lie.
+    final = registry.get(job_id)
+    status = final.status if final is not None else "gone"
+    logger.warning(
+        "ocr worker: job {} was {} by the time this run finished; "
+        "not recording its outcome", job_id, status,
+    )
+    _emit(job_id, len(pages), len(already), started, status)
 
 
 def _emit(job_id: str, pages: int, resumed: int, started: float, status: str) -> None:

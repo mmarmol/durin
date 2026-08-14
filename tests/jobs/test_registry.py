@@ -127,7 +127,8 @@ def test_done_units_supports_resumption(registry):
 
 def test_finish_without_error_is_done(registry):
     job = registry.enqueue(kind="ocr", label="a", payload={}, session_key=None, units_total=1)
-    registry.finish(job.id)
+    registry.claim(job.id, pid=4242)
+    assert registry.finish(job.id, pid=4242) is True
     reread = registry.get(job.id)
     assert reread.status == "done"
     assert reread.ended_at is not None
@@ -136,10 +137,45 @@ def test_finish_without_error_is_done(registry):
 
 def test_finish_with_error_is_failed(registry):
     job = registry.enqueue(kind="ocr", label="a", payload={}, session_key=None, units_total=1)
-    registry.finish(job.id, error="engine exploded")
+    registry.claim(job.id, pid=4242)
+    registry.finish(job.id, pid=4242, error="engine exploded")
     reread = registry.get(job.id)
     assert reread.status == "failed"
     assert reread.error == "engine exploded"
+
+
+def test_finish_does_not_erase_a_cancel(registry):
+    """A cancel can land after the worker's last per-page check: the sidecar
+    write, the chunking, the FTS index and the embeddings all happen after it,
+    and for a book that is minutes. An unconditional UPDATE would overwrite
+    the cancellation -- ended_at included -- with a cheerful "done"."""
+    job = registry.enqueue(kind="ocr", label="a", payload={}, session_key=None, units_total=1)
+    registry.claim(job.id, pid=4242)
+    registry.cancel(job.id)
+    cancelled_at = registry.get(job.id).ended_at
+
+    assert registry.finish(job.id, pid=4242) is False
+
+    reread = registry.get(job.id)
+    assert reread.status == "cancelled"
+    assert reread.ended_at == cancelled_at
+
+
+def test_finish_belongs_to_the_worker_that_owns_the_row(registry):
+    """reconcile's 6h age fallback can requeue a job whose worker is genuinely
+    alive, and a second worker then claims it. The first one arriving late
+    must not flip a row it no longer owns."""
+    job = registry.enqueue(kind="ocr", label="a", payload={}, session_key=None, units_total=1)
+    registry.claim(job.id, pid=111)
+    registry.reconcile(alive=lambda pid: False)
+    registry.claim(job.id, pid=222)
+
+    assert registry.finish(job.id, pid=111, error="boom") is False
+
+    reread = registry.get(job.id)
+    assert reread.status == "running"
+    assert reread.pid == 222
+    assert reread.error is None
 
 
 def test_cancel_marks_cancelled(registry):
@@ -200,7 +236,7 @@ def test_reconcile_leaves_a_live_pid_alone_when_still_within_the_age_window(regi
 def test_reconcile_ignores_finished_jobs(registry):
     job = registry.enqueue(kind="ocr", label="a", payload={}, session_key=None, units_total=1)
     registry.claim(job.id, pid=1)
-    registry.finish(job.id)
+    registry.finish(job.id, pid=1)
     assert registry.reconcile(alive=lambda pid: False) == []
 
 

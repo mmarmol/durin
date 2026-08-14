@@ -354,3 +354,38 @@ def test_worker_bails_when_a_cancel_wins_the_claim_race_with_no_pages_left(
 
 def test_worker_on_an_unknown_job_is_a_noop(registry):
     run_job("does-not-exist", registry=registry)  # must not raise
+
+
+def test_a_cancel_during_the_post_loop_work_is_not_overwritten(
+    registry, tmp_path, monkeypatch,
+):
+    """The per-page loop is not the last thing that happens. After its final
+    cancellation check the worker still writes the sidecar and hands the
+    document to the Library, which chunks, FTS-indexes and embeds a whole book
+    — minutes of work, all of it after the last chance to notice a cancel. A
+    cancel landing in that window must survive the finish that follows it, and
+    the worker must not report a success it did not have."""
+    ws = tmp_path / "ws"
+    entry_dir, pdf = _ingested_entry(ws)
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page",
+        lambda path, page, **kw: f"page {page}",
+    )
+
+    def _cancel_midway(entry_dir):
+        registry.cancel(job.id)
+
+    monkeypatch.setattr("durin.jobs.ocr_worker.index_ingested_entry", _cancel_midway)
+    job = _enqueue(registry, pdf, [1], sidecar_dir=entry_dir)
+
+    emitted = []
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker._emit",
+        lambda job_id, pages, resumed, started, status: emitted.append(status),
+    )
+
+    run_job(job.id, registry=registry)
+
+    reread = registry.get(job.id)
+    assert reread.status == "cancelled"
+    assert emitted == ["cancelled"]

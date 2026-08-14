@@ -191,15 +191,31 @@ class JobRegistry:
         ).fetchall()
         return {r[0] for r in rows}
 
-    def finish(self, job_id: str, *, error: str | None = None) -> None:
-        execute_write(
-            self._conn,
-            lambda c: c.execute(
+    def finish(self, job_id: str, *, pid: int, error: str | None = None) -> bool:
+        """Record the outcome of the job this worker owns.
+
+        Conditional on the row still being this worker's running job, for the
+        same reason :meth:`claim` is conditional. Two ways an unconditional
+        UPDATE gets it wrong. A cancel can land after the worker's last
+        per-page check — everything after that check (the sidecar, chunking,
+        indexing, embedding) is minutes for a book — and would be overwritten,
+        ``ended_at`` included. And ``reconcile``'s age fallback can requeue a
+        job whose worker is genuinely alive, so two workers can hold the same
+        job: the pid clause keeps the one that no longer owns the row from
+        flipping the outcome of the one that does.
+
+        Returns whether this call actually wrote the outcome. A caller that
+        gets False did not finish the job and must not report that it did.
+        """
+        def _write(c: Any) -> bool:
+            cur = c.execute(
                 "UPDATE jobs SET status = ?, ended_at = ?, error = ?, pid = NULL"
-                " WHERE id = ?",
-                ("failed" if error else "done", time.time(), error, job_id),
-            ),
-        )
+                " WHERE id = ? AND status = 'running' AND pid = ?",
+                ("failed" if error else "done", time.time(), error, job_id, pid),
+            )
+            return cur.rowcount > 0
+
+        return execute_write(self._conn, _write)
 
     def cancel(self, job_id: str) -> None:
         execute_write(

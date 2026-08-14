@@ -39,13 +39,15 @@ def test_a_queued_job_reads_as_running_in_the_tray(tmp_path, registry):
 
 def test_a_finished_job_reads_as_done(tmp_path, registry):
     job = registry.enqueue(kind="ocr", label="a", payload={}, session_key="s", units_total=1)
-    registry.finish(job.id)
+    registry.claim(job.id, pid=4242)
+    registry.finish(job.id, pid=4242)
     assert collect_tasks(tmp_path, session_key="s", jobs=registry)[0]["status"] == "done"
 
 
 def test_a_failed_job_reads_as_failed(tmp_path, registry):
     job = registry.enqueue(kind="ocr", label="a", payload={}, session_key="s", units_total=1)
-    registry.finish(job.id, error="boom")
+    registry.claim(job.id, pid=4242)
+    registry.finish(job.id, pid=4242, error="boom")
     assert collect_tasks(tmp_path, session_key="s", jobs=registry)[0]["status"] == "failed"
 
 

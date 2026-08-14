@@ -182,7 +182,8 @@ async def test_stop_running_job_requests_cancel(tmp_path):
 async def test_stop_finished_job_is_noop(tmp_path):
     jobs = _job_registry(tmp_path)
     job = jobs.enqueue(kind="ocr", label="book.pdf", payload={}, session_key=SESSION, units_total=1)
-    jobs.finish(job.id)
+    jobs.claim(job.id, pid=4242)
+    jobs.finish(job.id, pid=4242)
     out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(
         action="stop", id=job.id)
     assert "already" in out
