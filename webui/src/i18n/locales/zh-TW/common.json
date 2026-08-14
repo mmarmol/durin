@@ -2257,6 +2257,7 @@
   "work": {
     "steps": "{{count}} 個步驟",
     "steps_one": "1 個步驟",
+    "pages": "{{done}} / {{total}} 頁",
     "panelTitle": "工作",
     "inProgress": "進行中",
     "finished": "已完成（{{count}}）",

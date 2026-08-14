@@ -2257,6 +2257,7 @@
   "work": {
     "steps": "{{count}} langkah",
     "steps_one": "1 langkah",
+    "pages": "{{done}} dari {{total}} halaman",
     "panelTitle": "Kerja",
     "inProgress": "Sedang berlangsung",
     "finished": "Selesai ({{count}})",

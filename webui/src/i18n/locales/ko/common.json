@@ -2257,6 +2257,7 @@
   "work": {
     "steps": "{{count}} 단계",
     "steps_one": "1 단계",
+    "pages": "{{done}}/{{total}} 페이지",
     "panelTitle": "작업",
     "inProgress": "진행 중",
     "finished": "완료 ({{count}})",

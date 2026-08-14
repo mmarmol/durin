@@ -2257,6 +2257,7 @@
   "work": {
     "steps": "{{count}} bước",
     "steps_one": "1 bước",
+    "pages": "{{done}}/{{total}} trang",
     "panelTitle": "Công việc",
     "inProgress": "Đang thực hiện",
     "finished": "Đã xong ({{count}})",

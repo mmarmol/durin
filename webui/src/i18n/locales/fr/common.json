@@ -2257,6 +2257,7 @@
   "work": {
     "steps": "{{count}} étapes",
     "steps_one": "1 étape",
+    "pages": "{{done}} sur {{total}} pages",
     "panelTitle": "Travail",
     "inProgress": "En cours",
     "finished": "Terminé ({{count}})",

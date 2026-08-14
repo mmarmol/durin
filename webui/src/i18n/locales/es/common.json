@@ -2342,6 +2342,7 @@
   "work": {
     "steps": "{{count}} pasos",
     "steps_one": "1 paso",
+    "pages": "{{done}} de {{total}} páginas",
     "panelTitle": "Trabajo",
     "inProgress": "En curso",
     "finished": "Finalizadas ({{count}})",
