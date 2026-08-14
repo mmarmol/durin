@@ -72,6 +72,7 @@
       "web-search": "網路搜尋",
       "channels": "頻道",
       "memory": "記憶",
+      "documents": "文件",
       "transcription": "語音",
       "skills-security": "技能安全性",
       "personas": "人設",
@@ -574,6 +575,27 @@
       "crossEncoderModelPlaceholder": "模型 ID（例如 BAAI/bge-reranker-base）",
       "crossEncoderTest": "測試",
       "dreamDescription": "Dream 會將會話整理為實體頁面與技能，並移除重複的實體。除了每日 cron 排程外，也可搭配選用的反應式觸發。"
+    },
+    "documents": {
+      "description": "durin 如何讀取你附加或要求開啟的文件 — 擷取限制，以及針對掃描版 PDF 的本機 OCR。",
+      "loadError": "無法載入文件設定。",
+      "saveError": "無法儲存 {{path}}。",
+      "sections": {
+        "ocr": "本機 OCR",
+        "limits": "讀取限制"
+      },
+      "rows": {
+        "ocrEnabled": "本機 OCR",
+        "ocrInlineMaxPages": "即時處理頁數上限",
+        "maxTextChars": "最長擷取長度",
+        "maxFileSizeMb": "可讀取的最大檔案"
+      },
+      "help": {
+        "ocrEnabled": "使用在 CPU 上執行的本機 OCR 引擎，轉錄沒有文字圖層的掃描版 PDF 頁面。預設為關閉 — 開啟後會安裝該引擎，並增加掃描頁面的處理時間。",
+        "ocrInlineMaxPages": "需要 OCR 且可以在等待時立即轉錄的頁數。超過此數量的文件會變成背景工作，可以在工作面板中追蹤進度。",
+        "maxTextChars": "插入單一回合中的最長擷取內容，超出部分會被截斷。",
+        "maxFileSizeMb": "durin 會擷取文字的最大附件大小。較大的檔案會被回報為略過，而不會被讀取。"
+      }
     },
     "extras": {
       "willInstall": "這會安裝 {{extra}}（下載約 {{size}}）。",

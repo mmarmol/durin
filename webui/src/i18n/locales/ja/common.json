@@ -72,6 +72,7 @@
       "web-search": "ウェブ検索",
       "channels": "チャンネル",
       "memory": "メモリ",
+      "documents": "ドキュメント",
       "transcription": "音声",
       "skills-security": "スキルセキュリティ",
       "personas": "Personas",
@@ -574,6 +575,27 @@
       "crossEncoderModelPlaceholder": "モデル ID（例: BAAI/bge-reranker-base）",
       "crossEncoderTest": "テスト",
       "dreamDescription": "dream はセッションをエンティティページとスキルに統合し、重複したエンティティを排除します。毎日の cron に加え、任意のリアクティブトリガーでも実行されます。"
+    },
+    "documents": {
+      "description": "durin が添付されたドキュメントや開くよう指示されたドキュメントをどう読み取るか — 抽出の上限と、スキャンされた PDF 向けのローカル OCR です。",
+      "loadError": "ドキュメント設定を読み込めませんでした。",
+      "saveError": "{{path}} を保存できませんでした。",
+      "sections": {
+        "ocr": "ローカル OCR",
+        "limits": "読み取りの上限"
+      },
+      "rows": {
+        "ocrEnabled": "ローカル OCR",
+        "ocrInlineMaxPages": "インライン処理するページ数の上限",
+        "maxTextChars": "最長の抽出文字数",
+        "maxFileSizeMb": "読み取る最大ファイルサイズ"
+      },
+      "help": {
+        "ocrEnabled": "テキストレイヤーのないスキャン PDF のページを、CPU で動作するローカル OCR エンジンで文字起こしします。デフォルトでは無効です — 有効にするとエンジンがインストールされ、スキャンされたページの処理に時間がかかるようになります。",
+        "ocrInlineMaxPages": "待っている間にその場で文字起こしできる、OCR が必要なページ数です。これを超えるドキュメントはバックグラウンドジョブとなり、作業パネルから進捗を確認できます。",
+        "maxTextChars": "1 ターンに埋め込まれる抽出結果の最大文字数です。これを超えると切り詰められます。",
+        "maxFileSizeMb": "durin がテキストを抽出する添付ファイルの最大サイズです。これより大きいファイルは読み取られず、スキップとして報告されます。"
+      }
     },
     "extras": {
       "willInstall": "{{extra}} をインストールします（ダウンロード容量 約{{size}}）。",

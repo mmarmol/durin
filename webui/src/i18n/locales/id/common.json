@@ -72,6 +72,7 @@
       "web-search": "Pencarian web",
       "channels": "Saluran",
       "memory": "Memori",
+      "documents": "Dokumen",
       "transcription": "Suara",
       "skills-security": "Keamanan skill",
       "personas": "Personas",
@@ -574,6 +575,27 @@
       "crossEncoderModelPlaceholder": "id model (mis. BAAI/bge-reranker-base)",
       "crossEncoderTest": "Tes",
       "dreamDescription": "Dream mengonsolidasi sesi menjadi halaman entitas + skill dan mendeduplikasi entitas duplikat. Berjalan pada cron harian plus trigger reaktif opsional."
+    },
+    "documents": {
+      "description": "Cara durin membaca dokumen yang Anda lampirkan atau minta untuk dibuka — batas ekstraksi dan OCR lokal untuk PDF hasil pindaian.",
+      "loadError": "Tidak dapat memuat pengaturan dokumen.",
+      "saveError": "Tidak dapat menyimpan {{path}}.",
+      "sections": {
+        "ocr": "OCR lokal",
+        "limits": "Batas pembacaan"
+      },
+      "rows": {
+        "ocrEnabled": "OCR lokal",
+        "ocrInlineMaxPages": "Batas halaman langsung",
+        "maxTextChars": "Ekstraksi terpanjang",
+        "maxFileSizeMb": "Berkas terbesar yang dibaca"
+      },
+      "help": {
+        "ocrEnabled": "Mentranskripsikan halaman PDF hasil pindaian yang tidak memiliki lapisan teks menggunakan mesin OCR lokal yang berjalan di CPU. Nonaktif secara default — mengaktifkannya akan menginstal mesin dan menambah waktu pemrosesan pada halaman hasil pindaian.",
+        "ocrInlineMaxPages": "Halaman yang perlu OCR dan dapat ditranskripsikan sambil Anda menunggu. Dokumen yang butuh lebih banyak akan menjadi tugas latar belakang yang dapat dipantau dari panel kerja.",
+        "maxTextChars": "Ekstraksi terpanjang yang disisipkan ke dalam satu giliran sebelum dipotong.",
+        "maxFileSizeMb": "Lampiran terbesar yang teksnya akan diekstrak oleh durin. Berkas yang lebih besar dilaporkan sebagai dilewati, bukan dibaca."
+      }
     },
     "extras": {
       "willInstall": "Ini akan menginstal {{extra}} (~{{size}} unduhan).",

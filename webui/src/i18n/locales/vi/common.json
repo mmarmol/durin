@@ -72,6 +72,7 @@
       "web-search": "Tìm kiếm web",
       "channels": "Kênh",
       "memory": "Trí nhớ",
+      "documents": "Tài liệu",
       "transcription": "Giọng nói",
       "skills-security": "Bảo mật skill",
       "personas": "Personas",
@@ -574,6 +575,27 @@
       "crossEncoderModelPlaceholder": "id mô hình (vd. BAAI/bge-reranker-base)",
       "crossEncoderTest": "Kiểm tra",
       "dreamDescription": "Dream hợp nhất các phiên thành trang thực thể + skill và loại bỏ thực thể trùng lặp. Nó chạy theo cron hằng ngày cộng thêm các trigger phản ứng tùy chọn."
+    },
+    "documents": {
+      "description": "Cách durin đọc các tài liệu bạn đính kèm hoặc yêu cầu mở — giới hạn trích xuất và OCR cục bộ cho PDF dạng quét.",
+      "loadError": "Không thể tải cài đặt tài liệu.",
+      "saveError": "Không thể lưu {{path}}.",
+      "sections": {
+        "ocr": "OCR cục bộ",
+        "limits": "Giới hạn đọc"
+      },
+      "rows": {
+        "ocrEnabled": "OCR cục bộ",
+        "ocrInlineMaxPages": "Giới hạn số trang xử lý ngay",
+        "maxTextChars": "Trích xuất dài nhất",
+        "maxFileSizeMb": "Tệp lớn nhất có thể đọc"
+      },
+      "help": {
+        "ocrEnabled": "Chuyển văn bản các trang PDF dạng quét không có lớp văn bản bằng một công cụ OCR cục bộ chạy trên CPU. Tắt theo mặc định — bật lên sẽ cài đặt công cụ này và làm tăng thời gian xử lý trên các trang dạng quét.",
+        "ocrInlineMaxPages": "Số trang cần OCR có thể được chuyển văn bản ngay trong khi bạn chờ. Tài liệu cần nhiều hơn sẽ trở thành một tác vụ nền mà bạn có thể theo dõi từ bảng công việc.",
+        "maxTextChars": "Kết quả trích xuất dài nhất được chèn vào một lượt trước khi bị cắt bớt.",
+        "maxFileSizeMb": "Tệp đính kèm lớn nhất mà durin sẽ trích xuất văn bản. Các tệp lớn hơn sẽ được báo là bị bỏ qua thay vì được đọc."
+      }
     },
     "extras": {
       "willInstall": "Thao tác này sẽ cài {{extra}} (tải khoảng {{size}}).",
