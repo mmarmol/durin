@@ -392,6 +392,12 @@ def test_extract_documents_reports_an_over_budget_scan_instead_of_dropping_it(
     (tmp_path / "config.json").write_text(
         json.dumps({"documents": {"ocr": {"enabled": True, "inline_max_pages": 2}}})
     )
+    # The [ocr] extra is not part of CI's install set, so engine_available()
+    # would read False there and this test would take the engine-missing
+    # coverage-note branch instead of raising NeedsOcrJob — never exercising
+    # the fix under test. Force it available so the test is deterministic
+    # regardless of what is or isn't installed on the machine running it.
+    monkeypatch.setattr("durin.memory.doc_convert.engine_available", lambda: True)
 
     pdf = tmp_path / "book.pdf"
     _write_text_pdf(pdf, [""] * 8)

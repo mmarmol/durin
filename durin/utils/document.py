@@ -224,7 +224,11 @@ def extract_documents(
                 # the actionable "ingest this as a background job" instruction
                 # the model needs — dropped along with everything else. Report
                 # it instead, mirroring the oversized branch above.
-                reason = extracted.removeprefix("[error: ").removesuffix("]")
+                reason = (
+                    extracted.removeprefix("[error: ")
+                    .removesuffix("]")
+                    .removesuffix(".")
+                )
                 doc_texts.append(
                     f"[File: {p.name} — could not be read inline: {reason}. "
                     f"Saved on disk at {p}]"
