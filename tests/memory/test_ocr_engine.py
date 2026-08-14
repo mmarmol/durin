@@ -4,10 +4,13 @@ The [ocr] extra is not installed in CI, so anything touching the engine skips
 there. The availability and error-path tests run everywhere.
 """
 
+import json
 import logging
 import resource
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -263,6 +266,62 @@ def test_transcribe_pages_detached_parse_reads_stdout_only(monkeypatch, tmp_path
     result = transcribe_pages_detached(tmp_path / "doc.pdf", [1])
 
     assert result == {1: "clean text"}
+
+
+def test_transcribe_pages_detached_runs_one_child_at_a_time(monkeypatch, tmp_path):
+    """Two inline transcriptions arriving together must not put two OCR
+    children on the machine at once.
+
+    Inline callers reach this through ``asyncio.to_thread``'s executor, which
+    has more than one worker thread — so nothing in the event loop serializes
+    them any more. The engine costs about the same per child however it is
+    started, which is precisely the budget the background lane's
+    ``MAX_CONCURRENT_OCR_JOBS`` is built from; that cap lives in the registry
+    and never sees this path.
+
+    The fake child records when it starts and when it finishes, so the
+    assertion is about *overlap* rather than about wall-clock timing: with the
+    slot held, one child's start/finish pair always closes before the other's
+    opens, in whichever order the threads happen to win it.
+    """
+    events: list[str] = []
+    events_lock = threading.Lock()
+    both_started = threading.Barrier(2, timeout=10)
+
+    def run(cmd, *, capture_output, text, timeout):
+        page = cmd[-1]
+        with events_lock:
+            events.append(f"start {page}")
+        # Sleep inside the child so a second caller that was NOT held out has
+        # a real window to overlap in — without it, a serial interleave and a
+        # concurrent one look identical.
+        time.sleep(0.05)
+        with events_lock:
+            events.append(f"finish {page}")
+        return subprocess.CompletedProcess(
+            cmd, 0, stdout=json.dumps({"pages": {page: "text"}}), stderr="",
+        )
+
+    monkeypatch.setattr("durin.memory.ocr.subprocess.run", run)
+
+    def call(page: int):
+        # Both threads are inside transcribe_pages_detached's contention
+        # window before either is allowed to proceed, so the test exercises a
+        # genuine race rather than two calls that merely happened to be late.
+        both_started.wait()
+        transcribe_pages_detached(tmp_path / "doc.pdf", [page])
+
+    threads = [threading.Thread(target=call, args=(page,)) for page in (1, 2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+        assert not thread.is_alive(), "an inline OCR caller never returned"
+
+    assert events in (
+        ["start 1", "finish 1", "start 2", "finish 2"],
+        ["start 2", "finish 2", "start 1", "finish 1"],
+    ), f"two OCR children overlapped: {events}"
 
 
 def _rss_bytes() -> int:

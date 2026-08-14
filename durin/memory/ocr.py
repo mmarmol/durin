@@ -21,6 +21,7 @@ import io
 import json
 import subprocess
 import sys
+import threading
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -37,6 +38,20 @@ __all__ = [
 _DEFAULT_DPI = 200
 
 _engine = None
+
+# Measured (durin v0.6.0 audit): one OCR engine costs ~1.4 GB resident and
+# ~4.8 cores for as long as it runs, wherever it runs -- the same budget the
+# background lane's cap is built from (~2.1 GB peak over a whole book). Two or
+# three of them together saturate a laptop and OOM small servers. That cap is
+# enforced in the job registry and never sees this path, so inline
+# transcription admits one child at a time here: callers reach this from
+# ``asyncio.to_thread``'s executor, whose several worker threads would
+# otherwise let N scanned attachments spawn N children at once. A threading
+# semaphore, not an asyncio one, because that executor is what contends. No
+# config knob, for the same reason the job cap has none: raising it changes
+# the resource budget the number is built from, which is a code change, not a
+# per-install preference.
+_INLINE_OCR_SLOT = threading.Semaphore(1)
 
 
 class OcrUnavailable(RuntimeError):
@@ -124,43 +139,50 @@ def transcribe_pages_detached(
     existing callers degrade exactly as they already do for a missing
     engine, via the ``except (OcrUnavailable, ImportError)`` they already
     have. That reuse is deliberate — this adds no new exception type.
+
+    Holds ``_INLINE_OCR_SLOT`` for the whole call, so concurrent callers
+    queue instead of putting several engines on the machine at once.
     """
-    if timeout_s is None:
-        # 60s covers interpreter startup plus RapidOCR's model load; 10s per
-        # page covers rendering and inference on CPU with slack for a slow
-        # host. Not configurable: a hung child should fail loudly into the
-        # coverage-note path, not wait on a knob nobody will tune correctly.
-        timeout_s = 60 + 10 * len(pages)
+    with _INLINE_OCR_SLOT:
+        if timeout_s is None:
+            # 60s covers interpreter startup plus RapidOCR's model load; 10s
+            # per page covers rendering and inference on CPU with slack for a
+            # slow host. Measured from the child's own start, not from this
+            # call's: waiting for the slot above spends none of it. Not
+            # configurable: a hung child should fail loudly into the
+            # coverage-note path, not wait on a knob nobody will tune
+            # correctly.
+            timeout_s = 60 + 10 * len(pages)
 
-    cmd = [
-        sys.executable, "-m", "durin.memory.ocr_subproc",
-        str(pdf_path), str(dpi), *(str(page) for page in pages),
-    ]
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
-    except subprocess.TimeoutExpired as exc:
-        tail = (exc.stderr or "")[-500:]
-        raise OcrUnavailable(
-            f"OCR subprocess timed out after {timeout_s:.0f}s: {tail}"
-        ) from exc
+        cmd = [
+            sys.executable, "-m", "durin.memory.ocr_subproc",
+            str(pdf_path), str(dpi), *(str(page) for page in pages),
+        ]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
+        except subprocess.TimeoutExpired as exc:
+            tail = (exc.stderr or "")[-500:]
+            raise OcrUnavailable(
+                f"OCR subprocess timed out after {timeout_s:.0f}s: {tail}"
+            ) from exc
 
-    if proc.returncode != 0:
-        tail = (proc.stderr or "")[-500:]
-        raise OcrUnavailable(f"OCR subprocess exited {proc.returncode}: {tail}")
+        if proc.returncode != 0:
+            tail = (proc.stderr or "")[-500:]
+            raise OcrUnavailable(f"OCR subprocess exited {proc.returncode}: {tail}")
 
-    try:
-        payload = json.loads(proc.stdout)
-        result = {int(page): text for page, text in payload["pages"].items()}
-    except Exception as exc:  # noqa: BLE001 — any parse-shape surprise is OcrUnavailable too
-        tail = (proc.stderr or "")[-500:]
-        raise OcrUnavailable(
-            f"OCR subprocess produced no parseable result: {tail}"
-        ) from exc
+        try:
+            payload = json.loads(proc.stdout)
+            result = {int(page): text for page, text in payload["pages"].items()}
+        except Exception as exc:  # noqa: BLE001 — any parse-shape surprise is OcrUnavailable too
+            tail = (proc.stderr or "")[-500:]
+            raise OcrUnavailable(
+                f"OCR subprocess produced no parseable result: {tail}"
+            ) from exc
 
-    missing = [page for page in pages if page not in result]
-    if missing:
-        raise OcrUnavailable(
-            f"OCR subprocess did not return page(s) {missing} of the "
-            f"{len(pages)} requested"
-        )
-    return result
+        missing = [page for page in pages if page not in result]
+        if missing:
+            raise OcrUnavailable(
+                f"OCR subprocess did not return page(s) {missing} of the "
+                f"{len(pages)} requested"
+            )
+        return result
