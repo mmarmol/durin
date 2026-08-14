@@ -1005,14 +1005,6 @@ class ProvidersConfig(Base):
     nvidia: ProviderConfig = Field(default_factory=ProviderConfig, description="NVIDIA NIM (nvapi- keys)")
 
 
-class ApiConfig(Base):
-    """OpenAI-compatible API server configuration."""
-
-    host: str = Field(default="127.0.0.1", description="Bind address; local-only by default")
-    port: int = Field(default=8900, description="API server listen port")
-    timeout: float = Field(default=120.0, description="Per-request timeout in seconds")
-
-
 class CronConfig(Base):
     """Cron scheduler configuration."""
 
@@ -1386,7 +1378,6 @@ class Config(BaseSettings):
     )
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig, description="Telemetry: local JSONL always on, optional HTTPS push fan-out")
     logging: LoggingConfig = Field(default_factory=LoggingConfig, description="Gateway daemon log lifecycle: rotation size and retention age for gateway.log")
-    api: ApiConfig = Field(default_factory=ApiConfig, description="OpenAI-compatible API server: bind address, port, timeout")
     gateway: GatewayConfig = Field(default_factory=GatewayConfig, description="Gateway/server: bind address, port, daemon mode, embedded web dashboard")
     tools: ToolsConfig = Field(default_factory=ToolsConfig, description="Built-in agent tools and MCP server connections")
     install: InstallConfig = Field(default_factory=InstallConfig, description="Persistent install-level state (managed by durin; rarely edited by hand)")
