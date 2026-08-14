@@ -5,6 +5,64 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.6.0 — 2026-08-14
+
+### Highlights
+
+- **durin can read scanned documents.** A PDF with no text layer — a book someone
+  scanned, a contract that came back from a photocopier, an archived file — used to
+  extract to nothing and fail. durin now measures how much of a document it can
+  actually read, page by page, and transcribes the pages it cannot with an OCR
+  engine that runs on your machine. Nothing is uploaded and nothing is sent to a
+  model in the cloud: the engine ships inside the package and reads the pixels
+  locally. It is off until you turn it on, under **Settings → Documents**, which
+  also tells you what it costs before you do. (#523)
+
+- **A book no longer blocks the conversation.** Transcribing four hundred pages is
+  minutes of work, and durin used to have nowhere to put work like that — a
+  document was converted while you waited. Anything longer than a few pages now
+  becomes a background job: the document is stored immediately, the transcription
+  runs in its own process, and you watch it advance page by page in the work panel
+  or by asking durin how it is going. When it finishes, the book is a searchable
+  document in your Library like any other. (#523)
+
+- **That work survives things going wrong.** Each page is saved the moment it is
+  transcribed, so a job interrupted at page three hundred and eighty resumes at
+  three hundred and eighty rather than starting over — and restarting durin picks
+  up jobs that were running when it stopped instead of losing them. A document
+  that yields nothing, an engine that is missing, a page that fails: each one now
+  ends with a reason you can read rather than a job that quietly never finishes.
+  (#523)
+
+- **Partially scanned documents are handled as what they are.** A report with three
+  photocopied inserts is not a scan, and a scan is not a document with gaps. durin
+  tells them apart: it transcribes just the inserts, keeps the text it could
+  already read, and when something cannot be read it says which pages are missing
+  and what came before them, instead of handing the model a document with silent
+  holes in it. (#523)
+
+### Changes
+
+**Documents**
+
+- New `documents` configuration section: the OCR switch and page budget, plus two
+  limits that used to be fixed in code — the largest attachment durin will read and
+  how much of a document it inlines. An oversized attachment is now reported in the
+  conversation instead of being dropped without a word. (#523)
+- Local OCR ships as an optional `[ocr]` extra, installed on demand when you enable
+  the setting. (#523)
+
+**Jobs**
+
+- New background-job registry, generic over the kind of work, with OCR as its first
+  user. Jobs appear alongside sub-agents and workflow runs in the work panel and in
+  the agent's `tasks` tool, and can be stopped from there. (#523)
+
+**Dependencies**
+
+- Bump pypdf 6.14.2 → 6.15.0. (#521)
+- Bump h2 4.3.0 → 4.4.1. (#520)
+
 ## 0.5.5 — 2026-08-06
 
 ### Highlights
