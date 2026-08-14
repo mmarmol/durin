@@ -81,6 +81,53 @@ def test_a_pdf_with_gaps_still_gets_the_accurate_extraction(tmp_path):
     assert out.coverage.empty_pages == (2, 3, 4)
 
 
+# A corner stamp on an otherwise image-only page: an exhibit block, a Bates
+# number, an archive slug. 15 glyphs over 4 lines — under EMPTY_PAGE_CHARS, but
+# only if the probe measures the page the way the classifier's threshold is
+# calibrated for.
+_STAMP = "EX-14\nB-317\nARC\np7"
+
+
+def test_a_scan_whose_pages_carry_a_stamp_still_gets_its_coverage_note(tmp_path):
+    """What the reader loses if the cheap probe over-counts a sparse page: the
+    document reads as though the stamps were its content, with no note saying
+    six pages of it could not be read."""
+    from tests.tools.test_read_enhancements import _write_text_pdf
+
+    pdf = tmp_path / "stamped_scan.pdf"
+    _write_text_pdf(pdf, [_STAMP] * 6)
+
+    out = convert_file_to_markdown(pdf, documents_config=_cfg(enabled=False))
+
+    assert "SCANNED DOCUMENT" in out.markdown
+    assert out.coverage is not None
+    assert out.coverage.kind == "scanned"
+
+
+def test_stamped_scanned_inserts_are_transcribed_like_blank_ones(tmp_path, monkeypatch):
+    """The same page, with OCR on: a stamped insert needs transcribing exactly
+    as much as a page with nothing on it at all. A probe that reads the stamp
+    as a text layer skips the whole OCR branch and the insert is lost."""
+    from tests.tools.test_read_enhancements import _write_text_pdf
+
+    texts = ["Body text long enough to count as a real page"] * 8
+    for i in (3, 4, 5):
+        texts[i] = _STAMP
+    pdf = tmp_path / "stamped_report.pdf"
+    _write_text_pdf(pdf, texts)
+
+    transcribed = []
+    monkeypatch.setattr(
+        "durin.memory.doc_convert.transcribe_page",
+        lambda path, page, **kw: transcribed.append(page) or f"insert {page}",
+    )
+
+    out = convert_file_to_markdown(pdf, documents_config=_cfg(inline_max_pages=5))
+
+    assert transcribed == [4, 5, 6]
+    assert "insert 5" in out.markdown
+
+
 def test_text_pdf_is_unchanged_by_the_ocr_path(tmp_path):
     from tests.tools.test_read_enhancements import _write_text_pdf
 

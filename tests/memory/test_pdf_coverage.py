@@ -11,6 +11,20 @@ from durin.memory.pdf_coverage import (
     page_texts,
 )
 
+# A corner stamp on an otherwise image-only page: 15 glyphs over 4 lines. Under
+# EMPTY_PAGE_CHARS however it is measured (18 chars with "\n" separators), but
+# 21 if the separators are counted as "\r\n" — which is what a page with no
+# text layer must never be mistaken for.
+_STAMP = "EX-14\nB-317\nARC\np7"
+
+
+def _stamped_report() -> list[str]:
+    """An 8-page report with three scanned inserts carrying only a stamp."""
+    pages = ["Body text long enough to count as a real page"] * 8
+    for i in (3, 4, 5):
+        pages[i] = _STAMP
+    return pages
+
 
 def test_all_pages_with_text_is_kind_text():
     cov = classify_coverage(["lorem ipsum dolor sit amet"] * 10)
@@ -120,36 +134,68 @@ def test_page_texts_returns_empty_string_for_a_page_without_text(tmp_path):
     assert texts[1].strip() == ""
 
 
-def test_page_char_counts_reports_one_count_per_page(tmp_path):
+def test_page_char_counts_counts_glyphs_not_whitespace(tmp_path):
+    # Glyphs only, no whitespace of any kind: the two extractors disagree about
+    # whitespace (line separators most of all), and a count that includes it
+    # cannot be compared against pdfplumber's.
     from tests.tools.test_read_enhancements import _write_text_pdf
 
+    page = "Alpha page one and some more text"
     pdf = tmp_path / "gap.pdf"
-    _write_text_pdf(pdf, ["Alpha page one and some more text", "", "Gamma page three"])
+    _write_text_pdf(pdf, [page, "", "Gamma page three"])
 
     counts = page_char_counts(pdf)
     assert len(counts) == 3
-    assert counts[0] >= len("Alpha page one and some more text")
+    assert counts[0] == len("".join(page.split()))  # 27, not the string's 33
     assert counts[1] == 0
 
 
 def test_the_cheap_probe_classifies_a_real_pdf_the_same_way(tmp_path):
     # The probe exists only to skip the accurate extractor when no page needs
     # attention. It earns that only if it reaches the same verdict.
+    #
+    # The multi-line cases are not decoration. The two extractors separate
+    # lines differently (pdfium "\r\n", pdfplumber "\n"), so a page's character
+    # count depends on how many lines its text is split across — and a
+    # single-line fixture cannot show that at all.
     from tests.tools.test_read_enhancements import _write_text_pdf
 
-    for pages in (
-        ["Chapter one opens with plenty of body text", "", "", ""],
-        ["Body text long enough to count as a real page"] * 6,
-        [""] * 5,
-        ["Only page here, with plenty of body text on it"],
+    for name, pages in (
+        ("gapped", ["Chapter one opens with plenty of body text", "", "", ""]),
+        ("all-text", ["Body text long enough to count as a real page"] * 6),
+        ("all-blank", [""] * 5),
+        ("single-page", ["Only page here, with plenty of body text on it"]),
+        ("stamped-scan", [_STAMP] * 6),
+        ("stamped-inserts", _stamped_report()),
+        ("multiline-body", ["Real body text here\nspread over three lines\nof a genuine page"] * 4),
     ):
-        pdf = tmp_path / f"probe{len(pages)}{pages[0][:3]}.pdf"
+        pdf = tmp_path / f"probe-{name}.pdf"
         _write_text_pdf(pdf, pages)
-        assert classify_counts(page_char_counts(pdf)) == classify_coverage(page_texts(pdf))
+        assert classify_counts(page_char_counts(pdf)) == classify_coverage(page_texts(pdf)), name
+
+
+def test_a_multi_line_stamp_does_not_read_as_a_page_with_a_text_layer(tmp_path):
+    """The shape this whole feature exists for: a scanned page whose only text
+    is a short stamp laid out over several lines — an exhibit block, a Bates
+    number, an archive slug. Its glyphs fall under the threshold, but counting
+    the line separators too can push it over, and then the page reads as
+    genuine text and its content is silently dropped."""
+    from tests.tools.test_read_enhancements import _write_text_pdf
+
+    pdf = tmp_path / "stamped.pdf"
+    _write_text_pdf(pdf, [_STAMP] * 6)
+
+    accurate = classify_coverage(page_texts(pdf))
+    assert accurate.empty_pages == (1, 2, 3, 4, 5, 6)
+    assert accurate.kind == "scanned"
+    assert classify_counts(page_char_counts(pdf)) == accurate
 
 
 def test_classify_counts_and_classify_coverage_are_the_same_classifier():
-    texts = ["", "x" * 19, "y" * 20, "body text long enough to count"]
+    # The page with internal newlines is the one that discriminates: it fails
+    # if either side stops measuring `len(text.strip())` (whitespace included)
+    # — the measure the EMPTY_PAGE_CHARS threshold is calibrated against.
+    texts = ["", "x" * 19, "y" * 20, "a\nb\nc\nd\ne\nf\ng\nh\ni\nj", "body text long enough"]
     assert classify_counts([len(t.strip()) for t in texts]) == classify_coverage(texts)
 
 

@@ -130,14 +130,16 @@ def convert_file_to_markdown(path: Path, *, documents_config=None) -> ConvertedD
     coverage: PdfCoverage | None = None
 
     if suffix == ".pdf":
-        # Two-stage on purpose. Stage one is a character count per page, which
-        # is all the classifier needs and costs almost nothing; the majority of
-        # PDFs have a text layer on every page and stop here, paying only for
-        # the conversion above. Stage two — the accurate, expensive extraction —
-        # runs only when a page looks empty, because that is the only case whose
-        # text is actually read: to label the gaps in the note, and to merge the
-        # transcribed pages back in. The probe failing is not fatal; the
-        # accurate path answers the same question, just slowly.
+        # Two-stage on purpose. Stage one is a cheap per-page glyph count — a
+        # deliberate under-estimate of what the classifier measures, so it can
+        # only err towards calling a page empty. The majority of PDFs have a
+        # real text layer on every page and stop here, paying only for the
+        # conversion above. Stage two — the accurate, expensive extraction —
+        # runs whenever a page looks empty, and re-classifies from it, so the
+        # verdict a caller sees is always the accurate one. That is also the
+        # only case whose text is actually read: to label the gaps in the note,
+        # and to merge the transcribed pages back in. The probe failing is not
+        # fatal; the accurate path answers the same question, just slowly.
         cov: PdfCoverage | None = None
         try:
             cov = classify_counts(page_char_counts(path))

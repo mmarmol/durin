@@ -74,6 +74,11 @@ def classify_counts(char_counts: list[int]) -> PdfCoverage:
     text it is handed and calls this. Split out so a caller that only needs
     the verdict can count characters the cheap way instead of paying for a
     full layout-aware extraction it would throw away.
+
+    ``EMPTY_PAGE_CHARS`` is calibrated against ``len(text.strip())``, which is
+    what ``classify_coverage`` passes. A cheap counter that cannot reproduce
+    that exactly must come in *under* it rather than over — see
+    :func:`page_char_counts`, whose result is only ever a reason to look closer.
     """
     total = len(char_counts)
     empty = tuple(
@@ -108,16 +113,30 @@ def gap_ranges(empty_pages: tuple[int, ...]) -> list[tuple[int, int]]:
 
 
 def page_char_counts(path: Path) -> list[int]:
-    """How many characters each page carries, one count per page.
+    """How many non-whitespace characters each page carries, one count per page.
 
-    A cheap stand-in for ``len(page_texts(path)[i].strip())``. pypdfium2 reads
-    the page's text objects straight out; pdfplumber reconstructs reading order
-    from per-character geometry, which is what makes it accurate and what makes
-    it two orders of magnitude slower. Reading order does not change a
-    character count, and a page with a text layer clears ``EMPTY_PAGE_CHARS``
-    by orders of magnitude either way — so this is enough to decide *whether* a
-    page needs a closer look, and nothing more. Anything that reads the text
-    itself must call :func:`page_texts`.
+    A deliberately conservative stand-in for ``len(page_texts(path)[i].strip())``,
+    the measure ``EMPTY_PAGE_CHARS`` is calibrated against. pypdfium2 reads the
+    page's text objects straight out; pdfplumber reconstructs reading order from
+    per-character geometry, which is what makes it accurate and what makes it
+    two orders of magnitude slower.
+
+    Counting only glyphs — rather than the length of the extracted string — is
+    what makes the two comparable. The extractors do not agree on whitespace:
+    pypdfium2 separates lines with ``\\r\\n`` where pdfplumber uses ``\\n``, so a
+    string length taken here runs ahead of the accurate one by one character per
+    line break. That is not a rounding error on the pages that matter. A scanned
+    page whose only text is a corner stamp — an exhibit block, a Bates number, a
+    few lines of an archive slug — sits just under the threshold by design, and
+    the extra separators are enough to lift it over: the page then reads as
+    having a text layer, and the document loses both its coverage note and its
+    transcription. Discarding all whitespace keeps this count at or below the
+    accurate one whenever both extractors see the same glyphs, so a disagreement
+    can only make a page look emptier than it is — and every page that looks
+    empty is re-measured by :func:`page_texts` anyway, which decides.
+
+    This answers *whether* a page needs a closer look, and nothing more.
+    Anything that reads the text itself must call :func:`page_texts`.
     """
     import pypdfium2
 
@@ -127,7 +146,7 @@ def page_char_counts(path: Path) -> list[int]:
         for page in doc:
             textpage = page.get_textpage()
             try:
-                counts.append(len(textpage.get_text_range().strip()))
+                counts.append(len("".join(textpage.get_text_range().split())))
             finally:
                 textpage.close()
         return counts

@@ -207,10 +207,16 @@ When memory is disabled (no embedding model), only step 1 runs.
 coverage (`durin/memory/pdf_coverage.py`) and classifies it as ordinary,
 partially scanned, or fully scanned. The measurement is two-stage, so an
 ordinary PDF does not pay for text it never reads: `page_char_counts`
-(pypdfium2) counts characters per page — enough for the classifier and orders
-of magnitude cheaper — and the accurate `page_texts` (pdfplumber) runs only
-when some page looks empty, which is when its text is actually used (labelling
-the gaps in the coverage note, and merging transcribed pages back in). Local OCR
+(pypdfium2) counts non-whitespace glyphs per page — orders of magnitude
+cheaper, and deliberately an under-estimate of the `len(text.strip())` the
+threshold is calibrated against, so it can only err towards calling a page
+empty — and the accurate `page_texts` (pdfplumber) runs whenever some page
+looks empty, re-classifying from it so the verdict is always the accurate one.
+That is also when its text is actually used (labelling the gaps in the coverage
+note, and merging transcribed pages back in). Counting glyphs rather than
+string length is what makes the two comparable at all: the extractors disagree
+on line separators (`\r\n` vs `\n`), which is enough to lift a sparsely stamped
+scanned page over the threshold and lose both its note and its transcription. Local OCR
 (`documents.ocr.enabled`) transcribes the empty pages inline, as part of this
 same call, as long as there are at or under `documents.ocr.inline_max_pages`
 (default 5) of them. Over that budget, conversion does not run at all:
