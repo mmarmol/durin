@@ -296,7 +296,10 @@ def _chain_to_next_queued(registry: JobRegistry) -> None:
         _launch_worker(next_job.id)
     except OSError:
         # Same contract as spawn_ocr_job's own Popen call: the row stays
-        # queued, and the next reconcile/startup sweep retries.
+        # queued. Not reconcile's to retry -- it only ever selects `running`
+        # rows -- but the gateway's periodic sweep picks it up within the
+        # minute, the same pickup runs again at the next gateway start, and
+        # any worker that finishes before either one chains to it.
         logger.exception(
             "ocr worker: could not chain to the next queued job {}", next_job.id,
         )

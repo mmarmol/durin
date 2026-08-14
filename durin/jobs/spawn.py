@@ -82,8 +82,10 @@ def spawn_ocr_job(
     try:
         _launch_worker(job.id)
     except OSError:
-        # The row stays queued; the next gateway start's queued-pickup loop
-        # finds it (reconcile only ever selects `running` rows).
+        # The row stays queued; the gateway's periodic queued-pickup finds it
+        # within the minute, and the same pickup runs again at the next
+        # gateway start (reconcile never does -- it only ever selects
+        # `running` rows).
         logger.exception("could not start the OCR worker for job {}", job.id)
     return job
 
@@ -103,8 +105,9 @@ def respawn(job: Job) -> None:
         try:
             _launch_worker(job.id)
         except OSError:
-            # Same contract as spawn_ocr_job: stays queued, next queued-pickup
-            # loop retries (not reconcile -- it only ever selects `running` rows).
+            # Same contract as spawn_ocr_job: stays queued, and the next
+            # queued-pickup -- the gateway's periodic sweep, or its next start
+            # -- retries (not reconcile: it only ever selects `running` rows).
             logger.exception("could not restart the OCR worker for job {}", job.id)
         return
     raise ValueError(f"no worker for job kind {job.kind!r}")

@@ -1,4 +1,5 @@
-"""Gateway startup: reconciling orphaned jobs and picking up queued ones.
+"""Gateway startup and the periodic sweep: reconciling orphaned jobs and
+picking up queued ones.
 
 ``AgentLoop.run()`` resumes OCR work before doing anything else. Rows
 ``reconcile`` finds orphaned (a dead or long-stale worker pid) get a fresh
@@ -8,17 +9,27 @@ worker's chain-launcher crashing -- get one too, capped at
 ``MAX_CONCURRENT_OCR_JOBS``. Both loops only ever launch a worker process;
 neither claims a job itself (that stays exclusively the worker's own call,
 see ``tests/jobs/test_ocr_worker.py``).
+
+The same two loops run again on a timer for the rest of the process's life,
+because startup is not the only moment work can strand: a hard-killed worker
+leaves its row ``running`` with a dead pid holding the concurrency cap's one
+slot, and nothing else re-examines that row until a fresh ingest arrives or
+the gateway restarts.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import subprocess
 import sys
+import time
+from contextlib import asynccontextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
+from loguru import logger as loguru_logger
 
 from durin.agent.loop import AgentLoop
 from durin.bus.queue import MessageBus
@@ -73,6 +84,48 @@ def _dead_pid() -> int:
     proc = subprocess.Popen([sys.executable, "-c", "pass"])
     proc.wait(timeout=10)
     return proc.pid
+
+
+def _enqueue(registry: JobRegistry, label: str) -> object:
+    return registry.enqueue(
+        kind="ocr", label=label,
+        payload={"path": f"/tmp/{label}", "pages": [1], "sidecar_dir": None},
+        session_key="chat:1", units_total=1,
+    )
+
+
+@asynccontextmanager
+async def _live_loop(loop: AgentLoop):
+    """Run ``loop.run()`` for the body of the ``async with``, then take it
+    down the way a real shutdown does.
+
+    Unlike ``_run_briefly_and_stop`` above, the body runs *after* startup's
+    own reconcile/pickup block has finished — the sweep tests build the
+    stranded state inside the body precisely so startup cannot be the thing
+    that repairs it.
+    """
+    runner = asyncio.create_task(loop.run())
+    try:
+        # One scheduling slice is enough: the startup block has no await in
+        # it, so it completes the first time the task runs.
+        await asyncio.sleep(0.05)
+        yield
+    finally:
+        loop._running = False
+        runner.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await runner
+
+
+async def _wait_for(cond, *, what: str, timeout: float = 5.0) -> None:
+    """Poll *cond* until true, or fail naming what never happened. Bounded so
+    a regression fails the test instead of hanging it."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        await asyncio.sleep(0.005)
+        if cond():
+            return
+    raise AssertionError(f"timed out waiting for {what}")
 
 
 async def test_startup_launches_a_queued_job_with_no_worker(tmp_path, monkeypatch):
@@ -230,3 +283,160 @@ async def test_startup_queued_pickup_launches_distinct_jobs_at_a_higher_cap(tmp_
     # oldest-first, and the third (newest) is left for the chain to reach.
     assert set(launched_ids) == {jobs[0].id, jobs[1].id}
     assert {registry.get(j.id).status for j in jobs} == {"queued"}
+
+
+# --- the periodic sweep: startup's two loops, on a timer -------------------
+#
+# Every test below builds its stranded state *inside* ``_live_loop``'s body,
+# after startup has already run and found nothing. What repairs it can only be
+# the sweep.
+
+
+async def test_the_sweep_requeues_a_holder_whose_worker_was_killed(tmp_path, monkeypatch):
+    """The wedge the cap made possible: a running job's worker is hard-killed
+    (SIGKILL, an OOM kill), so it never reaches its chain call, and its row
+    keeps ``running`` with a dead pid — holding the cap's only slot. Before
+    the sweep, nothing looked at that row again: reconcile ran at startup
+    only, the queued job behind it has no worker to chain from, and a
+    cap-refused worker's inline self-heal needs a *new* worker to be refused.
+    A queue with nothing new arriving stayed wedged until the next restart."""
+    monkeypatch.setattr("durin.agent.loop._JOB_SWEEP_INTERVAL_S", 0.01)
+    registry = JobRegistry()
+    loop = _make_loop(tmp_path)  # built before patching Popen -- see the first test
+    # Also before it: _dead_pid spawns a real child, and the patch below lands
+    # on the shared `subprocess` module object, not on a per-module alias.
+    dead = _dead_pid()
+    calls = []
+    monkeypatch.setattr(
+        "durin.jobs.spawn.subprocess.Popen",
+        lambda args, **kw: calls.append(args),
+    )
+
+    async with _live_loop(loop):
+        held = _enqueue(registry, "book.pdf")
+        blocked = _enqueue(registry, "next.pdf")
+        registry.claim(held.id, pid=dead)
+
+        await _wait_for(lambda: calls, what="the sweep to launch a worker")
+
+    reread = registry.get(held.id)
+    assert reread.status == "queued"  # the self-heal that had no trigger before
+    assert reread.pid is None
+    assert calls[0][-1] == held.id
+    # `blocked` is still queued, and that is correct at MAX_CONCURRENT_OCR_JOBS
+    # == 1: the sweep's pickup takes the OLDEST queued row, which is the one
+    # just requeued. The worker it launched claims it and chains to `blocked`
+    # when it finishes -- the drain the wedge was blocking.
+    assert registry.get(blocked.id).status == "queued"
+
+
+async def test_the_sweep_picks_up_a_queued_job_nothing_ever_launched(tmp_path, monkeypatch):
+    """The other half of the wedge: a row whose own spawn's ``Popen`` failed
+    is left ``queued`` with no process anywhere. ``reconcile`` never selects
+    it (it only reads ``running`` rows) and no worker exists to chain to it,
+    so nothing but a fresh ingest or a restart used to reach it."""
+    monkeypatch.setattr("durin.agent.loop._JOB_SWEEP_INTERVAL_S", 0.01)
+    registry = JobRegistry()
+    loop = _make_loop(tmp_path)  # built before patching Popen -- see the first test
+    calls = []
+    monkeypatch.setattr(
+        "durin.jobs.spawn.subprocess.Popen",
+        lambda args, **kw: calls.append(args),
+    )
+
+    async with _live_loop(loop):
+        stranded = _enqueue(registry, "stranded.pdf")
+
+        await _wait_for(lambda: calls, what="the sweep to launch the stranded job")
+
+    assert calls[0] == [sys.executable, "-m", "durin.jobs.ocr_worker", stranded.id]
+    # Launching still never claims -- that stays the worker's own call.
+    assert registry.get(stranded.id).status == "queued"
+
+
+async def test_a_sweep_that_raises_is_logged_and_the_next_one_still_runs(
+    tmp_path, monkeypatch, caplog
+):
+    """A sweep tick that blows up (a locked database, an unreadable row) must
+    not be the last one: the task that would die with it is the only thing
+    keeping the queue draining for the rest of the process's life."""
+    monkeypatch.setattr("durin.agent.loop._JOB_SWEEP_INTERVAL_S", 0.01)
+    ticks = []
+
+    def exploding_resume():
+        ticks.append(len(ticks))
+        # Call 1 is startup's own (guarded separately); call 2 is the first
+        # sweep tick, and it is the one that has to not be the last.
+        if len(ticks) == 2:
+            raise RuntimeError("jobs.db is locked")
+
+    monkeypatch.setattr("durin.agent.loop._resume_jobs", exploding_resume)
+    loop = _make_loop(tmp_path)
+
+    handler_id = loguru_logger.add(caplog.handler, format="{message}", level="ERROR")
+    try:
+        with caplog.at_level(logging.ERROR):
+            async with _live_loop(loop):
+                await _wait_for(
+                    lambda: len(ticks) >= 4, what="the sweep to survive its own failure",
+                )
+    finally:
+        loguru_logger.remove(handler_id)
+
+    assert len(ticks) >= 4
+    assert "periodic job sweep failed" in caplog.text
+    # The startup guard's message is a different one; the sweep's own failure
+    # must not be reported as a startup failure.
+    assert "job reconcile at startup failed" not in caplog.text
+
+
+async def test_shutting_the_loop_down_cancels_the_sweep(tmp_path, monkeypatch):
+    """The task must not outlive the loop that started it -- a sweep still
+    firing against a torn-down gateway would launch workers nobody owns."""
+    monkeypatch.setattr("durin.agent.loop._JOB_SWEEP_INTERVAL_S", 0.01)
+    loop = _make_loop(tmp_path)
+    monkeypatch.setattr(
+        "durin.jobs.spawn.subprocess.Popen",
+        lambda args, **kw: None,
+    )
+
+    async with _live_loop(loop):
+        await _wait_for(
+            lambda: loop._job_sweep_task is not None, what="the sweep task to start",
+        )
+        sweep = loop._job_sweep_task
+
+    # `_live_loop` cancels run() exactly as a shutdown does; the sweep goes
+    # with it rather than being left pending on a closing loop.
+    await asyncio.sleep(0.01)
+    assert sweep.done()
+    assert loop._job_sweep_task is None
+
+
+async def test_stop_cancels_the_sweep_too(tmp_path, monkeypatch):
+    """``stop()`` tears the sweep down alongside the loop's other background
+    services, so a caller that stops without cancelling ``run()`` (the TUI's
+    own shutdown path) does not leave it running either."""
+    monkeypatch.setattr("durin.agent.loop._JOB_SWEEP_INTERVAL_S", 0.01)
+    loop = _make_loop(tmp_path)
+    monkeypatch.setattr(
+        "durin.jobs.spawn.subprocess.Popen",
+        lambda args, **kw: None,
+    )
+    runner = asyncio.create_task(loop.run())
+    try:
+        await _wait_for(
+            lambda: loop._job_sweep_task is not None, what="the sweep task to start",
+        )
+        sweep = loop._job_sweep_task
+
+        loop.stop()
+
+        await asyncio.sleep(0.01)
+        assert sweep.done()
+        assert loop._job_sweep_task is None
+    finally:
+        loop._running = False
+        runner.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await runner

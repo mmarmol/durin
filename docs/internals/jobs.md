@@ -80,6 +80,9 @@ flowchart TD
     GWSTART -->|respawn per orphan| WORKER
     GWSTART -->|then: queued_jobs, capped\nfor rows nothing ever claimed| WORKER
 
+    SWEEP(["periodic sweep\nAgentLoop, every 60 s"]) -->|the same pass again:\nreconcile, then capped pickup| REG
+    SWEEP -->|respawn: reaches a worker\nkilled before it could chain| WORKER
+
     TASKS["tasks tool / GET /api/v1/tasks\ncollect_tasks()"] -->|read-only| REG
     TASKS --> TRAY["webui work panel\nWorkItemCard (kind=job)"]
 
@@ -215,8 +218,11 @@ at a time without an external scheduler: each terminal job hands off to the
 next, and memory genuinely leaves the machine between books because every
 worker is a fresh process. A launch failure here is logged and swallowed the
 same way `spawn_ocr_job`'s own `Popen` failure is (above) — the row stays
-`queued`, and the next reconcile or startup pickup
-([below](#restart-reconciliation)) retries it.
+`queued`. `reconcile` is not what retries it: that only ever selects `running`
+rows and never sees a `queued` one. Three other things do, and any of them is
+enough: the [periodic sweep](#the-periodic-sweep)'s pickup within the minute,
+the identical pickup at the [next gateway start](#restart-reconciliation), or
+the chain of whichever worker finishes next.
 
 ### Per-unit persistence and resumption
 
@@ -305,6 +311,32 @@ one shared slot — which, on any redundant launch, is what a same-job race
 becomes the instant the winner's write lands. Either way the loser's launch
 is cheap: a refused claim does no PDF work and exits almost immediately, and
 its row is left exactly `queued`, for the chain or the next sweep to reach.
+
+### The periodic sweep
+
+Startup is not the only moment work strands, so `AgentLoop.run()` also starts
+a background task that re-runs exactly the pass above — `reconcile`, then the
+capped `queued_jobs` pickup — every `_JOB_SWEEP_INTERVAL_S` (60 seconds,
+`durin/agent/loop.py`) for as long as the gateway serves. It runs off the
+event-loop thread: the pass opens SQLite and may `Popen` a worker, and the
+same process is serving chat.
+
+It exists because the concurrency cap turned one hard kill into a stalled
+queue. A worker killed outright — SIGKILL, an OOM kill, a `kill -9` — never
+reaches its chain call, so nothing launches the next job; its row keeps
+`running` with a dead `pid`, which holds the cap's only slot, so a worker that
+does get launched has its claim refused; and neither of the two self-heals
+covers that state, because `run_job`'s inline `reconcile` fires only when a
+*new* worker is refused a claim, and the startup one fires only at startup.
+Until a fresh ingest arrived or someone restarted the gateway, the whole
+queue behind that dead holder waited. One sweep tick undoes it: `reconcile`
+requeues the dead holder and the pickup launches workers again.
+
+Each tick is guarded on its own, and a failure is logged (`periodic job sweep
+failed`) instead of ending the task — a sweep that died on one locked database
+would restore the very wedge it exists to prevent. The task is cancelled when
+the loop stops, and also whenever the task running `AgentLoop.run()` completes
+for any other reason, so a cancelled gateway does not leave it sweeping.
 
 ### Cancellation
 
@@ -441,7 +473,9 @@ copy there.
 | `respawn` | `durin/jobs/spawn.py` | (Re)launches the worker for a job that needs one and is not this process's to claim: an orphan `reconcile` just requeued, or a row gateway startup found `queued` with nothing claiming it. Dispatches on `job.kind`. |
 | `_launch_worker` | `durin/jobs/spawn.py` | The one `Popen` call shared by `spawn_ocr_job`, `respawn`, and the worker's own chain. |
 | `run_job` | `durin/jobs/ocr_worker.py` | The OCR worker's whole lifecycle: kind-capped claim (self-healing a stale holder once via an inline `reconcile` on refusal), per-page transcribe loop, sidecar assembly, Library indexing, finish or cancellation, then chain to the next queued job. |
-| `queued_jobs` | `durin/jobs/registry.py` | The oldest up to *n* still-`queued` jobs of a kind in one query; what gateway startup's pickup loop uses instead of looping `next_queued`. |
+| `queued_jobs` | `durin/jobs/registry.py` | The oldest up to *n* still-`queued` jobs of a kind in one query; what the pickup loop uses instead of looping `next_queued`. |
+| `_resume_jobs` | `durin/agent/loop.py` | The reconcile-then-capped-pickup pass itself, shared by gateway startup and the periodic sweep so the two cannot drift apart. |
+| `AgentLoop._sweep_jobs_periodically` | `durin/agent/loop.py` | Re-runs that pass every `_JOB_SWEEP_INTERVAL_S`, guarded per tick; what un-wedges a queue whose cap slot is held by a worker that was killed outright. |
 | `transcribe_page` | `durin/memory/ocr.py` | Renders one PDF page (`pypdfium2`) and runs it through the lazily-constructed, process-local `RapidOCR` engine. The worker calls this directly — its own process is already short-lived, so the engine's memory leaves with it. |
 | `transcribe_pages_detached` | `durin/memory/ocr.py` | The inline conversion path's transcription entry point: runs `transcribe_page` per page inside a short-lived child (`durin/memory/ocr_subproc.py`), so the engine's memory never enters the long-lived gateway process. |
 | `index_ingested_entry` | `durin/memory/ingestion.py` | Turns a finished `ingested/<id>/` entry into an indexed Library reference; the one memory-layer call the worker makes on success. |

@@ -166,6 +166,16 @@ class PendingQueues:
 
 _STEER_PREFIX = "[steer]"
 
+# How often the gateway re-runs the job reconcile and queued-pickup that
+# startup runs once (seconds). A hard-killed worker (SIGKILL, an OOM kill)
+# never reaches its own chain call and leaves its row "running" with a dead
+# pid, holding the concurrency cap's only slot; nothing else re-examines that
+# row, so the whole queue behind it waits for a fresh ingest or a restart. A
+# minute is far below any human's patience for a stalled document and far
+# above the cost of the sweep itself (two indexed reads on a small local
+# database, and nothing at all when it finds no work).
+_JOB_SWEEP_INTERVAL_S = 60
+
 # How long the final injection drain stays alive waiting for running
 # sub-agents to deliver results before giving up (seconds).
 _SUBAGENT_WAIT_TIMEOUT = 300
@@ -180,6 +190,60 @@ _STEER_FRAMING = (
 def _is_injectable(msg: InboundMessage) -> bool:
     """True when *msg* belongs in the running turn (steer or system result)."""
     return msg.channel == "system" or msg.metadata.get("steer") is True
+
+
+def _resume_jobs() -> None:
+    """Give a worker to every job that has none: orphans first, then rows
+    nobody ever claimed.
+
+    Rows whose worker process is gone go back to the queue with their
+    finished units intact, so the work resumes rather than restarting. Each
+    respawn is guarded individually, not the whole loop, so one bad orphan
+    (an unrecognized job kind raises ValueError) does not stop every orphan
+    after it from being respawned too.
+
+    Reconcile only ever returns rows that were "running" with a dead or
+    stale-aged pid — a row that never got a worker in the first place (its own
+    spawn's Popen failed, or a cap-refused worker's chain launch crashed
+    before it could start one) is left "queued" the whole time and that loop
+    never sees it. The second loop picks those up directly. Together with the
+    concurrency cap enforced atomically in JobRegistry.claim (see
+    durin/jobs/registry.py) and the chain a worker runs after finishing
+    (durin/jobs/ocr_worker.py), the full flow is: reconcile requeues orphans
+    -> respawn launches a worker for each -> those workers race the cap in
+    claim() -> every loser exits leaving its row queued -> the second loop has
+    already launched at most one more (cap=1 needs no more than that) -> the
+    chain drains whatever is left, one fresh process at a time, after each job
+    reaches a terminal state (done, failed, or cancelled — see
+    ocr_worker.run_job's _chain_to_next_queued).
+
+    Runs at gateway startup and then periodically, because the chain has
+    exactly one gap: a worker killed outright (SIGKILL, an OOM kill) never
+    reaches its chain call, and the row it was holding keeps "running" with a
+    dead pid — occupying the cap's only slot while nothing left alive has any
+    reason to look at it again.
+    """
+    from durin.jobs.registry import JobRegistry
+    from durin.jobs.spawn import MAX_CONCURRENT_OCR_JOBS, _pid_alive, respawn
+
+    registry = JobRegistry()
+    for job in registry.reconcile(alive=_pid_alive):
+        try:
+            respawn(job)
+        except Exception:
+            logger.exception("could not respawn job {} (kind={})", job.id, job.kind)
+    # queued_jobs, not a next_queued() loop: respawn() never claims, so a row
+    # just handed to it is still "queued" afterward, and a loop re-querying
+    # "the oldest queued job" would keep finding that identical row instead of
+    # moving on to the next one -- launching it MAX_CONCURRENT_OCR_JOBS times
+    # while the rest of the backlog goes untouched. One query naming how many
+    # to take avoids that.
+    for queued in registry.queued_jobs("ocr", MAX_CONCURRENT_OCR_JOBS):
+        try:
+            respawn(queued)
+        except Exception:
+            logger.exception(
+                "could not launch queued job {} (kind={})", queued.id, queued.kind)
 
 
 @dataclass
@@ -487,6 +551,9 @@ class AgentLoop:
         self._memory_health_scheduler: Any | None = None
         self._catalog_refresh_scheduler: Any | None = None
         self._mcp_catalog_refresh_scheduler: Any | None = None
+        # Started by run(), not here: it needs a running event loop, and a
+        # loop built for a one-shot call never serves long enough to sweep.
+        self._job_sweep_task: asyncio.Task | None = None
         self._start_memory_background_services()
         self._start_catalog_refresh()
         self._start_mcp_catalog_refresh()
@@ -779,6 +846,58 @@ class AgentLoop:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("mcp catalog refresh stop raised: {}", exc)
             self._mcp_catalog_refresh_scheduler = None
+
+    # ------------------------------------------------------------------
+    # Periodic job sweep lifecycle
+    # ------------------------------------------------------------------
+
+    def _start_job_sweep(self) -> None:
+        """Start the periodic job reconcile + queued-pickup.
+
+        An asyncio task rather than a thread like the schedulers above,
+        because it is owned by ``run()``: it starts once the loop is actually
+        serving and dies with it, whether the loop is stopped or cancelled.
+
+        ``stop()`` cancels it like every other background service, but a
+        gateway is not always taken down that politely — a cancelled ``run()``
+        never reaches ``stop()`` at all. Hanging the teardown off the owning
+        task's completion covers every exit (returned, cancelled, raised)
+        without wrapping the whole message loop below in a ``finally``.
+        """
+        if self._job_sweep_task is not None:
+            return
+        self._job_sweep_task = asyncio.create_task(self._sweep_jobs_periodically())
+        owner = asyncio.current_task()
+        if owner is not None:
+            owner.add_done_callback(lambda _task: self._stop_job_sweep())
+
+    async def _sweep_jobs_periodically(self) -> None:
+        """Re-run :func:`_resume_jobs` every ``_JOB_SWEEP_INTERVAL_S``.
+
+        Sleeps first: startup has just run the same pass. Each tick is guarded
+        on its own — a sweep that raises (a locked database, an unreadable
+        row) is logged and the next one still happens, because this task
+        dying silently would restore exactly the wedge it exists to prevent.
+        The pass itself runs off the loop thread: it opens SQLite and may
+        ``Popen`` a worker, neither of which belongs on the event loop of a
+        process that is also serving chat.
+        """
+        while True:
+            await asyncio.sleep(_JOB_SWEEP_INTERVAL_S)
+            try:
+                await asyncio.to_thread(_resume_jobs)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("periodic job sweep failed (continuing)")
+
+    def _stop_job_sweep(self) -> None:
+        """Cancel the sweep. Safe to call when it never started, and safe to
+        call twice — ``stop()`` and ``run()``'s own teardown both do."""
+        task = self._job_sweep_task
+        if task is not None:
+            task.cancel()
+            self._job_sweep_task = None
 
     @classmethod
     def from_config(
@@ -1913,57 +2032,16 @@ class AgentLoop:
         from durin.agent import pending_answers
 
         self._running = True
-        # A gateway restart used to leave running jobs untracked. Rows whose
-        # worker process is gone go back to the queue with their finished
-        # units intact, so the work resumes rather than restarting. Wrapped,
-        # like the other startup steps in __init__, so a reconcile failure
-        # cannot take the whole gateway down with it. Each respawn is guarded
-        # individually, not the whole loop, so one bad orphan (an unrecognized
-        # job kind raises ValueError) does not stop every orphan after it from
-        # being respawned too.
-        #
-        # Reconcile only ever returns rows that were "running" with a dead or
-        # stale-aged pid — a row that never got a worker in the first place
-        # (its own spawn's Popen failed, or a cap-refused worker's chain
-        # launch crashed before it could start one) is left "queued" the
-        # whole time and that loop never sees it. The second loop below picks
-        # those up directly. Together with the concurrency cap enforced
-        # atomically in JobRegistry.claim (see durin/jobs/registry.py) and the
-        # chain a worker runs after finishing (durin/jobs/ocr_worker.py), the
-        # full startup flow is: reconcile requeues orphans -> respawn launches
-        # a worker for each -> those workers race the cap in claim() -> every
-        # loser exits leaving its row queued -> the second loop below has
-        # already launched at most one more (cap=1 needs no more than that) ->
-        # the chain drains whatever is left, one fresh process at a time,
-        # after each job reaches a terminal state (done, failed, or
-        # cancelled — see ocr_worker.run_job's _chain_to_next_queued).
+        # A gateway restart used to leave running jobs untracked. Resuming
+        # them is wrapped, like the other startup steps in __init__, so a
+        # reconcile failure cannot take the whole gateway down with it.
         try:
-            from durin.jobs.registry import JobRegistry
-            from durin.jobs.spawn import MAX_CONCURRENT_OCR_JOBS, _pid_alive, respawn
-
-            registry = JobRegistry()
-            for job in registry.reconcile(alive=_pid_alive):
-                try:
-                    respawn(job)
-                except Exception:
-                    logger.exception(
-                        "could not respawn job {} (kind={})", job.id, job.kind)
-            # queued_jobs, not a next_queued() loop: respawn() never claims,
-            # so a row just handed to it is still "queued" afterward, and a
-            # loop re-querying "the oldest queued job" would keep finding
-            # that identical row instead of moving on to the next one --
-            # launching it MAX_CONCURRENT_OCR_JOBS times while the rest of
-            # the backlog goes untouched. One query naming how many to take
-            # avoids that.
-            for queued in registry.queued_jobs("ocr", MAX_CONCURRENT_OCR_JOBS):
-                try:
-                    respawn(queued)
-                except Exception:
-                    logger.exception(
-                        "could not launch queued job {} (kind={})",
-                        queued.id, queued.kind)
+            _resume_jobs()
         except Exception:
             logger.exception("job reconcile at startup failed (continuing)")
+        # Startup is not the only moment work strands, so the same pass runs
+        # on a timer for the rest of this process's life.
+        self._start_job_sweep()
         await self._connect_mcp()
         self._schedule_background(self._warmup_memory_embedding())
         # Blocking ask_user may only wait while this consumer is alive to
@@ -2311,6 +2389,7 @@ class AgentLoop:
         self._stop_memory_background_services()
         self._stop_catalog_refresh()
         self._stop_mcp_catalog_refresh()
+        self._stop_job_sweep()
         logger.info("Agent loop stopping")
 
     async def _process_system_message(
