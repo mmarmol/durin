@@ -239,6 +239,11 @@ read and persist, not produce files the main path consumes — nothing downstrea
 a **Persona** (a named SOUL + its model, mutually exclusive with `model`). Setting `persona`
 on a node injects the SOUL body into the node's system prompt and selects the persona's model.
 The persona is resolved via `durin/workflow/persona_resolve.py` (shared with the agent loop).
+**The default is resolved when the run starts**, from the config as saved (`agents.defaults`
+provider + model), not from the snapshot the surface was built with — so changing the default
+model applies to the next run without a gateway restart. The chat model picker is deliberately
+*not* that default: it swaps the model for the conversation only, and a workflow run keeps
+using the saved default.
 
 A **parallel** node runs branches concurrently and merges their text outputs into the next
 node's input. It has three shapes — **static** (a fixed `branches` list of work- or script-node ids, each

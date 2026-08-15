@@ -49,7 +49,7 @@ dependencies = [
     "python-docx>=1.1.0,<2.0.0",
     "openpyxl>=3.1.0,<4.0.0",
     "python-pptx>=1.0.0,<2.0.0",
-    "websockets>=13.0,<17.0",
+    "websockets>=13.0,<18.0",
     "lark-oapi>=1.4.0,<2.0.0",
     "textual>=8.2.0,<9.0.0",
     # `questionary` powers `durin onboard`'s interactive wizard. It used
@@ -94,6 +94,12 @@ oauth = [
     "oauth-cli-kit>=0.1.0",
 ]
 mcp = [
+    # Held below 2.0. The client APIs durin imports (`mcp.types`,
+    # `mcp.client.auth`, `StdioServerParameters`) all survive in 2.0, but that
+    # release drops `mcp.server.fastmcp`, which the MCP tests need to stand up
+    # a real in-process server to talk to. Lifting this ceiling means porting
+    # that harness first — to the standalone `fastmcp` package or to the
+    # low-level server API — not just widening the range.
     "mcp>=1.26.0,<2.0.0",
 ]
 web = [
@@ -114,7 +120,7 @@ matrix = [
     # NOT included: python-olm has no wheels for modern macOS and its bundled
     # libolm no longer builds under CMake >= 4 (verified 2026-07-10).
     # E2EE-room support is a documented limitation, not a dependency.
-    "matrix-nio>=0.25,<0.26",
+    "matrix-nio>=0.25,<0.27",
     # Markdown -> HTML for org.matrix.custom.html formatted bodies.
     "mistune>=3.0,<4.0",
     # HTML sanitizer for outbound formatted bodies.

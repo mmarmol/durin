@@ -10,6 +10,7 @@ concurrent version-store snapshot never sees a torn file.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -224,10 +225,23 @@ class WorkflowRecApplyResult(Result):
 
 
 class WorkflowsService:
-    def __init__(self, workspace: Path, *, app_config: Any = None, sessions: Any = None) -> None:
+    def __init__(self, workspace: Path, *, app_config: Any = None, sessions: Any = None,
+                 config_loader: Callable[[], Any] | None = None) -> None:
         self._workspace = Path(workspace)
         self._app_config = app_config   # for the run endpoint (provider); None on the catalog registry
         self._sessions = sessions       # SessionManager for node-session persistence during a run
+        # The registry is wired once at gateway start; the operator can change the
+        # default model afterwards and that write lands on disk. A run re-reads it
+        # through this loader so it obeys the current default, not the wiring-time
+        # snapshot. Left None where no config file backs the surface (tests/catalog).
+        self._config_loader = config_loader
+
+    def _live_config(self) -> Any:
+        """The config this run must obey: re-read when a loader is wired, else the
+        snapshot handed at construction."""
+        if self._config_loader is None:
+            return self._app_config
+        return self._config_loader()
 
     def _dir(self) -> Path:
         return workflows_dir(self._workspace)
@@ -649,24 +663,25 @@ class WorkflowsService:
             resume = build_resume_state(manifest, task)
             task = manifest.get("task") or task
 
-        preset = self._app_config.resolve_default_preset()
-        provider = make_provider(self._app_config, preset=preset)
+        app_config = self._live_config()
+        preset = app_config.resolve_default_preset()
+        provider = make_provider(app_config, preset=preset)
         runner = AgentRunner(provider)
         node_runner = AgentNodeRunner(
             runner, self._sessions, default_model=provider.get_default_model(),
-            tools_config=self._app_config.tools,
-            app_config=self._app_config,
+            tools_config=app_config.tools,
+            app_config=app_config,
         )
         from durin.workflow.script_runner import ScriptNodeRunner
         script_runner = ScriptNodeRunner(
             self._workspace,
-            default_timeout=self._app_config.workflow.script_timeout,
-            max_output_chars=self._app_config.workflow.script_output_max_chars,
-            log_max_chars=self._app_config.workflow.script_log_max_chars,
+            default_timeout=app_config.workflow.script_timeout,
+            max_output_chars=app_config.workflow.script_output_max_chars,
+            log_max_chars=app_config.workflow.script_log_max_chars,
         )
         judge = AgentJudgeRunner(runner, default_model=provider.get_default_model())
         ws = str(self._workspace)
-        wf_cfg = self._app_config.workflow
+        wf_cfg = app_config.workflow
         engine = WorkflowEngine(
             node_runner=node_runner,
             script_runner=script_runner,
