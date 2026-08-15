@@ -246,6 +246,17 @@ class WorkInterrupted(RuntimeError):
     than 'aborted'."""
 
 
+class _CancelledAbort(str):
+    """The abort text of a parallel node whose every branch (or fan-out worker) was
+    killed by the cancel itself — a script subprocess group-killed, or an agent turn
+    force-stopped — rather than failing on its own merits. A parallel node swallows
+    per-branch failures into text, so this marker is how the branches' causes reach
+    the walk, which ends the run 'cancelled' instead of 'aborted'. Reads as the plain
+    abort string everywhere else."""
+
+    __slots__ = ()
+
+
 class NodeExecutionError(RuntimeError):
     """A node's agent turn raised. Carries the node identity, iteration and the session
     key under which the node runner persisted the partial conversation — so the engine
@@ -1046,12 +1057,13 @@ class WorkflowEngine:
                 # its branches have finished and reconciled, sequentially on this thread.
                 runs[-1].artifacts = sorted(_work_snapshot() - before_files)[:20]
                 if abort is not None:
-                    # A hard cancel that interrupted every branch reaches here as
-                    # "every branch failed" — true of the branches, wrong about the
-                    # run: the user stopped it. Re-consult the flag (the same
-                    # re-consult the subworkflow branch does) so the run reports
-                    # what actually happened.
-                    if self._cancel_check is not None and self._cancel_check():
+                    # A cancel that killed every branch reaches here as "every
+                    # branch failed" — true of the branches, wrong about the run:
+                    # the user stopped it. The marker is set from the branches' own
+                    # failure causes, not from the flag: a cancel merely PENDING
+                    # while branches fail on their own merits must stay an abort,
+                    # or a genuine failure hides behind the user's stop.
+                    if isinstance(abort, _CancelledAbort):
                         return WorkflowResult(
                             status="cancelled", final_output=final_output, runs=runs,
                             run_id=run_id, final_output_node=final_output_node,
@@ -1258,6 +1270,12 @@ class WorkflowEngine:
         cap = node.max_concurrency if node.max_concurrency is not None else self._parallel_llm_cap
         workers = max(1, min(len(subtasks), cap))
 
+        # Worker indices aborted by the cancel itself rather than failing on their
+        # own merits — carrying the cause the way the static branches do. A plain
+        # `set` is safe here: only `add` runs off-thread, and it is atomic; the
+        # read happens after the pool has joined.
+        cancelled_workers: set[int] = set()
+
         def _run_worker(args):
             # A worker that raises must not take down the whole fan-out: catch it and
             # return a tagged failure so survivors still complete (per-future isolation).
@@ -1280,6 +1298,8 @@ class WorkflowEngine:
                 ))
                 return idx, resp.output, resp.session_key, None, resp.persist_failed, round(time.monotonic() - t0, 3)
             except NodeExecutionError as exc:
+                if isinstance(exc.cause, (ScriptCancelled, WorkInterrupted)):
+                    cancelled_workers.add(idx)
                 return idx, "", exc.session_key, str(exc.cause), False, round(time.monotonic() - t0, 3)
             except Exception as exc:  # noqa: BLE001 - isolate a single worker's failure
                 return idx, "", None, str(exc), False, round(time.monotonic() - t0, 3)
@@ -1295,7 +1315,9 @@ class WorkflowEngine:
                                 error=error, duration_s=duration))
 
         if all(error for _idx, _out, _key, error, _pf, _d in results):
-            return "", f"parallel node {node.id!r}: every worker failed"
+            text = f"parallel node {node.id!r}: every worker failed"
+            return "", (_CancelledAbort(text)
+                        if len(cancelled_workers) == len(results) else text)
 
         merged = "\n\n".join(
             f"[{idx}] {out}" if error is None else f"[{idx}] FAILED: {error}"
@@ -1464,6 +1486,10 @@ class WorkflowEngine:
         _emit_branches()
 
         if node.reconcile == "read":
+            # Branch ids whose failure was the cancel itself, not their own merits —
+            # the walk needs the cause, and per-branch failures are flattened to text.
+            cancelled_branches: set[str] = set()
+
             def _run(bid):
                 # A branch that raises must not take down the others: catch it and tag the
                 # failure so survivors still complete (per-branch isolation, like fan-out).
@@ -1481,6 +1507,8 @@ class WorkflowEngine:
                 except NodeExecutionError as exc:
                     with _branch_lock:
                         branch_status[bid] = "failed"
+                        if isinstance(exc.cause, (ScriptCancelled, WorkInterrupted)):
+                            cancelled_branches.add(bid)
                     _emit_branches()
                     return (bid, "", exc.session_key, str(exc.cause), False,
                             round(time.monotonic() - t0, 3), getattr(exc, "exit_code", None))
@@ -1493,7 +1521,9 @@ class WorkflowEngine:
                 results = list(ex.map(lambda bid: _gated(bid, _run), branches))
             self._record_branches(runs, results, iteration)
             if all(error for _bid, _out, _key, error, _pf, _d, _ec in results):
-                return "", f"parallel node {node.id!r}: every branch failed"
+                text = f"parallel node {node.id!r}: every branch failed"
+                return "", (_CancelledAbort(text)
+                            if len(cancelled_branches) == len(results) else text)
             return "\n\n".join(
                 f"[{bid}]\n{out}" if error is None else f"[{bid}] FAILED: {error}"
                 for bid, out, _key, error, _pf, _d, _ec in results), None

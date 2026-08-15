@@ -839,3 +839,87 @@ def test_no_cancel_check_runs_the_turn_directly(tmp_path):
     nr = _faithful_runner(sessions, reply="fin")
     req = _req(WorkNode(id="quick", model=None, context="own", prompt="p", next=None))
     assert nr(req).output == "fin"
+
+
+def _runner_awaiting(sessions, coro_body):
+    """A fake AgentRunner whose turn is exactly *coro_body* — for exercising what
+    the turn is blocked ON when the force-stop lands."""
+    provider = MagicMock(spec=LLMProvider)
+    provider.get_default_model.return_value = "test-model"
+    from durin.agent.runner import AgentRunner
+    ar = AgentRunner(provider)
+    ar.run = AsyncMock(side_effect=coro_body)
+    return AgentNodeRunner(ar, sessions, default_model="test-model")
+
+
+def test_a_force_stop_does_not_wait_out_work_handed_to_a_thread(tmp_path):
+    """A turn blocked in ``asyncio.to_thread`` — a provider whose SDK is
+    synchronous, a search pipeline, a document conversion — cannot be
+    interrupted, and ``asyncio.run``'s teardown drains the loop's default
+    executor with NO timeout. Waiting for that would make a force-stop no faster
+    than letting the node finish. The stop must land on its own schedule; the
+    orphaned unit of work finishes behind it."""
+    import asyncio as _asyncio
+    import threading as _threading
+    import time as _time
+
+    import pytest
+
+    from durin.workflow.engine import NodeExecutionError, WorkInterrupted
+
+    entered = _threading.Event()
+    release = _threading.Event()
+
+    def _uninterruptible_tool_call():
+        entered.set()
+        release.wait(10)
+
+    async def turn(spec):
+        await _asyncio.to_thread(_uninterruptible_tool_call)
+
+    nr = _runner_awaiting(SessionManager(workspace=tmp_path), turn)
+    req = _req(
+        WorkNode(id="slow", model=None, context="own", prompt="p", next=None),
+        cancel_check=lambda: True,
+    )
+
+    try:
+        t0 = _time.monotonic()
+        with pytest.raises(NodeExecutionError) as ei:
+            nr(req)
+        elapsed = _time.monotonic() - t0
+
+        assert entered.is_set(), "the turn must really have been inside a to_thread call"
+        assert isinstance(ei.value.cause, WorkInterrupted)
+        assert elapsed < 5, f"the force-stop waited out the thread ({elapsed:.1f}s)"
+    finally:
+        release.set()
+
+
+def test_the_turn_keeps_the_calling_threads_context(tmp_path):
+    """The turn no longer runs on the engine thread, and contextvars do not
+    cross a thread boundary on their own — memory provenance and the cron/
+    message tool defaults all ride one. asyncio.run gives the coroutine a COPY
+    of its caller's context; that must stay true."""
+    from contextvars import ContextVar
+
+    marker: ContextVar[str] = ContextVar("node_runner_test_marker", default="unset")
+    seen = {}
+
+    async def turn(spec):
+        seen["value"] = marker.get()
+        return AgentRunResult(final_content="fin", messages=list(spec.initial_messages) + [
+            {"role": "assistant", "content": "fin"}])
+
+    sessions = SessionManager(workspace=tmp_path)
+    sessions.save(Session(key="websocket:abc"))
+    nr = _runner_awaiting(sessions, turn)
+    req = _req(
+        WorkNode(id="quick", model=None, context="own", prompt="p", next=None),
+        cancel_check=lambda: False,
+    )
+
+    marker.set("from-the-engine-thread")
+    nr(req)
+
+    assert seen["value"] == "from-the-engine-thread"

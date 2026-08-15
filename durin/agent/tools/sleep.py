@@ -101,8 +101,11 @@ class SleepTool(Tool, ContextAware):
         the merged view carries them: a job's completion pushes nothing, so a
         sleep between job status checks is the legitimate polling this
         reminder must not scold — and naming a job here would falsely promise
-        its result arrives on its own. Empty on any failure or missing
-        wiring; the reminder is advisory only."""
+        its result arrives on its own. A run that is 'stopping' (a cancel is
+        pending, a node is still executing) counts as running: its result is
+        still pushed when the engine winds down, so dropping it here would tell
+        the agent to poll for exactly the work it must not poll for. Empty on
+        any failure or missing wiring; the reminder is advisory only."""
         try:
             ctx = self._request_ctx
             if not self._workspace or ctx is None:
@@ -116,7 +119,7 @@ class SleepTool(Tool, ContextAware):
                                  sessions=self._sessions, session_key=session_key)
             return [
                 f"{r['kind']} [{r['id']}]" for r in rows
-                if r.get("status") == "running" and r.get("kind") != "job"
+                if r.get("status") in ("running", "stopping") and r.get("kind") != "job"
             ]
         except Exception:  # noqa: BLE001 - the reminder must never break a sleep
             return []

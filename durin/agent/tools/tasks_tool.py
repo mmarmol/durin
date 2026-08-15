@@ -404,14 +404,20 @@ class TasksTool(Tool, ContextAware):
         row = next((r for r in self._rows(session_key) if r["id"] == task_id), None)
         if row is None:
             return f"Error: unknown task id {task_id!r} in this session."
+        # `force` escalates a workflow stop and nothing else. Answering the other
+        # two kinds with the plain wording would let a model that passed it
+        # believe the strongest stop available had already run.
+        dropped = (" (force only escalates a workflow stop — it changed nothing here.)"
+                   if force else "")
         if row["kind"] == "subagent":
             if self._manager is None:
                 return f"Error: cannot stop sub-agent [{task_id}] — no sub-agent manager."
             outcome = await self._manager.stop_task(task_id, session_key)
             if outcome == "stopped":
-                return f"Sub-agent [{task_id}] cancelled."
+                return f"Sub-agent [{task_id}] cancelled.{dropped}"
             if outcome == "not_running":
-                return f"Sub-agent [{task_id}] had already finished — nothing to cancel."
+                return (f"Sub-agent [{task_id}] had already finished — "
+                        f"nothing to cancel.{dropped}")
             return f"Error: unknown sub-agent id {task_id!r} in this session."
         if row["kind"] == "job":
             if row["status"] == "queued":
@@ -422,16 +428,17 @@ class TasksTool(Tool, ContextAware):
                 self._jobs.cancel(task_id)
                 return (
                     f"Job [{task_id}] cancelled while it was still waiting for "
-                    "the OCR slot; no worker will pick it up."
+                    f"the OCR slot; no worker will pick it up.{dropped}"
                 )
             if row["status"] != "running":
-                return f"Job [{task_id}] is already {row['status']} — nothing to cancel."
+                return (f"Job [{task_id}] is already {row['status']} — "
+                        f"nothing to cancel.{dropped}")
             self._jobs.cancel(task_id)
             return (
                 f"Job [{task_id}] asked to cancel. It stops at its next page "
                 "boundary (a page already being transcribed finishes first). "
                 "Nothing pushes a message when it does — check action=status "
-                "if you need to confirm it stopped."
+                f"if you need to confirm it stopped.{dropped}"
             )
         # workflow
         healed = self._heal_orphaned_workflow(row)
@@ -447,8 +454,9 @@ class TasksTool(Tool, ContextAware):
         if hard:
             return (
                 f"Workflow run [{task_id}] force-stopped: the node currently "
-                "executing is being interrupted. Its result still arrives as a "
-                "follow-up, with status 'cancelled'."
+                "executing is being interrupted, though a tool call already "
+                "under way runs to the end and its writes can still land. Its "
+                "result still arrives as a follow-up, with status 'cancelled'."
             )
         return (
             f"Workflow run [{task_id}] asked to cancel. It stops at its next node "

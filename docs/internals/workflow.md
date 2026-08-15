@@ -675,7 +675,10 @@ force-stop already in flight.
   node still dies immediately — the callback is threaded into its subprocess
   wait, polled every slice while the process runs, and a cancel kills the
   subprocess's process group directly (the same group-kill path a timeout
-  uses). An agent node already executing finishes first.
+  uses). An agent node already executing finishes first. A **detached**
+  (launch-and-continue) node is not exempt: it gets the same check its linear
+  counterpart would, so a detached script's subprocess dies with the run instead
+  of outliving it as an orphan nobody is left to reap.
 - **Hard** (`force=true`, or a repeat `stop` on a run already cancelling, which
   auto-escalates): additionally interrupts an in-flight agent node. The engine
   hands every agent turn — sequential work nodes, parallel branches, fan-out
@@ -684,6 +687,29 @@ force-stop already in flight.
   cancelling the task the moment it turns true. The abort surfaces as a
   `WorkInterrupted` cause, the partial conversation is persisted exactly like
   any node failure, and the run ends `cancelled`.
+
+**What a hard cancel does and does not reach.** Cancelling the turn's task
+unwinds the `await` it is sitting on, so a request to any provider whose SDK is
+async — Anthropic, the OpenAI-compatible family, Azure, Copilot — is dropped
+where it stands. Work the turn handed to a thread is not cancellable at all: a
+tool doing synchronous I/O (a document conversion, a memory ingest, a search
+pipeline) or a provider whose SDK is synchronous (Bedrock) finishes its current
+unit of work regardless. The run does not wait for it. The watched turn runs on
+a thread of its own and the force-stop abandons that thread rather than joining
+it — `asyncio.run`'s teardown drains the loop's default executor with no
+timeout, which would otherwise pin the run for the whole of that call and make a
+force-stop no faster than letting the node finish. So the stop lands on its own
+schedule either way; the abandoned unit of work completes in the background and
+its writes can still land after the run has reported `cancelled`. Nothing of the
+turn beyond that one call ever runs.
+
+**A parallel node whose branches are all gone.** Every branch failing is
+normally an abort ("every branch failed"). When the branches were killed by the
+cancel itself — a script subprocess group-killed, an agent turn force-stopped —
+the run reports `cancelled` instead. The distinction is drawn from the branches'
+own failure causes, not from the cancel flag: branches that fail on their own
+merits while a stop is merely *pending* still abort, so a genuine failure never
+hides behind the user's stop. Fan-out workers follow the same rule.
 
 While a cancel is pending, the merged task list reports the run as `stopping`
 (computed from the registry — the manifest is not rewritten), so surfaces

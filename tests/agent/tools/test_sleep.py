@@ -171,6 +171,28 @@ async def test_sleep_reminder_never_names_a_job(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_sleep_reminder_still_names_a_stopping_run(tmp_path, monkeypatch):
+    """A run with a cancel pending reports 'stopping', not 'running' — but its
+    result is still push-delivered when the engine winds down. Dropping it from
+    the reminder would tell the agent to keep polling for exactly the work it
+    must not poll for."""
+    def rows(*args, **kwargs):
+        return [
+            {"kind": "workflow", "id": "wf01abcd", "label": "qa",
+             "status": "stopping", "started_at": time.time(), "ended_at": None,
+             "session_key": "websocket:chatA", "nodes": None, "task": "t",
+             "units_total": None, "units_done": None, "error": None},
+        ]
+
+    monkeypatch.setattr("durin.agent.background_tasks.collect_tasks", rows)
+
+    out = await _tool_with_session(tmp_path).execute(seconds=0)
+
+    assert "wf01abcd" in out
+    assert "end your turn" in out
+
+
+@pytest.mark.asyncio
 async def test_sleep_stays_quiet_when_only_a_job_is_running(tmp_path, monkeypatch):
     """With nothing push-delivered in flight, a sleep between job status
     checks is exactly what the tool is for -- no reminder at all."""

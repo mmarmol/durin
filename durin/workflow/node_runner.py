@@ -3,7 +3,9 @@ its session with lineage.
 
 Plugs into WorkflowEngine as the ``node_runner``. It is synchronous (the engine
 walk is synchronous) and drives the async AgentRunner via asyncio.run on a fresh
-event loop per node — fine for the sequential slice. The node's conversation is
+event loop per node — fine for the sequential slice; a node that can be
+force-stopped gets that loop on a thread of its own, so the stop need not wait
+for uncancellable work (see ``_run_turn``). The node's conversation is
 persisted as its own session keyed ``workflow:<run_id>:<node_id>:<iteration>`` with
 the WS0 lineage block, so node work is navigable, searchable and dream-visible —
 exactly like a subagent session. Persistence is best-effort.
@@ -12,7 +14,10 @@ exactly like a subagent session. Persistence is best-effort.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
+import threading
+from typing import Any
 
 from loguru import logger
 
@@ -152,7 +157,7 @@ class AgentNodeRunner:
         )
 
     def _run_turn(self, spec: AgentRunSpec, cancel_check):
-        """Run one agent turn to completion on this thread's private event loop.
+        """Run one agent turn to completion and return its result.
 
         With *cancel_check* set (the engine hands work nodes the hard-cancel poll),
         the turn runs as a task and a watcher polls the flag every
@@ -160,7 +165,18 @@ class AgentNodeRunner:
         CancelledError unwinds the in-flight provider/tool await — and
         WorkInterrupted is raised so the caller's failure path persists the partial
         conversation and the engine ends the run 'cancelled'. Without it the turn
-        runs directly, exactly as before.
+        runs directly on this thread's private event loop, exactly as before.
+
+        The watched turn runs on a thread of its own, and a force-stop walks away
+        from that thread instead of joining it. ``asyncio.run``'s teardown shuts the
+        loop's default executor down and waits, with no timeout, for it to drain —
+        so any tool call marshalled through ``asyncio.to_thread`` (a provider whose
+        SDK is synchronous, a search pipeline, a document conversion) would otherwise
+        pin the engine right through the stop, making a force-stop no faster than
+        letting the node finish. Abandoning the thread ends the run now; the orphan
+        completes its one unit of work and tears its own loop down behind us.
+        Nothing of the turn runs after the cancelled await either way, so the same
+        writes land — the only difference is that the engine no longer waits for them.
         """
         if cancel_check is None:
             return asyncio.run(self.runner.run(spec))
@@ -179,7 +195,32 @@ class AgentNodeRunner:
                         pass
                     raise WorkInterrupted("agent turn aborted by force-stop")
 
-        return asyncio.run(_watched())
+        outcome: dict[str, Any] = {}
+
+        def _drive() -> None:
+            try:
+                outcome["result"] = asyncio.run(_watched())
+            except BaseException as exc:  # noqa: BLE001 - re-raised on the engine thread
+                outcome["error"] = exc
+
+        # asyncio.run() runs the coroutine in a COPY of the calling thread's context,
+        # so copying it onto the turn thread keeps every contextvar the turn would
+        # have seen had it run here.
+        context = contextvars.copy_context()
+        thread = threading.Thread(
+            target=lambda: context.run(_drive), name="durin-node-turn", daemon=True)
+        thread.start()
+        while True:
+            thread.join(_CANCEL_POLL_SECONDS)
+            if not thread.is_alive():
+                break
+            if cancel_check():
+                # The watcher on the turn thread cancels the turn itself; this only
+                # stops waiting for the teardown behind it.
+                raise WorkInterrupted("agent turn aborted by force-stop")
+        if "error" in outcome:
+            raise outcome["error"]
+        return outcome["result"]
 
     def _build_tools(self, node, workspace_override: str | None = None) -> ToolRegistry:
         """Build the node's tool registry: its built-in set ('none'→empty,

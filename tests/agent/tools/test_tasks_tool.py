@@ -727,6 +727,38 @@ async def test_retry_refuses_a_stopping_run(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_force_on_a_subagent_says_it_was_not_honored(tmp_path):
+    """force only escalates a workflow stop. Answering a sub-agent stop with the
+    plain wording would let the model believe the flag did something."""
+    mgr = _FakeManager([_SAStatus("sa01", "research", "awaiting_tools")], running=["sa01"])
+    out = await _tool(tmp_path, mgr).execute(action="stop", id="sa01", force=True)
+    assert "Sub-agent [sa01] cancelled" in out
+    assert "force" in out and "workflow" in out
+
+
+@pytest.mark.asyncio
+async def test_force_on_a_job_says_it_was_not_honored(tmp_path):
+    """Same for a job: its cancel always waits for the current page boundary,
+    and force cannot shorten that."""
+    jobs = _job_registry(tmp_path)
+    job = jobs.enqueue(kind="ocr", label="book.pdf", payload={}, session_key=SESSION,
+                       units_total=40)
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(
+        action="stop", id=job.id, force=True)
+    assert "cancelled while it was still waiting" in out
+    assert "force" in out and "workflow" in out
+
+
+@pytest.mark.asyncio
+async def test_a_plain_subagent_stop_does_not_mention_force(tmp_path):
+    """The clause is only for a dropped flag — a stop that never passed force
+    must not carry noise about it."""
+    mgr = _FakeManager([_SAStatus("sa01", "research", "awaiting_tools")], running=["sa01"])
+    out = await _tool(tmp_path, mgr).execute(action="stop", id="sa01")
+    assert "force" not in out
+
+
+@pytest.mark.asyncio
 async def test_force_parameter_is_declared_and_documented(tmp_path):
     tool = _tool(tmp_path, _FakeManager([], running=[]))
     force = tool.parameters["properties"]["force"]

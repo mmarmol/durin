@@ -10,6 +10,7 @@ from durin.workflow.engine import (
     NodeExecutionError,
     NodeRunRequest,
     NodeRunResponse,
+    ScriptCancelled,
     WorkflowEngine,
     WorkInterrupted,
 )
@@ -213,6 +214,128 @@ def test_a_parallel_node_whose_branches_were_all_interrupted_ends_cancelled():
             {"id": "b2", "kind": "work", "prompt": "p", "next": None},
         ],
     })
+    result = eng.run(wf, "t", root_session_key="websocket:chatA")
+
+    assert result.status == "cancelled"
+
+
+def test_detached_nodes_get_the_same_checks_the_linear_walk_gives():
+    """A detached node runs past the walk that launched it, so a stop that ended
+    the run would otherwise leave its subprocess alive to outlive the run. It
+    polls the plain check (either mode kills it) exactly like a linear script
+    node; a detached agent node keeps the hard-only check."""
+    captured: dict = {}
+
+    def runner(req: NodeRunRequest) -> NodeRunResponse:
+        captured[req.node.id] = req.cancel_check
+        return NodeRunResponse(output=f"out-{req.node.id}", session_key=None, messages=[])
+
+    def plain() -> bool:
+        return False
+
+    def hard() -> bool:
+        return False
+
+    eng = WorkflowEngine(
+        node_runner=runner, script_runner=runner, run_id_factory=lambda: "r-det",
+        cancel_check=plain, hard_cancel_check=hard,
+    )
+    wf = parse_workflow({
+        "name": "d", "start": "s",
+        "nodes": [
+            {"id": "s", "kind": "script", "command": "cat", "detached": True, "next": "w"},
+            {"id": "w", "kind": "work", "prompt": "p", "detached": True, "next": "end"},
+            {"id": "end", "kind": "work", "prompt": "p", "next": None},
+        ],
+    })
+    result = eng.run(wf, "t", root_session_key="websocket:chatA")
+
+    assert result.status == "completed"
+    assert captured["s"] is plain
+    assert captured["w"] is hard
+
+
+def _wf_parallel(*branches, kind="work"):
+    nodes: list[dict] = [
+        {"id": "fan", "kind": "parallel", "branches": list(branches), "next": None}]
+    for b in branches:
+        nodes.append({"id": b, "kind": "work", "prompt": "p", "next": None} if kind == "work"
+                     else {"id": b, "kind": "script", "command": "cat", "next": None})
+    return parse_workflow({"name": "p", "start": "fan", "nodes": nodes})
+
+
+def test_a_graceful_stop_pending_does_not_relabel_a_real_parallel_failure():
+    """A graceful stop leaves an in-flight agent branch alone, so branches that
+    fail while one is pending failed on their own merits. Reporting that run as
+    'cancelled' would hide a genuine failure behind the user's stop."""
+
+    state = {"cancel": False}
+
+    def runner(req: NodeRunRequest) -> NodeRunResponse:
+        # The graceful stop lands while the branches are in flight; they then
+        # fail for reasons of their own, which the stop must not relabel.
+        state["cancel"] = True
+        raise NodeExecutionError(req.node.id, req.iteration, None, RuntimeError("boom"))
+
+    eng = WorkflowEngine(
+        node_runner=runner, run_id_factory=lambda: "r-par-soft",
+        cancel_check=lambda: state["cancel"],   # a graceful stop is pending
+        hard_cancel_check=lambda: False,        # but nothing was interrupted
+    )
+    result = eng.run(_wf_parallel("b1", "b2"), "t", root_session_key="websocket:chatA")
+
+    assert result.status == "aborted"
+    assert "every branch failed" in result.final_output
+
+
+def test_a_graceful_stop_that_killed_every_script_branch_ends_cancelled():
+    """A graceful stop DOES kill a script branch's subprocess. When that is why
+    every branch is gone, 'every branch failed' is the wrong account — nothing
+    failed, the user stopped it."""
+
+    state = {"cancel": False}
+
+    def script_runner(req: NodeRunRequest) -> NodeRunResponse:
+        state["cancel"] = True   # the stop lands while the subprocesses run
+        raise NodeExecutionError(req.node.id, req.iteration, None,
+                                 ScriptCancelled("cancelled by user"))
+
+    eng = WorkflowEngine(
+        node_runner=lambda req: NodeRunResponse(output="", session_key=None, messages=[]),
+        script_runner=script_runner, run_id_factory=lambda: "r-par-script",
+        cancel_check=lambda: state["cancel"], hard_cancel_check=lambda: False,
+    )
+    result = eng.run(_wf_parallel("s1", "s2", kind="script"), "t",
+                     root_session_key="websocket:chatA")
+
+    assert result.status == "cancelled"
+
+
+def test_a_hard_stop_that_interrupted_every_fanout_worker_ends_cancelled():
+    """The dynamic fan-out reports 'every worker failed' the same way a static
+    parallel does — and needs the same correction when the failures are the
+    force-stop the user asked for."""
+
+    state = {"cancel": False}
+
+    def runner(req: NodeRunRequest) -> NodeRunResponse:
+        if req.node.id == "list":
+            return NodeRunResponse(output="one, two", session_key=None, messages=[])
+        state["cancel"] = True   # the force-stop lands while the workers run
+        raise NodeExecutionError(req.node.id, req.iteration, None, WorkInterrupted("forced"))
+
+    wf = parse_workflow({
+        "name": "f", "start": "list",
+        "nodes": [
+            {"id": "list", "kind": "work", "prompt": "p", "next": "fan"},
+            {"id": "fan", "kind": "parallel", "list_from": "list", "worker": "w", "next": None},
+            {"id": "w", "kind": "work", "prompt": "p", "next": None},
+        ],
+    })
+    eng = WorkflowEngine(
+        node_runner=runner, run_id_factory=lambda: "r-fan-hard",
+        cancel_check=lambda: state["cancel"], hard_cancel_check=lambda: state["cancel"],
+    )
     result = eng.run(wf, "t", root_session_key="websocket:chatA")
 
     assert result.status == "cancelled"
