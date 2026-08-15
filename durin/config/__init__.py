@@ -13,6 +13,7 @@ from durin.config.paths import (
     get_webui_dir,
     get_workspace_path,
     is_default_workspace,
+    jobs_db_path,
 )
 from durin.config.schema import Config
 
@@ -31,4 +32,5 @@ __all__ = [
     "get_cli_history_path",
     "get_bridge_install_dir",
     "get_legacy_sessions_dir",
+    "jobs_db_path",
 ]

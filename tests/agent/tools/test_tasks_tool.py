@@ -66,10 +66,15 @@ def _write_manifest(workspace, name, run_id, *, status, final_output=None, task=
     (d / f"{run_id}.json").write_text(json.dumps(rec), encoding="utf-8")
 
 
-def _tool(workspace, manager):
-    t = TasksTool(workspace=str(workspace), subagent_manager=manager, sessions=None)
+def _tool(workspace, manager, jobs=None):
+    t = TasksTool(workspace=str(workspace), subagent_manager=manager, sessions=None, jobs=jobs)
     t.set_context(RequestContext(channel="websocket", chat_id="chatA", session_key=SESSION))
     return t
+
+
+def _job_registry(tmp_path):
+    from durin.jobs.registry import JobRegistry
+    return JobRegistry(tmp_path / "jobs.db")
 
 
 @pytest.mark.asyncio
@@ -80,6 +85,18 @@ async def test_list_shows_both_kinds(tmp_path):
     assert "background task(s)" in out
     assert "sa01" in out and "subagent" in out
     assert "wf01abcd" in out and "workflow" in out
+
+
+@pytest.mark.asyncio
+async def test_list_shows_the_job_kind_too(tmp_path):
+    """convert_to_markdown's tool description already tells the model a large
+    scanned PDF "is transcribed as a background job you can follow with the
+    tasks tool" -- list must actually carry it, or that description is a lie
+    the model repeats to the user."""
+    jobs = _job_registry(tmp_path)
+    jobs.enqueue(kind="ocr", label="book.pdf", payload={}, session_key=SESSION, units_total=40)
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(action="list")
+    assert "book.pdf" in out and "job" in out
 
 
 @pytest.mark.asyncio
@@ -111,6 +128,100 @@ async def test_status_unknown_id(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_status_job_detail_shows_progress(tmp_path):
+    jobs = _job_registry(tmp_path)
+    job = jobs.enqueue(kind="ocr", label="book.pdf", payload={}, session_key=SESSION, units_total=40)
+    jobs.record_unit(job.id, 1, "page one text")
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(
+        action="status", id=job.id)
+    assert f"Job [{job.id}]" in out
+    assert "1/40" in out
+
+
+@pytest.mark.asyncio
+async def test_status_of_a_queued_job_says_it_is_waiting_and_shows_no_clock(tmp_path):
+    """A job behind the OCR cap has not started. Reporting an age for it reads
+    as time spent transcribing, which is exactly what nobody is doing."""
+    jobs = _job_registry(tmp_path)
+    job = jobs.enqueue(kind="ocr", label="book.pdf", payload={}, session_key=SESSION, units_total=40)
+
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(
+        action="status", id=job.id)
+
+    assert "status: queued" in out
+    assert "age:" not in out
+    assert "waiting" in out
+    # Progress still shows: the denominator is what the job will be.
+    assert "0/40" in out
+
+
+@pytest.mark.asyncio
+async def test_list_counts_a_queued_job_as_neither_running_nor_finished(tmp_path):
+    """The header's two buckets used to absorb queued rows into "finished",
+    which is the opposite of true for work that has not started."""
+    jobs = _job_registry(tmp_path)
+    started = jobs.enqueue(
+        kind="ocr", label="first.pdf", payload={}, session_key=SESSION, units_total=1)
+    jobs.claim(started.id, pid=4242)
+    jobs.enqueue(kind="ocr", label="second.pdf", payload={}, session_key=SESSION, units_total=1)
+
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(action="list")
+
+    assert "1 running, 1 queued, 0 finished" in out
+    assert "queued" in out.split("\n")[-1] or "queued" in out
+
+
+@pytest.mark.asyncio
+async def test_list_shows_no_age_for_a_queued_job(tmp_path):
+    """The STATUS render already withholds the clock for a queued job (an age
+    beside a job reads as time spent working, and a queued job has no worker
+    at all); the LIST line must not print one either. The blank cell keeps
+    the label column aligned with the other rows."""
+    jobs = _job_registry(tmp_path)
+    running = jobs.enqueue(
+        kind="ocr", label="first.pdf", payload={}, session_key=SESSION, units_total=1)
+    jobs.claim(running.id, pid=4242)
+    queued = jobs.enqueue(
+        kind="ocr", label="second.pdf", payload={}, session_key=SESSION, units_total=1)
+
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(action="list")
+
+    queued_line = next(ln for ln in out.split("\n") if queued.id in ln)
+    running_line = next(ln for ln in out.split("\n") if running.id in ln)
+    assert "age=" not in queued_line
+    assert "age=" in running_line
+    assert queued_line.index("second.pdf") == running_line.index("first.pdf")
+
+
+@pytest.mark.asyncio
+async def test_list_says_nothing_about_queueing_when_nothing_is_queued(tmp_path):
+    """The count only earns its place when there is one -- an always-present
+    "0 queued" is noise in a line the model reads on every check."""
+    jobs = _job_registry(tmp_path)
+    job = jobs.enqueue(kind="ocr", label="book.pdf", payload={}, session_key=SESSION, units_total=1)
+    jobs.claim(job.id, pid=4242)
+
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(action="list")
+
+    assert "1 running, 0 finished" in out
+
+
+@pytest.mark.asyncio
+async def test_status_of_a_failed_job_says_why_it_failed(tmp_path):
+    """"failed" on its own is not an answer anyone can act on. The worker
+    already records a usable reason; this is the surface that has to show it."""
+    jobs = _job_registry(tmp_path)
+    job = jobs.enqueue(kind="ocr", label="book.pdf", payload={}, session_key=SESSION, units_total=40)
+    jobs.claim(job.id, pid=4242)
+    jobs.finish(job.id, pid=4242, error="page 7: OSError: no space left on device")
+
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(
+        action="status", id=job.id)
+
+    assert "no space left on device" in out
+
+
+@pytest.mark.asyncio
 async def test_stop_subagent_delegates_to_manager(tmp_path):
     mgr = _FakeManager([_SAStatus("sa01", "research", "awaiting_tools")], running=["sa01"])
     out = await _tool(tmp_path, mgr).execute(action="stop", id="sa01")
@@ -135,6 +246,54 @@ async def test_stop_finished_workflow_is_noop(tmp_path):
     out = await _tool(tmp_path, _FakeManager([], running=[])).execute(action="stop", id="wfdone001")
     assert "already" in out
     assert cancellation.is_cancelled("wfdone001") is False
+
+
+@pytest.mark.asyncio
+async def test_stop_running_job_requests_cancel(tmp_path):
+    jobs = _job_registry(tmp_path)
+    job = jobs.enqueue(kind="ocr", label="book.pdf", payload={}, session_key=SESSION, units_total=40)
+    # Claimed, so this really is the running path: the row used to reach the
+    # tray as "running" whether or not anything had claimed it.
+    jobs.claim(job.id, pid=4242)
+
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(
+        action="stop", id=job.id)
+
+    assert "asked to cancel" in out
+    assert "page boundary" in out
+    assert jobs.get(job.id).status == "cancelled"
+    # Unlike a sub-agent or workflow run, nothing in durin/jobs ever publishes
+    # a follow-up message -- the stop message must not claim one is coming.
+    assert "follow-up" not in out
+
+
+@pytest.mark.asyncio
+async def test_stop_queued_job_cancels_it_outright(tmp_path):
+    """A job waiting for the OCR slot is the most cancellable state there is:
+    nothing has claimed it, and `claim` only ever moves a row out of "queued",
+    so the cancel is final with no page boundary to wait for. Naming it
+    "queued" in the tray must not make it look uncancellable."""
+    jobs = _job_registry(tmp_path)
+    job = jobs.enqueue(kind="ocr", label="book.pdf", payload={}, session_key=SESSION, units_total=40)
+
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(
+        action="stop", id=job.id)
+
+    assert jobs.get(job.id).status == "cancelled"
+    assert "nothing to cancel" not in out
+    assert "page boundary" not in out
+
+
+@pytest.mark.asyncio
+async def test_stop_finished_job_is_noop(tmp_path):
+    jobs = _job_registry(tmp_path)
+    job = jobs.enqueue(kind="ocr", label="book.pdf", payload={}, session_key=SESSION, units_total=1)
+    jobs.claim(job.id, pid=4242)
+    jobs.finish(job.id, pid=4242)
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(
+        action="stop", id=job.id)
+    assert "already" in out
+    assert jobs.get(job.id).status == "done"  # unchanged, not force-cancelled
 
 
 @pytest.mark.asyncio
@@ -223,3 +382,273 @@ async def test_stop_live_owner_run_still_cancels(tmp_path):
         # No engine consumes this flag in the test — drop it so the global
         # cancellation registry stays empty for later tests.
         cancellation.clear("alive789")
+
+
+@pytest.mark.asyncio
+async def test_create_wires_a_real_jobs_registry(tmp_path, monkeypatch):
+    """TasksTool.create(ctx) is the path the real agent loop uses to build
+    every tool — proves the wiring the loop actually exercises, not just that
+    __init__ accepts a jobs= argument when a test passes one explicitly."""
+    from types import SimpleNamespace
+
+    from durin.config.paths import jobs_db_path
+    from durin.jobs.registry import JobRegistry
+
+    monkeypatch.setenv("DURIN_HOME", str(tmp_path))
+    JobRegistry(jobs_db_path()).enqueue(
+        kind="ocr", label="book.pdf", payload={}, session_key=SESSION, units_total=5,
+    )
+
+    tool = TasksTool.create(SimpleNamespace(workspace=str(tmp_path)))
+    tool.set_context(RequestContext(channel="websocket", chat_id="chatA", session_key=SESSION))
+    out = await tool.execute(action="list")
+    assert "book.pdf" in out
+
+
+class _CountingPopen:
+    """Stands in for the ``subprocess`` module inside ``durin.jobs.spawn`` so a
+    test can assert how many workers were actually launched (see the sibling
+    convention in test_ingestion_ocr.py)."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def Popen(self, *args, **kwargs):
+        self.calls += 1
+        return None
+
+
+def _failed_job(jobs, *, units_done=0, error="page 3: engine exploded"):
+    job = jobs.enqueue(
+        kind="ocr", label="book.pdf", payload={"path": "/tmp/book.pdf"},
+        session_key=SESSION, units_total=40,
+    )
+    jobs.claim(job.id, pid=4242)
+    for unit in range(1, units_done + 1):
+        jobs.record_unit(job.id, unit, f"page {unit}")
+    jobs.finish(job.id, pid=4242, error=error)
+    return job
+
+
+@pytest.mark.asyncio
+async def test_retry_of_a_failed_job_requeues_it_and_launches_a_worker(
+    tmp_path, monkeypatch
+):
+    """The whole recovery in one gesture: the row goes back to queued with its
+    finished pages kept, exactly one worker process is launched for it, and
+    the response promises "queued" (the cap may refuse the claim) rather than
+    "running", naming the progress that survives. The start promise is hedged
+    with the periodic sweep, so it stays true even if this launch dies."""
+    launcher = _CountingPopen()
+    monkeypatch.setattr("durin.jobs.spawn.subprocess", launcher)
+    jobs = _job_registry(tmp_path)
+    job = _failed_job(jobs, units_done=3)
+
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(
+        action="retry", id=job.id)
+
+    assert jobs.get(job.id).status == "queued"
+    assert launcher.calls == 1
+    assert "requeued" in out
+    assert "3/40" in out
+    assert "running" not in out.lower()
+    # The launch Popen can fail (swallowed by respawn's contract), so the
+    # start promise must carry the sweep backstop instead of "immediately"
+    # alone.
+    assert "sweep" in out
+    # Same contract as stop's wording: nothing pushes a completion message.
+    assert "action=status" in out
+
+
+@pytest.mark.asyncio
+async def test_retry_refuses_a_running_job_without_spawning(tmp_path, monkeypatch):
+    launcher = _CountingPopen()
+    monkeypatch.setattr("durin.jobs.spawn.subprocess", launcher)
+    jobs = _job_registry(tmp_path)
+    job = jobs.enqueue(kind="ocr", label="book.pdf", payload={}, session_key=SESSION, units_total=40)
+    jobs.claim(job.id, pid=4242)
+
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(
+        action="retry", id=job.id)
+
+    assert "is running" in out
+    assert "only a failed or cancelled job can be retried" in out
+    assert jobs.get(job.id).status == "running"
+    assert launcher.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_retry_refuses_a_queued_job(tmp_path, monkeypatch):
+    launcher = _CountingPopen()
+    monkeypatch.setattr("durin.jobs.spawn.subprocess", launcher)
+    jobs = _job_registry(tmp_path)
+    job = jobs.enqueue(kind="ocr", label="book.pdf", payload={}, session_key=SESSION, units_total=40)
+
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(
+        action="retry", id=job.id)
+
+    assert "is queued" in out
+    assert jobs.get(job.id).status == "queued"
+    assert launcher.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_retry_of_a_done_job_points_at_the_finished_transcription(
+    tmp_path, monkeypatch
+):
+    """A done job has nothing left to run: its transcription is on disk and
+    indexed, and a re-ingest of the same document short-circuits on that
+    sidecar and returns it — it does NOT spawn a fresh job. The refusal must
+    promise exactly that outcome and nothing more."""
+    launcher = _CountingPopen()
+    monkeypatch.setattr("durin.jobs.spawn.subprocess", launcher)
+    jobs = _job_registry(tmp_path)
+    job = jobs.enqueue(kind="ocr", label="book.pdf", payload={}, session_key=SESSION, units_total=1)
+    jobs.claim(job.id, pid=4242)
+    jobs.finish(job.id, pid=4242)
+
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(
+        action="retry", id=job.id)
+
+    assert "is done" in out
+    assert "already in the Library" in out
+    assert "ingesting the document again returns it" in out
+    # A re-ingest of a finished document is a no-op return — the refusal must
+    # not claim it spawns anything.
+    assert "fresh job" not in out
+    assert jobs.get(job.id).status == "done"
+    assert launcher.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_retry_refuses_a_subagent_and_a_workflow(tmp_path):
+    mgr = _FakeManager([_SAStatus("sa01", "research", "error")], running=[])
+    _write_manifest(tmp_path, "qa", "wf01abcd", status="aborted")
+
+    tool = _tool(tmp_path, mgr)
+    for task_id, kind in (("sa01", "subagent"), ("wf01abcd", "workflow")):
+        out = await tool.execute(action="retry", id=task_id)
+        assert "retry only applies to background jobs" in out
+        assert kind in out
+
+
+@pytest.mark.asyncio
+async def test_retry_of_an_unknown_id_is_the_ordinary_unknown_id_error(tmp_path):
+    """A pruned terminal row is exactly an id the registry no longer has — the
+    resolver's existing miss path must answer for it, no dedicated branch."""
+    jobs = _job_registry(tmp_path)
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(
+        action="retry", id="pruned0000")
+    assert "unknown task id" in out
+
+
+@pytest.mark.asyncio
+async def test_retry_that_loses_the_requeue_race_reports_the_fresh_status_and_never_spawns(
+    tmp_path, monkeypatch
+):
+    """Between the tool's read (row: failed) and its requeue, another actor can
+    move the row — here a competing retry lands first. The guarded UPDATE then
+    writes nothing, and the tool must answer with the row's fresh status
+    instead of respawning a worker for a requeue that never happened."""
+    launcher = _CountingPopen()
+    monkeypatch.setattr("durin.jobs.spawn.subprocess", launcher)
+    jobs = _job_registry(tmp_path)
+    job = _failed_job(jobs)
+
+    real_requeue = jobs.requeue
+
+    def _racing_requeue(job_id):
+        real_requeue(job_id)  # the competing retry lands first
+        return real_requeue(job_id)  # this call's own write finds nothing to do
+
+    monkeypatch.setattr(jobs, "requeue", _racing_requeue)
+
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(
+        action="retry", id=job.id)
+
+    assert "is queued" in out
+    assert launcher.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_retry_requires_an_id(tmp_path):
+    out = await _tool(tmp_path, _FakeManager([], running=[])).execute(action="retry")
+    assert "'id' is required" in out
+
+
+@pytest.mark.asyncio
+async def test_description_action_enum_and_unknown_action_all_name_retry(tmp_path):
+    tool = _tool(tmp_path, _FakeManager([], running=[]))
+    assert "retry" in tool.description
+    assert "retry" in tool.parameters["properties"]["action"]["enum"]
+    assert "retry" in tool.parameters["properties"]["action"]["description"]
+    out = await tool.execute(action="frobnicate")
+    assert "retry" in out
+
+
+@pytest.mark.asyncio
+async def test_failed_job_status_names_the_recovery_and_keeps_the_stored_error_verbatim(
+    tmp_path
+):
+    """The render layer is where recovery advice belongs: only the model reads
+    it. The stored error is shown verbatim to humans in the webui tray, so
+    "action=retry" must appear next to the error line, never inside it."""
+    jobs = _job_registry(tmp_path)
+    job = _failed_job(jobs, error="page 7: OSError: no space left on device")
+
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(
+        action="status", id=job.id)
+
+    assert "action=retry" in out
+    assert "re-ingest" in out
+    # Outcome phrasing only: what a re-ingest does internally depends on what
+    # the failed attempt left on disk (it is a fresh job only when no sidecar
+    # exists), so the advice must not claim a mechanism.
+    assert "fresh job" not in out
+    assert "page 7: OSError: no space left on device" in out
+    assert jobs.get(job.id).error == "page 7: OSError: no space left on device"
+
+
+@pytest.mark.asyncio
+async def test_cancelled_job_status_names_the_recovery_too(tmp_path):
+    jobs = _job_registry(tmp_path)
+    job = jobs.enqueue(kind="ocr", label="book.pdf", payload={}, session_key=SESSION, units_total=40)
+    jobs.claim(job.id, pid=4242)
+    jobs.cancel(job.id)
+
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(
+        action="status", id=job.id)
+
+    assert "action=retry" in out
+
+
+@pytest.mark.asyncio
+async def test_a_running_job_status_offers_no_retry(tmp_path):
+    jobs = _job_registry(tmp_path)
+    job = jobs.enqueue(kind="ocr", label="book.pdf", payload={}, session_key=SESSION, units_total=40)
+    jobs.claim(job.id, pid=4242)
+
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(
+        action="status", id=job.id)
+
+    assert "action=retry" not in out
+
+
+def test_description_does_not_promise_a_notification_for_a_finished_job(tmp_path):
+    """Sub-agents and workflow runs genuinely publish a follow-up message on
+    completion (durin/agent/subagent.py, durin/agent/tools/run_workflow.py);
+    nothing in durin/jobs publishes anything at all. Extending the same
+    "arrives on its own, do not loop waiting" promise to jobs would tell the
+    model to end its turn and wait for a message that never comes."""
+    tool = _tool(tmp_path, _FakeManager([], running=[]))
+    desc = tool.description
+    assert "job" in desc.lower()
+    assert "a job pushes nothing" in desc.lower()
+
+
+def test_id_parameter_description_names_all_three_kinds(tmp_path):
+    tool = _tool(tmp_path, _FakeManager([], running=[]))
+    id_desc = tool.parameters["properties"]["id"]["description"].lower()
+    assert "sub-agent id" in id_desc
+    assert "workflow run id" in id_desc
+    assert "job id" in id_desc

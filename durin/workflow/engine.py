@@ -31,6 +31,7 @@ from loguru import logger
 from durin.workflow import run_log, workspace_fork
 from durin.workflow.artifacts import artifact_dir, prune_runs
 from durin.workflow.result import NodeRun, WorkflowResult
+from durin.workflow.session_keys import node_session_key
 from durin.workflow.spec import (
     NEEDS_INPUT_TARGET,
     ParallelNode,
@@ -102,6 +103,11 @@ class NodeRunResponse:
     # The subprocess exit code for a script node (None for agent nodes, which
     # have no exit code). Recorded in the NodeRun trace and the run manifest.
     exit_code: int | None = None
+    # A script node's captured command and streams (None for agent nodes). The
+    # engine copies these into the NodeRun so the manifest records what ran.
+    command: str | None = None
+    stdout: str | None = None
+    stderr: str | None = None
 
 
 NodeRunner = Callable[[NodeRunRequest], NodeRunResponse]
@@ -241,7 +247,8 @@ class NodeExecutionError(RuntimeError):
 
     def __init__(
         self, node_id: str, iteration: int, session_key: str | None, cause: BaseException,
-        *, exit_code: int | None = None,
+        *, exit_code: int | None = None, command: str | None = None,
+        stdout: str | None = None, stderr: str | None = None,
     ) -> None:
         super().__init__(f"node {node_id!r} (iteration {iteration}) failed: {cause}")
         self.node_id = node_id
@@ -249,6 +256,12 @@ class NodeExecutionError(RuntimeError):
         self.session_key = session_key
         self.cause = cause
         self.exit_code = exit_code
+        # What the script ran and printed before it died. The failing script is
+        # the one a reader most wants to see, so this path captures the same
+        # evidence the success path does rather than only a stderr tail.
+        self.command = command
+        self.stdout = stdout
+        self.stderr = stderr
 
 
 class WorkflowEngine:
@@ -635,6 +648,12 @@ class WorkflowEngine:
                     run_log.mark_node_started(
                         self._workspace, workflow.name, run_id,
                         node_id=node.id, label=node_label(node), started_at=node_started_at,
+                        iteration=iteration,
+                        # Only a work node persists a conversation. A script has no
+                        # session at all, and a sub-workflow's and a parallel's work
+                        # lives in their children's own rows.
+                        session_key=(node_session_key(run_id, node, iteration)
+                                     if isinstance(node, WorkNode) else None),
                     )
                 except Exception:  # noqa: BLE001 - observability write; never break the run
                     logger.exception("workflow node start marker failed for {}", workflow.name)
@@ -790,6 +809,9 @@ class WorkflowEngine:
                                         budget=budget,
                                         status="node_failed", error=str(exc.cause),
                                         exit_code=getattr(exc, "exit_code", None),
+                                        command=getattr(exc, "command", None),
+                                        stdout=getattr(exc, "stdout", None),
+                                        stderr=getattr(exc, "stderr", None),
                                         duration_s=round(time.monotonic() - node_t0, 3)))
                     runs[-1].artifacts = sorted(_work_snapshot() - before_files)[:20]
                     if update_manifest is not None:
@@ -809,6 +831,9 @@ class WorkflowEngine:
                                     passed=passed, budget=budget,
                                     status="persist_failed" if resp.persist_failed else "ok",
                                     exit_code=getattr(resp, "exit_code", None),
+                                    command=getattr(resp, "command", None),
+                                    stdout=getattr(resp, "stdout", None),
+                                    stderr=getattr(resp, "stderr", None),
                                     duration_s=round(time.monotonic() - node_t0, 3)))
                 if isinstance(node, WorkNode) and node.output_file and work_dir is not None:
                     # The ENGINE writes the schema-validated payload: the file cannot be

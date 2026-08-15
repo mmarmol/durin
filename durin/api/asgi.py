@@ -531,6 +531,9 @@ def build_gateway_http_app(
     static_token: str = "",
     static_dist_path: Path | None = None,
     hook_dispatcher: Any = None,
+    agent_loop: Any = None,
+    model_name: str = "durin",
+    api_request_timeout: float = 120.0,
 ) -> Starlette:
     """Build a Starlette ASGI app serving the full gateway HTTP surface.
 
@@ -545,6 +548,8 @@ def build_gateway_http_app(
     - ``GET /webui/bootstrap``         — token mint + session metadata.
     - ``GET /api/media/{sig}/{payload}`` — signed media fetch.
     - ``POST /api/v1/hooks/{hook}``    — webhook trigger ingress, secret-header gated.
+    - ``POST /v1/chat/completions`` + ``GET /v1/models`` — OpenAI-compatible chat
+      surface, ``chat:write``-gated; mounted only when ``agent_loop`` is given.
     - Static SPA files at ``/``        — served from ``static_dist_path`` if provided,
                                          with SPA history-mode fallback to index.html.
 
@@ -563,6 +568,11 @@ def build_gateway_http_app(
                           ingress route. ``None`` on surfaces without one (the
                           route then reports 503 for any hook, same shape as
                           the loops runtime's "not available" routes).
+        agent_loop:       The live ``AgentLoop`` backing ``/v1/chat/completions``.
+                          ``None`` leaves the whole ``/v1`` surface unmounted.
+        model_name:       Model id reported by ``/v1/models`` and echoed in
+                          chat responses.
+        api_request_timeout: Per-request timeout (seconds) for ``/v1`` chat turns.
     """
     resolved_static = static_dist_path or channel._static_dist_path
 
@@ -876,6 +886,22 @@ def build_gateway_http_app(
         # /api/v1/hooks/{hook} — webhook trigger ingress, secret-header gated.
         Route("/api/v1/hooks/{hook}", hooks_handler, methods=["POST"]),
     ]
+
+    # OpenAI-compatible /v1 surface — mounted only when the caller wires the
+    # live agent in (the gateway does; bare test apps may not).
+    if agent_loop is not None:
+        from durin.api.openai_routes import build_openai_routes
+
+        routes.extend(
+            build_openai_routes(
+                agent_loop,
+                model_name=model_name,
+                request_timeout=api_request_timeout,
+                resolve_principal=lambda headers: resolve_principal_from_headers(
+                    headers, auth=auth, static_token=static_token
+                ),
+            )
+        )
 
     # SPA static files (optional).
     if resolved_static is not None and resolved_static.is_dir():

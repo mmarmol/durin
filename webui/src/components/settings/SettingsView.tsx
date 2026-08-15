@@ -12,6 +12,7 @@ import {
   Drama,
   Eye,
   EyeOff,
+  FileText,
   Pencil,
   Gem,
   Globe,
@@ -71,6 +72,7 @@ import { ChannelsSettings } from "@/components/settings/ChannelsSettings";
 import { ConcurrencySettings } from "@/components/settings/ConcurrencySettings";
 import { ConfigSettings } from "@/components/settings/ConfigSettings";
 import { CronSettings } from "@/components/settings/CronSettings";
+import { DocumentsSettings } from "@/components/settings/DocumentsSettings";
 import { LogsSettings } from "@/components/settings/LogsSettings";
 import { MemorySettings } from "@/components/settings/MemorySettings";
 import { SkillsSecuritySettings } from "@/components/settings/SkillsSecuritySettings";
@@ -98,6 +100,7 @@ type SettingsSectionKey =
   | "web-search"
   | "channels"
   | "memory"
+  | "documents"
   | "transcription"
   | "skills-security"
   | "personas"
@@ -416,6 +419,8 @@ export function SettingsView({
                 <ChannelsSettings token={token} />
               ) : activeSection === "memory" ? (
                 <MemorySettings token={token} />
+              ) : activeSection === "documents" ? (
+                <DocumentsSettings token={token} />
               ) : activeSection === "transcription" ? (
                 <TranscriptionSettings token={token} />
               ) : activeSection === "skills-security" ? (
@@ -501,6 +506,7 @@ const SETTINGS_NAV_ITEMS = [
   { key: "web-search", icon: Globe },
   { key: "channels", icon: MessagesSquare },
   { key: "memory", icon: Brain },
+  { key: "documents", icon: FileText },
   { key: "transcription", icon: Waves },
   { key: "skills-security", icon: ShieldCheck },
   { key: "personas", icon: Drama },

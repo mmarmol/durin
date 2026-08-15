@@ -83,12 +83,22 @@ def _resolve_secret_map(values: dict[str, str] | None) -> dict[str, str] | None:
     MCP ``env`` / ``headers`` may hold secret-store references written by the
     discovery install flow; the plaintext is materialised only here, right before
     the transport spawns, and never persists in config or logs.
+
+    A mistyped reference raises rather than spawning the server with the
+    placeholder as its credential; the key is named because the resulting auth
+    failure would otherwise surface inside the server, far from the config.
     """
     if not values:
         return values
-    from durin.security.secrets import resolve_secret
+    from durin.security.secrets import MalformedSecretRefError, resolve_secret
 
-    return {k: resolve_secret(v) for k, v in values.items()}
+    resolved = {}
+    for k, v in values.items():
+        try:
+            resolved[k] = resolve_secret(v)
+        except MalformedSecretRefError as exc:
+            raise MalformedSecretRefError(f"{k}: {exc}") from exc
+    return resolved
 
 
 # Env var names a GitHub MCP server reads its token from. We only ever fill one the

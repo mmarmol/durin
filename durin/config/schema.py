@@ -1005,14 +1005,6 @@ class ProvidersConfig(Base):
     nvidia: ProviderConfig = Field(default_factory=ProviderConfig, description="NVIDIA NIM (nvapi- keys)")
 
 
-class ApiConfig(Base):
-    """OpenAI-compatible API server configuration."""
-
-    host: str = Field(default="127.0.0.1", description="Bind address; local-only by default")
-    port: int = Field(default=8900, description="API server listen port")
-    timeout: float = Field(default=120.0, description="Per-request timeout in seconds")
-
-
 class CronConfig(Base):
     """Cron scheduler configuration."""
 
@@ -1029,6 +1021,7 @@ class WorkflowConfig(Base):
     keep_runs: int = Field(default=20, ge=1, description="How many recent runs' working folders (.workflow/<run_id>/) to keep on disk")
     script_timeout: int = Field(default=300, ge=1, description="Default per-node timeout (seconds) for script nodes; a node's own 'timeout' overrides it")
     script_output_max_chars: int = Field(default=16000, ge=1000, description="Cap on a script node's captured stdout (the edge text); excess is truncated with a notice")
+    script_log_max_chars: int = Field(default=4000, ge=200, description="Cap on the stdout/stderr a script node records in the run manifest (per stream, per pass); separate from script_output_max_chars, which caps the edge text, because the manifest is rewritten in full after every node")
 
 
 class LoopsConfig(Base):
@@ -1065,6 +1058,12 @@ class GatewayConfig(Base):
             "redirect and the dashboard URL shown by status; unset means "
             "browser-origin/loopback behavior."
         ),
+    )
+    api_request_timeout: float = Field(
+        default=120.0,
+        validation_alias=AliasChoices("apiRequestTimeout", "api_request_timeout"),
+        serialization_alias="apiRequestTimeout",
+        description="Per-request timeout in seconds for the OpenAI-compatible /v1 chat endpoint",
     )
 
 
@@ -1154,6 +1153,51 @@ def _lazy_default(module_path: str, class_name: str) -> Any:
     return getattr(module, class_name)()
 
 
+class DocumentsOcrConfig(Base):
+    """Local OCR for PDF pages with no text layer.
+
+    Off by default: the engine is an optional extra. The Settings pane's
+    toggle installs it when turning this on; setting `enabled` any other
+    way (e.g. `durin config set`) does not.
+    """
+
+    enabled: bool = Field(default=False, description="Transcribe PDF pages that have no text layer using the local OCR engine; the Settings > Documents toggle installs the [ocr] extra when turning this on, but `durin config set` does not")
+    language: Literal[
+        "arabic", "cyrillic", "devanagari", "el", "eslav", "korean", "ta", "te", "th",
+    ] | None = Field(
+        default=None,
+        description="Recognition language for scripts the built-in models cannot read (they cover Chinese, Japanese, English and Latin-script languages). Selecting one downloads its recognition model (~8 MB, plus ~11 MB of shared detection models the first time any language is added) once from modelscope.cn into <durin home>/models/ocr on first use; document content never leaves the machine. null = the built-in pack",
+    )
+    inline_max_pages: int = Field(
+        default=5,
+        ge=0,
+        validation_alias=AliasChoices("inlineMaxPages", "inline_max_pages"),
+        description="Pages needing OCR that may be transcribed inside a conversion call; a document needing more becomes a background job. 0 sends every scanned document to a job",
+    )
+
+
+class DocumentsConfig(Base):
+    """How durin reads the documents it is given.
+
+    Shared by the three surfaces that convert a document: chat attachments,
+    the convert_to_markdown tool, and memory_ingest.
+    """
+
+    ocr: DocumentsOcrConfig = Field(default_factory=DocumentsOcrConfig, description="Local OCR for scanned PDF pages")
+    max_file_size_mb: int = Field(
+        default=50,
+        ge=1,
+        validation_alias=AliasChoices("maxFileSizeMb", "max_file_size_mb"),
+        description="Largest attachment durin will extract text from; larger files are reported as skipped rather than read",
+    )
+    max_text_chars: int = Field(
+        default=200_000,
+        ge=1000,
+        validation_alias=AliasChoices("maxTextChars", "max_text_chars"),
+        description="Longest extraction inlined into a turn before truncation",
+    )
+
+
 class ToolsConfig(Base):
     """Tools configuration.
 
@@ -1190,7 +1234,8 @@ class InstallConfig(Base):
         default=True,
         description=(
             "Auto-install a feature's pip extra when it's activated (frictionless). "
-            "Off falls back to a 'pip install durin-agent[X]' message."
+            "Off falls back to a manual install message "
+            "(pipx inject / uv tool install)."
         ),
     )
 
@@ -1320,6 +1365,7 @@ class Config(BaseSettings):
     tts: TtsConfig = Field(default_factory=TtsConfig, description="Text-to-speech for spoken replies in conversational voice mode")
     voice: VoiceConfig = Field(default_factory=VoiceConfig, description="Hands-free conversational voice mode (the gateway loop)")
     memory: MemoryConfig = Field(default_factory=MemoryConfig, description="Memory subsystem: vector retrieval, dream passes, file watcher, health checks")
+    documents: DocumentsConfig = Field(default_factory=DocumentsConfig, description="Document reading: extraction limits and local OCR for scanned PDFs")
     cron: CronConfig = Field(default_factory=CronConfig, description="Cron scheduler: run history and per-run session retention")
     workflow: WorkflowConfig = Field(default_factory=WorkflowConfig, description="Workflow engine: node-visit caps and run-folder retention")
     loops: LoopsConfig = Field(default_factory=LoopsConfig, description="Loops subsystem settings.")
@@ -1339,7 +1385,6 @@ class Config(BaseSettings):
     )
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig, description="Telemetry: local JSONL always on, optional HTTPS push fan-out")
     logging: LoggingConfig = Field(default_factory=LoggingConfig, description="Gateway daemon log lifecycle: rotation size and retention age for gateway.log")
-    api: ApiConfig = Field(default_factory=ApiConfig, description="OpenAI-compatible API server: bind address, port, timeout")
     gateway: GatewayConfig = Field(default_factory=GatewayConfig, description="Gateway/server: bind address, port, daemon mode, embedded web dashboard")
     tools: ToolsConfig = Field(default_factory=ToolsConfig, description="Built-in agent tools and MCP server connections")
     install: InstallConfig = Field(default_factory=InstallConfig, description="Persistent install-level state (managed by durin; rarely edited by hand)")

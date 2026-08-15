@@ -72,6 +72,7 @@
       "web-search": "Tìm kiếm web",
       "channels": "Kênh",
       "memory": "Trí nhớ",
+      "documents": "Tài liệu",
       "transcription": "Giọng nói",
       "skills-security": "Bảo mật skill",
       "personas": "Personas",
@@ -574,6 +575,42 @@
       "crossEncoderModelPlaceholder": "id mô hình (vd. BAAI/bge-reranker-base)",
       "crossEncoderTest": "Kiểm tra",
       "dreamDescription": "Dream hợp nhất các phiên thành trang thực thể + skill và loại bỏ thực thể trùng lặp. Nó chạy theo cron hằng ngày cộng thêm các trigger phản ứng tùy chọn."
+    },
+    "documents": {
+      "description": "Cách durin đọc các tài liệu bạn đính kèm hoặc yêu cầu mở — giới hạn trích xuất và OCR cục bộ cho PDF dạng quét.",
+      "loadError": "Không thể tải cài đặt tài liệu.",
+      "saveError": "Không thể lưu {{path}}.",
+      "saveRowLabel": "Lưu {{row}}",
+      "sections": {
+        "ocr": "OCR cục bộ",
+        "limits": "Giới hạn đọc"
+      },
+      "rows": {
+        "ocrEnabled": "OCR cục bộ",
+        "ocrLanguage": "Ngôn ngữ nhận dạng",
+        "ocrInlineMaxPages": "Giới hạn số trang xử lý ngay",
+        "maxTextChars": "Trích xuất dài nhất",
+        "maxFileSizeMb": "Tệp lớn nhất có thể đọc"
+      },
+      "help": {
+        "ocrEnabled": "Chuyển văn bản các trang PDF dạng quét không có lớp văn bản bằng một công cụ OCR cục bộ chạy trên CPU. Tắt theo mặc định — bật lên sẽ cài đặt khoảng 200 MB, dùng khoảng 2 GB RAM trong khi chuyển văn bản, và mất khoảng 1-2 giây mỗi trang với bản quét rõ nét.",
+        "ocrLanguage": "Dành cho các hệ chữ mà mô hình tích hợp không đọc được. Khi chọn một ngôn ngữ, mô hình nhận dạng của nó (khoảng 8 MB, cộng thêm khoảng 11 MB mô hình phát hiện dùng chung ở lần đầu tiên thêm bất kỳ ngôn ngữ nào) được tải xuống từ modelscope.cn một lần duy nhất, ở lần dùng đầu tiên — tài liệu của bạn không bao giờ rời khỏi máy này.",
+        "ocrInlineMaxPages": "Số trang cần OCR có thể được chuyển văn bản ngay trong khi bạn chờ. Tài liệu cần nhiều hơn sẽ trở thành một tác vụ nền mà bạn có thể theo dõi từ bảng công việc.",
+        "maxTextChars": "Kết quả trích xuất dài nhất được chèn vào một lượt trước khi bị cắt bớt.",
+        "maxFileSizeMb": "Tệp đính kèm lớn nhất mà durin sẽ trích xuất văn bản. Các tệp lớn hơn sẽ được báo là bị bỏ qua thay vì được đọc."
+      },
+      "language": {
+        "builtin": "Tích hợp — tiếng Trung, tiếng Nhật, tiếng Anh & chữ Latinh",
+        "arabic": "Chữ Ả Rập",
+        "cyrillic": "Chữ Kirin",
+        "devanagari": "Chữ Devanagari",
+        "el": "Chữ Hy Lạp",
+        "eslav": "Đông Slav (Nga, Ukraina, Belarus)",
+        "korean": "Tiếng Hàn",
+        "ta": "Chữ Tamil",
+        "te": "Chữ Telugu",
+        "th": "Chữ Thái"
+      }
     },
     "extras": {
       "willInstall": "Thao tác này sẽ cài {{extra}} (tải khoảng {{size}}).",
@@ -2249,14 +2286,17 @@
   },
   "tasks": {
     "status": {
-      "needs_input": "Cần nhập"
+      "needs_input": "Cần nhập",
+      "queued": "Đang chờ"
     },
     "needsInputHint": "Đã chuyển cho tác tử gọi nó — tác tử có thể tự trả lời từ ngữ cảnh của mình hoặc hỏi bạn, rồi tiếp tục lượt chạy này.",
+    "queuedHint": "Đang chờ để bắt đầu — mỗi lần chỉ một tài liệu được chép lại.",
     "questions": "Câu hỏi"
   },
   "work": {
     "steps": "{{count}} bước",
     "steps_one": "1 bước",
+    "pages": "{{done}}/{{total}} trang",
     "panelTitle": "Công việc",
     "inProgress": "Đang thực hiện",
     "finished": "Đã xong ({{count}})",
@@ -2264,9 +2304,12 @@
     "close": "Đóng bảng công việc",
     "strip": {
       "statusRunning": "đang chạy",
+      "statusQueued": "đang chờ",
       "statusDone": "hoàn tất",
       "statusFailed": "thất bại",
+      "statusCancelled": "đã hủy",
       "runningMany": "{{count}} tác vụ đang chạy",
+      "queuedMany": "{{count}} tác vụ đang chờ",
       "needsInput": "{{label}} cần bạn trả lời",
       "needsInputMany": "{{count}} tác vụ cần bạn trả lời",
       "view": "Xem",

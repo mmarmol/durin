@@ -489,8 +489,11 @@ class WebSearchTool(Tool):
         try:
             raw = await _run()
         except ImportError:
-            # `web` extra missing — auto-install then retry once.
-            res = ensure_extra("web_search", config=self._app_config)
+            # `web` extra missing — auto-install then retry once. Load the
+            # config when the tool has none, so the gate sees the opt-out.
+            from durin.config.loader import load_config
+
+            res = ensure_extra("web_search", config=self._app_config or load_config())
             if res.status not in ("present", "installed"):
                 return f"Error: web search unavailable — {res.message}"
             try:

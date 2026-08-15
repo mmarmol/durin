@@ -1,6 +1,6 @@
 [project]
 name = "durin-agent"
-version = "0.5.1"
+version = "0.6.0"
 description = "Personal AI agent with daily-driver CLI, modal TUI, and graph-based memory"
 readme = "README.md"
 # Upper bound = highest Python line durin is tested/known-good on, keeping the
@@ -74,6 +74,16 @@ dependencies = [
     # The docx/pptx/xlsx/xls/pdf extras pull the per-format converters;
     # html/csv/json/xml/epub/ipynb/zip work with the base install.
     "markitdown[docx,pptx,xlsx,xls,pdf]>=0.1.6,<0.2.0",
+    # Per-page PDF text, used to measure how much of a document has a text
+    # layer before deciding whether it needs OCR. Also arrives transitively
+    # via markitdown[pdf]; declared here because we import it directly.
+    "pdfplumber>=0.11.9,<1.0.0",
+    # Per-page character counts (to decide whether a page has a text layer at
+    # all) and page rasterisation for OCR. Two orders of magnitude cheaper than
+    # pdfplumber for the counting, so every PDF conversion runs it. Also
+    # arrives transitively via pdfplumber; declared here because we import it
+    # directly.
+    "pypdfium2>=5.9.0,<6",
     # Markdown → HTML for outbound email bodies (multipart/alternative).
     # Pure Python, CommonMark-compliant.
     "markdown-it-py>=3.0,<5.0",
@@ -156,12 +166,29 @@ cross-encoder = [
     # gated behind the extra rather than in `memory`.
     "sentence-transformers>=3.0,<6.0",
 ]
+ocr = [
+    # Local on-CPU OCR for PDF pages with no text layer. The built-in ONNX
+    # models ship in the wheel (Chinese, Japanese, Latin-script languages)
+    # and work fully offline. Selecting another recognition language
+    # (documents.ocr.language) downloads that model once, at first use, from
+    # modelscope.cn into <durin home>/models/ocr. Document content never
+    # leaves the box either way.
+    #
+    # Pinned to the maintained 3.x line. The legacy rapidocr-onnxruntime
+    # package caps at requires_python <3.13 and would silently drop durin's
+    # 3.13 support, so it must not be substituted here.
+    "rapidocr>=3.9,<4.0",
+]
 api = [
     # Starlette ASGI framework + uvicorn server for the new HTTP front door (SP4).
     # Both are transitively installed via mcp, but declared here so any install
     # path without [mcp] still gets them.
     "starlette>=1.3,<2",
     "uvicorn>=0.49,<1",
+    # Starlette's request.form() parser, used by the /v1 chat endpoint's
+    # multipart file uploads. Same rationale as above: transitively present
+    # via mcp, declared here so an install without [mcp] still has it.
+    "python-multipart>=0.0.9,<0.1",
 ]
 dev = [
     "pytest>=9.0.0,<10.0.0",

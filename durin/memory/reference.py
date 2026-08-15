@@ -15,10 +15,12 @@ The whole doc is the FTS unit; the chunks are the vector unit.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -33,8 +35,11 @@ __all__ = [
     "load_reference",
     "reference_chunks",
     "reference_marker",
+    "store_and_index_reference",
     "strip_scraped_boilerplate",
 ]
+
+logger = logging.getLogger(__name__)
 
 _MAX_CHUNK_TOKENS = 512
 # Structural chunks leave headroom under the 512 max_seq for the prepended
@@ -212,6 +217,64 @@ def ingest_reference(workspace: Path, title: str, content: str,
         "\n".join(json.dumps(r) for r in chunk_recs))
     return ReferenceResult(ref=ref, path=str(root / f"{slug}.md"),
                            chunk_count=len(chunks))
+
+
+def store_and_index_reference(
+    workspace: Path,
+    title: str,
+    content: str,
+    *,
+    source: str | None = None,
+    vector_index: Any | None = None,
+) -> str:
+    """Store a document as a reference AND make it searchable.
+
+    The single place that turns a document into a Library entry someone can
+    find: the whole doc is the FTS unit, and each token-aware chunk is the
+    vector unit, keyed ``<ref>#<idx>`` so a fragment hit resolves back to its
+    parent. Every caller that ingests a document goes through here, whether
+    its text was available at ingest time or arrived later from a background
+    transcription job. Returns the ref (``reference:<slug>``).
+
+    ``vector_index`` is a caller-owned :class:`~durin.memory.vector_index.VectorIndex`;
+    without one only the lexical half runs (which is all an install without
+    the embedding extras can do anyway).
+
+    Storing the document raises on failure — nothing is searchable if that
+    step did not happen. An index failure is logged and swallowed instead:
+    the document is on disk, where the search stack's grep fallback still
+    reaches it, so degrading beats failing the whole write.
+    """
+    res = ingest_reference(workspace, title, content, source=source)
+    ref = res.ref
+    slug = ref.split(":", 1)[1]
+    ref_md = Path(workspace) / "memory" / "references" / f"{slug}.md"
+
+    try:
+        from durin.memory.indexer import reindex_one_file
+
+        reindex_one_file(workspace, ref_md)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("reference FTS reindex failed for %s: %s", ref, exc)
+
+    if vector_index is not None:
+        from durin.memory.vector_index import VectorIndexDimensionMismatchError
+
+        for rec in reference_chunks(workspace, ref):
+            try:
+                vector_index.upsert_reference_chunk(
+                    ref=ref, idx=rec["idx"], text=rec["text"], path=ref_md,
+                    breadcrumb=rec.get("breadcrumb", ""),
+                )
+            except VectorIndexDimensionMismatchError as exc:
+                logger.warning("reference vector upsert: %s", exc)
+                break
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "reference vector upsert failed for %s#%s: %s",
+                    ref, rec.get("idx"), exc,
+                )
+    return ref
 
 
 def load_reference(workspace: Path, ref: str) -> str | None:

@@ -1,4 +1,4 @@
-import { Check, GitBranch, HelpCircle, Loader2, X } from "lucide-react";
+import { Ban, Check, Clock, GitBranch, HelpCircle, Loader2, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { cn } from "@/lib/utils";
@@ -50,20 +50,38 @@ function BranchStatusIcon({ status }: { status: WorkBranch["status"] }) {
   return <Loader2 className="h-3 w-3 animate-spin text-amber-600" aria-hidden />;
 }
 
-// Header-level status indicator for the WorkItem as a whole.
+// Header-level status indicator for the WorkItem as a whole. Icon vocabulary
+// matches RunStatusIcon in RunDetail.tsx (the executions screen) so a run
+// reads the same way in both places.
 function ItemStatusIcon({ status }: { status: WorkItem["status"] }) {
   if (status === "done") return <Check className="h-3.5 w-3.5 text-emerald-600" aria-hidden />;
   if (status === "failed") return <X className="h-3.5 w-3.5 text-destructive" aria-hidden />;
   if (status === "running") return <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-600" aria-hidden />;
+  // queued — a still clock, deliberately not the spinner: nothing is turning,
+  // the job is waiting for the one OCR worker slot. Muted like the pending
+  // node dot above, for the same reason: it has not started.
+  if (status === "queued") return <Clock className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />;
+  if (status === "cancelled") return <Ban className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />;
   // needs_input — accent-tinted: the run paused, it did not fail.
   return <HelpCircle className="h-3.5 w-3.5 text-accent-foreground" aria-hidden />;
 }
 
-/** Presentational card for one WorkItem (workflow or sub-agent). */
-export function WorkItemCard({ item }: { item: WorkItem }): JSX.Element {
+/** Presentational card for one WorkItem (workflow, sub-agent, or job). */
+export function WorkItemCard({
+  item,
+  onOpenNode,
+}: {
+  item: WorkItem;
+  // Opens one node's detail panel. A node that has not started, one belonging to
+  // a nested run, and any node of a run whose workflow name is unknown are never
+  // openable — see the guard at the node row.
+  onOpenNode?: (item: WorkItem, node: WorkNode) => void;
+}): JSX.Element {
   const { t } = useTranslation();
   // One ticker drives every live clock in this card; frozen (no re-render)
-  // once the item is no longer running, so a finished node's clock never ticks.
+  // once the item is no longer running, so a finished node's clock never
+  // ticks. "queued" is deliberately not running for this purpose either: a
+  // job waiting for the OCR slot has nothing to count.
   const now = useTicker(item.status === "running");
   // The single node the round/activity detail attaches to — shared with the chat
   // strip's own lookup rather than re-derived here, so the panel and the strip
@@ -92,8 +110,23 @@ export function WorkItemCard({ item }: { item: WorkItem }): JSX.Element {
             {t("tasks.status.needs_input")}
           </span>
         )}
+        {/* Muted, not accent-tinted: queued is the ordinary state of the
+            second book in an ingest, not something asking for attention. */}
+        {item.status === "queued" && (
+          <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+            {t("tasks.status.queued")}
+          </span>
+        )}
         <ItemStatusIcon status={item.status} />
       </div>
+
+      {/* queued: say why nothing is happening. Without this the card shows a
+          page count that never moves and no reason for it. */}
+      {item.status === "queued" && (
+        <div className="mt-1 pl-5 text-[11px] text-muted-foreground">
+          {t("tasks.queuedHint")}
+        </div>
+      )}
 
       {/* needs_input: neutral hand-off copy — the calling agent owns the resume,
           not this card, so there is no resume form here. */}
@@ -125,6 +158,15 @@ export function WorkItemCard({ item }: { item: WorkItem }): JSX.Element {
               const showDetail =
                 node === runningNode &&
                 (node.activity != null || (node.round != null && node.maxRounds != null));
+              // A node is openable only when its detail can actually be fetched:
+              // the run's manifest is keyed by workflow name, a nested run's nodes
+              // have no row in the caller's manifest (their frames are re-keyed
+              // onto it), and a pending node has not run at all.
+              const openable =
+                onOpenNode != null &&
+                item.workflow != null &&
+                node.parentNode == null &&
+                node.status !== "pending";
               return (
                 <li key={`${node.id}-${ni}`}>
                   {/* A node running inside a sub-workflow is not part of this
@@ -137,18 +179,33 @@ export function WorkItemCard({ item }: { item: WorkItem }): JSX.Element {
                     )}
                   >
                     <NodeStatusIcon status={node.status} />
-                    <span
-                      className={cn(
-                        "text-foreground/80",
-                        node.status === "failed" && "text-destructive",
-                        node.status === "pending" && "text-muted-foreground/60",
-                      )}
-                      // The node's own sentence, too long for this width, offered
-                      // on hover instead of replacing the short label.
-                      title={node.description}
-                    >
-                      {node.label ?? node.id}
-                    </span>
+                    {openable ? (
+                      <button
+                        type="button"
+                        onClick={() => onOpenNode(item, node)}
+                        className={cn(
+                          "rounded text-left underline-offset-2 hover:underline",
+                          "text-foreground/80",
+                          node.status === "failed" && "text-destructive",
+                        )}
+                        // The node's own sentence, too long for this width, offered
+                        // on hover instead of replacing the short label.
+                        title={node.description}
+                      >
+                        {node.label ?? node.id}
+                      </button>
+                    ) : (
+                      <span
+                        className={cn(
+                          "text-foreground/80",
+                          node.status === "failed" && "text-destructive",
+                          node.status === "pending" && "text-muted-foreground/60",
+                        )}
+                        title={node.description}
+                      >
+                        {node.label ?? node.id}
+                      </span>
+                    )}
                     <PassChip iteration={node.iteration} budget={node.budget} />
                     {elapsed != null && (
                       <span className="ml-auto shrink-0 tabular-nums text-[11px] text-muted-foreground">
@@ -204,6 +261,27 @@ export function WorkItemCard({ item }: { item: WorkItem }): JSX.Element {
       {item.kind === "subagent" && (
         <div className="mt-1 pl-5 text-[12px] text-muted-foreground">
           {t("work.steps", { count: item.steps ?? 0 })}
+        </div>
+      )}
+
+      {/* Job: pages transcribed of pages total. Unlike touchedNodeCount above,
+          a job's total starts as an estimate (the inline probe's flagged-page
+          count) that the worker corrects once it re-checks the document
+          itself, so "done of total" is a real, if revisable, fraction — not
+          a false promise. */}
+      {item.kind === "job" && (
+        <div className="mt-1 pl-5 text-[12px] text-muted-foreground">
+          {t("work.pages", { done: item.unitsDone ?? 0, total: item.unitsTotal ?? 0 })}
+        </div>
+      )}
+
+      {/* Why it failed, as the worker recorded it. Nothing else surfaces this:
+          the worker's stderr goes to the gateway's boot log, which is
+          truncated on every start and not served by the log reader. Not
+          translated — it is a verbatim error string, not durin's own prose. */}
+      {item.error && (
+        <div className="mt-1 break-words pl-5 text-[12px] text-destructive">
+          {item.error}
         </div>
       )}
     </div>

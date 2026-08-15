@@ -107,6 +107,24 @@ it("flashes failed with the failed status word", () => {
   expect(screen.getByText(/failed/)).toBeInTheDocument();
 });
 
+it("flashes a cancelled item as cancelled, not as a green Done", () => {
+  // useWorkState sorts cancelled into `finished` by endedAt desc, so a job the
+  // user just stopped is exactly what the flash picks up. Anything that is not
+  // "failed" used to take the Check + "finished" arm.
+  const { rerender, container } = render(
+    wrap(<WorkStrip active={[item({ kind: "job" })]} finished={[]} onOpen={() => {}} />),
+  );
+  const cancelled = item({ kind: "job", status: "cancelled", endedAt: 2 });
+  rerender(
+    wrap(<WorkStrip active={[]} finished={[cancelled]} onOpen={() => {}} />),
+  );
+  expect(screen.getByText(/cancelled/)).toBeInTheDocument();
+  expect(screen.queryByText(/finished/)).not.toBeInTheDocument();
+  // Ban is lucide-react's cancelled glyph, the same one WorkItemCard uses.
+  expect(container.querySelector(".lucide-ban")).toBeInTheDocument();
+  expect(container.querySelector(".lucide-check")).not.toBeInTheDocument();
+});
+
 it("does not flash on first mount with empty active and old finished items", () => {
   const done = item({ status: "done", endedAt: 2 });
   const { container } = render(
@@ -156,6 +174,42 @@ it("counts only the nodes the run has touched, excluding the pending tail", () =
   // Two touched (done + running); the two-node pending tail is not counted.
   expect(screen.getByText(/Consolidate · 0:00 · 2 nodes/)).toBeInTheDocument();
   expect(screen.queryByText(/4 nodes/)).not.toBeInTheDocument();
+});
+
+it("says queued, not in progress, when the only active job is waiting for a slot", () => {
+  // A queued OCR job is active work, but nothing has started it: the strip's
+  // spinner and "in progress" over it is the same lie the card used to tell.
+  const queued = item({ kind: "job", id: "j1", label: "second-book.pdf", status: "queued" });
+  const { container } = render(
+    wrap(<WorkStrip active={[queued]} finished={[]} onOpen={() => {}} />),
+  );
+  expect(screen.getByText("second-book.pdf")).toBeInTheDocument();
+  expect(screen.getByText(/queued/)).toBeInTheDocument();
+  expect(screen.queryByText(/in progress/)).not.toBeInTheDocument();
+  expect(container.querySelector(".animate-spin")).not.toBeInTheDocument();
+});
+
+it("counts several waiting jobs as queued", () => {
+  const active = [
+    item({ kind: "job", id: "j1", label: "one.pdf", status: "queued" }),
+    item({ kind: "job", id: "j2", label: "two.pdf", status: "queued" }),
+  ];
+  render(wrap(<WorkStrip active={active} finished={[]} onOpen={() => {}} />));
+  expect(screen.getByText("2 tasks queued")).toBeInTheDocument();
+});
+
+it("still reads as in progress while one job runs and others queue behind it", () => {
+  // Only an all-queued list is "queued": with a worker actually transcribing,
+  // the strip must keep spinning.
+  const active = [
+    item({ kind: "job", id: "j1", label: "one.pdf", status: "running" }),
+    item({ kind: "job", id: "j2", label: "two.pdf", status: "queued" }),
+  ];
+  const { container } = render(
+    wrap(<WorkStrip active={active} finished={[]} onOpen={() => {}} />),
+  );
+  expect(screen.getByText("2 tasks in progress")).toBeInTheDocument();
+  expect(container.querySelector(".animate-spin")).toBeInTheDocument();
 });
 
 it("uses the singular node count when only one node has been touched", () => {

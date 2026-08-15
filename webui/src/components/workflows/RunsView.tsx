@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, CornerLeftUp, HelpCircle, ListTree, Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { NodeDetailSheet } from "@/components/workflows/NodeDetailSheet";
 import { CopyableKey, RunDetail, RunStatusIcon } from "@/components/workflows/RunDetail";
 import {
   ApiError,
@@ -9,6 +10,7 @@ import {
   listAllWorkflowRuns,
   runWorkflow,
   type WorkflowGlobalRun,
+  type WorkflowRunNode,
   type WorkflowRunResult,
 } from "@/lib/api";
 import { relativeTime } from "@/lib/format";
@@ -231,6 +233,10 @@ export function RunsView() {
   const [manifest, setManifest] = useState<WorkflowRunResult | null>(null);
   const [manifestLoading, setManifestLoading] = useState(false);
   const [resumingId, setResumingId] = useState<string | null>(null);
+  // The node whose detail drawer is open, if any. Held here rather than inside
+  // RunDetail so the drawer survives the manifest refreshes that re-render it
+  // while a run is still going.
+  const [openNode, setOpenNode] = useState<WorkflowRunNode | null>(null);
 
   // Latest selection/manifest, read from inside the poll interval below without
   // making that interval's own effect depend on either — both change far more
@@ -567,6 +573,7 @@ export function RunsView() {
                     onResume={onResumeFromDetail}
                     childRuns={childEntries}
                     onOpenRun={(r) => void onSelectEntry(r)}
+                    onOpenNode={setOpenNode}
                   />
                 )
               )}
@@ -574,6 +581,21 @@ export function RunsView() {
           </>
         )}
       </div>
+      <NodeDetailSheet
+        open={openNode != null}
+        onOpenChange={(next) => {
+          if (!next) setOpenNode(null);
+        }}
+        row={openNode}
+        typicalS={openNode ? manifest?.typical_s?.[openNode.node_id] : undefined}
+        // Only the node the run itself reports as in flight keeps re-reading —
+        // a finished node's record cannot change, and a crashed run's last node
+        // is not running however recent it looks.
+        live={
+          manifest?.status === "running" &&
+          manifest?.active_node?.node_id === openNode?.node_id
+        }
+      />
     </div>
   );
 }

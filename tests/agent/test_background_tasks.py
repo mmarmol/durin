@@ -47,6 +47,28 @@ def test_collect_returns_dicts_with_stable_shape(tmp_path, monkeypatch):
     assert sa["id"] == "t1" and sa["status"] == "running" and sa["nodes"] is None
 
 
+def test_subagent_and_workflow_rows_carry_no_job_progress(tmp_path, monkeypatch):
+    """The job kind added units_total/units_done to every row's shape; the two
+    pre-existing kinds must carry them as None rather than omit them, so a
+    caller iterating the merged list never has to check which keys a given
+    row happens to have."""
+    sub = _Status("t1", "research", "awaiting_tools", "subagent:t1", started_at=time.monotonic())
+
+    import durin.workflow.run_log as run_log
+    monkeypatch.setattr(run_log, "runs_for_session", lambda ws, key: [
+        {"run_id": "r9", "workflow": "qa", "status": "running",
+         "started_at": time.time(), "finished_at": None, "runs": []},
+    ])
+
+    rows = collect_tasks(str(tmp_path), subagent_manager=_FakeSubagents([sub]),
+                         sessions=None, session_key="websocket:chatA")
+
+    assert {r["kind"] for r in rows} == {"workflow", "subagent"}
+    for r in rows:
+        assert r["units_total"] is None
+        assert r["units_done"] is None
+
+
 def test_collect_empty_without_sources(tmp_path):
     assert collect_tasks(str(tmp_path), subagent_manager=None, sessions=None,
                          session_key="websocket:chatA") == []

@@ -180,3 +180,50 @@ def test_strip_boilerplate_leaves_mid_content_bold_untouched() -> None:
 def test_strip_boilerplate_no_header_is_noop() -> None:
     text = "Just a plain paragraph with no scraped header at all.\n"
     assert strip_scraped_boilerplate(text) == text.strip()
+
+
+class _RecordingVectorIndex:
+    """Captures what a caller-owned vector index is asked to embed."""
+
+    def __init__(self):
+        self.upserts = []
+
+    def upsert_reference_chunk(self, *, ref, idx, text, path, breadcrumb=""):
+        self.upserts.append({"ref": ref, "idx": idx, "text": text,
+                             "path": path, "breadcrumb": breadcrumb})
+
+
+def test_store_and_index_reference_indexes_the_whole_doc_and_every_chunk(tmp_path):
+    """The one place that turns a document into a searchable Library entry:
+    the doc lands whole (the FTS unit) and every chunk is embedded (the vector
+    unit), keyed back to its parent reference."""
+    from durin.memory.fts_index import FTSIndex
+    from durin.memory.reference import store_and_index_reference
+
+    vi = _RecordingVectorIndex()
+    ref = store_and_index_reference(
+        tmp_path, "Field Manual", "# Field Manual\n\n" + (_PARA * 6),
+        source="/docs/field-manual.pdf", vector_index=vi,
+    )
+
+    assert ref == "reference:field-manual"
+    with FTSIndex.open(tmp_path) as idx:
+        assert [h.uri for h in idx.search("Mail2Cloud")] == [ref]
+    assert vi.upserts, "no chunk was embedded"
+    assert {u["ref"] for u in vi.upserts} == {ref}
+    assert [u["idx"] for u in vi.upserts] == list(range(len(vi.upserts)))
+
+
+def test_store_and_index_reference_without_a_vector_index_still_fts_indexes(tmp_path):
+    """CI, and any install without the embedding extras, has no vector index.
+    Lexical search must still find the document."""
+    from durin.memory.fts_index import FTSIndex
+    from durin.memory.reference import store_and_index_reference
+
+    ref = store_and_index_reference(
+        tmp_path, "Field Manual", "# Field Manual\n\n" + (_PARA * 2),
+        source="/docs/field-manual.pdf",
+    )
+
+    with FTSIndex.open(tmp_path) as idx:
+        assert [h.uri for h in idx.search("Mail2Cloud")] == [ref]

@@ -93,6 +93,57 @@ def _message_preview_text(message: dict[str, Any]) -> str:
     return _text_preview(content)
 
 
+def session_preview(messages: list[dict[str, Any]]) -> str:
+    """Label for a session row: the most recent user message.
+
+    The row it labels is sorted and dated by ``updated_at``, so the preview has
+    to describe the same moment. Taking the *first* message instead leaves a
+    long-lived session — a Slack channel key accumulates for weeks — sitting
+    under "Today" wearing the first thing anyone ever said in it. Falls back to
+    the last assistant turn for sessions the agent opened on its own.
+    """
+    fallback = ""
+    for message in reversed(messages):
+        if message.get("_type") == "metadata":
+            continue
+        text = _message_preview_text(message)
+        if not text:
+            continue
+        if message.get("role") == "user":
+            return text
+        if not fallback and message.get("role") == "assistant":
+            fallback = text
+    return fallback
+
+
+def _tail_preview(path: "Path", *, tail_bytes: int = 64_000) -> str:
+    """``session_preview`` for a file written before the preview was stored.
+
+    Reads only the end of the file. These sessions heal on their next save, so
+    this is a bridge for dormant ones — worth keeping cheap, since the session
+    list is refreshed on every session update and some transcripts run to
+    megabytes.
+    """
+    try:
+        size = path.stat().st_size
+        with open(path, "rb") as fh:
+            if size > tail_bytes:
+                fh.seek(size - tail_bytes)
+                fh.readline()  # discard the partial line the seek landed in
+            raw = fh.read().decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+    messages = []
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        try:
+            messages.append(json.loads(line))
+        except ValueError:
+            continue
+    return session_preview(messages)
+
+
 def is_workflow_session(key: str) -> bool:
     """A workflow node/run session (keyed ``workflow:<run_id>:...``) is internal
     execution machinery — the per-node conversation, persisted only so the run-detail
@@ -763,7 +814,12 @@ class SessionManager:
                         "created_at": session.created_at.isoformat(),
                         "updated_at": session.updated_at.isoformat(),
                         "metadata": identity_meta,
-                        "last_consolidated": session.last_consolidated
+                        "last_consolidated": session.last_consolidated,
+                        # Stored so the session list can label a row from line 0
+                        # alone. Free here — this rewrites the whole file anyway —
+                        # and it spares the list a body scan per session on every
+                        # refresh.
+                        "preview": session_preview(session.messages),
                     }
                     f.write(json.dumps(metadata_line, ensure_ascii=False) + "\n")
                     for msg in session.messages:
@@ -1029,23 +1085,14 @@ class SessionManager:
                             key = data.get("key") or path.stem.replace("_", ":", 1)
                             metadata = data.get("metadata", {})
                             title = metadata.get("title") if isinstance(metadata, dict) else None
-                            preview = ""
-                            fallback_preview = ""
-                            for line in f:
-                                if not line.strip():
-                                    continue
-                                item = json.loads(line)
-                                if item.get("_type") == "metadata":
-                                    continue
-                                text = _message_preview_text(item)
-                                if not text:
-                                    continue
-                                if item.get("role") == "user":
-                                    preview = text
-                                    break
-                                if not fallback_preview and item.get("role") == "assistant":
-                                    fallback_preview = text
-                            preview = preview or fallback_preview
+                            # Line 0 carries the preview for every session saved
+                            # by this version; older files predate it and are
+                            # read from the tail instead. Either way the answer
+                            # describes the LAST exchange, matching the
+                            # updated_at the row is sorted and dated by.
+                            preview = data.get("preview")
+                            if not isinstance(preview, str):
+                                preview = _tail_preview(path)
                             sessions.append({
                                 "key": key,
                                 "created_at": data.get("created_at"),

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Menu,
   Moon,
@@ -18,6 +18,21 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import type { ChatSummary } from "@/lib/types";
+
+type ChannelFilter = "web" | "all";
+
+const CHANNEL_FILTER_KEY = "durin-webui.channelFilter";
+
+/** Remembered across reloads: defaulting to "web" every time silently hides
+ *  every Slack, Telegram and Discord conversation, and the sidebar gives no
+ *  hint that the list is filtered at all. */
+function readStoredChannelFilter(): ChannelFilter {
+  try {
+    return localStorage.getItem(CHANNEL_FILTER_KEY) === "all" ? "all" : "web";
+  } catch {
+    return "web";
+  }
+}
 
 interface SidebarProps {
   sessions: ChatSummary[];
@@ -46,7 +61,15 @@ interface SidebarProps {
 export function Sidebar(props: SidebarProps) {
   const { t } = useTranslation();
   const [query, setQuery] = useState("");
-  const [channelFilter, setChannelFilter] = useState<"web" | "all">("web");
+  const [channelFilter, setChannelFilter] =
+    useState<ChannelFilter>(readStoredChannelFilter);
+  useEffect(() => {
+    try {
+      localStorage.setItem(CHANNEL_FILTER_KEY, channelFilter);
+    } catch {
+      // Private mode / quota — the filter just stops being remembered.
+    }
+  }, [channelFilter]);
   const normalizedQuery = query.trim().toLowerCase();
   const filteredSessions = useMemo(() => {
     let sessions = props.sessions;

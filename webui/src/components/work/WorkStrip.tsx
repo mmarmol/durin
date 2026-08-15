@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, HelpCircle, Loader2, PanelRight, X } from "lucide-react";
+import { Ban, Check, Clock, HelpCircle, Loader2, PanelRight, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { cn } from "@/lib/utils";
@@ -66,6 +66,10 @@ export function WorkStrip({
 
   const needsInput = active.filter((w) => w.status === "needs_input");
   const running = active.length > 0;
+  // Everything active is merely waiting for a worker slot (a multi-document
+  // ingest: one OCR job runs, the rest queue). A spinner and "in progress"
+  // over work that has not started is the same lie the card used to tell.
+  const allQueued = running && active.every((w) => w.status === "queued");
   const shown = running ? null : flash;
   const warn = needsInput.length > 0;
   // Only meaningful for the single-item, non-warn case (see body below);
@@ -91,7 +95,11 @@ export function WorkStrip({
       </span>
     );
   } else if (running) {
-    icon = <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden />;
+    icon = allQueued ? (
+      <Clock className="h-3.5 w-3.5 shrink-0" aria-hidden />
+    ) : (
+      <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden />
+    );
     // Falls back to the plain status text when nothing is running yet (no
     // node list, or none of the nodes have started) — old behavior preserved.
     const runningSuffix =
@@ -100,7 +108,7 @@ export function WorkStrip({
             "work.strip.nodes",
             { count: touchedNodeCount(active[0]) },
           )}`
-        : t("work.strip.statusRunning");
+        : t(allQueued ? "work.strip.statusQueued" : "work.strip.statusRunning");
     body =
       active.length === 1 ? (
         <>
@@ -111,16 +119,31 @@ export function WorkStrip({
         </>
       ) : (
         <span className="truncate">
-          {t("work.strip.runningMany", { count: active.length })}
+          {t(allQueued ? "work.strip.queuedMany" : "work.strip.runningMany", {
+            count: active.length,
+          })}
         </span>
       );
   } else {
+    // Three endings, not two: a cancelled item lands in `finished` too (a job
+    // the user just stopped is precisely what this flash tends to catch), and
+    // a green tick reading "finished" over it is a lie. Icon vocabulary
+    // matches WorkItemCard's ItemStatusIcon so the same ending reads the same
+    // way in the strip and in the panel.
     const failed = shown!.status === "failed";
-    icon = failed ? (
-      <X className="h-3.5 w-3.5 shrink-0 text-destructive" aria-hidden />
-    ) : (
-      <Check className="h-3.5 w-3.5 shrink-0 text-emerald-500" aria-hidden />
-    );
+    const cancelled = shown!.status === "cancelled";
+    if (failed) {
+      icon = <X className="h-3.5 w-3.5 shrink-0 text-destructive" aria-hidden />;
+    } else if (cancelled) {
+      icon = <Ban className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />;
+    } else {
+      icon = <Check className="h-3.5 w-3.5 shrink-0 text-emerald-500" aria-hidden />;
+    }
+    const statusText = failed
+      ? t("work.strip.statusFailed")
+      : cancelled
+        ? t("work.strip.statusCancelled")
+        : t("work.strip.statusDone");
     body = (
       <>
         <span className="truncate font-medium text-foreground/90">
@@ -128,7 +151,7 @@ export function WorkStrip({
         </span>
         <span className={cn("shrink-0", failed && "text-destructive")}>
           {" "}
-          · {failed ? t("work.strip.statusFailed") : t("work.strip.statusDone")}
+          · {statusText}
         </span>
       </>
     );

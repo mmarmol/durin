@@ -5,6 +5,201 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.6.0 — 2026-08-14
+
+### Highlights
+
+- **durin can read scanned documents.** A PDF with no text layer — a book someone
+  scanned, a contract that came back from a photocopier, an archived file — used to
+  extract to nothing and fail. durin now measures how much of a document it can
+  actually read, page by page, and transcribes the pages it cannot with an OCR
+  engine that runs on your machine. Nothing is uploaded and nothing is sent to a
+  model in the cloud: the engine ships inside the package and reads the pixels
+  locally. It is off until you turn it on, under **Settings → Documents**, which
+  also tells you what it costs before you do. (#523)
+
+- **A book no longer blocks the conversation.** Transcribing four hundred pages is
+  minutes of work, and durin used to have nowhere to put work like that — a
+  document was converted while you waited. Anything longer than a few pages now
+  becomes a background job: the document is stored immediately, the transcription
+  runs in its own process, and you watch it advance page by page in the work panel
+  or by asking durin how it is going. When it finishes, the book is a searchable
+  document in your Library like any other. (#523)
+
+- **That work survives things going wrong.** Each page is saved the moment it is
+  transcribed, so a job interrupted at page three hundred and eighty resumes at
+  three hundred and eighty rather than starting over — and restarting durin picks
+  up jobs that were running when it stopped instead of losing them. A document
+  that yields nothing, an engine that is missing, a page that fails: each one now
+  ends with a reason you can read rather than a job that quietly never finishes.
+  (#523)
+
+- **Partially scanned documents are handled as what they are.** A report with three
+  photocopied inserts is not a scan, and a scan is not a document with gaps. durin
+  tells them apart: it transcribes just the inserts, keeps the text it could
+  already read, and when something cannot be read it says which pages are missing
+  and what came before them, instead of handing the model a document with silent
+  holes in it. (#523)
+
+### Changes
+
+**Documents**
+
+- New `documents` configuration section: the OCR switch and page budget, plus two
+  limits that used to be fixed in code — the largest attachment durin will read and
+  how much of a document it inlines. An oversized attachment is now reported in the
+  conversation instead of being dropped without a word. (#523)
+- Local OCR ships as an optional `[ocr]` extra, installed on demand when you enable
+  the setting. (#523)
+
+**Jobs**
+
+- New background-job registry, generic over the kind of work, with OCR as its first
+  user. Jobs appear alongside sub-agents and workflow runs in the work panel and in
+  the agent's `tasks` tool, and can be stopped from there. (#523)
+
+**Dependencies**
+
+- Bump pypdf 6.14.2 → 6.15.0. (#521)
+- Bump h2 4.3.0 → 4.4.1. (#520)
+
+## 0.5.5 — 2026-08-06
+
+### Highlights
+
+- **Every step of a workflow run can now be opened.** A run told you *that* a
+  step ran, how long it took and whether it passed — never what it actually
+  did. The only thread back to the work was a session key printed as text, to
+  be looked up by hand on disk. Clicking a step now opens a panel: an agent
+  step shows its whole conversation, every tool call with its arguments **and**
+  its result, and the model's reasoning where the provider returned it, drawn
+  with the same blocks the chat uses. A script step shows the command it ran,
+  its exit code and both streams. A step that keeps no record of its own — a
+  sub-workflow, a parallel group — says so and points at the runs or branches
+  that do. The panel opens from the executions screen and from the chat's work
+  strip, so watching a run does not mean leaving the conversation. (#519)
+
+- **A step still working shows its work as it happens.** The panel does not
+  wait for the step to finish: a step's conversation is saved after every
+  round, so the transcript fills in round by round while you watch, and the
+  same panel simply stops moving once the step ends — it is the run's record
+  afterwards, not a second screen. Opened from the chat it also names what the
+  step is doing right now, down to the tool and the file or command it is
+  working on. (#519)
+
+- **A script step that worked used to leave nothing behind.** Its output only
+  travelled onward to the next step and its errors were discarded, so a script
+  that behaved was unreadable after the fact and a broken one left a stub. Runs
+  now record what each script ran and everything it printed — including when it
+  is killed by a timeout or a cancellation, where a hung script has usually
+  already printed the very lines that explain where it got stuck. Stored
+  secrets are stripped from all of it, the command line included. How much is
+  kept is yours to set (`workflow.script_log_max_chars`). (#519)
+
+## 0.5.4 — 2026-08-05
+
+### Highlights
+
+- **A mistyped `${secret:NAME}` no longer ships as the credential.** Only the
+  exact form is a reference, and anything that was not one came back untouched
+  — right for a real literal, but it meant a near miss like `{{secret:X}}`,
+  `$secret:X` or a lowercase name was handed downstream as if it were the
+  secret itself. A Sentry MCP server was spawned with the literal string
+  `{{secret:SENTRY_AUTH_TOKEN}}` as its token and failed inside the server with
+  an opaque authentication error, nothing pointing back at the config; the
+  hunt that followed went through wrapper scripts and process arguments and
+  never reached the brace that caused it. A dangling reference already failed
+  loudly, and a mistyped one is no more usable, so it now fails the same way —
+  naming the correct spelling, and for an MCP server naming the exact `env` or
+  header key. The same error covers a reference embedded in a longer string
+  (`Bearer ${secret:TOKEN}`), which durin never interpolated. (#517)
+
+## 0.5.3 — 2026-08-04
+
+### Highlights
+
+- **Slack shows what it is doing instead of going quiet.** The reaction emoji
+  is set once when a message arrives and the text stream only begins when the
+  model finally writes prose, so a turn spending minutes on tool calls — an
+  ordinary ticket investigation runs eight or more in a row — was
+  indistinguishable from a bot that had crashed. Reasoning would have covered
+  the gap, but Slack was the channel that never implemented it, so it was
+  discarded even with `showReasoning` on. There is now a status line that says
+  what is happening, and it is a *single* message per turn: it is edited in
+  place as the work moves and is then taken over by the answer itself, rather
+  than leaving one post per tool call in a channel people read. The reply never
+  gets painted over by a late update, and a status line is never left stranded
+  above the answer it announced. Turn it on per channel with
+  `channels.slack.sendToolHints` (still off by default, since a hint stream is
+  unwanted on some surfaces). (#514)
+
+### Channels
+
+- A streamed Slack reply resolves its destination the way a non-streamed one
+  already did. `send` turned a `#channel` name, an `@handle` or a user id into
+  a real conversation and `send_delta` did not, so a stream aimed at anything
+  but a concrete conversation id would have posted nowhere. Nothing was losing
+  messages over it — a streamed reply answers an inbound event, whose id is
+  already concrete — but the asymmetry was one caller away from doing so. (#514)
+
+## 0.5.2 — 2026-08-04
+
+### Highlights
+
+- **A long answer in Slack no longer disappears.** Slack caps an edited
+  message at 4 000 characters — an order of magnitude below the 40 000 a new
+  message may carry — and durin sized every edit with the larger number. Any
+  streamed reply past 4 000 therefore failed every edit it attempted, and
+  failed the same way three times, at which point the reply was dropped: a
+  streamed turn suppresses the complete copy that would otherwise have been
+  the fallback, so what stayed in the thread was whichever half-written
+  preview happened to fit. A reply that outgrows an edit now rolls into a
+  fresh message and keeps going, and the segments left behind are converted
+  to Slack's formatting as they are frozen rather than stranded in raw
+  Markdown. (#507)
+- **And it survives Slack moving that limit.** The 4 000 is a claim about
+  someone else's API, which is exactly what went stale to cause the above. So
+  it is now a starting point, not a fact: a payload rejected for size halves
+  the working budget, warns, and is delivered at the smaller size instead of
+  being dropped. Any other Slack error still surfaces untouched — a revoked
+  token is not mistaken for a long message. (#508)
+- **A chat is labelled by what was last said in it.** The list sorts and dates
+  a row by its most recent activity but was labelling it with the *first*
+  message in the conversation. On a key that lives for weeks — a Slack channel
+  accumulates indefinitely — those are different conversations, so a thread
+  active this morning sat under "Today" wearing a greeting from a week ago.
+  As a side effect the list no longer reads message bodies at all, on an
+  endpoint the sidebar re-hits whenever any session changes. (#509)
+- **The chat list stops hiding every channel conversation.** The sidebar's
+  channel filter defaulted to web-only and reset on every page load, so Slack,
+  Telegram and Discord chats vanished each time the page was refreshed, with
+  nothing on screen indicating the list was filtered. The choice is now
+  remembered. (#509)
+
+### Models
+
+- A reasoning model no longer fails the connection test for thinking. The
+  dashboard's "Probar" button and `durin doctor --ping-model` send a
+  deliberately tiny output budget, and a reasoning model can spend all of it
+  before reaching visible text — so a model that worked perfectly well once
+  saved was reported as returning an empty response. The check now passes on
+  content, tool calls *or* reasoning. It also stopped reading a failure as
+  success: providers return API errors as ordinary response text rather than
+  raising, so a stalled stream used to ping green. (#502)
+
+### API
+
+- New `POST /api/v1/channels/post` (scope `channels:write`): post through a
+  running channel *and* record it in the session that conversation belongs to.
+  Workflow script nodes run as subprocesses and cannot reach the channel
+  layer, so automation posts straight to the platform and the conversation
+  ends up existing only there — an automated investigation nobody replied to
+  left no chat at all, and a human answering it started from a blank session
+  rather than continuing the work already posted. It records under the key the
+  channel itself derives, so a later reply continues that same session. Where
+  a loop's internal *status* goes is unchanged: it is still never reported to
+  the external party a channel origin identifies. (#510)
+
 ## 0.5.1 — 2026-07-28
 
 ### Highlights

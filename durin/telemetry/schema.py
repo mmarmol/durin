@@ -1653,6 +1653,31 @@ class LoopsEventMatchedEvent(TypedDict):
     action: str
 
 
+class DocumentsOcrJobEvent(TypedDict):
+    """One OCR worker run ended, one way or another.
+
+    ``pages`` is the job's full page count and ``pages_resumed`` how many were
+    already transcribed when this worker started, so a dashboard can tell a
+    fresh run from one that picked up after a crash. ``duration_s`` covers
+    only this worker's share of the work, not the job's wall-clock life.
+
+    Usually one event per job, carrying its outcome. A worker that loses its
+    job after its per-page loop (a late cancel, a takeover) still emits,
+    reporting the row state it observed rather than an outcome it did not
+    write; a worker that stands down mid-loop to a live successor emits
+    nothing, because the successor's own event reports the job.
+    """
+
+    job_id: str
+    pages: int
+    pages_resumed: int
+    duration_s: float
+    status: str  # done | failed | cancelled from the run that owned the
+    # outcome; a run that lost its job reports what it observed instead:
+    # "gone" for a vanished row, or the row's status as something else
+    # left it ("running", "queued", or a terminal status someone else wrote)
+
+
 # ===========================================================================
 # Catalog — single source of truth
 # ===========================================================================
@@ -1795,6 +1820,8 @@ EVENTS: dict[str, type] = {
     "skill.curation_run": SkillCurationRunEvent,
     "skill.suggestion_resolved": SkillSuggestionResolvedEvent,
     "skill.observation_resolved": SkillObservationResolvedEvent,
+    # Documents / OCR jobs
+    "documents.ocr.job": DocumentsOcrJobEvent,
 }
 
 

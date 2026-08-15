@@ -80,7 +80,20 @@ class SlackConfig(Base):
     stream_edit_interval: float = Field(default=1.2, ge=0.5)
 
 
-SLACK_MAX_MESSAGE_LEN = 39_000  # Slack API allows ~40k; leave margin
+SLACK_MAX_MESSAGE_LEN = 39_000  # chat.postMessage allows ~40k; leave margin
+# chat.update is a different budget entirely: its text field is capped at 4_000
+# characters and anything longer comes back as msg_too_long. Every edit — the
+# mid-stream previews and the final render — has to fit here, so a streamed
+# answer past this size rolls into a fresh message instead of growing in place.
+# The margin under 4_000 absorbs the mrkdwn conversion, which can expand text
+# (a Markdown table becomes a longer bulleted rendering).
+SLACK_UPDATE_MAX_LEN = 3_900
+# A hard-coded limit is a claim about someone else's API, so treat it as one:
+# if Slack rejects a payload this budget said would fit, the channel halves the
+# budget at runtime rather than dropping the answer. This is the floor it will
+# not shrink past — below it the rejection is something other than size and
+# should surface instead of being retried into oblivion.
+SLACK_UPDATE_MIN_LEN = 500
 SLACK_DOWNLOAD_TIMEOUT = 30.0
 # Abort Socket Mode WSS handshake after this many seconds. REST auth_test can still
 # succeed while WSS blocks (firewall / region). slack-sdk does not apply HTTP(S)_PROXY
@@ -102,6 +115,9 @@ SLACK_FATAL_AUTH_ERRORS = frozenset(
 SLACK_EVENT_DEDUP_TTL_S = 300.0
 SLACK_EVENT_DEDUP_MAX = 2000
 SLACK_FOLLOWED_THREADS_MAX = 5000
+# Longest status line shown while a turn works. A tool hint can carry a whole
+# script; the reader only needs to see that something is happening.
+SLACK_STATUS_MAX_LEN = 160
 _HTML_DOWNLOAD_PREFIXES = (b"<!doctype html", b"<html")
 
 
@@ -113,6 +129,16 @@ class _StreamBuf:
     ts: str | None = None  # ts of the Slack message being edited
     last_edit: float = 0.0
     stream_id: str | None = None
+    # Resolved Slack conversation id for ``ts``. A chat_id may be a name or a
+    # user id that has to be turned into a real conversation before anything
+    # can be posted to it; resolving costs an API call, so it is done once per
+    # stream rather than per delta.
+    target: str | None = None
+    # True while ``ts`` holds a "working on it" line rather than answer text.
+    # The status message is deliberately the same message the answer will land
+    # in: the alternative is a new post per tool call, which turns a long
+    # investigation into a wall of noise in a channel people actually read.
+    status_only: bool = False
 
 
 class SlackChannel(BaseChannel):
@@ -151,6 +177,10 @@ class SlackChannel(BaseChannel):
         self._dedup = MessageDeduplicator(max_size=SLACK_EVENT_DEDUP_MAX, ttl_seconds=SLACK_EVENT_DEDUP_TTL_S)
         self._stream_bufs: dict[str, _StreamBuf] = {}  # chat_id -> streaming state
         self._followed_threads: set[str] = set()  # "chat_id:thread_ts" the bot follows
+        # Working ceiling for chat.update payloads. Starts at the documented
+        # limit and only ever shrinks, when Slack rejects a payload we sized
+        # to fit — see _shrink_update_budget.
+        self._update_budget = SLACK_UPDATE_MAX_LEN
 
     async def start(self) -> None:
         """Start the Slack Socket Mode client and keep it connected."""
@@ -296,16 +326,30 @@ class SlackChannel(BaseChannel):
             is_progress = (msg.metadata or {}).get("_progress", False)
             if is_progress and not msg.content:
                 pass  # skip empty progress messages (e.g. tool-event-only updates)
+            elif is_progress:
+                await self._show_status(
+                    msg.chat_id, target_chat_id, msg.content, thread_ts_param
+                )
             elif msg.content or not (msg.media or []):
                 mrkdwn = self._to_mrkdwn(msg.content) if msg.content else " "
                 buttons = getattr(msg, "buttons", None) or []
                 chunks = split_message(mrkdwn, SLACK_MAX_MESSAGE_LEN)
+                # A status line left over from this turn becomes the answer, so
+                # the reader never ends up with a stale "working on it" sitting
+                # above the reply it was waiting for.
+                claimed = await self._claim_status_message(msg.chat_id)
                 for index, chunk in enumerate(chunks):
                     kwargs: dict[str, Any] = dict(
                         channel=target_chat_id, text=chunk, thread_ts=thread_ts_param,
                     )
                     if buttons and index == len(chunks) - 1:
                         kwargs["blocks"] = self._build_button_blocks(chunk, buttons)
+                    if claimed is not None and index == 0:
+                        status_target, status_ts = claimed
+                        await self._replace_stream_message(
+                            status_target, status_ts, chunk, thread_ts_param
+                        )
+                        continue
                     await self._web_client.chat_postMessage(**kwargs)
 
             for media_path in msg.media or []:
@@ -347,17 +391,13 @@ class SlackChannel(BaseChannel):
                 return
             if stream_id is not None and buf.stream_id is not None and buf.stream_id != stream_id:
                 return
-            mrkdwn = self._to_mrkdwn(buf.text)
-            chunks = split_message(mrkdwn, SLACK_MAX_MESSAGE_LEN)
             try:
-                await self._web_client.chat_update(channel=chat_id, ts=buf.ts, text=chunks[0])
+                await self._replace_stream_message(
+                    buf.target or chat_id, buf.ts, self._to_mrkdwn(buf.text), thread_ts
+                )
             except Exception as e:
                 self.logger.warning("Final stream edit failed: {}", e)
                 raise  # Let ChannelManager handle retry
-            for chunk in chunks[1:]:
-                await self._web_client.chat_postMessage(
-                    channel=chat_id, text=chunk, thread_ts=thread_ts,
-                )
             event = slack_meta.get("event", {}) or {}
             await self._update_react_emoji(chat_id, event.get("ts"))
             self._stream_bufs.pop(chat_id, None)
@@ -369,16 +409,23 @@ class SlackChannel(BaseChannel):
             self._stream_bufs[chat_id] = buf
         elif buf.stream_id is None:
             buf.stream_id = stream_id
+        # Answer text takes over the status message rather than posting beside
+        # it: the "working on it" line and the answer are the same message, so
+        # the reader watches one thing become the other.
+        buf.status_only = False
         buf.text += delta
 
         if not buf.text.strip():
             return
 
         now = time.monotonic()
+        if buf.target is None:
+            buf.target = await self._resolve_target_chat_id(chat_id)
+        target = buf.target
         if buf.ts is None:
             try:
                 sent = await self._web_client.chat_postMessage(
-                    channel=chat_id, text=buf.text, thread_ts=thread_ts,
+                    channel=target, text=buf.text, thread_ts=thread_ts,
                 )
                 buf.ts = str(sent.get("ts") or "") or None
                 buf.last_edit = now
@@ -386,16 +433,149 @@ class SlackChannel(BaseChannel):
                 self.logger.warning("Stream initial send failed: {}", e)
                 raise  # Let ChannelManager handle retry
         elif (now - buf.last_edit) >= self.config.stream_edit_interval:
-            if len(buf.text) > SLACK_MAX_MESSAGE_LEN:
+            if len(buf.text) > self._update_budget:
                 await self._flush_stream_overflow(chat_id, buf, thread_ts)
                 buf.last_edit = now
                 return
             try:
-                await self._web_client.chat_update(channel=chat_id, ts=buf.ts, text=buf.text)
+                await self._web_client.chat_update(channel=target, ts=buf.ts, text=buf.text)
                 buf.last_edit = now
             except Exception as e:
+                if self._shrink_update_budget(e, len(buf.text)):
+                    # The buffer no longer fits an edit: roll it over at the
+                    # new budget rather than losing the preview.
+                    await self._flush_stream_overflow(chat_id, buf, thread_ts)
+                    buf.last_edit = now
+                    return
                 self.logger.warning("Stream edit failed: {}", e)
                 raise  # Let ChannelManager handle retry
+
+    @staticmethod
+    def _is_msg_too_long(exc: Exception) -> bool:
+        """True when Slack rejected a payload for size rather than anything else."""
+        response = getattr(exc, "response", None)
+        if response is None:
+            return False
+        try:
+            return response.get("error") == "msg_too_long"
+        except Exception:
+            return False
+
+    def _shrink_update_budget(self, exc: Exception, attempted: int) -> bool:
+        """Halve the edit budget after Slack rejects a payload we sized to fit.
+
+        SLACK_UPDATE_MAX_LEN is a claim about Slack's API, and the whole reason
+        this channel lost answers is that such a claim went stale. So when the
+        API contradicts it, believe the API: shrink the working budget for the
+        rest of this process and let the caller retry at the smaller size,
+        instead of raising and letting the manager drop the response.
+
+        Returns True when the caller should retry. The warning is deliberate —
+        it is the signal that the constant needs revisiting, and it fires once
+        per shrink rather than once per edit.
+        """
+        if not self._is_msg_too_long(exc) or self._update_budget <= SLACK_UPDATE_MIN_LEN:
+            return False
+        self._update_budget = max(SLACK_UPDATE_MIN_LEN, min(self._update_budget, attempted) // 2)
+        self.logger.warning(
+            "Slack rejected a {}-char chat.update as too long; edit budget lowered to {}. "
+            "SLACK_UPDATE_MAX_LEN ({}) now sits above Slack's real limit.",
+            attempted, self._update_budget, SLACK_UPDATE_MAX_LEN,
+        )
+        return True
+
+    @staticmethod
+    def _status_line(text: str) -> str:
+        """Compress a progress update into one glanceable line.
+
+        A tool hint can be a whole invocation with an embedded script; the
+        reader only needs to know something is happening and roughly what.
+        """
+        first = next((ln.strip() for ln in (text or "").splitlines() if ln.strip()), "")
+        if len(first) > SLACK_STATUS_MAX_LEN:
+            first = first[: SLACK_STATUS_MAX_LEN - 1].rstrip() + "…"
+        return f":hourglass_flowing_sand: {first}" if first else ":hourglass_flowing_sand:"
+
+    async def _show_status(
+        self, chat_id: str, target: str, text: str, thread_ts: str | None
+    ) -> None:
+        """Report ongoing work in one message that keeps being rewritten.
+
+        Until now a Slack reader saw nothing at all while a turn ran tools: the
+        reaction is set once on arrival and the text stream only begins when the
+        model finally writes prose, so minutes of tool calls were
+        indistinguishable from a hung bot. Posting per tool call would fix the
+        silence and replace it with noise — a long investigation becomes a wall
+        of messages in a channel people actually read. So there is exactly one
+        message: it starts as the status line, is edited as the work moves, and
+        is then taken over by the answer itself (see ``send_delta``).
+        """
+        buf = self._stream_bufs.get(chat_id)
+        if buf is not None and not buf.status_only and buf.ts is not None:
+            return  # the answer is already on screen; never overwrite it
+        line = self._status_line(text)
+        now = time.monotonic()
+
+        if buf is None or buf.ts is None:
+            sent = await self._web_client.chat_postMessage(
+                channel=target, text=line, thread_ts=thread_ts,
+            )
+            buf = buf or _StreamBuf()
+            buf.ts = str(sent.get("ts") or "") or None
+            buf.target = target
+            buf.status_only = True
+            buf.last_edit = now
+            self._stream_bufs[chat_id] = buf
+            return
+
+        # Throttled like any other edit: chat.update is Tier-3 and a tool-heavy
+        # turn can emit hints far faster than the rate limit allows.
+        if (now - buf.last_edit) < self.config.stream_edit_interval:
+            return
+        await self._web_client.chat_update(
+            channel=buf.target or target, ts=buf.ts, text=line
+        )
+        buf.last_edit = now
+
+    async def _claim_status_message(self, chat_id: str) -> tuple[str, str] | None:
+        """Hand a pending status message over to a non-streamed final answer.
+
+        Without this the status line would be stranded reading "working on it"
+        under the real reply, whenever the answer arrives through ``send``
+        rather than the streaming path.
+        """
+        buf = self._stream_bufs.get(chat_id)
+        if buf is None or not buf.status_only or not buf.ts or not buf.target:
+            return None
+        self._stream_bufs.pop(chat_id, None)
+        return buf.target, buf.ts
+
+    async def _replace_stream_message(
+        self, chat_id: str, ts: str, text: str, thread_ts: str | None
+    ) -> None:
+        """Rewrite a streamed message with ``text``, spilling what will not fit.
+
+        The single place that knows how big an edit may be. Splitting here —
+        rather than trusting the caller's budget — is what keeps a long answer
+        whole: mrkdwn conversion can push text past a size that fit before it,
+        and a rejected edit means the response is retried three times and then
+        dropped, since the manager suppresses the non-streamed copy once a
+        stream has run.
+        """
+        while True:
+            chunks = split_message(text, self._update_budget)
+            if not chunks:
+                return
+            try:
+                await self._web_client.chat_update(channel=chat_id, ts=ts, text=chunks[0])
+                break
+            except Exception as e:
+                if not self._shrink_update_budget(e, len(chunks[0])):
+                    raise
+        for chunk in chunks[1:]:
+            await self._web_client.chat_postMessage(
+                channel=chat_id, text=chunk, thread_ts=thread_ts,
+            )
 
     async def _flush_stream_overflow(
         self, chat_id: str, buf: _StreamBuf, thread_ts: str | None
@@ -405,18 +585,25 @@ class SlackChannel(BaseChannel):
         Edits the current stream message with the first chunk, posts any
         intermediate chunks as standalone messages, then opens a new message
         for the tail so subsequent deltas continue streaming into it.
+
+        Everything but the tail is final at this point, so it is rendered as
+        mrkdwn now — nothing else will edit those messages again. The tail
+        stays raw because it is still growing; ``_stream_end`` renders it.
         """
-        chunks = split_message(buf.text, SLACK_MAX_MESSAGE_LEN)
+        target = buf.target or chat_id
+        chunks = split_message(buf.text, self._update_budget)
         if len(chunks) <= 1:
             return
-        await self._web_client.chat_update(channel=chat_id, ts=buf.ts, text=chunks[0])
+        await self._replace_stream_message(
+            target, buf.ts, self._to_mrkdwn(chunks[0]), thread_ts
+        )
         for chunk in chunks[1:-1]:
             await self._web_client.chat_postMessage(
-                channel=chat_id, text=chunk, thread_ts=thread_ts,
+                channel=target, text=self._to_mrkdwn(chunk), thread_ts=thread_ts,
             )
         tail = chunks[-1]
         sent = await self._web_client.chat_postMessage(
-            channel=chat_id, text=tail, thread_ts=thread_ts,
+            channel=target, text=tail, thread_ts=thread_ts,
         )
         buf.ts = str(sent.get("ts") or "") or None
         buf.text = tail

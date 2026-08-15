@@ -134,10 +134,12 @@ export async function listSessions(
 }
 
 export interface BackgroundTask {
-  kind: "subagent" | "workflow";
+  kind: "subagent" | "workflow" | "job";
   id: string;
   label: string;
-  status: "running" | "needs_input" | "done" | "failed";
+  /** Only a job is ever "queued" (accepted, waiting for the one OCR worker
+   *  slot, nothing started); only a workflow run is ever "needs_input". */
+  status: "queued" | "running" | "needs_input" | "done" | "failed" | "cancelled";
   started_at: number;
   ended_at: number | null;
   session_key: string | null;
@@ -156,6 +158,11 @@ export interface BackgroundTask {
   }> | null;
   task?: string | null;
   needs_input_detail?: string | null;
+  /** Job progress denominator/numerator (pages); null for sub-agent and workflow rows. */
+  units_total?: number | null;
+  units_done?: number | null;
+  /** Why a failed job failed, as its worker recorded it; null otherwise. */
+  error?: string | null;
 }
 
 export async function listBackgroundTasks(
@@ -415,6 +422,13 @@ export type WorkflowRunNode = {
   duration_s?: number | null;
   // Files this node added to the run's shared working folder.
   artifacts?: string[];
+  // Script nodes only: the subprocess exit code, what ran, and what it printed
+  // (redacted and capped server-side). Absent for agent nodes, whose record is
+  // their persisted session instead.
+  exit_code?: number | null;
+  command?: string | null;
+  stdout?: string | null;
+  stderr?: string | null;
 };
 
 export type WorkflowRunResult = {
@@ -432,7 +446,16 @@ export type WorkflowRunResult = {
   output_files?: string[];
   // The node currently in flight, while status=="running"; absent once the run
   // finishes or for a manifest recorded before this field shipped.
-  active_node?: { node_id: string; label: string; started_at: number } | null;
+  active_node?: {
+    node_id: string;
+    label: string;
+    started_at: number;
+    // Which pass this is, and the session the running node is writing — what a
+    // reader needs to OPEN it rather than only name it. The key is null for node
+    // kinds that persist no conversation (script, sub-workflow, parallel).
+    iteration?: number | null;
+    session_key?: string | null;
+  } | null;
   // Median seconds each node took across this workflow's recent completed runs,
   // keyed by node_id; absent (or empty) when the workflow has no run history yet.
   typical_s?: Record<string, number>;

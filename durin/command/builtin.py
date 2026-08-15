@@ -1905,11 +1905,38 @@ async def cmd_sources(ctx: CommandContext) -> OutboundMessage:
         if not source.is_absolute():
             source = (workspace / source).resolve()
         try:
-            result = ingest_artifact(workspace, source)
+            # ctx.key IS the session key here (loop.sessions.get_or_create(ctx.key)
+            # is the pattern every other handler in this module uses) — tag any
+            # background OCR job this triggers with it, or the job's session_key
+            # stays NULL and it never appears in anyone's tasks tray.
+            #
+            # Off-loop: ingest_artifact converts the document (markitdown /
+            # pdfplumber / OCR) -- multi-second blocking work that would freeze
+            # the whole gateway (every session, stream, heartbeat), since the
+            # AgentLoop this command dispatches through is a per-gateway singleton.
+            result = await asyncio.to_thread(
+                ingest_artifact, workspace, source, session_key=ctx.key
+            )
         except IngestError as exc:
             return OutboundMessage(
                 channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
                 content=f"Ingest failed: {exc}", metadata=metadata_text,
+            )
+        if result.get("job_id"):
+            # A scanned document over the inline OCR budget: the original is
+            # stored, but its text does not exist yet, so it is neither
+            # readable nor searchable. Saying "Ingested" would claim otherwise.
+            lines = [
+                f"Stored `{result['id']}` ({result['size_bytes']} bytes) — "
+                "its text is not readable yet.",
+                f"Source: `{result['source']}`",
+                f"This document is scanned: about {result['job_pages']} pages "
+                f"are being transcribed in the background (job `{result['job_id']}`). "
+                "It becomes readable and searchable when that finishes.",
+            ]
+            return OutboundMessage(
+                channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+                content="\n".join(lines), metadata=metadata_text,
             )
         return OutboundMessage(
             channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,

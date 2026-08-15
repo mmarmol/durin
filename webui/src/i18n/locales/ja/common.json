@@ -72,6 +72,7 @@
       "web-search": "ウェブ検索",
       "channels": "チャンネル",
       "memory": "メモリ",
+      "documents": "ドキュメント",
       "transcription": "音声",
       "skills-security": "スキルセキュリティ",
       "personas": "Personas",
@@ -574,6 +575,42 @@
       "crossEncoderModelPlaceholder": "モデル ID（例: BAAI/bge-reranker-base）",
       "crossEncoderTest": "テスト",
       "dreamDescription": "dream はセッションをエンティティページとスキルに統合し、重複したエンティティを排除します。毎日の cron に加え、任意のリアクティブトリガーでも実行されます。"
+    },
+    "documents": {
+      "description": "durin が添付されたドキュメントや開くよう指示されたドキュメントをどう読み取るか — 抽出の上限と、スキャンされた PDF 向けのローカル OCR です。",
+      "loadError": "ドキュメント設定を読み込めませんでした。",
+      "saveError": "{{path}} を保存できませんでした。",
+      "saveRowLabel": "{{row}}を保存",
+      "sections": {
+        "ocr": "ローカル OCR",
+        "limits": "読み取りの上限"
+      },
+      "rows": {
+        "ocrEnabled": "ローカル OCR",
+        "ocrLanguage": "認識言語",
+        "ocrInlineMaxPages": "インライン処理するページ数の上限",
+        "maxTextChars": "最長の抽出文字数",
+        "maxFileSizeMb": "読み取る最大ファイルサイズ"
+      },
+      "help": {
+        "ocrEnabled": "テキストレイヤーのないスキャン PDF のページを、CPU で動作するローカル OCR エンジンで文字起こしします。デフォルトでは無効です — 有効にすると約 200MB をインストールし、文字起こし中は約 2GB の RAM を使用し、きれいなスキャンで 1 ページあたり 1〜2 秒ほどかかります。",
+        "ocrLanguage": "内蔵モデルが読めない文字体系向け。言語を選ぶと、その認識モデル（約8 MB。初めて言語を追加する際はさらに約11 MBの共有検出モデル）を初回使用時に modelscope.cn から一度だけダウンロードします — ドキュメントがこのマシンの外に出ることはありません。",
+        "ocrInlineMaxPages": "待っている間にその場で文字起こしできる、OCR が必要なページ数です。これを超えるドキュメントはバックグラウンドジョブとなり、作業パネルから進捗を確認できます。",
+        "maxTextChars": "1 ターンに埋め込まれる抽出結果の最大文字数です。これを超えると切り詰められます。",
+        "maxFileSizeMb": "durin がテキストを抽出する添付ファイルの最大サイズです。これより大きいファイルは読み取られず、スキップとして報告されます。"
+      },
+      "language": {
+        "builtin": "内蔵 — 中国語・日本語・英語・ラテン文字",
+        "arabic": "アラビア文字",
+        "cyrillic": "キリル文字",
+        "devanagari": "デーヴァナーガリー文字",
+        "el": "ギリシャ文字",
+        "eslav": "東スラヴ語（ロシア語・ウクライナ語・ベラルーシ語）",
+        "korean": "韓国語",
+        "ta": "タミル文字",
+        "te": "テルグ文字",
+        "th": "タイ文字"
+      }
     },
     "extras": {
       "willInstall": "{{extra}} をインストールします（ダウンロード容量 約{{size}}）。",
@@ -2249,14 +2286,17 @@
   },
   "tasks": {
     "status": {
-      "needs_input": "入力が必要"
+      "needs_input": "入力が必要",
+      "queued": "待機中"
     },
     "needsInputHint": "呼び出し元のエージェントに引き渡されます — 自身のコンテキストから回答するか、あなたに確認してからこの実行を再開します。",
+    "queuedHint": "開始待ち — 文書は一度に 1 つずつ文字起こしされます。",
     "questions": "質問"
   },
   "work": {
     "steps": "{{count}} ステップ",
     "steps_one": "1 ステップ",
+    "pages": "{{done}} / {{total}} ページ",
     "panelTitle": "作業",
     "inProgress": "進行中",
     "finished": "完了（{{count}}）",
@@ -2264,9 +2304,12 @@
     "close": "作業パネルを閉じる",
     "strip": {
       "statusRunning": "実行中",
+      "statusQueued": "待機中",
       "statusDone": "完了",
       "statusFailed": "失敗",
+      "statusCancelled": "キャンセル済み",
       "runningMany": "{{count}} 件のタスクを実行中",
+      "queuedMany": "{{count}} 件のタスクが待機中",
       "needsInput": "{{label}} が回答を待っています",
       "needsInputMany": "{{count}} 件のタスクが回答を待っています",
       "view": "表示",

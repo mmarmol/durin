@@ -56,6 +56,51 @@ def test_list_sessions_includes_user_preview(tmp_path):
     assert rows[0]["preview"] == "帮我总结一下 OpenAI 的最新硬件计划"
 
 
+def test_list_sessions_preview_follows_the_latest_exchange(tmp_path):
+    """A long-lived session is labelled by its newest message, not its first.
+
+    Reproduces the box: a Slack channel key accumulated for a week, so the
+    sidebar showed it under "Today" wearing the 'hola' that opened it.
+    """
+    manager = SessionManager(tmp_path)
+    session = manager.get_or_create("slack:C0AKE2P92F7")
+    session.add_message("user", "hola")
+    session.add_message("assistant", "¡hola! ¿en qué te ayudo?")
+    manager.save(session)
+    assert manager.list_sessions()[0]["preview"] == "hola"
+
+    session.add_message("user", "analiza el ticket 23087")
+    session.add_message("assistant", "voy a trazarlo")
+    manager.save(session)
+
+    assert manager.list_sessions()[0]["preview"] == "analiza el ticket 23087"
+
+
+def test_list_sessions_preview_reads_legacy_files_from_the_tail(tmp_path):
+    """Files written before the preview was stored still label correctly."""
+    import json
+
+    manager = SessionManager(tmp_path)
+    session = manager.get_or_create("slack:C0LEGACY")
+    session.add_message("user", "primer mensaje de hace semanas")
+    for i in range(200):
+        session.add_message("assistant", f"relleno {i}")
+    session.add_message("user", "lo último que se dijo")
+    manager.save(session)
+
+    # Strip the stored preview to reproduce a file from before this version.
+    path = next(tmp_path.glob("sessions/slack_C0LEGACY.jsonl"))
+    lines = path.read_text(encoding="utf-8").splitlines()
+    meta = json.loads(lines[0])
+    meta.pop("preview", None)
+    lines[0] = json.dumps(meta, ensure_ascii=False)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    rows = manager.list_sessions()
+
+    assert rows[0]["preview"] == "lo último que se dijo"
+
+
 # --- Original regression test (from PR 2075) ---
 
 def test_get_history_drops_orphan_tool_results_when_window_cuts_tool_calls():

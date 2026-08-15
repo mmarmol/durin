@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
 import type { WorkItem } from "@/lib/types";
 import { WorkItemCard } from "./WorkItemCard";
 
@@ -371,5 +372,178 @@ describe("WorkItemCard", () => {
     // The nested node's row is indented and railed; the run's own node's is not.
     expect(screen.getByText("Nested").parentElement?.className).toMatch(/border-l/);
     expect(screen.getByText("Own").parentElement?.className).not.toMatch(/border-l/);
+  });
+
+  it("opens a started node and leaves a pending one inert", async () => {
+    const onOpenNode = vi.fn();
+    const item: WorkItem = {
+      kind: "workflow",
+      id: "r1",
+      label: "review",
+      workflow: "review",
+      status: "running",
+      startedAt: 1,
+      endedAt: null,
+      nodes: [
+        { id: "analyze", label: "Analyze", status: "done" },
+        { id: "report", label: "Report", status: "pending" },
+      ],
+    };
+    render(<WorkItemCard item={item} onOpenNode={onOpenNode} />);
+
+    await userEvent.click(screen.getByRole("button", { name: /Analyze/ }));
+    expect(onOpenNode).toHaveBeenCalledTimes(1);
+    expect(onOpenNode.mock.calls[0][1].id).toBe("analyze");
+
+    // A pending node has not run: no manifest row, no session, nothing to show.
+    expect(screen.queryByRole("button", { name: /Report/ })).not.toBeInTheDocument();
+  });
+
+  it("leaves a nested sub-workflow node inert", () => {
+    const item: WorkItem = {
+      kind: "workflow",
+      id: "r1",
+      label: "review",
+      workflow: "review",
+      status: "running",
+      startedAt: 1,
+      endedAt: null,
+      nodes: [{ id: "inner", label: "Inner", status: "done", parentNode: "sub" }],
+    };
+    render(<WorkItemCard item={item} onOpenNode={vi.fn()} />);
+    // Its frames are re-keyed onto the caller's run, so the caller's manifest has
+    // no row for it — the executions pane is where it is reachable.
+    expect(screen.queryByRole("button", { name: /Inner/ })).not.toBeInTheDocument();
+  });
+
+  it("leaves every node inert when the run's workflow name is unknown", () => {
+    // `label` falls back to the run id when the frame did not name the workflow;
+    // without the real name the panel cannot fetch the run's manifest, so the
+    // affordance would open a drawer that can never fill.
+    const item: WorkItem = {
+      kind: "workflow",
+      id: "r1",
+      label: "r1",
+      status: "running",
+      startedAt: 1,
+      endedAt: null,
+      nodes: [{ id: "analyze", label: "Analyze", status: "done" }],
+    };
+    render(<WorkItemCard item={item} onOpenNode={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: /Analyze/ })).not.toBeInTheDocument();
+  });
+
+  it("renders page progress for a running job", () => {
+    render(
+      <WorkItemCard
+        item={{
+          kind: "job",
+          id: "job1",
+          label: "scanned-book.pdf",
+          status: "running",
+          unitsDone: 137,
+          unitsTotal: 412,
+          startedAt: 0,
+          endedAt: null,
+        }}
+      />,
+    );
+    expect(screen.getByText("scanned-book.pdf")).toBeInTheDocument();
+    // work.pages with done=137, total=412 renders as "137 of 412 pages"
+    expect(screen.getByText("137 of 412 pages")).toBeInTheDocument();
+  });
+
+  it("shows the full page count on a finished job, not a stale partial one", () => {
+    // A job at "done" always has unitsDone === unitsTotal (the worker only
+    // calls finish() after every page is recorded) — the card must read the
+    // props it was given, not something that could lag behind at completion.
+    render(
+      <WorkItemCard
+        item={{
+          kind: "job",
+          id: "job2",
+          label: "scanned-book.pdf",
+          status: "done",
+          unitsDone: 412,
+          unitsTotal: 412,
+          startedAt: 0,
+          endedAt: 100,
+        }}
+      />,
+    );
+    expect(screen.getByText("412 of 412 pages")).toBeInTheDocument();
+    expect(screen.queryByText(/137/)).not.toBeInTheDocument();
+  });
+
+  it("shows why a failed job failed", () => {
+    render(
+      <WorkItemCard
+        item={{
+          kind: "job",
+          id: "job4",
+          label: "scanned-book.pdf",
+          status: "failed",
+          unitsDone: 7,
+          unitsTotal: 412,
+          error: "page 7: OSError: no space left on device",
+          startedAt: 0,
+          endedAt: 100,
+        }}
+      />,
+    );
+    expect(
+      screen.getByText(/page 7: OSError: no space left on device/),
+    ).toBeInTheDocument();
+  });
+
+  it("renders a queued job as waiting, with no spinner and no ticker", () => {
+    // Under the one-worker OCR cap, every book but the first in a
+    // multi-document ingest sits here. Rendering it as running gave it the
+    // amber spinner and a live clock over work nobody had started.
+    const { container } = render(
+      <WorkItemCard
+        item={{
+          kind: "job",
+          id: "job5",
+          label: "second-book.pdf",
+          status: "queued",
+          unitsDone: 0,
+          unitsTotal: 300,
+          startedAt: 0,
+          endedAt: null,
+        }}
+      />,
+    );
+    expect(screen.getByText("Queued")).toBeInTheDocument();
+    expect(
+      screen.getByText("Waiting to start — one document is transcribed at a time."),
+    ).toBeInTheDocument();
+    // A still clock, not the running spinner.
+    expect(container.querySelector(".lucide-clock")).toBeInTheDocument();
+    expect(container.querySelector(".animate-spin")).not.toBeInTheDocument();
+    // The page count is still shown: it is the size of the work ahead.
+    expect(screen.getByText("0 of 300 pages")).toBeInTheDocument();
+  });
+
+  it("renders a distinct icon for a cancelled job instead of the needs-input one", () => {
+    const { container } = render(
+      <WorkItemCard
+        item={{
+          kind: "job",
+          id: "job3",
+          label: "scanned-book.pdf",
+          status: "cancelled",
+          unitsDone: 50,
+          unitsTotal: 412,
+          startedAt: 0,
+          endedAt: 100,
+        }}
+      />,
+    );
+    // Ban is lucide-react's cancelled glyph (className "lucide-ban"); without a
+    // dedicated cancelled arm, ItemStatusIcon falls through to the needs_input
+    // HelpCircle instead.
+    expect(container.querySelector(".lucide-ban")).toBeInTheDocument();
+    expect(container.querySelector(".lucide-help-circle")).not.toBeInTheDocument();
   });
 });

@@ -76,10 +76,5 @@ scripts/hypothesis_test/v9_runs/
 # Real assets live under webui/ and docs/ and are unaffected by the root scope.
 /*.png
 
-# Test-mock leak guard: a test that mocks a path object and lets a real
-# cross_process_lock run writes a file named after the mock's repr (e.g.
-# "<MagicMock ...>.lock") into the CWD. Never let one get swept into a commit.
-*MagicMock*
-
 # Stray `go build` output when built from bridge/ directly.
 bridge/bridge

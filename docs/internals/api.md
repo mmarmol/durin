@@ -45,7 +45,7 @@ automatically extends the contract and the HTTP surface.
 **Persisted, scoped, hashed token store.** Authentication uses
 `ApiTokenStore` — a file-backed store that persists salted SHA-256 hashes, never
 plaintext tokens. Tokens carry explicit scope grants (e.g.
-`sessions:read`, `mcp:write`, `admin`). The store survives process restarts and
+`sessions:read`, `mcp:write`, `chat:write`, `admin`). The store survives process restarts and
 is shared between the gateway daemon and the CLI, so a token issued in one
 context is valid in the other without any in-memory state.
 
@@ -83,6 +83,7 @@ flowchart TD
     gwapp -->|/api/v1/*| apiapp
     gwapp --> bootstrap["GET /webui/bootstrap\nmints admin token"]
     gwapp --> media["GET /api/media/{sig}/{payload}\nHMAC-signed media fetch"]
+    gwapp --> openai["POST /v1/chat/completions + GET /v1/models\nbuild_openai_routes → AgentLoop.process_direct"]
     gwapp --> spa["Mount / → _SpaStaticFiles\nSPA with index.html fallback"]
 
     subgraph auth["Auth flow"]
@@ -206,6 +207,48 @@ surface with no `hook_dispatcher` wired the route reports 503 rather than 404,
 the same "not available here" shape the loops runtime's other routes use. See
 [loops.md](loops.md) for what the dispatcher does with a matched request.
 
+### OpenAI-compatible `/v1` surface
+
+`durin/api/openai_routes.py` builds `POST /v1/chat/completions` and
+`GET /v1/models` through `build_openai_routes()`, spliced into the gateway app
+ahead of the SPA mount. The routes exist only when `build_gateway_http_app` is
+given an `agent_loop` — the gateway passes its live loop, so the API and every
+chat surface share one agent, one memory, and one session store; an app built
+without it simply has no `/v1`.
+
+Both routes require `Authorization: Bearer` with the `chat:write` scope
+(`admin` short-circuits as everywhere). The module never imports `asgi`: the
+resolver is injected as a `resolve_principal(headers)` callable wrapping
+`resolve_principal_from_headers`. Auth failures answer in OpenAI's error shape
+(`{"error": {message, type, code}}`, `authentication_error` / `permission_error`)
+rather than problem+json — an OpenAI client surfaces those cleanly, and callers
+of this surface are OpenAI clients by definition.
+
+The contract is session-oriented, which is the substantive difference from a
+stateless OpenAI endpoint: exactly one user message per request, with history
+held server-side under `api:{session_id}` (`api:default` when the caller sends
+no id). A request carrying `tools`, `tool_choice`, `functions`, or
+`function_call` is rejected with 400 — durin runs its tools inside the turn, and
+silently ignoring the field would leave a caller waiting for tool-call callbacks
+that never come.
+
+Turns run through `AgentLoop.process_direct` under a per-session `asyncio.Lock`
+held in the closure, so concurrent calls on one session queue instead of
+colliding, wrapped in `asyncio.wait_for(gateway.api_request_timeout)`. An empty
+final response is retried once before falling back to
+`EMPTY_FINAL_RESPONSE_MESSAGE`; a timeout answers 504.
+
+Streaming hands back a `StreamingResponse` fed by a queue that
+`process_direct`'s `on_stream` callback fills. `on_stream_end` deliberately does
+nothing: it marks generation-segment boundaries, and a tool-using turn continues
+past them, so the HTTP stream closes only when `process_direct` returns. A
+completed stream emits a `finish_reason: "stop"` chunk then `data: [DONE]`; a
+failed one emits a single `{"error": ...}` frame and **omits** `[DONE]`, which is
+how a client distinguishes truncation from completion.
+
+These routes are hand-mounted, not registry routes, so — like bootstrap, media,
+and hooks — they are outside the generated OpenAPI contract.
+
 ### WebSocket chat
 
 The WebSocket route calls `chat_ws_endpoint`, which authenticates via
@@ -286,6 +329,7 @@ URL signing (`get_or_create_media_secret()`), stored base64-encoded in the same
 | `channels.websocket.websocket_requires_token` | When true (default), the WS handshake must include a valid token (static or issued); when false, unauthenticated connections are allowed |
 | `tools.mcp_servers` | List of MCP server configs; `McpService.update` (PATCH) and other MCP routes mutate this via `save_config` |
 | Gateway host/port | Set via the `--port` flag or config; uvicorn runs in the agent event loop; WS and HTTP share the same port |
+| `gateway.api_request_timeout` | Per-request timeout (seconds) for `/v1/chat/completions` turns; a non-streaming overrun answers 504 |
 
 `TranscriptionService` exists in the codebase but is not HTTP-exposed (it
 carries no `@route` decorator on any method). Its configuration
@@ -311,6 +355,26 @@ list for workflow-kind tasks) used by the work panel to render per-node and
 per-branch progress. See the generated OpenAPI contract
 (`contract/openapi-v1.json`) and `TasksService` (`durin/service/tasks.py`) for
 the authoritative field definitions.
+
+**`POST /api/v1/channels/post`** (scope `channels:write`,
+`ChannelPostService`) posts a message through a running channel *and records it
+in the session that conversation belongs to*. It exists because workflow script
+nodes run as subprocesses and cannot reach the in-process `ChannelManager`;
+without a door they post to the platform API directly, and the conversation
+then exists only on the platform. Recording is the point of the route rather
+than a side effect: a session is created solely by the loop consuming an
+inbound message, so an outbound send alone leaves no chat behind. The key it
+records under is the one the channel derives for that conversation
+(`channel:chat_id`, plus `:thread_id` where the channel threads), so a later
+human reply continues the same session instead of opening a second one beside
+it. The transcript is written directly rather than published as an inbound
+event — an inbound would run a turn and durin would answer its own post.
+
+This carries the workflow's own prose, not loop status: where an *outcome*
+goes is decided by `durin.loops.outcome.route`, which deliberately refuses to
+report internal status to the external party a channel origin identifies.
+`channels:write` is its own scope because speaking outward as durin, to a
+counterpart, is a different power from editing a session file.
 
 **`GET /api/v1/health`** is the only unauthenticated route *within the
 bearer-gated API surface* (the special routes outside it — webui bootstrap,
@@ -344,6 +408,8 @@ Every error response is RFC 9457 `application/problem+json` with
 | `GET /api/v1/mcp/oauth/callback` | OAuth provider redirect for gateway-driven MCP sign-in; gated by a single-use state token, not a bearer token |
 | `GET /api/media/{sig}/{payload}` | HMAC-signed media fetch; signature verified against the per-process media secret |
 | `POST /api/v1/hooks/{hook}` | Webhook trigger ingress for [loops](loops.md); gated by `X-Durin-Hook-Secret`, not a bearer token |
+| `POST /v1/chat/completions` | OpenAI-compatible chat; bearer token with the `chat:write` scope (see below) |
+| `GET /v1/models` | Reports the configured model id; same `chat:write` gate |
 | WebSocket at `channel._expected_path()` | Chat endpoint; auth via query-param token before `accept()`; backed by `StarletteConnectionAdapter` |
 | `Mount /` | SPA static files with `index.html` fallback for history-mode routing |
 

@@ -43,6 +43,7 @@ REGISTRY: dict[str, FeatureExtra] = {
     "stt": FeatureExtra("stt", "stt", "sherpa_onnx", True, "~30 MB", "Audio transcription (Parakeet/SenseVoice)"),
     "voice": FeatureExtra("voice", "voice", "sounddevice", False, "~5 MB", "Microphone recording"),
     "tts": FeatureExtra("tts", "tts", "supertonic", True, "~260 MB", "Speech synthesis (Supertonic)"),
+    "ocr": FeatureExtra("ocr", "ocr", "rapidocr", True, "~200 MB", "Local OCR (scanned PDFs)"),
 }
 
 _LOCKS: dict[str, threading.Lock] = {}
@@ -130,15 +131,25 @@ def _lock_for(feature: str) -> threading.Lock:
 
 
 def ensure_extra(feature: str, *, config) -> EnsureResult:
-    """Ensure ``feature``'s pip extra is importable, installing it if allowed."""
+    """Ensure ``feature``'s pip extra is importable, installing it if allowed.
+
+    ``config`` must be the loaded app config: the install is gated by
+    ``config.install.auto_install_extras``, and a caller without one (``None``)
+    cannot prove the user hasn't opted out, so the gate refuses ("disabled")
+    instead of installing.
+    """
     fe = REGISTRY[feature]
     if _module_present(fe.module):
         return EnsureResult("present", feature, fe.needs_restart)
     install_cfg = getattr(config, "install", None)
-    if install_cfg is not None and not getattr(install_cfg, "auto_install_extras", True):
+    if install_cfg is None or not getattr(install_cfg, "auto_install_extras", True):
+        # The manual command mirrors how durin is actually installed (pipx
+        # or uv tool, per the install guide) — a bare `pip install` would
+        # target an interpreter the app venv does not expose.
         return EnsureResult(
             "disabled", feature, fe.needs_restart,
-            f"Run: pip install durin-agent[{fe.extra}]",
+            f"Run: pipx inject durin-agent 'durin-agent[{fe.extra}]' — or, "
+            f"for a uv install: uv tool install 'durin-agent[{fe.extra}]'",
         )
     with _lock_for(feature):
         if _module_present(fe.module):

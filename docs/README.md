@@ -41,6 +41,8 @@ How to install, configure, and run durin.
   the other chat surfaces.
 - [Providers & models](guide/providers.md) — choosing LLM providers and models,
   API keys, and aux-model presets.
+- [OpenAI-compatible API](guide/openai-api.md) — letting another agent or any
+  OpenAI client talk to durin, with a scoped token.
 - [Documents & your knowledge](guide/documents.md) — giving durin your documents
   (PDF, Office, EPUB, web pages) to read now or remember into the Library.
 - [Workflows](guide/workflows.md) — defining and running multi-step flow

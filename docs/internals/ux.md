@@ -216,7 +216,12 @@ text is extracted and folded into the message by `extract_documents`
 **saved on-disk path** (`[File: <name> — saved on disk at <path>]`), not just the
 name, so when the user asks to *remember* an attached document the agent can
 `memory_ingest("<path>")` it directly instead of asking for a path it doesn't
-have.
+have. When extraction fails instead — a corrupt file, or a scanned PDF needing
+more OCR than `documents.ocr.inline_max_pages` allows — the reason is folded in
+the same way rather than dropped: `[File: <name> — could not be read inline:
+<reason>. Saved on disk at <path>]`. For an over-budget scan the reason is
+itself the instruction to ingest the document as a background job, so the agent
+can act on it without asking the user for anything.
 
 **Rich fenced blocks.** Code blocks tagged `html`, `svg`, `mermaid`, or
 `vega-lite` render inline as a `RichBlock`. Each block shows a header strip with
@@ -560,7 +565,7 @@ operations are safe from both async channel handlers and sync CLI contexts.
 | `BuiltinCommandSpec` / `cmd_*` | `durin/command/builtin.py` | Slash-command metadata (`BUILTIN_COMMAND_SPECS` tuple) and async handlers for `/new`, `/stop`, `/restart`, `/status`, `/usage`, `/retry`, `/model`, `/persona`, `/effort`, `/history`, `/goal`, `/help`, `/plan`, `/build`, `/mode`, `/sessions`, `/resume`, `/compact`, `/copy`, `/name`, `/hotkeys`, `/memory`, `/skills`, `/remember`, `/forget`, `/sources`, `/audit`, `/why`, `/version`, `/pairing` |
 | `DurinApp` | `durin/cli/tui/app.py` | Textual TUI app; `on_mount` spawns `agent_loop.run()` and `_consume_outbound`; maps metadata flags to widget operations |
 | `run_interactive` | `durin/cli/commands.py` | Interactive CLI loop: `PromptSession`, surrogate-sanitize, drag-drop pre-process, bus publish, `_consume_outbound` render |
-| `Config` | `durin/config/schema.py` | Pydantic `BaseSettings` root: `agents`, `providers`, `channels`, `tools`, `memory`, `gateway`, `api`, `telemetry`, `appearance`, `model_presets`, `skills`, etc. |
+| `Config` | `durin/config/schema.py` | Pydantic `BaseSettings` root: `agents`, `providers`, `channels`, `tools`, `memory`, `gateway`, `telemetry`, `appearance`, `model_presets`, `skills`, etc. |
 | `load_config` / `save_config` / `mutate_config` | `durin/config/loader.py` | Config I/O: layout-transparent (split or legacy monolith); atomic cross-process write; auto-migration to split on first use |
 | `SecretStore` | `durin/security/secrets.py` | Plaintext-0600 JSON store; `SecretEntry` fields: `value`, `service`, `account`, `description`, `scope`, `origin`, `created_at` (`name` is the map key, not a model field) |
 | `resolve_secret` / `SecretRedactor` | `durin/security/secrets.py` | `resolve_secret()` dereferences `${secret:NAME}` at use; `SecretRedactor` applies value-based + pattern-based redaction on tool results |

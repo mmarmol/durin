@@ -29,6 +29,7 @@ from durin.session.manager import Session, SessionManager
 from durin.workflow.engine import NodeExecutionError, NodeRunRequest, NodeRunResponse
 from durin.workflow.node_progress import NodeCheckpointHook, NodeProgressHook
 from durin.workflow.persona_resolve import resolve_persona
+from durin.workflow.session_keys import is_persistent_session, node_session_key
 
 
 class _CrossLoopTool(Tool):
@@ -127,18 +128,18 @@ class AgentNodeRunner:
 
     @staticmethod
     def _is_persistent(req: NodeRunRequest) -> bool:
-        # Parallel units (worker fan-out / branch forks) always get per-unit fresh
-        # sessions; the parser also rejects persistent on them (defense in depth).
-        return (getattr(req.node, "session", "fresh") == "persistent"
-                and req.worker_index is None and req.workspace_override is None)
+        return is_persistent_session(
+            req.node, worker_index=req.worker_index,
+            isolated=req.workspace_override is not None,
+        )
 
     @classmethod
     def _session_key(cls, req: NodeRunRequest) -> str:
-        if cls._is_persistent(req):
-            return f"workflow:{req.run_id}:{req.node.id}"
-        if req.worker_index is not None:
-            return f"workflow:{req.run_id}:{req.node.id}:{req.iteration}:{req.worker_index}"
-        return f"workflow:{req.run_id}:{req.node.id}:{req.iteration}"
+        return node_session_key(
+            req.run_id, req.node, req.iteration,
+            worker_index=req.worker_index,
+            isolated=req.workspace_override is not None,
+        )
 
     def _build_tools(self, node, workspace_override: str | None = None) -> ToolRegistry:
         """Build the node's tool registry: its built-in set ('none'→empty,

@@ -149,7 +149,7 @@ class WorkflowRunResult(Result):
     final_output: str
     final_output_node: str = ""       # which node's output became final_output
     run_id: str                       # the run's manifest id — the key for the read routes below
-    runs: list[dict[str, Any]]        # per-node trace: node_id/iteration/passed/session_key/worker_index/branch_id/budget/status/route_label/exit_code/output
+    runs: list[dict[str, Any]]        # per-node trace: node_id/iteration/passed/session_key/worker_index/branch_id/budget/status/route_label/exit_code/command/stdout/stderr/output
     output_dir: str = ""
     exhausted_node: str = ""
     needs_input_node: str = ""        # set when status=="needs_input": the node that asked
@@ -606,6 +606,12 @@ class WorkflowsService:
                  "branch_id": r.branch_id, "budget": r.budget,
                  "status": r.status, "route_label": r.route_label,
                  "exit_code": getattr(r, "exit_code", None),
+                 # Script nodes: the same record the manifest keeps, so a run
+                 # opened straight from the editor reads like a stored one
+                 # instead of showing an exit code with no output beside it.
+                 "command": getattr(r, "command", None),
+                 "stdout": getattr(r, "stdout", None),
+                 "stderr": getattr(r, "stderr", None),
                  "output": (r.output or "")[:2000]}
                 for r in result.runs
             ],
@@ -671,6 +677,7 @@ class WorkflowsService:
             self._workspace,
             default_timeout=app_config.workflow.script_timeout,
             max_output_chars=app_config.workflow.script_output_max_chars,
+            log_max_chars=app_config.workflow.script_log_max_chars,
         )
         judge = AgentJudgeRunner(runner, default_model=provider.get_default_model())
         ws = str(self._workspace)

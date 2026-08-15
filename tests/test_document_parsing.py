@@ -321,3 +321,216 @@ class TestIsTextExtension:
         assert _is_text_extension(".txt") is True
         assert _is_text_extension(".TXT") is False
         assert _is_text_extension(".pdf") is False
+
+
+def test_extract_documents_honours_an_explicit_size_limit(tmp_path):
+    from durin.utils.document import extract_documents
+
+    big = tmp_path / "big.txt"
+    big.write_text("x" * 5000)
+
+    text, images = extract_documents("hello", [str(big)], max_file_size=1000)
+    assert "x" * 100 not in text
+    assert images == []
+
+
+def test_extract_documents_reports_a_skipped_oversized_file(tmp_path):
+    # A silently dropped attachment reads to the user as durin ignoring them.
+    from durin.utils.document import extract_documents
+
+    big = tmp_path / "huge.pdf"
+    big.write_bytes(b"%PDF-1.4" + b"0" * 5000)
+
+    text, _ = extract_documents("hello", [str(big)], max_file_size=1000)
+    assert "huge.pdf" in text
+    assert "too large" in text.lower()
+
+
+def test_configured_max_file_size_reads_the_configured_value(tmp_path, monkeypatch):
+    # A non-default value, well clear of both the schema default (50) and the
+    # module's fallback constant (also 50) — the two cannot be told apart by
+    # a value that happens to equal either, so this pins the real read.
+    import json
+
+    from durin.utils.document import _configured_max_file_size
+
+    (tmp_path / "config.json").write_text(
+        json.dumps({"documents": {"maxFileSizeMb": 3}})
+    )
+    monkeypatch.setenv("DURIN_HOME", str(tmp_path))
+
+    assert _configured_max_file_size() == 3 * 1024 * 1024
+
+
+def test_configured_max_text_chars_reads_the_configured_value(tmp_path, monkeypatch):
+    import json
+
+    from durin.utils.document import _configured_max_text_chars
+
+    (tmp_path / "config.json").write_text(
+        json.dumps({"documents": {"maxTextChars": 1500}})
+    )
+    monkeypatch.setenv("DURIN_HOME", str(tmp_path))
+
+    assert _configured_max_text_chars() == 1500
+
+
+def test_extract_documents_reports_an_over_budget_scan_instead_of_dropping_it(
+    tmp_path, monkeypatch
+):
+    # The flagship OCR case: a scanned book attached in chat with OCR on.
+    # convert_file_to_markdown raises NeedsOcrJob because its page count
+    # blows the inline budget; that used to vanish as an [error:] string the
+    # drop gate discarded. The model must see the filename, the on-disk
+    # path, and the "Ingest" instruction instead.
+    import json
+
+    from durin.utils.document import extract_documents
+    from tests.tools.test_read_enhancements import _write_text_pdf
+
+    monkeypatch.setenv("DURIN_HOME", str(tmp_path))
+    (tmp_path / "config.json").write_text(
+        json.dumps({"documents": {"ocr": {"enabled": True, "inline_max_pages": 2}}})
+    )
+    # The [ocr] extra is not part of CI's install set, so engine_available()
+    # would read False there and this test would take the engine-missing
+    # coverage-note branch instead of raising NeedsOcrJob — never exercising
+    # the fix under test. Force it available so the test is deterministic
+    # regardless of what is or isn't installed on the machine running it.
+    monkeypatch.setattr("durin.memory.doc_convert.engine_available", lambda: True)
+
+    pdf = tmp_path / "book.pdf"
+    _write_text_pdf(pdf, [""] * 8)
+
+    text, images = extract_documents("please remember this book", [str(pdf)])
+
+    assert "book.pdf" in text
+    assert str(pdf) in text
+    assert "Ingest" in text
+    assert images == []
+
+
+def test_extract_documents_reports_a_blank_scan_instead_of_a_silent_empty_file(
+    tmp_path, monkeypatch
+):
+    # A scanned PDF whose pages ALL transcribe blank must not vanish the way
+    # an unraised empty string used to -- it has to name the file and say
+    # why, like every other extraction failure this gate already covers.
+    import json
+
+    from durin.utils.document import extract_documents
+    from tests.tools.test_read_enhancements import _write_text_pdf
+
+    monkeypatch.setenv("DURIN_HOME", str(tmp_path))
+    (tmp_path / "config.json").write_text(
+        json.dumps({"documents": {"ocr": {"enabled": True, "inline_max_pages": 5}}})
+    )
+    # engine_available() would read False in CI (no [ocr] extra installed
+    # there), taking the engine-missing coverage-note branch instead of ever
+    # reaching the blank-after-OCR raise this test is about.
+    monkeypatch.setattr("durin.memory.doc_convert.engine_available", lambda: True)
+    from durin.memory.ocr import TranscribedPage
+
+    blank = TranscribedPage(text="", mean_score=None, min_score=None, det_boxes=0)
+    monkeypatch.setattr(
+        "durin.memory.doc_convert.transcribe_pages_detached",
+        lambda path, pages, language=None: {p: blank for p in pages},
+    )
+
+    pdf = tmp_path / "blank_scan.pdf"
+    _write_text_pdf(pdf, ["", ""])
+
+    text, images = extract_documents("please remember this", [str(pdf)])
+
+    assert "blank_scan.pdf" in text
+    assert "could not be read inline" in text
+    assert images == []
+
+
+def test_extract_documents_reports_a_corrupt_file_instead_of_dropping_it(tmp_path):
+    # The [error:] gate predates the OCR branch — it silently dropped
+    # corrupt files too. The fix covers the whole defect class, not just
+    # NeedsOcrJob.
+    from durin.utils.document import extract_documents
+
+    corrupt = tmp_path / "broken.pdf"
+    corrupt.write_bytes(b"not a real pdf, just garbage bytes" * 5)
+
+    text, images = extract_documents("hello", [str(corrupt)])
+
+    assert "broken.pdf" in text
+    assert "could not be read inline" in text
+    assert images == []
+
+
+def test_extract_documents_error_line_does_not_repeat_the_filename(
+    tmp_path, monkeypatch
+):
+    # The reason inside "could not be read inline: ..." usually BEGINS with
+    # the same filename the line already names (DocConvertError messages lead
+    # with path.name) — "book.pdf — could not be read inline: book.pdf
+    # yielded no..." says the name twice in a row. The composed line strips
+    # that leading repeat, whether the name is followed by a space or a colon.
+    from durin.utils import document as doc_mod
+
+    f = tmp_path / "book.pdf"
+    f.write_bytes(b"%PDF-1.4 x")
+
+    monkeypatch.setattr(
+        doc_mod, "extract_text",
+        lambda p: "[error: book.pdf yielded no extractable text even after "
+                  "OCR — every transcribed page came back blank.]",
+    )
+    text, _ = doc_mod.extract_documents("hello", [str(f)])
+    assert "book.pdf — could not be read inline: yielded no extractable" in text
+    assert "could not be read inline: book.pdf" not in text
+
+    monkeypatch.setattr(
+        doc_mod, "extract_text",
+        lambda p: "[error: book.pdf: 3 of 8 pages need OCR, over the inline "
+                  "limit of 2. Ingest the document to have it transcribed as "
+                  "a background job.]",
+    )
+    text, _ = doc_mod.extract_documents("hello", [str(f)])
+    assert "book.pdf — could not be read inline: 3 of 8 pages need OCR" in text
+    assert "could not be read inline: book.pdf" not in text
+
+
+def test_extract_documents_error_line_keeps_a_reason_without_the_filename(
+    tmp_path, monkeypatch
+):
+    # A reason that never names the file (markitdown wrap failures, io
+    # errors) must pass through untouched — the de-dup only strips a leading
+    # repeat of this file's own name.
+    from durin.utils import document as doc_mod
+
+    f = tmp_path / "book.pdf"
+    f.write_bytes(b"%PDF-1.4 x")
+    monkeypatch.setattr(
+        doc_mod, "extract_text",
+        lambda p: "[error: failed to extract .pdf: EOF marker not found]",
+    )
+
+    text, _ = doc_mod.extract_documents("hello", [str(f)])
+
+    assert (
+        "book.pdf — could not be read inline: failed to extract .pdf: "
+        "EOF marker not found" in text
+    )
+
+
+def test_extract_documents_still_inlines_an_ordinary_pdf(tmp_path):
+    # Regression: a normal text PDF must keep inlining cleanly with no
+    # error line — the fix only changes what happens to [error:] strings.
+    from durin.utils.document import extract_documents
+    from tests.tools.test_read_enhancements import _write_text_pdf
+
+    pdf = tmp_path / "report.pdf"
+    _write_text_pdf(pdf, ["Quarterly revenue is $5M"])
+
+    text, images = extract_documents("summarize", [str(pdf)])
+
+    assert "Quarterly revenue is $5M" in text
+    assert "[error:" not in text
+    assert "could not be read inline" not in text
+    assert images == []

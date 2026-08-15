@@ -82,6 +82,10 @@ function workItemFromWorkflowEvent(
     kind: "workflow",
     id: runId,
     label,
+    // Only when the frame actually named it: `label` above falls back to the run
+    // id, and a surface that fetches the run's manifest by name needs to know the
+    // difference between a name and a stand-in.
+    ...(args?.workflow ? { workflow: args.workflow } : {}),
     ...(task !== undefined ? { task } : {}),
     status: e.phase === "end" ? "done" : "running",
     nodes,
@@ -227,9 +231,16 @@ export function useWorkState(
             kind: r.kind,
             id: r.id,
             label: r.label,
+            // The tasks API's label for a workflow item IS the workflow name (it
+            // comes from the run manifest), unlike the live frame's run-id
+            // fallback — so here the two can safely be the same value.
+            ...(r.kind === "workflow" && r.label ? { workflow: r.label } : {}),
             status: r.status,
             ...(r.task != null ? { task: r.task } : {}),
             ...(r.needs_input_detail != null ? { needsInputDetail: r.needs_input_detail } : {}),
+            ...(r.units_total != null ? { unitsTotal: r.units_total } : {}),
+            ...(r.units_done != null ? { unitsDone: r.units_done } : {}),
+            ...(r.error != null ? { error: r.error } : {}),
             // The API sends epoch seconds (Python time.time()); WorkItem.startedAt/
             // endedAt are epoch milliseconds everywhere else (the live WS path below
             // sets them from Date.now()) — convert here, at the boundary, so a
@@ -281,6 +292,7 @@ export function useWorkState(
       const decided =
         polledItem != null &&
         polledItem.status !== "running" &&
+        polledItem.status !== "queued" &&
         polledItem.status !== "needs_input";
       if (decided) continue;
       // A live item's startedAt is only when THIS browser saw its first frame;
@@ -298,11 +310,16 @@ export function useWorkState(
 
     return Array.from(byId.values());
   }, [polled, liveVersion]);
+  // "queued" belongs with the active work, not the finished list: a job
+  // waiting for the single OCR worker slot has not run yet, and sorting it
+  // among finished items by an endedAt it does not have would bury it.
   const active = all.filter(
-    (w) => w.status === "running" || w.status === "needs_input",
+    (w) => w.status === "running" || w.status === "queued" || w.status === "needs_input",
   );
   const finished = all
-    .filter((w) => w.status !== "running" && w.status !== "needs_input")
+    .filter(
+      (w) => w.status !== "running" && w.status !== "queued" && w.status !== "needs_input",
+    )
     .sort((a, b) => (b.endedAt ?? b.startedAt) - (a.endedAt ?? a.startedAt));
 
   const refresh = useCallback(() => {

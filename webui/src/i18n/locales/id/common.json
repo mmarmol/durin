@@ -72,6 +72,7 @@
       "web-search": "Pencarian web",
       "channels": "Saluran",
       "memory": "Memori",
+      "documents": "Dokumen",
       "transcription": "Suara",
       "skills-security": "Keamanan skill",
       "personas": "Personas",
@@ -574,6 +575,42 @@
       "crossEncoderModelPlaceholder": "id model (mis. BAAI/bge-reranker-base)",
       "crossEncoderTest": "Tes",
       "dreamDescription": "Dream mengonsolidasi sesi menjadi halaman entitas + skill dan mendeduplikasi entitas duplikat. Berjalan pada cron harian plus trigger reaktif opsional."
+    },
+    "documents": {
+      "description": "Cara durin membaca dokumen yang Anda lampirkan atau minta untuk dibuka — batas ekstraksi dan OCR lokal untuk PDF hasil pindaian.",
+      "loadError": "Tidak dapat memuat pengaturan dokumen.",
+      "saveError": "Tidak dapat menyimpan {{path}}.",
+      "saveRowLabel": "Simpan {{row}}",
+      "sections": {
+        "ocr": "OCR lokal",
+        "limits": "Batas pembacaan"
+      },
+      "rows": {
+        "ocrEnabled": "OCR lokal",
+        "ocrLanguage": "Bahasa pengenalan",
+        "ocrInlineMaxPages": "Batas halaman langsung",
+        "maxTextChars": "Ekstraksi terpanjang",
+        "maxFileSizeMb": "Berkas terbesar yang dibaca"
+      },
+      "help": {
+        "ocrEnabled": "Mentranskripsikan halaman PDF hasil pindaian yang tidak memiliki lapisan teks menggunakan mesin OCR lokal yang berjalan di CPU. Nonaktif secara default — mengaktifkannya akan menginstal ~200 MB, menggunakan ~2 GB RAM saat mentranskripsi, dan membutuhkan sekitar 1-2 detik per halaman pada pindaian yang bersih.",
+        "ocrLanguage": "Untuk aksara yang tidak bisa dibaca model bawaan. Memilih bahasa akan mengunduh model pengenalannya (sekitar 8 MB, ditambah sekitar 11 MB model deteksi bersama saat pertama kali bahasa apa pun ditambahkan) dari modelscope.cn satu kali, saat pertama dipakai — dokumen Anda tidak pernah meninggalkan mesin ini.",
+        "ocrInlineMaxPages": "Halaman yang perlu OCR dan dapat ditranskripsikan sambil Anda menunggu. Dokumen yang butuh lebih banyak akan menjadi tugas latar belakang yang dapat dipantau dari panel kerja.",
+        "maxTextChars": "Ekstraksi terpanjang yang disisipkan ke dalam satu giliran sebelum dipotong.",
+        "maxFileSizeMb": "Lampiran terbesar yang teksnya akan diekstrak oleh durin. Berkas yang lebih besar dilaporkan sebagai dilewati, bukan dibaca."
+      },
+      "language": {
+        "builtin": "Bawaan — Tionghoa, Jepang, Inggris & aksara Latin",
+        "arabic": "Arab",
+        "cyrillic": "Sirilik",
+        "devanagari": "Dewanagari",
+        "el": "Yunani",
+        "eslav": "Slavia Timur (Rusia, Ukraina, Belarusia)",
+        "korean": "Korea",
+        "ta": "Tamil",
+        "te": "Telugu",
+        "th": "Thai"
+      }
     },
     "extras": {
       "willInstall": "Ini akan menginstal {{extra}} (~{{size}} unduhan).",
@@ -2249,14 +2286,17 @@
   },
   "tasks": {
     "status": {
-      "needs_input": "Butuh input"
+      "needs_input": "Butuh input",
+      "queued": "Dalam antrean"
     },
     "needsInputHint": "Diserahkan ke agen pemanggil — agen ini bisa menjawab dari konteksnya sendiri atau bertanya ke Anda, lalu melanjutkan run ini.",
+    "queuedHint": "Menunggu untuk mulai — dokumen ditranskripsi satu per satu.",
     "questions": "Pertanyaan"
   },
   "work": {
     "steps": "{{count}} langkah",
     "steps_one": "1 langkah",
+    "pages": "{{done}} dari {{total}} halaman",
     "panelTitle": "Kerja",
     "inProgress": "Sedang berlangsung",
     "finished": "Selesai ({{count}})",
@@ -2264,9 +2304,12 @@
     "close": "Tutup panel kerja",
     "strip": {
       "statusRunning": "berjalan",
+      "statusQueued": "dalam antrean",
       "statusDone": "selesai",
       "statusFailed": "gagal",
+      "statusCancelled": "dibatalkan",
       "runningMany": "{{count}} tugas sedang berjalan",
+      "queuedMany": "{{count}} tugas dalam antrean",
       "needsInput": "{{label}} membutuhkan jawaban Anda",
       "needsInputMany": "{{count}} tugas membutuhkan jawaban Anda",
       "view": "Lihat",

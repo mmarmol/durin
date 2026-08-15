@@ -186,6 +186,29 @@ describe("useWorkState", () => {
     });
   });
 
+  it("a queued job is active work, not finished", async () => {
+    // The active/finished split was "running or needs_input" vs everything
+    // else, so a job waiting for the OCR slot fell into finished — sorted by
+    // an endedAt it does not have, and buried under work that really ended.
+    const { result } = await renderHookWithPolled([
+      {
+        kind: "job",
+        id: "j1",
+        label: "second-book.pdf",
+        status: "queued",
+        started_at: 1000,
+        ended_at: null,
+        session_key: "websocket:c1",
+        units_total: 300,
+        units_done: 0,
+      },
+    ]);
+
+    expect(result.current.active.map((w) => w.id)).toEqual(["j1"]);
+    expect(result.current.active[0].status).toBe("queued");
+    expect(result.current.finished).toEqual([]);
+  });
+
   it("a poll result with a done task surfaces under finished (no live counterpart)", async () => {
     const { client, emit: _emit } = makeFakeClient();
     mockUseClient.mockReturnValue({
@@ -683,5 +706,78 @@ describe("useWorkState", () => {
 
     const ids = result.current.finished.map((w) => w.id);
     expect(ids.indexOf("polled-later")).toBeLessThan(ids.indexOf("live-earlier"));
+  });
+
+  // -------------------------------------------------------------------------
+  // Job rows: units_total/units_done (snake_case, off the wire) carried onto
+  // WorkItem as unitsTotal/unitsDone (camelCase), the same bridge needsInputDetail
+  // already does for needs_input_detail.
+  // -------------------------------------------------------------------------
+
+  it("carries a running job's page progress onto the WorkItem as unitsDone/unitsTotal", async () => {
+    const { result } = await renderHookWithPolled([
+      {
+        kind: "job",
+        id: "job1",
+        label: "scanned-book.pdf",
+        status: "running",
+        started_at: 1000,
+        ended_at: null,
+        session_key: null,
+        units_total: 412,
+        units_done: 137,
+      },
+    ]);
+
+    const item = result.current.active.find((w) => w.id === "job1");
+    expect(item).toBeDefined();
+    expect(item!.unitsTotal).toBe(412);
+    expect(item!.unitsDone).toBe(137);
+  });
+
+  it("carries a finished job's full page count onto the WorkItem", async () => {
+    // Different numbers from the test above so this only passes if the values
+    // genuinely come from this row's own props, not a fixed/reused stub.
+    const { result } = await renderHookWithPolled([
+      {
+        kind: "job",
+        id: "job2",
+        label: "scanned-book.pdf",
+        status: "done",
+        started_at: 1000,
+        ended_at: 1500,
+        session_key: null,
+        units_total: 40,
+        units_done: 40,
+      },
+    ]);
+
+    const item = result.current.finished.find((w) => w.id === "job2");
+    expect(item).toBeDefined();
+    expect(item!.unitsTotal).toBe(40);
+    expect(item!.unitsDone).toBe(40);
+  });
+
+  it("carries a failed job's reason onto the WorkItem", async () => {
+    // The worker's error is the only account of why a job failed that reaches
+    // a person: its stderr goes to the gateway's truncated boot log.
+    const { result } = await renderHookWithPolled([
+      {
+        kind: "job",
+        id: "job3",
+        label: "scanned-book.pdf",
+        status: "failed",
+        started_at: 1000,
+        ended_at: 1500,
+        session_key: null,
+        units_total: 40,
+        units_done: 7,
+        error: "page 7: OSError: no space left on device",
+      },
+    ]);
+
+    const item = result.current.finished.find((w) => w.id === "job3");
+    expect(item).toBeDefined();
+    expect(item!.error).toBe("page 7: OSError: no space left on device");
   });
 });

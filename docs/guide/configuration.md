@@ -393,6 +393,29 @@ background file watching, and health checks. See
 
 ---
 
+### `documents`
+
+How durin reads the documents it is given: extraction limits and local OCR for
+scanned PDFs. One section governs the three surfaces that convert a document —
+chat attachments, the `convert_to_markdown` tool, and `memory_ingest`. See
+[documents.md](documents.md) for the user-facing guide to reading, remembering,
+and scanned PDFs.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `max_file_size_mb` | `50` | Largest attachment durin will extract text from; larger files are reported as skipped rather than read |
+| `max_text_chars` | `200000` | Longest extraction inlined into a turn before truncation |
+
+**`documents.ocr`** — local OCR for PDF pages that have no text layer:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | Transcribe PDF pages that have no text layer using the local OCR engine. The engine is an optional extra: the dashboard's **Settings → Documents** toggle installs the `[ocr]` extra when turning this on; setting the key any other way (e.g. `durin config set`) does not |
+| `language` | `null` | Recognition language for scripts the built-in models cannot read (they cover Chinese, Japanese, English, and Latin-script languages): `arabic`, `cyrillic`, `devanagari`, `el` (Greek), `eslav` (East Slavic), `korean`, `ta` (Tamil), `te` (Telugu), or `th` (Thai). Selecting one downloads its recognition model — ~8 MB, plus ~11 MB of shared detection models the first time any language is added — once from modelscope.cn into `<durin_home>/models/ocr` on first use; document content never leaves the machine. `null` = the built-in pack |
+| `inline_max_pages` | `5` | Pages needing OCR that may be transcribed inside a conversion call; a document needing more becomes a background job. `0` sends every scanned document to a job |
+
+---
+
 ### `skills`
 
 Governance for the skill subsystem: import policy, security, and discovery registries.
@@ -652,6 +675,7 @@ HTTP gateway and embedded web dashboard settings.
 | `daemon` | `false` | Run detached with a PID file and log file; easier to debug when off |
 | `webui_enabled` | `true` | Auto-enable the websocket channel so the embedded web dashboard is served |
 | `public_url` | `null` | How this gateway is reached from the outside (e.g. `https://durin.tailXXXX.ts.net`) |
+| `api_request_timeout` | `120.0` | Per-request timeout in seconds for the OpenAI-compatible `/v1` chat endpoint |
 
 Set `public_url` when the webui is reached over a tailnet, VPN, or public
 HTTPS domain rather than `localhost` or a plain `host:port`. It has two
@@ -662,18 +686,6 @@ either consumer — MCP OAuth sign-ins fall back to the browser's own origin,
 and the status dashboard URL falls back to the websocket channel's
 `host:port`. CLI `durin mcp login` is unaffected either way; it always uses
 its own `127.0.0.1` loopback callback.
-
----
-
-### `api`
-
-OpenAI-compatible API server settings.
-
-| Key | Default | Meaning |
-|---|---|---|
-| `host` | `127.0.0.1` | Bind address; local-only by default |
-| `port` | `8900` | API server listen port |
-| `timeout` | `120.0` | Per-request timeout in seconds |
 
 ---
 
@@ -698,6 +710,7 @@ Workflow-engine lifecycle: node-visit caps and run-folder retention.
 | `keep_runs` | `20` | Recent run working-folders (`.workflow/<run_id>/`) kept on disk |
 | `script_timeout` | `300` | Default per-node timeout (seconds) for script nodes; a node's own `timeout` overrides it |
 | `script_output_max_chars` | `16000` | Cap on a script node's captured stdout (the edge text); excess is truncated |
+| `script_log_max_chars` | `4000` | Cap, per stream and per pass, on the stdout/stderr a script node records in the run manifest — what the node panel shows you afterwards |
 
 ---
 
@@ -749,7 +762,7 @@ edit it manually.
 | Key | Default | Meaning |
 |---|---|---|
 | `extras` | `[]` | Additive list of optional extras detected at any point; used by `durin doctor` |
-| `auto_install_extras` | `true` | Auto-install a feature's pip extra when it is activated; `false` shows a `pip install durin-agent[X]` message instead |
+| `auto_install_extras` | `true` | Auto-install a feature's pip extra when it is activated; `false` shows the manual install command instead (`pipx inject durin-agent 'durin-agent[X]'`, or `uv tool install 'durin-agent[X]'` for uv installs) |
 
 ---
 
@@ -797,6 +810,14 @@ durin config set providers.anthropic.api_key '${secret:ANTHROPIC_KEY}'
 The value is typed at a hidden prompt, never on the command line. Re-running
 `durin secret set ANTHROPIC_KEY` without `--service` later rotates the value
 in place, keeping the secret's metadata and scope.
+
+`${secret:NAME}` is the only spelling durin accepts, `NAME` uppercase, and the
+reference must be the entire field value. Anything close but not exact —
+`{{secret:NAME}}`, `$secret:NAME`, a lowercase name, or a reference embedded in
+a longer string like `Bearer ${secret:TOKEN}` — is rejected with an error naming
+the correct form. It is not silently treated as a literal, because a placeholder
+handed to a provider or MCP server as if it were the credential fails much later
+with an opaque authentication error.
 
 ### Connect GitHub
 

@@ -1,8 +1,7 @@
 """Shared helpers for decoding ``data:...;base64,...`` URLs to disk.
 
-Historically lived in ``durin.api.server``; now shared by the WebSocket
-channel so the ``api`` + ``websocket`` ingress paths apply the same parsing,
-size guard, and filesystem layout.
+Shared by the OpenAI-compatible ``/v1`` routes and the WebSocket channel so
+both ingress paths apply the same parsing, size guard, and filesystem layout.
 """
 
 from __future__ import annotations

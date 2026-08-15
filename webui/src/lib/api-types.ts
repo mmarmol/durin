@@ -159,6 +159,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/channels/post": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post a message through a running channel and record it in the session */
+        post: operations["channels_post_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/channels/runtime": {
         parameters: {
             query?: never;
@@ -2313,7 +2330,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List background tasks (sub-agents + workflow runs) for a chat session */
+        /** List background tasks (sub-agents + workflow runs + jobs) for a chat session */
         get: operations["tasks_list"];
         put?: never;
         post?: never;
@@ -2631,6 +2648,11 @@ export interface components {
         BackgroundTask: {
             /** Ended At */
             ended_at: number | null;
+            /**
+             * Error
+             * @default null
+             */
+            error: string | null;
             /** Id */
             id: string;
             /** Kind */
@@ -2660,6 +2682,50 @@ export interface components {
              * @default null
              */
             task: string | null;
+            /**
+             * Units Done
+             * @default null
+             */
+            units_done: number | null;
+            /**
+             * Units Total
+             * @default null
+             */
+            units_total: number | null;
+        };
+        /** ChannelPostCommand */
+        ChannelPostCommand: {
+            /** Channel */
+            channel: string;
+            /** Chat Id */
+            chat_id: string;
+            /**
+             * Record
+             * @default true
+             */
+            record: boolean;
+            /** Text */
+            text: string;
+            /**
+             * Thread Id
+             * @default null
+             */
+            thread_id: string | null;
+        };
+        /** ChannelPostResult */
+        ChannelPostResult: {
+            /**
+             * Error
+             * @default null
+             */
+            error: string | null;
+            /** Ok */
+            ok: boolean;
+            /**
+             * Session Key
+             * @default null
+             */
+            session_key: string | null;
         };
         /** ChannelStartCommand */
         ChannelStartCommand: {
@@ -6405,6 +6471,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DiscordTestResult"];
+                };
+            };
+        };
+    };
+    channels_post_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChannelPostCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelPostResult"];
                 };
             };
         };

@@ -276,8 +276,9 @@ instead, via `redirect_lib_logging` (e.g. `nio`, `botpy`, `Lark`, `websockets`),
 to keep their noise out of `gateway.log`.
 
 `daemon_status()` returns a `DaemonStatus` with `state ∈ {running, not_running,
-stale_pid}`. A stale PID is detected when the PID file exists but `os.kill(pid,
-0)` raises `ProcessLookupError`. The gateway also acquires an exclusive flock on
+stale_pid}`. A stale PID is detected when the PID file exists but its pid fails
+`pid_alive` (`durin/utils/process.py`), the cross-platform liveness probe
+shared with the jobs subsystem's reconcile sweeps. The gateway also acquires an exclusive flock on
 `~/.durin/gateway.lock` at startup (`acquire_gateway_singleton`); the OS
 releases it automatically on exit, providing crash-safe singleton enforcement
 that the PID file alone cannot guarantee.
@@ -303,7 +304,7 @@ escalates to SIGKILL if needed, then removes the PID file.
 | `run_checks` | `durin/cli/doctor.py` | Orchestrator: calls all `check_*` functions in sequence, returns a `DoctorReport`. Supports opt-in `--ping` and `--ping-model` checks. |
 | `DaemonStatus` | `durin/cli/gateway_daemon.py` | Frozen dataclass `(state, pid, pid_file, log_file)`. `state ∈ {running, not_running, stale_pid}`. |
 | `start_daemon` | `durin/cli/gateway_daemon.py` | Spawns detached child subprocess, writes PID file, exits parent. Raises `AlreadyRunningError` on live daemon. |
-| `daemon_status` | `durin/cli/gateway_daemon.py` | Reads PID file and probes liveness via `os.kill(pid, 0)`. |
+| `daemon_status` | `durin/cli/gateway_daemon.py` | Reads PID file and probes liveness via the shared `pid_alive` (`durin/utils/process.py`). |
 | `acquire_gateway_singleton` | `durin/cli/gateway_daemon.py` | Acquires exclusive flock on `~/.durin/gateway.lock`. Held for process lifetime; OS releases on exit. |
 | `configure_gateway_file_logging` | `durin/cli/gateway_logging.py` | Attaches loguru JSONL file sink (`serialize=True`, `enqueue=True`, rotation + gz + retention). Called on every gateway run, and by the dream worker subprocess for its own `logs/dream-worker.log` (same rotation knobs) — a long dream run is auditable after the fact instead of a black box. |
 
@@ -372,8 +373,8 @@ cross-encoder package) shows a clear fix hint without breaking CI gates that
 pipe on the exit code.
 
 **PID file plus flock singleton.** The PID file provides human-visible state
-(`durin gateway status`), but its liveness check is a best-effort `os.kill(pid,
-0)` probe that has a TOCTOU window. The flock on `gateway.lock` provides the
+(`durin gateway status`), but its liveness check is the best-effort `pid_alive`
+probe, which has a TOCTOU window. The flock on `gateway.lock` provides the
 authoritative singleton guarantee: if two processes race through `start_daemon`,
 only the one that acquires the flock succeeds at binding the port. The OS
 releases the flock on crash or clean exit, making the mechanism crash-safe

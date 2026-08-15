@@ -460,6 +460,81 @@ metadata)` and `send_reasoning_delta(chat_id, delta, metadata)`. The
 is true and the subclass actually overrides `send_delta` (checked by identity
 against `BaseChannel.send_delta`).
 
+### Streaming edit budgets
+
+Channels that stream by editing a message in place (Telegram, Slack) live under
+**two** platform limits, and they are not always the same number: what a *new*
+message may contain, and what an *edit* may contain. Slack is the extreme case —
+`chat.postMessage` accepts about 40 000 characters while `chat.update` rejects
+anything past 4 000 with `msg_too_long`. Telegram caps both at 4 096.
+
+Each adapter therefore keeps a separate edit budget (`SLACK_UPDATE_MAX_LEN`,
+`TELEGRAM_MAX_MESSAGE_LEN`) sized under the platform's *edit* limit, and applies
+it to every edit — the throttled mid-stream previews and the final render alike.
+When the buffer outgrows that budget the adapter does not keep editing: it
+freezes the current message at the budget, posts the intervening chunks as
+standalone messages, and opens a new message for the tail so the stream keeps
+flowing. A long answer therefore arrives as several messages, which is the only
+shape an edit-based stream can take once it exceeds the edit limit.
+
+Getting this wrong loses the whole answer rather than degrading it. A rejected
+edit propagates out of `send_delta`, `_send_with_retry` burns its attempts on an
+error that will never succeed, and the response is dropped — the loop already
+marked the turn `_streamed`, so the dispatcher suppresses the complete
+non-streamed copy that would otherwise have been the fallback. What the reader
+is left with is the last preview that happened to fit.
+
+Chunks that get frozen by a rollover are final — nothing will edit them again —
+so an adapter that converts markup for its platform (Slack's mrkdwn) converts
+them at that moment. Only the live tail stays raw, until stream end renders it.
+Because that conversion can *grow* text past a budget it fit before (a Markdown
+table expands into a longer bulleted rendering), the split is applied after
+conversion, not before.
+
+### Showing work while a turn runs
+
+A channel that only speaks when the model writes prose goes silent for as long
+as the turn spends in tools, and silence is indistinguishable from a hung bot.
+Slack sets its reaction emoji once on arrival and then shows nothing until the
+first text delta, so a tool-heavy turn — several minutes of `exec` calls is
+ordinary for an investigation — reads as a failure to the person waiting.
+
+The signal is gated by `send_tool_hints` (per-channel, defaulting off, since a
+hint stream is unwanted noise on some surfaces). What the channel does with a
+hint once it passes that gate is the channel's business, and posting one
+message per tool call trades silence for a wall of messages in a room people
+read. Slack therefore keeps **one** message per turn: it is posted as a status
+line, edited in place as the work moves (throttled by `stream_edit_interval`
+like any other edit, since `chat.update` is Tier-3), and then taken over by the
+answer — `send_delta` clears `status_only` on the first text delta and streams
+into the same `ts`. When the reply arrives through `send` instead of the
+streaming path, `_claim_status_message` hands the same message over, so a
+status line is never stranded above the answer it was announcing.
+
+The status message never overwrites answer text: once a buffer holds real
+content, later hints are dropped rather than painted over it.
+
+### Resolving where a stream goes
+
+`send` resolves its target (`_resolve_target_chat_id` turns a `#channel` name,
+an `@handle` or a user id into a conversation id) and the streaming path must
+do the same, or a stream aimed at anything but a concrete conversation id posts
+nowhere. The resolved id is cached on the stream buffer: resolution costs an
+API call, and a stream would otherwise repeat it on every delta.
+
+A hard-coded budget is a claim about someone else's API, and the failure above
+is what a stale claim costs. Slack therefore treats the constant as a starting
+point rather than a fact: when `chat.update` answers `msg_too_long` for a
+payload the budget said would fit, `_shrink_update_budget` halves the working
+budget, logs a warning, and the edit is retried at the smaller size — mid-stream
+that means rolling the buffer over instead of failing the send. The budget only
+shrinks, holds for the life of the process, and stops at `SLACK_UPDATE_MIN_LEN`,
+below which a rejection is no longer plausibly about size and is allowed to
+surface. Every other Slack error still propagates untouched, so a real fault
+(a missing channel, a revoked token) is not swallowed as a sizing problem. The
+warning is the operational signal that the constant needs revisiting; the
+adaptive path only buys the time to do it without losing answers meanwhile.
+
 `is_allowed(sender_id)` is a policy method called by the central gate — NOT by
 the channel itself. It checks: `"*"` in `allow_from`, exact match in
 `allow_from`, and `is_approved(channel, sender_id)` from the pairing store.
