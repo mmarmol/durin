@@ -274,6 +274,20 @@ def run_job(job_id: str, *, registry: JobRegistry | None = None) -> None:
             error = f"library index: {type(exc).__name__}: {exc}"
 
     if registry.finish(job_id, pid=os.getpid(), error=error):
+        if error is None:
+            # A done job's units are scratch nothing reads again — the
+            # sidecar and the Library index written above are the durable
+            # artifacts, and for a book the units are megabytes of page
+            # text. A FAILED job must keep its units: they are the resume
+            # data a retry's requeued run starts from (deleting them would
+            # silently turn "retry resumes from page k" into "retry redoes
+            # the whole book") and the diagnosis of what the failed pass
+            # produced; a cancelled job keeps its units the same way, since
+            # it never reaches this write at all. Both are pruned with the row
+            # itself once the retention window passes. The units_done/
+            # units_total counters are columns on the job row, so the
+            # tray's finished-progress display survives this delete.
+            registry.delete_units(job_id)
         _emit(job_id, len(pages), len(already), started, "failed" if error else "done")
         # Chain: hand the cap slot this job just freed straight to the next
         # queued job, so a backlog drains one fresh process at a time instead

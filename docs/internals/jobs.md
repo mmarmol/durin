@@ -71,7 +71,7 @@ flowchart TD
 
     WORKER -->|claim: queued to running,\nkind-capped| REG
     WORKER -->|record_unit per page| REG
-    WORKER -->|finish: done / failed| REG
+    WORKER -->|finish: done (units deleted)\nor failed (units kept)| REG
     WORKER -->|assemble source.md| SIDECAR["ingested/&lt;id&gt;/source.md"]
     WORKER -->|index_ingested_entry| LIB["memory/references/&lt;slug&gt;.md\n+ FTS row + vector chunks"]
     WORKER -->|finish or cancel: next_queued\nthen launch a fresh process| WORKER
@@ -82,6 +82,7 @@ flowchart TD
 
     SWEEP(["periodic sweep\nAgentLoop, every 60 s"]) -->|the same pass again:\nreconcile, then capped pickup| REG
     SWEEP -->|respawn: reaches a worker\nkilled before it could chain| WORKER
+    SWEEP -->|day-tick, at most daily: prune\nterminal rows past 30 days| REG
 
     TASKS["tasks tool / GET /api/v1/tasks\ncollect_tasks()"] -->|read-only| REG
     TASKS --> TRAY["webui work panel\nWorkItemCard (kind=job)"]
@@ -403,7 +404,10 @@ stay, so the next worker resumes from the first missing page exactly like a
 reconciled orphan does, and the tray keeps showing progress that genuinely
 exists. `created_at` survives too, and since `next_queued`/`queued_jobs`
 order by it, a requeued job re-enters *ahead* of jobs enqueued after it —
-accepted on purpose: it already waited its turn once.
+accepted on purpose: it already waited its turn once. That survival has a
+horizon: a failed or cancelled row left untouched for 30 days is pruned,
+units and all — retryable for a month, then gone (see
+[Retention](#retention)).
 
 The caller is the `tasks` tool's `action="retry"` (jobs only — a sub-agent
 or workflow run is redone by launching a new one). After a successful
@@ -434,6 +438,62 @@ owns the document, heals the indexing the failed run missed. Retry covers
 both sub-cases the same way — the same job resumes — and a resumed run that
 finds no pages left to transcribe just rewrites the sidecar and runs the
 indexing step it died at, ending `done`.
+
+### Retention
+
+jobs.db is scratch, not an archive. A finished transcription's durable
+artifacts — the sidecar and the indexed Library entry — are written *before*
+the row ever goes terminal, and behind them the `job_units` rows hold the
+full text of every transcribed page: megabytes per scanned book, read by
+nobody once the job is `done`. What survives, and for how long, follows from
+what each row still owes anybody:
+
+- **A `done` job loses its units immediately.** The worker calls
+  `JobRegistry.delete_units` for its own job right after its successful
+  `finish()` write. The `units_done`/`units_total` counters are columns on
+  the job row, not unit rows, so the tray's finished "N of M" keeps
+  rendering.
+- **A `failed` or `cancelled` job keeps its units.** They are not just
+  diagnosis — they are the retry's resume data: `requeue` revives the row in
+  place and the next worker resumes from `done_units()` (see
+  [Retry](#retry)). Deleting them at a failed finish would silently turn
+  "retry resumes from page k" into "retry redoes the whole book".
+- **Every terminal row prunes after 30 days.** `JobRegistry.prune_terminal`
+  deletes jobs — units and all, in one transaction — whose status is
+  `done`/`failed`/`cancelled` and whose `ended_at` is more than
+  `_JOB_RETENTION_S` (30 days, `durin/jobs/registry.py`) in the past. The
+  window is a grace period for acting on an outcome (reading the error,
+  retrying), not an archival promise. The age predicate is total over
+  terminal rows because `finish` stamps `ended_at` for `done` and `failed`
+  alike and `cancel` stamps it too, while `requeue` clears it when reviving
+  a row — which also, correctly, takes the revived row out of prune's
+  reach. Age alone never deletes: a `running` row older than any window is
+  reconcile's business (a dead pid to requeue, units kept), never prune's —
+  the status predicate, not the timestamp, is what protects a legitimately
+  old live job.
+
+The prune rides the pass everything else here already rides: `_resume_jobs`
+carries a retention day-tick that calls `prune_terminal` at most once every
+24 hours (`_JOB_PRUNE_INTERVAL_S`, `durin/agent/loop.py`), whichever
+caller's pass — gateway startup or the [periodic sweep](#the-periodic-sweep)
+— crosses the mark first. It runs last and is guarded on its own, like each
+respawn is, so a retention failure (a locked database, say) can never cost
+the pass its respawn and pickup work; a failed attempt just waits for the
+next day's tick. Both registry methods are kind-agnostic like `reconcile`;
+the delete-at-done call is each worker's own, and today only the OCR worker
+makes it.
+
+A pruned id composes with the recovery paths that already handle an absent
+row, rather than needing new ones. `tasks(action="retry")` on it gets the
+ordinary unknown-id answer, because `requeue` finds nothing to revive. A
+re-ingest of a document whose entry still carries an `ocr_job.json` marker
+naming the pruned id takes the marker branch's vanished-row route
+(`ingest_artifact` branches on the row's *current* state, and `get()`
+returning `None` falls through to the retry): a fresh job is spawned and the
+marker overwritten to name it — a marker that outlives its row heals itself
+on the next touch. Related and deliberate, `list_for_session` returns at
+most the 200 newest rows as a defensive bound: the tray renders a handful,
+and the prune keeps the table small anyway.
 
 ### The subprocess worker
 
@@ -549,15 +609,16 @@ transcribed at a time").
 | Symbol | File | Role |
 |---|---|---|
 | `Job` | `durin/jobs/registry.py` | Frozen dataclass mirroring one `jobs` row. |
-| `JobRegistry` | `durin/jobs/registry.py` | `enqueue`, `get`, `list_for_session`, `claim`, `next_queued`, `queued_jobs`, `set_units_total`, `record_unit`, `units`, `done_units`, `finish`, `cancel`, `requeue`, `reconcile`. |
+| `JobRegistry` | `durin/jobs/registry.py` | `enqueue`, `get`, `list_for_session`, `claim`, `next_queued`, `queued_jobs`, `set_units_total`, `record_unit`, `units`, `done_units`, `delete_units`, `finish`, `cancel`, `requeue`, `reconcile`, `prune_terminal`. |
 | `RECONCILE_AGE_S` | `durin/jobs/registry.py` | Six hours — the pid-liveness-is-unreliable fallback age used by `reconcile`. |
+| `_JOB_RETENTION_S` | `durin/jobs/registry.py` | Thirty days — how long a terminal row (and any units it kept) outlives its outcome before `prune_terminal` deletes it. See [Retention](#retention). |
 | `MAX_CONCURRENT_OCR_JOBS` | `durin/jobs/spawn.py` | The per-kind concurrency cap `claim` enforces; currently `1`. No config key — see [Concurrency cap and chaining](#concurrency-cap-and-chaining). |
 | `spawn_ocr_job` | `durin/jobs/spawn.py` | Enqueues an OCR job and launches its worker; called from `ingest_artifact` when a document needs more OCR than the inline budget and no job for it is already pending — an `ocr_job.json` marker in the entry directory short-circuits a re-ingest while one is still `queued`/`running` instead of calling this again (see [Memory: agent tools](memory/04_agent_tools.md#memory_ingest)). |
 | `respawn` | `durin/jobs/spawn.py` | (Re)launches the worker for a job that needs one and is not this process's to claim: an orphan `reconcile` just requeued, or a row gateway startup found `queued` with nothing claiming it. Dispatches on `job.kind`. |
 | `_launch_worker` | `durin/jobs/spawn.py` | The one `Popen` call shared by `spawn_ocr_job`, `respawn`, and the worker's own chain. |
 | `run_job` | `durin/jobs/ocr_worker.py` | The OCR worker's whole lifecycle: kind-capped claim (self-healing a stale holder once via an inline `reconcile` on refusal), per-page transcribe loop, sidecar assembly, Library indexing, finish or cancellation, then chain to the next queued job. |
 | `queued_jobs` | `durin/jobs/registry.py` | The oldest up to *n* still-`queued` jobs of a kind in one query; what the pickup loop uses instead of looping `next_queued`. |
-| `_resume_jobs` | `durin/agent/loop.py` | The reconcile-then-capped-pickup pass itself, shared by gateway startup and the periodic sweep so the two cannot drift apart. |
+| `_resume_jobs` | `durin/agent/loop.py` | The reconcile-then-capped-pickup pass itself, shared by gateway startup and the periodic sweep so the two cannot drift apart; also carries the retention day-tick — a guarded `prune_terminal` at most once a day. |
 | `AgentLoop._sweep_jobs_periodically` | `durin/agent/loop.py` | Re-runs that pass every `_JOB_SWEEP_INTERVAL_S`, guarded per tick; what un-wedges a queue whose cap slot is held by a worker that was killed outright. |
 | `transcribe_page` | `durin/memory/ocr.py` | Renders one PDF page (`pypdfium2`) and runs it through the lazily-constructed, process-local `RapidOCR` engine. Returns a `TranscribedPage`: the text, mean/min of the engine's per-line recognition scores (logged for diagnosis, never used as an accept/reject gate — measured score bands for wrong-but-plausible output overlap legitimate noisy scans), and, only when the page came back empty, a detection-only box count that separates blank paper from print the engine cannot read. The worker calls this directly — its own process is already short-lived, so the engine's memory leaves with it. |
 | `transcribe_pages_detached` | `durin/memory/ocr.py` | The inline conversion path's transcription entry point: runs `transcribe_page` per page inside a short-lived child (`durin/memory/ocr_subproc.py`), so the engine's memory never enters the long-lived gateway process. The child prints one JSON object whose per-page values mirror `TranscribedPage` field for field; the parent rebuilds them and logs a one-line score summary (the child's stderr is discarded on success, so this is where the scores reach a log). Admits one child at a time (a module-level semaphore in the same file) for the same measured reason `MAX_CONCURRENT_OCR_JOBS` exists — the registry's cap governs workers only and never sees this path. |

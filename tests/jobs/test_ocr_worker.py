@@ -55,18 +55,22 @@ def _enqueue(registry, pdf, pages, *, sidecar_dir=None, units_total=None):
 
 
 def test_worker_transcribes_every_requested_page(registry, scanned_pdf, monkeypatch):
+    # Observed through the calls, not the stored units: a successful finish
+    # deletes the units (see the retention tests at the bottom), and where
+    # each page's text lands is the sidecar-merge test's job.
+    called = []
     monkeypatch.setattr(
         "durin.jobs.ocr_worker.transcribe_page",
-        lambda path, page, **kw: _page(f"text of page {page}"),
+        lambda path, page, **kw: called.append(page) or _page(f"text of page {page}"),
     )
     job = _enqueue(registry, scanned_pdf, [1, 2, 3])
 
     run_job(job.id, registry=registry)
 
-    assert registry.get(job.id).status == "done"
-    assert registry.units(job.id) == [
-        (1, "text of page 1"), (2, "text of page 2"), (3, "text of page 3"),
-    ]
+    reread = registry.get(job.id)
+    assert reread.status == "done"
+    assert called == [1, 2, 3]
+    assert reread.units_done == 3
 
 
 def test_worker_resolves_the_configured_language_and_threads_it(
@@ -114,8 +118,9 @@ def test_worker_survives_a_text_page_that_carries_no_scores(
 
     run_job(job.id, registry=registry)
 
-    assert registry.get(job.id).status == "done"
-    assert [unit for unit, _ in registry.units(job.id)] == [1, 2, 3]
+    reread = registry.get(job.id)
+    assert reread.status == "done"  # not failed over a log-formatting detail
+    assert reread.units_done == 3
 
 
 def test_worker_transcribes_the_empty_pages_its_payload_left_out(
@@ -135,16 +140,19 @@ def test_worker_transcribes_the_empty_pages_its_payload_left_out(
         ["Real body text on page one, plenty of it", "", "",
          "Real body text on page four, plenty of it"],
     )
+    called = []
     monkeypatch.setattr(
         "durin.jobs.ocr_worker.transcribe_page",
-        lambda path, page, **kw: _page(f"text of page {page}"),
+        lambda path, page, **kw: called.append(page) or _page(f"text of page {page}"),
     )
     job = _enqueue(registry, pdf, [2])  # page 3 is just as empty and left out
 
     run_job(job.id, registry=registry)
 
-    assert registry.done_units(job.id) == {2, 3}
-    assert registry.get(job.id).units_total == 2
+    assert called == [2, 3]  # the page the payload never named got done too
+    reread = registry.get(job.id)
+    assert reread.units_done == 2
+    assert reread.units_total == 2
 
 
 def test_worker_resizes_a_job_that_was_enqueued_expecting_more_pages(
@@ -449,7 +457,10 @@ def test_worker_skips_pages_already_transcribed(registry, scanned_pdf, monkeypat
     run_job(job.id, registry=registry)
 
     assert called == [2, 3]
-    assert registry.units(job.id)[0] == (1, "already done before the crash")
+    # The kept unit's TEXT is not observable here after the run — a
+    # successful finish deletes the units — but the failed-retry resume test
+    # at the bottom pins that same promise end to end, through the sidecar.
+    assert registry.get(job.id).units_done == 3
 
 
 def test_worker_records_a_failure_and_keeps_finished_pages(registry, scanned_pdf, monkeypatch):
@@ -924,3 +935,79 @@ def test_worker_chain_drains_a_queue_of_several_jobs(registry, scanned_pdf, monk
     run_job(jobs[0].id, registry=registry)  # only this one is "launched" directly
 
     assert [registry.get(j.id).status for j in jobs] == ["done", "done", "done"]
+
+
+# ---------------------------------------------------------------------------
+# Retention at the worker: a done job's units are scratch nothing reads
+# again; a failed (or cancelled) job's units are the retry's resume data.
+# ---------------------------------------------------------------------------
+
+
+def test_worker_deletes_a_done_jobs_units_keeping_counters_and_artifacts(
+    registry, tmp_path, monkeypatch,
+):
+    """Once a job is done, its durable artifacts are the sidecar and the
+    Library entry — the units are megabytes of full-page text nothing reads
+    again. The worker deletes them right after its own successful finish().
+    units_done/units_total are columns on the job row, not unit rows, so the
+    tray's finished "N of M" display must survive the delete."""
+    ws = tmp_path / "ws"
+    entry_dir, pdf = _ingested_entry(ws)
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page",
+        lambda path, page, **kw: _page(f"text of page {page}"),
+    )
+    job = _enqueue(registry, pdf, [1, 2, 3], sidecar_dir=entry_dir)
+
+    run_job(job.id, registry=registry)
+
+    reread = registry.get(job.id)
+    assert reread.status == "done"
+    assert registry.units(job.id) == []  # the scratch is gone...
+    assert registry.done_units(job.id) == set()
+    assert reread.units_done == 3  # ...and the counters are not
+    assert reread.units_total == 3
+    # The durable artifacts were written before finish and are untouched.
+    assert "text of page 2" in (entry_dir / "source.md").read_text(encoding="utf-8")
+    assert (ws / "memory" / "references" / "zorpbook.md").exists()
+
+
+def test_a_failed_jobs_units_survive_for_the_retry_to_resume_from(
+    registry, tmp_path, monkeypatch,
+):
+    """The counterpart contract, and the reason the delete above is gated on
+    a clean outcome: a failed job's units are not just diagnosis, they are
+    the retry's resume data. Deleting them at a failed finish would silently
+    turn "retry resumes from page k" into "retry redoes the whole book"."""
+    ws = tmp_path / "ws"
+    entry_dir, pdf = _ingested_entry(ws)
+
+    def _boom_on_two(path, page, **kw):
+        if page == 2:
+            raise RuntimeError("engine exploded")
+        return _page(f"first run page {page}")
+
+    monkeypatch.setattr("durin.jobs.ocr_worker.transcribe_page", _boom_on_two)
+    job = _enqueue(registry, pdf, [1, 2, 3], sidecar_dir=entry_dir)
+    run_job(job.id, registry=registry)
+
+    assert registry.get(job.id).status == "failed"
+    assert registry.units(job.id) == [(1, "first run page 1")]  # kept, not scratch
+
+    # The retry: requeue revives the row in place, and the next worker
+    # resumes from the kept units instead of redoing page 1.
+    assert registry.requeue(job.id) is True
+    retried = []
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page",
+        lambda path, page, **kw: retried.append(page) or _page(f"retry page {page}"),
+    )
+    run_job(job.id, registry=registry)
+
+    assert retried == [2, 3]  # resumed, not restarted
+    assert registry.get(job.id).status == "done"
+    # The kept unit fed the finished document: the first run's page text is
+    # in the sidecar next to the retry's, exactly as if one run did it all.
+    assert (entry_dir / "source.md").read_text(encoding="utf-8") == (
+        "first run page 1\n\nretry page 2\n\nretry page 3"
+    )

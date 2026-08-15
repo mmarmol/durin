@@ -486,3 +486,75 @@ async def test_stop_cancels_the_sweep_too(tmp_path, monkeypatch):
         runner.cancel()
         with pytest.raises(asyncio.CancelledError):
             await runner
+
+
+# --- the retention day-tick: pruning rides the same pass, at most daily ----
+
+
+def test_the_day_tick_prunes_once_per_day_not_once_per_pass(monkeypatch):
+    """The pass runs every minute (and once at startup), but retention has a
+    30-day window — nothing about it needs re-checking 1440 times a day. The
+    day-tick state and the injectable clock are what keep this test
+    synchronous: no sweep task, no sleeps."""
+    import durin.agent.loop as loop_module
+    from durin.jobs.registry import _JOB_RETENTION_S
+
+    calls = []
+    monkeypatch.setattr(
+        JobRegistry, "prune_terminal",
+        lambda self, older_than_s, *, now=None: calls.append(older_than_s) or 0,
+    )
+    monkeypatch.setattr(loop_module, "_last_job_prune_at", None)  # fresh process
+    registry = JobRegistry()
+    t0 = 1_700_000_000.0
+
+    loop_module._prune_jobs_if_due(registry, now=t0)  # first pass: due at once
+    loop_module._prune_jobs_if_due(registry, now=t0 + 60)  # the next sweep tick
+    loop_module._prune_jobs_if_due(registry, now=t0 + 23 * 3600)  # still same day
+
+    assert calls == [_JOB_RETENTION_S]  # one prune, with the retention window
+
+    loop_module._prune_jobs_if_due(registry, now=t0 + 24 * 3600 + 1)  # a day later
+
+    assert calls == [_JOB_RETENTION_S, _JOB_RETENTION_S]  # exactly one more
+
+
+def test_a_prune_failure_does_not_cost_the_pass_its_respawn_and_pickup_duties(
+    tmp_path, monkeypatch,
+):
+    """Retention is the pass's least important duty: a prune that blows up (a
+    locked database) must be guarded on its own, exactly like each respawn
+    is, so the reconcile/respawn and queued-pickup work still happens in the
+    same pass — and _resume_jobs must not raise, or the sweep would log the
+    wrong failure."""
+    import durin.agent.loop as loop_module
+
+    registry = JobRegistry()
+    dead = _dead_pid()  # before Popen is patched — it spawns a real child
+    held = _enqueue(registry, "book.pdf")
+    registry.claim(held.id, pid=dead)
+
+    pruned = []
+
+    def _boom(self, older_than_s, *, now=None):
+        pruned.append(older_than_s)
+        raise RuntimeError("jobs.db is locked")
+
+    monkeypatch.setattr(JobRegistry, "prune_terminal", _boom)
+    monkeypatch.setattr(loop_module, "_last_job_prune_at", None)  # prune is due
+    calls = []
+    monkeypatch.setattr(
+        "durin.jobs.spawn.subprocess.Popen",
+        lambda args, **kw: calls.append(args),
+    )
+
+    loop_module._resume_jobs()  # must not raise
+
+    assert pruned  # the prune genuinely ran (and blew up) inside this pass
+    reread = registry.get(held.id)
+    assert reread.status == "queued"  # reconcile still requeued the dead holder
+    assert reread.pid is None
+    # And both launches still happened: reconcile's respawn of the orphan,
+    # then the pickup finding the same still-queued row (the documented
+    # redundancy the claim() status guard makes harmless).
+    assert [args[-1] for args in calls] == [held.id, held.id]

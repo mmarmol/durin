@@ -1,8 +1,10 @@
 """The long-job registry: enqueue, progress, resumption, reconciliation."""
 
+import sqlite3
+
 import pytest
 
-from durin.jobs.registry import RECONCILE_AGE_S, Job, JobRegistry
+from durin.jobs.registry import _JOB_RETENTION_S, RECONCILE_AGE_S, Job, JobRegistry
 
 
 @pytest.fixture()
@@ -493,3 +495,130 @@ def test_kind_is_not_restricted_to_ocr(registry):
     # The registry is generic; OCR is only its first client.
     job = registry.enqueue(kind="reindex", label="rebuild", payload={}, session_key=None, units_total=7)
     assert registry.get(job.id).kind == "reindex"
+
+
+# ---------------------------------------------------------------------------
+# Retention: delete_units for a finished job's scratch, prune_terminal for
+# rows whose outcome nobody is coming back to, and the bounded session list.
+# ---------------------------------------------------------------------------
+
+_DAY_S = 24 * 3600.0
+_PRUNE_NOW = 1_700_000_000.0
+
+
+def test_delete_units_drops_the_scratch_rows_keeping_the_counters(registry):
+    job = registry.enqueue(kind="ocr", label="a", payload={}, session_key=None, units_total=2)
+    registry.claim(job.id, pid=1)
+    registry.record_unit(job.id, 1, "page one")
+    registry.record_unit(job.id, 2, "page two")
+    registry.finish(job.id, pid=1)
+
+    registry.delete_units(job.id)
+
+    assert registry.units(job.id) == []
+    assert registry.done_units(job.id) == set()
+    reread = registry.get(job.id)  # the row and its counters are not touched
+    assert reread.status == "done"
+    assert reread.units_done == 2
+    assert reread.units_total == 2
+
+
+def _terminal_at_age(registry, monkeypatch, *, age_days, outcome, label):
+    """One terminal job, one recorded unit, whose outcome landed *age_days*
+    before ``_PRUNE_NOW`` — built through the public API under a frozen clock,
+    since ``finish``/``cancel`` stamp ``ended_at`` from ``time.time()``."""
+    monkeypatch.setattr(
+        "durin.jobs.registry.time.time", lambda: _PRUNE_NOW - age_days * _DAY_S,
+    )
+    job = registry.enqueue(kind="ocr", label=label, payload={}, session_key="s", units_total=1)
+    registry.claim(job.id, pid=1)
+    registry.record_unit(job.id, 1, "scratch page text")
+    if outcome == "done":
+        registry.finish(job.id, pid=1)
+    elif outcome == "failed":
+        registry.finish(job.id, pid=1, error="engine exploded")
+    else:
+        registry.cancel(job.id)
+    return job
+
+
+def test_prune_terminal_deletes_old_terminal_rows_with_their_units(registry, monkeypatch):
+    done = _terminal_at_age(registry, monkeypatch, age_days=31, outcome="done", label="d")
+    failed = _terminal_at_age(registry, monkeypatch, age_days=31, outcome="failed", label="f")
+    cancelled = _terminal_at_age(
+        registry, monkeypatch, age_days=31, outcome="cancelled", label="c")
+
+    deleted = registry.prune_terminal(_JOB_RETENTION_S, now=_PRUNE_NOW)
+
+    assert deleted == 3
+    for job in (done, failed, cancelled):
+        assert registry.get(job.id) is None
+        assert registry.done_units(job.id) == set()  # units went with the row
+    # A pruned id composes with the recovery paths that already handle an
+    # absent row: requeue reports it unknown (so the tasks tool's retry gives
+    # its ordinary unknown-id answer), and a re-ingest whose marker names the
+    # vanished id spawns a fresh job through the marker's vanished-row branch.
+    assert registry.requeue(failed.id) is False
+
+
+def test_prune_terminal_spares_terminal_rows_still_inside_the_window(registry, monkeypatch):
+    fresh = _terminal_at_age(registry, monkeypatch, age_days=29, outcome="failed", label="f")
+
+    deleted = registry.prune_terminal(_JOB_RETENTION_S, now=_PRUNE_NOW)
+
+    assert deleted == 0
+    assert registry.get(fresh.id).status == "failed"
+    assert registry.done_units(fresh.id) == {1}  # resume data intact for a retry
+
+
+def test_prune_terminal_never_deletes_by_age_alone(registry, tmp_path, monkeypatch):
+    """A running row older than any window is reconcile's business (a dead
+    pid to requeue, units kept), never prune's; a queued row has not even
+    started. Age must only ever qualify a row the status predicate already
+    admitted."""
+    old_clock = _PRUNE_NOW - 31 * _DAY_S
+    monkeypatch.setattr("durin.jobs.registry.time.time", lambda: old_clock)
+    queued = registry.enqueue(kind="ocr", label="q", payload={}, session_key="s", units_total=1)
+    running = registry.enqueue(kind="ocr", label="r", payload={}, session_key="s", units_total=1)
+    registry.claim(running.id, pid=1)
+    registry.record_unit(running.id, 1, "in-flight page")
+    # A running row with a stale ended_at is not reachable through this API
+    # today (finish/cancel stamp it only alongside a terminal status, and
+    # requeue clears it on revival). Forge one directly anyway: prune must
+    # trust the status column and never the timestamp, so no future write
+    # path that leaves a stale ended_at behind can cost a live job its row.
+    forged = registry.enqueue(kind="ocr", label="z", payload={}, session_key="s", units_total=1)
+    registry.claim(forged.id, pid=2)
+    conn = sqlite3.connect(tmp_path / "jobs.db")
+    conn.execute("UPDATE jobs SET ended_at = ? WHERE id = ?", (old_clock, forged.id))
+    conn.commit()
+    conn.close()
+
+    deleted = registry.prune_terminal(_JOB_RETENTION_S, now=_PRUNE_NOW)
+
+    assert deleted == 0
+    assert registry.get(queued.id).status == "queued"
+    assert registry.get(running.id).status == "running"
+    assert registry.done_units(running.id) == {1}
+    assert registry.get(forged.id).status == "running"
+
+
+def test_list_for_session_returns_at_most_the_200_newest(registry, monkeypatch):
+    # Strictly increasing created_at, so "newest" is unambiguous and the
+    # boundary between kept and dropped rows can be asserted by id.
+    ticks = iter(range(1_000))
+    monkeypatch.setattr(
+        "durin.jobs.registry.time.time", lambda: 1_700_000_000.0 + next(ticks),
+    )
+    jobs = [
+        registry.enqueue(kind="ocr", label=f"j{i}", payload={}, session_key="s", units_total=1)
+        for i in range(210)
+    ]
+
+    listed = registry.list_for_session("s")
+
+    assert len(listed) == 200
+    assert listed[0].id == jobs[209].id  # the newest made the cut
+    assert listed[-1].id == jobs[10].id  # ...down to the 200th-newest
+    listed_ids = {j.id for j in listed}
+    assert all(j.id not in listed_ids for j in jobs[:10])  # the 10 oldest fell off
