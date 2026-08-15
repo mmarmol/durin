@@ -91,7 +91,7 @@ flowchart TD
     CANCEL["tasks(action=stop)"] -->|status=cancelled| REG
     RETRY["tasks(action=retry)"] -->|requeue: failed/cancelled\nto queued, units kept| REG
     RETRY -->|respawn| WORKER
-    WORKER -.checks ownership: status + pid\nat each claim + page boundary.-> REG
+    WORKER -.checks ownership: status + pid\nat each page boundary.-> REG
 ```
 
 ## 4. How it works
@@ -203,11 +203,14 @@ runs `reconcile` on a 60-second timer regardless of what else is happening, so
 refusal and no restart required. Plan for a legitimately >6h job to be taken
 over, not for it to be rare.
 
-A worker looks for more work before it exits, from every point after a
-successful claim where the slot it held is nobody else's to hand off: its
-own `finish()` succeeding, a cancellation — or a vanished row — noticed
-mid-loop (`registry.cancel` already wrote `cancelled` by then; a vanished
-row is counted by nobody), or `finish()` losing to something else.
+A worker looks for more work before it exits, from each exit where the slot
+it held is plausibly nobody else's to hand off: its own `finish()`
+succeeding, a cancellation — or a vanished row — noticed mid-loop
+(`registry.cancel` already wrote `cancelled` by then; a vanished row is
+counted by nobody), or `finish()` losing to something else. That last one
+can overlap a retry's own respawn (a requeue landing during the sidecar and
+indexing tail), which is tolerated: both launches race into the same atomic
+claim and the loser exits, one refused-claim spawn at worst.
 The first two genuinely leave the row no longer `running`; the third might
 not — a late cancel is terminal, but a takeover by a second worker via
 `reconcile`'s age fallback leaves the row `running` under its new owner

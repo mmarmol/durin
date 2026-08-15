@@ -381,11 +381,13 @@ def run_job(job_id: str, *, registry: JobRegistry | None = None) -> None:
 def _chain_to_next_queued(registry: JobRegistry) -> None:
     """Launch a fresh worker for the oldest still-``queued`` OCR job, if any.
 
-    Called from every exit of ``run_job`` that follows a successful claim
-    and leaves nobody else responsible for the slot this worker held: its
-    own successful ``finish()``, a cancellation (or a vanished row) noticed
-    mid-loop, and a ``finish()`` that lost to something else. The first two
-    genuinely leave the row no longer ``running``; the third might not -- a
+    Called from each exit of ``run_job`` that follows a successful claim
+    and plausibly leaves nobody else responsible for the slot this worker
+    held: its own successful ``finish()``, a cancellation (or a vanished
+    row) noticed mid-loop, and a ``finish()`` that lost to something else.
+    The first two genuinely leave the row no longer ``running``; the third
+    might not -- it can even overlap a retry's own respawn, when a requeue
+    lands during the sidecar/indexing tail -- a
     takeover via ``reconcile``'s age fallback can leave it ``running``
     under its new owner instead of freeing the cap slot. Calling this
     anyway is safe: the worker launched below still has to win ``claim()``'s
