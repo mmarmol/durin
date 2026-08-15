@@ -11,27 +11,32 @@ short-lived subprocess, so its engine goes away when it exits. The gateway is
 not short-lived, so inline callers never call ``transcribe_page`` in this
 process — they call ``transcribe_pages_detached``, which runs the engine in
 its own short-lived child (``durin/memory/ocr_subproc.py``) and hands back
-only the transcribed text, keeping the engine's memory out of the gateway
-either way.
+only the transcription results, keeping the engine's memory out of the
+gateway either way.
 """
 
 from __future__ import annotations
 
 import io
 import json
+import logging
 import subprocess
 import sys
 import threading
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 __all__ = [
     "OcrUnavailable",
+    "TranscribedPage",
     "engine_available",
     "render_page",
     "transcribe_page",
     "transcribe_pages_detached",
 ]
+
+logger = logging.getLogger(__name__)
 
 # 200 dpi is the usual floor for reliable OCR of body text; below it small
 # type starts dropping characters, above it the cost grows with no gain.
@@ -56,6 +61,25 @@ _INLINE_OCR_SLOT = threading.Semaphore(1)
 
 class OcrUnavailable(RuntimeError):
     """Raised when OCR is requested but the [ocr] extra is not installed."""
+
+
+@dataclass(frozen=True)
+class TranscribedPage:
+    """One page's transcription, with the engine's own account of it.
+
+    ``mean_score`` and ``min_score`` aggregate the engine's per-line
+    recognition scores; both are None when no line survived recognition.
+    ``det_boxes`` is None for a page that produced text — the question never
+    came up — and an int only when the page came back empty: a detection-only
+    second pass then counts regions of printed text, so 0 means genuinely
+    blank paper while more means the page holds print this engine cannot
+    read (a script outside its models, typically).
+    """
+
+    text: str
+    mean_score: float | None
+    min_score: float | None
+    det_boxes: int | None
 
 
 def engine_available() -> bool:
@@ -103,18 +127,47 @@ def render_page(pdf_path: Path, page: int, *, dpi: int = _DEFAULT_DPI) -> bytes:
         doc.close()
 
 
-def transcribe_page(pdf_path: Path, page: int, *, dpi: int = _DEFAULT_DPI) -> str:
+def transcribe_page(
+    pdf_path: Path, page: int, *, dpi: int = _DEFAULT_DPI
+) -> TranscribedPage:
     """Transcribe one 1-based PDF page, top to bottom.
 
-    Returns an empty string for a page the engine finds no text on — a blank
-    scan is a legitimate outcome, not a failure.
+    Empty ``text`` is a legitimate outcome, not a failure; the result's
+    ``det_boxes`` is what says whether that emptiness is blank paper or
+    printed text the engine cannot read.
     """
     engine = _get_engine()
-    result = engine(render_page(pdf_path, page, dpi=dpi))
+    image = render_page(pdf_path, page, dpi=dpi)
+    # Every stage flag explicit on every call: rapidocr writes any non-None
+    # flag back onto the engine instance, so the det-only pass below would
+    # otherwise leave recognition switched off for every page transcribed
+    # after it through this process-cached engine.
+    result = engine(image, use_det=True, use_cls=True, use_rec=True)
     lines = getattr(result, "txts", None)
     if not lines:
-        return ""
-    return "\n".join(str(line) for line in lines).strip()
+        # Recognition read nothing. Detection alone, on the same rendered
+        # image, is what tells blank paper (0 boxes) apart from print in a
+        # script the models cannot read (some boxes, all of whose
+        # recognitions were erased by the engine's own score filter).
+        det = engine(image, use_det=True, use_cls=False, use_rec=False)
+        boxes = getattr(det, "boxes", None)
+        return TranscribedPage(
+            text="",
+            mean_score=None,
+            min_score=None,
+            det_boxes=0 if boxes is None else len(boxes),
+        )
+    scores = [float(score) for score in getattr(result, "scores", None) or ()]
+    # The scores travel for logging and diagnosis only, never as an
+    # accept/reject gate: measured on this engine, wrong-but-plausible
+    # readings score 0.956-0.987 — inside the band of legitimate noisy
+    # scans — so no threshold separates bad output from good.
+    return TranscribedPage(
+        text="\n".join(str(line) for line in lines).strip(),
+        mean_score=sum(scores) / len(scores) if scores else None,
+        min_score=min(scores) if scores else None,
+        det_boxes=None,
+    )
 
 
 def _child_failure(stdout: str | None, stderr: str | None) -> str:
@@ -141,7 +194,7 @@ def transcribe_pages_detached(
     *,
     dpi: int = _DEFAULT_DPI,
     timeout_s: float | None = None,
-) -> dict[int, str]:
+) -> dict[int, TranscribedPage]:
     """Transcribe *pages* of *pdf_path* in a short-lived child process.
 
     Spawns ``python -m durin.memory.ocr_subproc`` and waits for it
@@ -192,7 +245,15 @@ def transcribe_pages_detached(
 
         try:
             payload = json.loads(proc.stdout)
-            result = {int(page): text for page, text in payload["pages"].items()}
+            result = {
+                int(page): TranscribedPage(
+                    text=str(obj["text"]),
+                    mean_score=None if obj["mean_score"] is None else float(obj["mean_score"]),
+                    min_score=None if obj["min_score"] is None else float(obj["min_score"]),
+                    det_boxes=None if obj["det_boxes"] is None else int(obj["det_boxes"]),
+                )
+                for page, obj in payload["pages"].items()
+            }
         except Exception as exc:  # noqa: BLE001 — any parse-shape surprise is OcrUnavailable too
             tail = (proc.stderr or "")[-500:]
             raise OcrUnavailable(
@@ -204,5 +265,20 @@ def transcribe_pages_detached(
             raise OcrUnavailable(
                 f"OCR subprocess did not return page(s) {missing} of the "
                 f"{len(pages)} requested"
+            )
+        # The child's stderr is captured and discarded on success, so this
+        # summary is the only place its scores can reach a log at all.
+        mean_scores = [p.mean_score for p in result.values() if p.mean_score is not None]
+        min_scores = [p.min_score for p in result.values() if p.min_score is not None]
+        if min_scores:
+            logger.info(
+                "OCR subprocess transcribed %d page(s) of %s: mean score %.3f, min %.3f",
+                len(result), pdf_path.name,
+                sum(mean_scores) / len(mean_scores), min(min_scores),
+            )
+        else:
+            logger.info(
+                "OCR subprocess transcribed %d page(s) of %s: no text recognized on any",
+                len(result), pdf_path.name,
             )
         return result

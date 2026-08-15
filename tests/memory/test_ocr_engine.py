@@ -12,11 +12,13 @@ import sys
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from durin.memory.ocr import (
     OcrUnavailable,
+    TranscribedPage,
     engine_available,
     render_page,
     transcribe_page,
@@ -131,8 +133,106 @@ def test_transcribe_reads_text_off_a_rendered_page(tmp_path):
     pdf = tmp_path / "hello.pdf"
     _write_text_pdf(pdf, ["HELLO OCR"])
 
-    text = transcribe_page(pdf, 1)
-    assert "HELLO" in text.upper()
+    page = transcribe_page(pdf, 1)
+    assert "HELLO" in page.text.upper()
+    # The engine's own per-line confidence, aggregated: real fields with real
+    # bounds, not placeholders.
+    assert page.mean_score is not None and 0.0 < page.mean_score <= 1.0
+    assert page.min_score is not None and page.min_score <= page.mean_score
+    # The page had text, so the blank-vs-unreadable question never came up.
+    assert page.det_boxes is None
+
+
+@pytest.mark.skipif(not engine_available(), reason="[ocr] extra not installed")
+def test_transcribe_reports_zero_det_boxes_for_a_genuinely_blank_page(tmp_path):
+    """A blank page and an unreadable page produce byte-identical text (none);
+    the detection-only second pass is what tells them apart, and on blank
+    paper it must find nothing at all."""
+    from tests.tools.test_read_enhancements import _write_text_pdf
+
+    pdf = tmp_path / "blank.pdf"
+    _write_text_pdf(pdf, [""])
+
+    page = transcribe_page(pdf, 1)
+    assert page.text == ""
+    assert page.mean_score is None and page.min_score is None
+    assert page.det_boxes == 0
+
+
+# --- transcribe_page: scores and the det-only second pass, engine faked ---
+#
+# These fake the engine object itself (not the subprocess), so they run
+# everywhere (no [ocr] extra needed) and pin the two-call contract: one full
+# pass with every stage flag explicit, then — only when recognition returns
+# nothing — a det-only pass whose box count separates blank paper from print
+# the engine cannot read. The exact flag dicts are load-bearing: rapidocr
+# persists any non-None flag onto the engine instance, so a full pass that
+# left its flags implicit after a det-only pass would silently run with
+# recognition still switched off.
+
+
+class _FakeEngine:
+    def __init__(self, full_result, det_result=None):
+        self.full_result = full_result
+        self.det_result = det_result
+        self.calls: list[dict] = []
+
+    def __call__(self, img, **flags):
+        self.calls.append(flags)
+        if flags.get("use_rec") is False:
+            return self.det_result
+        return self.full_result
+
+
+def _transcribe_with(monkeypatch, tmp_path, engine):
+    from tests.tools.test_read_enhancements import _write_text_pdf
+
+    pdf = tmp_path / "one.pdf"
+    _write_text_pdf(pdf, ["whatever, the engine is fake"])
+    monkeypatch.setattr("durin.memory.ocr._get_engine", lambda: engine)
+    return transcribe_page(pdf, 1)
+
+
+def test_transcribe_page_aggregates_scores_and_skips_the_det_pass_for_a_text_page(
+    monkeypatch, tmp_path
+):
+    engine = _FakeEngine(
+        SimpleNamespace(txts=("first line", "second"), scores=(0.91, 0.87))
+    )
+
+    page = _transcribe_with(monkeypatch, tmp_path, engine)
+
+    assert page.text == "first line\nsecond"
+    assert page.mean_score == pytest.approx(0.89)
+    assert page.min_score == pytest.approx(0.87)
+    assert page.det_boxes is None
+    assert engine.calls == [{"use_det": True, "use_cls": True, "use_rec": True}]
+
+
+@pytest.mark.parametrize(
+    ("boxes", "expected"),
+    [
+        pytest.param([[0, 0], [1, 1], [2, 2], [3, 3]], 4, id="printed-but-unreadable"),
+        pytest.param(None, 0, id="genuinely-blank"),
+    ],
+)
+def test_transcribe_page_runs_a_det_only_pass_when_recognition_finds_nothing(
+    monkeypatch, tmp_path, boxes, expected
+):
+    engine = _FakeEngine(
+        SimpleNamespace(txts=None, scores=None),
+        det_result=SimpleNamespace(boxes=boxes),
+    )
+
+    page = _transcribe_with(monkeypatch, tmp_path, engine)
+
+    assert page.text == ""
+    assert page.mean_score is None and page.min_score is None
+    assert page.det_boxes == expected
+    assert engine.calls == [
+        {"use_det": True, "use_cls": True, "use_rec": True},
+        {"use_det": True, "use_cls": False, "use_rec": False},
+    ]
 
 
 # --- transcribe_pages_detached: the parent-side call to the OCR subprocess ---
@@ -153,15 +253,70 @@ def _fake_run(stdout="", stderr="", returncode=0):
     return run
 
 
-def test_transcribe_pages_detached_parses_stdout_into_a_page_dict(monkeypatch, tmp_path):
+def _page_payload(text, mean_score=None, min_score=None, det_boxes=None):
+    """One page's object in the child's stdout JSON — the shape ``ocr_subproc``
+    prints and ``transcribe_pages_detached`` parses back."""
+    return {
+        "text": text,
+        "mean_score": mean_score,
+        "min_score": min_score,
+        "det_boxes": det_boxes,
+    }
+
+
+def test_transcribe_pages_detached_parses_stdout_into_transcribed_pages(
+    monkeypatch, tmp_path, caplog
+):
+    stdout = json.dumps(
+        {
+            "pages": {
+                "1": _page_payload("hello", mean_score=0.98, min_score=0.9),
+                "2": _page_payload("", det_boxes=3),
+            }
+        }
+    )
+    monkeypatch.setattr("durin.memory.ocr.subprocess.run", _fake_run(stdout=stdout))
+
+    with caplog.at_level(logging.INFO, logger="durin.memory.ocr"):
+        result = transcribe_pages_detached(tmp_path / "doc.pdf", [1, 2])
+
+    assert result[1] == TranscribedPage(
+        "hello", mean_score=0.98, min_score=0.9, det_boxes=None
+    )
+    assert result[2] == TranscribedPage(
+        "", mean_score=None, min_score=None, det_boxes=3
+    )
+    # The child's stderr is captured and discarded on success, so the parent's
+    # own summary line is the only place the scores can reach a log at all.
+    logged = "\n".join(rec.getMessage() for rec in caplog.records)
+    assert "2 page(s)" in logged
+    assert "min 0.900" in logged
+
+
+@pytest.mark.parametrize(
+    "inner",
+    [
+        pytest.param("just the text", id="flat-string-the-old-shape"),
+        pytest.param({"text": "x"}, id="missing-score-keys"),
+    ],
+)
+def test_transcribe_pages_detached_treats_a_malformed_page_object_as_no_result(
+    monkeypatch, tmp_path, inner
+):
+    """A child that emits anything but the full per-page object — notably the
+    flat ``"page": "text"`` shape this contract replaced — has not produced a
+    parseable result. Parent and child ship in the same install, so a mismatch
+    is a bug, and it must surface as the one OcrUnavailable every caller
+    already handles rather than as half-parsed data."""
     monkeypatch.setattr(
         "durin.memory.ocr.subprocess.run",
-        _fake_run(stdout='{"pages": {"1": "hello", "2": "world"}}'),
+        _fake_run(stdout=json.dumps({"pages": {"1": inner}})),
     )
 
-    result = transcribe_pages_detached(tmp_path / "doc.pdf", [1, 2])
+    with pytest.raises(OcrUnavailable) as excinfo:
+        transcribe_pages_detached(tmp_path / "doc.pdf", [1])
 
-    assert result == {1: "hello", 2: "world"}
+    assert "no parseable result" in str(excinfo.value)
 
 
 def test_transcribe_pages_detached_invokes_the_subprocess_module_by_argv_contract(
@@ -175,9 +330,10 @@ def test_transcribe_pages_detached_invokes_the_subprocess_module_by_argv_contrac
 
     def run(cmd, *, capture_output, text, timeout):
         seen["cmd"] = cmd
-        return subprocess.CompletedProcess(
-            cmd, 0, stdout='{"pages": {"3": "x", "7": "y"}}', stderr=""
+        stdout = json.dumps(
+            {"pages": {"3": _page_payload("x", 0.9, 0.9), "7": _page_payload("y", 0.9, 0.9)}}
         )
+        return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
 
     monkeypatch.setattr("durin.memory.ocr.subprocess.run", run)
 
@@ -196,9 +352,10 @@ def test_transcribe_pages_detached_default_timeout_scales_with_page_count(monkey
 
     def run(cmd, *, capture_output, text, timeout):
         seen["timeout"] = timeout
-        return subprocess.CompletedProcess(
-            cmd, 0, stdout='{"pages": {"1": "a", "2": "b", "3": "c"}}', stderr=""
+        stdout = json.dumps(
+            {"pages": {str(p): _page_payload("x", 0.9, 0.9) for p in (1, 2, 3)}}
         )
+        return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
 
     monkeypatch.setattr("durin.memory.ocr.subprocess.run", run)
 
@@ -282,7 +439,7 @@ def test_transcribe_pages_detached_raises_when_a_page_is_missing_from_the_result
     # whole call fails the same way a broken engine does.
     monkeypatch.setattr(
         "durin.memory.ocr.subprocess.run",
-        _fake_run(stdout='{"pages": {"1": "hello"}}'),
+        _fake_run(stdout=json.dumps({"pages": {"1": _page_payload("hello", 0.9, 0.9)}})),
     )
 
     with pytest.raises(OcrUnavailable):
@@ -300,12 +457,15 @@ def test_transcribe_pages_detached_parse_reads_stdout_only(monkeypatch, tmp_path
     )
     monkeypatch.setattr(
         "durin.memory.ocr.subprocess.run",
-        _fake_run(stdout='{"pages": {"1": "clean text"}}', stderr=noisy_stderr),
+        _fake_run(
+            stdout=json.dumps({"pages": {"1": _page_payload("clean text", 0.9, 0.9)}}),
+            stderr=noisy_stderr,
+        ),
     )
 
     result = transcribe_pages_detached(tmp_path / "doc.pdf", [1])
 
-    assert result == {1: "clean text"}
+    assert result[1].text == "clean text"
 
 
 def test_transcribe_pages_detached_runs_one_child_at_a_time(monkeypatch, tmp_path):
@@ -339,7 +499,9 @@ def test_transcribe_pages_detached_runs_one_child_at_a_time(monkeypatch, tmp_pat
         with events_lock:
             events.append(f"finish {page}")
         return subprocess.CompletedProcess(
-            cmd, 0, stdout=json.dumps({"pages": {page: "text"}}), stderr="",
+            cmd, 0,
+            stdout=json.dumps({"pages": {page: _page_payload("text", 0.9, 0.9)}}),
+            stderr="",
         )
 
     monkeypatch.setattr("durin.memory.ocr.subprocess.run", run)
@@ -406,8 +568,8 @@ def test_transcribe_pages_detached_keeps_the_engine_out_of_this_process(tmp_path
     result = transcribe_pages_detached(pdf, [1, 2])
     after = _rss_bytes()
 
-    assert "FIRST" in result[1].upper()
-    assert "SECOND" in result[2].upper()
+    assert "FIRST" in result[1].text.upper()
+    assert "SECOND" in result[2].text.upper()
 
     delta_mb = (after - before) / (1024 * 1024)
     assert delta_mb < 300, (

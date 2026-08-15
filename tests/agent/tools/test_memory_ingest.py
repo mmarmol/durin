@@ -152,9 +152,14 @@ def test_a_scanned_book_becomes_searchable_once_its_transcription_lands(
     registry = _defer_ocr_to_a_job(tmp_path, monkeypatch)
     book = _scanned_book(tmp_path)
     ws = tmp_path / "ws"
+    from durin.memory.ocr import TranscribedPage
+
     monkeypatch.setattr(
         "durin.jobs.ocr_worker.transcribe_page",
-        lambda path, page, **kw: f"Page {page}: the zorptastic protocol governs it all.",
+        lambda path, page, **kw: TranscribedPage(
+            text=f"Page {page}: the zorptastic protocol governs it all.",
+            mean_score=0.99, min_score=0.97, det_boxes=None,
+        ),
     )
 
     from durin.agent.tools.memory_search import MemorySearchTool
@@ -230,9 +235,12 @@ def test_a_blank_scan_produces_no_reference_and_reports_the_error(tmp_path, monk
     cfg.documents.ocr.inline_max_pages = 5
     monkeypatch.setattr("durin.config.loader.load_config", lambda *a, **k: cfg)
     monkeypatch.setattr("durin.memory.doc_convert.engine_available", lambda: True)
+    from durin.memory.ocr import TranscribedPage
+
+    blank = TranscribedPage(text="", mean_score=None, min_score=None, det_boxes=0)
     monkeypatch.setattr(
         "durin.memory.doc_convert.transcribe_pages_detached",
-        lambda path, pages: {p: "" for p in pages},
+        lambda path, pages: {p: blank for p in pages},
     )
 
     pdf = tmp_path / "blank.pdf"

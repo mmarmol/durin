@@ -336,7 +336,7 @@ def convert_file_to_markdown(path: Path, *, documents_config=None) -> ConvertedD
             try:
                 transcribed = transcribe_pages_detached(path, pages)
                 for page in pages:
-                    texts[page - 1] = transcribed[page]
+                    texts[page - 1] = transcribed[page].text
             except (OcrUnavailable, ImportError) as exc:
                 # engine_available() above only proves ``import rapidocr``
                 # works; the subprocess's own imports can still fail
@@ -362,6 +362,21 @@ def convert_file_to_markdown(path: Path, *, documents_config=None) -> ConvertedD
                 )
             markdown = "\n\n".join(t for t in texts if t.strip())
             if not markdown:
+                # The det pass tells two invisible documents apart: pages of
+                # blank paper, or print the engine detected but could not
+                # read. Only the second message sends the reader anywhere
+                # useful — at pages that LOOK blank in the output, "rescan
+                # the document" is otherwise the natural, wrong conclusion.
+                unreadable = sum(1 for p in transcribed.values() if p.det_boxes)
+                if unreadable:
+                    raise DocConvertError(
+                        f"{path.name} yielded no extractable text even after "
+                        f"OCR — the engine detected printed text on "
+                        f"{unreadable} of the {len(transcribed)} transcribed "
+                        "page(s) but could not read it; a script outside its "
+                        "built-in models (they read Chinese, Japanese and "
+                        "Latin-script languages) is the usual cause"
+                    )
                 raise DocConvertError(
                     f"{path.name} yielded no extractable text even after OCR — every "
                     "transcribed page came back blank"

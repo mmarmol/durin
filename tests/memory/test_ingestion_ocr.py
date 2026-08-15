@@ -5,6 +5,18 @@ import pytest
 from durin.config.schema import DocumentsConfig
 from durin.jobs.registry import JobRegistry
 from durin.memory.ingestion import IngestError, ingest_artifact
+from durin.memory.ocr import TranscribedPage
+
+
+def _page(text):
+    """A TranscribedPage shaped the way the engine builds one: scores ride
+    with recognized text; an empty page carries the det pass's box count
+    instead (0 here — these tests never exercise the unreadable case)."""
+    if text:
+        return TranscribedPage(
+            text=text, mean_score=0.99, min_score=0.97, det_boxes=None
+        )
+    return TranscribedPage(text="", mean_score=None, min_score=None, det_boxes=0)
 
 
 @pytest.fixture(autouse=True)
@@ -122,7 +134,7 @@ def test_ingest_raises_when_ocr_transcribes_every_flagged_page_blank(
     _write_text_pdf(pdf, ["", ""])
     monkeypatch.setattr(
         "durin.memory.doc_convert.transcribe_pages_detached",
-        lambda path, pages: {p: "" for p in pages},
+        lambda path, pages: {p: _page("") for p in pages},
     )
     cfg = DocumentsConfig.model_validate({"ocr": {"enabled": True, "inline_max_pages": 5}})
 
@@ -237,7 +249,7 @@ def test_re_ingest_after_done_is_a_true_no_op(tmp_path, book, registry, monkeypa
     monkeypatch.setattr("durin.jobs.spawn.subprocess", launcher)
     monkeypatch.setattr(
         "durin.jobs.ocr_worker.transcribe_page",
-        lambda path, page, **kw: f"Page {page}: settled text.",
+        lambda path, page, **kw: _page(f"Page {page}: settled text."),
     )
     # memory.enabled=False keeps this test off the vector/embedding half --
     # index_ingested_entry (called by run_job) still runs its lexical half.
@@ -426,7 +438,7 @@ def test_a_re_ingest_upgrades_an_ocr_off_stub_once_ocr_is_enabled(
 
     monkeypatch.setattr(
         "durin.memory.doc_convert.transcribe_pages_detached",
-        lambda path, pages: {p: f"Page {p}: fresh text." for p in pages},
+        lambda path, pages: {p: _page(f"Page {p}: fresh text.") for p in pages},
     )
     cfg_on = DocumentsConfig.model_validate(
         {"ocr": {"enabled": True, "inline_max_pages": 50}}
@@ -512,7 +524,7 @@ def test_a_half_state_missing_meta_rebuilds_instead_of_short_circuiting(
     monkeypatch.setattr("durin.jobs.spawn.subprocess", launcher)
     monkeypatch.setattr(
         "durin.memory.doc_convert.transcribe_pages_detached",
-        lambda path, pages: {p: f"Page {p}: real text." for p in pages},
+        lambda path, pages: {p: _page(f"Page {p}: real text.") for p in pages},
     )
     cfg = DocumentsConfig.model_validate({"ocr": {"enabled": True, "inline_max_pages": 50}})
 
@@ -567,7 +579,7 @@ def test_a_legacy_stub_meta_predating_the_flag_still_upgrades(
 
     monkeypatch.setattr(
         "durin.memory.doc_convert.transcribe_pages_detached",
-        lambda path, pages: {p: f"Page {p}: fresh text." for p in pages},
+        lambda path, pages: {p: _page(f"Page {p}: fresh text.") for p in pages},
     )
     cfg_on = DocumentsConfig.model_validate(
         {"ocr": {"enabled": True, "inline_max_pages": 50}}

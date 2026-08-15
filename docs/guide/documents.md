@@ -40,6 +40,23 @@ its own. If the engine is ever missing while the setting says on (an install
 that skipped it, say), durin still gives you whatever text the document does
 have, and says the engine is the reason the rest is blank.
 
+**What the built-in engine can read.** The models installed with OCR read
+Chinese, Japanese, and Latin-script languages — English, Spanish, French,
+German, Portuguese, and several dozen more. Scripts outside that set fail in
+two different ways, and durin is honest about both. A Cyrillic or Greek page
+comes back as confident-looking garbage: the engine reads the letterforms as
+Latin lookalikes, and nothing in its output flags the result as wrong. A page
+in Arabic — or any script the models cannot match at all — comes back with no
+text; durin then checks whether the page holds printed text at all, and
+reports "printed text the engine could not read" instead of calling the page
+blank. A genuinely empty page is still reported as blank.
+
+The engine also scores its own confidence in every line it reads, and durin
+logs a per-document summary of those scores to help diagnose a bad
+transcription. It never uses them to accept or reject one: measured against
+real scans, plausible-but-wrong readings score in the same range as
+legitimate noisy-but-correct ones, so no threshold can tell them apart.
+
 A short scan is read on the spot, the same as any other document. Ask durin to
 remember a longer one — a whole scanned book — and it does not make you wait:
 the original is kept right away and its pages are transcribed in the

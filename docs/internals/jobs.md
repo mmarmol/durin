@@ -467,9 +467,18 @@ finds nothing left to transcribe would otherwise hit the same broken step again
 on every retry. The completeness check and the indexing both count as steps
 that can fail the job on purpose: a job reported "done" whose document cannot
 be found, or whose book was published with the pages nobody confirmed left out,
-is the exact outcome each step exists to prevent. A pass that transcribed nothing at all fails there too — the inline
-conversion path already refuses a document with no extractable text, and an
-empty Library entry is no more useful for having arrived late.
+is the exact outcome each step exists to prevent. A pass that transcribed
+nothing at all fails at the sidecar-assembly step, before anything is written:
+the inline conversion path already refuses a document with no extractable
+text, and an empty Library entry is no more useful for having arrived late.
+That failure says which kind of nothing it was — every `TranscribedPage` that
+comes back empty carries a detection-only box count, so the error
+distinguishes blank paper (no boxes anywhere) from printed text the engine
+could not read (boxes without a single surviving recognition, the usual shape
+of a script outside the engine's models). The counts are scoped to the pages
+the failing run transcribed itself: pages recorded by an earlier run kept
+only their text, so a resumed run has no detector evidence for them and its
+message does not pretend otherwise.
 
 ### How a new job `kind` is added
 
@@ -537,8 +546,8 @@ transcribed at a time").
 | `queued_jobs` | `durin/jobs/registry.py` | The oldest up to *n* still-`queued` jobs of a kind in one query; what the pickup loop uses instead of looping `next_queued`. |
 | `_resume_jobs` | `durin/agent/loop.py` | The reconcile-then-capped-pickup pass itself, shared by gateway startup and the periodic sweep so the two cannot drift apart. |
 | `AgentLoop._sweep_jobs_periodically` | `durin/agent/loop.py` | Re-runs that pass every `_JOB_SWEEP_INTERVAL_S`, guarded per tick; what un-wedges a queue whose cap slot is held by a worker that was killed outright. |
-| `transcribe_page` | `durin/memory/ocr.py` | Renders one PDF page (`pypdfium2`) and runs it through the lazily-constructed, process-local `RapidOCR` engine. The worker calls this directly — its own process is already short-lived, so the engine's memory leaves with it. |
-| `transcribe_pages_detached` | `durin/memory/ocr.py` | The inline conversion path's transcription entry point: runs `transcribe_page` per page inside a short-lived child (`durin/memory/ocr_subproc.py`), so the engine's memory never enters the long-lived gateway process. Admits one child at a time (a module-level semaphore in the same file) for the same measured reason `MAX_CONCURRENT_OCR_JOBS` exists — the registry's cap governs workers only and never sees this path. |
+| `transcribe_page` | `durin/memory/ocr.py` | Renders one PDF page (`pypdfium2`) and runs it through the lazily-constructed, process-local `RapidOCR` engine. Returns a `TranscribedPage`: the text, mean/min of the engine's per-line recognition scores (logged for diagnosis, never used as an accept/reject gate — measured score bands for wrong-but-plausible output overlap legitimate noisy scans), and, only when the page came back empty, a detection-only box count that separates blank paper from print the engine cannot read. The worker calls this directly — its own process is already short-lived, so the engine's memory leaves with it. |
+| `transcribe_pages_detached` | `durin/memory/ocr.py` | The inline conversion path's transcription entry point: runs `transcribe_page` per page inside a short-lived child (`durin/memory/ocr_subproc.py`), so the engine's memory never enters the long-lived gateway process. The child prints one JSON object whose per-page values mirror `TranscribedPage` field for field; the parent rebuilds them and logs a one-line score summary (the child's stderr is discarded on success, so this is where the scores reach a log). Admits one child at a time (a module-level semaphore in the same file) for the same measured reason `MAX_CONCURRENT_OCR_JOBS` exists — the registry's cap governs workers only and never sees this path. |
 | `index_ingested_entry` | `durin/memory/ingestion.py` | Turns a finished `ingested/<id>/` entry into an indexed Library reference; the one memory-layer call the worker makes on success. |
 | `collect_tasks` | `durin/agent/background_tasks.py` | Merges sub-agents, workflow runs, and jobs into the one list the tray and `tasks` tool both read. |
 | `TasksTool` | `durin/agent/tools/tasks_tool.py` | Agent-facing `tasks` tool: `list` / `status` / `stop`, across all three background-work categories. |

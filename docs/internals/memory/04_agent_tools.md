@@ -231,7 +231,13 @@ of this same call, as long as there are at or under
 long-lived, so it never loads the OCR engine itself: `transcribe_pages_detached`
 (`durin/memory/ocr.py`) hands the page numbers to a short-lived subprocess
 (`durin/memory/ocr_subproc.py`, run as `python -m durin.memory.ocr_subproc`),
-which renders and transcribes them and returns the text over stdout. The
+which renders and transcribes them and returns one JSON object over stdout —
+per page, the text plus the engine's recognition-score aggregates and, when a
+page comes back empty, a detection-only box count that tells blank paper
+apart from print the engine cannot read. The parent rebuilds each page as a
+`TranscribedPage` and logs a one-line score summary; the scores are for
+diagnosis only, never an accept/reject gate, because the measured score bands
+for wrong-but-plausible output overlap those of legitimate noisy scans. The
 engine's memory is released when that subprocess exits rather than
 accumulating in the gateway across conversions. Only one of those children
 runs at a time across the whole process: an engine costs roughly 1.4 GB
@@ -246,9 +252,15 @@ process is already short-lived.
 
 If every transcribed page still comes back blank — nothing OCR could read
 either — `convert_file_to_markdown` raises `DocConvertError` rather than
-returning a document with an empty body; `ingest_artifact` converts that into
-`IngestError` the same way it does every other conversion failure, so the
-tool reports it and writes no reference.
+returning a document with an empty body, and the message says which kind of
+blank it was: pages whose det pass found no text regions at all are reported
+as genuinely blank, while pages the detector saw print on that recognition
+could not read are reported as unreadable — the usual shape of a script
+outside the engine's built-in models (they read Chinese, Japanese and
+Latin-script languages; Cyrillic or Greek instead come back as
+confident-looking garbage, which no message can catch). `ingest_artifact`
+converts either into `IngestError` the same way it does every other
+conversion failure, so the tool reports it and writes no reference.
 
 Over that budget the document is never converted or fully extracted — both
 outputs would be thrown away unread — so the decision to go over is taken

@@ -429,9 +429,12 @@ def test_extract_documents_reports_a_blank_scan_instead_of_a_silent_empty_file(
     # there), taking the engine-missing coverage-note branch instead of ever
     # reaching the blank-after-OCR raise this test is about.
     monkeypatch.setattr("durin.memory.doc_convert.engine_available", lambda: True)
+    from durin.memory.ocr import TranscribedPage
+
+    blank = TranscribedPage(text="", mean_score=None, min_score=None, det_boxes=0)
     monkeypatch.setattr(
         "durin.memory.doc_convert.transcribe_pages_detached",
-        lambda path, pages: {p: "" for p in pages},
+        lambda path, pages: {p: blank for p in pages},
     )
 
     pdf = tmp_path / "blank_scan.pdf"

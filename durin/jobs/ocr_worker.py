@@ -173,6 +173,10 @@ def run_job(job_id: str, *, registry: JobRegistry | None = None) -> None:
             )
         todo = [p for p in pages if p not in already]
 
+    # Detector box counts for the pages THIS run transcribed empty. Pages an
+    # earlier run recorded kept only their text, so if the whole book comes
+    # out blank below, this is all the detector evidence that exists.
+    det_boxes_seen: dict[int, int] = {}
     for page in todo:
         # Re-read rather than trusting the local copy: cancellation arrives
         # from the gateway, in another process.
@@ -188,7 +192,20 @@ def run_job(job_id: str, *, registry: JobRegistry | None = None) -> None:
             _chain_to_next_queued(registry)
             return
         try:
-            registry.record_unit(job_id, page, transcribe_page(pdf_path, page))
+            result = transcribe_page(pdf_path, page)
+            registry.record_unit(job_id, page, result.text)
+            if result.det_boxes is None:
+                logger.info(
+                    "ocr worker: page {} of {}: mean score {:.3f}, min {:.3f}",
+                    page, pdf_path.name, result.mean_score, result.min_score,
+                )
+            else:
+                det_boxes_seen[page] = result.det_boxes
+                logger.info(
+                    "ocr worker: page {} of {}: no text recognized, "
+                    "{} text region(s) detected",
+                    page, pdf_path.name, result.det_boxes,
+                )
         except Exception as exc:  # noqa: BLE001
             logger.exception("ocr worker: page {} of {} failed", page, pdf_path.name)
             error = f"page {page}: {type(exc).__name__}: {exc}"
@@ -214,7 +231,15 @@ def run_job(job_id: str, *, registry: JobRegistry | None = None) -> None:
             for unit, text in registry.units(job_id):
                 texts[unit - 1] = text
             markdown = "\n\n".join(t for t in texts if t.strip())
-            atomic_write_text(Path(sidecar_dir) / "source.md", markdown)
+            if not markdown:
+                # Written empty, this sidecar would fail the job at the
+                # indexing step below with nothing but "no text to index" to
+                # show for a whole transcription pass. Failing before
+                # anything is written keeps the diagnosis the det pass paid
+                # for: blank paper, or print the engine could not read.
+                error = _no_text_error(det_boxes_seen)
+            else:
+                atomic_write_text(Path(sidecar_dir) / "source.md", markdown)
         except Exception as exc:  # noqa: BLE001
             logger.exception("ocr worker: sidecar write failed for job {}", job_id)
             error = f"sidecar write: {type(exc).__name__}: {exc}"
@@ -303,6 +328,28 @@ def _chain_to_next_queued(registry: JobRegistry) -> None:
         logger.exception(
             "ocr worker: could not chain to the next queued job {}", next_job.id,
         )
+
+
+def _no_text_error(det_boxes_seen: dict[int, int]) -> str:
+    """The honest account of a transcription pass that produced no text.
+
+    *det_boxes_seen* maps each page this run transcribed empty to the
+    detector's box count for it. Pages an earlier run transcribed have no
+    entry — only their empty text was recorded — so the unreadable message
+    scopes its counts to this run rather than claiming the whole book was
+    measured. With no boxes anywhere (or no detector data at all), blank
+    paper is what the evidence says, and what the message keeps saying.
+    """
+    unreadable = sum(1 for boxes in det_boxes_seen.values() if boxes)
+    if unreadable:
+        return (
+            "transcription produced no text: the engine detected printed text "
+            f"on {unreadable} of the {len(det_boxes_seen)} page(s) transcribed "
+            "in this run but could not read it; a script outside its built-in "
+            "models (they read Chinese, Japanese and Latin-script languages) "
+            "is the usual cause"
+        )
+    return "transcription produced no text: every transcribed page came back blank"
 
 
 def _empty_pages(pdf_path: Path) -> list[int] | None:
