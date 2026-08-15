@@ -5,6 +5,111 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.7.0 — 2026-08-15
+
+### Highlights
+
+- **Another agent can now talk to durin.** The gateway answers at
+  `/v1/chat/completions` in the shape every OpenAI-compatible client already
+  speaks, so anything that can point at a base URL — a coding agent, a script,
+  another assistant — can hold a conversation with durin instead of just reading
+  its API. It streams, it accepts file uploads, and it is closed by default:
+  reaching it takes a token scoped to chat, issued by you. The old `durin serve`
+  command is gone; the gateway is the one server. (#526)
+
+- **Scanned documents work end to end now, not just in the happy case.** 0.6.0
+  taught durin to read a scan; this release makes it survive contact with real
+  documents. A book attached in chat used to vanish silently — the instruction to
+  ingest it was composed and then discarded — and the gateway froze for as long as
+  a conversion took. Both are fixed, along with the memory the OCR engine used to
+  leave behind in the gateway forever: transcription now runs in a short-lived
+  process that takes its ~1.4 GB with it when it exits. (#525)
+
+- **A scan that cannot be read says so, and one you already added is not read
+  twice.** A document whose every page comes back blank used to be published as an
+  empty, unfindable Library entry; it now fails with a reason, and distinguishes
+  blank paper from printed text this engine cannot decipher. Re-adding a document
+  you already have returns what you had — instantly, no second transcription, no
+  duplicate job — and a book you added while OCR was switched off upgrades itself
+  the moment you turn OCR on. (#527)
+
+- **A background transcription that failed can be retried, and picks up where it
+  stopped.** Nothing could restart a failed job before: the work was simply lost.
+  `tasks(action="retry")` revives it and resumes from the pages already
+  transcribed — a book that failed at page four of forty re-does thirty-seven
+  pages, not forty. Every failure message now names that recovery. (#527)
+
+- **Nine more scripts, downloaded only if you choose one.** Cyrillic, Arabic,
+  Greek, Korean, Devanagari, Thai, Tamil, Telugu and East-Slavic recognition are
+  selectable under Settings → Documents. The built-in pack still covers Chinese,
+  Japanese and Latin-script languages fully offline; picking another downloads its
+  model once, on first use, into `~/.durin/models/ocr`, and every place that asks
+  you to choose says what that costs. Your documents never leave the machine
+  either way. (#527)
+
+- **Stopping a workflow can now actually stop it.** A stop only ever took effect
+  between steps, so an agent step in the middle of a model turn ran to the end no
+  matter what you pressed. `force=true` — or simply pressing stop a second time —
+  interrupts the turn itself, including inside nested sub-workflows, and a run
+  that is winding down shows as `stopping` instead of pretending to be healthy.
+  What a tool call already started still finishes on its own, and the interface
+  says so rather than promising more. (#529)
+
+### Changes
+
+**API**
+
+- New OpenAI-compatible surface on the gateway: `/v1/chat/completions` (streaming
+  and multipart uploads), `/v1/models`, gated by the new `chat:write` scope and a
+  configurable request timeout. Removed the separate `durin serve` command and its
+  module, and the `[I] API Server` entry in the onboarding wizard. (#526)
+
+**Documents**
+
+- Attaching a scanned document in chat reaches the model with the filename, the
+  path and what to do with it, on every channel; unreadable attachments are
+  reported rather than dropped. (#525)
+- Conversion no longer runs on the gateway's event loop, and deciding that a book
+  belongs in a background job costs a probe instead of a full conversion —
+  measured 18.8 s → 0.05 s on a 400-page scan. (#525)
+- Background OCR is capped at one worker atomically, chains to the next queued
+  book, and self-heals a worker killed outright within a minute. Waiting books are
+  shown as `queued` rather than as running with a live clock. (#525)
+- Per-page recognition scores are recorded and logged. They are deliberately not
+  used to accept or reject a page: measured, the scores of confident nonsense
+  overlap those of correct text from a noisy scan, and the docs say so. (#527)
+- The transcribed text of a finished book no longer lives in the job database
+  forever: it is deleted once the book is in your Library, while a failed job
+  keeps its pages so a retry can resume, and terminal jobs are pruned after
+  thirty days. (#527)
+- The configuration guide documents the `documents` section; the install guide
+  notes that slim Linux images need `libgl1` for the OCR extra. (#527)
+
+**Workflows**
+
+- Two-mode cancellation (graceful and hard), `stopping` as a visible state in the
+  work panel, the composer strip and the `tasks` tool, and a force-stop that
+  reaches nested runs, parallel branches, fan-out workers and detached launches.
+  (#529)
+- A run started after you changed the default model now uses the model you saved,
+  instead of the one that was current when the gateway booted. (#504)
+
+**Fixes**
+
+- The extras auto-installer respects `install.auto_install_extras: false`. Three
+  call sites had no configuration in hand and installed anyway, silently
+  overriding the setting. Its refusal now also names the install commands durin
+  actually documents, rather than a bare `pip install`. (#527)
+- Liveness probing on Windows no longer risks killing the process it is checking:
+  `os.kill(pid, 0)` is a console-control event there, and a known CPython
+  fall-through turns it into a terminate. Both copies of the probe are now one
+  Windows-safe implementation. (#527)
+
+**Dependencies**
+
+- Bump cryptography 49.0.0 → 50.0.0. (#513)
+- Bump the python group: three updates across one directory. (#516)
+
 ## 0.6.0 — 2026-08-14
 
 ### Highlights
