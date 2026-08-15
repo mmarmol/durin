@@ -491,11 +491,14 @@ finds the row in the session listing; `requeue` finding nothing to revive is
 the backstop behind that, for a prune that lands between the lookup and the
 guarded write. A
 re-ingest of a document whose entry still carries an `ocr_job.json` marker
-naming the pruned id takes the marker branch's vanished-row route
-(`ingest_artifact` branches on the row's *current* state, and `get()`
-returning `None` falls through to the retry): a fresh job is spawned and the
-marker overwritten to name it — a marker that outlives its row heals itself
-on the next touch. Related and deliberate, `list_for_session` returns at
+naming the pruned id — and whose transcription is still missing — takes the
+marker branch's vanished-row route (`ingest_artifact` branches on the row's
+*current* state, and `get()` returning `None` falls through to the retry): a
+fresh job is spawned and the marker overwritten to name it — a marker that
+outlives its row heals itself on the next touch. The dominant pruned
+population never gets that far: a job that finished left its sidecar, so
+re-ingest answers at the finished short-circuit with the existing
+transcription and the stale marker is simply never consulted. Related and deliberate, `list_for_session` returns at
 most the 200 newest rows as a defensive bound: the tray renders a handful,
 and the prune keeps the table small anyway.
 
