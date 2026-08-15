@@ -198,9 +198,16 @@ class TasksTool(Tool, ContextAware):
             f"({counts}{len(rows) - running - queued} finished):"
         ]
         for r in rows:
-            age = _age_epoch(r["started_at"], r.get("ended_at"))
+            # Same honesty as the queued branch of the STATUS render: an age
+            # beside a job reads as time spent working, and a queued job has
+            # no worker at all. Blank the cell (width kept for alignment)
+            # instead of printing a clock nobody is running against.
+            if r["status"] == "queued":
+                age_cell = " " * 10
+            else:
+                age_cell = f"age={_age_epoch(r['started_at'], r.get('ended_at')):<6}"
             lines.append(
-                f"  [{r['id']}] {r['kind']:<8} {r['status']:<10} age={age:<6} {r['label']}"
+                f"  [{r['id']}] {r['kind']:<8} {r['status']:<10} {age_cell} {r['label']}"
             )
         return "\n".join(lines)
 

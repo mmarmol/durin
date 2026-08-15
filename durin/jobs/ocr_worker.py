@@ -250,7 +250,7 @@ def run_job(job_id: str, *, registry: JobRegistry | None = None) -> None:
                 # show for a whole transcription pass. Failing before
                 # anything is written keeps the diagnosis the det pass paid
                 # for: blank paper, or print the engine could not read.
-                error = _no_text_error(det_boxes_seen)
+                error = _no_text_error(det_boxes_seen, language)
             else:
                 atomic_write_text(Path(sidecar_dir) / "source.md", markdown)
         except Exception as exc:  # noqa: BLE001
@@ -370,7 +370,7 @@ def _chain_to_next_queued(registry: JobRegistry) -> None:
         )
 
 
-def _no_text_error(det_boxes_seen: dict[int, int]) -> str:
+def _no_text_error(det_boxes_seen: dict[int, int], language: str | None) -> str:
     """The honest account of a transcription pass that produced no text.
 
     *det_boxes_seen* maps each page this run transcribed empty to the
@@ -379,15 +379,28 @@ def _no_text_error(det_boxes_seen: dict[int, int]) -> str:
     scopes its counts to this run rather than claiming the whole book was
     measured. With no boxes anywhere (or no detector data at all), blank
     paper is what the evidence says, and what the message keeps saying.
+
+    *language* is the recognition language this run transcribed with: when
+    one is selected, its model did the reading, so the unreadable message
+    names it instead of blaming the built-in pack that was never consulted.
     """
     unreadable = sum(1 for boxes in det_boxes_seen.values() if boxes)
     if unreadable:
+        if language:
+            cause = (
+                f"the selected recognition language ({language!r}) read none "
+                "of it — the pages may be in a different script, or genuinely "
+                "unreadable"
+            )
+        else:
+            cause = (
+                "a script outside its built-in models (they read Chinese, "
+                "Japanese and Latin-script languages) is the usual cause"
+            )
         return (
             "transcription produced no text: the engine detected printed text "
             f"on {unreadable} of the {len(det_boxes_seen)} page(s) transcribed "
-            "in this run but could not read it; a script outside its built-in "
-            "models (they read Chinese, Japanese and Latin-script languages) "
-            "is the usual cause"
+            f"in this run but could not read it; {cause}"
         )
     return "transcription produced no text: every transcribed page came back blank"
 

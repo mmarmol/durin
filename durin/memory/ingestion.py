@@ -76,7 +76,13 @@ def ingest_artifact(
       ``job_id`` instead of spawning a second one.
     - The marker names a job that is ``failed``/``cancelled``, or one the
       registry no longer has: a legitimate retry — conversion runs again and
-      a fresh job is spawned, overwriting the marker.
+      a fresh job is spawned, overwriting the marker. One failure shape never
+      reaches this bullet: a job that failed at the Library-index step had
+      already written its sidecar (the worker writes ``source.md`` before
+      indexing), so the entry matches the finished case above — a no-op
+      returning the text, the marker never consulted — and the
+      ``memory_ingest`` tool layer, which recreates the Library reference
+      whenever no job is pending, heals the missed indexing on that path.
     - A half state (``source.md`` present but ``meta.json`` missing — the two
       writes are each atomic but not one transaction, so a crash between them
       is possible) is treated as no finished entry at all: conversion runs

@@ -750,7 +750,7 @@ edit it manually.
 | Key | Default | Meaning |
 |---|---|---|
 | `extras` | `[]` | Additive list of optional extras detected at any point; used by `durin doctor` |
-| `auto_install_extras` | `true` | Auto-install a feature's pip extra when it is activated; `false` shows a `pip install durin-agent[X]` message instead |
+| `auto_install_extras` | `true` | Auto-install a feature's pip extra when it is activated; `false` shows the manual install command instead (`pipx inject durin-agent 'durin-agent[X]'`, or `uv tool install 'durin-agent[X]'` for uv installs) |
 
 ---
 

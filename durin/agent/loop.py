@@ -1245,8 +1245,10 @@ class AgentLoop:
             logger.warning("MCP connection cancelled (will retry next message)")
             self._mcp_connections.clear()
         except ImportError:
-            # Cold path (extra missing): most AgentLoops have app_config=None,
-            # so load the config for the auto-install gate.
+            # Cold path (extra missing): loops built via from_config carry
+            # app_config, but a directly constructed AgentLoop (tests, other
+            # embedders) may not — fall back to loading the config so the
+            # auto-install gate always sees the user's real opt-in/out.
             from durin.config.loader import load_config
 
             res = ensure_or_note(

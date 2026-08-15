@@ -172,6 +172,28 @@ async def test_list_counts_a_queued_job_as_neither_running_nor_finished(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_list_shows_no_age_for_a_queued_job(tmp_path):
+    """The STATUS render already withholds the clock for a queued job (an age
+    beside a job reads as time spent working, and a queued job has no worker
+    at all); the LIST line must not print one either. The blank cell keeps
+    the label column aligned with the other rows."""
+    jobs = _job_registry(tmp_path)
+    running = jobs.enqueue(
+        kind="ocr", label="first.pdf", payload={}, session_key=SESSION, units_total=1)
+    jobs.claim(running.id, pid=4242)
+    queued = jobs.enqueue(
+        kind="ocr", label="second.pdf", payload={}, session_key=SESSION, units_total=1)
+
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(action="list")
+
+    queued_line = next(ln for ln in out.split("\n") if queued.id in ln)
+    running_line = next(ln for ln in out.split("\n") if running.id in ln)
+    assert "age=" not in queued_line
+    assert "age=" in running_line
+    assert queued_line.index("second.pdf") == running_line.index("first.pdf")
+
+
+@pytest.mark.asyncio
 async def test_list_says_nothing_about_queueing_when_nothing_is_queued(tmp_path):
     """The count only earns its place when there is one -- an always-present
     "0 queued" is noise in a line the model reads on every check."""

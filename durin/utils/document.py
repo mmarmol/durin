@@ -229,6 +229,16 @@ def extract_documents(
                     .removesuffix("]")
                     .removesuffix(".")
                 )
+                # The reason usually BEGINS with the same filename this line
+                # already names (conversion errors lead with it), reading as
+                # "book.pdf — could not be read inline: book.pdf yielded
+                # no...". Strip that leading repeat plus its separator — only
+                # at a token boundary, so a name that merely prefixes another
+                # word is left alone.
+                if reason.startswith(p.name) and (
+                    reason[len(p.name):len(p.name) + 1] in ("", " ", ":")
+                ):
+                    reason = reason[len(p.name):].lstrip(" :").strip() or reason
                 doc_texts.append(
                     f"[File: {p.name} — could not be read inline: {reason}. "
                     f"Saved on disk at {p}]"

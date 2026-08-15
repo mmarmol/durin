@@ -371,6 +371,36 @@ def test_worker_fails_honestly_when_pages_hold_print_the_engine_cannot_read(
     assert not (ws / "memory" / "references").exists()
 
 
+def test_worker_unreadable_error_names_the_selected_language(
+    registry, tmp_path, monkeypatch,
+):
+    """Same unreadable book, but with documents.ocr.language set: the
+    selected language's model is what read nothing, so citing the built-in
+    pack as the usual cause would imply it was never consulted. The error
+    names the selected language and keeps both honest readings open."""
+    from durin.config.schema import Config
+
+    cfg = Config.model_validate({"documents": {"ocr": {"language": "el"}}})
+    monkeypatch.setattr("durin.jobs.ocr_worker.load_config", lambda: cfg)
+
+    ws = tmp_path / "ws"
+    entry_dir, pdf = _ingested_entry(ws)
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page",
+        lambda path, page, **kw: _page("", det_boxes=4),
+    )
+    job = _enqueue(registry, pdf, [1, 2, 3], sidecar_dir=entry_dir)
+
+    run_job(job.id, registry=registry)
+
+    reread = registry.get(job.id)
+    assert reread.status == "failed"
+    assert "printed text" in reread.error
+    assert "'el'" in reread.error
+    assert "built-in models" not in reread.error
+    assert "came back blank" not in reread.error
+
+
 def test_worker_scopes_the_unreadable_count_to_the_pages_this_run_transcribed(
     registry, tmp_path, monkeypatch,
 ):

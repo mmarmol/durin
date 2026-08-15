@@ -463,6 +463,62 @@ def test_extract_documents_reports_a_corrupt_file_instead_of_dropping_it(tmp_pat
     assert images == []
 
 
+def test_extract_documents_error_line_does_not_repeat_the_filename(
+    tmp_path, monkeypatch
+):
+    # The reason inside "could not be read inline: ..." usually BEGINS with
+    # the same filename the line already names (DocConvertError messages lead
+    # with path.name) — "book.pdf — could not be read inline: book.pdf
+    # yielded no..." says the name twice in a row. The composed line strips
+    # that leading repeat, whether the name is followed by a space or a colon.
+    from durin.utils import document as doc_mod
+
+    f = tmp_path / "book.pdf"
+    f.write_bytes(b"%PDF-1.4 x")
+
+    monkeypatch.setattr(
+        doc_mod, "extract_text",
+        lambda p: "[error: book.pdf yielded no extractable text even after "
+                  "OCR — every transcribed page came back blank.]",
+    )
+    text, _ = doc_mod.extract_documents("hello", [str(f)])
+    assert "book.pdf — could not be read inline: yielded no extractable" in text
+    assert "could not be read inline: book.pdf" not in text
+
+    monkeypatch.setattr(
+        doc_mod, "extract_text",
+        lambda p: "[error: book.pdf: 3 of 8 pages need OCR, over the inline "
+                  "limit of 2. Ingest the document to have it transcribed as "
+                  "a background job.]",
+    )
+    text, _ = doc_mod.extract_documents("hello", [str(f)])
+    assert "book.pdf — could not be read inline: 3 of 8 pages need OCR" in text
+    assert "could not be read inline: book.pdf" not in text
+
+
+def test_extract_documents_error_line_keeps_a_reason_without_the_filename(
+    tmp_path, monkeypatch
+):
+    # A reason that never names the file (markitdown wrap failures, io
+    # errors) must pass through untouched — the de-dup only strips a leading
+    # repeat of this file's own name.
+    from durin.utils import document as doc_mod
+
+    f = tmp_path / "book.pdf"
+    f.write_bytes(b"%PDF-1.4 x")
+    monkeypatch.setattr(
+        doc_mod, "extract_text",
+        lambda p: "[error: failed to extract .pdf: EOF marker not found]",
+    )
+
+    text, _ = doc_mod.extract_documents("hello", [str(f)])
+
+    assert (
+        "book.pdf — could not be read inline: failed to extract .pdf: "
+        "EOF marker not found" in text
+    )
+
+
 def test_extract_documents_still_inlines_an_ordinary_pdf(tmp_path):
     # Regression: a normal text PDF must keep inlining cleanly with no
     # error line — the fix only changes what happens to [error:] strings.

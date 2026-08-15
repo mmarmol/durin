@@ -73,10 +73,10 @@ def _get_kernel32() -> ctypes.WinDLL:
 def pid_alive(pid: int) -> bool:
     """Best-effort liveness probe: True iff *pid* names a live process.
 
-    Totalized on purpose: every outcome is an answer, never an exception.
-    A pid that exists but is not ours to inspect reads as alive; an answer
-    the OS refuses to give reads as dead, and so does a pid too large for
-    the OS to represent -- no live process can have it.
+    Totalized on purpose: for any integer pid, every outcome is an answer,
+    never an exception. A pid that exists but is not ours to inspect reads
+    as alive; an answer the OS refuses to give reads as dead, and so does a
+    pid too large for the OS to represent -- no live process can have it.
     """
     if sys.platform == "win32":
         # os.kill is not a probe on Windows. Signal 0 there is CTRL_C_EVENT

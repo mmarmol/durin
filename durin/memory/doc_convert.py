@@ -371,13 +371,27 @@ def convert_file_to_markdown(path: Path, *, documents_config=None) -> ConvertedD
                 # the document" is otherwise the natural, wrong conclusion.
                 unreadable = sum(1 for p in transcribed.values() if p.det_boxes)
                 if unreadable:
+                    # Blame what actually read the pages: with a recognition
+                    # language selected, its model did the reading — pointing
+                    # at the built-in pack would imply it was never tried.
+                    if ocr_cfg.language:
+                        cause = (
+                            f"the selected recognition language "
+                            f"({ocr_cfg.language!r}) read none of it — the "
+                            "pages may be in a different script, or genuinely "
+                            "unreadable"
+                        )
+                    else:
+                        cause = (
+                            "a script outside its built-in models (they read "
+                            "Chinese, Japanese and Latin-script languages) is "
+                            "the usual cause"
+                        )
                     raise DocConvertError(
                         f"{path.name} yielded no extractable text even after "
                         f"OCR — the engine detected printed text on "
                         f"{unreadable} of the {len(transcribed)} transcribed "
-                        "page(s) but could not read it; a script outside its "
-                        "built-in models (they read Chinese, Japanese and "
-                        "Latin-script languages) is the usual cause"
+                        f"page(s) but could not read it; {cause}"
                     )
                 raise DocConvertError(
                     f"{path.name} yielded no extractable text even after OCR — every "

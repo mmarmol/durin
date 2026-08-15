@@ -551,8 +551,11 @@ text, and an empty Library entry is no more useful for having arrived late.
 That failure says which kind of nothing it was — every `TranscribedPage` that
 comes back empty carries a detection-only box count, so the error
 distinguishes blank paper (no boxes anywhere) from printed text the engine
-could not read (boxes without a single surviving recognition, the usual shape
-of a script outside the engine's models). The counts are scoped to the pages
+could not read (boxes without a single surviving recognition). The unreadable
+variant blames what actually read the pages: a script outside the engine's
+built-in models by default, or — when `documents.ocr.language` is set — the
+selected language's model reading nothing, which means a different script or
+genuinely unreadable pages. The counts are scoped to the pages
 the failing run transcribed itself: pages recorded by an earlier run kept
 only their text, so a resumed run has no detector evidence for them and its
 message does not pretend otherwise.
@@ -652,8 +655,9 @@ session, counting queued jobs apart from both running and finished work;
 `action="status"` with an id gives a job's page progress (`done/total`)
 alongside its status, plus the recorded reason when it failed. A `running`
 job also reports its age; a `queued` one reports that it is waiting for the
-OCR slot instead, because an age beside a job reads as time spent working and
-a queued job has no worker. `action="stop"` cancels a job: cooperative for a
+OCR slot instead, and the list line leaves a queued row's age cell blank for
+the same reason: an age beside a job reads as time spent working and a
+queued job has no worker. `action="stop"` cancels a job: cooperative for a
 running one (see above), immediate and final for a queued one, since `claim`
 only ever moves a row *out* of `queued` and nothing can pick it up
 afterwards. `action="retry"` requeues a failed or cancelled job and launches

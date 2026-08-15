@@ -143,9 +143,13 @@ def ensure_extra(feature: str, *, config) -> EnsureResult:
         return EnsureResult("present", feature, fe.needs_restart)
     install_cfg = getattr(config, "install", None)
     if install_cfg is None or not getattr(install_cfg, "auto_install_extras", True):
+        # The manual command mirrors how durin is actually installed (pipx
+        # or uv tool, per the install guide) — a bare `pip install` would
+        # target an interpreter the app venv does not expose.
         return EnsureResult(
             "disabled", feature, fe.needs_restart,
-            f"Run: pip install durin-agent[{fe.extra}]",
+            f"Run: pipx inject durin-agent 'durin-agent[{fe.extra}]' — or, "
+            f"for a uv install: uv tool install 'durin-agent[{fe.extra}]'",
         )
     with _lock_for(feature):
         if _module_present(fe.module):

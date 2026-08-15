@@ -43,6 +43,12 @@ def test_gate_off_returns_disabled(monkeypatch):
     r = ex.ensure_extra("web_search", config=_Cfg(auto=False))
     assert r.status == "disabled"
     assert "durin-agent[web]" in r.message
+    # The manual command must match how durin is actually installed (pipx or
+    # uv tool, per the install guide) — a bare `pip install` points at an
+    # interpreter the app venv does not expose.
+    assert "pipx inject durin-agent" in r.message
+    assert "uv tool install" in r.message
+    assert "pip install" not in r.message
 
 
 def test_install_success(monkeypatch):
@@ -127,6 +133,7 @@ def test_none_config_refuses_install(monkeypatch):
     r = ex.ensure_extra("web_search", config=None)
     assert r.status == "disabled"
     assert "durin-agent[web]" in r.message
+    assert "pipx inject durin-agent" in r.message
     assert run_calls == []  # installer subprocess never attempted
 
 

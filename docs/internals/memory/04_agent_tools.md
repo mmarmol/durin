@@ -271,10 +271,15 @@ either — `convert_file_to_markdown` raises `DocConvertError` rather than
 returning a document with an empty body, and the message says which kind of
 blank it was: pages whose det pass found no text regions at all are reported
 as genuinely blank, while pages the detector saw print on that recognition
-could not read are reported as unreadable — the usual shape of a script
-outside the engine's built-in models (they read Chinese, Japanese and
-Latin-script languages; Cyrillic or Greek instead come back as
-confident-looking garbage, which no message can catch). `ingest_artifact`
+could not read are reported as unreadable. The unreadable variant blames
+whatever actually read the pages. With no recognition language selected it
+names a script outside the engine's built-in models as the usual cause (they
+read Chinese, Japanese and Latin-script languages; Cyrillic or Greek instead
+come back as confident-looking garbage, which no message can catch); with
+`documents.ocr.language` set it names the selected language instead — its
+model reading nothing means a different script, or pages that are genuinely
+unreadable. The background worker's no-text failure message makes the same
+split. `ingest_artifact`
 converts either into `IngestError` the same way it does every other
 conversion failure, so the tool reports it and writes no reference.
 
@@ -357,7 +362,12 @@ A document whose OCR job is still `queued`/`running` — tracked by an
 `ocr_job.json` marker in the entry directory — returns that SAME job instead
 of starting a second one. A marker naming a `failed`/`cancelled` job, or one
 no longer in the registry, is a legitimate retry: conversion runs again and a
-fresh job is spawned, overwriting the marker.
+fresh job is spawned, overwriting the marker. One failure shape never takes
+that retry route: a job that failed at the Library-index step had already
+written its `source.md` (the worker writes the sidecar before indexing), so
+its re-ingest matches the finished case first — a no-op returning the text,
+the marker never consulted — and the tool layer's reference write (run
+whenever no job is pending) heals the missed indexing.
 
 `id` and `reference` are emitted first in the response so they survive the 16 KB
 agent-result head-truncation on large documents.

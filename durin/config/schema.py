@@ -1236,7 +1236,8 @@ class InstallConfig(Base):
         default=True,
         description=(
             "Auto-install a feature's pip extra when it's activated (frictionless). "
-            "Off falls back to a 'pip install durin-agent[X]' message."
+            "Off falls back to a manual install message "
+            "(pipx inject / uv tool install)."
         ),
     )
 

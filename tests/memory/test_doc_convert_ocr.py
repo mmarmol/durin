@@ -668,6 +668,30 @@ def test_an_empty_scan_with_detected_boxes_reports_unreadable_not_blank(
     assert "came back blank" not in message
 
 
+def test_unreadable_message_names_the_selected_language_not_the_builtin_pack(
+    two_page_scan, monkeypatch
+):
+    """With documents.ocr.language set, the selected language's model is the
+    one that read nothing — blaming "a script outside its built-in models"
+    would imply only the default pack was tried. The message must name the
+    selected language and leave both honest possibilities open: a different
+    script, or pages that are genuinely unreadable."""
+    monkeypatch.setattr(
+        "durin.memory.doc_convert.transcribe_pages_detached",
+        lambda path, pages, language=None: {p: _page("", det_boxes=4) for p in pages},
+    )
+
+    with pytest.raises(DocConvertError) as excinfo:
+        convert_file_to_markdown(two_page_scan, documents_config=_cfg(language="el"))
+
+    message = str(excinfo.value)
+    assert "even after OCR" in message
+    assert "printed text" in message
+    assert "'el'" in message
+    assert "built-in models" not in message
+    assert "came back blank" not in message
+
+
 def test_partial_scan_with_one_real_page_survives_blank_ocr_pages(
     tmp_path, monkeypatch
 ):
