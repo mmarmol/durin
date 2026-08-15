@@ -561,7 +561,7 @@
       },
       "help": {
         "ocrEnabled": "Transcribe páginas de PDF escaneadas sin capa de texto usando un motor de OCR local que corre en CPU. Desactivado por defecto — activarlo instala ~200 MB, usa ~2 GB de RAM mientras transcribe, y toma 1-2 segundos por página en un escaneo limpio.",
-        "ocrLanguage": "Para alfabetos que los modelos integrados no pueden leer. Al elegir un idioma se descarga su modelo de reconocimiento (unos 8 MB) desde modelscope.cn una sola vez, la primera vez que se usa — tus documentos nunca salen de esta máquina.",
+        "ocrLanguage": "Para alfabetos que los modelos integrados no pueden leer. Al elegir un idioma se descarga su modelo de reconocimiento (unos 8 MB, más unos 11 MB de modelos de detección compartidos la primera vez que se añade cualquier idioma) desde modelscope.cn una sola vez, la primera vez que se usa — tus documentos nunca salen de esta máquina.",
         "ocrInlineMaxPages": "Páginas que necesitan OCR y se pueden transcribir mientras esperás. Un documento que necesita más se convierte en un job en segundo plano que podés seguir desde el panel de trabajo.",
         "maxTextChars": "Extracción más larga que se incluye en un turno antes de truncarse.",
         "maxFileSizeMb": "El adjunto más grande del que durin extraerá texto. Los archivos más grandes se reportan como omitidos en lugar de leerse."

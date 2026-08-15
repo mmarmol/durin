@@ -1168,7 +1168,7 @@ class DocumentsOcrConfig(Base):
         "arabic", "cyrillic", "devanagari", "el", "eslav", "korean", "ta", "te", "th",
     ] | None = Field(
         default=None,
-        description="Recognition language for scripts the built-in models cannot read (they cover Chinese, Japanese, English and Latin-script languages). Selecting one downloads its recognition model (~8 MB) once from modelscope.cn into <durin home>/models/ocr on first use; document content never leaves the machine. null = the built-in pack",
+        description="Recognition language for scripts the built-in models cannot read (they cover Chinese, Japanese, English and Latin-script languages). Selecting one downloads its recognition model (~8 MB, plus ~11 MB of shared detection models the first time any language is added) once from modelscope.cn into <durin home>/models/ocr on first use; document content never leaves the machine. null = the built-in pack",
     )
     inline_max_pages: int = Field(
         default=5,

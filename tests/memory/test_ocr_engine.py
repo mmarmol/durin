@@ -505,7 +505,10 @@ def test_an_absent_language_model_extends_the_timeout_and_logs_the_download(
     assert seen["timeout"] == 60 + 10 * 2 + _MODEL_DOWNLOAD_TIMEOUT_S
     logged = "\n".join(rec.getMessage() for rec in caplog.records)
     assert "modelscope.cn" in logged
-    assert "el" in logged
+    # The log line formats the language with %r, so it appears quoted; the
+    # quotes are what make this check real — a bare "el" is a substring of
+    # "model" and "modelscope.cn" and would match any download log line.
+    assert "'el'" in logged
 
 
 def test_a_present_language_model_keeps_the_ordinary_timeout_formula(
