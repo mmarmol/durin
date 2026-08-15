@@ -79,10 +79,11 @@ flowchart TD
     GWSTART(["gateway start\nAgentLoop.run()"]) -->|reconcile: running rows\nwith a dead pid or too old| REG
     GWSTART -->|respawn per orphan| WORKER
     GWSTART -->|then: queued_jobs, capped\nfor rows nothing ever claimed| WORKER
+    GWSTART -->|day-tick, at most daily: prune\nterminal rows past 30 days| REG
 
     SWEEP(["periodic sweep\nAgentLoop, every 60 s"]) -->|the same pass again:\nreconcile, then capped pickup| REG
     SWEEP -->|respawn: reaches a worker\nkilled before it could chain| WORKER
-    SWEEP -->|day-tick, at most daily: prune\nterminal rows past 30 days| REG
+    SWEEP -->|the same day-tick: whichever\ncaller crosses the mark first prunes| REG
 
     TASKS["tasks tool / GET /api/v1/tasks\ncollect_tasks()"] -->|read-only| REG
     TASKS --> TRAY["webui work panel\nWorkItemCard (kind=job)"]
@@ -485,7 +486,10 @@ makes it.
 
 A pruned id composes with the recovery paths that already handle an absent
 row, rather than needing new ones. `tasks(action="retry")` on it gets the
-ordinary unknown-id answer, because `requeue` finds nothing to revive. A
+ordinary unknown-id answer — from the tool's own lookup, which no longer
+finds the row in the session listing; `requeue` finding nothing to revive is
+the backstop behind that, for a prune that lands between the lookup and the
+guarded write. A
 re-ingest of a document whose entry still carries an `ocr_job.json` marker
 naming the pruned id takes the marker branch's vanished-row route
 (`ingest_artifact` branches on the row's *current* state, and `get()`

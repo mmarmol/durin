@@ -287,7 +287,20 @@ def run_job(job_id: str, *, registry: JobRegistry | None = None) -> None:
             # itself once the retention window passes. The units_done/
             # units_total counters are columns on the job row, so the
             # tray's finished-progress display survives this delete.
-            registry.delete_units(job_id)
+            #
+            # Guarded because finish() above already committed "done": a
+            # failure here (a locked database, say) must not crash the
+            # worker before the emit and the chain below run — under cap=1
+            # a queued sibling would wait on the periodic sweep for a slot
+            # that is already free. The units a failed delete leaves behind
+            # cost nothing but space, and the retention prune removes them
+            # with the row.
+            try:
+                registry.delete_units(job_id)
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "ocr worker: unit cleanup failed for job {}", job_id,
+                )
         _emit(job_id, len(pages), len(already), started, "failed" if error else "done")
         # Chain: hand the cap slot this job just freed straight to the next
         # queued job, so a backlog drains one fresh process at a time instead

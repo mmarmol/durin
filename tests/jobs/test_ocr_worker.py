@@ -1011,3 +1011,48 @@ def test_a_failed_jobs_units_survive_for_the_retry_to_resume_from(
     assert (entry_dir / "source.md").read_text(encoding="utf-8") == (
         "first run page 1\n\nretry page 2\n\nretry page 3"
     )
+
+
+def test_worker_unit_delete_failure_is_logged_and_the_chain_still_fires(
+    registry, scanned_pdf, monkeypatch,
+):
+    """The done-job unit delete runs AFTER finish() committed "done", so a
+    failure there (a locked database, say) must not crash the worker on its
+    way out: the telemetry emit and the chain to the next queued job still
+    have to run — under cap=1 a queued sibling would otherwise wait on the
+    periodic sweep for a slot that is already free. The units the failed
+    delete left behind are the retention prune's to remove with the row, and
+    the failure is logged rather than silent."""
+    from loguru import logger as loguru_logger
+
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page",
+        lambda path, page, **kw: _page(f"page {page}"),
+    )
+    launched = []
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker._launch_worker",
+        lambda job_id: launched.append(job_id),
+    )
+
+    def _boom(job_id):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(registry, "delete_units", _boom)
+    job = _enqueue(registry, scanned_pdf, [1, 2, 3])
+    next_job = _enqueue(registry, scanned_pdf, [1])  # queued sibling behind it
+
+    errors = []
+    sink_id = loguru_logger.add(
+        lambda m: errors.append(str(m)), level="ERROR", format="{message}",
+    )
+    try:
+        run_job(job.id, registry=registry)  # must not raise
+    finally:
+        loguru_logger.remove(sink_id)
+
+    assert registry.get(job.id).status == "done"
+    assert launched == [next_job.id]  # the chain still fired
+    # The delete never happened, so the units sit where the prune finds them.
+    assert registry.units(job.id) == [(1, "page 1"), (2, "page 2"), (3, "page 3")]
+    assert any("unit cleanup failed" in m for m in errors)
