@@ -9,7 +9,22 @@ import pytest
 from durin.jobs.ocr_worker import run_job
 from durin.jobs.registry import JobRegistry
 from durin.jobs.spawn import MAX_CONCURRENT_OCR_JOBS
+from durin.memory.ocr import TranscribedPage
 from durin.memory.pdf_coverage import page_texts
+
+
+def _page(text, *, det_boxes=None):
+    """A TranscribedPage shaped the way the engine builds one: scores ride
+    with recognized text, while an empty page instead carries the det pass's
+    box count — 0 (blank paper) unless a test says otherwise."""
+    if text:
+        return TranscribedPage(
+            text=text, mean_score=0.99, min_score=0.97, det_boxes=None
+        )
+    return TranscribedPage(
+        text="", mean_score=None, min_score=None,
+        det_boxes=0 if det_boxes is None else det_boxes,
+    )
 
 
 @pytest.fixture()
@@ -40,18 +55,72 @@ def _enqueue(registry, pdf, pages, *, sidecar_dir=None, units_total=None):
 
 
 def test_worker_transcribes_every_requested_page(registry, scanned_pdf, monkeypatch):
+    # Observed through the calls, not the stored units: a successful finish
+    # deletes the units (see the retention tests at the bottom), and where
+    # each page's text lands is the sidecar-merge test's job.
+    called = []
     monkeypatch.setattr(
         "durin.jobs.ocr_worker.transcribe_page",
-        lambda path, page, **kw: f"text of page {page}",
+        lambda path, page, **kw: called.append(page) or _page(f"text of page {page}"),
+    )
+    job = _enqueue(registry, scanned_pdf, [1, 2, 3])
+
+    run_job(job.id, registry=registry)
+
+    reread = registry.get(job.id)
+    assert reread.status == "done"
+    assert called == [1, 2, 3]
+    assert reread.units_done == 3
+
+
+def test_worker_resolves_the_configured_language_and_threads_it(
+    registry, scanned_pdf, monkeypatch,
+):
+    """The worker is its own process, so it resolves documents.ocr.language
+    from its own config load — once per run — and hands it to every
+    transcription. The child never reads config (that is the parent's job on
+    the inline path, and this worker's here)."""
+    from durin.config.schema import Config
+
+    cfg = Config.model_validate({"documents": {"ocr": {"language": "cyrillic"}}})
+    monkeypatch.setattr("durin.jobs.ocr_worker.load_config", lambda: cfg)
+
+    seen = []
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page",
+        lambda path, page, language=None: seen.append(language)
+        or _page(f"text of page {page}"),
     )
     job = _enqueue(registry, scanned_pdf, [1, 2, 3])
 
     run_job(job.id, registry=registry)
 
     assert registry.get(job.id).status == "done"
-    assert registry.units(job.id) == [
-        (1, "text of page 1"), (2, "text of page 2"), (3, "text of page 3"),
-    ]
+    assert seen == ["cyrillic", "cyrillic", "cyrillic"]
+
+
+def test_worker_survives_a_text_page_that_carries_no_scores(
+    registry, scanned_pdf, monkeypatch,
+):
+    """text with None scores is representable end to end (the child parse
+    allows it, and transcribe_page's own ``scores ... or ()`` defense builds
+    it) and used to TypeError the per-page log line AFTER record_unit had
+    committed — failing the page over a formatting detail. The score must
+    log as absent instead."""
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page",
+        lambda path, page, **kw: TranscribedPage(
+            text=f"text of page {page}", mean_score=None, min_score=None,
+            det_boxes=None,
+        ),
+    )
+    job = _enqueue(registry, scanned_pdf, [1, 2, 3])
+
+    run_job(job.id, registry=registry)
+
+    reread = registry.get(job.id)
+    assert reread.status == "done"  # not failed over a log-formatting detail
+    assert reread.units_done == 3
 
 
 def test_worker_transcribes_the_empty_pages_its_payload_left_out(
@@ -71,16 +140,19 @@ def test_worker_transcribes_the_empty_pages_its_payload_left_out(
         ["Real body text on page one, plenty of it", "", "",
          "Real body text on page four, plenty of it"],
     )
+    called = []
     monkeypatch.setattr(
         "durin.jobs.ocr_worker.transcribe_page",
-        lambda path, page, **kw: f"text of page {page}",
+        lambda path, page, **kw: called.append(page) or _page(f"text of page {page}"),
     )
     job = _enqueue(registry, pdf, [2])  # page 3 is just as empty and left out
 
     run_job(job.id, registry=registry)
 
-    assert registry.done_units(job.id) == {2, 3}
-    assert registry.get(job.id).units_total == 2
+    assert called == [2, 3]  # the page the payload never named got done too
+    reread = registry.get(job.id)
+    assert reread.units_done == 2
+    assert reread.units_total == 2
 
 
 def test_worker_resizes_a_job_that_was_enqueued_expecting_more_pages(
@@ -96,7 +168,7 @@ def test_worker_resizes_a_job_that_was_enqueued_expecting_more_pages(
     _write_text_pdf(pdf, ["", *["Real body text on this page, plenty of it"] * 4])
     monkeypatch.setattr(
         "durin.jobs.ocr_worker.transcribe_page",
-        lambda path, page, **kw: f"text of page {page}",
+        lambda path, page, **kw: _page(f"text of page {page}"),
     )
     job = _enqueue(registry, pdf, [1], units_total=5)
 
@@ -132,7 +204,7 @@ def test_worker_refuses_to_publish_a_book_it_could_not_check(
     monkeypatch.setattr("durin.jobs.ocr_worker.page_texts", _fails_the_first_time)
     monkeypatch.setattr(
         "durin.jobs.ocr_worker.transcribe_page",
-        lambda path, page, **kw: f"text of page {page}",
+        lambda path, page, **kw: _page(f"text of page {page}"),
     )
     job = _enqueue(
         registry, pdf, [1, 2, 3, 4, 5, 6], sidecar_dir=entry_dir, units_total=40,
@@ -164,7 +236,7 @@ def test_worker_never_reports_more_pages_done_than_it_has_to_do(
     _write_text_pdf(pdf, ["", *["Real body text on this page, plenty of it"] * 2])
     monkeypatch.setattr(
         "durin.jobs.ocr_worker.transcribe_page",
-        lambda path, page, **kw: f"text of page {page}",
+        lambda path, page, **kw: _page(f"text of page {page}"),
     )
     job = _enqueue(registry, pdf, [1], units_total=1)
     for page in (1, 2, 3):  # an earlier run found more than this one will
@@ -185,7 +257,7 @@ def test_worker_writes_the_sidecar_with_pages_merged_in_order(registry, tmp_path
 
     monkeypatch.setattr(
         "durin.jobs.ocr_worker.transcribe_page",
-        lambda path, page, **kw: f"OCR'd text for page {page}",
+        lambda path, page, **kw: _page(f"OCR'd text for page {page}"),
     )
     job = _enqueue(registry, pdf, [2], sidecar_dir=entry_dir)
 
@@ -233,7 +305,7 @@ def test_worker_makes_the_finished_transcription_searchable(
     entry_dir, pdf = _ingested_entry(ws)
     monkeypatch.setattr(
         "durin.jobs.ocr_worker.transcribe_page",
-        lambda path, page, **kw: f"Page {page} of the zorptastic protocol.",
+        lambda path, page, **kw: _page(f"Page {page} of the zorptastic protocol."),
     )
     job = _enqueue(registry, pdf, [1, 2, 3], sidecar_dir=entry_dir)
 
@@ -256,7 +328,7 @@ def test_worker_records_a_failure_when_the_transcription_produced_no_text(
     ws = tmp_path / "ws"
     entry_dir, pdf = _ingested_entry(ws)
     monkeypatch.setattr(
-        "durin.jobs.ocr_worker.transcribe_page", lambda path, page, **kw: "")
+        "durin.jobs.ocr_worker.transcribe_page", lambda path, page, **kw: _page(""))
     job = _enqueue(registry, pdf, [1, 2, 3], sidecar_dir=entry_dir)
 
     run_job(job.id, registry=registry)
@@ -264,7 +336,93 @@ def test_worker_records_a_failure_when_the_transcription_produced_no_text(
     reread = registry.get(job.id)
     assert reread.status == "failed"
     assert "no text" in reread.error
+    # Zero det boxes everywhere: honestly blank paper, and said so.
+    assert "came back blank" in reread.error
+    # The failure lands before anything is published: no empty sidecar for a
+    # resumed run to trip over, no Library entry, no indexing attempted.
+    assert not (entry_dir / "source.md").exists()
     assert not (ws / "memory" / "references").exists()
+
+
+def test_worker_fails_honestly_when_pages_hold_print_the_engine_cannot_read(
+    registry, tmp_path, monkeypatch,
+):
+    """Same empty book, opposite diagnosis: the detector saw printed text on
+    every page and the recognizer read none of it — a script outside the
+    engine's built-in models, not blank paper. The job must fail saying that,
+    with nothing published, instead of writing an empty sidecar and dying at
+    the indexing step with the reason gone."""
+    ws = tmp_path / "ws"
+    entry_dir, pdf = _ingested_entry(ws)
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page",
+        lambda path, page, **kw: _page("", det_boxes=4),
+    )
+    job = _enqueue(registry, pdf, [1, 2, 3], sidecar_dir=entry_dir)
+
+    run_job(job.id, registry=registry)
+
+    reread = registry.get(job.id)
+    assert reread.status == "failed"
+    assert "printed text" in reread.error
+    assert "could not read" in reread.error
+    assert "came back blank" not in reread.error
+    assert not (entry_dir / "source.md").exists()
+    assert not (ws / "memory" / "references").exists()
+
+
+def test_worker_unreadable_error_names_the_selected_language(
+    registry, tmp_path, monkeypatch,
+):
+    """Same unreadable book, but with documents.ocr.language set: the
+    selected language's model is what read nothing, so citing the built-in
+    pack as the usual cause would imply it was never consulted. The error
+    names the selected language and keeps both honest readings open."""
+    from durin.config.schema import Config
+
+    cfg = Config.model_validate({"documents": {"ocr": {"language": "el"}}})
+    monkeypatch.setattr("durin.jobs.ocr_worker.load_config", lambda: cfg)
+
+    ws = tmp_path / "ws"
+    entry_dir, pdf = _ingested_entry(ws)
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page",
+        lambda path, page, **kw: _page("", det_boxes=4),
+    )
+    job = _enqueue(registry, pdf, [1, 2, 3], sidecar_dir=entry_dir)
+
+    run_job(job.id, registry=registry)
+
+    reread = registry.get(job.id)
+    assert reread.status == "failed"
+    assert "printed text" in reread.error
+    assert "'el'" in reread.error
+    assert "built-in models" not in reread.error
+    assert "came back blank" not in reread.error
+
+
+def test_worker_scopes_the_unreadable_count_to_the_pages_this_run_transcribed(
+    registry, tmp_path, monkeypatch,
+):
+    """A resumed run has no detector data for the pages an earlier run
+    recorded — only their (empty) text survived in job_units. The failure
+    message must count what this run actually measured instead of claiming
+    the whole book was."""
+    ws = tmp_path / "ws"
+    entry_dir, pdf = _ingested_entry(ws)
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page",
+        lambda path, page, **kw: _page("", det_boxes=5),
+    )
+    job = _enqueue(registry, pdf, [1, 2, 3], sidecar_dir=entry_dir)
+    for page in (1, 2):  # a previous run transcribed these, empty
+        registry.record_unit(job.id, page, "")
+
+    run_job(job.id, registry=registry)
+
+    reread = registry.get(job.id)
+    assert reread.status == "failed"
+    assert "1 of the 1 page(s) transcribed in this run" in reread.error
 
 
 def test_worker_records_a_failure_when_the_library_write_breaks(
@@ -279,7 +437,7 @@ def test_worker_records_a_failure_when_the_library_write_breaks(
     entry_dir, pdf = _ingested_entry(ws)
     monkeypatch.setattr(
         "durin.jobs.ocr_worker.transcribe_page",
-        lambda path, page, **kw: f"page {page}",
+        lambda path, page, **kw: _page(f"page {page}"),
     )
 
     def _boom(entry_dir):
@@ -306,7 +464,7 @@ def test_worker_marks_itself_running_with_its_pid(registry, scanned_pdf, monkeyp
     def _capture(path, page, **kw):
         seen["status"] = registry.get(job.id).status
         seen["pid"] = registry.get(job.id).pid
-        return "x"
+        return _page("x")
 
     monkeypatch.setattr("durin.jobs.ocr_worker.transcribe_page", _capture)
     job = _enqueue(registry, scanned_pdf, [1])
@@ -321,7 +479,7 @@ def test_worker_skips_pages_already_transcribed(registry, scanned_pdf, monkeypat
     called = []
     monkeypatch.setattr(
         "durin.jobs.ocr_worker.transcribe_page",
-        lambda path, page, **kw: called.append(page) or f"page {page}",
+        lambda path, page, **kw: called.append(page) or _page(f"page {page}"),
     )
     job = _enqueue(registry, scanned_pdf, [1, 2, 3])
     registry.record_unit(job.id, 1, "already done before the crash")
@@ -329,14 +487,17 @@ def test_worker_skips_pages_already_transcribed(registry, scanned_pdf, monkeypat
     run_job(job.id, registry=registry)
 
     assert called == [2, 3]
-    assert registry.units(job.id)[0] == (1, "already done before the crash")
+    # The kept unit's TEXT is not observable here after the run — a
+    # successful finish deletes the units — but the failed-retry resume test
+    # at the bottom pins that same promise end to end, through the sidecar.
+    assert registry.get(job.id).units_done == 3
 
 
 def test_worker_records_a_failure_and_keeps_finished_pages(registry, scanned_pdf, monkeypatch):
     def _boom(path, page, **kw):
         if page == 2:
             raise RuntimeError("engine exploded")
-        return f"page {page}"
+        return _page(f"page {page}")
 
     monkeypatch.setattr("durin.jobs.ocr_worker.transcribe_page", _boom)
     job = _enqueue(registry, scanned_pdf, [1, 2, 3])
@@ -360,7 +521,7 @@ def test_worker_records_a_failure_when_the_sidecar_write_breaks(registry, scanne
 
     monkeypatch.setattr(
         "durin.jobs.ocr_worker.transcribe_page",
-        lambda path, page, **kw: f"page {page}",
+        lambda path, page, **kw: _page(f"page {page}"),
     )
 
     def _boom(path, text):
@@ -388,7 +549,7 @@ def test_worker_stops_when_the_job_is_cancelled_midway(registry, scanned_pdf, mo
     def _cancel_after_first(path, page, **kw):
         if page == 1:
             registry.cancel(job.id)
-        return f"page {page}"
+        return _page(f"page {page}")
 
     monkeypatch.setattr("durin.jobs.ocr_worker.transcribe_page", _cancel_after_first)
     job = _enqueue(registry, scanned_pdf, [1, 2, 3])
@@ -403,7 +564,7 @@ def test_worker_respects_a_cancellation_that_landed_before_it_started(registry, 
     called = []
     monkeypatch.setattr(
         "durin.jobs.ocr_worker.transcribe_page",
-        lambda path, page, **kw: called.append(page) or f"page {page}",
+        lambda path, page, **kw: called.append(page) or _page(f"page {page}"),
     )
     job = _enqueue(registry, scanned_pdf, [1, 2, 3])
     registry.cancel(job.id)
@@ -419,7 +580,7 @@ def test_worker_does_not_reclaim_a_job_already_running_elsewhere(registry, scann
     called = []
     monkeypatch.setattr(
         "durin.jobs.ocr_worker.transcribe_page",
-        lambda path, page, **kw: called.append(page) or f"page {page}",
+        lambda path, page, **kw: called.append(page) or _page(f"page {page}"),
     )
     job = _enqueue(registry, scanned_pdf, [1, 2, 3])
     registry.claim(job.id, pid=999999)  # another process already owns this job
@@ -456,7 +617,7 @@ def test_worker_bails_when_a_cancel_wins_the_claim_race(registry, scanned_pdf, m
     called = []
     monkeypatch.setattr(
         "durin.jobs.ocr_worker.transcribe_page",
-        lambda path, page, **kw: called.append(page) or f"page {page}",
+        lambda path, page, **kw: called.append(page) or _page(f"page {page}"),
     )
     job = _enqueue(registry, scanned_pdf, [1, 2, 3])
     _lose_the_claim_race_to_a_cancel(registry, monkeypatch)
@@ -504,7 +665,7 @@ def test_a_cancel_during_the_post_loop_work_is_not_overwritten(
     entry_dir, pdf = _ingested_entry(ws)
     monkeypatch.setattr(
         "durin.jobs.ocr_worker.transcribe_page",
-        lambda path, page, **kw: f"page {page}",
+        lambda path, page, **kw: _page(f"page {page}"),
     )
 
     def _cancel_midway(entry_dir):
@@ -539,7 +700,7 @@ def test_worker_chains_even_when_finish_loses_to_something_else(
     entry_dir, pdf = _ingested_entry(ws)
     monkeypatch.setattr(
         "durin.jobs.ocr_worker.transcribe_page",
-        lambda path, page, **kw: f"page {page}",
+        lambda path, page, **kw: _page(f"page {page}"),
     )
 
     def _cancel_midway(entry_dir):
@@ -562,6 +723,207 @@ def test_worker_chains_even_when_finish_loses_to_something_else(
 
 
 # ---------------------------------------------------------------------------
+# Ownership at the page boundary. The live sequence that found this seam:
+# cancel lands while a page is mid-transcription, the user's prompt retry
+# requeues the row (cancelled -> queued), and a successor worker claims it --
+# all inside one page's transcription time, before the old worker's next
+# boundary re-read. A check that only asks "was I cancelled?" reads the
+# successor's "running" as all clear and keeps transcribing the whole
+# remaining book alongside it: two OCR engines on one job, the exact
+# resource condition MAX_CONCURRENT_OCR_JOBS=1 exists to prevent.
+# ---------------------------------------------------------------------------
+
+
+def test_worker_stands_down_when_the_job_is_requeued_and_reclaimed_midway(
+    registry, scanned_pdf, monkeypatch,
+):
+    """The full race, deterministically: page 1's transcription performs the
+    cancel + requeue + foreign claim before returning, so the worker's next
+    boundary re-read sees "running" under a pid that is not its own. It must
+    stand down: no further pages transcribed or recorded (they are the
+    successor's work), the row left exactly as the successor's claim wrote
+    it, no chain launched (the slot is the successor's, not this worker's to
+    hand off), and no telemetry outcome event (the job's outcome is now the
+    successor's to record)."""
+    called = []
+
+    def _lose_the_job_during_page_one(path, page, **kw):
+        called.append(page)
+        if page == 1:
+            registry.cancel(job.id)
+            assert registry.requeue(job.id) is True
+            assert registry.claim(job.id, pid=999999) is True  # the successor
+        return _page(f"page {page}")
+
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page", _lose_the_job_during_page_one,
+    )
+    launched = []
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker._launch_worker",
+        lambda job_id: launched.append(job_id),
+    )
+    emitted = []
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker._emit",
+        lambda job_id, pages, resumed, started, status: emitted.append(status),
+    )
+    job = _enqueue(registry, scanned_pdf, [1, 2, 3])
+
+    run_job(job.id, registry=registry)
+
+    assert called == [1]  # pages 2 and 3 belong to the successor
+    # The page in flight when ownership was lost is still recorded: record_unit
+    # is idempotent and the successor resumes from it instead of redoing it.
+    assert registry.done_units(job.id) == {1}
+    reread = registry.get(job.id)
+    assert reread.status == "running"  # the successor's claim, untouched
+    assert reread.pid == 999999
+    assert launched == []
+    assert emitted == []
+
+
+def test_worker_stands_down_when_the_job_is_requeued_but_not_yet_reclaimed(
+    registry, scanned_pdf, monkeypatch,
+):
+    """The same race caught one beat earlier: the requeue flipped the row
+    back to "queued" but no successor has claimed yet. "queued" is not
+    "cancelled" — a cancelled-only check would keep transcribing a job that
+    is back in the queue for someone else. And the slot is still not this
+    worker's to hand off: the retry that requeued also respawns, so a chain
+    fired from here could put a second launch on top of that one, racing it
+    for this very job."""
+    called = []
+
+    def _requeue_during_page_one(path, page, **kw):
+        called.append(page)
+        if page == 1:
+            registry.cancel(job.id)
+            assert registry.requeue(job.id) is True
+        return _page(f"page {page}")
+
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page", _requeue_during_page_one,
+    )
+    launched = []
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker._launch_worker",
+        lambda job_id: launched.append(job_id),
+    )
+    emitted = []
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker._emit",
+        lambda job_id, pages, resumed, started, status: emitted.append(status),
+    )
+    job = _enqueue(registry, scanned_pdf, [1, 2, 3])
+
+    run_job(job.id, registry=registry)
+
+    assert called == [1]
+    assert registry.done_units(job.id) == {1}  # resume data for the successor
+    reread = registry.get(job.id)
+    assert reread.status == "queued"  # exactly as the requeue wrote it
+    assert reread.pid is None
+    assert reread.started_at is None
+    assert launched == []
+    assert emitted == []
+
+
+def test_worker_chains_and_reports_gone_when_the_row_vanishes_midway(
+    registry, scanned_pdf, monkeypatch,
+):
+    """A row that vanishes mid-run is nobody's: nothing is left to claim or
+    requeue, so no successor exists, and the cap's COUNT of running rows no
+    longer sees it, so the slot is genuinely free — this worker is the only
+    process positioned to hand it to a queued sibling, exactly as after a
+    cancel. The telemetry event says what was observed ("gone", the same
+    word the post-loop loser path uses for the same observation), not
+    "cancelled", which would invent an outcome nobody wrote."""
+    from durin.utils.sqlite_util import execute_write
+
+    called = []
+
+    def _row_vanishes_during_page_one(path, page, **kw):
+        called.append(page)
+        if page == 1:
+            execute_write(
+                registry._conn,
+                lambda c: c.execute("DELETE FROM jobs WHERE id = ?", (job.id,)),
+            )
+        return _page(f"page {page}")
+
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page", _row_vanishes_during_page_one,
+    )
+    launched = []
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker._launch_worker",
+        lambda job_id: launched.append(job_id),
+    )
+    emitted = []
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker._emit",
+        lambda job_id, pages, resumed, started, status: emitted.append(status),
+    )
+    job = _enqueue(registry, scanned_pdf, [1, 2, 3])
+    sibling = _enqueue(registry, scanned_pdf, [1])  # queued behind the slot
+
+    run_job(job.id, registry=registry)
+
+    assert called == [1]
+    assert registry.get(job.id) is None
+    assert emitted == ["gone"]
+    assert launched == [sibling.id]  # the freed slot was handed off
+
+
+def test_finish_still_refuses_and_warns_when_the_takeover_lands_past_the_last_boundary(
+    registry, scanned_pdf, monkeypatch,
+):
+    """The boundary check is not the last word: a takeover landing during
+    the FINAL page's transcription is past every boundary re-read (and the
+    sidecar/indexing window after the loop has no checks at all), so the
+    pid-guarded finish() is what refuses to overwrite the successor — with
+    its WARNING, reporting the row's observed state, and without flipping
+    the row the successor now owns."""
+    from loguru import logger as loguru_logger
+
+    def _lose_the_job_during_the_last_page(path, page, **kw):
+        if page == 3:
+            registry.cancel(job.id)
+            assert registry.requeue(job.id) is True
+            assert registry.claim(job.id, pid=999999) is True  # the successor
+        return _page(f"page {page}")
+
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page", _lose_the_job_during_the_last_page,
+    )
+    emitted = []
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker._emit",
+        lambda job_id, pages, resumed, started, status: emitted.append(status),
+    )
+    job = _enqueue(registry, scanned_pdf, [1, 2, 3])
+
+    warnings = []
+    sink_id = loguru_logger.add(
+        lambda m: warnings.append(str(m)), level="WARNING", format="{message}",
+    )
+    try:
+        run_job(job.id, registry=registry)
+    finally:
+        loguru_logger.remove(sink_id)
+
+    reread = registry.get(job.id)
+    assert reread.status == "running"  # the successor's row survived the finish
+    assert reread.pid == 999999
+    assert any("by the time this run finished" in m for m in warnings)
+    assert emitted == ["running"]  # the loser reports what it observed
+    # All three pages were recorded before the loser stood down: the takeover
+    # landed during the last one, so there was no boundary left to catch it.
+    assert registry.done_units(job.id) == {1, 2, 3}
+
+
+# ---------------------------------------------------------------------------
 # The concurrency cap (MAX_CONCURRENT_OCR_JOBS) and the chain that drains a
 # queue behind it one fresh process at a time.
 # ---------------------------------------------------------------------------
@@ -570,9 +932,9 @@ def test_worker_chains_even_when_finish_loses_to_something_else(
 def _dead_pid() -> int:
     """A pid that definitely does not belong to a live process: spawn a
     child and wait on it, rather than guessing an arbitrary "probably free"
-    integer (mirrors tests/jobs/test_spawn.py's own ``_pid_alive`` fixture).
+    integer (mirrors tests/utils/test_process.py's own reaped-child trick).
     Load-bearing here specifically: the self-healing cap-refusal path below
-    calls the real ``_pid_alive`` probe, so a pid that merely *looks* free by
+    calls the real ``pid_alive`` probe, so a pid that merely *looks* free by
     convention is not good enough -- it has to actually be dead."""
     proc = subprocess.Popen([sys.executable, "-c", "pass"])
     proc.wait(timeout=10)
@@ -588,7 +950,7 @@ def test_worker_exits_quietly_when_the_cap_refuses_its_claim(registry, scanned_p
     called = []
     monkeypatch.setattr(
         "durin.jobs.ocr_worker.transcribe_page",
-        lambda path, page, **kw: called.append(page) or f"page {page}",
+        lambda path, page, **kw: called.append(page) or _page(f"page {page}"),
     )
     running = _enqueue(registry, scanned_pdf, [1])
     # This test's own process: guaranteed alive for its whole duration, so
@@ -623,7 +985,7 @@ def test_worker_reclaims_the_cap_slot_from_a_dead_holder(registry, scanned_pdf, 
     called = []
     monkeypatch.setattr(
         "durin.jobs.ocr_worker.transcribe_page",
-        lambda path, page, **kw: called.append(page) or f"page {page}",
+        lambda path, page, **kw: called.append(page) or _page(f"page {page}"),
     )
     stale = _enqueue(registry, scanned_pdf, [1])
     registry.claim(stale.id, pid=_dead_pid())  # holds the one cap slot, but is dead
@@ -644,7 +1006,7 @@ def test_worker_reclaims_the_cap_slot_from_a_dead_holder(registry, scanned_pdf, 
 def test_worker_chains_to_the_next_queued_job_after_finishing(registry, scanned_pdf, monkeypatch):
     monkeypatch.setattr(
         "durin.jobs.ocr_worker.transcribe_page",
-        lambda path, page, **kw: f"page {page}",
+        lambda path, page, **kw: _page(f"page {page}"),
     )
     launched = []
     monkeypatch.setattr(
@@ -662,7 +1024,7 @@ def test_worker_chains_to_the_next_queued_job_after_finishing(registry, scanned_
 def test_worker_does_not_chain_when_nothing_is_queued(registry, scanned_pdf, monkeypatch):
     monkeypatch.setattr(
         "durin.jobs.ocr_worker.transcribe_page",
-        lambda path, page, **kw: f"page {page}",
+        lambda path, page, **kw: _page(f"page {page}"),
     )
     launched = []
     monkeypatch.setattr(
@@ -683,7 +1045,7 @@ def test_worker_chains_only_after_its_own_finish_write(registry, scanned_pdf, mo
     happened eventually" is what rules that out."""
     monkeypatch.setattr(
         "durin.jobs.ocr_worker.transcribe_page",
-        lambda path, page, **kw: f"page {page}",
+        lambda path, page, **kw: _page(f"page {page}"),
     )
     order = []
     real_finish = registry.finish
@@ -717,7 +1079,7 @@ def test_worker_chains_after_a_cancel_is_noticed_mid_loop(registry, scanned_pdf,
     def _cancel_after_first(path, page, **kw):
         if page == 1:
             registry.cancel(job.id)
-        return f"page {page}"
+        return _page(f"page {page}")
 
     monkeypatch.setattr("durin.jobs.ocr_worker.transcribe_page", _cancel_after_first)
     launched = []
@@ -743,7 +1105,7 @@ def test_worker_does_not_chain_when_its_own_claim_was_refused(registry, scanned_
     called = []
     monkeypatch.setattr(
         "durin.jobs.ocr_worker.transcribe_page",
-        lambda path, page, **kw: called.append(page) or f"page {page}",
+        lambda path, page, **kw: called.append(page) or _page(f"page {page}"),
     )
     running = _enqueue(registry, scanned_pdf, [1])
     registry.claim(running.id, pid=os.getpid())  # genuinely alive: refused, not self-healed
@@ -766,7 +1128,7 @@ def test_worker_chain_failure_is_logged_and_swallowed(registry, scanned_pdf, mon
     started stays queued, and the next reconcile/startup sweep retries it."""
     monkeypatch.setattr(
         "durin.jobs.ocr_worker.transcribe_page",
-        lambda path, page, **kw: f"page {page}",
+        lambda path, page, **kw: _page(f"page {page}"),
     )
 
     def _boom(job_id):
@@ -793,7 +1155,7 @@ def test_worker_chain_drains_a_queue_of_several_jobs(registry, scanned_pdf, monk
     would leave the second and third job queued forever."""
     monkeypatch.setattr(
         "durin.jobs.ocr_worker.transcribe_page",
-        lambda path, page, **kw: f"page {page}",
+        lambda path, page, **kw: _page(f"page {page}"),
     )
     monkeypatch.setattr(
         "durin.jobs.ocr_worker._launch_worker",
@@ -804,3 +1166,124 @@ def test_worker_chain_drains_a_queue_of_several_jobs(registry, scanned_pdf, monk
     run_job(jobs[0].id, registry=registry)  # only this one is "launched" directly
 
     assert [registry.get(j.id).status for j in jobs] == ["done", "done", "done"]
+
+
+# ---------------------------------------------------------------------------
+# Retention at the worker: a done job's units are scratch nothing reads
+# again; a failed (or cancelled) job's units are the retry's resume data.
+# ---------------------------------------------------------------------------
+
+
+def test_worker_deletes_a_done_jobs_units_keeping_counters_and_artifacts(
+    registry, tmp_path, monkeypatch,
+):
+    """Once a job is done, its durable artifacts are the sidecar and the
+    Library entry — the units are megabytes of full-page text nothing reads
+    again. The worker deletes them right after its own successful finish().
+    units_done/units_total are columns on the job row, not unit rows, so the
+    tray's finished "N of M" display must survive the delete."""
+    ws = tmp_path / "ws"
+    entry_dir, pdf = _ingested_entry(ws)
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page",
+        lambda path, page, **kw: _page(f"text of page {page}"),
+    )
+    job = _enqueue(registry, pdf, [1, 2, 3], sidecar_dir=entry_dir)
+
+    run_job(job.id, registry=registry)
+
+    reread = registry.get(job.id)
+    assert reread.status == "done"
+    assert registry.units(job.id) == []  # the scratch is gone...
+    assert registry.done_units(job.id) == set()
+    assert reread.units_done == 3  # ...and the counters are not
+    assert reread.units_total == 3
+    # The durable artifacts were written before finish and are untouched.
+    assert "text of page 2" in (entry_dir / "source.md").read_text(encoding="utf-8")
+    assert (ws / "memory" / "references" / "zorpbook.md").exists()
+
+
+def test_a_failed_jobs_units_survive_for_the_retry_to_resume_from(
+    registry, tmp_path, monkeypatch,
+):
+    """The counterpart contract, and the reason the delete above is gated on
+    a clean outcome: a failed job's units are not just diagnosis, they are
+    the retry's resume data. Deleting them at a failed finish would silently
+    turn "retry resumes from page k" into "retry redoes the whole book"."""
+    ws = tmp_path / "ws"
+    entry_dir, pdf = _ingested_entry(ws)
+
+    def _boom_on_two(path, page, **kw):
+        if page == 2:
+            raise RuntimeError("engine exploded")
+        return _page(f"first run page {page}")
+
+    monkeypatch.setattr("durin.jobs.ocr_worker.transcribe_page", _boom_on_two)
+    job = _enqueue(registry, pdf, [1, 2, 3], sidecar_dir=entry_dir)
+    run_job(job.id, registry=registry)
+
+    assert registry.get(job.id).status == "failed"
+    assert registry.units(job.id) == [(1, "first run page 1")]  # kept, not scratch
+
+    # The retry: requeue revives the row in place, and the next worker
+    # resumes from the kept units instead of redoing page 1.
+    assert registry.requeue(job.id) is True
+    retried = []
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page",
+        lambda path, page, **kw: retried.append(page) or _page(f"retry page {page}"),
+    )
+    run_job(job.id, registry=registry)
+
+    assert retried == [2, 3]  # resumed, not restarted
+    assert registry.get(job.id).status == "done"
+    # The kept unit fed the finished document: the first run's page text is
+    # in the sidecar next to the retry's, exactly as if one run did it all.
+    assert (entry_dir / "source.md").read_text(encoding="utf-8") == (
+        "first run page 1\n\nretry page 2\n\nretry page 3"
+    )
+
+
+def test_worker_unit_delete_failure_is_logged_and_the_chain_still_fires(
+    registry, scanned_pdf, monkeypatch,
+):
+    """The done-job unit delete runs AFTER finish() committed "done", so a
+    failure there (a locked database, say) must not crash the worker on its
+    way out: the telemetry emit and the chain to the next queued job still
+    have to run — under cap=1 a queued sibling would otherwise wait on the
+    periodic sweep for a slot that is already free. The units the failed
+    delete left behind are the retention prune's to remove with the row, and
+    the failure is logged rather than silent."""
+    from loguru import logger as loguru_logger
+
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page",
+        lambda path, page, **kw: _page(f"page {page}"),
+    )
+    launched = []
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker._launch_worker",
+        lambda job_id: launched.append(job_id),
+    )
+
+    def _boom(job_id):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(registry, "delete_units", _boom)
+    job = _enqueue(registry, scanned_pdf, [1, 2, 3])
+    next_job = _enqueue(registry, scanned_pdf, [1])  # queued sibling behind it
+
+    errors = []
+    sink_id = loguru_logger.add(
+        lambda m: errors.append(str(m)), level="ERROR", format="{message}",
+    )
+    try:
+        run_job(job.id, registry=registry)  # must not raise
+    finally:
+        loguru_logger.remove(sink_id)
+
+    assert registry.get(job.id).status == "done"
+    assert launched == [next_job.id]  # the chain still fired
+    # The delete never happened, so the units sit where the prune finds them.
+    assert registry.units(job.id) == [(1, "page 1"), (2, "page 2"), (3, "page 3")]
+    assert any("unit cleanup failed" in m for m in errors)

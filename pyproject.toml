@@ -167,8 +167,12 @@ cross-encoder = [
     "sentence-transformers>=3.0,<6.0",
 ]
 ocr = [
-    # Local on-CPU OCR for PDF pages with no text layer. ONNX models ship in
-    # the wheel; nothing is downloaded at runtime and nothing leaves the box.
+    # Local on-CPU OCR for PDF pages with no text layer. The built-in ONNX
+    # models ship in the wheel (Chinese, Japanese, Latin-script languages)
+    # and work fully offline. Selecting another recognition language
+    # (documents.ocr.language) downloads that model once, at first use, from
+    # modelscope.cn into <durin home>/models/ocr. Document content never
+    # leaves the box either way.
     #
     # Pinned to the maintained 3.x line. The legacy rapidocr-onnxruntime
     # package caps at requires_python <3.13 and would silently drop durin's

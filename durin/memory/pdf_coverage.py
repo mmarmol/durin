@@ -25,6 +25,7 @@ __all__ = [
     "classify_coverage",
     "coverage_note",
     "gap_ranges",
+    "is_pre_flag_stub_note",
     "page_char_counts",
     "page_texts",
     "page_texts_subset",
@@ -270,3 +271,30 @@ def coverage_note(
             "documents.ocr.enabled."
         )
     return head + tail + "]\n"
+
+
+# The exact heads every flag-less durin version ever prepended to a stub
+# sidecar — versions that wrote no ``derived.ocr_stub`` verdict into
+# meta.json, leaving the sidecar's own first bytes as the only evidence of
+# what it is. This corpus is CLOSED HISTORY: every current writer records
+# the flag at write time, so no new head can ever join it. Do not extend
+# this tuple and do not derive it from ``coverage_note``'s current strings;
+# if the live note's wording changes tomorrow, this tuple deliberately does
+# not follow it. The duplication with ``coverage_note`` above is the point,
+# not an oversight.
+_PRE_FLAG_STUB_HEADS = (
+    "[SCANNED DOCUMENT: ",
+    "[EXTRACTION COVERAGE WARNING: ",
+)
+
+
+def is_pre_flag_stub_note(content: str) -> bool:
+    """Whether ``content`` is a stub sidecar written before the flag existed.
+
+    Only meaningful for a sidecar whose meta.json carries no
+    ``derived.ocr_stub`` key. Coverage notes are always prepended, so a stub
+    starts with one of the two frozen historical heads at position 0, and
+    nothing else can: real transcriptions and ordinary conversions are pure
+    extracted text with no note in front.
+    """
+    return content.startswith(_PRE_FLAG_STUB_HEADS)

@@ -587,15 +587,29 @@
       },
       "rows": {
         "ocrEnabled": "OCR local",
+        "ocrLanguage": "Langue de reconnaissance",
         "ocrInlineMaxPages": "Limite de pages en direct",
         "maxTextChars": "Extraction la plus longue",
         "maxFileSizeMb": "Fichier le plus volumineux à lire"
       },
       "help": {
         "ocrEnabled": "Transcrit les pages de PDF scannées sans couche de texte à l’aide d’un moteur OCR local qui s’exécute sur le CPU. Désactivé par défaut — l’activer installe environ 200 Mo, utilise environ 2 Go de RAM pendant la transcription, et prend 1-2 secondes par page sur un scan propre.",
+        "ocrLanguage": "Pour les écritures que les modèles intégrés ne peuvent pas lire. Choisir une langue télécharge son modèle de reconnaissance (environ 8 Mo, plus environ 11 Mo de modèles de détection partagés la première fois qu’une langue est ajoutée) depuis modelscope.cn une seule fois, à la première utilisation — vos documents ne quittent jamais cette machine.",
         "ocrInlineMaxPages": "Pages nécessitant l’OCR qui peuvent être transcrites pendant l’attente. Un document qui en nécessite plus devient une tâche en arrière-plan à suivre depuis le panneau de travail.",
         "maxTextChars": "Extraction la plus longue insérée dans un tour avant d’être tronquée.",
         "maxFileSizeMb": "La plus grande pièce jointe dont durin extraira le texte. Les fichiers plus volumineux sont signalés comme ignorés plutôt que lus."
+      },
+      "language": {
+        "builtin": "Intégré — chinois, japonais, anglais et écritures latines",
+        "arabic": "Arabe",
+        "cyrillic": "Cyrillique",
+        "devanagari": "Dévanagari",
+        "el": "Grec",
+        "eslav": "Slave oriental (russe, ukrainien, biélorusse)",
+        "korean": "Coréen",
+        "ta": "Tamoul",
+        "te": "Télougou",
+        "th": "Thaï"
       }
     },
     "extras": {

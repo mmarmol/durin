@@ -6,7 +6,6 @@ test can drive without ever spawning anything.
 
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -111,17 +110,3 @@ def respawn(job: Job) -> None:
             logger.exception("could not restart the OCR worker for job {}", job.id)
         return
     raise ValueError(f"no worker for job kind {job.kind!r}")
-
-
-def _pid_alive(pid: int) -> bool:
-    """Best-effort liveness probe: signal 0 sends nothing, it only checks
-    whether *pid* exists. A PermissionError means the process exists but is
-    owned by another uid -- alive, just not ours to signal; only
-    ProcessLookupError (and other OSErrors) mean the pid is actually free."""
-    try:
-        os.kill(pid, 0)
-    except PermissionError:
-        return True
-    except OSError:
-        return False
-    return True

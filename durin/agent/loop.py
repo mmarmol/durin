@@ -115,6 +115,7 @@ if TYPE_CHECKING:
         ToolsConfig,
     )
     from durin.cron.service import CronService
+    from durin.jobs.registry import JobRegistry
 
 
 UNIFIED_SESSION_KEY = "unified:default"
@@ -176,6 +177,18 @@ _STEER_PREFIX = "[steer]"
 # database, and nothing at all when it finds no work).
 _JOB_SWEEP_INTERVAL_S = 60
 
+# How often the job pass also prunes terminal rows past their retention
+# window (seconds). The pass itself runs every minute, but retention has a
+# 30-day window, so nothing about it is urgent: one attempt a day bounds
+# both the work and the log noise, whichever caller's pass (startup or the
+# periodic sweep) crosses the mark first.
+_JOB_PRUNE_INTERVAL_S = 24 * 3600
+
+# When this process last attempted the prune (time.time()); None means never
+# yet, so the first pass after startup prunes immediately. Module-level so
+# tests can reset it and drive the day-tick deterministically.
+_last_job_prune_at: float | None = None
+
 # How long the final injection drain stays alive waiting for running
 # sub-agents to deliver results before giving up (seconds).
 _SUBAGENT_WAIT_TIMEOUT = 300
@@ -190,6 +203,31 @@ _STEER_FRAMING = (
 def _is_injectable(msg: InboundMessage) -> bool:
     """True when *msg* belongs in the running turn (steer or system result)."""
     return msg.channel == "system" or msg.metadata.get("steer") is True
+
+
+def _prune_jobs_if_due(registry: JobRegistry, *, now: float | None = None) -> None:
+    """Prune terminal jobs past the retention window, at most once a day.
+
+    The attempt time is recorded before the prune runs, not after it
+    succeeds: retention tolerates a day of slippage by construction, so a
+    transient failure (a locked database, say) simply waits for tomorrow's
+    tick instead of retrying — and logging — on every 60-second sweep for
+    the rest of the day.
+    """
+    global _last_job_prune_at
+    from durin.jobs.registry import _JOB_RETENTION_S
+
+    if now is None:
+        now = time.time()
+    if (
+        _last_job_prune_at is not None
+        and now - _last_job_prune_at < _JOB_PRUNE_INTERVAL_S
+    ):
+        return
+    _last_job_prune_at = now
+    pruned = registry.prune_terminal(_JOB_RETENTION_S)
+    if pruned:
+        logger.info("pruned {} terminal job(s) past the retention window", pruned)
 
 
 def _resume_jobs() -> None:
@@ -222,12 +260,17 @@ def _resume_jobs() -> None:
     reaches its chain call, and the row it was holding keeps "running" with a
     dead pid — occupying the cap's only slot while nothing left alive has any
     reason to look at it again.
+
+    The pass also carries the retention day-tick (``_prune_jobs_if_due``),
+    last and guarded on its own: losing a prune to an exception must never
+    cost the respawn/pickup work above it.
     """
     from durin.jobs.registry import JobRegistry
-    from durin.jobs.spawn import MAX_CONCURRENT_OCR_JOBS, _pid_alive, respawn
+    from durin.jobs.spawn import MAX_CONCURRENT_OCR_JOBS, respawn
+    from durin.utils.process import pid_alive
 
     registry = JobRegistry()
-    for job in registry.reconcile(alive=_pid_alive):
+    for job in registry.reconcile(alive=pid_alive):
         try:
             respawn(job)
         except Exception:
@@ -244,6 +287,13 @@ def _resume_jobs() -> None:
         except Exception:
             logger.exception(
                 "could not launch queued job {} (kind={})", queued.id, queued.kind)
+    # Retention rides the same pass, last and guarded like the respawns
+    # above: pruning month-old terminal rows is the one duty here that can
+    # always wait, so it must never take the liveness work down with it.
+    try:
+        _prune_jobs_if_due(registry)
+    except Exception:
+        logger.exception("job retention prune failed (continuing)")
 
 
 @dataclass
@@ -1195,7 +1245,15 @@ class AgentLoop:
             logger.warning("MCP connection cancelled (will retry next message)")
             self._mcp_connections.clear()
         except ImportError:
-            res = ensure_or_note("mcp", config=getattr(self, "app_config", None))
+            # Cold path (extra missing): loops built via from_config carry
+            # app_config, but a directly constructed AgentLoop (tests, other
+            # embedders) may not — fall back to loading the config so the
+            # auto-install gate always sees the user's real opt-in/out.
+            from durin.config.loader import load_config
+
+            res = ensure_or_note(
+                "mcp", config=getattr(self, "app_config", None) or load_config()
+            )
             if res.status in ("present", "installed"):
                 try:
                     self._mcp_connections = await connect_mcp_servers(
@@ -1811,8 +1869,16 @@ class AgentLoop:
                         "Failed to convert a queued message to a user turn (session={})",
                         pending_msg.session_key,
                     )
+                    # Rebuilt from pending_msg.content (never mutated by
+                    # _to_user_message -- that rebinds its own local), so the
+                    # steer check below is re-derived rather than lost: this
+                    # handler runs precisely because the normal path didn't
+                    # finish, so its framing has to be applied here too.
+                    content = pending_msg.content
+                    if pending_msg.metadata.get("steer") is True:
+                        content = f"{_STEER_FRAMING}\n\n{content}"
                     content = (
-                        f"{pending_msg.content}\n\n"
+                        f"{content}\n\n"
                         f"[error: attached media could not be read: {exc}]"
                     )
                     return {"role": "user", "content": content}

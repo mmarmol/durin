@@ -140,3 +140,52 @@ async def test_sleep_no_reminder_without_running_work(tmp_path):
     out = await _tool_with_session(tmp_path).execute(seconds=0)
     assert "Slept" in out
     assert "end your turn" not in out
+
+
+@pytest.mark.asyncio
+async def test_sleep_reminder_never_names_a_job(tmp_path, monkeypatch):
+    """A job is the one background kind whose completion pushes nothing:
+    sleep+status over one is the legitimate polling the tool description
+    allows, so the anti-polling reminder must not claim push delivery for
+    it. Even if the merged task view hands back a running job row, the
+    reminder names only the push-delivered kinds."""
+    def rows(*args, **kwargs):
+        return [
+            {"kind": "job", "id": "job42", "label": "book.pdf",
+             "status": "running", "started_at": time.time(), "ended_at": None,
+             "session_key": "websocket:chatA", "nodes": None, "task": None,
+             "units_total": 40, "units_done": 3, "error": None},
+            {"kind": "subagent", "id": "sa01", "label": "research",
+             "status": "running", "started_at": time.time(), "ended_at": None,
+             "session_key": "websocket:chatA", "nodes": None, "task": None,
+             "units_total": None, "units_done": None, "error": None},
+        ]
+
+    monkeypatch.setattr("durin.agent.background_tasks.collect_tasks", rows)
+
+    out = await _tool_with_session(tmp_path).execute(seconds=0)
+
+    assert "sa01" in out
+    assert "end your turn" in out
+    assert "job42" not in out
+
+
+@pytest.mark.asyncio
+async def test_sleep_stays_quiet_when_only_a_job_is_running(tmp_path, monkeypatch):
+    """With nothing push-delivered in flight, a sleep between job status
+    checks is exactly what the tool is for -- no reminder at all."""
+    def rows(*args, **kwargs):
+        return [
+            {"kind": "job", "id": "job42", "label": "book.pdf",
+             "status": "running", "started_at": time.time(), "ended_at": None,
+             "session_key": "websocket:chatA", "nodes": None, "task": None,
+             "units_total": 40, "units_done": 3, "error": None},
+        ]
+
+    monkeypatch.setattr("durin.agent.background_tasks.collect_tasks", rows)
+
+    out = await _tool_with_session(tmp_path).execute(seconds=0)
+
+    assert "Slept" in out
+    assert "end your turn" not in out
+    assert "job42" not in out

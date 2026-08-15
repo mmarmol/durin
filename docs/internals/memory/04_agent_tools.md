@@ -230,8 +230,30 @@ of this same call, as long as there are at or under
 `documents.ocr.inline_max_pages` (default 5) of them. The gateway is
 long-lived, so it never loads the OCR engine itself: `transcribe_pages_detached`
 (`durin/memory/ocr.py`) hands the page numbers to a short-lived subprocess
-(`durin/memory/ocr_subproc.py`, run as `python -m durin.memory.ocr_subproc`),
-which renders and transcribes them and returns the text over stdout. The
+(`durin/memory/ocr_subproc.py`, run as `python -m durin.memory.ocr_subproc`,
+argv `<pdf_path> <dpi> <page> [<page>...] [--lang <code>]`),
+which renders and transcribes them and returns one JSON object over stdout —
+per page, the text plus the engine's recognition-score aggregates and, when a
+page comes back empty, a detection-only box count that tells blank paper
+apart from print the engine cannot read. The parent rebuilds each page as a
+`TranscribedPage` and logs a one-line score summary; the scores are for
+diagnosis only, never an accept/reject gate, because the measured score bands
+for wrong-but-plausible output overlap those of legitimate noisy scans.
+
+The optional trailing `--lang` carries `documents.ocr.language` — a
+recognition language beyond the engine's built-in pack. The parent resolves
+it from config (the child stays config-free; everything it needs arrives on
+argv) and appends it only when set. The engine then swaps just its
+recognition model, keyed on the language in its per-process cache, and
+resolves models under `<durin home>/models/ocr` — the same
+`<durin home>/models/` convention the stt and tts engines cache under,
+chosen over rapidocr's own site-packages default because a reinstall or
+redeploy would delete models cached there. Whatever that root is missing is
+downloaded from modelscope.cn on first use, inside the child, ahead of its
+first page — so when the parent sees the language's recognition model absent
+from the root, it extends the subprocess timeout by a named constant and
+logs the one-time download (source and size); selecting the language in
+config is the consent, the same pattern as the extras auto-install. The
 engine's memory is released when that subprocess exits rather than
 accumulating in the gateway across conversions. Only one of those children
 runs at a time across the whole process: an engine costs roughly 1.4 GB
@@ -243,6 +265,23 @@ enforced here because the background lane's own cap (`MAX_CONCURRENT_OCR_JOBS`)
 lives in the job registry and never sees this path. The background-job worker
 (below) transcribes with the same engine in-process instead, because its own
 process is already short-lived.
+
+If every transcribed page still comes back blank — nothing OCR could read
+either — `convert_file_to_markdown` raises `DocConvertError` rather than
+returning a document with an empty body, and the message says which kind of
+blank it was: pages whose det pass found no text regions at all are reported
+as genuinely blank, while pages the detector saw print on that recognition
+could not read are reported as unreadable. The unreadable variant blames
+whatever actually read the pages. With no recognition language selected it
+names a script outside the engine's built-in models as the usual cause (they
+read Chinese, Japanese and Latin-script languages; Cyrillic or Greek instead
+come back as confident-looking garbage, which no message can catch); with
+`documents.ocr.language` set it names the selected language instead — its
+model reading nothing means a different script, or pages that are genuinely
+unreadable. The background worker's no-text failure message makes the same
+split. `ingest_artifact`
+converts either into `IngestError` the same way it does every other
+conversion failure, so the tool reports it and writes no reference.
 
 Over that budget the document is never converted or fully extracted — both
 outputs would be thrown away unread — so the decision to go over is taken
@@ -288,9 +327,47 @@ uses the separate `convert_to_markdown` tool
 with no storage or indexing.
 
 The `id` is a `sha256` of `filename + content` (raw original bytes for a
-converted document), truncated to 12 chars — re-ingesting the same file with
-the same name is idempotent. Renaming the file before re-ingest produces a new
-id and a new entry.
+converted document), truncated to 12 chars, computed before any conversion
+runs — renaming the file before re-ingest produces a new id and a new entry.
+That ordering is what makes re-ingesting the same file genuinely idempotent:
+`ingest_artifact` (`durin/memory/ingestion.py`) checks the entry's own state
+under that id before doing any work, rather than redoing the work and only
+then discovering nothing needed to change. A finished entry with a real
+transcription (`source.md` on disk, and `meta.json`'s `derived.ocr_stub`
+false) short-circuits to a true no-op, returning that content with
+`job_id: null` and never touching `meta.json`.
+
+`source.md` alone does not prove an entry is finished and final, though.
+`convert_file_to_markdown` can return a coverage-note STUB instead of a real
+transcription — OCR was off, or the engine was missing or failed
+(`ConvertedDoc.ocr_stub`) — and `ingest_artifact` persists that flag into
+`meta.json`'s `derived.ocr_stub` right alongside it. A re-ingest reads the
+flag before trusting the sidecar: while OCR still cannot do better, the stub
+is returned as-is (honest — it is still the current answer, not a stale one);
+once OCR is enabled and the engine is available, the next re-ingest
+re-converts instead, and the upgrade is written back to `source.md` and the
+flag on disk, not just returned for that one call. A `meta.json` that
+predates the flag — no `ocr_stub` key at all, which is everything flag-less
+versions wrote — is not read as "real": the sidecar is classified once
+against the two frozen note heads those versions prepended to every stub
+(`is_pre_flag_stub_note` in `durin/memory/pdf_coverage.py`, a deliberately
+closed corpus that never follows the live note's wording), and the verdict
+is written back into `meta.json` with nothing else in it changed, so the
+sniff never re-runs. The same re-check applies to a half state — `source.md`
+present but `meta.json` missing, which the two writes being individually
+atomic rather than one transaction makes possible on a crash between them —
+treated as no finished entry at all.
+
+A document whose OCR job is still `queued`/`running` — tracked by an
+`ocr_job.json` marker in the entry directory — returns that SAME job instead
+of starting a second one. A marker naming a `failed`/`cancelled` job, or one
+no longer in the registry, is a legitimate retry: conversion runs again and a
+fresh job is spawned, overwriting the marker. One failure shape never takes
+that retry route: a job that failed at the Library-index step had already
+written its `source.md` (the worker writes the sidecar before indexing), so
+its re-ingest matches the finished case first — a no-op returning the text,
+the marker never consulted — and the tool layer's reference write (run
+whenever no job is pending) heals the missed indexing.
 
 `id` and `reference` are emitted first in the response so they survive the 16 KB
 agent-result head-truncation on large documents.

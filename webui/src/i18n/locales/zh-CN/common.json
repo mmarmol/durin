@@ -587,15 +587,29 @@
       },
       "rows": {
         "ocrEnabled": "本地 OCR",
+        "ocrLanguage": "识别语言",
         "ocrInlineMaxPages": "即时处理页数上限",
         "maxTextChars": "最长提取长度",
         "maxFileSizeMb": "可读取的最大文件"
       },
       "help": {
         "ocrEnabled": "使用运行在 CPU 上的本地 OCR 引擎，转录没有文本层的扫描版 PDF 页面。默认关闭 — 开启后会安装约 200 MB，转录时使用约 2 GB 内存，在清晰的扫描件上每页大约需要 1-2 秒。",
+        "ocrLanguage": "用于内置模型无法识别的文字。选择语言后，其识别模型（约 8 MB，首次添加任一语言时另加约 11 MB 的共享检测模型）会在首次使用时从 modelscope.cn 一次性下载 — 你的文档不会离开这台机器。",
         "ocrInlineMaxPages": "需要 OCR 且可以在等待时立即转录的页数。超出这个数量的文档会变成后台任务，可以在工作面板中查看进度。",
         "maxTextChars": "插入到一轮对话中的最长提取内容，超出部分会被截断。",
         "maxFileSizeMb": "durin 会提取文本的最大附件大小。更大的文件会被报告为跳过，而不会被读取。"
+      },
+      "language": {
+        "builtin": "内置 — 中文、日文、英文及拉丁字母",
+        "arabic": "阿拉伯文",
+        "cyrillic": "西里尔字母",
+        "devanagari": "天城文",
+        "el": "希腊文",
+        "eslav": "东斯拉夫语（俄语、乌克兰语、白俄罗斯语）",
+        "korean": "韩文",
+        "ta": "泰米尔文",
+        "te": "泰卢固文",
+        "th": "泰文"
       }
     },
     "extras": {

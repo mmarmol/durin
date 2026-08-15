@@ -46,6 +46,11 @@ def test_ddgs_missing_install_fails_returns_message(monkeypatch):
         return types.SimpleNamespace(status="failed", needs_restart=False, message="boom")
 
     monkeypatch.setattr(web, "ensure_extra", fake_ensure)
+    # _app_config=None makes the site load a config for the auto-install gate;
+    # keep the test off the real loader even though ensure_extra is mocked.
+    monkeypatch.setattr(
+        "durin.config.loader.load_config", lambda *a, **k: types.SimpleNamespace()
+    )
 
     def fake_ddgs_text(query, n):
         raise ImportError("No module named 'ddgs'")
@@ -59,6 +64,39 @@ def test_ddgs_missing_install_fails_returns_message(monkeypatch):
     out = asyncio.run(tool._search_duckduckgo("q", 1))
     assert "boom" in out
     assert "unavailable" in out.lower()
+
+
+def test_ddgs_missing_opted_out_config_blocks_install(monkeypatch):
+    """With no _app_config in hand the tool loads a config for the gate:
+    install.auto_install_extras=False must block the install (no installer
+    subprocess) and the error must carry the manual install command."""
+    import durin.extras as ex
+
+    def fake_ddgs_text(query, n):
+        raise ImportError("No module named 'ddgs'")
+
+    monkeypatch.setattr(web, "_ddgs_text", fake_ddgs_text)
+    opted_out = types.SimpleNamespace(
+        install=types.SimpleNamespace(auto_install_extras=False)
+    )
+    monkeypatch.setattr("durin.config.loader.load_config", lambda *a, **k: opted_out)
+    monkeypatch.setattr(ex, "_module_present", lambda m: False)
+    monkeypatch.setattr(ex, "_extra_specs", lambda extra: ["ddgs"])
+    monkeypatch.setattr(ex, "_installer_cmd", lambda specs: ["echo", *specs])
+    run_calls = []
+    monkeypatch.setattr(
+        ex.subprocess, "run",
+        lambda *a, **k: run_calls.append(a)
+        or types.SimpleNamespace(returncode=0, stderr="", stdout=""),
+    )
+
+    tool = web.WebSearchTool.__new__(web.WebSearchTool)
+    tool.config = types.SimpleNamespace(timeout=5)
+    tool._app_config = None
+
+    out = asyncio.run(tool._search_duckduckgo("q", 1))
+    assert run_calls == []  # opt-out honored: no installer subprocess
+    assert "durin-agent[web]" in out
 
 
 def test_strip_tags_removes_script_with_whitespace_close():

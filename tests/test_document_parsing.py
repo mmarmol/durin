@@ -410,6 +410,43 @@ def test_extract_documents_reports_an_over_budget_scan_instead_of_dropping_it(
     assert images == []
 
 
+def test_extract_documents_reports_a_blank_scan_instead_of_a_silent_empty_file(
+    tmp_path, monkeypatch
+):
+    # A scanned PDF whose pages ALL transcribe blank must not vanish the way
+    # an unraised empty string used to -- it has to name the file and say
+    # why, like every other extraction failure this gate already covers.
+    import json
+
+    from durin.utils.document import extract_documents
+    from tests.tools.test_read_enhancements import _write_text_pdf
+
+    monkeypatch.setenv("DURIN_HOME", str(tmp_path))
+    (tmp_path / "config.json").write_text(
+        json.dumps({"documents": {"ocr": {"enabled": True, "inline_max_pages": 5}}})
+    )
+    # engine_available() would read False in CI (no [ocr] extra installed
+    # there), taking the engine-missing coverage-note branch instead of ever
+    # reaching the blank-after-OCR raise this test is about.
+    monkeypatch.setattr("durin.memory.doc_convert.engine_available", lambda: True)
+    from durin.memory.ocr import TranscribedPage
+
+    blank = TranscribedPage(text="", mean_score=None, min_score=None, det_boxes=0)
+    monkeypatch.setattr(
+        "durin.memory.doc_convert.transcribe_pages_detached",
+        lambda path, pages, language=None: {p: blank for p in pages},
+    )
+
+    pdf = tmp_path / "blank_scan.pdf"
+    _write_text_pdf(pdf, ["", ""])
+
+    text, images = extract_documents("please remember this", [str(pdf)])
+
+    assert "blank_scan.pdf" in text
+    assert "could not be read inline" in text
+    assert images == []
+
+
 def test_extract_documents_reports_a_corrupt_file_instead_of_dropping_it(tmp_path):
     # The [error:] gate predates the OCR branch — it silently dropped
     # corrupt files too. The fix covers the whole defect class, not just
@@ -424,6 +461,62 @@ def test_extract_documents_reports_a_corrupt_file_instead_of_dropping_it(tmp_pat
     assert "broken.pdf" in text
     assert "could not be read inline" in text
     assert images == []
+
+
+def test_extract_documents_error_line_does_not_repeat_the_filename(
+    tmp_path, monkeypatch
+):
+    # The reason inside "could not be read inline: ..." usually BEGINS with
+    # the same filename the line already names (DocConvertError messages lead
+    # with path.name) — "book.pdf — could not be read inline: book.pdf
+    # yielded no..." says the name twice in a row. The composed line strips
+    # that leading repeat, whether the name is followed by a space or a colon.
+    from durin.utils import document as doc_mod
+
+    f = tmp_path / "book.pdf"
+    f.write_bytes(b"%PDF-1.4 x")
+
+    monkeypatch.setattr(
+        doc_mod, "extract_text",
+        lambda p: "[error: book.pdf yielded no extractable text even after "
+                  "OCR — every transcribed page came back blank.]",
+    )
+    text, _ = doc_mod.extract_documents("hello", [str(f)])
+    assert "book.pdf — could not be read inline: yielded no extractable" in text
+    assert "could not be read inline: book.pdf" not in text
+
+    monkeypatch.setattr(
+        doc_mod, "extract_text",
+        lambda p: "[error: book.pdf: 3 of 8 pages need OCR, over the inline "
+                  "limit of 2. Ingest the document to have it transcribed as "
+                  "a background job.]",
+    )
+    text, _ = doc_mod.extract_documents("hello", [str(f)])
+    assert "book.pdf — could not be read inline: 3 of 8 pages need OCR" in text
+    assert "could not be read inline: book.pdf" not in text
+
+
+def test_extract_documents_error_line_keeps_a_reason_without_the_filename(
+    tmp_path, monkeypatch
+):
+    # A reason that never names the file (markitdown wrap failures, io
+    # errors) must pass through untouched — the de-dup only strips a leading
+    # repeat of this file's own name.
+    from durin.utils import document as doc_mod
+
+    f = tmp_path / "book.pdf"
+    f.write_bytes(b"%PDF-1.4 x")
+    monkeypatch.setattr(
+        doc_mod, "extract_text",
+        lambda p: "[error: failed to extract .pdf: EOF marker not found]",
+    )
+
+    text, _ = doc_mod.extract_documents("hello", [str(f)])
+
+    assert (
+        "book.pdf — could not be read inline: failed to extract .pdf: "
+        "EOF marker not found" in text
+    )
 
 
 def test_extract_documents_still_inlines_an_ordinary_pdf(tmp_path):

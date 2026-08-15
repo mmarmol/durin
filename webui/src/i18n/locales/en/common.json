@@ -587,15 +587,29 @@
       },
       "rows": {
         "ocrEnabled": "Local OCR",
+        "ocrLanguage": "Recognition language",
         "ocrInlineMaxPages": "Inline page limit",
         "maxTextChars": "Longest extraction",
         "maxFileSizeMb": "Largest file to read"
       },
       "help": {
         "ocrEnabled": "Transcribe scanned PDF pages that have no text layer using a local OCR engine that runs on CPU. Off by default — turning it on installs ~200 MB, uses ~2 GB RAM while it transcribes, and takes roughly 1-2 seconds per page on a clean scan.",
+        "ocrLanguage": "For scripts the built-in models can't read. Picking a language downloads its recognition model (about 8 MB, plus about 11 MB of shared detection models the first time any language is added) from modelscope.cn once, the first time it's used — your documents never leave this machine.",
         "ocrInlineMaxPages": "Pages needing OCR that can be transcribed while you wait. A document that needs more becomes a background job you can track from the work panel.",
         "maxTextChars": "Longest extraction inlined into a turn before it's truncated.",
         "maxFileSizeMb": "Largest attachment durin will extract text from. Larger files are reported as skipped rather than read."
+      },
+      "language": {
+        "builtin": "Built-in — Chinese, Japanese, English & Latin scripts",
+        "arabic": "Arabic",
+        "cyrillic": "Cyrillic",
+        "devanagari": "Devanagari",
+        "el": "Greek",
+        "eslav": "East Slavic (Russian, Ukrainian, Belarusian)",
+        "korean": "Korean",
+        "ta": "Tamil",
+        "te": "Telugu",
+        "th": "Thai"
       }
     },
     "extras": {
