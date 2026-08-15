@@ -393,6 +393,29 @@ background file watching, and health checks. See
 
 ---
 
+### `documents`
+
+How durin reads the documents it is given: extraction limits and local OCR for
+scanned PDFs. One section governs the three surfaces that convert a document —
+chat attachments, the `convert_to_markdown` tool, and `memory_ingest`. See
+[documents.md](documents.md) for the user-facing guide to reading, remembering,
+and scanned PDFs.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `max_file_size_mb` | `50` | Largest attachment durin will extract text from; larger files are reported as skipped rather than read |
+| `max_text_chars` | `200000` | Longest extraction inlined into a turn before truncation |
+
+**`documents.ocr`** — local OCR for PDF pages that have no text layer:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | Transcribe PDF pages that have no text layer using the local OCR engine. The engine is an optional extra: the dashboard's **Settings → Documents** toggle installs the `[ocr]` extra when turning this on; setting the key any other way (e.g. `durin config set`) does not |
+| `language` | `null` | Recognition language for scripts the built-in models cannot read (they cover Chinese, Japanese, English, and Latin-script languages): `arabic`, `cyrillic`, `devanagari`, `el` (Greek), `eslav` (East Slavic), `korean`, `ta` (Tamil), `te` (Telugu), or `th` (Thai). Selecting one downloads its recognition model — ~8 MB, plus ~11 MB of shared detection models the first time any language is added — once from modelscope.cn into `<durin_home>/models/ocr` on first use; document content never leaves the machine. `null` = the built-in pack |
+| `inline_max_pages` | `5` | Pages needing OCR that may be transcribed inside a conversion call; a document needing more becomes a background job. `0` sends every scanned document to a job |
+
+---
+
 ### `skills`
 
 Governance for the skill subsystem: import policy, security, and discovery registries.
