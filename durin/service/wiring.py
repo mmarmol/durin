@@ -97,6 +97,15 @@ def build_service_registry(
 
         return load_config().workspace_path
 
+    def _live_config() -> Any:
+        # The registry is wired once, at gateway start. A default-model change
+        # saved afterwards is on disk, so surfaces that spawn their own provider
+        # (the workflow run endpoint) must read it again rather than keep the
+        # wiring-time snapshot.
+        from durin.config.loader import load_config, resolve_config_env_vars
+
+        return resolve_config_env_vars(load_config())
+
     registry = ServiceRegistry(
         config=config,
         session_manager=session_manager,
@@ -129,7 +138,8 @@ def build_service_registry(
     registry.register("oauth", OAuthService())
     registry.register("auth", AuthService(ApiTokenStore()))
     registry.register("workflows", WorkflowsService(
-        workspace=_workspace(), app_config=config, sessions=session_manager))
+        workspace=_workspace(), app_config=config, sessions=session_manager,
+        config_loader=_live_config))
     from durin.service.tasks import TasksService
     # Unlike subagent_manager/session_manager, a JobRegistry is a stateless
     # database handle rather than live in-memory state, so a fresh instance

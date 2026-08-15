@@ -56,3 +56,27 @@ async def test_execute_without_a_run_id_still_mints_one(tmp_path):
         result = await _svc(tmp_path).execute("w1", "task")
 
     assert result.run_id and result.run_id != "reserved1234"
+
+
+@pytest.mark.asyncio
+async def test_execute_uses_the_default_saved_after_the_service_was_wired(tmp_path):
+    """The dashboard's run endpoint must obey the default model saved after the
+    gateway started, not the snapshot the registry was wired with."""
+    _write_script_workflow(tmp_path, "w3")
+    boot = SimpleNamespace(resolve_default_preset=lambda: "old-preset",
+                           tools=ToolsConfig(), workflow=WorkflowConfig())
+    saved = SimpleNamespace(resolve_default_preset=lambda: "new-preset",
+                            tools=ToolsConfig(), workflow=WorkflowConfig())
+    svc = WorkflowsService(workspace=tmp_path, app_config=boot,
+                           sessions=SessionManager(workspace=tmp_path),
+                           config_loader=lambda: saved)
+    seen: list = []
+
+    def _capture(config, *, preset=None, **kw):
+        seen.append(preset)
+        return SimpleNamespace(get_default_model=lambda: "m")
+
+    with patch("durin.providers.factory.make_provider", side_effect=_capture):
+        await svc.execute(name="w3", task="t")
+
+    assert seen == ["new-preset"]
