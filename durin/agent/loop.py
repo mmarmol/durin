@@ -1245,7 +1245,13 @@ class AgentLoop:
             logger.warning("MCP connection cancelled (will retry next message)")
             self._mcp_connections.clear()
         except ImportError:
-            res = ensure_or_note("mcp", config=getattr(self, "app_config", None))
+            # Cold path (extra missing): most AgentLoops have app_config=None,
+            # so load the config for the auto-install gate.
+            from durin.config.loader import load_config
+
+            res = ensure_or_note(
+                "mcp", config=getattr(self, "app_config", None) or load_config()
+            )
             if res.status in ("present", "installed"):
                 try:
                     self._mcp_connections = await connect_mcp_servers(

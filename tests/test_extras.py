@@ -110,20 +110,24 @@ def test_post_install_unknown_is_noop():
     ex._post_install("web_search")  # must not raise
 
 
-def test_none_config_treated_as_gate_on(monkeypatch):
-    """The agent often has app_config=None; treat that as gate-on (default)."""
-    seen = {"present": False}
-    monkeypatch.setattr(ex, "_module_present", lambda m: seen["present"])
+def test_none_config_refuses_install(monkeypatch):
+    """A caller with no config cannot prove the user hasn't opted out
+    (install.auto_install_extras=False), so the gate refuses instead of
+    installing. Every in-tree caller threads a real config; this pins the
+    refusal for the next caller someone writes with config=None."""
+    monkeypatch.setattr(ex, "_module_present", lambda m: False)
     monkeypatch.setattr(ex, "_extra_specs", lambda extra: ["ddgs"])
     monkeypatch.setattr(ex, "_installer_cmd", lambda specs: ["echo", *specs])
-
-    def fake_run(cmd, **kw):
-        seen["present"] = True
-        return types.SimpleNamespace(returncode=0, stderr="", stdout="")
-
-    monkeypatch.setattr(ex.subprocess, "run", fake_run)
+    run_calls = []
+    monkeypatch.setattr(
+        ex.subprocess, "run",
+        lambda *a, **kw: run_calls.append(a)
+        or types.SimpleNamespace(returncode=0, stderr="", stdout=""),
+    )
     r = ex.ensure_extra("web_search", config=None)
-    assert r.status == "installed"
+    assert r.status == "disabled"
+    assert "durin-agent[web]" in r.message
+    assert run_calls == []  # installer subprocess never attempted
 
 
 def test_ensure_or_note_logs_and_returns(monkeypatch, caplog):
