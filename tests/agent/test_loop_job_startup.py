@@ -80,7 +80,7 @@ async def _run_briefly_and_stop(loop: AgentLoop, *, until) -> None:
 def _dead_pid() -> int:
     """A pid that definitely does not belong to a live process: spawn a
     child and wait on it, rather than guessing an arbitrary "probably free"
-    integer (mirrors tests/jobs/test_spawn.py's own ``_pid_alive`` fixture)."""
+    integer (mirrors tests/utils/test_process.py's own reaped-child trick)."""
     proc = subprocess.Popen([sys.executable, "-c", "pass"])
     proc.wait(timeout=10)
     return proc.pid

@@ -180,7 +180,7 @@ cap's own `COUNT` would keep counting it, wedging every later job of this
 kind behind a row nothing is ever going to finish; gateway startup's
 `reconcile` sweep ([below](#restart-reconciliation)) is the only other place
 that would ever clean it, and that could be hours away. So a cap-refused
-claim runs the same `reconcile(alive=_pid_alive)` probe right where it is —
+claim runs the same `reconcile(alive=pid_alive)` probe right where it is —
 inside `ocr_worker.run_job`, at the exact moment someone is actually being
 blocked by a stale holder — and retries the claim once if reconcile requeued
 anything. A dead holder is cleaned at exactly the moment its absence matters;
@@ -270,11 +270,14 @@ way. Failing at the check says so before spending the OCR, and leaves
 A gateway restart used to strand a `process_registry.py`-tracked background
 `exec` forever (documented there as a known limitation); jobs fix this for
 their own rows. On every gateway start, `AgentLoop.run()`
-(`durin/agent/loop.py`) calls `JobRegistry.reconcile(alive=_pid_alive)` before
+(`durin/agent/loop.py`) calls `JobRegistry.reconcile(alive=pid_alive)` before
 serving any traffic. `reconcile` finds every `running` row and requeues it
 (clearing `pid`/`started_at`, keeping its finished units) when either:
 
-- its `pid` is not alive (`os.kill(pid, 0)` raises), or
+- its `pid` fails `pid_alive` (`durin/utils/process.py`) — the cross-platform
+  liveness probe shared with the gateway daemon: signal 0 on POSIX, an
+  `OpenProcess`/`GetExitCodeProcess` query on Windows, where signal 0 is not
+  a probe at all — or
 - it has been `running` longer than `RECONCILE_AGE_S` (six hours) regardless
   of what its `pid` looks like — a rebooted host restarts pid allocation from
   a low number, so a stale row's `pid` can coincidentally match a real,

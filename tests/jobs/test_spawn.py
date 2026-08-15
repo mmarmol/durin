@@ -1,6 +1,5 @@
 """Starting a job's worker process, including restarting one after reconcile."""
 
-import os
 import subprocess
 import sys
 
@@ -10,10 +9,10 @@ from durin.jobs.registry import Job, JobRegistry
 from durin.jobs.spawn import (
     MAX_CONCURRENT_OCR_JOBS,
     _launch_worker,
-    _pid_alive,
     respawn,
     spawn_ocr_job,
 )
+from durin.utils.process import pid_alive
 
 
 def _job(**overrides):
@@ -25,41 +24,6 @@ def _job(**overrides):
     )
     fields.update(overrides)
     return Job(**fields)
-
-
-# ---------------------------------------------------------------------------
-# _pid_alive
-# ---------------------------------------------------------------------------
-
-
-def test_pid_alive_true_for_the_current_process():
-    assert _pid_alive(os.getpid()) is True
-
-
-def test_pid_alive_false_for_a_reaped_process():
-    # Spawn and wait on a child so its pid is deterministically dead, rather
-    # than guessing an arbitrary "probably free" integer.
-    proc = subprocess.Popen([sys.executable, "-c", "pass"])
-    proc.wait(timeout=10)
-    assert _pid_alive(proc.pid) is False
-
-
-def test_pid_alive_true_for_a_pid_owned_by_another_user(monkeypatch):
-    # os.kill raises PermissionError when the pid exists but is owned by a
-    # different uid -- that process is alive, just not ours to signal.
-    def _raise_permission(pid, sig):
-        raise PermissionError("not our process")
-
-    monkeypatch.setattr("durin.jobs.spawn.os.kill", _raise_permission)
-    assert _pid_alive(4242) is True
-
-
-def test_pid_alive_false_when_no_such_process(monkeypatch):
-    def _raise_lookup(pid, sig):
-        raise ProcessLookupError("no such process")
-
-    monkeypatch.setattr("durin.jobs.spawn.os.kill", _raise_lookup)
-    assert _pid_alive(4242) is False
 
 
 # ---------------------------------------------------------------------------
@@ -182,7 +146,7 @@ def test_a_reconciled_job_is_respawned_with_its_own_id(tmp_path, monkeypatch):
         lambda args, **kw: calls.append(args),
     )
 
-    orphans = registry.reconcile(alive=_pid_alive)  # 999999 is not alive
+    orphans = registry.reconcile(alive=pid_alive)  # 999999 is not alive
     for orphan in orphans:
         respawn(orphan)
 
@@ -229,7 +193,7 @@ def test_a_reconciled_job_gets_a_real_live_worker_again(tmp_path, monkeypatch):
 
     monkeypatch.setattr("durin.jobs.spawn.subprocess.Popen", _capturing_popen)
 
-    orphans = registry.reconcile(alive=_pid_alive)
+    orphans = registry.reconcile(alive=pid_alive)
     assert [o.id for o in orphans] == [job.id]
     for orphan in orphans:
         respawn(orphan)

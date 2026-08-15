@@ -690,9 +690,9 @@ def test_worker_chains_even_when_finish_loses_to_something_else(
 def _dead_pid() -> int:
     """A pid that definitely does not belong to a live process: spawn a
     child and wait on it, rather than guessing an arbitrary "probably free"
-    integer (mirrors tests/jobs/test_spawn.py's own ``_pid_alive`` fixture).
+    integer (mirrors tests/utils/test_process.py's own reaped-child trick).
     Load-bearing here specifically: the self-healing cap-refusal path below
-    calls the real ``_pid_alive`` probe, so a pid that merely *looks* free by
+    calls the real ``pid_alive`` probe, so a pid that merely *looks* free by
     convention is not good enough -- it has to actually be dead."""
     proc = subprocess.Popen([sys.executable, "-c", "pass"])
     proc.wait(timeout=10)

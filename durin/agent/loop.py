@@ -224,10 +224,11 @@ def _resume_jobs() -> None:
     reason to look at it again.
     """
     from durin.jobs.registry import JobRegistry
-    from durin.jobs.spawn import MAX_CONCURRENT_OCR_JOBS, _pid_alive, respawn
+    from durin.jobs.spawn import MAX_CONCURRENT_OCR_JOBS, respawn
+    from durin.utils.process import pid_alive
 
     registry = JobRegistry()
-    for job in registry.reconcile(alive=_pid_alive):
+    for job in registry.reconcile(alive=pid_alive):
         try:
             respawn(job)
         except Exception:

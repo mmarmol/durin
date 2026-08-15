@@ -26,11 +26,12 @@ from loguru import logger
 
 from durin.config.loader import load_config
 from durin.jobs.registry import JobRegistry
-from durin.jobs.spawn import MAX_CONCURRENT_OCR_JOBS, _launch_worker, _pid_alive
+from durin.jobs.spawn import MAX_CONCURRENT_OCR_JOBS, _launch_worker
 from durin.memory.ingestion import index_ingested_entry
 from durin.memory.ocr import score_str, transcribe_page
 from durin.memory.pdf_coverage import classify_coverage, page_texts
 from durin.utils.atomic_write import atomic_write_text
+from durin.utils.process import pid_alive
 
 __all__ = ["run_job"]
 
@@ -110,7 +111,7 @@ def run_job(job_id: str, *, registry: JobRegistry | None = None) -> None:
             # is genuinely alive but slow, briefly letting two workers hold
             # one job. finish()'s pid guard and record_unit's idempotence
             # are what keep that window safe, not this retry.
-            if registry.reconcile(alive=_pid_alive):
+            if registry.reconcile(alive=pid_alive):
                 won = registry.claim(
                     job_id, pid=os.getpid(), kind_cap=("ocr", MAX_CONCURRENT_OCR_JOBS),
                 )
