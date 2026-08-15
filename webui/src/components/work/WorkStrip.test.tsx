@@ -198,6 +198,24 @@ it("counts several waiting jobs as queued", () => {
   expect(screen.getByText("2 tasks queued")).toBeInTheDocument();
 });
 
+it("swaps the status word for a single stopping item", () => {
+  // A cancel was requested and the run is winding down. "in progress" over it
+  // says the stop did not register.
+  const stopping = item({ status: "stopping" });
+  render(wrap(<WorkStrip active={[stopping]} finished={[]} onOpen={() => {}} />));
+  expect(screen.getByText("ticket-stage1-context")).toBeInTheDocument();
+  expect(screen.getByText(/stopping/)).toBeInTheDocument();
+  expect(screen.queryByText(/in progress/)).not.toBeInTheDocument();
+});
+
+it("keeps the running word when a stopping item is not the only active one", () => {
+  // The multi-item line is a count, not a per-item status: only the
+  // single-item case can honestly name one item's state.
+  const active = [item({ status: "stopping" }), item({ id: "r2", label: "other-flow" })];
+  render(wrap(<WorkStrip active={active} finished={[]} onOpen={() => {}} />));
+  expect(screen.getByText("2 tasks in progress")).toBeInTheDocument();
+});
+
 it("still reads as in progress while one job runs and others queue behind it", () => {
   // Only an all-queued list is "queued": with a worker actually transcribing,
   // the strip must keep spinning.

@@ -139,6 +139,8 @@ function workItemFromSubagentEvent(
  * the poll reports the run as decided (done / failed / cancelled). A crashed
  * or externally-reconciled run never emits a final WS frame, so its last live
  * frame says "running" forever; the decided manifest is authoritative there.
+ * A polled "stopping" also beats live running frames (the cancel registry knows
+ * before the stream does) but yields to a live end frame.
  */
 export function useWorkState(
   chatId: string | null,
@@ -286,15 +288,26 @@ export function useWorkState(
     // this guard that stale frame pins the panel and strip to in-progress. A
     // polled needs_input does NOT count as decided: a resumed run's fresh
     // running frame must flip the item back to running immediately (the
-    // manifest lags the live stream there).
+    // manifest lags the live stream there). A polled "stopping" (cancel
+    // requested, run winding down) is not decided either — it must yield to a
+    // live END frame, which means the run actually finished — but it does beat
+    // a live "running" frame, since the engine keeps emitting those while it
+    // winds down and the stop would otherwise look ignored.
     for (const [id, item] of live) {
       const polledItem = byId.get(id);
       const decided =
         polledItem != null &&
         polledItem.status !== "running" &&
         polledItem.status !== "queued" &&
+        polledItem.status !== "stopping" &&
         polledItem.status !== "needs_input";
       if (decided) continue;
+      if (
+        polledItem?.status === "stopping" &&
+        (item.status === "running" || item.status === "needs_input")
+      ) {
+        continue;
+      }
       // A live item's startedAt is only when THIS browser saw its first frame;
       // the polled one is the run's true start, off the manifest. Keeping the
       // polled value means a run watched after a reload (or opened mid-run in a
@@ -312,13 +325,22 @@ export function useWorkState(
   }, [polled, liveVersion]);
   // "queued" belongs with the active work, not the finished list: a job
   // waiting for the single OCR worker slot has not run yet, and sorting it
-  // among finished items by an endedAt it does not have would bury it.
+  // among finished items by an endedAt it does not have would bury it. So does
+  // "stopping": a run winding down still has a node executing.
   const active = all.filter(
-    (w) => w.status === "running" || w.status === "queued" || w.status === "needs_input",
+    (w) =>
+      w.status === "running" ||
+      w.status === "queued" ||
+      w.status === "stopping" ||
+      w.status === "needs_input",
   );
   const finished = all
     .filter(
-      (w) => w.status !== "running" && w.status !== "queued" && w.status !== "needs_input",
+      (w) =>
+        w.status !== "running" &&
+        w.status !== "queued" &&
+        w.status !== "stopping" &&
+        w.status !== "needs_input",
     )
     .sort((a, b) => (b.endedAt ?? b.startedAt) - (a.endedAt ?? a.startedAt));
 

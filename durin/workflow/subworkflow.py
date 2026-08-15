@@ -48,6 +48,7 @@ class SubworkflowRunner:
     def __call__(self, name: str, task: str, root_session_key: str | None = None,
                 work_dir: str | None = None, parent_run_id: str | None = None,
                 progress_emit: Any = None, cancel_check: Any = None,
+                hard_cancel_check: Any = None,
                 parent_node_id: str | None = None) -> WorkflowResult:
         def _config_abort(message: str) -> WorkflowResult:
             # An unrunnable sub-workflow reference (cycle / depth / missing name) is an
@@ -101,6 +102,9 @@ class SubworkflowRunner:
             pick_runner=self.judge_runner.pick if self.judge_runner is not None else None,
             progress_emit=(_tagged_emit if progress_emit is not None else None),
             cancel_check=cancel_check,
+            # Forwarded like the plain check: a force-stop on the caller must be
+            # able to interrupt the node executing inside the nested run too.
+            hard_cancel_check=hard_cancel_check,
             parallel_llm_concurrency=self.parallel_llm_concurrency,
             parallel_script_concurrency=self.parallel_script_concurrency,
         )

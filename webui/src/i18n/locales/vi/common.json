@@ -2287,7 +2287,8 @@
   "tasks": {
     "status": {
       "needs_input": "Cần nhập",
-      "queued": "Đang chờ"
+      "queued": "Đang chờ",
+      "stopping": "Đang dừng…"
     },
     "needsInputHint": "Đã chuyển cho tác tử gọi nó — tác tử có thể tự trả lời từ ngữ cảnh của mình hoặc hỏi bạn, rồi tiếp tục lượt chạy này.",
     "queuedHint": "Đang chờ để bắt đầu — mỗi lần chỉ một tài liệu được chép lại.",
@@ -2305,6 +2306,7 @@
     "strip": {
       "statusRunning": "đang chạy",
       "statusQueued": "đang chờ",
+      "statusStopping": "đang dừng…",
       "statusDone": "hoàn tất",
       "statusFailed": "thất bại",
       "statusCancelled": "đã hủy",

@@ -648,7 +648,10 @@ mid-run window onto a run's artifacts) and, while a node is executing, names it
 as the currently-running entry in that same per-node list (from the manifest's
 `active_node`) — previously that list showed only nodes that had already
 finished, so a multi-minute node was invisible in the tool's answer for its
-whole duration. `tasks(action='stop', id=…)` requests cancellation. The same
+whole duration. `tasks(action='stop', id=…)` requests cancellation, graceful by
+default and hard with `force=true` (or on a repeat stop) — see **Cooperative
+cancellation** below; a run with a pending cancel reports as `stopping` and is
+still counted among the running work. The same
 merge of sub-agents and workflow runs that backs `GET /api/v1/tasks`
 (`durin/agent/background_tasks.py::collect_tasks`) is what `tasks` renders —
 and for the HTTP surface specifically (the web UI's Work panel) each node entry
@@ -666,22 +669,64 @@ input. The shared-context buffer is not reconstructed across a resume —
 persistent-session nodes recover their own history, and files live in the
 working folder.
 
-**Cooperative cancellation.** `tasks(action='stop', …)` marks the `run_id` in a
-process-global registry (`durin/workflow/cancellation.py`); the engine polls it
-via a `cancel_check` callback at the top of its node walk. For an agent node a
-cancel takes effect **between** nodes — a node already executing finishes first
-(best-effort, the same contract as cancelling a sub-agent). A script node gets
-the same callback threaded into its subprocess wait, polled every slice while
-the process runs: a cancel there kills the subprocess's process group directly
-(the same group-kill path a timeout uses) instead of waiting for it to finish
-or time out. Either way the run ends with the terminal status `cancelled`,
-carrying the partial per-node trace, and its result is still injected back
-like any other completion. A **foreground** run
-(`background=false`) is bridged to the same mechanism: if `/stop` cancels the
-turn awaiting it, `run_workflow` signals the run's cooperative flag — asyncio
-cancellation cannot reach the engine's worker thread — so the engine stops
-before its next node instead of running to completion unobserved, and the flag
-is dropped once the detached engine actually stops.
+**Cooperative cancellation — two modes.** `tasks(action='stop', …)` marks the
+`run_id` in a process-global registry (`durin/workflow/cancellation.py`) with a
+mode; the engine polls it via a `cancel_check` callback at the top of its node
+walk. `request_cancel` upgrades graceful → hard and never downgrades, so a
+repeat stop escalates on its own and a second graceful stop cannot undo a
+force-stop already in flight.
+
+- **Graceful** (the default): the run stops at its next node boundary. A script
+  node still dies immediately — the callback is threaded into its subprocess
+  wait, polled every slice while the process runs, and a cancel kills the
+  subprocess's process group directly (the same group-kill path a timeout
+  uses). An agent node already executing finishes first. A **detached**
+  (launch-and-continue) node is not exempt: it gets the same check its linear
+  counterpart would, so a detached script's subprocess dies with the run instead
+  of outliving it as an orphan nobody is left to reap.
+- **Hard** (`force=true`, or a repeat `stop` on a run already cancelling, which
+  auto-escalates): additionally interrupts an in-flight agent node. The engine
+  hands every agent turn — sequential work nodes, parallel branches, detached
+  launches, fan-out workers, and the nodes of a nested sub-workflow — a
+  hard-only check; the node
+  runner runs the turn as a task and polls the flag on a short interval,
+  cancelling the task the moment it turns true. The abort surfaces as a
+  `WorkInterrupted` cause, the partial conversation is persisted exactly like
+  any node failure, and the run ends `cancelled`.
+
+**What a hard cancel does and does not reach.** Cancelling the turn's task
+unwinds the `await` it is sitting on, so a request to any provider whose SDK is
+async — Anthropic, the OpenAI-compatible family, Azure, Copilot — is dropped
+where it stands. Work the turn handed to a thread is not cancellable at all: a
+tool doing synchronous I/O (a document conversion, a memory ingest, a search
+pipeline) or a provider whose SDK is synchronous (Bedrock) finishes its current
+unit of work regardless. The run does not wait for it. The watched turn runs on
+a thread of its own and the force-stop abandons that thread rather than joining
+it — `asyncio.run`'s teardown drains the loop's default executor with no
+timeout, which would otherwise pin the run for the whole of that call and make a
+force-stop no faster than letting the node finish. So the stop lands on its own
+schedule either way; the abandoned unit of work completes in the background and
+its writes can still land after the run has reported `cancelled`. Nothing of the
+turn beyond that one call ever runs.
+
+**A parallel node whose branches are all gone.** Every branch failing is
+normally an abort ("every branch failed"). When the branches were killed by the
+cancel itself — a script subprocess group-killed, an agent turn force-stopped —
+the run reports `cancelled` instead. The distinction is drawn from the branches'
+own failure causes, not from the cancel flag: branches that fail on their own
+merits while a stop is merely *pending* still abort, so a genuine failure never
+hides behind the user's stop. Fan-out workers follow the same rule.
+
+While a cancel is pending, the merged task list reports the run as `stopping`
+(computed from the registry — the manifest is not rewritten), so surfaces
+acknowledge the stop before the engine actually winds down. Either mode ends the
+run with the terminal status `cancelled`, carrying the partial per-node trace,
+and its result is still injected back like any other completion. A **foreground**
+run (`background=false`) is bridged to the same mechanism: if `/stop` cancels the
+turn awaiting it, `run_workflow` signals the run's cooperative flag **hard** —
+asyncio cancellation cannot reach the engine's worker thread, and with nobody
+waiting for the result there is no reason to let the in-flight node burn tokens
+to completion — and the flag is dropped once the detached engine actually stops.
 
 **Live per-node and per-branch progress.** Every frame the sequential walk
 emits — the running node, a finished node, the certain-but-not-yet-started

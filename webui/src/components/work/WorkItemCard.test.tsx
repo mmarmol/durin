@@ -546,4 +546,31 @@ describe("WorkItemCard", () => {
     expect(container.querySelector(".lucide-ban")).toBeInTheDocument();
     expect(container.querySelector(".lucide-help-circle")).not.toBeInTheDocument();
   });
+
+  it("renders a stopping run as a muted spinner with a Stopping chip", () => {
+    // A cancel was requested and the engine is winding down: still spinning
+    // (a node is executing), but muted — and chipped, so the stop is visibly
+    // acknowledged instead of looking like nothing happened.
+    const { container } = render(
+      <WorkItemCard
+        item={{
+          kind: "workflow",
+          id: "r9",
+          label: "research-to-answer",
+          status: "stopping",
+          startedAt: 0,
+          endedAt: null,
+        }}
+      />,
+    );
+    expect(screen.getByText("Stopping…")).toBeInTheDocument();
+    // Still spinning (a node is executing) but muted, not the amber of
+    // ordinary running work.
+    expect(
+      container.querySelector(".animate-spin.text-muted-foreground"),
+    ).toBeInTheDocument();
+    expect(container.querySelector(".animate-spin.text-amber-600")).not.toBeInTheDocument();
+    // Not the needs-input fallback.
+    expect(container.querySelector(".lucide-help-circle")).not.toBeInTheDocument();
+  });
 });

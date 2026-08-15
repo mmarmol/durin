@@ -61,6 +61,9 @@ function ItemStatusIcon({ status }: { status: WorkItem["status"] }) {
   // the job is waiting for the one OCR worker slot. Muted like the pending
   // node dot above, for the same reason: it has not started.
   if (status === "queued") return <Clock className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />;
+  // stopping — a cancel is pending; still spinning (a node is executing), but
+  // muted while the run winds down.
+  if (status === "stopping") return <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" aria-hidden />;
   if (status === "cancelled") return <Ban className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />;
   // needs_input — accent-tinted: the run paused, it did not fail.
   return <HelpCircle className="h-3.5 w-3.5 text-accent-foreground" aria-hidden />;
@@ -81,8 +84,10 @@ export function WorkItemCard({
   // One ticker drives every live clock in this card; frozen (no re-render)
   // once the item is no longer running, so a finished node's clock never
   // ticks. "queued" is deliberately not running for this purpose either: a
-  // job waiting for the OCR slot has nothing to count.
-  const now = useTicker(item.status === "running");
+  // job waiting for the OCR slot has nothing to count. "stopping" is: the run
+  // is winding down but a node is still executing, and its clock must not
+  // freeze mid-node.
+  const now = useTicker(item.status === "running" || item.status === "stopping");
   // The single node the round/activity detail attaches to — shared with the chat
   // strip's own lookup rather than re-derived here, so the panel and the strip
   // always agree on which node is "the" running one.
@@ -115,6 +120,13 @@ export function WorkItemCard({
         {item.status === "queued" && (
           <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
             {t("tasks.status.queued")}
+          </span>
+        )}
+        {/* Muted for the same reason as queued: the stop was the user's own
+            request, not something asking for attention. */}
+        {item.status === "stopping" && (
+          <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+            {t("tasks.status.stopping")}
           </span>
         )}
         <ItemStatusIcon status={item.status} />

@@ -652,3 +652,115 @@ def test_id_parameter_description_names_all_three_kinds(tmp_path):
     assert "sub-agent id" in id_desc
     assert "workflow run id" in id_desc
     assert "job id" in id_desc
+
+
+@pytest.mark.asyncio
+async def test_stop_force_requests_a_hard_cancel(tmp_path):
+    _write_manifest(tmp_path, "qa", "wfforce01", status="running")
+    try:
+        out = await _tool(tmp_path, _FakeManager([], running=[])).execute(
+            action="stop", id="wfforce01", force=True)
+        assert "force-stopped" in out
+        assert cancellation.is_hard_cancelled("wfforce01") is True
+    finally:
+        cancellation.clear("wfforce01")
+
+
+@pytest.mark.asyncio
+async def test_a_plain_stop_stays_graceful(tmp_path):
+    """The default must not interrupt an in-flight node: only the plain flag is
+    set, so the hard-only poll the engine hands work nodes stays false."""
+    _write_manifest(tmp_path, "qa", "wfsoft001", status="running")
+    try:
+        await _tool(tmp_path, _FakeManager([], running=[])).execute(
+            action="stop", id="wfsoft001")
+        assert cancellation.is_cancelled("wfsoft001") is True
+        assert cancellation.is_hard_cancelled("wfsoft001") is False
+    finally:
+        cancellation.clear("wfsoft001")
+
+
+@pytest.mark.asyncio
+async def test_repeat_stop_escalates_to_hard(tmp_path):
+    """First stop is graceful; a second stop on the (now "stopping") run means
+    "stop it NOW" and escalates without needing force=true."""
+    _write_manifest(tmp_path, "qa", "wfrepeat01", status="running")
+    tool = _tool(tmp_path, _FakeManager([], running=[]))
+    try:
+        first = await tool.execute(action="stop", id="wfrepeat01")
+        assert "asked to cancel" in first
+        assert cancellation.is_hard_cancelled("wfrepeat01") is False
+        second = await tool.execute(action="stop", id="wfrepeat01")
+        assert "force-stopped" in second
+        assert cancellation.is_hard_cancelled("wfrepeat01") is True
+    finally:
+        cancellation.clear("wfrepeat01")
+
+
+@pytest.mark.asyncio
+async def test_list_counts_a_stopping_run_as_running(tmp_path):
+    """A run winding down has not finished. Counting it among "finished" would
+    tell the model the work is over while a node is still executing."""
+    _write_manifest(tmp_path, "qa", "wfwind0001", status="running")
+    tool = _tool(tmp_path, _FakeManager([], running=[]))
+    try:
+        cancellation.request_cancel("wfwind0001")
+        out = await tool.execute(action="list")
+        assert "1 running, 0 finished" in out
+        assert "stopping" in out
+    finally:
+        cancellation.clear("wfwind0001")
+
+
+@pytest.mark.asyncio
+async def test_retry_refuses_a_stopping_run(tmp_path):
+    """stop and retry compose: a run winding down is not a finished lifecycle,
+    so it is not retryable (and retry is a jobs-only action besides)."""
+    _write_manifest(tmp_path, "qa", "wfretrystop", status="running")
+    tool = _tool(tmp_path, _FakeManager([], running=[]))
+    try:
+        cancellation.request_cancel("wfretrystop")
+        out = await tool.execute(action="retry", id="wfretrystop")
+        assert "retry only applies to background jobs" in out
+    finally:
+        cancellation.clear("wfretrystop")
+
+
+@pytest.mark.asyncio
+async def test_force_on_a_subagent_says_it_was_not_honored(tmp_path):
+    """force only escalates a workflow stop. Answering a sub-agent stop with the
+    plain wording would let the model believe the flag did something."""
+    mgr = _FakeManager([_SAStatus("sa01", "research", "awaiting_tools")], running=["sa01"])
+    out = await _tool(tmp_path, mgr).execute(action="stop", id="sa01", force=True)
+    assert "Sub-agent [sa01] cancelled" in out
+    assert "force" in out and "workflow" in out
+
+
+@pytest.mark.asyncio
+async def test_force_on_a_job_says_it_was_not_honored(tmp_path):
+    """Same for a job: its cancel always waits for the current page boundary,
+    and force cannot shorten that."""
+    jobs = _job_registry(tmp_path)
+    job = jobs.enqueue(kind="ocr", label="book.pdf", payload={}, session_key=SESSION,
+                       units_total=40)
+    out = await _tool(tmp_path, _FakeManager([], running=[]), jobs=jobs).execute(
+        action="stop", id=job.id, force=True)
+    assert "cancelled while it was still waiting" in out
+    assert "force" in out and "workflow" in out
+
+
+@pytest.mark.asyncio
+async def test_a_plain_subagent_stop_does_not_mention_force(tmp_path):
+    """The clause is only for a dropped flag — a stop that never passed force
+    must not carry noise about it."""
+    mgr = _FakeManager([_SAStatus("sa01", "research", "awaiting_tools")], running=["sa01"])
+    out = await _tool(tmp_path, mgr).execute(action="stop", id="sa01")
+    assert "force" not in out
+
+
+@pytest.mark.asyncio
+async def test_force_parameter_is_declared_and_documented(tmp_path):
+    tool = _tool(tmp_path, _FakeManager([], running=[]))
+    force = tool.parameters["properties"]["force"]
+    assert "boolean" in force["type"]
+    assert "force" in tool.description

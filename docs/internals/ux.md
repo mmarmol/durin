@@ -303,7 +303,11 @@ session lineage and workflow run manifests. Live WebSocket frames win over the
 poll for an item still in flight, but once the poll reports a run as decided
 (done / failed / cancelled) the manifest is authoritative — a crashed or
 reconciled run emits no final frame, so its last live "running" frame must not
-pin the item to in-progress.
+pin the item to in-progress. A polled `stopping` status (a cancel was requested
+and the run is winding down) also beats live running frames, yielding only to a
+live end frame; it counts as active work, and the panel shows it as a muted
+spinner with a "stopping" chip. A run that ended by cancellation gets a neutral
+cancelled icon rather than success or failure marks.
 
 **Work chip.** A compact inline indicator in the message thread shows that
 background work is running or has finished. Clicking it opens the work panel.
@@ -316,8 +320,10 @@ is something to report (opening the panel replaces it, so the two never show at
 once). It reads the active work in priority order — any item waiting on user
 input renders a warn-tinted "needs your response" line with a Respond
 affordance; otherwise running work renders a neutral line with the item's label
-(a count when several run at once); and when the last active item ends the strip
-flashes a finished/failed line for a few seconds before disappearing. The whole
+(a count when several run at once), and a single item winding down under a
+pending cancel swaps its status word for "stopping"; and when the last active
+item ends the strip flashes a finished/failed/cancelled line for a few seconds
+before disappearing. The whole
 strip is a single button that opens the work panel, and the wrapper is a
 `role="status"` live region so state changes are announced by screen readers.
 Unlike the inline work chip, it does not scroll away with the transcript.

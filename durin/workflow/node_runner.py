@@ -3,7 +3,9 @@ its session with lineage.
 
 Plugs into WorkflowEngine as the ``node_runner``. It is synchronous (the engine
 walk is synchronous) and drives the async AgentRunner via asyncio.run on a fresh
-event loop per node — fine for the sequential slice. The node's conversation is
+event loop per node — fine for the sequential slice; a node that can be
+force-stopped gets that loop on a thread of its own, so the stop need not wait
+for uncancellable work (see ``_run_turn``). The node's conversation is
 persisted as its own session keyed ``workflow:<run_id>:<node_id>:<iteration>`` with
 the WS0 lineage block, so node work is navigable, searchable and dream-visible —
 exactly like a subagent session. Persistence is best-effort.
@@ -12,7 +14,10 @@ exactly like a subagent session. Persistence is best-effort.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
+import threading
+from typing import Any
 
 from loguru import logger
 
@@ -26,10 +31,20 @@ from durin.agent.tools.registry import ToolRegistry
 from durin.config.schema import ToolsConfig
 from durin.session.lineage import ORIGIN_ID, ORIGIN_TYPE, build_lineage, root_of
 from durin.session.manager import Session, SessionManager
-from durin.workflow.engine import NodeExecutionError, NodeRunRequest, NodeRunResponse
+from durin.workflow.engine import (
+    NodeExecutionError,
+    NodeRunRequest,
+    NodeRunResponse,
+    WorkInterrupted,
+)
 from durin.workflow.node_progress import NodeCheckpointHook, NodeProgressHook
 from durin.workflow.persona_resolve import resolve_persona
 from durin.workflow.session_keys import is_persistent_session, node_session_key
+
+# How often the cancel watcher wakes to poll the hard-cancel flag while a node's
+# agent turn is in flight. Small enough that a force-stop feels immediate; large
+# enough to be free next to a multi-second LLM call.
+_CANCEL_POLL_SECONDS = 0.5
 
 
 class _CrossLoopTool(Tool):
@@ -140,6 +155,82 @@ class AgentNodeRunner:
             worker_index=req.worker_index,
             isolated=req.workspace_override is not None,
         )
+
+    def _run_turn(self, spec: AgentRunSpec, cancel_check):
+        """Run one agent turn to completion and return its result.
+
+        With *cancel_check* set (the engine hands work nodes the hard-cancel poll),
+        the turn runs as a task and a watcher polls the flag every
+        ``_CANCEL_POLL_SECONDS``; the moment it turns true the task is cancelled —
+        CancelledError unwinds the in-flight provider/tool await — and
+        WorkInterrupted is raised so the caller's failure path persists the partial
+        conversation and the engine ends the run 'cancelled'. Without it the turn
+        runs directly on this thread's private event loop, exactly as before.
+
+        The watched turn runs on a thread of its own, and a force-stop walks away
+        from that thread instead of joining it. ``asyncio.run``'s teardown shuts the
+        loop's default executor down and waits, with no timeout, for it to drain —
+        so any tool call marshalled through ``asyncio.to_thread`` (a provider whose
+        SDK is synchronous, a search pipeline, a document conversion) would otherwise
+        pin the engine right through the stop, making a force-stop no faster than
+        letting the node finish. Abandoning the thread ends the run now; the orphan
+        completes its one unit of work and tears its own loop down behind us.
+        Nothing of the turn runs after the cancelled await either way, so the same
+        writes land — the only difference is that the engine no longer waits for them.
+        """
+        if cancel_check is None:
+            return asyncio.run(self.runner.run(spec))
+
+        async def _watched():
+            turn = asyncio.ensure_future(self.runner.run(spec))
+            while True:
+                done, _ = await asyncio.wait({turn}, timeout=_CANCEL_POLL_SECONDS)
+                if done:
+                    return turn.result()
+                if cancel_check():
+                    turn.cancel()
+                    try:
+                        await turn
+                    except (asyncio.CancelledError, Exception):  # noqa: BLE001 - the turn is being discarded
+                        pass
+                    raise WorkInterrupted("agent turn aborted by force-stop")
+
+        outcome: dict[str, Any] = {}
+        abandoned = threading.Event()
+
+        def _drive() -> None:
+            try:
+                outcome["result"] = asyncio.run(_watched())
+            except BaseException as exc:  # noqa: BLE001 - re-raised on the engine thread
+                outcome["error"] = exc
+                if abandoned.is_set() and not isinstance(exc, WorkInterrupted):
+                    # Once the engine has walked away nobody re-raises this, so a
+                    # genuine failure in the orphan would leave no trace at all.
+                    # WorkInterrupted is the abandonment itself and says nothing.
+                    logger.warning(
+                        "workflow: the abandoned turn thread failed after its "
+                        "force-stop ({}): {}", type(exc).__name__, exc,
+                    )
+
+        # asyncio.run() runs the coroutine in a COPY of the calling thread's context,
+        # so copying it onto the turn thread keeps every contextvar the turn would
+        # have seen had it run here.
+        context = contextvars.copy_context()
+        thread = threading.Thread(
+            target=lambda: context.run(_drive), name="durin-node-turn", daemon=True)
+        thread.start()
+        while True:
+            thread.join(_CANCEL_POLL_SECONDS)
+            if not thread.is_alive():
+                break
+            if cancel_check():
+                # The watcher on the turn thread cancels the turn itself; this only
+                # stops waiting for the teardown behind it.
+                abandoned.set()
+                raise WorkInterrupted("agent turn aborted by force-stop")
+        if "error" in outcome:
+            raise outcome["error"]
+        return outcome["result"]
 
     def _build_tools(self, node, workspace_override: str | None = None) -> ToolRegistry:
         """Build the node's tool registry: its built-in set ('none'→empty,
@@ -316,7 +407,7 @@ class AgentNodeRunner:
         # messages exist (status node_failed) and raise a typed error carrying the node
         # identity and the persisted session key so the engine can record + name it.
         try:
-            result = asyncio.run(self.runner.run(AgentRunSpec(
+            result = self._run_turn(AgentRunSpec(
                 initial_messages=messages,
                 tools=self._build_tools(req.node, req.workspace_override),
                 model=model,
@@ -327,7 +418,7 @@ class AgentNodeRunner:
                 # subagents; the runner keeps mutations serial.
                 concurrent_tools=True,
                 hook=hook,
-            )))
+            ), req.cancel_check)
         except Exception as exc:  # noqa: BLE001 - persist + re-raise as a typed node failure
             # `messages` is the pre-turn snapshot built above. AgentRunner.run()
             # copies it into its own list (`messages = list(spec.initial_messages)`)
@@ -376,7 +467,7 @@ class AgentNodeRunner:
                 ),
             }]
             try:
-                result = asyncio.run(self.runner.run(AgentRunSpec(
+                result = self._run_turn(AgentRunSpec(
                     initial_messages=reentry_messages,
                     tools=self._build_tools(req.node, req.workspace_override),
                     model=model,
@@ -384,7 +475,7 @@ class AgentNodeRunner:
                     max_tool_result_chars=self.max_tool_result_chars,
                     concurrent_tools=True,
                     hook=hook,
-                )))
+                ), req.cancel_check)
             except Exception as exc:  # noqa: BLE001 - persist + re-raise, same as the first run
                 checkpointed = checkpoint_hook.last_persisted
                 failure_messages = (
@@ -419,13 +510,13 @@ class AgentNodeRunner:
                 "content": synthesis_prompt,
             }]
             try:
-                synthesis_result = asyncio.run(self.runner.run(AgentRunSpec(
+                synthesis_result = self._run_turn(AgentRunSpec(
                     initial_messages=synthesis_messages,
                     tools=ToolRegistry(),   # no tools — model must emit text
                     model=model,
                     max_iterations=1,
                     max_tool_result_chars=self.max_tool_result_chars,
-                )))
+                ), req.cancel_check)
             except Exception as exc:  # noqa: BLE001 - persist the gathered history, then re-raise typed
                 raise self._on_failure(req, list(result.messages), exc) from exc
             # synthesis_result.messages is the superset (first-run history + synthesis turns)

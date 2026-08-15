@@ -260,3 +260,34 @@ def test_engine_forwards_live_progress_and_cancel_to_a_real_subworkflow(tmp_path
     assert all(f.get("parent_node") == "call-child" for f in child_frames)
     assert {p["run_id"] for p in emitted} == {result.run_id}
     assert ran == ["a"], f"nested run continued past the cancel: {ran}"
+
+
+def test_the_hard_cancel_poll_reaches_a_nested_run_s_work_nodes(tmp_path):
+    """A force-stop on the caller must be able to interrupt the node executing
+    inside a sub-workflow too — otherwise "stop it NOW" waits out a nested turn
+    the same way the graceful mode does."""
+    _write(tmp_path, "child", {"name": "child", "start": "a",
+                               "nodes": [{"id": "a", "kind": "work", "next": None}]})
+    parent_wf = parse_workflow({
+        "name": "parent", "start": "call-child",
+        "nodes": [{"id": "call-child", "kind": "subworkflow", "workflow": "child", "next": None}],
+    })
+    captured: dict = {}
+
+    def _capturing_runner(req):
+        captured[req.node.id] = req.cancel_check
+        return NodeRunResponse(output="x", session_key=None, messages=[])
+
+    def hard() -> bool:
+        return False
+
+    sub_runner = SubworkflowRunner(tmp_path, _capturing_runner, judge_runner=None)
+    engine = WorkflowEngine(
+        node_runner=_capturing_runner,
+        subworkflow_runner=sub_runner,
+        hard_cancel_check=hard,
+    )
+
+    engine.run(parent_wf, "t")
+
+    assert captured["a"] is hard, "the nested work node was handed no hard-cancel poll"

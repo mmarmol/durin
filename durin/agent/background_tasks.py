@@ -9,9 +9,10 @@ long-job registry (JobRegistry), plus persisted sub-agent lineage so history
 survives a gateway restart.
 
 Returns plain dicts with a stable shape — ``kind`` ("subagent" | "workflow" |
-"job"), ``id``, ``label``, ``status`` ("queued" | "running" | "needs_input" |
-"done" | "failed" | "cancelled" — only a job is ever "queued", and only a
-workflow run is ever "needs_input"), ``started_at`` (wall-clock epoch), ``ended_at``,
+"job"), ``id``, ``label``, ``status`` ("queued" | "running" | "stopping" |
+"needs_input" | "done" | "failed" | "cancelled" — only a job is ever "queued",
+and only a workflow run is ever "stopping" or "needs_input"), ``started_at``
+(wall-clock epoch), ``ended_at``,
 ``session_key``, ``units_total``/``units_done`` (a job's progress; ``None`` for
 the other two kinds), ``error`` (why a failed job failed; ``None`` for the
 other two kinds, whose failures are diagnosed from their own artifacts — a run
@@ -188,10 +189,20 @@ def collect_tasks(
         # its own turn, and the manifest's dedicated needs_input_detail (not active_node)
         # is what should surface for it.
         active_node = rec.get("active_node") if rec.get("status") == "running" else None
+        status = _workflow_status(rec.get("status", ""))
+        # A running run with a pending cancel surfaces as "stopping" so every
+        # surface acknowledges the stop while the engine winds down. The registry
+        # lives in this process — the same one serving this list — so the check is
+        # exact, and the manifest needs no extra write. Gated on "running": a run
+        # that already ended keeps its terminal status even if a flag lingers.
+        if status == "running":
+            from durin.workflow.cancellation import is_cancelled
+            if is_cancelled(rec.get("run_id", "")):
+                status = "stopping"
         tasks.append({
             "kind": "workflow", "id": rec.get("run_id", ""),
             "label": wf_name,
-            "status": _workflow_status(rec.get("status", "")),
+            "status": status,
             "started_at": float(rec.get("started_at") or 0.0),
             "ended_at": rec.get("finished_at"),
             "session_key": drill,

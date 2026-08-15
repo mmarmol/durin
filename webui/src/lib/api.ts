@@ -138,8 +138,16 @@ export interface BackgroundTask {
   id: string;
   label: string;
   /** Only a job is ever "queued" (accepted, waiting for the one OCR worker
-   *  slot, nothing started); only a workflow run is ever "needs_input". */
-  status: "queued" | "running" | "needs_input" | "done" | "failed" | "cancelled";
+   *  slot, nothing started); only a workflow run is ever "stopping" (a cancel
+   *  was requested and the run is winding down) or "needs_input". */
+  status:
+    | "queued"
+    | "running"
+    | "stopping"
+    | "needs_input"
+    | "done"
+    | "failed"
+    | "cancelled";
   started_at: number;
   ended_at: number | null;
   session_key: string | null;

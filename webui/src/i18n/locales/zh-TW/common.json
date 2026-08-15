@@ -2287,7 +2287,8 @@
   "tasks": {
     "status": {
       "needs_input": "需要輸入",
-      "queued": "排隊中"
+      "queued": "排隊中",
+      "stopping": "正在停止…"
     },
     "needsInputHint": "已交由呼叫端代理處理——它可能會根據自身脈絡直接回答，或詢問你，然後繼續這次執行。",
     "queuedHint": "等待開始——一次只轉寫一個文件。",
@@ -2305,6 +2306,7 @@
     "strip": {
       "statusRunning": "進行中",
       "statusQueued": "排隊中",
+      "statusStopping": "正在停止…",
       "statusDone": "已完成",
       "statusFailed": "失敗",
       "statusCancelled": "已取消",

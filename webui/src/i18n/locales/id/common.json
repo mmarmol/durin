@@ -2287,7 +2287,8 @@
   "tasks": {
     "status": {
       "needs_input": "Butuh input",
-      "queued": "Dalam antrean"
+      "queued": "Dalam antrean",
+      "stopping": "Menghentikan…"
     },
     "needsInputHint": "Diserahkan ke agen pemanggil — agen ini bisa menjawab dari konteksnya sendiri atau bertanya ke Anda, lalu melanjutkan run ini.",
     "queuedHint": "Menunggu untuk mulai — dokumen ditranskripsi satu per satu.",
@@ -2305,6 +2306,7 @@
     "strip": {
       "statusRunning": "berjalan",
       "statusQueued": "dalam antrean",
+      "statusStopping": "menghentikan…",
       "statusDone": "selesai",
       "statusFailed": "gagal",
       "statusCancelled": "dibatalkan",

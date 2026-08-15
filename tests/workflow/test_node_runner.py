@@ -737,3 +737,189 @@ def test_node_turns_run_concurrency_safe_tools_in_parallel(tmp_path):
     nr(_req(WorkNode(id="a", tools="default", next=None)))
     spec = nr.runner.run.call_args.args[0]
     assert spec.concurrent_tools is True
+
+
+def _hanging_runner(sessions, *, rounds_before_hang=0):
+    """A fake AgentRunner whose turn never finishes. When ``rounds_before_hang``
+    is set it first drives the spec's hook for that many rounds — the way the
+    real AgentRunner checkpoints mid-turn — so the abort path has a partial
+    conversation to persist."""
+    import asyncio
+
+    from durin.agent.hook import AgentHookContext
+
+    provider = MagicMock(spec=LLMProvider)
+    provider.get_default_model.return_value = "test-model"
+    from durin.agent.runner import AgentRunner
+    ar = AgentRunner(provider)
+
+    async def hang(spec):
+        messages = list(spec.initial_messages)
+        for i in range(rounds_before_hang):
+            messages.append({"role": "assistant", "content": f"round {i + 1}"})
+            if spec.hook is not None:
+                await spec.hook.after_iteration(
+                    AgentHookContext(iteration=i + 1, messages=messages))
+        await asyncio.sleep(60)
+
+    ar.run = AsyncMock(side_effect=hang)
+    return AgentNodeRunner(ar, sessions, default_model="test-model")
+
+
+def test_hard_cancel_interrupts_the_in_flight_turn(tmp_path):
+    """With req.cancel_check true (a force-stop), a turn that never finishes is
+    aborted within the watcher's poll interval and surfaces as a typed node
+    failure whose cause is WorkInterrupted — the engine ends such a run
+    'cancelled' rather than 'aborted'."""
+    import time as _time
+
+    import pytest
+
+    from durin.workflow.engine import NodeExecutionError, WorkInterrupted
+
+    nr = _hanging_runner(SessionManager(workspace=tmp_path))
+    req = _req(
+        WorkNode(id="slow", model=None, context="own", prompt="p", next=None),
+        cancel_check=lambda: True,
+    )
+
+    t0 = _time.monotonic()
+    with pytest.raises(NodeExecutionError) as ei:
+        nr(req)
+
+    assert isinstance(ei.value.cause, WorkInterrupted)
+    assert _time.monotonic() - t0 < 10, "the watcher must abort promptly, not wait out the turn"
+
+
+def test_hard_cancel_persists_the_partial_conversation(tmp_path):
+    """An aborted turn is persisted exactly like any other node failure: the
+    rounds the node completed before the force-stop stay navigable."""
+    import pytest
+
+    from durin.workflow.engine import NodeExecutionError
+
+    sessions = SessionManager(workspace=tmp_path)
+    sessions.save(Session(key="websocket:abc"))
+    nr = _hanging_runner(sessions, rounds_before_hang=2)
+    req = NodeRunRequest(
+        node=WorkNode(id="slow", model=None, context="own", prompt="p", next=None),
+        task="t", upstream_output=None, shared_context=[],
+        run_id="r1", iteration=1, root_session_key="websocket:abc",
+        cancel_check=lambda: True,
+    )
+
+    with pytest.raises(NodeExecutionError) as ei:
+        nr(req)
+
+    assert ei.value.session_key == "workflow:r1:slow:1"
+    reloaded = SessionManager(workspace=tmp_path).get_or_create("workflow:r1:slow:1")
+    assert any(m.get("content") == "round 2" for m in reloaded.messages), (
+        "the rounds completed before the abort were lost"
+    )
+
+
+def test_a_false_cancel_check_lets_the_turn_finish(tmp_path):
+    """The watcher only aborts when the poll turns TRUE. A graceful stop leaves
+    the hard check false, so the node completes normally."""
+    sessions = SessionManager(workspace=tmp_path)
+    sessions.save(Session(key="websocket:abc"))
+    nr = _faithful_runner(sessions, reply="fin")
+    req = _req(
+        WorkNode(id="quick", model=None, context="own", prompt="p", next=None),
+        cancel_check=lambda: False,
+    )
+    assert nr(req).output == "fin"
+
+
+def test_no_cancel_check_runs_the_turn_directly(tmp_path):
+    """Without a cancel_check (CLI/test callers) the runner takes the plain
+    asyncio.run path and completes normally — the watcher never engages."""
+    sessions = SessionManager(workspace=tmp_path)
+    sessions.save(Session(key="websocket:abc"))
+    nr = _faithful_runner(sessions, reply="fin")
+    req = _req(WorkNode(id="quick", model=None, context="own", prompt="p", next=None))
+    assert nr(req).output == "fin"
+
+
+def _runner_awaiting(sessions, coro_body):
+    """A fake AgentRunner whose turn is exactly *coro_body* — for exercising what
+    the turn is blocked ON when the force-stop lands."""
+    provider = MagicMock(spec=LLMProvider)
+    provider.get_default_model.return_value = "test-model"
+    from durin.agent.runner import AgentRunner
+    ar = AgentRunner(provider)
+    ar.run = AsyncMock(side_effect=coro_body)
+    return AgentNodeRunner(ar, sessions, default_model="test-model")
+
+
+def test_a_force_stop_does_not_wait_out_work_handed_to_a_thread(tmp_path):
+    """A turn blocked in ``asyncio.to_thread`` — a provider whose SDK is
+    synchronous, a search pipeline, a document conversion — cannot be
+    interrupted, and ``asyncio.run``'s teardown drains the loop's default
+    executor with NO timeout. Waiting for that would make a force-stop no faster
+    than letting the node finish. The stop must land on its own schedule; the
+    orphaned unit of work finishes behind it."""
+    import asyncio as _asyncio
+    import threading as _threading
+    import time as _time
+
+    import pytest
+
+    from durin.workflow.engine import NodeExecutionError, WorkInterrupted
+
+    entered = _threading.Event()
+    release = _threading.Event()
+
+    def _uninterruptible_tool_call():
+        entered.set()
+        release.wait(10)
+
+    async def turn(spec):
+        await _asyncio.to_thread(_uninterruptible_tool_call)
+
+    nr = _runner_awaiting(SessionManager(workspace=tmp_path), turn)
+    req = _req(
+        WorkNode(id="slow", model=None, context="own", prompt="p", next=None),
+        cancel_check=lambda: True,
+    )
+
+    try:
+        t0 = _time.monotonic()
+        with pytest.raises(NodeExecutionError) as ei:
+            nr(req)
+        elapsed = _time.monotonic() - t0
+
+        assert entered.is_set(), "the turn must really have been inside a to_thread call"
+        assert isinstance(ei.value.cause, WorkInterrupted)
+        assert elapsed < 5, f"the force-stop waited out the thread ({elapsed:.1f}s)"
+    finally:
+        release.set()
+
+
+def test_the_turn_keeps_the_calling_threads_context(tmp_path):
+    """The turn no longer runs on the engine thread, and contextvars do not
+    cross a thread boundary on their own — memory provenance and the cron/
+    message tool defaults all ride one. asyncio.run gives the coroutine a COPY
+    of its caller's context; that must stay true."""
+    from contextvars import ContextVar
+
+    marker: ContextVar[str] = ContextVar("node_runner_test_marker", default="unset")
+    seen = {}
+
+    async def turn(spec):
+        seen["value"] = marker.get()
+        return AgentRunResult(final_content="fin", messages=list(spec.initial_messages) + [
+            {"role": "assistant", "content": "fin"}])
+
+    sessions = SessionManager(workspace=tmp_path)
+    sessions.save(Session(key="websocket:abc"))
+    nr = _runner_awaiting(sessions, turn)
+    req = _req(
+        WorkNode(id="quick", model=None, context="own", prompt="p", next=None),
+        cancel_check=lambda: False,
+    )
+
+    marker.set("from-the-engine-thread")
+    nr(req)
+
+    assert seen["value"] == "from-the-engine-thread"
