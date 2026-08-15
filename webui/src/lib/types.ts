@@ -177,8 +177,17 @@ export interface WorkItem {
   label: string;
   /** "queued" is a job that has been accepted but not started: one OCR worker
    *  runs at a time, so every book but the first in a multi-document ingest
-   *  sits here. Neither of the other two kinds can produce it. */
-  status: "queued" | "running" | "needs_input" | "done" | "failed" | "cancelled";
+   *  sits here. Neither of the other two kinds can produce it.
+   *  "stopping" is a workflow run whose cancel was requested and which is
+   *  winding down — still active, not yet ended. */
+  status:
+    | "queued"
+    | "running"
+    | "stopping"
+    | "needs_input"
+    | "done"
+    | "failed"
+    | "cancelled";
   /** Workflow node tree; live frames override polled history. */
   nodes?: WorkNode[];
   /** Sub-agent live step count from progress.iteration. */

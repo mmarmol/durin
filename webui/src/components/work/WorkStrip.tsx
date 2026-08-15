@@ -102,13 +102,23 @@ export function WorkStrip({
     );
     // Falls back to the plain status text when nothing is running yet (no
     // node list, or none of the nodes have started) — old behavior preserved.
+    // A single item winding down under a pending cancel swaps its status word:
+    // "in progress" over a stop the user already asked for reads as ignored.
+    // Only meaningful for one item — the multi-item line is a count, not a
+    // per-item status.
+    const stopping = active.length === 1 && active[0].status === "stopping";
+    const plainStatusKey = stopping
+      ? "work.strip.statusStopping"
+      : allQueued
+        ? "work.strip.statusQueued"
+        : "work.strip.statusRunning";
     const runningSuffix =
-      node && node.startedAt != null
+      node && node.startedAt != null && !stopping
         ? `${node.label ?? node.id} · ${formatElapsed(node.startedAt * 1000, now)} · ${t(
             "work.strip.nodes",
             { count: touchedNodeCount(active[0]) },
           )}`
-        : t(allQueued ? "work.strip.statusQueued" : "work.strip.statusRunning");
+        : t(plainStatusKey);
     body =
       active.length === 1 ? (
         <>

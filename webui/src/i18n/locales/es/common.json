@@ -2372,7 +2372,8 @@
   "tasks": {
     "status": {
       "needs_input": "Necesita input",
-      "queued": "En cola"
+      "queued": "En cola",
+      "stopping": "Deteniendo…"
     },
     "needsInputHint": "En manos del agente que lo llamó — puede responder con su propio contexto o preguntarte, y luego reanuda este run.",
     "queuedHint": "Esperando para empezar — se transcribe un documento a la vez.",
@@ -2404,6 +2405,7 @@
     "strip": {
       "statusRunning": "en curso",
       "statusQueued": "en cola",
+      "statusStopping": "deteniendo…",
       "statusDone": "finalizado",
       "statusFailed": "falló",
       "statusCancelled": "cancelado",

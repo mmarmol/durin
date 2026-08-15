@@ -30,9 +30,10 @@ class BackgroundTask(Result):
     kind: str  # "subagent" | "workflow" | "job"
     id: str
     label: str
-    # "queued" | "running" | "needs_input" | "done" | "failed" | "cancelled".
-    # Only a job is ever "queued" (waiting for the OCR concurrency cap's slot,
-    # nothing started yet) and only a workflow run is ever "needs_input".
+    # "queued" | "running" | "stopping" | "needs_input" | "done" | "failed" |
+    # "cancelled". Only a job is ever "queued" (waiting for the OCR concurrency
+    # cap's slot, nothing started yet); only a workflow run is ever "stopping"
+    # (a cancel was requested and the run is winding down) or "needs_input".
     status: str
     started_at: float  # wall-clock epoch seconds
     ended_at: float | None

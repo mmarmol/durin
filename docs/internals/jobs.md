@@ -702,7 +702,8 @@ the same reason: an age beside a job reads as time spent working and a
 queued job has no worker. `action="stop"` cancels a job: cooperative for a
 running one (see above), immediate and final for a queued one, since `claim`
 only ever moves a row *out* of `queued` and nothing can pick it up
-afterwards. `action="retry"` requeues a failed or cancelled job and launches
+afterwards. (`stop`'s `force=true` escalation applies to workflow runs only —
+a job's page boundary is already its finest cancellation grain.) `action="retry"` requeues a failed or cancelled job and launches
 a worker for it, keeping the pages already transcribed (see
 [Retry](#retry)); a failed or cancelled job's `status` output names that
 recovery next to the recorded error — in the tool's render only, never

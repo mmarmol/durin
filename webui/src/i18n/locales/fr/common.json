@@ -2287,7 +2287,8 @@
   "tasks": {
     "status": {
       "needs_input": "Réponse requise",
-      "queued": "En file d’attente"
+      "queued": "En file d’attente",
+      "stopping": "Arrêt en cours…"
     },
     "needsInputHint": "Transmis à l’agent appelant — il peut répondre depuis son propre contexte ou vous demander, puis reprendre cette exécution.",
     "queuedHint": "En attente de démarrage — un seul document est transcrit à la fois.",
@@ -2305,6 +2306,7 @@
     "strip": {
       "statusRunning": "en cours",
       "statusQueued": "en file d’attente",
+      "statusStopping": "arrêt en cours…",
       "statusDone": "terminé",
       "statusFailed": "échoué",
       "statusCancelled": "annulé",

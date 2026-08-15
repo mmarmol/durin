@@ -120,6 +120,49 @@ def test_needs_input_questions_capped_at_500_chars(tmp_path, monkeypatch):
     assert wf["needs_input_detail"] == "q" * 500
 
 
+def test_running_run_with_a_pending_cancel_reads_as_stopping(tmp_path, monkeypatch):
+    """A running workflow whose cancel was requested surfaces as "stopping" so
+    every surface acknowledges the stop while the engine winds down; without
+    the pending cancel the same row stays "running"."""
+    import durin.workflow.run_log as run_log
+    from durin.workflow import cancellation
+
+    monkeypatch.setattr(run_log, "runs_for_session", lambda ws, key: [
+        {"run_id": "rstop", "workflow": "w", "status": "running",
+         "started_at": 1.0, "finished_at": None, "runs": []},
+    ])
+
+    rows = collect_tasks(str(tmp_path), session_key="websocket:x")
+    assert rows[0]["status"] == "running"
+
+    cancellation.request_cancel("rstop")
+    try:
+        rows = collect_tasks(str(tmp_path), session_key="websocket:x")
+        assert rows[0]["status"] == "stopping"
+    finally:
+        cancellation.clear("rstop")
+
+
+def test_a_finished_run_is_never_relabelled_stopping(tmp_path, monkeypatch):
+    """"stopping" is derived from the registry only for a run still running: a
+    run that already ended keeps its terminal status even if a stale flag
+    lingers, or the tray would resurrect finished work."""
+    import durin.workflow.run_log as run_log
+    from durin.workflow import cancellation
+
+    monkeypatch.setattr(run_log, "runs_for_session", lambda ws, key: [
+        {"run_id": "rdone", "workflow": "w", "status": "cancelled",
+         "started_at": 1.0, "finished_at": 2.0, "runs": []},
+    ])
+
+    cancellation.request_cancel("rdone", hard=True)
+    try:
+        rows = collect_tasks(str(tmp_path), session_key="websocket:x")
+        assert rows[0]["status"] == "cancelled"
+    finally:
+        cancellation.clear("rdone")
+
+
 def test_a_running_node_appears_in_the_node_tree(tmp_path):
     """Reloading mid-node must still show which node is in flight — the live WS
     frames are gone after a reload, so this polled path is the only source."""

@@ -2372,7 +2372,8 @@
   "tasks": {
     "status": {
       "needs_input": "Needs input",
-      "queued": "Queued"
+      "queued": "Queued",
+      "stopping": "Stopping…"
     },
     "needsInputHint": "Handed to the calling agent — it may answer from its own context or ask you, then resume this run.",
     "queuedHint": "Waiting to start — one document is transcribed at a time.",
@@ -2404,6 +2405,7 @@
     "strip": {
       "statusRunning": "in progress",
       "statusQueued": "queued",
+      "statusStopping": "stopping…",
       "statusDone": "finished",
       "statusFailed": "failed",
       "statusCancelled": "cancelled",

@@ -2287,7 +2287,8 @@
   "tasks": {
     "status": {
       "needs_input": "需要输入",
-      "queued": "排队中"
+      "queued": "排队中",
+      "stopping": "正在停止…"
     },
     "needsInputHint": "已交给调用方代理——它可能会根据自身上下文直接回答，或向你提问，然后继续这次运行。",
     "queuedHint": "等待开始——一次只转写一个文档。",
@@ -2305,6 +2306,7 @@
     "strip": {
       "statusRunning": "进行中",
       "statusQueued": "排队中",
+      "statusStopping": "正在停止…",
       "statusDone": "已完成",
       "statusFailed": "失败",
       "statusCancelled": "已取消",

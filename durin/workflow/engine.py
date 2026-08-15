@@ -74,9 +74,11 @@ class NodeRunRequest:
     # left: a FAIL verdict now ends the run as 'exhausted' instead of looping. The
     # runner tells the gate so its last verdict is definitive, not another loop turn.
     fail_would_exhaust: bool = False
-    # The engine's own cooperative-cancel poll, handed only to a script node so its
-    # runner can check it mid-subprocess (an agent turn has no equivalent mid-turn
-    # hook, so it stays None there — unchanged, between-nodes-only cancellation).
+    # Mid-node cancellation poll. For a script node this is the engine's plain
+    # cancel check (the subprocess is killed on either cancel mode); for an agent
+    # node it is the HARD-cancel check (only a force-stop aborts the in-flight
+    # turn — a graceful stop lets it finish and takes effect between nodes).
+    # None means the node cannot be interrupted mid-run (CLI/test callers).
     cancel_check: Callable[[], bool] | None = None
     # Synchronous sink for in-node progress ({"round", "activity"}). The node runs
     # on a worker thread with its own event loop, so this must never be awaited
@@ -237,6 +239,13 @@ class ScriptCancelled(RuntimeError):
     rather than 'aborted'."""
 
 
+class WorkInterrupted(RuntimeError):
+    """A work node's in-flight agent turn was aborted by a HARD cancel (as opposed
+    to failing on its own). Raised by the node runner's cancel watcher and carried
+    as a NodeExecutionError's cause so run() can end the run 'cancelled' rather
+    than 'aborted'."""
+
+
 class NodeExecutionError(RuntimeError):
     """A node's agent turn raised. Carries the node identity, iteration and the session
     key under which the node runner persisted the partial conversation — so the engine
@@ -271,12 +280,13 @@ class WorkflowEngine:
         *,
         script_runner: NodeRunner | None = None,
         run_id_factory: Callable[[], str] | None = None,
-        subworkflow_runner: Callable[..., "WorkflowResult | str"] | None = None,  # (name, task, root_session_key, work_dir=None, parent_run_id=None, progress_emit=None, cancel_check=None, parent_node_id=None) -> child WorkflowResult (a plain str still means "completed with this output")
+        subworkflow_runner: Callable[..., "WorkflowResult | str"] | None = None,  # (name, task, root_session_key, work_dir=None, parent_run_id=None, progress_emit=None, cancel_check=None, hard_cancel_check=None, parent_node_id=None) -> child WorkflowResult (a plain str still means "completed with this output")
         workspace: str | None = None,
         pick_runner: Callable[[str, list[str], "str | None"], int] | None = None,
         max_node_visits: int = 1000,
         progress_emit: Callable[[dict], None] | None = None,
         cancel_check: Callable[[], bool] | None = None,
+        hard_cancel_check: Callable[[], bool] | None = None,
         prune_keep: int = 20,
         parallel_llm_concurrency: int = 2,
         parallel_script_concurrency: int = 4,
@@ -299,6 +309,12 @@ class WorkflowEngine:
         # background run can be stopped between nodes. None means the run is never
         # cancelled from outside (CLI/test callers).
         self._cancel_check = cancel_check
+        # Optional HARD-cancel poll: true only when the caller asked to interrupt
+        # the node currently executing. Handed to agent turns (work nodes,
+        # parallel branches, fan-out workers, nested runs) so their in-flight turn
+        # can be aborted; script nodes keep the plain check — their subprocess dies
+        # on either mode.
+        self._hard_cancel_check = hard_cancel_check
         self._prune_keep = prune_keep
         # Global per-kind parallel caps (config): script branches are cheap and run
         # wider than LLM branches. A node's explicit max_concurrency overrides both
@@ -401,8 +417,9 @@ class WorkflowEngine:
                 effective_root, started_at, parent_run_id)
             raise
         except NodeExecutionError as exc:
-            if isinstance(exc.cause, ScriptCancelled):
-                # A running script was killed by a cooperative cancel: end the run
+            if isinstance(exc.cause, (ScriptCancelled, WorkInterrupted)):
+                # The in-flight node was cancelled mid-run (a script killed by any
+                # cancel, or a work turn aborted by a hard cancel): end the run
                 # 'cancelled' (not 'aborted'), carrying the partial trace the walk
                 # already built. The walk's node_failed NodeRun for this node stays
                 # as-is (an honest per-node record); only the run-level status changes.
@@ -784,9 +801,11 @@ class WorkflowEngine:
                     output_dir=out_dir,
                     budget=budget,
                     fail_would_exhaust=fail_would_exhaust,
-                    # Only a script node gets the poll hook — an agent node's
-                    # cancellation stays between-nodes-only (unchanged).
-                    cancel_check=self._cancel_check if isinstance(node, ScriptNode) else None,
+                    # A script node polls the plain check (its subprocess dies on
+                    # either cancel mode); an agent node polls the HARD check so
+                    # only a force-stop interrupts its in-flight turn.
+                    cancel_check=(self._cancel_check if isinstance(node, ScriptNode)
+                                  else self._hard_cancel_check),
                     progress=_node_progress,
                 )
 
@@ -939,6 +958,7 @@ class WorkflowEngine:
                     node.workflow, upstream_output or task, root_session_key,
                     work_dir=work_dir, parent_run_id=run_id,
                     progress_emit=self._progress_emit, cancel_check=self._cancel_check,
+                    hard_cancel_check=self._hard_cancel_check,
                     parent_node_id=node.id,
                 )
                 sub_duration = round(time.monotonic() - sub_t0, 3)
@@ -1026,6 +1046,16 @@ class WorkflowEngine:
                 # its branches have finished and reconciled, sequentially on this thread.
                 runs[-1].artifacts = sorted(_work_snapshot() - before_files)[:20]
                 if abort is not None:
+                    # A hard cancel that interrupted every branch reaches here as
+                    # "every branch failed" — true of the branches, wrong about the
+                    # run: the user stopped it. Re-consult the flag (the same
+                    # re-consult the subworkflow branch does) so the run reports
+                    # what actually happened.
+                    if self._cancel_check is not None and self._cancel_check():
+                        return WorkflowResult(
+                            status="cancelled", final_output=final_output, runs=runs,
+                            run_id=run_id, final_output_node=final_output_node,
+                        )
                     return WorkflowResult(
                         status="aborted", final_output=abort, runs=runs, run_id=run_id
                     )
@@ -1143,6 +1173,9 @@ class WorkflowEngine:
             run_id=run_id, iteration=iteration, root_session_key=root_key,
             workspace_override=workspace_override,
             output_dir=out_dir if (is_script or getattr(branch, "tools", "none") == "default") else None,
+            # Same split as the linear walk: a script branch's subprocess dies on
+            # either cancel mode, an agent branch's turn only on a hard cancel.
+            cancel_check=self._cancel_check if is_script else self._hard_cancel_check,
         ))
 
     @staticmethod
@@ -1242,6 +1275,8 @@ class WorkflowEngine:
                     root_session_key=root_key,
                     worker_index=idx,
                     output_dir=work_dir if worker_node.tools == "default" else None,
+                    # Fan-out workers are agent turns: a force-stop aborts them too.
+                    cancel_check=self._hard_cancel_check,
                 ))
                 return idx, resp.output, resp.session_key, None, resp.persist_failed, round(time.monotonic() - t0, 3)
             except NodeExecutionError as exc:
