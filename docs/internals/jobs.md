@@ -417,10 +417,20 @@ return to the queue.
 Retry composes with the re-ingest path instead of fighting it. The entry's
 `ocr_job.json` marker still names the retried job's id, and the marker
 branch in `ingest_artifact` reads the row's *current* status, so re-ingesting
-the same document while the retried job is `queued`/`running` returns that
-same job as pending rather than spawning a second one. Re-ingesting after a
-failure *without* retrying remains the other legitimate recovery — that one
-spawns a fresh job and overwrites the marker.
+a document whose transcription is still missing while the retried job is
+`queued`/`running` returns that same job as pending rather than spawning a
+second one. Re-ingesting after a failure *without* retrying remains the
+other legitimate recovery, and what it does splits on what the failed
+attempt left on disk. A failure at a page or at the sidecar write left no
+`source.md`, so the marker's failed branch converts again and spawns a fresh
+job, overwriting the marker. A failure at the Library-indexing step comes
+*after* the worker wrote the sidecar, so the finished-entry short-circuit
+returns that transcription and no job spawns at all; the `memory_ingest`
+tool layer, which stores and indexes the returned content whenever no job
+owns the document, heals the indexing the failed run missed. Retry covers
+both sub-cases the same way — the same job resumes — and a resumed run that
+finds no pages left to transcribe just rewrites the sidecar and runs the
+indexing step it died at, ending `done`.
 
 ### The subprocess worker
 

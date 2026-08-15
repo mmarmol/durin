@@ -415,7 +415,8 @@ async def test_retry_of_a_failed_job_requeues_it_and_launches_a_worker(
     """The whole recovery in one gesture: the row goes back to queued with its
     finished pages kept, exactly one worker process is launched for it, and
     the response promises "queued" (the cap may refuse the claim) rather than
-    "running", naming the progress that survives."""
+    "running", naming the progress that survives. The start promise is hedged
+    with the periodic sweep, so it stays true even if this launch dies."""
     launcher = _CountingPopen()
     monkeypatch.setattr("durin.jobs.spawn.subprocess", launcher)
     jobs = _job_registry(tmp_path)
@@ -429,6 +430,10 @@ async def test_retry_of_a_failed_job_requeues_it_and_launches_a_worker(
     assert "requeued" in out
     assert "3/40" in out
     assert "running" not in out.lower()
+    # The launch Popen can fail (swallowed by respawn's contract), so the
+    # start promise must carry the sweep backstop instead of "immediately"
+    # alone.
+    assert "sweep" in out
     # Same contract as stop's wording: nothing pushes a completion message.
     assert "action=status" in out
 
@@ -466,10 +471,13 @@ async def test_retry_refuses_a_queued_job(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_retry_of_a_done_job_points_at_re_ingesting_instead(tmp_path, monkeypatch):
-    """"Redo a finished document" is a legitimate wish with a designed path —
-    re-ingesting spawns a fresh job — and the refusal should say so instead of
-    dead-ending."""
+async def test_retry_of_a_done_job_points_at_the_finished_transcription(
+    tmp_path, monkeypatch
+):
+    """A done job has nothing left to run: its transcription is on disk and
+    indexed, and a re-ingest of the same document short-circuits on that
+    sidecar and returns it — it does NOT spawn a fresh job. The refusal must
+    promise exactly that outcome and nothing more."""
     launcher = _CountingPopen()
     monkeypatch.setattr("durin.jobs.spawn.subprocess", launcher)
     jobs = _job_registry(tmp_path)
@@ -481,7 +489,11 @@ async def test_retry_of_a_done_job_points_at_re_ingesting_instead(tmp_path, monk
         action="retry", id=job.id)
 
     assert "is done" in out
-    assert "ingest" in out
+    assert "already in the Library" in out
+    assert "ingesting the document again returns it" in out
+    # A re-ingest of a finished document is a no-op return — the refusal must
+    # not claim it spawns anything.
+    assert "fresh job" not in out
     assert jobs.get(job.id).status == "done"
     assert launcher.calls == 0
 
@@ -567,6 +579,10 @@ async def test_failed_job_status_names_the_recovery_and_keeps_the_stored_error_v
 
     assert "action=retry" in out
     assert "re-ingest" in out
+    # Outcome phrasing only: what a re-ingest does internally depends on what
+    # the failed attempt left on disk (it is a fresh job only when no sidecar
+    # exists), so the advice must not claim a mechanism.
+    assert "fresh job" not in out
     assert "page 7: OSError: no space left on device" in out
     assert jobs.get(job.id).error == "page 7: OSError: no space left on device"
 

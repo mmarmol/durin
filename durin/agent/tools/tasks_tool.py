@@ -304,7 +304,7 @@ class TasksTool(Tool, ContextAware):
             out.append(
                 "  recovery: action=retry requeues this job and resumes from "
                 "the pages already transcribed; re-ingesting the document "
-                "also works (that spawns a fresh job)."
+                "also recovers it."
             )
         return "\n".join(out)
 
@@ -426,9 +426,13 @@ class TasksTool(Tool, ContextAware):
         drift apart."""
         text = f"Job [{task_id}] is {status} — only a failed or cancelled job can be retried."
         if status == "done":
-            # The legitimate "redo a finished document" gesture is a fresh
-            # ingest — the entry's job marker branch handles it cleanly.
-            text += " To redo the document, ingest it again; that spawns a fresh job."
+            # A done job's transcription is on disk and indexed; a re-ingest
+            # of the same document short-circuits on that sidecar and returns
+            # it without redoing any work — promise that outcome, not a job.
+            text += (
+                " Its transcription is finished and already in the Library; "
+                "ingesting the document again returns it."
+            )
         return text
 
     def _do_retry(self, session_key: str, task_id: str) -> str:
@@ -463,7 +467,9 @@ class TasksTool(Tool, ContextAware):
             f"Job [{task_id}] requeued. Progress is preserved — "
             f"{job.units_done}/{job.units_total} pages already transcribed — "
             "and the worker resumes from the first missing page. It starts "
-            "when the OCR slot frees (immediately if it is free). Nothing "
+            "when the OCR slot frees (immediately if it is free; a missed "
+            "launch is picked up by the periodic sweep within about a "
+            "minute). Nothing "
             "pushes a message when it finishes — check action=status (or "
             "list) to follow it."
         )

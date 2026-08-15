@@ -183,16 +183,20 @@ def test_the_entry_is_complete_before_its_job_is_spawned(tmp_path, book, registr
 
 class _CountingPopen:
     """Stands in for the ``subprocess`` module inside ``durin.jobs.spawn``, so
-    a test can assert how many OCR workers were actually launched instead of
-    only observing job rows. A fresh instance per test avoids any counter
+    a test can assert how many OCR workers were actually launched — and for
+    which job: each launch's argv is kept in ``cmds`` (its last element is the
+    job id the worker was given). A fresh instance per test avoids any counter
     leaking between them (see ``_NoLaunch`` in test_memory_ingest.py for the
     sibling convention this mirrors)."""
 
     def __init__(self):
         self.calls = 0
+        self.cmds: list[list[str]] = []
 
     def Popen(self, *args, **kwargs):
         self.calls += 1
+        argv = args[0] if args else kwargs.get("args") or []
+        self.cmds.append([str(part) for part in argv])
         return None
 
 
@@ -300,8 +304,12 @@ def test_a_retried_job_reads_as_pending_to_a_concurrent_re_ingest(
     revives the FAILED job in place, and the entry's ocr_job.json marker still
     names that id — so a re-ingest of the same bytes right after the retry
     must find the row queued again and return the SAME job as pending, not
-    spawn a second one. Exactly one worker launch in the whole sequence: the
-    retry's own respawn."""
+    spawn a second one. Exactly one worker launch in the whole sequence — the
+    retry's own respawn, launched for the retried id — and the marker still
+    names that id afterwards."""
+    import json
+    from pathlib import Path
+
     from durin.agent.tools.context import RequestContext
     from durin.agent.tools.tasks_tool import TasksTool
 
@@ -317,6 +325,7 @@ def test_a_retried_job_reads_as_pending_to_a_concurrent_re_ingest(
     assert registry.claim(job_id, pid=4242)
     assert registry.finish(job_id, pid=4242, error="page 3: engine exploded")
     launcher.calls = 0  # the sequence under test starts here
+    launcher.cmds.clear()
 
     tool = TasksTool(
         workspace=str(tmp_path / "ws"), subagent_manager=None, sessions=None, jobs=registry
@@ -334,6 +343,13 @@ def test_a_retried_job_reads_as_pending_to_a_concurrent_re_ingest(
 
     assert second["job_id"] == job_id
     assert launcher.calls == 1  # the retry's respawn; the re-ingest launched nothing
+    # The one launch was for the retried job itself: the worker argv ends
+    # with the job id it is told to claim.
+    assert launcher.cmds[0][-1] == job_id
+    # And the marker still names that id after the whole sequence, so any
+    # later re-ingest keeps resolving to this same row.
+    marker_path = Path(first["source"]).parent / "ocr_job.json"
+    assert json.loads(marker_path.read_text(encoding="utf-8"))["job_id"] == job_id
     assert len(registry.list_for_session(session)) == 1
 
 
