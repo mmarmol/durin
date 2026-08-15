@@ -181,7 +181,11 @@ def list_supported_models() -> dict[str, dict[str, Any]]:
     try:
         from fastembed import TextEmbedding  # type: ignore[import-not-found]
     except ImportError:
-        res = ensure_or_note("memory_vector", config=None)
+        # Cold path (extra missing): load the config so the auto-install gate
+        # can see install.auto_install_extras.
+        from durin.config.loader import load_config
+
+        res = ensure_or_note("memory_vector", config=load_config())
         try:
             from fastembed import TextEmbedding  # type: ignore[import-not-found]
         except ImportError as exc:

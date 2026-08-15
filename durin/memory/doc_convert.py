@@ -62,9 +62,23 @@ class DocConvertError(ValueError):
 
 @dataclass(frozen=True)
 class ConvertedDoc:
+    """The result of converting one document to markdown.
+
+    ``ocr_stub`` is True when ``markdown`` is a coverage note standing in for
+    pages that need OCR but could not get it right now (the setting is off,
+    or the engine is missing/failed) rather than a real transcription. A
+    caller that persists this document should record the flag: it is what
+    lets a later re-ingest tell "nothing more to do" apart from "OCR's
+    situation may have changed, worth trying again" without re-running the
+    conversion just to find out. Defaults False -- every other return path
+    (a real transcription, or a document that never needed OCR at all) is
+    final and never needs a second look.
+    """
+
     markdown: str
     suffix: str
     coverage: PdfCoverage | None = None
+    ocr_stub: bool = False
 
 
 class NeedsOcrJob(DocConvertError):
@@ -138,8 +152,18 @@ def _confirm_empty_pages(path: Path, candidates: Sequence[int]) -> list[int]:
     superset — and a subset that already exceeds a budget proves the whole set
     does. A page the extractor cannot see at all is not a page confirmed empty,
     so it does not count.
+
+    Raises :class:`DocConvertError` if the extraction pass itself fails (a
+    corrupt PDF, pdfplumber raising) — a raw exception here would otherwise
+    escape past the taxonomy every caller of :func:`convert_file_to_markdown`
+    already handles.
     """
-    texts = page_texts_subset(path, candidates)
+    try:
+        texts = page_texts_subset(path, candidates)
+    except Exception as exc:  # noqa: BLE001
+        raise DocConvertError(
+            f"{path.name}: confirming flagged pages: {exc}"
+        ) from exc
     confirmed: list[int] = []
     for page in candidates:
         text = texts.get(page)
@@ -215,8 +239,17 @@ def convert_file_to_markdown(path: Path, *, documents_config=None) -> ConvertedD
             # existed. markitdown runs first because it is what turns a file no
             # library can read into a DocConvertError, rather than letting a
             # raw extractor exception escape to callers that catch neither.
+            # That guard only helps when markitdown ALSO fails, though — when
+            # it succeeds and this extraction independently raises, the raw
+            # exception needs its own wrap.
             markitdown_text()
-            texts = page_texts(path)
+            try:
+                texts = page_texts(path)
+            except Exception as page_exc:  # noqa: BLE001
+                raise DocConvertError(
+                    f"{path.name}: extracting page text after the coverage "
+                    f"probe failed: {page_exc}"
+                ) from page_exc
             cov = classify_coverage(texts)
         else:
             # Through the classifier rather than against the threshold
@@ -265,7 +298,12 @@ def convert_file_to_markdown(path: Path, *, documents_config=None) -> ConvertedD
                 # only measure allowed to decide which pages are empty — the
                 # probe can miss one, on a font it decodes and pdfplumber does
                 # not.
-                texts = page_texts(path)
+                try:
+                    texts = page_texts(path)
+                except Exception as exc:  # noqa: BLE001
+                    raise DocConvertError(
+                        f"{path.name}: extracting page text: {exc}"
+                    ) from exc
                 cov = classify_coverage(texts)
 
         if cov.empty_pages:
@@ -277,10 +315,14 @@ def convert_file_to_markdown(path: Path, *, documents_config=None) -> ConvertedD
             # the wording differs.
             if not ocr_cfg.enabled or not engine_available():
                 # Still return the document. What text exists is worth having,
-                # and the note tells the reader what is missing and how to fix it.
+                # and the note tells the reader what is missing and how to fix
+                # it. ocr_stub=True: a caller that persists this must not treat
+                # it as the last word -- OCR being turned on later is exactly
+                # the situation change that makes this note stale.
                 note = coverage_note(cov, texts, engine_missing=ocr_cfg.enabled)
                 return ConvertedDoc(
-                    markdown=note + markitdown_text(), suffix=suffix, coverage=cov
+                    markdown=note + markitdown_text(), suffix=suffix, coverage=cov,
+                    ocr_stub=True,
                 )
             pages = list(cov.empty_pages)
             if len(pages) > ocr_cfg.inline_max_pages:
@@ -292,9 +334,11 @@ def convert_file_to_markdown(path: Path, *, documents_config=None) -> ConvertedD
                     total_pages=cov.total_pages,
                 )
             try:
-                transcribed = transcribe_pages_detached(path, pages)
+                transcribed = transcribe_pages_detached(
+                    path, pages, language=ocr_cfg.language
+                )
                 for page in pages:
-                    texts[page - 1] = transcribed[page]
+                    texts[page - 1] = transcribed[page].text
             except (OcrUnavailable, ImportError) as exc:
                 # engine_available() above only proves ``import rapidocr``
                 # works; the subprocess's own imports can still fail
@@ -312,14 +356,48 @@ def convert_file_to_markdown(path: Path, *, documents_config=None) -> ConvertedD
                     "coverage note", path.name, exc,
                 )
                 note = coverage_note(cov, texts, engine_missing=True)
+                # Same ocr_stub=True as the engine-missing branch above: the
+                # engine merely failing THIS run does not mean it always will.
                 return ConvertedDoc(
-                    markdown=note + markitdown_text(), suffix=suffix, coverage=cov
+                    markdown=note + markitdown_text(), suffix=suffix, coverage=cov,
+                    ocr_stub=True,
                 )
-            return ConvertedDoc(
-                markdown="\n\n".join(t for t in texts if t.strip()),
-                suffix=suffix,
-                coverage=cov,
-            )
+            markdown = "\n\n".join(t for t in texts if t.strip())
+            if not markdown:
+                # The det pass tells two invisible documents apart: pages of
+                # blank paper, or print the engine detected but could not
+                # read. Only the second message sends the reader anywhere
+                # useful — at pages that LOOK blank in the output, "rescan
+                # the document" is otherwise the natural, wrong conclusion.
+                unreadable = sum(1 for p in transcribed.values() if p.det_boxes)
+                if unreadable:
+                    # Blame what actually read the pages: with a recognition
+                    # language selected, its model did the reading — pointing
+                    # at the built-in pack would imply it was never tried.
+                    if ocr_cfg.language:
+                        cause = (
+                            f"the selected recognition language "
+                            f"({ocr_cfg.language!r}) read none of it — the "
+                            "pages may be in a different script, or genuinely "
+                            "unreadable"
+                        )
+                    else:
+                        cause = (
+                            "a script outside its built-in models (they read "
+                            "Chinese, Japanese and Latin-script languages) is "
+                            "the usual cause"
+                        )
+                    raise DocConvertError(
+                        f"{path.name} yielded no extractable text even after "
+                        f"OCR — the engine detected printed text on "
+                        f"{unreadable} of the {len(transcribed)} transcribed "
+                        f"page(s) but could not read it; {cause}"
+                    )
+                raise DocConvertError(
+                    f"{path.name} yielded no extractable text even after OCR — every "
+                    "transcribed page came back blank"
+                )
+            return ConvertedDoc(markdown=markdown, suffix=suffix, coverage=cov)
         # No pages need OCR: fall through to the shared empty-extraction
         # guard below, same as any other format, just carrying coverage.
         coverage = cov

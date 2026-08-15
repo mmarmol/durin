@@ -35,6 +35,13 @@ __all__ = ["RECONCILE_AGE_S", "Job", "JobRegistry"]
 # client of, not the other way around, and the two may want to diverge later.
 RECONCILE_AGE_S = 6 * 3600
 
+# How long a terminal row (and any units it still holds) outlives its
+# outcome before prune_terminal deletes it. Thirty days is a grace window
+# for acting on that outcome -- retrying a failure, reading its error --
+# not an archive: a finished job's durable artifacts (the sidecar, the
+# Library index) were written before the row ever went terminal.
+_JOB_RETENTION_S = 30 * 24 * 3600
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
     id           TEXT PRIMARY KEY,
@@ -134,9 +141,12 @@ class JobRegistry:
         return _row_to_job(row) if row else None
 
     def list_for_session(self, session_key: str) -> list[Job]:
+        # Bounded defensively: the tray renders a handful of rows, so the
+        # newest 200 is already generous, and the DESC ordering means the
+        # LIMIT drops the oldest.
         rows = self._conn.execute(
             f"SELECT {_COLUMNS} FROM jobs WHERE session_key = ?"
-            " ORDER BY created_at DESC, rowid DESC",
+            " ORDER BY created_at DESC, rowid DESC LIMIT 200",
             (session_key,),
         ).fetchall()
         return [_row_to_job(r) for r in rows]
@@ -283,6 +293,22 @@ class JobRegistry:
         ).fetchall()
         return {r[0] for r in rows}
 
+    def delete_units(self, job_id: str) -> None:
+        """Drop a job's per-unit scratch, keeping the row and its counters.
+
+        ``units_done``/``units_total`` are columns on the job row, not unit
+        rows, so progress keeps displaying after this; only the stored unit
+        text goes. The caller decides when that is safe: the worker calls
+        this for its own job right after a successful ``finish``, because a
+        ``done`` job's units are never read again, while a failed or
+        cancelled job keeps its units — they are the resume data a
+        ``requeue`` retry starts from — until the row itself is pruned.
+        """
+        execute_write(
+            self._conn,
+            lambda c: c.execute("DELETE FROM job_units WHERE job_id = ?", (job_id,)),
+        )
+
     def finish(self, job_id: str, *, pid: int, error: str | None = None) -> bool:
         """Record the outcome of the job this worker owns.
 
@@ -318,6 +344,36 @@ class JobRegistry:
                 (time.time(), job_id),
             ),
         )
+
+    def requeue(self, job_id: str) -> bool:
+        """Return a failed or cancelled job to the queue for another attempt.
+
+        One guarded UPDATE, conditional the same way :meth:`finish` is: the
+        row must still be ``failed`` or ``cancelled`` at write time, so a
+        retry racing another actor (a second retry, a fresh claim) writes
+        nothing rather than yanking a job out from under a live worker —
+        flipping a ``running`` row back to ``queued`` would let a second
+        worker claim it while the first is still transcribing. Returns
+        whether this call actually requeued it; a caller that gets False
+        must not launch a worker.
+
+        Only the failed attempt's outcome is cleared (``pid``,
+        ``started_at``, ``ended_at``, ``error``). The ``job_units`` rows and
+        both counters stay, so the next worker resumes from the pages
+        already transcribed and the tray keeps showing progress that
+        genuinely exists; ``created_at`` stays too, so the job keeps its
+        place in the age-ordered queue — it already waited its turn once.
+        """
+        def _write(c: Any) -> bool:
+            cur = c.execute(
+                "UPDATE jobs SET status = 'queued', pid = NULL,"
+                " started_at = NULL, ended_at = NULL, error = NULL"
+                " WHERE id = ? AND status IN ('failed', 'cancelled')",
+                (job_id,),
+            )
+            return cur.rowcount > 0
+
+        return execute_write(self._conn, _write)
 
     def reconcile(
         self, *, alive: Callable[[int], bool],
@@ -358,3 +414,41 @@ class JobRegistry:
                 ),
             )
         return [j for j in (self.get(o.id) for o in orphans) if j is not None]
+
+    def prune_terminal(self, older_than_s: float, *, now: float | None = None) -> int:
+        """Delete terminal jobs, units and all, whose outcome is more than
+        *older_than_s* seconds old. Returns how many job rows were deleted.
+
+        The age predicate is total over terminal rows: ``finish`` stamps
+        ``ended_at`` for ``done`` and ``failed`` alike, ``cancel`` stamps it
+        too, and ``requeue`` clears it when reviving a row (which also takes
+        the revived row out of this delete's reach, correctly — it is
+        ``queued`` again). Age alone must never delete: a ``running`` row
+        older than any window is reconcile's business (a dead pid to
+        requeue, units kept), never prune's, so the status predicate stays
+        load-bearing even though a live row's ``ended_at`` is NULL today —
+        no future write path that leaves a stale timestamp behind may cost a
+        live job its row. The ``IS NOT NULL`` is spelled out for the reader
+        even though the ``<`` comparison already excludes NULL. Units and
+        row go in one transaction, so a crash between the two cannot leave
+        unit rows nothing will ever select again.
+        """
+        if now is None:
+            now = time.time()
+        cutoff = now - older_than_s
+
+        def _write(c: Any) -> int:
+            c.execute(
+                "DELETE FROM job_units WHERE job_id IN"
+                " (SELECT id FROM jobs WHERE status IN ('done', 'failed', 'cancelled')"
+                " AND ended_at IS NOT NULL AND ended_at < ?)",
+                (cutoff,),
+            )
+            cur = c.execute(
+                "DELETE FROM jobs WHERE status IN ('done', 'failed', 'cancelled')"
+                " AND ended_at IS NOT NULL AND ended_at < ?",
+                (cutoff,),
+            )
+            return cur.rowcount
+
+        return execute_write(self._conn, _write)

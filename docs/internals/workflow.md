@@ -629,7 +629,9 @@ descriptions, and the `workflows` skill) to report the run to the user and END
 its turn rather than burn it on sleep+status loops — the follow-up wakes it,
 and the user watches live per-node progress in the Work panel. A deterministic
 backstop reinforces the guidance: a `sleep` that wakes while this session still
-has running background work appends a reminder naming those tasks and telling
+has running push-delivered background work (a sub-agent or a workflow run —
+never a job, whose completion pushes nothing and may legitimately be polled)
+appends a reminder naming those tasks and telling
 the agent to end its turn, so a polling loop is corrected on its first
 iteration instead of running for minutes. A background
 launch still returns the run's `run_id` (pre-generated and passed to the

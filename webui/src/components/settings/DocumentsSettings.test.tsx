@@ -1,14 +1,14 @@
 // webui/src/components/settings/DocumentsSettings.test.tsx
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getExtraStatus, setConfigValue } from "@/lib/api";
+import { getConfig, getExtraStatus, setConfigValue } from "@/lib/api";
 import { DocumentsSettings } from "./DocumentsSettings";
 
 vi.mock("@/lib/api", () => ({
   getConfig: vi.fn(async () => ({
     config: {
       documents: {
-        ocr: { enabled: false, inline_max_pages: 5 },
+        ocr: { enabled: false, inline_max_pages: 5, language: null },
         max_file_size_mb: 50,
         max_text_chars: 200000,
       },
@@ -17,7 +17,7 @@ vi.mock("@/lib/api", () => ({
   })),
   setConfigValue: vi.fn(async () => ({
     documents: {
-      ocr: { enabled: true, inline_max_pages: 5 },
+      ocr: { enabled: true, inline_max_pages: 5, language: null },
       max_file_size_mb: 50,
       max_text_chars: 200000,
     },
@@ -115,5 +115,62 @@ describe("DocumentsSettings", () => {
     const { container } = renderCard();
     await screen.findByRole("switch", { name: /ocr/i });
     expect(container.textContent?.toLowerCase()).not.toContain("markitdown");
+  });
+
+  it("renders the language selector on the built-in pack from config", async () => {
+    renderCard();
+    const select = await screen.findByRole("combobox", {
+      name: /recognition language/i,
+    });
+    // null in config = the built-in pack = the empty option value.
+    expect(select).toHaveValue("");
+  });
+
+  it("saves a selected recognition language by its config code", async () => {
+    renderCard();
+    const select = await screen.findByRole("combobox", {
+      name: /recognition language/i,
+    });
+    fireEvent.change(select, { target: { value: "arabic" } });
+    await waitFor(() =>
+      expect(vi.mocked(setConfigValue)).toHaveBeenCalledWith(
+        "tok",
+        "documents.ocr.language",
+        "arabic",
+      ),
+    );
+  });
+
+  it("saves null when switching back to the built-in pack", async () => {
+    vi.mocked(getConfig).mockResolvedValueOnce({
+      config: {
+        documents: {
+          ocr: { enabled: true, inline_max_pages: 5, language: "el" },
+          max_file_size_mb: 50,
+          max_text_chars: 200000,
+        },
+      },
+      schema: {},
+    });
+    renderCard();
+    const select = await screen.findByRole("combobox", {
+      name: /recognition language/i,
+    });
+    expect(select).toHaveValue("el");
+    fireEvent.change(select, { target: { value: "" } });
+    await waitFor(() =>
+      expect(vi.mocked(setConfigValue)).toHaveBeenCalledWith(
+        "tok",
+        "documents.ocr.language",
+        null,
+      ),
+    );
+  });
+
+  it("tells the truth about the one-time model download near the selector", async () => {
+    const { container } = renderCard();
+    await screen.findByRole("combobox", { name: /recognition language/i });
+    expect(container.textContent?.toLowerCase()).toContain("modelscope.cn");
+    expect(container.textContent?.toLowerCase()).toContain("once");
   });
 });

@@ -104,7 +104,7 @@ pip install -e ".[memory,mcp,web]"
 |---|---|---|
 | `memory` | `fastembed`, `lancedb` | Vector recall + lexical FTS over `memory/`. Default embedding is `intfloat/multilingual-e5-small` (~450 MB, 100+ langs, MIT). |
 | `cross-encoder` | `sentence-transformers` (+ `torch` ~1 GB) | Optional reranker for `memory_search`. Default model `BAAI/bge-reranker-base` (~100M params, MIT). Off by default — opt in via the wizard or `memory.search.cross_encoder.enabled = true`. |
-| `ocr` | `rapidocr` (~200 MB) | Local OCR for scanned PDF pages. Off by default — opt in via the dashboard's Settings → Documents toggle or `documents.ocr.enabled = true`. A reinstall or redeploy that omits this extra while `documents.ocr.enabled` stays on does not disable the feature: durin keeps returning those documents, with a coverage note in place of the transcription. |
+| `ocr` | `rapidocr` (~200 MB) | Local OCR for scanned PDF pages. Off by default — opt in via the dashboard's Settings → Documents toggle or `documents.ocr.enabled = true`. On slim Linux images the bundled OpenCV needs libGL at runtime — `apt install libgl1` (or your distro's equivalent). A reinstall or redeploy that omits this extra while `documents.ocr.enabled` stays on does not disable the feature: durin keeps returning those documents, with a coverage note in place of the transcription. |
 | `mcp` | `mcp` | Use durin as an MCP server. |
 | `web` | `ddgs`, `readability-lxml` | The web-search and reader tools. |
 | `slack` | `slack-sdk`, `slackify-markdown` | Slack channel. |
@@ -345,13 +345,15 @@ you can sanity-check before committing.
 | `~/.cache/durin/models/` | yes | `--keep-cache` |
 | `~/.cache/durin/archive/` | yes | `--keep-cache` |
 | `~/.durin/models/stt/` | **no** (STT model cache, not enumerated) | — |
+| `~/.durin/models/ocr/` | **no** (OCR language-model cache, not enumerated) | — |
 | `<workspace>/.durin/{plans,spills,tool-results}/` | only if `--workspace <path>` is passed | — |
 
 Per-workspace scratch (`<workspace>/.durin/...`) is **not** removed
 automatically — many users keep their workspace under a project repo and
 don't want durin to touch it. Pass `--workspace <path>` to opt-in.
-The STT model cache (`~/.durin/models/stt/`) is also left in place and can
-be deleted manually if you want to reclaim disk space.
+The model caches under `~/.durin/models/` (STT engines, OCR recognition
+languages) are also left in place and can be deleted manually if you want to
+reclaim disk space.
 
 ---
 

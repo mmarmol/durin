@@ -38,6 +38,8 @@ try:
 except ImportError:  # pragma: no cover - POSIX
     msvcrt = None  # type: ignore[assignment]
 
+from durin.utils.process import pid_alive
+
 __all__ = [
     "AlreadyRunningError",
     "DaemonStatus",
@@ -104,18 +106,6 @@ class DaemonStatus:
         return self.state == "running"
 
 
-def _pid_alive(pid: int) -> bool:
-    """Best-effort check: does this PID still belong to a live process?"""
-    try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        # Process exists, owned by someone else. Treat as alive.
-        return True
-
-
 def _read_pid(pid_path: Path) -> int | None:
     try:
         raw = pid_path.read_text(encoding="utf-8").strip()
@@ -135,7 +125,7 @@ def daemon_status() -> DaemonStatus:
     pid = _read_pid(pid_path)
     if pid is None:
         return DaemonStatus("stale_pid", None, pid_path, log_path)
-    if _pid_alive(pid):
+    if pid_alive(pid):
         return DaemonStatus("running", pid, pid_path, log_path)
     return DaemonStatus("stale_pid", pid, pid_path, log_path)
 
@@ -302,10 +292,10 @@ def stop_daemon(*, grace_seconds: float = 5.0) -> DaemonStatus:
     # Poll until the process exits or the grace window expires.
     deadline = time.monotonic() + grace_seconds
     while time.monotonic() < deadline:
-        if not _pid_alive(pid):
+        if not pid_alive(pid):
             break
         time.sleep(0.1)
-    if _pid_alive(pid):
+    if pid_alive(pid):
         try:
             os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:

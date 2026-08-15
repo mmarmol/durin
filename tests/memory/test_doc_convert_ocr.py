@@ -11,12 +11,32 @@ from durin.memory.doc_convert import (
     NeedsOcrJob,
     convert_file_to_markdown,
 )
-from durin.memory.ocr import OcrUnavailable
+from durin.memory.ocr import OcrUnavailable, TranscribedPage
 
 
-def _cfg(*, enabled=True, inline_max_pages=5):
+def _cfg(*, enabled=True, inline_max_pages=5, language=None):
     return DocumentsConfig.model_validate(
-        {"ocr": {"enabled": enabled, "inline_max_pages": inline_max_pages}}
+        {
+            "ocr": {
+                "enabled": enabled,
+                "inline_max_pages": inline_max_pages,
+                "language": language,
+            }
+        }
+    )
+
+
+def _page(text, *, det_boxes=None):
+    """A TranscribedPage shaped the way the engine builds one: scores ride
+    with recognized text, while an empty page instead carries the det pass's
+    box count — 0 (blank paper) unless a test says otherwise."""
+    if text:
+        return TranscribedPage(
+            text=text, mean_score=0.99, min_score=0.97, det_boxes=None
+        )
+    return TranscribedPage(
+        text="", mean_score=None, min_score=None,
+        det_boxes=0 if det_boxes is None else det_boxes,
     )
 
 
@@ -142,7 +162,7 @@ def test_stamped_scanned_inserts_are_transcribed_like_blank_ones(tmp_path, monke
     requested = []
     monkeypatch.setattr(
         "durin.memory.doc_convert.transcribe_pages_detached",
-        lambda path, pages: requested.extend(pages) or {p: f"insert {p}" for p in pages},
+        lambda path, pages, language=None: requested.extend(pages) or {p: _page(f"insert {p}") for p in pages},
     )
 
     out = convert_file_to_markdown(pdf, documents_config=_cfg(inline_max_pages=5))
@@ -165,11 +185,31 @@ def test_text_pdf_is_unchanged_by_the_ocr_path(tmp_path):
 def test_small_scan_is_transcribed_inline(two_page_scan, monkeypatch):
     monkeypatch.setattr(
         "durin.memory.doc_convert.transcribe_pages_detached",
-        lambda path, pages: {p: f"transcribed page {p}" for p in pages},
+        lambda path, pages, language=None: {
+            p: _page(f"transcribed page {p}") for p in pages
+        },
     )
     out = convert_file_to_markdown(two_page_scan, documents_config=_cfg())
     assert "transcribed page 1" in out.markdown
     assert "transcribed page 2" in out.markdown
+
+
+def test_the_configured_language_reaches_the_transcriber(two_page_scan, monkeypatch):
+    """documents.ocr.language, resolved by whoever loaded the config, must
+    ride the inline call — the subprocess it spawns is config-free."""
+    seen = {}
+
+    def fake(path, pages, *, language=None):
+        seen["language"] = language
+        return {p: _page(f"t {p}") for p in pages}
+
+    monkeypatch.setattr("durin.memory.doc_convert.transcribe_pages_detached", fake)
+
+    convert_file_to_markdown(two_page_scan, documents_config=_cfg(language="el"))
+    assert seen["language"] == "el"
+
+    convert_file_to_markdown(two_page_scan, documents_config=_cfg())
+    assert seen["language"] is None
 
 
 def test_scan_over_the_budget_raises_needs_ocr_job(big_scan):
@@ -192,7 +232,7 @@ def test_exactly_the_budget_stays_inline_one_more_goes_to_a_job(tmp_path, monkey
 
     monkeypatch.setattr(
         "durin.memory.doc_convert.transcribe_pages_detached",
-        lambda path, pages: {p: f"transcribed page {p}" for p in pages},
+        lambda path, pages, language=None: {p: _page(f"transcribed page {p}") for p in pages},
     )
 
     at_budget = tmp_path / "at_budget.pdf"
@@ -294,7 +334,7 @@ def test_the_early_exit_raises_at_exactly_one_page_over_the_budget(
     # inline, one more is work the decision did not need to do.
     monkeypatch.setattr(
         "durin.memory.doc_convert.transcribe_pages_detached",
-        lambda path, pages: {p: f"transcribed page {p}" for p in pages},
+        lambda path, pages, language=None: {p: _page(f"transcribed page {p}") for p in pages},
     )
 
     with pytest.raises(NeedsOcrJob) as excinfo:
@@ -343,7 +383,7 @@ def test_the_under_budget_partial_path_does_not_convert_the_document_either(
     conv = _watch_markitdown(monkeypatch)
     monkeypatch.setattr(
         "durin.memory.doc_convert.transcribe_pages_detached",
-        lambda path, pages: {p: f"ocr {p}" for p in pages},
+        lambda path, pages, language=None: {p: _page(f"ocr {p}") for p in pages},
     )
 
     out = convert_file_to_markdown(pdf, documents_config=_cfg())
@@ -380,7 +420,7 @@ def test_a_page_the_probe_reads_as_full_is_still_transcribed_when_it_is_empty(
     requested = []
     monkeypatch.setattr(
         "durin.memory.doc_convert.transcribe_pages_detached",
-        lambda path, pages: requested.extend(pages) or {p: f"ocr {p}" for p in pages},
+        lambda path, pages, language=None: requested.extend(pages) or {p: _page(f"ocr {p}") for p in pages},
     )
 
     convert_file_to_markdown(pdf, documents_config=_cfg())
@@ -455,7 +495,7 @@ def test_budget_counts_pages_needing_ocr_not_document_pages(tmp_path, monkeypatc
 
     monkeypatch.setattr(
         "durin.memory.doc_convert.transcribe_pages_detached",
-        lambda path, pages: {p: f"insert {p}" for p in pages},
+        lambda path, pages, language=None: {p: _page(f"insert {p}") for p in pages},
     )
     out = convert_file_to_markdown(pdf, documents_config=_cfg(inline_max_pages=5))
     assert "insert 11" in out.markdown
@@ -505,7 +545,7 @@ def test_no_job_is_enqueued_for_a_book_no_engine_can_transcribe(big_scan, monkey
 def test_an_engine_that_fails_at_transcribe_time_is_handled_the_same_way(
     two_page_scan, monkeypatch, boom
 ):
-    def _raise(path, pages):
+    def _raise(path, pages, language=None):
         raise boom
 
     monkeypatch.setattr("durin.memory.doc_convert.transcribe_pages_detached", _raise)
@@ -523,7 +563,7 @@ def test_a_timed_out_engine_is_not_reported_as_a_missing_install(
     load" or that it is not installed — the user would go reinstall software
     they already have. The child's own reason has to travel with it: the
     gateway log is the only place it is recorded."""
-    def _raise(path, pages):
+    def _raise(path, pages, language=None):
         raise OcrUnavailable("OCR subprocess timed out after 80s: stuck loading model")
 
     monkeypatch.setattr("durin.memory.doc_convert.transcribe_pages_detached", _raise)
@@ -553,7 +593,7 @@ def test_partial_scan_only_transcribes_the_empty_pages(tmp_path, monkeypatch):
     requested = []
     monkeypatch.setattr(
         "durin.memory.doc_convert.transcribe_pages_detached",
-        lambda path, pages: requested.extend(pages) or {p: f"ocr {p}" for p in pages},
+        lambda path, pages, language=None: requested.extend(pages) or {p: _page(f"ocr {p}") for p in pages},
     )
     convert_file_to_markdown(pdf, documents_config=_cfg())
     assert requested == [4, 5]
@@ -576,3 +616,203 @@ def test_non_pdf_documents_never_touch_the_ocr_path(tmp_path):
     out_path.write_text("a,b\n1,2\n")
     out = convert_file_to_markdown(out_path, documents_config=_cfg())
     assert out.coverage is None
+
+
+# ---------------------------------------------------------------------------
+# W2-T1: a blank scan must raise, not mint an empty ConvertedDoc
+# ---------------------------------------------------------------------------
+
+
+def test_a_blank_scan_raises_even_after_ocr_transcribes_every_page(
+    two_page_scan, monkeypatch
+):
+    """Every flagged page transcribes to "" -- the per-page join on this
+    return path is then "" too, which used to come back as a ConvertedDoc
+    with an empty markdown body instead of raising. The empty-extraction
+    guard at the bottom of the function never runs on this path: it returns
+    before reaching it."""
+    monkeypatch.setattr(
+        "durin.memory.doc_convert.transcribe_pages_detached",
+        lambda path, pages, language=None: {p: _page("") for p in pages},
+    )
+
+    with pytest.raises(DocConvertError) as excinfo:
+        convert_file_to_markdown(two_page_scan, documents_config=_cfg())
+
+    assert "even after OCR" in str(excinfo.value)
+    assert two_page_scan.name in str(excinfo.value)
+    # Zero det boxes on every page: this really is blank paper, and the
+    # message must keep saying so rather than hedging.
+    assert "came back blank" in str(excinfo.value)
+
+
+def test_an_empty_scan_with_detected_boxes_reports_unreadable_not_blank(
+    two_page_scan, monkeypatch
+):
+    """Same empty join, opposite diagnosis: the detector found printed text on
+    the pages, the recognizer just could not read any of it (a script outside
+    the built-in models, typically). Calling that document "blank" sends the
+    user to rescan paper that was never the problem."""
+    monkeypatch.setattr(
+        "durin.memory.doc_convert.transcribe_pages_detached",
+        lambda path, pages, language=None: {p: _page("", det_boxes=4) for p in pages},
+    )
+
+    with pytest.raises(DocConvertError) as excinfo:
+        convert_file_to_markdown(two_page_scan, documents_config=_cfg())
+
+    message = str(excinfo.value)
+    assert "even after OCR" in message
+    assert "printed text" in message
+    assert "could not read" in message
+    assert "came back blank" not in message
+
+
+def test_unreadable_message_names_the_selected_language_not_the_builtin_pack(
+    two_page_scan, monkeypatch
+):
+    """With documents.ocr.language set, the selected language's model is the
+    one that read nothing — blaming "a script outside its built-in models"
+    would imply only the default pack was tried. The message must name the
+    selected language and leave both honest possibilities open: a different
+    script, or pages that are genuinely unreadable."""
+    monkeypatch.setattr(
+        "durin.memory.doc_convert.transcribe_pages_detached",
+        lambda path, pages, language=None: {p: _page("", det_boxes=4) for p in pages},
+    )
+
+    with pytest.raises(DocConvertError) as excinfo:
+        convert_file_to_markdown(two_page_scan, documents_config=_cfg(language="el"))
+
+    message = str(excinfo.value)
+    assert "even after OCR" in message
+    assert "printed text" in message
+    assert "'el'" in message
+    assert "built-in models" not in message
+    assert "came back blank" not in message
+
+
+def test_partial_scan_with_one_real_page_survives_blank_ocr_pages(
+    tmp_path, monkeypatch
+):
+    """One real page keeps the join non-empty even when every OCR'd page
+    comes back blank -- the empty-after-OCR guard must not fire on a
+    document that still has real content."""
+    from tests.tools.test_read_enhancements import _write_text_pdf
+
+    pdf = tmp_path / "partial.pdf"
+    _write_text_pdf(pdf, ["Real body text on this page, plenty of it", "", ""])
+
+    monkeypatch.setattr(
+        "durin.memory.doc_convert.transcribe_pages_detached",
+        lambda path, pages, language=None: {p: _page("") for p in pages},
+    )
+
+    out = convert_file_to_markdown(pdf, documents_config=_cfg())
+    assert "Real body text" in out.markdown
+
+
+# ---------------------------------------------------------------------------
+# W2-T1: raw extractor exceptions at the three page_texts/page_texts_subset
+# call sites must arrive at the caller wrapped as DocConvertError.
+# ---------------------------------------------------------------------------
+
+
+def test_the_confirmation_pass_wraps_a_raw_extractor_exception(big_scan, monkeypatch):
+    """_confirm_empty_pages calls page_texts_subset directly; a raw exception
+    there (pdfplumber, a corrupt PDF, whatever) must not escape past the
+    DocConvertError taxonomy every caller of convert_file_to_markdown
+    already handles."""
+
+    class _BoomSubsetError(Exception):
+        pass
+
+    def _raise(path, pages):
+        raise _BoomSubsetError("pdfplumber choked on this subset")
+
+    monkeypatch.setattr("durin.memory.doc_convert.page_texts_subset", _raise)
+
+    with pytest.raises(DocConvertError) as excinfo:
+        convert_file_to_markdown(big_scan, documents_config=_cfg(inline_max_pages=5))
+
+    assert not isinstance(excinfo.value, _BoomSubsetError)
+    assert "confirming flagged pages" in str(excinfo.value)
+    assert "pdfplumber choked on this subset" in str(excinfo.value)
+
+
+def test_the_under_budget_accurate_extraction_wraps_a_raw_extractor_exception(
+    tmp_path, monkeypatch
+):
+    """The full accurate pass on the under-budget flagged branch (some pages
+    flagged, but not enough to blow the inline budget) calls page_texts
+    directly too."""
+    from tests.tools.test_read_enhancements import _write_text_pdf
+
+    texts = ["Real body text on this page, plenty of it"] * 10
+    texts[3] = ""
+    texts[4] = ""
+    pdf = tmp_path / "mixed.pdf"
+    _write_text_pdf(pdf, texts)
+
+    class _BoomFullError(Exception):
+        pass
+
+    def _raise(path):
+        raise _BoomFullError("pdfplumber choked on the whole document")
+
+    monkeypatch.setattr("durin.memory.doc_convert.page_texts", _raise)
+
+    with pytest.raises(DocConvertError) as excinfo:
+        convert_file_to_markdown(pdf, documents_config=_cfg())
+
+    assert not isinstance(excinfo.value, _BoomFullError)
+    assert "extracting page text" in str(excinfo.value)
+    assert "pdfplumber choked on the whole document" in str(excinfo.value)
+
+
+def test_the_probe_failure_fallback_extraction_wraps_a_raw_extractor_exception(
+    tmp_path, monkeypatch
+):
+    """The markitdown-first guard in the probe-failure branch only turns an
+    unreadable file into a DocConvertError when markitdown ALSO fails. When
+    markitdown succeeds and the accurate extractor independently raises,
+    that exception used to escape raw -- markitdown is left real here (not
+    mocked) so this test actually exercises that gap rather than the one
+    the sibling test above already covers."""
+    from tests.tools.test_read_enhancements import _write_text_pdf
+
+    pdf = tmp_path / "gapped.pdf"
+    _write_text_pdf(pdf, ["Chapter Four: Financial Statements", "", "", ""])
+
+    def _no_probe(path):
+        raise RuntimeError("pypdfium2 could not open this")
+
+    class _BoomFallbackError(Exception):
+        pass
+
+    def _raise(path):
+        raise _BoomFallbackError("pdfplumber choked on the fallback pass")
+
+    monkeypatch.setattr("durin.memory.doc_convert.page_char_counts", _no_probe)
+    monkeypatch.setattr("durin.memory.doc_convert.page_texts", _raise)
+
+    with pytest.raises(DocConvertError) as excinfo:
+        convert_file_to_markdown(pdf, documents_config=_cfg())
+
+    assert not isinstance(excinfo.value, _BoomFallbackError)
+    assert "coverage probe failed" in str(excinfo.value)
+    assert "pdfplumber choked on the fallback pass" in str(excinfo.value)
+
+
+def test_needs_ocr_job_still_propagates_unwrapped_through_the_confirmation_region(
+    big_scan,
+):
+    """NeedsOcrJob is raised in convert_file_to_markdown AFTER
+    _confirm_empty_pages returns -- the DocConvertError wrap around its
+    page_texts_subset call must not catch it or relabel it. pytest.raises
+    with the subclass already proves this (a plain DocConvertError would not
+    satisfy it), the explicit type() check makes the proof unmissable."""
+    with pytest.raises(NeedsOcrJob) as excinfo:
+        convert_file_to_markdown(big_scan, documents_config=_cfg(inline_max_pages=5))
+
+    assert type(excinfo.value) is NeedsOcrJob

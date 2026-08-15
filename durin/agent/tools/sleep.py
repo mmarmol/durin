@@ -96,9 +96,13 @@ class SleepTool(Tool, ContextAware):
         return True
 
     def _running_background(self) -> list[str]:
-        """Best-effort: ids of this session's still-running background tasks
-        (sub-agents + workflow runs) — the work whose results are push-delivered.
-        Empty on any failure or missing wiring; the reminder is advisory only."""
+        """Best-effort: ids of this session's still-running push-delivered work
+        (sub-agents + workflow runs). ``kind=job`` rows are excluded even when
+        the merged view carries them: a job's completion pushes nothing, so a
+        sleep between job status checks is the legitimate polling this
+        reminder must not scold — and naming a job here would falsely promise
+        its result arrives on its own. Empty on any failure or missing
+        wiring; the reminder is advisory only."""
         try:
             ctx = self._request_ctx
             if not self._workspace or ctx is None:
@@ -110,7 +114,10 @@ class SleepTool(Tool, ContextAware):
             from durin.agent.background_tasks import collect_tasks
             rows = collect_tasks(self._workspace, subagent_manager=self._manager,
                                  sessions=self._sessions, session_key=session_key)
-            return [f"{r['kind']} [{r['id']}]" for r in rows if r.get("status") == "running"]
+            return [
+                f"{r['kind']} [{r['id']}]" for r in rows
+                if r.get("status") == "running" and r.get("kind") != "job"
+            ]
         except Exception:  # noqa: BLE001 - the reminder must never break a sleep
             return []
 
@@ -187,10 +194,13 @@ class SleepTool(Tool, ContextAware):
         # Anti-polling reminder, checked at wake time: sleep+status loops around
         # push-delivered background work waste the turn and block the chat, so the
         # very first sleep of such a loop says so — not a human nine minutes later.
+        # Jobs never appear in this list: their completion pushes nothing, so
+        # sleeping between job checks is the legitimate use, not the loop.
         running = self._running_background()
         if running:
             body += (
-                "\nNote: background work is still running in this session ("
+                "\nNote: push-delivered background work is still running in "
+                "this session ("
                 + ", ".join(running[:4])
                 + "). Its result will be delivered to you automatically as a "
                 "follow-up message — if this sleep was only waiting for that, "
