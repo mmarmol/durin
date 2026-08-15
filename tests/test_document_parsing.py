@@ -434,7 +434,7 @@ def test_extract_documents_reports_a_blank_scan_instead_of_a_silent_empty_file(
     blank = TranscribedPage(text="", mean_score=None, min_score=None, det_boxes=0)
     monkeypatch.setattr(
         "durin.memory.doc_convert.transcribe_pages_detached",
-        lambda path, pages: {p: blank for p in pages},
+        lambda path, pages, language=None: {p: blank for p in pages},
     )
 
     pdf = tmp_path / "blank_scan.pdf"

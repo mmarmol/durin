@@ -69,6 +69,55 @@ def test_worker_transcribes_every_requested_page(registry, scanned_pdf, monkeypa
     ]
 
 
+def test_worker_resolves_the_configured_language_and_threads_it(
+    registry, scanned_pdf, monkeypatch,
+):
+    """The worker is its own process, so it resolves documents.ocr.language
+    from its own config load — once per run — and hands it to every
+    transcription. The child never reads config (that is the parent's job on
+    the inline path, and this worker's here)."""
+    from durin.config.schema import Config
+
+    cfg = Config.model_validate({"documents": {"ocr": {"language": "cyrillic"}}})
+    monkeypatch.setattr("durin.jobs.ocr_worker.load_config", lambda: cfg)
+
+    seen = []
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page",
+        lambda path, page, language=None: seen.append(language)
+        or _page(f"text of page {page}"),
+    )
+    job = _enqueue(registry, scanned_pdf, [1, 2, 3])
+
+    run_job(job.id, registry=registry)
+
+    assert registry.get(job.id).status == "done"
+    assert seen == ["cyrillic", "cyrillic", "cyrillic"]
+
+
+def test_worker_survives_a_text_page_that_carries_no_scores(
+    registry, scanned_pdf, monkeypatch,
+):
+    """text with None scores is representable end to end (the child parse
+    allows it, and transcribe_page's own ``scores ... or ()`` defense builds
+    it) and used to TypeError the per-page log line AFTER record_unit had
+    committed — failing the page over a formatting detail. The score must
+    log as absent instead."""
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page",
+        lambda path, page, **kw: TranscribedPage(
+            text=f"text of page {page}", mean_score=None, min_score=None,
+            det_boxes=None,
+        ),
+    )
+    job = _enqueue(registry, scanned_pdf, [1, 2, 3])
+
+    run_job(job.id, registry=registry)
+
+    assert registry.get(job.id).status == "done"
+    assert [unit for unit, _ in registry.units(job.id)] == [1, 2, 3]
+
+
 def test_worker_transcribes_the_empty_pages_its_payload_left_out(
     registry, tmp_path, monkeypatch,
 ):

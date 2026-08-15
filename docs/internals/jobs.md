@@ -444,6 +444,16 @@ and progress needs no purpose-built IPC channel — the worker writes
 `job_units` and `units_done` directly, and the gateway (or a CLI/API reader)
 just reads the same database.
 
+Being its own process, the worker resolves `documents.ocr.language` through
+its own config load — once per run, before claiming the job, so an
+unreadable config leaves the job queued rather than stuck running — and
+passes it to every `transcribe_page` call. The language is not part of the
+job payload: the payload records which pages to transcribe, and a language
+changed while a job sat queued should apply when it runs. A non-default
+language's recognition model lives under `<durin home>/models/ocr` and is
+downloaded there by the engine on first use (see [Memory: agent
+tools](memory/04_agent_tools.md) for the model-root convention).
+
 On success, a job whose payload carries a `sidecar_dir` (an ingested Library
 entry) has the worker assemble `source.md` there: the document's per-page
 text with every OCR'd page filled in, joined the same way the inline

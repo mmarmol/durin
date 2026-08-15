@@ -1164,6 +1164,12 @@ class DocumentsOcrConfig(Base):
     """
 
     enabled: bool = Field(default=False, description="Transcribe PDF pages that have no text layer using the local OCR engine; the Settings > Documents toggle installs the [ocr] extra when turning this on, but `durin config set` does not")
+    language: Literal[
+        "arabic", "cyrillic", "devanagari", "el", "eslav", "korean", "ta", "te", "th",
+    ] | None = Field(
+        default=None,
+        description="Recognition language for scripts the built-in models cannot read (they cover Chinese, Japanese, English and Latin-script languages). Selecting one downloads its recognition model (~8 MB) once from modelscope.cn into <durin home>/models/ocr on first use; document content never leaves the machine. null = the built-in pack",
+    )
     inline_max_pages: int = Field(
         default=5,
         ge=0,

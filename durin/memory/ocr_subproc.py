@@ -6,7 +6,10 @@ here rather than in the caller means the OCR engine's memory is released the
 moment this process ends, instead of staying resident in whatever process
 called it.
 
-argv contract: ``<pdf_path> <dpi> <page> [<page>...]``. On success, prints one
+argv contract: ``<pdf_path> <dpi> <page> [<page>...] [--lang <code>]``. The
+optional trailing ``--lang`` selects a recognition language beyond the
+built-in pack; the parent resolves it from config so this process stays
+config-free — everything it needs arrives on argv. On success, prints one
 JSON object to stdout and exits 0::
 
     {"pages": {"<page>": {"text": ..., "mean_score": ...,
@@ -32,8 +35,19 @@ __all__ = ["main"]
 
 
 def main(argv: list[str]) -> int:
+    usage = "usage: <pdf_path> <dpi> <page> [<page>...] [--lang <code>]"
+
+    language: str | None = None
+    if "--lang" in argv:
+        flag = argv.index("--lang")
+        if flag + 1 >= len(argv):
+            print(json.dumps({"error": usage}))
+            return 2
+        language = argv[flag + 1]
+        argv = argv[:flag] + argv[flag + 2 :]
+
     if len(argv) < 3:
-        print(json.dumps({"error": "usage: <pdf_path> <dpi> <page> [<page>...]"}))
+        print(json.dumps({"error": usage}))
         return 2
 
     pdf_path, dpi_arg, *page_args = argv
@@ -45,7 +59,10 @@ def main(argv: list[str]) -> int:
         return 2
 
     try:
-        results = {page: transcribe_page(Path(pdf_path), page, dpi=dpi) for page in pages}
+        results = {
+            page: transcribe_page(Path(pdf_path), page, dpi=dpi, language=language)
+            for page in pages
+        }
     except Exception as exc:  # noqa: BLE001 — every failure here is the parent's OcrUnavailable
         print(json.dumps({"error": f"{type(exc).__name__}: {exc}"}))
         return 1

@@ -24,10 +24,11 @@ from pathlib import Path
 
 from loguru import logger
 
+from durin.config.loader import load_config
 from durin.jobs.registry import JobRegistry
 from durin.jobs.spawn import MAX_CONCURRENT_OCR_JOBS, _launch_worker, _pid_alive
 from durin.memory.ingestion import index_ingested_entry
-from durin.memory.ocr import transcribe_page
+from durin.memory.ocr import score_str, transcribe_page
 from durin.memory.pdf_coverage import classify_coverage, page_texts
 from durin.utils.atomic_write import atomic_write_text
 
@@ -46,6 +47,13 @@ def run_job(job_id: str, *, registry: JobRegistry | None = None) -> None:
     pdf_path = Path(job.payload["path"])
     pages: list[int] = list(job.payload["pages"])
     already = registry.done_units(job_id)
+
+    # This worker is its own process, so the recognition language comes from
+    # its own config load — once per run, before the claim, so a config that
+    # cannot be read leaves the job queued (retryable) rather than stuck
+    # running. Resolved here and not in the payload: the job records which
+    # pages to transcribe, and a language changed mid-queue should apply.
+    language = load_config().documents.ocr.language
 
     # Re-fetch immediately before claiming rather than trusting `job` above:
     # interpreter boot, imports and the done_units() round trip all take real
@@ -192,12 +200,16 @@ def run_job(job_id: str, *, registry: JobRegistry | None = None) -> None:
             _chain_to_next_queued(registry)
             return
         try:
-            result = transcribe_page(pdf_path, page)
+            result = transcribe_page(pdf_path, page, language=language)
             registry.record_unit(job_id, page, result.text)
             if result.det_boxes is None:
+                # score_str, not a float format: a text page can carry None
+                # scores, and this line runs after record_unit committed —
+                # a TypeError here would fail a page that transcribed fine.
                 logger.info(
-                    "ocr worker: page {} of {}: mean score {:.3f}, min {:.3f}",
-                    page, pdf_path.name, result.mean_score, result.min_score,
+                    "ocr worker: page {} of {}: mean score {}, min {}",
+                    page, pdf_path.name,
+                    score_str(result.mean_score), score_str(result.min_score),
                 )
             else:
                 det_boxes_seen[page] = result.det_boxes

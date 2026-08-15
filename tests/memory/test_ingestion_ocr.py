@@ -134,7 +134,7 @@ def test_ingest_raises_when_ocr_transcribes_every_flagged_page_blank(
     _write_text_pdf(pdf, ["", ""])
     monkeypatch.setattr(
         "durin.memory.doc_convert.transcribe_pages_detached",
-        lambda path, pages: {p: _page("") for p in pages},
+        lambda path, pages, language=None: {p: _page("") for p in pages},
     )
     cfg = DocumentsConfig.model_validate({"ocr": {"enabled": True, "inline_max_pages": 5}})
 
@@ -438,7 +438,7 @@ def test_a_re_ingest_upgrades_an_ocr_off_stub_once_ocr_is_enabled(
 
     monkeypatch.setattr(
         "durin.memory.doc_convert.transcribe_pages_detached",
-        lambda path, pages: {p: _page(f"Page {p}: fresh text.") for p in pages},
+        lambda path, pages, language=None: {p: _page(f"Page {p}: fresh text.") for p in pages},
     )
     cfg_on = DocumentsConfig.model_validate(
         {"ocr": {"enabled": True, "inline_max_pages": 50}}
@@ -524,7 +524,7 @@ def test_a_half_state_missing_meta_rebuilds_instead_of_short_circuiting(
     monkeypatch.setattr("durin.jobs.spawn.subprocess", launcher)
     monkeypatch.setattr(
         "durin.memory.doc_convert.transcribe_pages_detached",
-        lambda path, pages: {p: _page(f"Page {p}: real text.") for p in pages},
+        lambda path, pages, language=None: {p: _page(f"Page {p}: real text.") for p in pages},
     )
     cfg = DocumentsConfig.model_validate({"ocr": {"enabled": True, "inline_max_pages": 50}})
 
@@ -579,7 +579,7 @@ def test_a_legacy_stub_meta_predating_the_flag_still_upgrades(
 
     monkeypatch.setattr(
         "durin.memory.doc_convert.transcribe_pages_detached",
-        lambda path, pages: {p: _page(f"Page {p}: fresh text.") for p in pages},
+        lambda path, pages, language=None: {p: _page(f"Page {p}: fresh text.") for p in pages},
     )
     cfg_on = DocumentsConfig.model_validate(
         {"ocr": {"enabled": True, "inline_max_pages": 50}}

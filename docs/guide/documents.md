@@ -42,20 +42,36 @@ have, and says the engine is the reason the rest is blank.
 
 **What the built-in engine can read.** The models installed with OCR read
 Chinese, Japanese, and Latin-script languages — English, Spanish, French,
-German, Portuguese, and several dozen more. Scripts outside that set fail in
-two different ways, and durin is honest about both. A Cyrillic or Greek page
-comes back as confident-looking garbage: the engine reads the letterforms as
-Latin lookalikes, and nothing in its output flags the result as wrong. A page
-in Arabic — or any script the models cannot match at all — comes back with no
-text; durin then checks whether the page holds printed text at all, and
-reports "printed text the engine could not read" instead of calling the page
-blank. A genuinely empty page is still reported as blank.
+German, Portuguese, and several dozen more — entirely offline. Scripts
+outside that set fail in two different ways, and durin is honest about both.
+A Cyrillic or Greek page comes back as confident-looking garbage: the engine
+reads the letterforms as Latin lookalikes, and nothing in its output flags
+the result as wrong. A page in Arabic — or any script the models cannot
+match at all — comes back with no text; durin then checks whether the page
+holds printed text at all, and reports that the engine detected printed text
+but could not read it, instead of calling the page blank. A genuinely empty
+page is still reported as blank.
+
+**Reading other scripts.** For a script outside the built-in set, pick a
+**recognition language** next to the OCR toggle in **Settings → Documents**
+(the config key is `documents.ocr.language`): Arabic, Cyrillic, Devanagari,
+Greek, East Slavic (Russian, Ukrainian, Belarusian), Korean, Tamil, Telugu,
+or Thai. The first time a language is used, durin downloads its recognition
+model — about 8 MB, plus about 11 MB of shared detection models the first
+time any language is added — from **modelscope.cn** into
+`~/.durin/models/ocr`, once; it survives updates and reinstalls, and your
+documents never leave the machine. One language is active at a time: while
+one is selected, scans in that script are read with its model, and switching
+back to the built-in pack restores the original behavior — which needs no
+network at all.
 
 The engine also scores its own confidence in every line it reads, and durin
-logs a per-document summary of those scores to help diagnose a bad
-transcription. It never uses them to accept or reject one: measured against
-real scans, plausible-but-wrong readings score in the same range as
-legitimate noisy-but-correct ones, so no threshold can tell them apart.
+logs those scores to help diagnose a bad transcription — a per-document
+summary when it transcribes while you wait, and a line per page in the
+background worker's log. It never uses them to accept or reject one:
+measured against real scans, plausible-but-wrong readings score in the same
+range as legitimate noisy-but-correct ones, so no threshold can tell them
+apart.
 
 A short scan is read on the spot, the same as any other document. Ask durin to
 remember a longer one — a whole scanned book — and it does not make you wait:

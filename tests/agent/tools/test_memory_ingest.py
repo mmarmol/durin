@@ -240,7 +240,7 @@ def test_a_blank_scan_produces_no_reference_and_reports_the_error(tmp_path, monk
     blank = TranscribedPage(text="", mean_score=None, min_score=None, det_boxes=0)
     monkeypatch.setattr(
         "durin.memory.doc_convert.transcribe_pages_detached",
-        lambda path, pages: {p: blank for p in pages},
+        lambda path, pages, language=None: {p: blank for p in pages},
     )
 
     pdf = tmp_path / "blank.pdf"

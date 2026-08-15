@@ -334,7 +334,9 @@ def convert_file_to_markdown(path: Path, *, documents_config=None) -> ConvertedD
                     total_pages=cov.total_pages,
                 )
             try:
-                transcribed = transcribe_pages_detached(path, pages)
+                transcribed = transcribe_pages_detached(
+                    path, pages, language=ocr_cfg.language
+                )
                 for page in pages:
                     texts[page - 1] = transcribed[page].text
             except (OcrUnavailable, ImportError) as exc:

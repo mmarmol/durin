@@ -27,11 +27,14 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from durin.config.home import durin_home
+
 __all__ = [
     "OcrUnavailable",
     "TranscribedPage",
     "engine_available",
     "render_page",
+    "score_str",
     "transcribe_page",
     "transcribe_pages_detached",
 ]
@@ -42,7 +45,21 @@ logger = logging.getLogger(__name__)
 # type starts dropping characters, above it the cost grows with no gain.
 _DEFAULT_DPI = 200
 
+# Headroom added to the subprocess timeout when the selected language's
+# recognition model is not on disk yet: the one-time download rides ahead of
+# the first page, and the ordinary formula budgets nothing for the network.
+# Sized for the worst first run — the ~8 MiB recognition model plus ~10.5 MiB
+# of shared detection/classification models when no language was ever added
+# before — on a ~0.5 Mbit/s line.
+_MODEL_DOWNLOAD_TIMEOUT_S = 300
+
+# The engine and the language it was built for, cached per process. The
+# language is part of the cache key: rapidocr swaps the recognition model by
+# construction parameter, so an engine built for one language served to a
+# request for another would transcribe every page as plausible garbage with
+# nothing flagging it.
 _engine = None
+_engine_language: str | None = None
 
 # Measured (durin v0.6.0 audit): one OCR engine costs ~1.4 GB resident and
 # ~4.8 cores for as long as it runs, wherever it runs -- the same budget the
@@ -92,9 +109,52 @@ def engine_available() -> bool:
         return False
 
 
-def _get_engine():
-    global _engine
-    if _engine is None:
+def score_str(score: float | None) -> str:
+    """A recognition score for a log line: three decimals, or ``n/a``.
+
+    None is representable end to end — the child's JSON allows any None mix
+    and ``transcribe_page``'s own ``scores ... or ()`` defense builds
+    score-less pages — so a format site that assumes a float turns a missing
+    number into a TypeError. Formatting through this keeps an absent score a
+    logging detail, never a page failure.
+    """
+    return "n/a" if score is None else f"{score:.3f}"
+
+
+def _model_root() -> Path:
+    """Where on-demand language models live: ``<durin home>/models/ocr``.
+
+    The durin home, not rapidocr's own default (a ``models`` dir inside its
+    site-packages install), because every reinstall or redeploy replaces
+    site-packages — models cached there would be re-downloaded after each
+    one. The stt and tts engines cache under the same ``models/`` parent for
+    the same reason.
+    """
+    return durin_home() / "models" / "ocr"
+
+
+def _language_model_present(language: str) -> bool:
+    """Whether *language*'s one-time model download already happened.
+
+    RapidOCR stores every model flat under the root, named after its
+    download URL's basename (observed with rapidocr 3.9.2): the language's
+    recognition model is ``<code>_PP-OCRv5_rec_mobile.onnx``, and the first
+    added language drops the shared detection/classification models beside
+    it. The recognition model is the per-language marker; when it is absent,
+    a download is coming, whatever else the root holds.
+    """
+    return (_model_root() / f"{language}_PP-OCRv5_rec_mobile.onnx").is_file()
+
+
+def _get_engine(language: str | None = None):
+    """The process-cached engine for *language* (None = the built-in pack).
+
+    A request for a different language than the cached engine's rebuilds it
+    — same lifetime rules as before, the language is simply part of what
+    identifies the engine.
+    """
+    global _engine, _engine_language
+    if _engine is None or _engine_language != language:
         if not engine_available():
             raise OcrUnavailable(
                 "local OCR needs the [ocr] extra: install it via the "
@@ -104,7 +164,28 @@ def _get_engine():
             )
         from rapidocr import RapidOCR
 
-        _engine = RapidOCR()
+        if language is None:
+            # Exactly the construction the default path has always used: the
+            # models bundled in the wheel, resolved inside it, fully offline.
+            engine = RapidOCR()
+        else:
+            from rapidocr import ModelType, OCRVersion
+
+            # PP-OCRv5 mobile is the line that publishes per-script
+            # recognition models; only the recognizer is swapped, detection
+            # and classification stay the defaults. Overriding the model
+            # root moves every download (and lookup) to durin's own model
+            # dir; rapidocr fetches whatever is missing there on first use
+            # and reuses it afterwards.
+            engine = RapidOCR(
+                params={
+                    "Rec.lang_type": language,
+                    "Rec.ocr_version": OCRVersion.PPOCRV5,
+                    "Rec.model_type": ModelType.MOBILE,
+                    "Global.model_root_dir": str(_model_root()),
+                }
+            )
+        _engine, _engine_language = engine, language
     return _engine
 
 
@@ -128,15 +209,21 @@ def render_page(pdf_path: Path, page: int, *, dpi: int = _DEFAULT_DPI) -> bytes:
 
 
 def transcribe_page(
-    pdf_path: Path, page: int, *, dpi: int = _DEFAULT_DPI
+    pdf_path: Path,
+    page: int,
+    *,
+    dpi: int = _DEFAULT_DPI,
+    language: str | None = None,
 ) -> TranscribedPage:
     """Transcribe one 1-based PDF page, top to bottom.
 
     Empty ``text`` is a legitimate outcome, not a failure; the result's
     ``det_boxes`` is what says whether that emptiness is blank paper or
-    printed text the engine cannot read.
+    printed text the engine cannot read. *language* selects a recognition
+    model beyond the built-in pack (None); callers pass the already-validated
+    ``documents.ocr.language`` value.
     """
-    engine = _get_engine()
+    engine = _get_engine(language)
     image = render_page(pdf_path, page, dpi=dpi)
     # Every stage flag explicit on every call: rapidocr writes any non-None
     # flag back onto the engine instance, so the det-only pass below would
@@ -194,6 +281,7 @@ def transcribe_pages_detached(
     *,
     dpi: int = _DEFAULT_DPI,
     timeout_s: float | None = None,
+    language: str | None = None,
 ) -> dict[int, TranscribedPage]:
     """Transcribe *pages* of *pdf_path* in a short-lived child process.
 
@@ -215,6 +303,20 @@ def transcribe_pages_detached(
     queue instead of putting several engines on the machine at once.
     """
     with _INLINE_OCR_SLOT:
+        # Selecting the language in config was the consent for this; the log
+        # line is the disclosure — the source by name, and what of the user's
+        # is (not) in the transfer. Checked before spawning because only the
+        # parent knows to stretch the timeout for it.
+        downloading = language is not None and not _language_model_present(language)
+        if downloading:
+            logger.info(
+                "first use of OCR language %r: rapidocr downloads its "
+                "recognition model (~8 MiB, plus ~11 MiB of shared detection "
+                "models if none was ever added) from modelscope.cn into %s, "
+                "once; document content is not uploaded",
+                language, _model_root(),
+            )
+
         if timeout_s is None:
             # 60s covers interpreter startup plus RapidOCR's model load; 10s
             # per page covers rendering and inference on CPU with slack for a
@@ -222,13 +324,18 @@ def transcribe_pages_detached(
             # call's: waiting for the slot above spends none of it. Not
             # configurable: a hung child should fail loudly into the
             # coverage-note path, not wait on a knob nobody will tune
-            # correctly.
+            # correctly. A pending model download is the one addition: it
+            # happens inside the child, ahead of its first page.
             timeout_s = 60 + 10 * len(pages)
+            if downloading:
+                timeout_s += _MODEL_DOWNLOAD_TIMEOUT_S
 
         cmd = [
             sys.executable, "-m", "durin.memory.ocr_subproc",
             str(pdf_path), str(dpi), *(str(page) for page in pages),
         ]
+        if language is not None:
+            cmd += ["--lang", language]
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
         except subprocess.TimeoutExpired as exc:
@@ -267,14 +374,27 @@ def transcribe_pages_detached(
                 f"{len(pages)} requested"
             )
         # The child's stderr is captured and discarded on success, so this
-        # summary is the only place its scores can reach a log at all.
+        # summary is the only place its scores can reach a log at all. Each
+        # aggregate is guarded on its own inputs: a page can carry any mix
+        # of None scores, so "some mins exist" says nothing about the means
+        # — one gate for both divided by zero on exactly that mix.
         mean_scores = [p.mean_score for p in result.values() if p.mean_score is not None]
         min_scores = [p.min_score for p in result.values() if p.min_score is not None]
-        if min_scores:
+        if mean_scores or min_scores:
             logger.info(
-                "OCR subprocess transcribed %d page(s) of %s: mean score %.3f, min %.3f",
+                "OCR subprocess transcribed %d page(s) of %s: mean score %s, min %s",
                 len(result), pdf_path.name,
-                sum(mean_scores) / len(mean_scores), min(min_scores),
+                score_str(sum(mean_scores) / len(mean_scores) if mean_scores else None),
+                score_str(min(min_scores) if min_scores else None),
+            )
+        elif any(p.text for p in result.values()):
+            # Text without a single score anywhere: an engine that does not
+            # report them. "No text recognized" would be a lie here — the
+            # text is the part that arrived fine.
+            logger.info(
+                "OCR subprocess transcribed %d page(s) of %s: "
+                "no recognition scores reported",
+                len(result), pdf_path.name,
             )
         else:
             logger.info(

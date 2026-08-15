@@ -230,14 +230,30 @@ of this same call, as long as there are at or under
 `documents.ocr.inline_max_pages` (default 5) of them. The gateway is
 long-lived, so it never loads the OCR engine itself: `transcribe_pages_detached`
 (`durin/memory/ocr.py`) hands the page numbers to a short-lived subprocess
-(`durin/memory/ocr_subproc.py`, run as `python -m durin.memory.ocr_subproc`),
+(`durin/memory/ocr_subproc.py`, run as `python -m durin.memory.ocr_subproc`,
+argv `<pdf_path> <dpi> <page> [<page>...] [--lang <code>]`),
 which renders and transcribes them and returns one JSON object over stdout —
 per page, the text plus the engine's recognition-score aggregates and, when a
 page comes back empty, a detection-only box count that tells blank paper
 apart from print the engine cannot read. The parent rebuilds each page as a
 `TranscribedPage` and logs a one-line score summary; the scores are for
 diagnosis only, never an accept/reject gate, because the measured score bands
-for wrong-but-plausible output overlap those of legitimate noisy scans. The
+for wrong-but-plausible output overlap those of legitimate noisy scans.
+
+The optional trailing `--lang` carries `documents.ocr.language` — a
+recognition language beyond the engine's built-in pack. The parent resolves
+it from config (the child stays config-free; everything it needs arrives on
+argv) and appends it only when set. The engine then swaps just its
+recognition model, keyed on the language in its per-process cache, and
+resolves models under `<durin home>/models/ocr` — the same
+`<durin home>/models/` convention the stt and tts engines cache under,
+chosen over rapidocr's own site-packages default because a reinstall or
+redeploy would delete models cached there. Whatever that root is missing is
+downloaded from modelscope.cn on first use, inside the child, ahead of its
+first page — so when the parent sees the language's recognition model absent
+from the root, it extends the subprocess timeout by a named constant and
+logs the one-time download (source and size); selecting the language in
+config is the consent, the same pattern as the extras auto-install. The
 engine's memory is released when that subprocess exits rather than
 accumulating in the gateway across conversions. Only one of those children
 runs at a time across the whole process: an engine costs roughly 1.4 GB

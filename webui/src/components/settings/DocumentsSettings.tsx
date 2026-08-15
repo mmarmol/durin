@@ -17,7 +17,7 @@ interface DocumentsConfigShape {
   // /api/config returns the canonical snake_case shape; setConfigValue
   // *paths* are snake_case too, normalized server-side before writing.
   documents?: {
-    ocr?: { enabled?: boolean; inline_max_pages?: number };
+    ocr?: { enabled?: boolean; inline_max_pages?: number; language?: string | null };
     max_file_size_mb?: number;
     max_text_chars?: number;
   };
@@ -26,9 +26,25 @@ interface DocumentsConfigShape {
 interface DocumentsState {
   ocrEnabled: boolean;
   ocrInlineMaxPages: number;
+  ocrLanguage: string; // config code, or "" for the built-in pack (null)
   maxFileSizeMb: number;
   maxTextChars: number;
 }
+
+// Languages the engine can add beyond its built-in pack. Values are the
+// documents.ocr.language config codes (English literals, never translated);
+// only the display labels go through i18n.
+const OCR_LANGUAGES: ReadonlyArray<{ value: string; labelKey: string }> = [
+  { value: "arabic", labelKey: "settings.documents.language.arabic" },
+  { value: "cyrillic", labelKey: "settings.documents.language.cyrillic" },
+  { value: "devanagari", labelKey: "settings.documents.language.devanagari" },
+  { value: "el", labelKey: "settings.documents.language.el" },
+  { value: "eslav", labelKey: "settings.documents.language.eslav" },
+  { value: "korean", labelKey: "settings.documents.language.korean" },
+  { value: "ta", labelKey: "settings.documents.language.ta" },
+  { value: "te", labelKey: "settings.documents.language.te" },
+  { value: "th", labelKey: "settings.documents.language.th" },
+];
 
 function readDocuments(config: Record<string, unknown> | null): DocumentsState {
   const documents = (config as DocumentsConfigShape | null)?.documents ?? {};
@@ -37,6 +53,7 @@ function readDocuments(config: Record<string, unknown> | null): DocumentsState {
     ocrEnabled: typeof ocr.enabled === "boolean" ? ocr.enabled : false,
     ocrInlineMaxPages:
       typeof ocr.inline_max_pages === "number" ? ocr.inline_max_pages : 5,
+    ocrLanguage: typeof ocr.language === "string" ? ocr.language : "",
     maxFileSizeMb:
       typeof documents.max_file_size_mb === "number" ? documents.max_file_size_mb : 50,
     maxTextChars:
@@ -166,6 +183,29 @@ export function DocumentsSettings({ token }: { token: string }) {
               }}
             />
           ) : null}
+          <SettingsRow
+            title={t("settings.documents.rows.ocrLanguage")}
+            description={t("settings.documents.help.ocrLanguage")}
+          >
+            <select
+              value={state.ocrLanguage}
+              aria-label={t("settings.documents.rows.ocrLanguage")}
+              onChange={(e) =>
+                // "" is the built-in pack, stored as null so the config file
+                // reads as "unset" rather than as a tenth language code.
+                void onSave("documents.ocr.language", e.target.value || null)
+              }
+              disabled={savingPath === "documents.ocr.language"}
+              className="h-8 max-w-[260px] rounded-full border bg-background px-3 text-[13px]"
+            >
+              <option value="">{t("settings.documents.language.builtin")}</option>
+              {OCR_LANGUAGES.map((lang) => (
+                <option key={lang.value} value={lang.value}>
+                  {t(lang.labelKey)}
+                </option>
+              ))}
+            </select>
+          </SettingsRow>
           <NumberRow
             title={t("settings.documents.rows.ocrInlineMaxPages")}
             description={t("settings.documents.help.ocrInlineMaxPages")}
