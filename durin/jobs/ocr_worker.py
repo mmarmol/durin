@@ -174,8 +174,9 @@ def run_job(job_id: str, *, registry: JobRegistry | None = None) -> None:
         ):
             # Same contract as claim() and finish(): a write that did not
             # happen is not a write to assume. The row stopped being this
-            # worker's between the claim and here — the per-page loop's own
-            # check below is what acts on that.
+            # worker's between the claim and here — the per-page loop's
+            # ownership check below is what acts on that, whichever way it
+            # was lost (cancelled, requeued, or claimed by another worker).
             logger.warning(
                 "ocr worker: job {} was not this worker's to resize; "
                 "its progress count is left as it was", job_id,
@@ -188,17 +189,59 @@ def run_job(job_id: str, *, registry: JobRegistry | None = None) -> None:
     det_boxes_seen: dict[int, int] = {}
     for page in todo:
         # Re-read rather than trusting the local copy: cancellation arrives
-        # from the gateway, in another process.
+        # from the gateway, in another process -- and cancellation is not
+        # the only way this row stops being this run's. Each boundary asks
+        # "is this row still mine?", and only `running` under this process's
+        # own pid says yes; anything else stops the loop before another page
+        # is transcribed. (The page already in flight when ownership is lost
+        # still gets recorded above the next check: record_unit is
+        # idempotent, and a successor resumes from it instead of redoing it.)
         current = registry.get(job_id)
         if current is None or current.status == "cancelled":
-            _emit(job_id, len(pages), len(already), started, "cancelled")
-            # registry.cancel() already wrote the terminal status, so the cap
-            # slot this job held is free from this instant -- chain exactly
-            # as a normal finish would, or a queued sibling waits for a
-            # trigger that may never come (stop is user-facing, and under
-            # cap=1 "one running, one queued behind it" is the ordinary
-            # state for a multi-book ingest).
+            # Cancelled, or the row is gone entirely. Either way the cap
+            # slot this job held is genuinely free (registry.cancel() wrote
+            # the terminal status and cleared the pid; a vanished row is
+            # counted by nobody), and no successor process exists to hand it
+            # to a queued sibling -- so this worker chains, exactly as a
+            # normal finish would, or that sibling waits for a trigger that
+            # may never come (stop is user-facing, and under cap=1 "one
+            # running, one queued behind it" is the ordinary state for a
+            # multi-book ingest). The emitted status reports what was
+            # observed: a vanished row was not cancelled, and saying
+            # "cancelled" for it would invent an outcome nobody wrote.
+            _emit(job_id, len(pages), len(already), started,
+                  "cancelled" if current is not None else "gone")
             _chain_to_next_queued(registry)
+            return
+        if current.status != "running" or current.pid != os.getpid():
+            # The row is alive but no longer this run's: requeued out from
+            # under it (status "queued" -- a cancel followed by a prompt
+            # retry lands here whenever the requeue beats this boundary
+            # re-read), claimed by a successor worker ("running" under a
+            # foreign pid), or even finished outright by one ("done"/
+            # "failed"). Checking only for "cancelled" here once read that
+            # foreign "running" as all clear and kept a second OCR engine
+            # transcribing the whole remaining book alongside the successor
+            # -- the exact resource condition MAX_CONCURRENT_OCR_JOBS exists
+            # to prevent. Stop now: every further page is the successor's
+            # work, and the row's state is the successor's to write.
+            #
+            # No chain from this exit: this worker's slot was never freed
+            # into its hands. A requeued row's slot goes to whoever claims
+            # it -- the retry's own respawn, the periodic sweep, or a chain
+            # from a worker that genuinely freed a slot -- so a chain fired
+            # from here could double-launch on top of that respawn; a
+            # foreign "running" row IS the slot, occupied, and its owner
+            # chains when it finishes; a row someone else finished got its
+            # chain from that finisher's own exit. No terminal _emit either:
+            # that event records how a job's work ended, this job's work has
+            # not ended (its successor is doing it), and the successor's own
+            # exit reports the real outcome -- an event from here would
+            # double-count the job under a status that is not an outcome.
+            logger.warning(
+                "ocr worker: job {} is {} and no longer this run's; stopping "
+                "without transcribing further pages", job_id, current.status,
+            )
             return
         try:
             result = transcribe_page(pdf_path, page, language=language)
@@ -339,20 +382,22 @@ def _chain_to_next_queued(registry: JobRegistry) -> None:
     """Launch a fresh worker for the oldest still-``queued`` OCR job, if any.
 
     Called from every exit of ``run_job`` that follows a successful claim
-    and reaches a terminal state for the row this worker held: its own
-    successful ``finish()``, a cancellation noticed mid-loop, and a
-    ``finish()`` that lost to something else. The first two genuinely leave
-    the row no longer ``running``; the third might not -- a takeover via
-    ``reconcile``'s age fallback can leave it ``running`` under its new
-    owner instead of freeing the cap slot. Calling this anyway is safe: the
-    worker launched below still has to win ``claim()``'s own atomic cap
-    check, so a chain fired while the slot is not really free just costs
-    that worker a refused claim -- one wasted spawn, not a second worker on
-    the same job. Deliberately NOT called from the refused-claim exit above:
-    a worker whose own claim was refused never held a slot to free, so
-    chaining from there would be an extra launch on top of whatever the
-    live holder already does when it finishes — the live holder owns the
-    chain, not a worker that never claimed anything.
+    and leaves nobody else responsible for the slot this worker held: its
+    own successful ``finish()``, a cancellation (or a vanished row) noticed
+    mid-loop, and a ``finish()`` that lost to something else. The first two
+    genuinely leave the row no longer ``running``; the third might not -- a
+    takeover via ``reconcile``'s age fallback can leave it ``running``
+    under its new owner instead of freeing the cap slot. Calling this
+    anyway is safe: the worker launched below still has to win ``claim()``'s
+    own atomic cap check, so a chain fired while the slot is not really
+    free just costs that worker a refused claim -- one wasted spawn, not a
+    second worker on the same job. Deliberately NOT called from the two
+    exits where the slot is someone else's to hand off: the refused-claim
+    exit (that worker never held a slot to free, and the live holder owns
+    the chain), and the mid-loop stand-down for a row requeued out from
+    under this run or claimed by a successor (the requeue's own respawn, or
+    the successor's exit, owns the next launch -- a chain from the loser
+    could double-launch on top of it).
     """
     next_job = registry.next_queued("ocr")
     if next_job is None:

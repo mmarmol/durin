@@ -723,6 +723,207 @@ def test_worker_chains_even_when_finish_loses_to_something_else(
 
 
 # ---------------------------------------------------------------------------
+# Ownership at the page boundary. The live sequence that found this seam:
+# cancel lands while a page is mid-transcription, the user's prompt retry
+# requeues the row (cancelled -> queued), and a successor worker claims it --
+# all inside one page's transcription time, before the old worker's next
+# boundary re-read. A check that only asks "was I cancelled?" reads the
+# successor's "running" as all clear and keeps transcribing the whole
+# remaining book alongside it: two OCR engines on one job, the exact
+# resource condition MAX_CONCURRENT_OCR_JOBS=1 exists to prevent.
+# ---------------------------------------------------------------------------
+
+
+def test_worker_stands_down_when_the_job_is_requeued_and_reclaimed_midway(
+    registry, scanned_pdf, monkeypatch,
+):
+    """The full race, deterministically: page 1's transcription performs the
+    cancel + requeue + foreign claim before returning, so the worker's next
+    boundary re-read sees "running" under a pid that is not its own. It must
+    stand down: no further pages transcribed or recorded (they are the
+    successor's work), the row left exactly as the successor's claim wrote
+    it, no chain launched (the slot is the successor's, not this worker's to
+    hand off), and no telemetry outcome event (the job's outcome is now the
+    successor's to record)."""
+    called = []
+
+    def _lose_the_job_during_page_one(path, page, **kw):
+        called.append(page)
+        if page == 1:
+            registry.cancel(job.id)
+            assert registry.requeue(job.id) is True
+            assert registry.claim(job.id, pid=999999) is True  # the successor
+        return _page(f"page {page}")
+
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page", _lose_the_job_during_page_one,
+    )
+    launched = []
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker._launch_worker",
+        lambda job_id: launched.append(job_id),
+    )
+    emitted = []
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker._emit",
+        lambda job_id, pages, resumed, started, status: emitted.append(status),
+    )
+    job = _enqueue(registry, scanned_pdf, [1, 2, 3])
+
+    run_job(job.id, registry=registry)
+
+    assert called == [1]  # pages 2 and 3 belong to the successor
+    # The page in flight when ownership was lost is still recorded: record_unit
+    # is idempotent and the successor resumes from it instead of redoing it.
+    assert registry.done_units(job.id) == {1}
+    reread = registry.get(job.id)
+    assert reread.status == "running"  # the successor's claim, untouched
+    assert reread.pid == 999999
+    assert launched == []
+    assert emitted == []
+
+
+def test_worker_stands_down_when_the_job_is_requeued_but_not_yet_reclaimed(
+    registry, scanned_pdf, monkeypatch,
+):
+    """The same race caught one beat earlier: the requeue flipped the row
+    back to "queued" but no successor has claimed yet. "queued" is not
+    "cancelled" — a cancelled-only check would keep transcribing a job that
+    is back in the queue for someone else. And the slot is still not this
+    worker's to hand off: the retry that requeued also respawns, so a chain
+    fired from here could put a second launch on top of that one, racing it
+    for this very job."""
+    called = []
+
+    def _requeue_during_page_one(path, page, **kw):
+        called.append(page)
+        if page == 1:
+            registry.cancel(job.id)
+            assert registry.requeue(job.id) is True
+        return _page(f"page {page}")
+
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page", _requeue_during_page_one,
+    )
+    launched = []
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker._launch_worker",
+        lambda job_id: launched.append(job_id),
+    )
+    emitted = []
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker._emit",
+        lambda job_id, pages, resumed, started, status: emitted.append(status),
+    )
+    job = _enqueue(registry, scanned_pdf, [1, 2, 3])
+
+    run_job(job.id, registry=registry)
+
+    assert called == [1]
+    assert registry.done_units(job.id) == {1}  # resume data for the successor
+    reread = registry.get(job.id)
+    assert reread.status == "queued"  # exactly as the requeue wrote it
+    assert reread.pid is None
+    assert reread.started_at is None
+    assert launched == []
+    assert emitted == []
+
+
+def test_worker_chains_and_reports_gone_when_the_row_vanishes_midway(
+    registry, scanned_pdf, monkeypatch,
+):
+    """A row that vanishes mid-run is nobody's: nothing is left to claim or
+    requeue, so no successor exists, and the cap's COUNT of running rows no
+    longer sees it, so the slot is genuinely free — this worker is the only
+    process positioned to hand it to a queued sibling, exactly as after a
+    cancel. The telemetry event says what was observed ("gone", the same
+    word the post-loop loser path uses for the same observation), not
+    "cancelled", which would invent an outcome nobody wrote."""
+    from durin.utils.sqlite_util import execute_write
+
+    called = []
+
+    def _row_vanishes_during_page_one(path, page, **kw):
+        called.append(page)
+        if page == 1:
+            execute_write(
+                registry._conn,
+                lambda c: c.execute("DELETE FROM jobs WHERE id = ?", (job.id,)),
+            )
+        return _page(f"page {page}")
+
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page", _row_vanishes_during_page_one,
+    )
+    launched = []
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker._launch_worker",
+        lambda job_id: launched.append(job_id),
+    )
+    emitted = []
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker._emit",
+        lambda job_id, pages, resumed, started, status: emitted.append(status),
+    )
+    job = _enqueue(registry, scanned_pdf, [1, 2, 3])
+    sibling = _enqueue(registry, scanned_pdf, [1])  # queued behind the slot
+
+    run_job(job.id, registry=registry)
+
+    assert called == [1]
+    assert registry.get(job.id) is None
+    assert emitted == ["gone"]
+    assert launched == [sibling.id]  # the freed slot was handed off
+
+
+def test_finish_still_refuses_and_warns_when_the_takeover_lands_past_the_last_boundary(
+    registry, scanned_pdf, monkeypatch,
+):
+    """The boundary check is not the last word: a takeover landing during
+    the FINAL page's transcription is past every boundary re-read (and the
+    sidecar/indexing window after the loop has no checks at all), so the
+    pid-guarded finish() is what refuses to overwrite the successor — with
+    its WARNING, reporting the row's observed state, and without flipping
+    the row the successor now owns."""
+    from loguru import logger as loguru_logger
+
+    def _lose_the_job_during_the_last_page(path, page, **kw):
+        if page == 3:
+            registry.cancel(job.id)
+            assert registry.requeue(job.id) is True
+            assert registry.claim(job.id, pid=999999) is True  # the successor
+        return _page(f"page {page}")
+
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker.transcribe_page", _lose_the_job_during_the_last_page,
+    )
+    emitted = []
+    monkeypatch.setattr(
+        "durin.jobs.ocr_worker._emit",
+        lambda job_id, pages, resumed, started, status: emitted.append(status),
+    )
+    job = _enqueue(registry, scanned_pdf, [1, 2, 3])
+
+    warnings = []
+    sink_id = loguru_logger.add(
+        lambda m: warnings.append(str(m)), level="WARNING", format="{message}",
+    )
+    try:
+        run_job(job.id, registry=registry)
+    finally:
+        loguru_logger.remove(sink_id)
+
+    reread = registry.get(job.id)
+    assert reread.status == "running"  # the successor's row survived the finish
+    assert reread.pid == 999999
+    assert any("by the time this run finished" in m for m in warnings)
+    assert emitted == ["running"]  # the loser reports what it observed
+    # All three pages were recorded before the loser stood down: the takeover
+    # landed during the last one, so there was no boundary left to catch it.
+    assert registry.done_units(job.id) == {1, 2, 3}
+
+
+# ---------------------------------------------------------------------------
 # The concurrency cap (MAX_CONCURRENT_OCR_JOBS) and the chain that drains a
 # queue behind it one fresh process at a time.
 # ---------------------------------------------------------------------------

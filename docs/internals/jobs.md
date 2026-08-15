@@ -91,7 +91,7 @@ flowchart TD
     CANCEL["tasks(action=stop)"] -->|status=cancelled| REG
     RETRY["tasks(action=retry)"] -->|requeue: failed/cancelled\nto queued, units kept| REG
     RETRY -->|respawn| WORKER
-    WORKER -.checks status\nat each claim + page boundary.-> REG
+    WORKER -.checks ownership: status + pid\nat each claim + page boundary.-> REG
 ```
 
 ## 4. How it works
@@ -204,9 +204,10 @@ refusal and no restart required. Plan for a legitimately >6h job to be taken
 over, not for it to be rare.
 
 A worker looks for more work before it exits, from every point after a
-successful claim where the row it held reaches a terminal state: its own
-`finish()` succeeding, a cancellation noticed mid-loop (`registry.cancel`
-already wrote `cancelled` by then), or `finish()` losing to something else.
+successful claim where the slot it held is nobody else's to hand off: its
+own `finish()` succeeding, a cancellation — or a vanished row — noticed
+mid-loop (`registry.cancel` already wrote `cancelled` by then; a vanished
+row is counted by nobody), or `finish()` losing to something else.
 The first two genuinely leave the row no longer `running`; the third might
 not — a late cancel is terminal, but a takeover by a second worker via
 `reconcile`'s age fallback leaves the row `running` under its new owner
@@ -220,10 +221,17 @@ worker launches a fresh process for it through `_launch_worker`, the same
 `Popen` call `spawn_ocr_job` and `respawn` use. The launch happens strictly
 *after* the terminal write, never before — launching earlier could let the
 cap briefly see two workers of one job's kind at once. Deliberately not
-called from the refused-claim exit above: a worker whose own claim was
-refused never held a slot to free, so chaining from there would be an extra
-launch on top of whatever the live holder already does when it finishes —
-the live holder owns the chain. This is how several scanned books drain one
+called from the two exits where the slot is someone else's to hand off. The
+refused-claim exit above: a worker whose own claim was refused never held a
+slot to free, so chaining from there would be an extra launch on top of
+whatever the live holder already does when it finishes — the live holder
+owns the chain. And the mid-loop ownership stand-down (a row requeued out
+from under the run, or claimed by a successor — see
+[Cancellation](#cancellation)): a requeued row's slot goes to whoever claims
+it, the retry's own respawn or the sweep's pickup, so a chain fired by the
+standing-down worker could double-launch on top of that; a foreign `running`
+row *is* the slot, occupied, and its owner chains when it finishes.
+This is how several scanned books drain one
 at a time without an external scheduler: each terminal job hands off to the
 next, and memory genuinely leaves the machine between books because every
 worker is a fresh process. A launch failure here is logged and swallowed the
@@ -355,11 +363,35 @@ for any other reason, so a cancelled gateway does not leave it sweeping.
 
 `JobRegistry.cancel` sets `status='cancelled'`. There is no signal sent to the
 worker process — cancellation is cooperative, and the worker only ever learns
-of it by re-reading the row: at the top of every per-unit loop iteration, so a
+of it by re-reading the row at the top of every per-unit loop iteration, so a
 cancel lands at the next page boundary at the latest, with a page already
-being transcribed finishing first. The one case that loop never reaches — every
-requested page already transcribed by an earlier run — is covered instead by
-`claim`'s own conditional `UPDATE ... WHERE status='queued'` (see
+being transcribed finishing first.
+
+That boundary re-read is an **ownership check, not a cancellation check**:
+the worker keeps transcribing only while the row is still `running` under
+its own pid. A cancel is one way to fail it; so are a requeue that flipped
+the row back to `queued`, a successor worker's claim (`running` under a
+foreign pid), and a row that vanished outright. The distinction is
+load-bearing because cancel composes with [retry](#retry): a stop followed
+promptly by a retry requeues the row and claims it for a fresh worker, and
+both can land inside one page's transcription time — before the old worker's
+next boundary re-read. A check that only asked "was I cancelled?" read that
+successor's `running` as all clear and kept a second OCR engine transcribing
+the same job's whole remaining tail (observed live): two workers' full
+resource cost on one job, the exact condition the cap exists to prevent,
+with only `record_unit`'s idempotence and `finish`'s pid guard keeping it
+*correct*. The ownership check makes the old worker stand down at the
+boundary instead — no further pages, no row write, no chain launch, no
+telemetry outcome event; the successor owns the slot, the remaining pages,
+and the outcome. Which exits chain differs for the same reason: a cancelled
+or vanished row leaves the slot free with no successor to hand it off, so
+the worker chains; a requeued or reclaimed row's slot belongs to the
+requeue/claim path (the retry's own respawn, or the sweep), so the
+standing-down worker launching anything could only double up on it.
+
+The one case the per-unit loop never reaches — every requested page already
+transcribed by an earlier run — is covered instead by `claim`'s own
+conditional `UPDATE ... WHERE status='queued'` (see
 [above](#enqueueing-and-claiming)): a cancel that lands between the worker's
 pre-claim status read and the claim itself makes that `UPDATE` match zero
 rows, so the worker still notices it lost the job rather than marking a
@@ -413,7 +445,11 @@ units and all — retryable for a month, then gone (see
 The caller is the `tasks` tool's `action="retry"` (jobs only — a sub-agent
 or workflow run is redone by launching a new one). After a successful
 requeue the tool hands the row to `respawn`, the same never-claiming launch
-used for a reconciled orphan. Under `MAX_CONCURRENT_OCR_JOBS = 1` the
+used for a reconciled orphan. A retry can land while the cancelled job's
+previous worker is still mid-page — a cancel is only noticed at a page
+boundary — and that boundary's ownership check (see
+[Cancellation](#cancellation)) is what makes the old worker stand down
+instead of transcribing on alongside the retry's fresh one. Under `MAX_CONCURRENT_OCR_JOBS = 1` the
 launched worker's claim is refused while another OCR job holds the slot, and
 the retried job simply stays `queued` for the running worker's finish-time
 chain or the [periodic sweep](#the-periodic-sweep) to pick up — which is why
@@ -626,7 +662,7 @@ transcribed at a time").
 | `spawn_ocr_job` | `durin/jobs/spawn.py` | Enqueues an OCR job and launches its worker; called from `ingest_artifact` when a document needs more OCR than the inline budget and no job for it is already pending — an `ocr_job.json` marker in the entry directory short-circuits a re-ingest while one is still `queued`/`running` instead of calling this again (see [Memory: agent tools](memory/04_agent_tools.md#memory_ingest)). |
 | `respawn` | `durin/jobs/spawn.py` | (Re)launches the worker for a job that needs one and is not this process's to claim: an orphan `reconcile` just requeued, or a row gateway startup found `queued` with nothing claiming it. Dispatches on `job.kind`. |
 | `_launch_worker` | `durin/jobs/spawn.py` | The one `Popen` call shared by `spawn_ocr_job`, `respawn`, and the worker's own chain. |
-| `run_job` | `durin/jobs/ocr_worker.py` | The OCR worker's whole lifecycle: kind-capped claim (self-healing a stale holder once via an inline `reconcile` on refusal), per-page transcribe loop, sidecar assembly, Library indexing, finish or cancellation, then chain to the next queued job. |
+| `run_job` | `durin/jobs/ocr_worker.py` | The OCR worker's whole lifecycle: kind-capped claim (self-healing a stale holder once via an inline `reconcile` on refusal), per-page transcribe loop behind a per-boundary ownership check, sidecar assembly, Library indexing, then finish, cancellation, or standing down to a successor — chaining to the next queued job from every exit whose slot was nobody else's to hand off. |
 | `queued_jobs` | `durin/jobs/registry.py` | The oldest up to *n* still-`queued` jobs of a kind in one query; what the pickup loop uses instead of looping `next_queued`. |
 | `_resume_jobs` | `durin/agent/loop.py` | The reconcile-then-capped-pickup pass itself, shared by gateway startup and the periodic sweep so the two cannot drift apart; also carries the retention day-tick — a guarded `prune_terminal` at most once a day. |
 | `AgentLoop._sweep_jobs_periodically` | `durin/agent/loop.py` | Re-runs that pass every `_JOB_SWEEP_INTERVAL_S`, guarded per tick; what un-wedges a queue whose cap slot is held by a worker that was killed outright. |
