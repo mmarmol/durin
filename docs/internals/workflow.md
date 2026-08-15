@@ -681,8 +681,9 @@ force-stop already in flight.
   of outliving it as an orphan nobody is left to reap.
 - **Hard** (`force=true`, or a repeat `stop` on a run already cancelling, which
   auto-escalates): additionally interrupts an in-flight agent node. The engine
-  hands every agent turn — sequential work nodes, parallel branches, fan-out
-  workers, and the nodes of a nested sub-workflow — a hard-only check; the node
+  hands every agent turn — sequential work nodes, parallel branches, detached
+  launches, fan-out workers, and the nodes of a nested sub-workflow — a
+  hard-only check; the node
   runner runs the turn as a task and polls the flag on a short interval,
   cancelling the task the moment it turns true. The abort surfaces as a
   `WorkInterrupted` cause, the partial conversation is persisted exactly like

@@ -454,9 +454,10 @@ class TasksTool(Tool, ContextAware):
         if hard:
             return (
                 f"Workflow run [{task_id}] force-stopped: the node currently "
-                "executing is being interrupted, though a tool call already "
-                "under way runs to the end and its writes can still land. Its "
-                "result still arrives as a follow-up, with status 'cancelled'."
+                "executing is being interrupted. If it was waiting on the model, "
+                "that ends at once; if it was inside a tool doing blocking work, "
+                "that one call finishes on its own and its writes can still land. "
+                "Its result still arrives as a follow-up, with status 'cancelled'."
             )
         return (
             f"Workflow run [{task_id}] asked to cancel. It stops at its next node "

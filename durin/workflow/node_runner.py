@@ -196,12 +196,21 @@ class AgentNodeRunner:
                     raise WorkInterrupted("agent turn aborted by force-stop")
 
         outcome: dict[str, Any] = {}
+        abandoned = threading.Event()
 
         def _drive() -> None:
             try:
                 outcome["result"] = asyncio.run(_watched())
             except BaseException as exc:  # noqa: BLE001 - re-raised on the engine thread
                 outcome["error"] = exc
+                if abandoned.is_set() and not isinstance(exc, WorkInterrupted):
+                    # Once the engine has walked away nobody re-raises this, so a
+                    # genuine failure in the orphan would leave no trace at all.
+                    # WorkInterrupted is the abandonment itself and says nothing.
+                    logger.warning(
+                        "workflow: the abandoned turn thread failed after its "
+                        "force-stop ({}): {}", type(exc).__name__, exc,
+                    )
 
         # asyncio.run() runs the coroutine in a COPY of the calling thread's context,
         # so copying it onto the turn thread keeps every contextvar the turn would
@@ -217,6 +226,7 @@ class AgentNodeRunner:
             if cancel_check():
                 # The watcher on the turn thread cancels the turn itself; this only
                 # stops waiting for the teardown behind it.
+                abandoned.set()
                 raise WorkInterrupted("agent turn aborted by force-stop")
         if "error" in outcome:
             raise outcome["error"]
