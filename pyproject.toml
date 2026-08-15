@@ -94,7 +94,13 @@ oauth = [
     "oauth-cli-kit>=0.1.0",
 ]
 mcp = [
-    "mcp>=1.26.0,<3.0.0",
+    # Held below 2.0. The client APIs durin imports (`mcp.types`,
+    # `mcp.client.auth`, `StdioServerParameters`) all survive in 2.0, but that
+    # release drops `mcp.server.fastmcp`, which the MCP tests need to stand up
+    # a real in-process server to talk to. Lifting this ceiling means porting
+    # that harness first — to the standalone `fastmcp` package or to the
+    # low-level server API — not just widening the range.
+    "mcp>=1.26.0,<2.0.0",
 ]
 web = [
     "ddgs>=9.5.5,<10.0.0",
