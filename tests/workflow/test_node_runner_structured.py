@@ -5,6 +5,8 @@ that cannot produce a valid payload has failed (typed NodeExecutionError, so
 the run aborts naming it and failure-resume can retry it). Providers don't
 reliably enforce JSON Schema, so validation is server-side and an invalid
 payload is retried immediately with the exact validation error as feedback.
+A length-truncated delivery is named as truncation (not misreported as a schema
+miss) and a provider-error response fails fast with the provider's message.
 """
 
 import json
@@ -44,10 +46,12 @@ def _runner_with_deliver(tmp_path, deliver_responses):
         messages=[{"role": "user", "content": "t"},
                   {"role": "assistant", "content": "prose answer"}],
     ))
-    provider.chat = AsyncMock(side_effect=[
-        SimpleNamespace(tool_calls=[SimpleNamespace(arguments=args)] if args is not None else [])
-        for args in deliver_responses
-    ])
+    def _as_response(item):
+        if isinstance(item, SimpleNamespace):        # full response (finish_reason etc.)
+            return item
+        return SimpleNamespace(tool_calls=[SimpleNamespace(arguments=item)] if item is not None else [])
+
+    provider.chat_with_retry = AsyncMock(side_effect=[_as_response(i) for i in deliver_responses])
     return AgentNodeRunner(ar, SessionManager(workspace=tmp_path), default_model="test-model"), provider
 
 
@@ -60,7 +64,7 @@ def test_valid_payload_first_try_becomes_the_output(tmp_path):
     nr, provider = _runner_with_deliver(tmp_path, [{"queries": ["a", "b"]}])
     resp = nr(_req(_schema_node()))
     assert json.loads(resp.output) == {"queries": ["a", "b"]}
-    assert provider.chat.await_count == 1
+    assert provider.chat_with_retry.await_count == 1
 
 
 def test_invalid_payload_is_retried_with_the_validation_error(tmp_path):
@@ -68,8 +72,8 @@ def test_invalid_payload_is_retried_with_the_validation_error(tmp_path):
         tmp_path, [{"queries": []}, {"queries": ["fixed"]}])   # minItems violation, then valid
     resp = nr(_req(_schema_node()))
     assert json.loads(resp.output) == {"queries": ["fixed"]}
-    assert provider.chat.await_count == 2
-    retry_messages = provider.chat.await_args_list[1].kwargs["messages"]
+    assert provider.chat_with_retry.await_count == 2
+    retry_messages = provider.chat_with_retry.await_args_list[1].kwargs["messages"]
     feedback = retry_messages[-1]["content"]
     assert "did not satisfy the output schema" in feedback
     assert "queries" in feedback                    # names where it failed
@@ -81,12 +85,54 @@ def test_exhausted_attempts_raise_a_typed_node_failure(tmp_path):
     with pytest.raises(NodeExecutionError) as exc:
         nr(_req(_schema_node()))
     assert "structured output failed" in str(exc.value.cause)
-    assert provider.chat.await_count == 3
+    assert provider.chat_with_retry.await_count == 3
 
 
 def test_missing_tool_call_counts_as_a_failed_attempt(tmp_path):
     nr, provider = _runner_with_deliver(tmp_path, [None, {"queries": ["ok"]}])
     resp = nr(_req(_schema_node()))
     assert json.loads(resp.output) == {"queries": ["ok"]}
-    retry_messages = provider.chat.await_args_list[1].kwargs["messages"]
+    retry_messages = provider.chat_with_retry.await_args_list[1].kwargs["messages"]
     assert "no deliver tool call" in retry_messages[-1]["content"]
+
+
+def test_truncated_invalid_payload_names_the_output_limit_and_recovers(tmp_path):
+    truncated = SimpleNamespace(
+        tool_calls=[SimpleNamespace(arguments={"queries": []})], finish_reason="length")
+    nr, provider = _runner_with_deliver(tmp_path, [truncated, {"queries": ["ok"]}])
+    resp = nr(_req(_schema_node()))
+    assert json.loads(resp.output) == {"queries": ["ok"]}
+    feedback = provider.chat_with_retry.await_args_list[1].kwargs["messages"][-1]["content"]
+    assert "output-token limit" in feedback
+    assert "did not satisfy the output schema" not in feedback
+
+
+def test_all_attempts_truncated_report_truncation_not_schema(tmp_path):
+    def t():
+        return SimpleNamespace(tool_calls=[SimpleNamespace(arguments={})], finish_reason="length")
+    nr, provider = _runner_with_deliver(tmp_path, [t(), t(), t()])
+    with pytest.raises(NodeExecutionError) as exc:
+        nr(_req(_schema_node()))
+    msg = str(exc.value.cause)
+    assert "output-token limit" in msg
+    assert "is a required property" not in msg
+    assert provider.chat_with_retry.await_count == 3
+
+
+def test_provider_error_response_fails_fast_with_the_provider_message(tmp_path):
+    err = SimpleNamespace(tool_calls=[], finish_reason="error",
+                          content="Error calling LLM: boom")
+    nr, provider = _runner_with_deliver(tmp_path, [err])
+    with pytest.raises(NodeExecutionError) as exc:
+        nr(_req(_schema_node()))
+    assert "provider error" in str(exc.value.cause)
+    assert "boom" in str(exc.value.cause)
+    assert provider.chat_with_retry.await_count == 1, "must not burn attempts on a dead provider"
+
+
+def test_complete_valid_payload_is_accepted_even_when_flagged_length(tmp_path):
+    r = SimpleNamespace(tool_calls=[SimpleNamespace(arguments={"queries": ["a"]})],
+                        finish_reason="length")
+    nr, provider = _runner_with_deliver(tmp_path, [r])
+    resp = nr(_req(_schema_node()))
+    assert json.loads(resp.output) == {"queries": ["a"]}

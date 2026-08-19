@@ -57,7 +57,7 @@ def _runner(tmp_path, deliver_responses=None, on_run=None):
 
     ar.run = AsyncMock(side_effect=_fake_run)
     if deliver_responses is not None:
-        provider.chat = AsyncMock(side_effect=[
+        provider.chat_with_retry = AsyncMock(side_effect=[
             SimpleNamespace(tool_calls=[SimpleNamespace(arguments=args)] if args is not None else [])
             for args in deliver_responses
         ])
@@ -95,11 +95,11 @@ def test_node_events_land_in_a_workflow_telemetry_file(tmp_path, monkeypatch):
     assert any(e["type"] == "tool.read_file" for e in events)
 
 
-def test_structured_output_round_trips_emit_call_telemetry(tmp_path, monkeypatch):
+def test_structured_output_goes_through_the_retry_wrapper(tmp_path, monkeypatch):
+    """Deliver calls ride chat_with_retry: transport retries, generation-resolved
+    max_tokens, and provider.call telemetry emitted by the wrapper itself."""
     monkeypatch.setattr(telemetry_logger, "_DEFAULT_DIR", tmp_path / "telemetry")
     nr, provider = _runner(tmp_path, deliver_responses=[{"queries": ["a"]}])
     nr(_req(_node(schema=SCHEMA)))
-    provider.emit_call_telemetry.assert_called_once()
-    kwargs = provider.emit_call_telemetry.call_args.kwargs
-    assert kwargs["model"] == "test-model"
-    assert kwargs["duration_ms"] >= 0
+    provider.chat_with_retry.assert_awaited_once()
+    provider.chat.assert_not_called()

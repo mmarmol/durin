@@ -221,7 +221,13 @@ A work node may declare a **structured output** (`output_schema`): the node runn
 `deliver` tool call whose parameters ARE the schema (the same machinery as the `route`
 verdict), validates the payload server-side (jsonschema), retries immediately inside the
 node with the exact validation error, and fails the node after the attempt budget — no
-text fallback. The delivery instruction names the schema's required fields up front, so
+text fallback. The forced-tool calls (route / re-entry / deliver) go through
+`chat_with_retry`, so transient transport failures retry and `max_tokens` resolves to the
+model's configured output cap rather than a hardcoded signature default. The delivery loop
+reads `finish_reason`: a `length` response is named as truncation and the retry is steered
+toward a more concise payload (a truncated tool-call JSON otherwise repairs into a partial
+object and gets misreported as a missing required field); an `error` response fails the
+node immediately with the provider's message instead of burning the remaining attempts. The delivery instruction names the schema's required fields up front, so
 a required-property miss costs a retry only when the model ignores an explicit list, not
 because it had to infer the contract from the schema alone. The node's output is the validated payload as JSON, and with `output_file`
 the ENGINE writes it into the working folder (the model never types the file).
