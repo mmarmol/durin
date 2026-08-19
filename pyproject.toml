@@ -100,7 +100,7 @@ mcp = [
     # a real in-process server to talk to. Lifting this ceiling means porting
     # that harness first — to the standalone `fastmcp` package or to the
     # low-level server API — not just widening the range.
-    "mcp>=1.26.0,<2.0.0",
+    "mcp>=1.26.0,<3.0.0",
 ]
 web = [
     "ddgs>=9.5.5,<10.0.0",
