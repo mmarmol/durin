@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import re
+import time
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
@@ -244,6 +245,11 @@ class LLMProvider(ABC):
 
     _SENTINEL = object()
 
+    # Config-registry name of this provider (e.g. "zai_coding_plan"), stamped
+    # by the factory so telemetry can attribute calls; class-level default so
+    # ad-hoc constructions (tests, probes) still emit under the class name.
+    provider_key: str | None = None
+
     def __init__(self, api_key: str | None = None, api_base: str | None = None):
         self.api_key = api_key
         self.api_base = api_base
@@ -253,6 +259,34 @@ class LLMProvider(ABC):
     def set_telemetry(self, telemetry: Any) -> None:
         """Attach a TelemetryLogger for structured rate limit tracking."""
         self._telemetry = telemetry
+
+    def emit_call_telemetry(self, *, model: Any, response: LLMResponse,
+                            duration_ms: float) -> None:
+        """Log one ``provider.call`` event for a completed round-trip.
+
+        Sink resolution: the ContextVar-bound session logger wins (bound per
+        turn / per workflow node), falling back to the logger attached via
+        ``set_telemetry()``. No sink → the event is dropped. Telemetry must
+        never break the call, so everything is exception-suppressed."""
+        with suppress(Exception):
+            from durin.telemetry.logger import current_telemetry
+
+            sink = current_telemetry() or getattr(self, "_telemetry", None)
+            if sink is None or not hasattr(sink, "log"):
+                return
+            resolved_model = model
+            if not resolved_model:
+                resolved_model = self.get_default_model()
+            usage = getattr(response, "usage", None) or {}
+            sink.log("provider.call", {
+                "provider": self.provider_key or type(self).__name__,
+                "model": str(resolved_model or ""),
+                "prompt_tokens": int(usage.get("prompt_tokens", 0) or 0),
+                "cached_tokens": int(usage.get("cached_tokens", 0) or 0),
+                "completion_tokens": int(usage.get("completion_tokens", 0) or 0),
+                "duration_ms": round(float(duration_ms), 1),
+                "finish_reason": getattr(response, "finish_reason", "stop"),
+            })
 
     @staticmethod
     def _sanitize_empty_content(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -877,6 +911,30 @@ class LLMProvider(ABC):
             remaining -= chunk
 
     async def _run_with_retry(
+        self,
+        call: Callable[..., Awaitable[LLMResponse]],
+        kw: dict[str, Any],
+        original_messages: list[dict[str, Any]],
+        *,
+        retry_mode: str,
+        on_retry_wait: Callable[[str, dict[str, Any]], Awaitable[None]] | None,
+    ) -> LLMResponse:
+        """Timed wrapper around the retry loop: every completed call — final
+        success or final error — lands one ``provider.call`` telemetry event
+        (wall clock, retries included), so every consumer of the retry
+        wrappers is visible in telemetry without instrumenting each caller."""
+        started = time.monotonic()
+        response = await self._run_retry_loop(
+            call, kw, original_messages,
+            retry_mode=retry_mode, on_retry_wait=on_retry_wait,
+        )
+        self.emit_call_telemetry(
+            model=kw.get("model"), response=response,
+            duration_ms=(time.monotonic() - started) * 1000.0,
+        )
+        return response
+
+    async def _run_retry_loop(
         self,
         call: Callable[..., Awaitable[LLMResponse]],
         kw: dict[str, Any],

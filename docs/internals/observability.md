@@ -116,6 +116,29 @@ flowchart TD
 `AgentLoop.from_config` calls `provider.set_telemetry(logger)` so the provider
 can emit rate-limit events directly without going through `emit_tool_event`.
 
+Every LLM round-trip emits a `provider.call` event from the provider layer
+itself: `LLMProvider._run_with_retry` times the retry loop and logs once per
+completed call (final success or final error, wall clock with retries
+included), which covers both `chat_with_retry` and `chat_stream_with_retry` —
+i.e. the agent loop, memory/dream, aux invokes, judges, personas, and
+evaluators without instrumenting each caller. Workflow nodes' direct `chat()`
+calls (route verdicts, re-entry assessments, structured-output delivery) and
+the `interpret_image`/`interpret_audio` aux tools emit through the same
+public `emit_call_telemetry` helper. The event carries the provider's
+config-registry name (stamped as `provider_key` by the factory), the model,
+prompt/cached/completion token counts, `duration_ms`, and the final
+`finish_reason` — the universal "who spent the tokens" record; `cache.usage`
+remains the agent-loop-only cache-ratio view. Sink resolution: the
+ContextVar-bound session logger wins, falling back to the `set_telemetry()`
+logger; with no sink the event is dropped.
+
+`AgentNodeRunner.__call__` binds `get_session_logger(<node session key>)`
+around the entire node execution (reset in `finally` — nodes run on pooled
+executor threads), so each workflow node writes its own
+`workflow_<run>_<node>` telemetry file with its tool events and
+`provider.call` records. Before this binding, workflow runs emitted no
+telemetry at all.
+
 At the start of each turn, `AgentLoop._run_agent_loop` calls
 `bind_telemetry(get_session_logger(session_key))`, which sets a ContextVar
 (`_current_logger`) for the current async task. The binding token is stored and

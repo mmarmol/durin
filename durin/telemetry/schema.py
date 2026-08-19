@@ -259,6 +259,25 @@ class ProviderRateLimitExhaustedEvent(TypedDict):
     error: str
 
 
+class ProviderCallEvent(TypedDict):
+    """One LLM round-trip, emitted from the provider layer for every call
+    that goes through the retry wrappers (and for workflow nodes' direct
+    ``chat()`` calls). This is the universal per-call token/latency record:
+    ``cache.usage`` only covers the channel agent loop, while this event also
+    makes workflow nodes, aux bridges (vision/audio), memory/dream and judge
+    traffic visible — "who spent the tokens?" is answerable from telemetry
+    alone. ``duration_ms`` is wall clock for the whole call, retries
+    included. The sink is the ContextVar-bound session logger, falling back
+    to the logger attached via ``set_telemetry()``."""
+    provider: str
+    model: str
+    prompt_tokens: int
+    cached_tokens: int
+    completion_tokens: int
+    duration_ms: float
+    finish_reason: str
+
+
 # ===========================================================================
 # Cache / context engineering
 # ===========================================================================
@@ -1707,6 +1726,7 @@ EVENTS: dict[str, type] = {
     "tool_call.argument_repair": ToolCallArgumentRepairEvent,
     "provider.rate_limit": ProviderRateLimitEvent,
     "provider.rate_limit_exhausted": ProviderRateLimitExhaustedEvent,
+    "provider.call": ProviderCallEvent,
     # Cache / context engineering
     "cache.usage": CacheUsageEvent,
     "context.composition": ContextCompositionEvent,
