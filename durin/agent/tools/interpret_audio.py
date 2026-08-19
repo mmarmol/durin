@@ -28,6 +28,7 @@ appears in the LLM's tool list when ``aux_providers["audio"]`` is set.
 from __future__ import annotations
 
 import base64
+import time
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -199,11 +200,18 @@ class InterpretAudioTool(Tool):
         })
 
         try:
+            _started = time.monotonic()
             response = await self._aux.provider.chat(
                 messages=messages,
                 model=self._aux.model,
                 max_tokens=_MAX_RESPONSE_TOKENS,
                 temperature=0.1,
+            )
+            # Direct chat() bypasses the retry wrappers' provider.call emission,
+            # so this aux round-trip logs its own call event to stay visible.
+            self._aux.provider.emit_call_telemetry(
+                model=self._aux.model, response=response,
+                duration_ms=(time.monotonic() - _started) * 1000.0,
             )
         except Exception as e:
             self._emit("ask_audio.error", {

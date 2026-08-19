@@ -17,6 +17,7 @@ import asyncio
 import contextvars
 import json
 import threading
+import time
 from typing import Any
 
 from loguru import logger
@@ -29,6 +30,7 @@ from durin.agent.tools.file_state import FileStates
 from durin.agent.tools.loader import ToolLoader
 from durin.agent.tools.registry import ToolRegistry
 from durin.config.schema import ToolsConfig
+from durin.providers.base import LLMResponse
 from durin.session.lineage import ORIGIN_ID, ORIGIN_TYPE, build_lineage, root_of
 from durin.session.manager import Session, SessionManager
 from durin.workflow.engine import (
@@ -304,6 +306,24 @@ class AgentNodeRunner:
         return SkillsLoader(self.sessions.workspace).load_skills_for_context(list(names))
 
     def __call__(self, req: NodeRunRequest) -> NodeRunResponse:
+        """Run the node with its own session telemetry bound for the whole
+        execution — the work loop's tool events and every LLM round-trip
+        (``provider.call``) land in a ``workflow_<run>_<node>`` telemetry
+        file instead of vanishing. Nodes run on pooled executor threads, so
+        the binding is reset in ``finally`` to avoid cross-node leakage."""
+        from durin.telemetry.logger import (
+            bind_telemetry,
+            get_session_logger,
+            reset_telemetry,
+        )
+
+        token = bind_telemetry(get_session_logger(self._session_key(req)))
+        try:
+            return self._execute(req)
+        finally:
+            reset_telemetry(token)
+
+    def _execute(self, req: NodeRunRequest) -> NodeRunResponse:
         system = req.node.prompt
 
         # Apply persona: prepend its SOUL body and use its model ref when set.
@@ -596,8 +616,8 @@ class AgentNodeRunner:
                         "exactly one of: " + ", ".join(labels) + "."),
         }]
         try:
-            resp = asyncio.run(self.runner.provider.chat(
-                messages=route_messages, tools=[tool], tool_choice="required", model=model))
+            resp = self._chat(
+                messages=route_messages, tools=[tool], tool_choice="required", model=model)
             for tc in (getattr(resp, "tool_calls", None) or []):
                 args = getattr(tc, "arguments", None)
                 if args is None:
@@ -610,6 +630,21 @@ class AgentNodeRunner:
         except Exception:  # noqa: BLE001 - any failure → fall back to text-parse in the engine
             logger.opt(exception=True).debug("route-tool verdict failed; falling back to text parse")
         return None
+
+    def _chat(self, **kwargs) -> LLMResponse:
+        """One direct provider round-trip with ``provider.call`` telemetry.
+
+        These calls bypass ``chat_with_retry`` deliberately — a route/deliver
+        retry is schema-feedback-driven, not transport-driven — so they emit
+        their own call event here to stay visible in telemetry."""
+        provider = self.runner.provider
+        started = time.monotonic()
+        resp = asyncio.run(provider.chat(**kwargs))
+        provider.emit_call_telemetry(
+            model=kwargs.get("model"), response=resp,
+            duration_ms=(time.monotonic() - started) * 1000.0,
+        )
+        return resp
 
     def _wants_reentry(self, messages: list[dict], model: str | None) -> bool:
         """After budget exhaustion, ask the model — via a forced tool call — whether
@@ -631,8 +666,8 @@ class AgentNodeRunner:
                         "still missing and you need more tool rounds."),
         }]
         try:
-            resp = asyncio.run(self.runner.provider.chat(
-                messages=convo, tools=[tool], tool_choice="required", model=model))
+            resp = self._chat(
+                messages=convo, tools=[tool], tool_choice="required", model=model)
             for tc in (getattr(resp, "tool_calls", None) or []):
                 args = getattr(tc, "arguments", None)
                 if args is None:
@@ -675,8 +710,8 @@ class AgentNodeRunner:
         }]
         last_error = "the model made no deliver tool call"
         for _ in range(self._STRUCTURED_OUTPUT_ATTEMPTS):
-            resp = asyncio.run(self.runner.provider.chat(
-                messages=convo, tools=[tool], tool_choice="required", model=model))
+            resp = self._chat(
+                messages=convo, tools=[tool], tool_choice="required", model=model)
             args = None
             for tc in (getattr(resp, "tool_calls", None) or []):
                 args = getattr(tc, "arguments", None)

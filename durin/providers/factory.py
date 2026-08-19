@@ -135,6 +135,7 @@ def _make_provider_core(
         )
 
     provider.generation = resolved.to_generation_settings()
+    provider.provider_key = provider_name or None
     return provider
 
 

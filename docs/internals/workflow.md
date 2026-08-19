@@ -66,7 +66,10 @@ runs one `AgentRunner` turn with that node's model and tool registry (with
 fetches, parallel reads — run in parallel like the main loop's and subagents'; mutations
 stay serial), then persists
 the node's conversation as a session keyed `workflow:<run_id>:<node_id>:<iteration>`
-with lineage (`origin_type="workflow_node"`). A node is configured independently and
+with lineage (`origin_type="workflow_node"`). The node's session telemetry logger is
+bound for the whole execution, so its tool events and per-call `provider.call`
+token/latency records land in a `workflow_<run>_<node>` telemetry file (see
+`docs/internals/observability.md`). A node is configured independently and
 focused by default. Its **work mode** is an `AgentMode` (`durin/agent/agent_mode.py`) —
 for nodes, `build` (full access, neutral posture) for steps that create or edit files and
 `read` (read-only, neutral posture) for steps that inspect, analyse, or judge; or a

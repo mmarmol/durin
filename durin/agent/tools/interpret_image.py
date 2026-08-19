@@ -37,6 +37,7 @@ specified — no runtime capability detection.
 
 from __future__ import annotations
 
+import time
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -165,11 +166,18 @@ class InterpretImageTool(Tool):
         })
 
         try:
+            _started = time.monotonic()
             response = await self._aux.provider.chat(
                 messages=messages,
                 model=self._aux.model,
                 max_tokens=_MAX_RESPONSE_TOKENS,
                 temperature=0.1,
+            )
+            # Direct chat() bypasses the retry wrappers' provider.call emission,
+            # so this aux round-trip logs its own call event to stay visible.
+            self._aux.provider.emit_call_telemetry(
+                model=self._aux.model, response=response,
+                duration_ms=(time.monotonic() - _started) * 1000.0,
             )
         except Exception as e:
             self._emit("ask_vision.error", {
