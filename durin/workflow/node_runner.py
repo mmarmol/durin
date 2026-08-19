@@ -17,7 +17,6 @@ import asyncio
 import contextvars
 import json
 import threading
-import time
 from typing import Any
 
 from loguru import logger
@@ -632,19 +631,15 @@ class AgentNodeRunner:
         return None
 
     def _chat(self, **kwargs) -> LLMResponse:
-        """One direct provider round-trip with ``provider.call`` telemetry.
-
-        These calls bypass ``chat_with_retry`` deliberately — a route/deliver
-        retry is schema-feedback-driven, not transport-driven — so they emit
-        their own call event here to stay visible in telemetry."""
-        provider = self.runner.provider
-        started = time.monotonic()
-        resp = asyncio.run(provider.chat(**kwargs))
-        provider.emit_call_telemetry(
-            model=kwargs.get("model"), response=resp,
-            duration_ms=(time.monotonic() - started) * 1000.0,
-        )
-        return resp
+        """One provider round-trip for the forced-tool verdict/delivery calls
+        (route / re-entry / deliver), via ``chat_with_retry``: transient
+        transport failures retry instead of failing the call, ``max_tokens``
+        resolves to the model's configured output cap (a bare ``chat()``
+        silently used the 4096 signature default — a reasoning model plus a
+        large deliver payload overflowed it, truncating the tool arguments),
+        long generations ride the streaming transport, and the round-trip
+        lands in telemetry as ``provider.call`` from the retry wrapper."""
+        return asyncio.run(self.runner.provider.chat_with_retry(**kwargs))
 
     def _wants_reentry(self, messages: list[dict], model: str | None) -> bool:
         """After budget exhaustion, ask the model — via a forced tool call — whether
@@ -689,8 +684,12 @@ class AgentNodeRunner:
         parameters ARE the declared schema (the same machinery as the ``route``
         verdict). Providers don't reliably enforce JSON Schema, so every payload is
         validated server-side; an invalid one is retried immediately with the exact
-        validation error as feedback. Raises after the attempt budget — a schema'd
-        node with no valid payload has failed, there is no text fallback."""
+        validation error as feedback. A ``length`` finish_reason is named as
+        truncation and the retry is steered toward a smaller payload; an ``error``
+        finish_reason raises immediately with the provider's message — neither is
+        misreported as a schema failure. Raises after the attempt budget — a
+        schema'd node with no valid payload has failed, there is no text
+        fallback."""
         import jsonschema
 
         tool = {"type": "function", "function": {
@@ -712,6 +711,16 @@ class AgentNodeRunner:
         for _ in range(self._STRUCTURED_OUTPUT_ATTEMPTS):
             resp = self._chat(
                 messages=convo, tools=[tool], tool_choice="required", model=model)
+            finish_reason = getattr(resp, "finish_reason", None)
+            if finish_reason == "error":
+                # The retry wrapper already exhausted transport retries — this
+                # is a provider failure, not a payload problem. Burning the
+                # remaining attempts would re-send the whole conversation just
+                # to fail the same way, and the final error would misleadingly
+                # blame the schema.
+                raise RuntimeError(
+                    "structured output delivery failed on a provider error: "
+                    + ((getattr(resp, "content", None) or "unknown error")[:300]))
             args = None
             for tc in (getattr(resp, "tool_calls", None) or []):
                 args = getattr(tc, "arguments", None)
@@ -724,22 +733,43 @@ class AgentNodeRunner:
                         args = None
                 if args is not None:
                     break
-            if args is None:
-                last_error = "the model made no deliver tool call"
-            else:
+            if args is not None:
                 try:
                     jsonschema.validate(args, schema)
+                    # Complete and valid — accept it even if flagged "length":
+                    # the cut fell after the payload closed.
                     return args
                 except jsonschema.ValidationError as ve:
                     path = "/".join(str(p) for p in ve.absolute_path) or "(root)"
                     last_error = f"at {path}: {ve.message}"
+            if finish_reason == "length":
+                # The payload was cut at the output-token limit: json_repair
+                # salvages a partial object and validation then blames a missing
+                # field, which misdiagnoses the real problem (observed live: a
+                # reasoning model plus a large deliver payload failed every
+                # attempt with "'ticket_id' is a required property"). Name the
+                # truncation and steer the retry toward a smaller payload
+                # instead of a fix-the-schema hint.
+                last_error = ("the deliver call was cut off at the "
+                              "output-token limit before the payload completed")
+                convo.append({
+                    "role": "user",
+                    "content": ("Your deliver call was cut off at the output-token "
+                                "limit before the payload completed. Call `deliver` "
+                                "again with a more concise payload — shorter strings, "
+                                "fewer and shorter list items; keep every required "
+                                "field."),
+                })
+                continue
+            if args is None:
+                last_error = "the model made no deliver tool call"
             convo.append({
                 "role": "user",
                 "content": (f"That payload did not satisfy the output schema — {last_error}. "
                             "Call `deliver` again with a corrected payload."),
             })
         raise RuntimeError(
-            f"structured output failed schema validation after "
+            f"structured output failed after "
             f"{self._STRUCTURED_OUTPUT_ATTEMPTS} attempts: {last_error}")
 
     def _persist(self, req: NodeRunRequest, messages: list[dict]) -> str | None:
