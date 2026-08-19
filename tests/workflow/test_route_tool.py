@@ -1,9 +1,9 @@
 """Tests for the forced `route` tool call in AgentNodeRunner.
 
 Covers two behaviours:
-1. When provider.chat returns a valid route tool call, the engine uses that label as
+1. When provider.chat_with_retry returns a valid route tool call, the engine uses that label as
    the routing verdict — even when the node's text output contains no parseable label.
-2. When provider.chat raises, the engine gracefully falls back to parsing the node's
+2. When provider.chat_with_retry raises, the engine gracefully falls back to parsing the node's
    text output (route_label is None), preserving existing behaviour.
 """
 
@@ -50,7 +50,7 @@ def _multi_way_workflow():
 
 
 def test_route_tool_verdict_overrides_unparseable_text(tmp_path):
-    """When provider.chat returns a route tool call with a valid label, the engine
+    """When provider.chat_with_retry returns a route tool call with a valid label, the engine
     must route by that label — even though the node's text output has no parseable label."""
     wf = _multi_way_workflow()
 
@@ -64,13 +64,13 @@ def test_route_tool_verdict_overrides_unparseable_text(tmp_path):
         messages=[{"role": "assistant", "content": ambiguous_output}],
     )
 
-    # provider.chat is called for the forced route tool call and returns NEED_INFO.
+    # provider.chat_with_retry is called for the forced route tool call and returns NEED_INFO.
     route_tool_call = SimpleNamespace(
         name="route",
         arguments={"label": "NEED_INFO"},
     )
     route_response = SimpleNamespace(tool_calls=[route_tool_call])
-    mock_provider.chat = AsyncMock(return_value=route_response)
+    mock_provider.chat_with_retry = AsyncMock(return_value=route_response)
 
     node_runner = _make_node_runner(tmp_path, mock_provider)
     engine = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1")
@@ -88,7 +88,7 @@ def test_route_tool_verdict_overrides_unparseable_text(tmp_path):
 
 
 def test_route_tool_failure_falls_back_to_text_parse(tmp_path):
-    """When provider.chat raises, route_label is None and the engine falls back to
+    """When provider.chat_with_retry raises, route_label is None and the engine falls back to
     parsing the node's text output — existing behaviour is preserved."""
     wf = _multi_way_workflow()
 
@@ -109,8 +109,8 @@ def test_route_tool_failure_falls_back_to_text_parse(tmp_path):
         messages=[{"role": "assistant", "content": "done"}],
     )
 
-    # provider.chat raises — the route tool call fails.
-    mock_provider.chat = AsyncMock(side_effect=Exception("provider unavailable"))
+    # provider.chat_with_retry raises — the route tool call fails.
+    mock_provider.chat_with_retry = AsyncMock(side_effect=Exception("provider unavailable"))
 
     node_runner = _make_node_runner(tmp_path, mock_provider)
     engine = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1")

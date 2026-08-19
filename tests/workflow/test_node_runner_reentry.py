@@ -64,7 +64,7 @@ def _runner(tmp_path, run_results, chat_responses=()):
     provider.get_default_model.return_value = "test-model"
     ar = AgentRunner(provider)
     ar.run = AsyncMock(side_effect=list(run_results))
-    provider.chat = AsyncMock(side_effect=list(chat_responses))
+    provider.chat_with_retry = AsyncMock(side_effect=list(chat_responses))
     return AgentNodeRunner(ar, SessionManager(workspace=tmp_path),
                            default_model="test-model"), provider
 
@@ -112,7 +112,7 @@ def test_deliver_verdict_goes_straight_to_synthesis(tmp_path):
     )
     resp = nr(_req(_node(max_reentries=1)))
 
-    assert provider.chat.await_count == 1      # the assessment
+    assert provider.chat_with_retry.await_count == 1      # the assessment
     assert nr.runner.run.await_count == 2      # first run + synthesis
     synthesis_spec = nr.runner.run.await_args_list[1].args[0]
     assert synthesis_spec.max_iterations == 1
@@ -140,7 +140,7 @@ def test_reentry_budget_is_bounded_then_synthesis_runs(tmp_path):
         chat_responses=[_assess("continue")],
     )
     resp = nr(_req(_node(max_reentries=1)))
-    assert provider.chat.await_count == 1
+    assert provider.chat_with_retry.await_count == 1
     assert nr.runner.run.await_count == 3      # first + re-entry + synthesis
     assert resp.output == "synthesized"
 
@@ -151,7 +151,7 @@ def test_no_reentries_means_no_assessment_call(tmp_path):
         run_results=[_exhausted(), _completed("synthesized")],
     )
     nr(_req(_node()))                          # max_reentries defaults to 0
-    assert provider.chat.await_count == 0
+    assert provider.chat_with_retry.await_count == 0
 
 
 # ── schema-aware exhaustion path ──────────────────────────────────────────────
@@ -187,7 +187,7 @@ def test_deliver_instruction_enumerates_required_fields(tmp_path):
             arguments={"rootCause": "x", "findings": "y"})])],
     )
     resp = nr(_req(_node(output_schema=SCHEMA)))
-    instruction = provider.chat.await_args_list[0].kwargs["messages"][-1]["content"]
+    instruction = provider.chat_with_retry.await_args_list[0].kwargs["messages"][-1]["content"]
     assert "every required field" in instruction
     assert "rootCause" in instruction and "findings" in instruction
     assert json.loads(resp.output) == {"rootCause": "x", "findings": "y"}
