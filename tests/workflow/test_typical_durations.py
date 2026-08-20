@@ -4,14 +4,20 @@ from durin.workflow import run_log
 
 
 def _finish(tmp_path, name, run_id, rows, status="completed"):
+    # A row is (node_id, duration) or (node_id, duration, node_status) — the third
+    # element lets a test seed a "reused" row alongside ordinary "ok" ones.
+    def _row(spec):
+        n, d, *rest = spec
+        return SimpleNamespace(
+            node_id=n, iteration=1, passed=None, session_key=None, worker_index=None,
+            branch_id=None, budget=None, status=(rest[0] if rest else "ok"),
+            route_label=None, exit_code=None, duration_s=d, error=None,
+        )
+
     result = SimpleNamespace(
         run_id=run_id, status=status, final_output="", final_output_node=None,
         needs_input_node=None, output_files=[], missing_artifacts=[],
-        runs=[SimpleNamespace(
-            node_id=n, iteration=1, passed=None, session_key=None, worker_index=None,
-            branch_id=None, budget=None, status="ok", route_label=None, exit_code=None,
-            duration_s=d, error=None,
-        ) for n, d in rows],
+        runs=[_row(spec) for spec in rows],
     )
     run_log.finalize_run(tmp_path, name, result, root_session_key=None,
                          started_at=0.0, finished_at=1.0)
@@ -37,6 +43,17 @@ def test_typical_skips_nodes_without_a_duration(tmp_path):
 
 def test_typical_is_empty_for_a_workflow_with_no_history(tmp_path):
     assert run_log.typical_node_durations(tmp_path, "never-run") == {}
+
+
+def test_typical_ignores_reused_node_rows(tmp_path):
+    # A reused row's duration must never enter the sample, regardless of its
+    # value — the row records how long the SKIP took (engine always writes
+    # 0.0), not what a fresh dispatch would have cost. An unrealistic value
+    # here proves the row is excluded by status, not merely harmless at 0.0.
+    _finish(tmp_path, "wf", "r1", [("scan", 10.0)])
+    _finish(tmp_path, "wf", "r2", [("scan", 20.0)])
+    _finish(tmp_path, "wf", "r3", [("scan", 999.0, "reused")])
+    assert run_log.typical_node_durations(tmp_path, "wf") == {"scan": 15.0}
 
 
 def test_typical_total_does_not_sum_branches_no_single_run_takes(tmp_path):
@@ -71,6 +88,14 @@ def test_typical_total_is_absent_without_history(tmp_path):
 def test_typical_total_is_absent_when_no_run_measured_anything(tmp_path):
     _finish(tmp_path, "gates-only", "r1", [("gate", None)])
     assert run_log.typical_total_duration(tmp_path, "gates-only") is None
+
+
+def test_typical_total_ignores_reused_node_rows(tmp_path):
+    _finish(tmp_path, "wf", "r1", [("scan", 10.0), ("gate", 5.0)])
+    _finish(tmp_path, "wf", "r2", [("scan", 500.0, "reused"), ("gate", 5.0)])
+    # r1 totals 15.0; r2's reused "scan" row is excluded, so r2 totals 5.0 (just
+    # "gate") — not 505.0. median(15.0, 5.0) = 10.0.
+    assert run_log.typical_total_duration(tmp_path, "wf") == 10.0
 
 
 def test_the_engine_records_the_typical_total_on_the_start_manifest(tmp_path):

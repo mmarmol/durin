@@ -122,6 +122,26 @@ class AgentNodeRunner:
         # so N nodes don't pay N provider constructions.
         self._aux_providers: dict | None = None
 
+    def reuse_identity(self, node) -> dict | None:
+        """The producer identity a run of *node* right now would stamp into
+        provenance — model, provider and generation-params hash, resolved exactly
+        as ``_execute`` resolves them. Used by the engine's reuse gate to compare
+        against a stored artifact's recorded producer; duck-typed (``getattr(...,
+        "reuse_identity", None)``) so a script runner or test double need not
+        implement it. None on any failure — an unresolvable identity must disable
+        reuse, never crash the run."""
+        try:
+            _soul, persona_model_ref = resolve_persona(
+                self._app_config, getattr(node, "persona", None), self.sessions.workspace)
+            model = persona_model_ref or node.model or self.default_model
+            return {
+                "model": model,
+                "provider": getattr(self.runner.provider, "provider_key", None),
+                "params_hash": params_hash(self.runner.provider.generation),
+            }
+        except Exception:  # noqa: BLE001 - unknown identity must disable reuse, never crash
+            return None
+
     @staticmethod
     def _pass_note(req: NodeRunRequest) -> str:
         """The loop-awareness note appended to the node's user turn. Empty on a first

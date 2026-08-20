@@ -67,6 +67,7 @@ follows `next` or **routes** on a verdict.
 | `inputs_from` | array of strings | `[]` | **Named inputs.** The node's input becomes one labeled block `[source-id]` per named node (its LAST recorded output this run), ALWAYS followed by an `[upstream]` block with the walk's current edge text — loop-back feedback is never lost. A source that has not run composes as `(no output recorded)`. Sources must exist, not be the node itself, not be detached. |
 | `output_schema` | object \| null | none | **Structured output.** A JSON Schema (root must be an object; wrap arrays in a single-property object). The runner forces a `deliver` tool call with this schema as its parameters, validates the payload, and retries IMMEDIATELY inside the node with the exact validation error; after the attempts the node fails (failure-resume applies). The node's output is the validated payload as JSON. Mutually exclusive with routing. |
 | `output_file` | string | `""` | **Engine-written file** (relative path in the working folder) holding the validated payload — the model never types the file, so it cannot be malformed. Requires `output_schema`. |
+| `reuse` | `"if-unchanged"` \| null | none | **Skip when unchanged.** Before dispatching, the engine compares this node's current definition hash and the runner's current model/provider/params against `output_file`'s recorded producer; on an exact four-way match it skips the runner and reuses the file as this pass's output (trace record: `status: "reused"`, `origin_run_id`). Any mismatch, or no recorded producer at all, runs normally. Requires `output_file`. A reused pass contributes no messages to `context: "shared"` and records no session for `session: "persistent"` — the original run's session remains the trace. |
 
 **Edge exclusivity — pick exactly one shape:** `next` **xor** `on_pass`/`on_fail` **xor**
 `cases`. Setting more than one is a parse error.
@@ -195,7 +196,8 @@ The parser rejects a definition (with a clear message) when:
   the target of a routing edge (only a linear `next` may reach it).
 - An `inputs_from` entry names an unknown node, the node itself, or a detached node; an
   `output_schema` is set on a routing node or is not a valid JSON Schema; an
-  `output_file` is absolute / `..`-escaping or set without `output_schema`.
+  `output_file` is absolute / `..`-escaping or set without `output_schema`; `reuse` is set
+  to anything other than `"if-unchanged"`, or set without `output_file`.
 - A `parallel` branch id points to a node that is neither `work` nor `script` (parallel
   and subworkflow nodes cannot be branches), or the dynamic `worker` id points to a
   non-`work` node (the worker template stays agent-only on purpose: a script iterates

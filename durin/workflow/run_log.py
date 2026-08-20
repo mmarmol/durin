@@ -112,6 +112,10 @@ def _node_records(result) -> list[dict]:
             "model": getattr(r, "model", None),
             "provider": getattr(r, "provider", None),
             "node_hash": getattr(r, "node_hash", None),
+            # Set only when status=="reused": the run_id of the ORIGINAL pass that
+            # produced the artifact this pass reused instead of dispatching the
+            # runner (None otherwise — see durin/workflow/engine.py's reuse gate).
+            "origin_run_id": getattr(r, "origin_run_id", None),
         }
         for r in result.runs
     ]
@@ -436,7 +440,9 @@ def typical_node_durations(
     Only completed runs count: an aborted run's node timings describe a path that
     ended early. The median (not the mean) so one pathological run does not skew
     the number a user reads as "normal". Nodes with no recorded duration — gates
-    and routers — are absent rather than zero.
+    and routers — are absent rather than zero. A reused row (status "reused",
+    duration_s 0) is excluded too: it did not run, so its duration says nothing
+    about the node's real cost.
     """
     from statistics import median
 
@@ -450,7 +456,10 @@ def typical_node_durations(
         for r in manifest.get("runs") or []:
             d = r.get("duration_s")
             nid = r.get("node_id")
-            if d is None or not nid:
+            # A reused row's 0.0 does not describe how long the node takes when it
+            # actually runs — counting it would deflate the median toward zero the
+            # more often the node gets skipped.
+            if d is None or not nid or r.get("status") == "reused":
                 continue
             samples.setdefault(nid, []).append(float(d))
     return {nid: float(median(vals)) for nid, vals in samples.items() if vals}
@@ -463,7 +472,9 @@ def typical_total_duration(
 
     Each run contributes the sum of its OWN node durations — the same quantity a
     surface sums to show a run's actual elapsed, so the two read as a direct
-    comparison — and the median of those totals is the estimate.
+    comparison — and the median of those totals is the estimate. Reused rows
+    (status "reused") are excluded from that sum, same as in
+    typical_node_durations: their duration is not what a fresh dispatch costs.
 
     Summing the per-node medians instead would sum the union of the paths prior
     runs took: a workflow whose router picks one of several mutually exclusive
@@ -480,8 +491,11 @@ def typical_total_duration(
         if rec.get("status") != "completed":
             continue
         manifest = read_manifest(workspace, name, rec["run_id"]) or {}
+        # Same exclusion as typical_node_durations: a reused row's duration is not
+        # what a fresh dispatch would have cost, so it must not count toward the
+        # run's total either.
         durations = [float(r["duration_s"]) for r in manifest.get("runs") or []
-                     if r.get("duration_s") is not None]
+                     if r.get("duration_s") is not None and r.get("status") != "reused"]
         if durations:
             totals.append(sum(durations))
     return float(median(totals)) if totals else None

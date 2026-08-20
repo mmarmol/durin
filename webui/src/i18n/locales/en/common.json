@@ -1256,6 +1256,7 @@
     "outputSchema": "output schema (JSON)",
     "outputSchemaInvalid": "Invalid JSON — the schema is not saved until it parses.",
     "outputFile": "output file",
+    "reuse": "reuse when unchanged (skip if the producer matches)",
     "routingShape": "routing shape",
     "routingShapeBinary": "binary (pass / fail)",
     "routingShapeMultiway": "multi-way (custom labels)",
@@ -1415,6 +1416,7 @@
     "badge": {
       "detached": "background",
       "schema": "schema",
+      "reuse": "reuse if unchanged",
       "persistent": "persistent session",
       "skills_one": "1 skill",
       "skills_other": "{{n}} skills",

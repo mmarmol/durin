@@ -285,6 +285,71 @@ async def test_run_response_carries_needs_input_node_and_output_files(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_run_response_carries_producer_fields(tmp_path):
+    """The synchronous run() response's per-node dict must carry the same
+    producer-identity fields (model/provider/node_hash/origin_run_id) the
+    durable manifest does (run_log._node_records()) — a caller reading a run
+    straight from this response, not a later manifest read, needs the same
+    trail: which producer made this node's output, and for a reused node,
+    which run actually produced the artifact."""
+    svc, p = _runnable_svc(tmp_path), Principal.local()
+    await svc.save(WorkflowSaveCommand(name="wf", definition=_VALID), p)
+    fake_provider = MagicMock(spec=LLMProvider)
+    fake_provider.get_default_model.return_value = "m"
+
+    def fake_run(self, workflow, task, *, root_session_key=None, input_files=None,
+                 output_format=None, resume=None):
+        return WorkflowResult(
+            status="completed", run_id="r1", final_output="ok",
+            runs=[NodeRun(node_id="a", iteration=1, output="x", status="reused",
+                         model="glm-5.3", provider="zai", node_hash="h1",
+                         origin_run_id="r0")],
+        )
+
+    with patch("durin.providers.factory.make_provider", return_value=fake_provider), \
+         patch("durin.workflow.engine.WorkflowEngine.run", fake_run):
+        result = await svc.run(WorkflowRunCommand(name="wf", task="go"), p)
+
+    row = result.runs[0]
+    assert row["model"] == "glm-5.3"
+    assert row["provider"] == "zai"
+    assert row["node_hash"] == "h1"
+    assert row["origin_run_id"] == "r0"
+
+
+@pytest.mark.asyncio
+async def test_run_response_serializes_legacy_rows_with_producer_fields_absent(tmp_path):
+    """A row from a producer that predates these fields (or a caller/test double
+    that just never set them) must still serialize — via getattr degrading to
+    None, never a missing key or a crash. SimpleNamespace (not NodeRun) so the
+    attributes are genuinely ABSENT from the object, not merely None-valued —
+    the honest shape of an old trace row."""
+    svc, p = _runnable_svc(tmp_path), Principal.local()
+    await svc.save(WorkflowSaveCommand(name="wf", definition=_VALID), p)
+    fake_provider = MagicMock(spec=LLMProvider)
+    fake_provider.get_default_model.return_value = "m"
+    legacy_row = SimpleNamespace(
+        node_id="a", iteration=1, output="x", status="ok", passed=None,
+        session_key=None, worker_index=None, branch_id=None, budget=None,
+        route_label=None,
+    )
+
+    def fake_run(self, workflow, task, *, root_session_key=None, input_files=None,
+                 output_format=None, resume=None):
+        return WorkflowResult(status="completed", run_id="r1", final_output="ok", runs=[legacy_row])
+
+    with patch("durin.providers.factory.make_provider", return_value=fake_provider), \
+         patch("durin.workflow.engine.WorkflowEngine.run", fake_run):
+        result = await svc.run(WorkflowRunCommand(name="wf", task="go"), p)
+
+    row = result.runs[0]
+    assert row["model"] is None
+    assert row["provider"] is None
+    assert row["node_hash"] is None
+    assert row["origin_run_id"] is None
+
+
+@pytest.mark.asyncio
 async def test_run_resumes_a_needs_input_manifest_with_the_original_task(tmp_path):
     svc, p = _runnable_svc(tmp_path), Principal.local()
     await svc.save(WorkflowSaveCommand(name="wf", definition=_VALID), p)

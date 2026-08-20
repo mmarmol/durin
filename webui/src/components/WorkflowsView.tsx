@@ -124,6 +124,7 @@ function NodeBadges({ node, t }: { node: WorkflowNodeDef; t: (k: string, o?: Rec
   if (node.detached === true) badges.push({ key: "detached", text: t("workflows.badge.detached") });
   if (node.output_schema) badges.push({ key: "schema", text: t("workflows.badge.schema") });
   if (node.output_file) badges.push({ key: "file", text: String(node.output_file) });
+  if (node.reuse === "if-unchanged") badges.push({ key: "reuse", text: t("workflows.badge.reuse") });
   const skills = (node.skills as string[]) ?? [];
   if (skills.length > 0)
     badges.push({ key: "skills", text: t("workflows.badge.skills", { n: skills.length, count: skills.length }), title: skills.join(", ") });
@@ -479,6 +480,7 @@ function RoutingFields({
 
   const routingToggleId = `routing-toggle-${node.id}`;
   const detachedToggleId = `detached-toggle-${node.id}`;
+  const reuseToggleId = `reuse-toggle-${node.id}`;
 
   return (
     <>
@@ -544,7 +546,13 @@ function RoutingFields({
             <SchemaField
               value={node.output_schema as Record<string, unknown> | null | undefined}
               onChange={(v) =>
-                patch({ output_schema: v, ...(v === undefined ? { output_file: undefined } : {}) })
+                // Clearing the schema also clears output_file (it requires a
+                // schema) and, transitively, reuse (it requires output_file) —
+                // otherwise reuse would linger set with no file to compare.
+                patch({
+                  output_schema: v,
+                  ...(v === undefined ? { output_file: undefined, reuse: undefined } : {}),
+                })
               }
               t={t}
             />
@@ -554,10 +562,32 @@ function RoutingFields({
               <Input
                 value={(node.output_file as string) ?? ""}
                 placeholder="plan.json"
-                onChange={(e) => patch({ output_file: e.target.value || undefined })}
+                onChange={(e) => {
+                  const value = e.target.value || undefined;
+                  // reuse requires output_file — clearing the file must clear
+                  // reuse too, or it lingers set with nothing to compare against.
+                  patch({ output_file: value, ...(value === undefined ? { reuse: undefined } : {}) });
+                }}
                 className="h-8"
               />
             </Field>
+          )}
+          {node.output_schema != null && node.output_file && (
+            <div className="flex items-center gap-2">
+              <input
+                id={reuseToggleId}
+                type="checkbox"
+                className="h-4 w-4 cursor-pointer accent-primary"
+                checked={node.reuse === "if-unchanged"}
+                onChange={(e) => patch({ reuse: e.target.checked ? "if-unchanged" : undefined })}
+              />
+              <label
+                htmlFor={reuseToggleId}
+                className="cursor-pointer select-none text-xs text-muted-foreground"
+              >
+                {t("workflows.reuse")}
+              </label>
+            </div>
           )}
         </>
       )}
