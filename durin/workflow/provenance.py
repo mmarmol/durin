@@ -32,7 +32,7 @@ def load(work_dir: Path) -> dict[str, dict]:
     try:
         raw = json.loads((Path(work_dir) / FILENAME).read_text(encoding="utf-8"))
         return raw if isinstance(raw, dict) else {}
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError):
         return {}
 
 
