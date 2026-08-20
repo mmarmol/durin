@@ -36,6 +36,14 @@ class NodeRun:
     command: str | None = None
     stdout: str | None = None
     stderr: str | None = None
+    # Producer identity for this pass: the resolved model/provider (agent nodes
+    # only; None for script nodes or an unresolvable model) and the hash of the
+    # node's reuse-relevant definition fields (WorkNode only, via provenance.
+    # reuse_hash — None for script nodes). The same identity the engine stamps
+    # into work/.provenance.json for the node's declared output_file, if any.
+    model: str | None = None
+    provider: str | None = None
+    node_hash: str | None = None
 
 
 @dataclass

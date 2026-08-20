@@ -28,7 +28,7 @@ from typing import Any, Callable
 
 from loguru import logger
 
-from durin.workflow import run_log, workspace_fork
+from durin.workflow import provenance, run_log, workspace_fork
 from durin.workflow.artifacts import artifact_dir, prune_runs
 from durin.workflow.result import NodeRun, WorkflowResult
 from durin.workflow.session_keys import node_session_key
@@ -110,6 +110,17 @@ class NodeRunResponse:
     command: str | None = None
     stdout: str | None = None
     stderr: str | None = None
+    # The model actually resolved for this node's LLM calls (persona override, the
+    # node's explicit model, or the runner's default). None for script nodes and
+    # for anything that ran with no resolvable model. Threaded through to run-folder
+    # provenance (see durin/workflow/provenance.py).
+    model: str | None = None
+    # The provider_key of the runner's provider (stamped by the provider factory).
+    # None for script nodes or when the provider carries no key.
+    provider: str | None = None
+    # sha256 over this call's generation params (provenance.params_hash). None when
+    # the provider exposes no readable generation settings (e.g. a test double).
+    params_hash: str | None = None
 
 
 NodeRunner = Callable[[NodeRunRequest], NodeRunResponse]
@@ -537,10 +548,22 @@ class WorkflowEngine:
         except Exception:  # noqa: BLE001 - history is a nicety; never block a run
             pass
         try:
+            # spec_hash identifies the workflow DEFINITION this run walked — every node's
+            # identity, keyed by node id (an agent node's raw spec dict; a script,
+            # subworkflow, or parallel node's parsed dataclass fields, since those carry
+            # no raw field — see provenance.node_identity) — so a manifest reader can tell
+            # whether two runs of the same name actually ran the same graph, INCLUDING a
+            # change to a non-agent node the reader would otherwise never see reflected
+            # here. durin_version identifies the engine build. Both computed once here and
+            # carried forward by update_run/finalize_run rather than recomputed on every
+            # rewrite.
             run_log.start_run(self._workspace, workflow.name, run_id,
                               root_session_key=root_session_key, started_at=started_at,
                               task=task, parent_run_id=parent_run_id, work_dir=work_dir,
-                              typical_s=typical, typical_total_s=typical_total)
+                              typical_s=typical, typical_total_s=typical_total,
+                              spec_hash=provenance.node_hash(
+                                  {nid: provenance.node_identity(n) for nid, n in workflow.nodes.items()}),
+                              durin_version=provenance.durin_version())
         except Exception:  # noqa: BLE001 - a manifest write must not break the run
             logger.exception("workflow run manifest start failed for {}", workflow.name)
 
@@ -856,6 +879,14 @@ class WorkflowEngine:
                     passed = (route_label == "PASS") if route_label is not None else parse_verdict(output)
                 else:
                     passed = None
+                # The node's producer identity: the resolved model/provider (agent nodes
+                # only — None for script nodes) and, for a WorkNode carrying its raw spec,
+                # the hash of its reuse-relevant definition fields. Computed once and reused
+                # below for the output_file provenance entry, so both records agree.
+                node_reuse_hash = (
+                    provenance.reuse_hash(node.raw)
+                    if isinstance(node, WorkNode) and node.raw else None
+                )
                 runs.append(NodeRun(node_id=node.id, iteration=iteration,
                                     output=output, session_key=resp.session_key,
                                     passed=passed, budget=budget,
@@ -864,6 +895,9 @@ class WorkflowEngine:
                                     command=getattr(resp, "command", None),
                                     stdout=getattr(resp, "stdout", None),
                                     stderr=getattr(resp, "stderr", None),
+                                    model=getattr(resp, "model", None),
+                                    provider=getattr(resp, "provider", None),
+                                    node_hash=node_reuse_hash,
                                     duration_s=round(time.monotonic() - node_t0, 3)))
                 if isinstance(node, WorkNode) and node.output_file and work_dir is not None:
                     # The ENGINE writes the schema-validated payload: the file cannot be
@@ -877,6 +911,27 @@ class WorkflowEngine:
                     except OSError:
                         logger.opt(exception=True).warning(
                             "workflow output_file write failed for node {}", node.id)
+                    else:
+                        # Stamp WHO produced this artifact next to it — the node-definition
+                        # hash, resolved model/provider, generation params hash, and durin
+                        # version — so a later run can decide "identical producer →
+                        # reusable". Best-effort like the write above: never fail the node.
+                        try:
+                            provenance.record(Path(work_dir), node.output_file, {
+                                "run_id": run_id,
+                                "workflow": workflow.name,
+                                "node_id": node.id,
+                                "iteration": iteration,
+                                "finished_at": time.time(),
+                                "node_hash": node_reuse_hash,
+                                "model": getattr(resp, "model", None),
+                                "provider": getattr(resp, "provider", None),
+                                "params_hash": getattr(resp, "params_hash", None),
+                                "durin_version": provenance.durin_version(),
+                            })
+                        except Exception:  # noqa: BLE001 - provenance is a nicety; never break the node
+                            logger.opt(exception=True).warning(
+                                "workflow provenance record failed for node {}", node.id)
                 runs[-1].artifacts = sorted(_work_snapshot() - before_files)[:20]
                 if isinstance(node, WorkNode) and node.context == "shared":
                     shared_context.extend(resp.messages)

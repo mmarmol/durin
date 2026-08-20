@@ -381,3 +381,55 @@ def test_framing_carries_declared_artifacts(tmp_path):
     framed = WorkflowEngine._frame_task(wf, "the task")
     assert "context.json" in framed and "the context" in framed
     assert "evidence.json" in framed
+
+
+# ---------------------------------------------------------------------------
+# output_file provenance: the engine stamps WHO produced it next to it
+# ---------------------------------------------------------------------------
+
+def test_output_file_gets_provenance_entry(tmp_path):
+    from durin.workflow.provenance import load
+
+    def runner(req):
+        return NodeRunResponse(output='{"x": 1}', model="test-model", provider="test-provider")
+
+    wf = parse_workflow({
+        "name": "w", "start": "plan",
+        "nodes": [{"id": "plan", "kind": "work",
+                   "output_schema": {"type": "object"}, "output_file": "out.json", "next": None}],
+    })
+    result = WorkflowEngine(runner, workspace=str(tmp_path)).run(wf, "t")
+    assert result.status == "completed"
+
+    work_dir = Path(tmp_path) / ".workflow" / result.run_id / "work"
+    prov = load(work_dir)
+    assert "out.json" in prov
+    e = prov["out.json"]
+    assert e["node_id"] == "plan"
+    assert e["run_id"] == result.run_id
+    assert e["node_hash"]
+    assert e["model"] == "test-model"
+    assert e["provider"] == "test-provider"
+    assert e["finished_at"]
+
+
+def test_output_file_with_no_provenance_write_failure_still_completes(tmp_path, monkeypatch):
+    # A provenance write failure (bad work_dir) must never fail the node — same
+    # posture as an output_file write failure.
+    import durin.workflow.engine as engine_mod
+
+    def runner(req):
+        return NodeRunResponse(output='{"x": 1}', model="test-model")
+
+    wf = parse_workflow({
+        "name": "w", "start": "plan",
+        "nodes": [{"id": "plan", "kind": "work",
+                   "output_schema": {"type": "object"}, "output_file": "out.json", "next": None}],
+    })
+
+    def _boom(*a, **kw):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(engine_mod.provenance, "record", _boom)
+    result = WorkflowEngine(runner, workspace=str(tmp_path)).run(wf, "t")
+    assert result.status == "completed"

@@ -174,3 +174,105 @@ def test_engine_records_work_dir_and_durations(tmp_path):
     assert m["work_dir"].endswith(".workflow/r1/work")
     assert len(m["runs"]) == 2
     assert all(isinstance(r["duration_s"], float) for r in m["runs"])
+
+
+# ---------------------------------------------------------------------------
+# Producer identity: spec_hash/durin_version at top level, model/provider/
+# node_hash per node record
+# ---------------------------------------------------------------------------
+
+def test_manifest_carries_spec_hash_and_durin_version(tmp_path):
+    def runner(req):
+        return NodeRunResponse(output=f"out {req.node.id}", model="test-model", provider="test-provider")
+
+    engine = WorkflowEngine(runner, workspace=str(tmp_path), run_id_factory=lambda: "r1")
+    res = engine.run(_two_node_wf(), "go")
+    assert res.status == "completed"
+
+    rec = run_log.read_manifest(tmp_path, "w", "r1")
+    assert rec["spec_hash"]                 # a real workflow → non-empty hash
+    assert "durin_version" in rec           # value may be None depending on install
+
+    by_node = {r["node_id"]: r for r in rec["runs"]}
+    assert by_node["a"]["model"] == "test-model"
+    assert by_node["a"]["provider"] == "test-provider"
+    assert by_node["a"]["node_hash"]
+
+
+def test_manifest_spec_hash_survives_mid_walk_update(tmp_path):
+    # spec_hash/durin_version are written by start_run; update_run must carry
+    # them forward, not drop them on the first mid-walk rewrite.
+    seen = {}
+
+    def runner(req):
+        if req.node.id == "b":
+            mid = run_log.read_manifest(tmp_path, "w", "r1")
+            seen["spec_hash"] = mid.get("spec_hash")
+        return NodeRunResponse(output=f"out {req.node.id}")
+
+    WorkflowEngine(runner, workspace=str(tmp_path),
+                   run_id_factory=lambda: "r1").run(_two_node_wf(), "go")
+    assert seen["spec_hash"]
+
+
+def test_spec_hash_covers_script_nodes_and_is_deterministic(tmp_path):
+    """spec_hash must move when a NON-agent node's definition changes (a script
+    node carries no `raw` field, so it is the case most likely to be silently
+    skipped), and must be identical for two runs of the identical definition."""
+    def runner(req):
+        return NodeRunResponse(output=f"out {req.node.id}")
+
+    def _spec_hash_for(command, run_id):
+        wf = parse_workflow({
+            "name": "w", "start": "a",
+            "nodes": [{"id": "a", "kind": "work", "next": "b"},
+                     {"id": "b", "kind": "script", "command": command, "next": None}],
+        })
+        engine = WorkflowEngine(runner, script_runner=runner, workspace=str(tmp_path),
+                                run_id_factory=lambda: run_id)
+        res = engine.run(wf, "go")
+        assert res.status == "completed"
+        return run_log.read_manifest(tmp_path, "w", run_id)["spec_hash"]
+
+    h1 = _spec_hash_for("echo hi", "r1")
+    h2 = _spec_hash_for("echo bye", "r2")
+    h1_again = _spec_hash_for("echo hi", "r3")
+    assert h1 != h2          # the script node's command IS covered by spec_hash
+    assert h1 == h1_again    # deterministic: the identical spec parsed twice → same hash
+
+
+def test_legacy_manifest_without_producer_fields_round_trips(tmp_path):
+    """A manifest written before this change (no spec_hash/durin_version/model/
+    provider/node_hash) must still round-trip through every public reader."""
+    import json
+
+    d = tmp_path / "workflows-runs" / "w"
+    d.mkdir(parents=True)
+    legacy = {
+        "schema": 2, "run_id": "old", "workflow": "w", "status": "completed",
+        "root_session_key": None, "started_at": 1.0, "finished_at": 2.0, "ts": 2.0,
+        "task": None, "parent_run_id": None, "work_dir": None,
+        "typical_s": {}, "typical_total_s": None,
+        "final_output": "done", "final_output_node": "b",
+        "needs_input_node": None, "failed_node": None,
+        "resume_inputs": None, "resume_upstream": None,
+        "output_files": [], "missing_artifacts": [],
+        "runs": [{"node_id": "a", "iteration": 1, "passed": None, "session_key": None,
+                  "worker_index": None, "branch_id": None, "budget": 3, "status": "ok",
+                  "route_label": None, "exit_code": None, "duration_s": 0.1,
+                  "error": None, "artifacts": [], "command": None, "stdout": None, "stderr": None}],
+    }
+    (d / "old.json").write_text(json.dumps(legacy), encoding="utf-8")
+    assert "spec_hash" not in legacy        # confirms this really is the pre-change shape
+
+    rec = run_log.read_manifest(tmp_path, "w", "old")
+    assert rec["run_id"] == "old"
+
+    summaries = run_log.list_runs(tmp_path, "w")
+    assert [s["run_id"] for s in summaries] == ["old"]
+
+    all_runs = run_log.list_all_runs(tmp_path)
+    assert [s["run_id"] for s in all_runs] == ["old"]
+
+    durations = run_log.typical_node_durations(tmp_path, "w")
+    assert durations["a"] == 0.1
