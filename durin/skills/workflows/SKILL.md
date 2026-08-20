@@ -140,7 +140,9 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   currently-running entry so you know what the workflow is doing right now, not only
   what it has already finished); `tasks(action="stop", ...)` cancels. Pass `background=false` ONLY
   when you need the result to keep reasoning in the same turn (the call then blocks and
-  returns the result directly).
+  returns the result directly). `tasks` only sees runs launched THIS session — for a run from
+  earlier (any session), use `workflow_runs(action="search", query=...)` to find it and
+  `action="show"` to read its manifest and artifact files instead of running the workflow again.
   **Getting files back:** when the workflow declares it outputs files
   (`output: {"file": true}`), the summary reports the run's working-folder path AND lists the
   produced files — read them there, and copy out anything that must outlive the run (working
