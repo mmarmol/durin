@@ -299,7 +299,36 @@ class WorkflowRunsTool(Tool):
         return "\n".join(lines)
 
     @staticmethod
-    def _node_line(r: dict) -> str:
+    def _collapse_node_records(node_records: list) -> list[tuple[dict, int]]:
+        """Group per-visit node records by node_id (first-seen order), keeping
+        only the LATEST visit's fields plus how many visits it had.
+
+        A manifest carries one record per node *visit*, not per node — a
+        looping node (max_visits up to the low thousands) revisits the same
+        node_id on every iteration, so the raw list can run far longer than
+        the graph has nodes. Mirrors the exact collapse
+        ``durin/agent/background_tasks.py``'s ``_node_tree`` already applies
+        to this same shape, for the same reason (that one feeds the Work
+        panel's node tree; this one feeds `show`'s per-node lines) — first
+        occurrence fixes the display order, each later occurrence of the same
+        node_id overwrites the stored entry so the latest status/duration/
+        model/origin_run_id wins.
+        """
+        order: list[str] = []
+        latest: dict[str, dict] = {}
+        counts: dict[str, int] = {}
+        for r in node_records:
+            if not isinstance(r, dict):
+                continue
+            nid = r.get("node_id") or "?"
+            if nid not in latest:
+                order.append(nid)
+            latest[nid] = r
+            counts[nid] = counts.get(nid, 0) + 1
+        return [(latest[nid], counts[nid]) for nid in order]
+
+    @staticmethod
+    def _node_line(r: dict, visits: int = 1) -> str:
         node_id = r.get("node_id") or "?"
         status = r.get("status") or "?"
         bits = [f"    - {node_id} [{status}]"]
@@ -316,6 +345,8 @@ class WorkflowRunsTool(Tool):
             origin = r.get("origin_run_id")
             if origin:
                 bits.append(f"origin_run_id={origin}")
+        if visits > 1:
+            bits.append(f"×{visits} visits")
         return " ".join(bits)
 
     @staticmethod
@@ -385,8 +416,12 @@ class WorkflowRunsTool(Tool):
         lines = [self._summary_line(rec)]
         node_records = rec.get("runs") or []
         if node_records:
+            collapsed = self._collapse_node_records(node_records)
             lines.append("  nodes:")
-            lines.extend(self._node_line(r) for r in node_records if isinstance(r, dict))
+            for r, visits in collapsed[:_MAX_ARTIFACTS]:
+                lines.append(self._node_line(r, visits))
+            if len(collapsed) > _MAX_ARTIFACTS:
+                lines.append(f"    …and {len(collapsed) - _MAX_ARTIFACTS} more")
 
         work_dir = rec.get("work_dir") or str(
             Path(self._workspace) / ARTIFACT_ROOT / run_id / "work"

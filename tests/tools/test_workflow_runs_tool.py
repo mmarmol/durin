@@ -15,6 +15,8 @@ T0 = 1_700_000_000.0
 RUN_MODERN = "aaaaaa111111"   # completed, provenance fields + a reused node
 RUN_LEGACY = "bbbbbb222222"   # completed, pre-provenance shape
 RUN_ABORTED = "cccccc333333"  # aborted, different workflow name
+RUN_LOOP = "dddddd444444"     # completed, one node revisited 40 times
+RUN_WIDE = "eeeeee555555"     # completed, 35 distinct nodes, none repeated
 
 
 def _write_manifest(workspace: Path, workflow: str, run_id: str, data: dict) -> None:
@@ -127,6 +129,53 @@ def tool(workspace: Path) -> WorkflowRunsTool:
     return WorkflowRunsTool(workspace=str(workspace))
 
 
+@pytest.fixture
+def loop_workspace(tmp_path: Path) -> Path:
+    """A separate, isolated workspace (deliberately NOT folded into the shared
+    `workspace` fixture, so this large manifest never perturbs the other
+    tests' exact-count / newest-first assertions): one run whose node list
+    interleaves 40 visits of a single looping node between two ordinary
+    nodes — a real manifest shape once a loop node's max_visits is set high."""
+    runs = [{"node_id": "start", "iteration": 1, "status": "ok", "duration_s": 2.0}]
+    for i in range(1, 40):
+        runs.append({
+            "node_id": "loop_node", "iteration": i, "status": "ok",
+            "duration_s": 5.0, "model": "claude-sonnet-5",
+        })
+    # The 40th (last) visit carries different fields from the prior 39, so a
+    # test can prove the collapsed line reports the LATEST visit, not the first.
+    runs.append({
+        "node_id": "loop_node", "iteration": 40, "status": "ok",
+        "duration_s": 123.0, "model": "claude-opus-5",
+    })
+    runs.append({"node_id": "finish", "iteration": 1, "status": "ok", "duration_s": 3.0})
+    _write_manifest(tmp_path, "loop-workflow", RUN_LOOP, {
+        "schema": 2, "run_id": RUN_LOOP, "workflow": "loop-workflow",
+        "status": "completed", "started_at": T0, "finished_at": T0 + 600,
+        "ts": T0 + 600, "task": "loop node visit collapsing", "work_dir": None,
+        "runs": runs,
+    })
+    return tmp_path
+
+
+@pytest.fixture
+def wide_workspace(tmp_path: Path) -> Path:
+    """A separate, isolated workspace (same isolation rationale as
+    `loop_workspace`): one run with 35 DISTINCT nodes, none repeated — exercises
+    the artifact-style cap on the collapsed (not raw) node count."""
+    runs = [
+        {"node_id": f"n{i:02d}", "iteration": 1, "status": "ok", "duration_s": 1.0}
+        for i in range(1, 36)
+    ]
+    _write_manifest(tmp_path, "wide-workflow", RUN_WIDE, {
+        "schema": 2, "run_id": RUN_WIDE, "workflow": "wide-workflow",
+        "status": "completed", "started_at": T0, "finished_at": T0 + 60,
+        "ts": T0 + 60, "task": "35 distinct nodes", "work_dir": None,
+        "runs": runs,
+    })
+    return tmp_path
+
+
 # --- search -----------------------------------------------------------------
 
 
@@ -168,6 +217,26 @@ async def test_limit_respected(tool: WorkflowRunsTool):
     assert RUN_MODERN not in out
     assert RUN_LEGACY not in out
     assert "showing the 1 most recent" in out
+
+
+@pytest.mark.asyncio
+async def test_search_limit_zero_floors_to_one_result(tool: WorkflowRunsTool):
+    # limit=0 must never mean "no results" -- clamped to the floor of 1.
+    out = await tool.execute(action="search", limit=0)
+    assert "showing the 1 most recent" in out
+    assert RUN_ABORTED in out          # newest -- the one result shown
+    assert RUN_MODERN not in out
+    assert RUN_LEGACY not in out
+
+
+def test_clamp_limit_over_max_caps_at_fifty():
+    from durin.agent.tools.workflow_runs import _clamp_limit
+    assert _clamp_limit(100) == 50
+
+
+def test_clamp_limit_zero_floors_at_one():
+    from durin.agent.tools.workflow_runs import _clamp_limit
+    assert _clamp_limit(0) == 1
 
 
 @pytest.mark.asyncio
@@ -257,6 +326,32 @@ async def test_show_requires_run_id(tool: WorkflowRunsTool):
     out = await tool.execute(action="show")
     assert "Error" in out
     assert "run_id" in out
+
+
+@pytest.mark.asyncio
+async def test_show_collapses_looping_node_visits(loop_workspace: Path):
+    tool = WorkflowRunsTool(workspace=str(loop_workspace))
+    out = await tool.execute(action="show", run_id=RUN_LOOP)
+    node_lines = [ln for ln in out.splitlines() if ln.strip().startswith("- ")]
+    # 3 distinct node_ids (start, loop_node, finish) -- not 41 raw visit rows.
+    assert len(node_lines) == 3
+    loop_line = next(ln for ln in node_lines if "loop_node" in ln)
+    assert "×40 visits" in loop_line
+    # The collapsed line reports the LAST visit's fields, not an earlier one --
+    # checked on the node line specifically: the top summary line legitimately
+    # shows "claude-sonnet-5" too (ruling 2's "first node record carrying one"
+    # rule picks it from an early loop_node visit, since "start" has no model).
+    assert "model=claude-opus-5" in loop_line
+    assert "model=claude-sonnet-5" not in loop_line
+
+
+@pytest.mark.asyncio
+async def test_show_caps_distinct_nodes_with_overflow(wide_workspace: Path):
+    tool = WorkflowRunsTool(workspace=str(wide_workspace))
+    out = await tool.execute(action="show", run_id=RUN_WIDE)
+    node_lines = [ln for ln in out.splitlines() if ln.strip().startswith("- ")]
+    assert len(node_lines) == 30
+    assert "…and 5 more" in out
 
 
 @pytest.mark.asyncio
