@@ -238,8 +238,8 @@ node immediately with the provider's message instead of burning the remaining at
 a required-property miss costs a retry only when the model ignores an explicit list, not
 because it had to infer the contract from the schema alone. The node's output is the validated payload as JSON, and with `output_file`
 the ENGINE writes it into the working folder (the model never types the file).
-Alongside `output_file`, the engine stamps **artifact provenance**: `work/.provenance.json` maps each engine-written file to who produced it — a hash of the producing node's reuse-relevant definition fields (routing-only edits like `next`/`on_fail` are excluded, so they never invalidate reuse), the resolved model/provider, a generation-params hash, and the durin version — best-effort like the `output_file` write itself, never fatal. Run manifests carry the same producer identity at coarser grain: a top-level `spec_hash` — over every node's identity (an agent node's raw spec; a script/subworkflow/parallel node's parsed definition, since those carry no raw field) — plus `durin_version`, and `model`/`provider`/`node_hash` on a work/script node's own linear-walk record (branch, fan-out worker, subworkflow, parallel-aggregate, and detached rows carry none of the three: the aggregate rows have no single resolvable model, and a detached node's response is not yet threaded through for its record).
-A work node may declare **`reuse: "if-unchanged"`** (requires `output_file`; one without the other is a parse-time spec error). Before dispatching, the engine asks the node runner for the producer identity a run right now WOULD stamp (model, provider, params hash) and compares it, alongside the node's current `reuse_hash`, against the `output_file`'s provenance entry — all four must match exactly; a `None` on either side of any single comparison (an unresolvable identity, or a work folder with no recorded provenance — e.g. a legacy folder) always means "run normally", never "reuse". On a match the runner is never dispatched: the artifact's text becomes the node's output and the walk continues exactly as after a real run (`output_schema`, required by `output_file`, already rules out routing here), while the node's trace record gets `status: "reused"` and `origin_run_id` (the run that actually produced the file) in place of `ok`/`persist_failed`, `duration_s: 0`, and does NOT re-stamp provenance — the original entry, still accurate, stands.
+Alongside `output_file`, the engine stamps **artifact provenance**: `work/.provenance.json` maps each engine-written file to who produced it — a hash of the producing node's reuse-relevant definition fields (routing-only/display edits like `next`/`on_fail`/`title` are excluded via a denylist, so they never invalidate reuse; an unrecognized future field is NOT excluded by default, so it still invalidates reuse rather than being silently ignored), the resolved model/provider, a generation-params hash, a hash of the exact `(task, composed-upstream-input)` pair the node was dispatched with (`input_hash`), a hash of the artifact's own text content (`content_sha256`), and the durin version — best-effort like the `output_file` write itself, never fatal; when the stamp itself fails, the engine best-effort drops any stale entry for the same filename rather than leaving it standing over content that just changed. Run manifests carry the same producer identity at coarser grain: a top-level `spec_hash` — over every node's identity (an agent node's raw spec; a script/subworkflow/parallel node's parsed definition, since those carry no raw field) — plus `durin_version`, and `model`/`provider`/`node_hash` on a work/script node's own linear-walk record (branch, fan-out worker, subworkflow, parallel-aggregate, and detached rows carry none of the three: the aggregate rows have no single resolvable model, and a detached node's response is not yet threaded through for its record).
+A work node may declare **`reuse: "if-unchanged"`** (requires `output_file`; one without the other is a parse-time spec error). Before dispatching, the engine asks the node runner for the producer identity a run right now WOULD stamp (model, provider, params hash) and compares it, alongside the node's current `reuse_hash` and the CURRENT composed input (task + upstream/`inputs_from` text, hashed the same way as `input_hash`), against the `output_file`'s provenance entry — all must match exactly, and the file's CURRENT bytes must still hash to the entry's `content_sha256`; a `None` on either side of any single comparison (an unresolvable identity, or a work folder with no recorded provenance — e.g. a legacy folder) always means "run normally", never "reuse". A same-run revisit (this node's second or later visit within the current walk) never reuses either, regardless of what else matches — belt and suspenders, since a revisit only happens after a loop-back, which means upstream feedback exists. On a match the runner is never dispatched: the artifact's text becomes the node's output (`output_schema`, required by `output_file`, already rules out routing here), while the node's trace record gets `status: "reused"` and `origin_run_id` (the run that actually produced the file) in place of `ok`/`persist_failed`, `duration_s: 0`, and does NOT re-stamp provenance — the original entry, still accurate, stands. A reused pass contributes no messages to `context: "shared"` and records no session for `session: "persistent"` — the original run's session remains the trace.
 A work or script node may be **detached** (`detached: true`): the walk launches it on a
 small per-run executor and continues immediately along its `next` — the upstream edge text
 passes THROUGH unchanged (the detached node and the next node both receive it), its output
@@ -388,7 +388,7 @@ Every run with a workspace produces a durable **run manifest** at
 `<workspace>/workflows-runs/<name>/<run_id>.json`. The manifest is a live record, not
 a post-run summary:
 
-1. **Before the walk** — `start_run` writes `{status: "running", root_session_key, started_at, runs: [], typical_s, typical_total_s}`.
+1. **Before the walk** — `start_run` writes `{status: "running", root_session_key, started_at, runs: [], typical_s, typical_total_s, spec_hash, durin_version}`.
 2. **When a node begins** — `mark_node_started` sets `active_node`, so a node that runs for minutes is not invisible on disk for its whole duration.
 3. **After each node** — `update_run` rewrites the file with the accumulated per-node trace, clears `active_node`, and keeps `status: "running"`, so an in-flight run is observable by reading the file.
 4. **On every exit path** (normal completion, exhaustion, abort, cancellation, or config error) — `finalize_run` writes the terminal status (`completed`/`exhausted`/`aborted`/`cancelled`), `finished_at`, and the full trace.
@@ -404,7 +404,7 @@ The per-node entries in the manifest's `runs` array carry:
 | `session_key` | the persisted session containing the node's conversation (`workflow:<run_id>:<node_id>:<iteration>`, with a `:<worker_index>` suffix for fan-out workers; a persistent-session node's key omits the iteration suffix — one session across its passes) |
 | `worker_index` | fan-out worker index (0-based; `null` for non-fan-out nodes) |
 | `branch_id` | static-parallel branch node id (`null` for non-branch nodes) |
-| `status` | `"ok"` / `"persist_failed"` (save raised) / `"node_failed"` (agent turn raised) |
+| `status` | `"ok"` / `"persist_failed"` (save raised) / `"node_failed"` (agent turn raised) / `"reused"` (skipped the runner; see `origin_run_id`) |
 | `passed` | binary routing verdict (`true`/`false`/`null` for non-binary nodes) |
 | `route_label` | matched case label for multi-way nodes (`null` otherwise) |
 | `budget` | the node's effective visit budget at this pass (`null` for parallel branches/workers, which are not loop targets) |
@@ -414,15 +414,21 @@ The per-node entries in the manifest's `runs` array carry:
 | `stderr` | a script node's captured stderr, same redaction and cap. Recorded on every exit path including a timeout or cancel kill, where the streams the process had already produced are drained and kept rather than discarded — a killed script has usually printed the very lines explaining where it got stuck |
 | `error` | failure detail (stderr tail / exception text, capped) for `node_failed`/`persist_failed` rows — the evidence the improve pass's script-repair lane reads (`null` otherwise) |
 | `duration_s` | wall-clock seconds this pass took (`null` where not measured — e.g. choose/union branches) |
-| `artifacts` | relative paths this pass added to the run's shared working folder — a before/after listing diffed around the node's turn, since the folder itself records no per-node ownership (`[]` when nothing new appeared). A static branch or dynamic fan-out worker is not individually diffed (concurrent writes into the same folder would make per-unit attribution racy or meaningless) and always reports `[]`; the parallel node's own aggregate row is diffed once, after its branches or workers finish |
+| `artifacts` | relative paths this pass added to the run's shared working folder — a before/after listing diffed around the node's turn, since the folder itself records no per-node ownership (`[]` when nothing new appeared). A static branch or dynamic fan-out worker is not individually diffed (concurrent writes into the same folder would make per-unit attribution racy or meaningless) and always reports `[]`; the parallel node's own aggregate row is diffed once, after its branches or workers finish. Never includes the engine's own `.provenance.json` bookkeeping file |
+| `model` | the resolved model this pass ran with (agent nodes only; `null` for script nodes or a pre-provenance trace) |
+| `provider` | the `provider_key` of the runner's provider (agent nodes only; `null` for script nodes or when the provider carries no key) |
+| `node_hash` | `provenance.reuse_hash` of the node's definition at the time it ran (`WorkNode` only; `null` for script nodes) |
+| `origin_run_id` | set only when `status` is `"reused"`: the `run_id` of the ORIGINAL pass that produced the artifact this pass reused instead of dispatching the runner (`null` otherwise) |
 
 The manifest also carries top-level fields. From the very first (`running`) write:
 `work_dir` — the run's shared working folder, recorded at start so an in-flight
 run's artifacts are findable by any observer (the `tasks` tool renders it plus a
-capped listing of the folder's current files); and `typical_s` / `typical_total_s`
+capped listing of the folder's current files); `typical_s` / `typical_total_s`
 — median per-node and median whole-run seconds, computed once here from the
 workflow's prior completed runs (§4g), so every reader shows the same baseline for
-the life of the run instead of recomputing it.
+the life of the run instead of recomputing it; and `spec_hash` / `durin_version` —
+the workflow-definition hash and engine build this run walked with (see
+`durin/workflow/provenance.py`), carried forward unchanged on every later rewrite.
 **While a node is executing**, `active_node` — `{node_id, label, started_at,
 iteration, session_key}` — names it: `mark_node_started` writes this the instant a
 node begins (skipped entirely by a
@@ -447,7 +453,8 @@ parses its stdin);
 `final_output_node` — which node's output became `final_output` (`null` when no node
 contributed, e.g. an aborted run); `output_files`: the relative paths (within the
 run's output folder) a completed run produced, empty for a run that ended any other
-status or produced no files; `missing_artifacts` — declared `output.artifacts` paths a
+status or produced no files (never includes the engine's own `.provenance.json`
+bookkeeping file — same exclusion as a node's `artifacts`, above); `missing_artifacts` — declared `output.artifacts` paths a
 completed run did not produce (the warning-only file contract, empty otherwise); and
 `parent_run_id` — the calling run's `run_id` when this
 run is a nested subworkflow invocation, `None` for a top-level run (including on
@@ -550,7 +557,8 @@ workspace forks and a half-failed fork has no coherent state to merge, so a bran
 failure in those modes propagates and aborts the run.
 
 `NodeRun.status` values: `"ok"` (node persisted), `"persist_failed"` (session save raised
-but the run continued), `"node_failed"` (the node's agent turn raised).
+but the run continued), `"node_failed"` (the node's agent turn raised), `"reused"`
+(the reuse gate skipped the runner; see §2's `reuse: "if-unchanged"` and `origin_run_id`).
 
 ### 4d. The routing verdict — a forced tool call, text-parse as fallback
 

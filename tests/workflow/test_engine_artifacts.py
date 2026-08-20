@@ -255,6 +255,29 @@ def test_completed_result_lists_output_files(tmp_path):
     assert sorted(result.output_files) == ["report.md", "sub/data.csv"]
 
 
+def test_output_files_and_artifacts_exclude_provenance_file(tmp_path):
+    # M1: .provenance.json is the engine's own bookkeeping, not a run deliverable —
+    # it must never surface in output_files or a node's own artifacts diff.
+    def runner(req):
+        Path(req.output_dir, "report.md").write_text("done")
+        return NodeRunResponse(output='{"x": 1}', model="test-model", provider="test-provider")
+    wf = parse_workflow({
+        "name": "w", "start": "plan",
+        "nodes": [{"id": "plan", "kind": "work", "tools": "default",
+                   "output_schema": {"type": "object"}, "output_file": "out.json", "next": None}],
+    })
+    result = WorkflowEngine(runner, workspace=str(tmp_path)).run(wf, "t")
+    assert result.status == "completed"
+
+    work_dir = Path(tmp_path) / ".workflow" / result.run_id / "work"
+    assert (work_dir / ".provenance.json").is_file()          # it really got written
+
+    assert ".provenance.json" not in result.output_files
+    assert sorted(result.output_files) == ["out.json", "report.md"]
+    assert ".provenance.json" not in result.runs[0].artifacts
+    assert sorted(result.runs[0].artifacts) == ["out.json", "report.md"]
+
+
 def test_engine_prune_keep_is_wired(tmp_path):
     import durin.workflow.engine as engine_mod
     seen = {}

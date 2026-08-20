@@ -714,12 +714,15 @@ class WorkflowEngine:
             # around this node's turn is the only way to attribute a file to it.
             # Best-effort like the rest of this block: an unreadable folder yields an
             # empty set rather than raising, so a snapshot failure never breaks the run.
+            # Excludes the engine's own .provenance.json bookkeeping file — it is not
+            # a run deliverable and must never surface as a node's "artifact".
             def _work_snapshot() -> set[str]:
                 if work_dir is None:
                     return set()
                 root = Path(work_dir)
                 try:
-                    return {str(p.relative_to(root)) for p in root.rglob("*") if p.is_file()}
+                    return {str(p.relative_to(root)) for p in root.rglob("*")
+                            if p.is_file() and p.name != provenance.FILENAME}
                 except OSError:
                     return set()
 
@@ -845,15 +848,18 @@ class WorkflowEngine:
 
                 # reuse gate: a WorkNode declaring reuse="if-unchanged" whose declared
                 # output_file was last produced by an IDENTICAL producer (same
-                # reuse-relevant node definition + resolved model/provider/params) skips
-                # the runner entirely — the recorded artifact stands in as this pass's
-                # output. Never for a routing node: output_schema (which output_file
-                # requires) and routing are already mutually exclusive at parse time, so
-                # a reuse hit always falls through to the plain 'next' edge below.
+                # reuse-relevant node definition + resolved model/provider/params),
+                # fed the SAME composed input, still holding the SAME content on disk,
+                # on this node's FIRST visit this run, skips the runner entirely — the
+                # recorded artifact stands in as this pass's output. Never for a
+                # routing node: output_schema (which output_file requires) and routing
+                # are already mutually exclusive at parse time, so a reuse hit always
+                # falls through to the plain 'next' edge below.
                 reuse_hit: tuple[str, dict] | None = None
                 if (isinstance(node, WorkNode) and node.reuse == "if-unchanged"
                         and node.output_file and work_dir is not None):
-                    reuse_hit = self._reuse_hit(node, work_dir)
+                    reuse_hit = self._reuse_hit(node, work_dir, task=task,
+                                                node_input=node_input, iteration=iteration)
 
                 # Run a full agent turn; for a multi-way node the verdict is a matched
                 # case label; for binary routing it is PASS/FAIL from the first non-empty
@@ -937,9 +943,12 @@ class WorkflowEngine:
                             "workflow output_file write failed for node {}", node.id)
                     else:
                         # Stamp WHO produced this artifact next to it — the node-definition
-                        # hash, resolved model/provider, generation params hash, and durin
-                        # version — so a later run can decide "identical producer →
-                        # reusable". Best-effort like the write above: never fail the node.
+                        # hash, resolved model/provider, generation params hash, the
+                        # composed input this pass ran on, a content hash of what was
+                        # just written, and the durin version — so a later run can
+                        # decide "identical producer, identical input, unchanged
+                        # content → reusable". Best-effort like the write above: never
+                        # fail the node.
                         try:
                             provenance.record(Path(work_dir), node.output_file, {
                                 "run_id": run_id,
@@ -951,11 +960,17 @@ class WorkflowEngine:
                                 "model": getattr(resp, "model", None),
                                 "provider": getattr(resp, "provider", None),
                                 "params_hash": getattr(resp, "params_hash", None),
+                                "input_hash": provenance.input_hash(task, node_input),
+                                "content_sha256": provenance.content_sha256(output),
                                 "durin_version": provenance.durin_version(),
                             })
                         except Exception:  # noqa: BLE001 - provenance is a nicety; never break the node
                             logger.opt(exception=True).warning(
                                 "workflow provenance record failed for node {}", node.id)
+                            # The write above landed but this stamp did not — never leave
+                            # a stale (or now-inaccurate) entry standing over content that
+                            # just changed. drop() is itself failure-suppressed.
+                            provenance.drop(Path(work_dir), node.output_file)
                 runs[-1].artifacts = sorted(_work_snapshot() - before_files)[:20]
                 if isinstance(node, WorkNode) and node.context == "shared":
                     shared_context.extend(resp.messages)
@@ -1180,8 +1195,11 @@ class WorkflowEngine:
         output_files: list[str] = []
         if terminal_output_dir is not None:
             root_dir = Path(terminal_output_dir)
+            # .provenance.json is the engine's own bookkeeping file, not a run
+            # deliverable — excluded so it never leaks into a user-visible listing.
             output_files = sorted(
-                str(p.relative_to(root_dir)) for p in root_dir.rglob("*") if p.is_file()
+                str(p.relative_to(root_dir)) for p in root_dir.rglob("*")
+                if p.is_file() and p.name != provenance.FILENAME
             )
         # The declared file contract (output.artifacts): report promised paths the
         # completed run did not produce. A warning, never a failure — the caller
@@ -1196,17 +1214,30 @@ class WorkflowEngine:
             final_output_node=final_output_node, missing_artifacts=missing,
         )
 
-    def _reuse_hit(self, node: WorkNode, work_dir: str) -> tuple[str, dict] | None:
-        """Whether *node*'s declared output_file can stand in for a fresh run: the
-        node runner's CURRENT producer identity (model/provider/params_hash — only
-        the runner can resolve persona/model-ref, so this is duck-typed via
-        ``reuse_identity``) must exactly match the stored provenance entry for that
-        file, alongside the node's current reuse_hash. A None on either side of any
-        of the four comparisons means "unknown", which never justifies reuse — same
-        for a runner with no ``reuse_identity`` (a script runner or test double need
-        not implement it) or a failure reading the artifact file. Returns
-        ``(file_text, provenance_entry)`` on a hit, else None (the node runs
-        normally)."""
+    def _reuse_hit(self, node: WorkNode, work_dir: str, *, task: str, node_input: str | None,
+                  iteration: int) -> tuple[str, dict] | None:
+        """Whether *node*'s declared output_file can stand in for a fresh run. Every
+        one of these must hold, with a None on either side of ANY single comparison
+        meaning "unknown" — which never justifies reuse:
+        - the node runner's CURRENT producer identity (model/provider/params_hash —
+          only the runner can resolve persona/model-ref, so this is duck-typed via
+          ``reuse_identity``; a runner with no ``reuse_identity`` — a script runner
+          or test double — never reuses) against the stored entry;
+        - the node's current ``reuse_hash`` against the stored entry's ``node_hash``;
+        - the CURRENT composed input (task + upstream/inputs_from text) against the
+          stored entry's ``input_hash`` — an unchanged producer fed different input
+          is not the same call;
+        - the file's CURRENT bytes against the stored entry's ``content_sha256`` —
+          content edited or restored since it was stamped is not trustworthy even
+          when every other signal still agrees.
+        On top of all that, ``iteration`` must be 1: a same-run revisit (iteration
+        > 1) NEVER reuses regardless of what else matches — belt and suspenders,
+        since a revisit only happens after a loop-back, which means upstream
+        feedback exists (normally already reflected in input_hash, but this holds
+        even were that not so). Returns ``(file_text, provenance_entry)`` on a hit,
+        else None (the node runs normally)."""
+        if iteration > 1:
+            return None
         identity_fn = getattr(self._node_runner, "reuse_identity", None)
         if identity_fn is None:
             return None
@@ -1223,11 +1254,14 @@ class WorkflowEngine:
         if not (_agree(entry.get("node_hash"), provenance.reuse_hash(node.raw))
                 and _agree(entry.get("model"), identity.get("model"))
                 and _agree(entry.get("provider"), identity.get("provider"))
-                and _agree(entry.get("params_hash"), identity.get("params_hash"))):
+                and _agree(entry.get("params_hash"), identity.get("params_hash"))
+                and _agree(entry.get("input_hash"), provenance.input_hash(task, node_input))):
             return None
         try:
             text = (Path(work_dir) / node.output_file).read_text(encoding="utf-8")
         except OSError:
+            return None
+        if not _agree(entry.get("content_sha256"), provenance.content_sha256(text)):
             return None
         return text, entry
 

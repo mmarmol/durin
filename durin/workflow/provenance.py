@@ -1,10 +1,12 @@
 """Artifact provenance for workflow work folders.
 
-`.provenance.json` maps each engine-written output file to WHO produced it —
-node definition hash, resolved model/provider, generation params hash — so a
-later run can decide "identical producer → reusable" and anything else re-runs.
-Written only by the engine; a missing or corrupt file means "unknown", which
-must always be treated as not-reusable."""
+`.provenance.json` maps each engine-written output file to WHO produced it AND
+UNDER WHAT CONDITIONS — node definition hash, resolved model/provider,
+generation params hash, a hash of the composed input the node was dispatched
+with, and a hash of the artifact's own content — so a later run can decide
+"identical producer, identical input, unchanged content → reusable" and
+anything else re-runs. Written only by the engine; a missing or corrupt file
+means "unknown", which must always be treated as not-reusable."""
 from __future__ import annotations
 
 import dataclasses
@@ -23,19 +25,35 @@ def node_hash(node_spec: dict) -> str:
     return hashlib.sha256(_canonical(node_spec).encode("utf-8")).hexdigest()
 
 
-# The node-definition fields that determine what an artifact's content WOULD be —
-# deliberately excludes routing/wiring fields (next, on_pass, on_fail, cases,
-# detached, inputs_from, id, title, ...) so editing a node's place in the graph
-# never invalidates a reusable artifact.
-REUSE_RELEVANT_KEYS = ("prompt", "output_schema", "skills", "mode", "tools",
-                       "model", "persona", "max_turns", "kind")
+# Node-definition keys that do NOT determine an artifact's content — pure graph
+# wiring or display metadata. A DENYLIST, not an allowlist: reuse_hash() hashes
+# everything else, so a field this set doesn't name (including one added to
+# WorkNode after this was written) still participates in the hash — conservative
+# by default, since under-including a content-affecting field risks a stale
+# reuse, while over-including a wiring field only costs an occasional needless
+# re-run.
+REUSE_IGNORED_KEYS = frozenset({
+    "id",          # the node's own graph identity, not part of what it produces
+    "title",       # human display label only
+    "next",        # linear routing edge — wiring, not content
+    "on_pass",     # binary routing edge — wiring, not content
+    "on_fail",     # binary routing edge — wiring, not content
+    "cases",       # multi-way routing edges — wiring, not content
+    "detached",    # launch-and-continue scheduling — doesn't change what runs
+    "max_visits",  # loop-cap wiring, not content
+    "reuse",       # the reuse opt-in flag itself — toggling it must not
+                   # invalidate the very artifact it is about to be compared against
+})
 
 
 def reuse_hash(raw_node_spec: dict) -> str:
-    """Hash of the node-definition fields that determine an artifact's content.
-    Routing-only edits (next / on_fail / detached wiring) deliberately do not
-    change it, so they never invalidate reuse."""
-    return node_hash({k: raw_node_spec.get(k) for k in REUSE_RELEVANT_KEYS})
+    """Hash of the node-definition fields that determine an artifact's content:
+    everything in the raw spec EXCEPT the pure-wiring/display keys in
+    REUSE_IGNORED_KEYS. Notably this now includes inputs_from (composes the
+    node's entire input via the engine), mcps, context, session, max_reentries,
+    and reentry_prompt — all content-determining, previously missed by an
+    allowlist that named only a few fields explicitly."""
+    return node_hash({k: v for k, v in raw_node_spec.items() if k not in REUSE_IGNORED_KEYS})
 
 
 def node_identity(node) -> dict:
@@ -64,6 +82,24 @@ def params_hash(generation) -> str:
     return hashlib.sha256(_canonical(payload).encode("utf-8")).hexdigest()
 
 
+def input_hash(task: str | None, node_input: str | None) -> str:
+    """Hash of the exact (task, composed-upstream-input) pair a node was
+    dispatched with — the same two values NodeRunRequest carries as ``task``/
+    ``upstream_output``. The reuse gate compares this against a stored entry so
+    an identical producer fed DIFFERENT input (a changed task, new upstream
+    text, or loop-back feedback) is never mistaken for the same call."""
+    payload = {"task": task, "upstream_output": node_input}
+    return hashlib.sha256(_canonical(payload).encode("utf-8")).hexdigest()
+
+
+def content_sha256(text: str) -> str:
+    """Hash of an artifact's exact text content, as written to disk. The reuse
+    gate compares this against a stored entry so content edited, restored, or
+    otherwise drifted after being stamped is never reused just because its
+    producer's identity still matches."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def durin_version() -> str | None:
     """The installed durin-agent distribution version, or None when it cannot be
     resolved (e.g. running from source with no installed distribution). Best-effort
@@ -88,3 +124,20 @@ def record(work_dir: Path, filename: str, entry: dict) -> None:
     data[filename] = entry
     (Path(work_dir) / FILENAME).write_text(
         json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def drop(work_dir: Path, filename: str) -> None:
+    """Best-effort removal of *filename*'s entry. Used when a fresh artifact
+    write's ``record()`` call itself fails: a stale (or now-inaccurate) entry
+    for the same filename must never be left standing over content that just
+    changed, or a later run could treat old metadata as still describing what
+    is on disk now. Never raises — a cleanup failure here must not compound the
+    record() failure it exists to contain."""
+    try:
+        data = load(work_dir)
+        if filename in data:
+            del data[filename]
+            (Path(work_dir) / FILENAME).write_text(
+                json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    except Exception:  # noqa: BLE001 - cleanup is best-effort, never fatal
+        pass
