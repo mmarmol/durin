@@ -138,6 +138,9 @@ PLAN_MODE_ALLOWED = frozenset({
     "skill_view",
     "skill_search",
     "list_workflows",
+    # Consulting past workflow runs is read-only w.r.t. the workspace — the same
+    # posture as `tasks`/`list_workflows` above.
+    "workflow_runs",
 })
 
 PLAN_MODE = AgentMode(

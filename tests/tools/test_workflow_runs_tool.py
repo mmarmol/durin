@@ -371,6 +371,12 @@ def test_enabled_mirrors_tasks_tool_gate():
     assert WorkflowRunsTool.enabled(SimpleNamespace()) is False
 
 
+def test_tool_is_in_plan_mode_allowed_set():
+    # Read-only w.r.t. the workspace, like its peers tasks/list_workflows/session_search.
+    from durin.agent.agent_mode import PLAN_MODE
+    assert PLAN_MODE.is_tool_allowed("workflow_runs")
+
+
 def test_read_only_and_core_scope():
     assert WorkflowRunsTool(workspace="/tmp").read_only is True
     assert WorkflowRunsTool._scopes == {"core"}
