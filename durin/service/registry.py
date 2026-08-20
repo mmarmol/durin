@@ -37,6 +37,9 @@ class RouteSpec:
     request_model: type[Command] | type[Query] | None
     response_model: type[Result] | None
     summary: str
+    # Success status code. 200 for nearly everything; a route that hands off
+    # to background work (e.g. a detached launch) returns 202 instead.
+    status_code: int = 200
 
 
 def route(
@@ -47,6 +50,7 @@ def route(
     request_model: type[Command] | type[Query] | None = None,
     response_model: type[Result] | None = None,
     summary: str = "",
+    status_code: int = 200,
 ) -> Callable[[Callable], Callable]:
     """Mark a service method as an HTTP route.
 
@@ -56,7 +60,10 @@ def route(
     """
 
     def deco(fn: Callable) -> Callable:
-        setattr(fn, ROUTE_ATTR, RouteSpec(verb, path, scope, request_model, response_model, summary))
+        setattr(fn, ROUTE_ATTR, RouteSpec(
+            verb, path, scope, request_model, response_model, summary,
+            status_code=status_code,
+        ))
         return fn
 
     return deco

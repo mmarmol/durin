@@ -203,6 +203,50 @@ def test_seed_apply_unknown_template_reports_error(client, workspace):
     assert body["applied"] is False and body["error"]
 
 
+def _issue(token_store, scopes):
+    _token_id, plaintext = token_store.issue(scopes, label="test")
+    return {"Authorization": f"Bearer {plaintext}"}
+
+
+def test_launch_route_returns_202_with_run_id(client, workspace, token_store):
+    workflows_dir = workspace / "workflows"
+    workflows_dir.mkdir(parents=True)
+    (workflows_dir / "w1.json").write_text(
+        json.dumps({"name": "w1", "start": "a", "nodes": [{"id": "a", "kind": "work"}]})
+    )
+    resp = client.post(
+        "/api/v1/workflows/w1/runs",
+        headers=_issue(token_store, ["workflows:write"]),
+        json={"task": "do the thing"},
+    )
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["run_id"]
+
+
+def test_launch_route_requires_workflows_write_scope(client, workspace, token_store):
+    workflows_dir = workspace / "workflows"
+    workflows_dir.mkdir(parents=True)
+    (workflows_dir / "w1.json").write_text(
+        json.dumps({"name": "w1", "start": "a", "nodes": [{"id": "a", "kind": "work"}]})
+    )
+    resp = client.post(
+        "/api/v1/workflows/w1/runs",
+        headers=_issue(token_store, ["workflows:read"]),
+        json={"task": "do the thing"},
+    )
+    assert resp.status_code == 403
+
+
+def test_launch_route_unknown_workflow_is_404(client, token_store):
+    resp = client.post(
+        "/api/v1/workflows/ghost/runs",
+        headers=_issue(token_store, ["workflows:write"]),
+        json={"task": "do the thing"},
+    )
+    assert resp.status_code == 404
+
+
 def test_seed_dismiss_tombstones_the_pending_entry(client, workspace):
     workflows_dir = workspace / "workflows"
     workflows_dir.mkdir(parents=True)

@@ -7209,6 +7209,38 @@
         "title": "WorkflowGetResult",
         "type": "object"
       },
+      "WorkflowLaunchCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "task": {
+            "title": "Task",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "task"
+        ],
+        "title": "WorkflowLaunchCommand",
+        "type": "object"
+      },
+      "WorkflowLaunchResult": {
+        "properties": {
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id"
+        ],
+        "title": "WorkflowLaunchResult",
+        "type": "object"
+      },
       "WorkflowRecApplyCommand": {
         "additionalProperties": false,
         "properties": {
@@ -12857,6 +12889,33 @@
         },
         "summary": "List one workflow's persisted runs, newest-first.",
         "x-required-scope": "workflows:read"
+      },
+      "post": {
+        "operationId": "workflows_launch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowLaunchCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowLaunchResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Launch a workflow run detached: returns immediately with the run id, never waits for it to finish.",
+        "x-required-scope": "workflows:write"
       }
     },
     "/api/v1/workflows/{name}/runs/{run_id}": {
