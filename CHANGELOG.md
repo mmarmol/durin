@@ -5,6 +5,57 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.8.0 — 2026-08-20
+
+### Highlights
+
+- **"Who spent the tokens?" is now answerable from telemetry alone.** Every LLM
+  round-trip — the chat loop, workflow nodes, judges, memory and dream work, the
+  vision and audio helpers — logs one `provider.call` event naming the provider,
+  the model, the prompt/cached/completion token counts, the wall-clock duration
+  and how the call ended. Workflow nodes were previously invisible: a run could
+  burn hours of model time without leaving a single telemetry line — each node
+  now writes its own telemetry file, tool calls and LLM round-trips included.
+  Born from a real audit day where the provider's dashboard showed hundreds of
+  millions of tokens and durin's telemetry could only account for a fraction of
+  its own share. (#534)
+
+- **Structured output stops failing with the wrong story.** A workflow node that
+  had already done its work could still abort with `'ticket_id' is a required
+  property` — when the truth was that the delivery payload got cut at the
+  output-token limit and repaired into a partial object. The delivery call now
+  runs with the model's real output budget (it was silently capped at a
+  4096-token default), a truncation is named as a truncation and the retry is
+  steered toward a more concise payload, and a provider failure aborts
+  immediately with the provider's message instead of burning retries on a dead
+  call. (#536)
+
+### Changes
+
+**Telemetry**
+
+- New `provider.call` event emitted at the provider layer for every completed
+  call through the retry wrappers, and from workflow nodes' direct calls and the
+  `interpret_image`/`interpret_audio` helpers; the factory stamps each provider's
+  config-registry name so events attribute to `zai_coding_plan`, not a class
+  name. (#534)
+- Workflow nodes bind their session logger for the whole node execution, so
+  `workflow_<run>_<node>` telemetry files exist at all. (#534)
+
+**Workflows**
+
+- The forced-tool calls (route verdicts, re-entry assessments, structured-output
+  delivery) ride `chat_with_retry`: transient transport failures retry, output
+  budget resolves to the model's configured cap, and long generations keep the
+  streaming transport alive. (#536)
+- The structured-output delivery loop reads `finish_reason`: truncation and
+  provider errors are reported as what they are, and a complete valid payload
+  flagged at the limit is still accepted. (#536)
+
+**Data**
+
+- Weekly vendored model catalog and MCP floor refreshes. (#531, #532)
+
 ## 0.7.0 — 2026-08-15
 
 ### Highlights
