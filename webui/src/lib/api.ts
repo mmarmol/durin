@@ -409,7 +409,7 @@ export async function renameWorkflow(
 // One per-node entry in a run's trace. The attribution fields make a run auditable:
 // session_key points at the fresh session that produced the row; worker_index/branch_id
 // identify a fan-out worker or a static parallel branch so concurrent units stay legible;
-// status is "ok" | "persist_failed" | "node_failed".
+// status is "ok" | "persist_failed" | "node_failed" | "reused".
 // `output` is present on a freshly-run result but absent from a persisted run's manifest
 // (the on-disk record omits per-node output text) — callers must tolerate it being unset.
 export type WorkflowRunNode = {

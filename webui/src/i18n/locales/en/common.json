@@ -1389,6 +1389,7 @@
       "no_session": "no session",
       "persist_failed": "save failed",
       "node_failed": "failed",
+      "reused": "reused",
       "completed": "completed",
       "running": "running",
       "needs_input": "waiting for input",

@@ -2318,6 +2318,7 @@
       "no_session": "sin sesión",
       "persist_failed": "fallo al guardar",
       "node_failed": "falló",
+      "reused": "reutilizado",
       "completed": "completada",
       "running": "en ejecución",
       "needs_input": "espera respuesta",

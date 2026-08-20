@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 from durin.workflow.engine import NodeRunResponse
-from durin.workflow.provenance import node_hash, params_hash, record, load
+from durin.workflow.provenance import (
+    content_sha256, drop, input_hash, load, node_hash, params_hash, record,
+)
 
 def test_node_hash_is_stable_and_order_insensitive():
     a = {"id": "n", "prompt": "p", "output_schema": {"x": 1}}
@@ -28,12 +30,42 @@ def test_load_tolerates_missing_and_corrupt(tmp_path):
     (tmp_path / ".provenance.json").write_bytes(b'{"model": "gl\xc3"}')
     assert load(tmp_path) == {}
 
+def test_drop_removes_only_the_named_entry(tmp_path):
+    record(tmp_path, "a.json", {"run_id": "r1"})
+    record(tmp_path, "b.json", {"run_id": "r2"})
+    drop(tmp_path, "a.json")
+    assert load(tmp_path) == {"b.json": {"run_id": "r2"}}
+
+def test_drop_tolerates_missing_entry_and_missing_file(tmp_path):
+    drop(tmp_path, "nope.json")            # no .provenance.json at all yet
+    assert load(tmp_path) == {}
+    record(tmp_path, "a.json", {"run_id": "r1"})
+    drop(tmp_path, "does-not-exist.json")  # entry never existed
+    assert load(tmp_path) == {"a.json": {"run_id": "r1"}}
+
+def test_drop_never_raises_on_an_unwritable_path(tmp_path):
+    # Failure-suppressed by contract: a cleanup failure must never compound the
+    # record() failure it exists to contain.
+    drop(tmp_path / "does" / "not" / "exist", "a.json")
+
 def test_params_hash_is_stable():
     gen1 = SimpleNamespace(max_tokens=1000, temperature=0.7, reasoning_effort=None, top_p=0.9, top_k=50)
     gen2 = SimpleNamespace(top_k=50, top_p=0.9, temperature=0.7, max_tokens=1000, reasoning_effort=None)
     assert params_hash(gen1) == params_hash(gen2)
     gen3 = SimpleNamespace(max_tokens=2000, temperature=0.7, reasoning_effort=None, top_p=0.9, top_k=50)
     assert params_hash(gen1) != params_hash(gen3)
+
+def test_input_hash_is_stable_and_sensitive_to_either_half():
+    assert input_hash("t", "u") == input_hash("t", "u")
+    assert input_hash("t", "u") != input_hash("t", "different")
+    assert input_hash("t", "u") != input_hash("different", "u")
+
+def test_input_hash_treats_none_upstream_distinctly_from_empty_string():
+    assert input_hash("t", None) != input_hash("t", "")
+
+def test_content_sha256_is_stable_and_sensitive_to_content():
+    assert content_sha256("x") == content_sha256("x")
+    assert content_sha256("x") != content_sha256("y")
 
 def test_node_run_response_provenance_fields_default_to_none():
     resp = NodeRunResponse(output="x")
@@ -75,13 +107,53 @@ def test_reuse_hash_changes_when_prompt_changes():
     assert reuse_hash(a) != reuse_hash(b)
 
 
-def test_reuse_hash_is_projection_of_node_hash():
-    # reuse_hash must equal node_hash of the REUSE_RELEVANT_KEYS projection, not
-    # the whole node dict — proving it does not accidentally hash routing fields.
-    from durin.workflow.provenance import REUSE_RELEVANT_KEYS, node_hash, reuse_hash
-    src = {"id": "n", "prompt": "p", "next": "b", "detached": True}
-    projection = {k: src.get(k) for k in REUSE_RELEVANT_KEYS}
+def test_reuse_hash_is_projection_excluding_denylist():
+    # reuse_hash must equal node_hash of raw MINUS REUSE_IGNORED_KEYS — a denylist,
+    # not an allowlist, so a key this test doesn't even know about still hashes.
+    from durin.workflow.provenance import REUSE_IGNORED_KEYS, node_hash, reuse_hash
+    src = {"id": "n", "prompt": "p", "next": "b", "detached": True, "inputs_from": ["a"]}
+    projection = {k: v for k, v in src.items() if k not in REUSE_IGNORED_KEYS}
     assert reuse_hash(src) == node_hash(projection)
+
+
+def test_reuse_hash_changes_when_inputs_from_changes():
+    # C1: inputs_from composes the node's ENTIRE input via the engine — the
+    # allowlist used to miss this, letting a producer swap under a stable hash.
+    from durin.workflow.provenance import reuse_hash
+    a = {"id": "n", "prompt": "p", "inputs_from": ["x"]}
+    b = {"id": "n", "prompt": "p", "inputs_from": ["y"]}
+    assert reuse_hash(a) != reuse_hash(b)
+
+
+def test_reuse_hash_is_sensitive_to_previously_missed_content_fields():
+    # C1 names these as content-determining fields the old allowlist missed.
+    from durin.workflow.provenance import reuse_hash
+    base = {"id": "n", "prompt": "p"}
+    for key, value in (
+        ("mcps", ["server-a"]),
+        ("context", "shared"),
+        ("session", "persistent"),
+        ("max_reentries", 2),
+        ("reentry_prompt", "steer"),
+    ):
+        assert reuse_hash(base) != reuse_hash({**base, key: value}), key
+
+
+def test_reuse_hash_ignores_next_max_visits_and_reuse_flag():
+    from durin.workflow.provenance import reuse_hash
+    a = {"id": "n", "prompt": "p", "next": "b", "max_visits": 3, "reuse": None}
+    b = {"id": "n", "prompt": "p", "next": "z", "max_visits": 9, "reuse": "if-unchanged"}
+    assert reuse_hash(a) == reuse_hash(b)
+
+
+def test_reuse_hash_is_sensitive_to_unknown_future_keys():
+    # Conservative by default: a denylist only ignores keys it explicitly names,
+    # so a key nobody anticipated still invalidates reuse instead of being
+    # silently dropped the way an allowlist would drop it.
+    from durin.workflow.provenance import reuse_hash
+    a = {"id": "n", "prompt": "p"}
+    b = {"id": "n", "prompt": "p", "some_future_field": "value"}
+    assert reuse_hash(a) != reuse_hash(b)
 
 
 def test_durin_version_matches_installed_metadata():
