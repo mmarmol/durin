@@ -7,6 +7,7 @@ Written only by the engine; a missing or corrupt file means "unknown", which
 must always be treated as not-reusable."""
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 from pathlib import Path
@@ -35,6 +36,26 @@ def reuse_hash(raw_node_spec: dict) -> str:
     Routing-only edits (next / on_fail / detached wiring) deliberately do not
     change it, so they never invalidate reuse."""
     return node_hash({k: raw_node_spec.get(k) for k in REUSE_RELEVANT_KEYS})
+
+
+def node_identity(node) -> dict:
+    """A JSON-serializable identity for one workflow-graph node, for spec_hash
+    (the whole-graph signal, unlike reuse_hash's narrower projection — spec_hash
+    is deliberately sensitive to routing/wiring too, since it answers "did the
+    graph change at all", not "is a specific artifact still reusable").
+
+    A WorkNode's ``raw`` spec dict IS its identity — the authored source. Script,
+    subworkflow, and parallel nodes carry no ``raw`` field, so their parsed
+    dataclass fields stand in instead: still an exact, order-independent identity,
+    since the on-disk definition determines them uniquely. Falls back to just
+    id+kind only if even that fails (a non-dataclass double in a test)."""
+    raw = getattr(node, "raw", None)
+    if raw:
+        return raw
+    try:
+        return dataclasses.asdict(node)
+    except (TypeError, ValueError):
+        return {"id": getattr(node, "id", None), "kind": type(node).__name__}
 
 
 def params_hash(generation) -> str:

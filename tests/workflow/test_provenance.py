@@ -101,3 +101,41 @@ def test_durin_version_returns_none_when_unresolvable(monkeypatch):
 
     monkeypatch.setattr(importlib.metadata, "version", _raise)
     assert provenance.durin_version() is None
+
+
+def test_node_identity_returns_raw_when_present():
+    # A WorkNode's raw spec dict IS its identity — no fallback needed.
+    from durin.workflow.provenance import node_identity
+    n = SimpleNamespace(raw={"id": "x", "prompt": "p"}, id="x")
+    assert node_identity(n) == {"id": "x", "prompt": "p"}
+
+
+def test_node_identity_falls_back_to_dataclass_fields_when_raw_absent():
+    # ScriptNode carries no `raw` field (only WorkNode does) — node_identity must
+    # still produce a real identity from the parsed dataclass, not an empty dict.
+    from durin.workflow.provenance import node_identity
+    from durin.workflow.spec import parse_workflow
+    wf = parse_workflow({
+        "name": "w", "start": "b",
+        "nodes": [{"id": "b", "kind": "script", "command": "echo hi", "next": None}],
+    })
+    script_node = wf.nodes["b"]
+    assert not getattr(script_node, "raw", None)
+    identity = node_identity(script_node)
+    assert identity["command"] == "echo hi"
+
+
+def test_node_identity_is_sensitive_to_script_command():
+    from durin.workflow.provenance import node_hash, node_identity
+    from durin.workflow.spec import parse_workflow
+
+    def _script(command):
+        wf = parse_workflow({
+            "name": "w", "start": "b",
+            "nodes": [{"id": "b", "kind": "script", "command": command, "next": None}],
+        })
+        return wf.nodes["b"]
+
+    h1 = node_hash(node_identity(_script("echo hi")))
+    h2 = node_hash(node_identity(_script("echo bye")))
+    assert h1 != h2

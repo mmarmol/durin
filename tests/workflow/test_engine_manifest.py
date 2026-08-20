@@ -215,6 +215,32 @@ def test_manifest_spec_hash_survives_mid_walk_update(tmp_path):
     assert seen["spec_hash"]
 
 
+def test_spec_hash_covers_script_nodes_and_is_deterministic(tmp_path):
+    """spec_hash must move when a NON-agent node's definition changes (a script
+    node carries no `raw` field, so it is the case most likely to be silently
+    skipped), and must be identical for two runs of the identical definition."""
+    def runner(req):
+        return NodeRunResponse(output=f"out {req.node.id}")
+
+    def _spec_hash_for(command, run_id):
+        wf = parse_workflow({
+            "name": "w", "start": "a",
+            "nodes": [{"id": "a", "kind": "work", "next": "b"},
+                     {"id": "b", "kind": "script", "command": command, "next": None}],
+        })
+        engine = WorkflowEngine(runner, script_runner=runner, workspace=str(tmp_path),
+                                run_id_factory=lambda: run_id)
+        res = engine.run(wf, "go")
+        assert res.status == "completed"
+        return run_log.read_manifest(tmp_path, "w", run_id)["spec_hash"]
+
+    h1 = _spec_hash_for("echo hi", "r1")
+    h2 = _spec_hash_for("echo bye", "r2")
+    h1_again = _spec_hash_for("echo hi", "r3")
+    assert h1 != h2          # the script node's command IS covered by spec_hash
+    assert h1 == h1_again    # deterministic: the identical spec parsed twice → same hash
+
+
 def test_legacy_manifest_without_producer_fields_round_trips(tmp_path):
     """A manifest written before this change (no spec_hash/durin_version/model/
     provider/node_hash) must still round-trip through every public reader."""

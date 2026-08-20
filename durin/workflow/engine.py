@@ -548,17 +548,21 @@ class WorkflowEngine:
         except Exception:  # noqa: BLE001 - history is a nicety; never block a run
             pass
         try:
-            # spec_hash identifies the workflow DEFINITION this run walked (over every
-            # node's raw spec, keyed by node id) — a manifest reader can tell whether two
-            # runs of the same name actually ran the same graph. durin_version identifies
-            # the engine build. Both computed once here and carried forward by
-            # update_run/finalize_run rather than recomputed on every rewrite.
+            # spec_hash identifies the workflow DEFINITION this run walked — every node's
+            # identity, keyed by node id (an agent node's raw spec dict; a script,
+            # subworkflow, or parallel node's parsed dataclass fields, since those carry
+            # no raw field — see provenance.node_identity) — so a manifest reader can tell
+            # whether two runs of the same name actually ran the same graph, INCLUDING a
+            # change to a non-agent node the reader would otherwise never see reflected
+            # here. durin_version identifies the engine build. Both computed once here and
+            # carried forward by update_run/finalize_run rather than recomputed on every
+            # rewrite.
             run_log.start_run(self._workspace, workflow.name, run_id,
                               root_session_key=root_session_key, started_at=started_at,
                               task=task, parent_run_id=parent_run_id, work_dir=work_dir,
                               typical_s=typical, typical_total_s=typical_total,
                               spec_hash=provenance.node_hash(
-                                  {nid: n.raw for nid, n in workflow.nodes.items() if hasattr(n, "raw")}),
+                                  {nid: provenance.node_identity(n) for nid, n in workflow.nodes.items()}),
                               durin_version=provenance.durin_version())
         except Exception:  # noqa: BLE001 - a manifest write must not break the run
             logger.exception("workflow run manifest start failed for {}", workflow.name)
