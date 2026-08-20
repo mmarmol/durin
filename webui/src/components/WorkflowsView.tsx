@@ -546,7 +546,13 @@ function RoutingFields({
             <SchemaField
               value={node.output_schema as Record<string, unknown> | null | undefined}
               onChange={(v) =>
-                patch({ output_schema: v, ...(v === undefined ? { output_file: undefined } : {}) })
+                // Clearing the schema also clears output_file (it requires a
+                // schema) and, transitively, reuse (it requires output_file) —
+                // otherwise reuse would linger set with no file to compare.
+                patch({
+                  output_schema: v,
+                  ...(v === undefined ? { output_file: undefined, reuse: undefined } : {}),
+                })
               }
               t={t}
             />
@@ -556,7 +562,12 @@ function RoutingFields({
               <Input
                 value={(node.output_file as string) ?? ""}
                 placeholder="plan.json"
-                onChange={(e) => patch({ output_file: e.target.value || undefined })}
+                onChange={(e) => {
+                  const value = e.target.value || undefined;
+                  // reuse requires output_file — clearing the file must clear
+                  // reuse too, or it lingers set with nothing to compare against.
+                  patch({ output_file: value, ...(value === undefined ? { reuse: undefined } : {}) });
+                }}
                 className="h-8"
               />
             </Field>

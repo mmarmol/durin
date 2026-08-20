@@ -7,6 +7,7 @@ folder (simulating a workflow re-run against the same work directory)."""
 
 import pytest
 
+from durin.workflow import run_log
 from durin.workflow.engine import NodeRunResponse, WorkflowEngine
 from durin.workflow.spec import WorkflowError, parse_workflow
 
@@ -66,6 +67,13 @@ def test_reuse_skips_when_producer_identical(tmp_path):
     assert second.runs[0].status == "reused"
     assert second.runs[0].origin_run_id == first.run_id
     assert second.final_output == '{"x": 1}'            # == the artifact's content
+
+    # The DURABLE record, not just the in-memory result: origin_run_id must
+    # survive into the manifest run_log.py writes, or no reader (webui, API,
+    # a later dream pass) can ever tell which run actually produced the file.
+    manifest = run_log.read_manifest(tmp_path, "w", second.run_id)
+    assert manifest["runs"][0]["origin_run_id"] == first.run_id
+    assert manifest["runs"][0]["status"] == "reused"
 
 
 def test_reuse_reruns_when_node_spec_changed(tmp_path):
