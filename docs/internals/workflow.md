@@ -221,7 +221,14 @@ A work node may declare a **structured output** (`output_schema`): the node runn
 `deliver` tool call whose parameters ARE the schema (the same machinery as the `route`
 verdict), validates the payload server-side (jsonschema), retries immediately inside the
 node with the exact validation error, and fails the node after the attempt budget — no
-text fallback. The forced-tool calls (route / re-entry / deliver) go through
+text fallback. `deliver` and `route` are registered in the node's own tool registry from
+turn 1, not appended only at this forced call, so the `tools` array — and the prompt-cache
+prefix it anchors — stays identical between every work-loop round and this final call. A
+schema-valid `deliver` call made mid-loop is accepted immediately as the node's output,
+skipping the forced call entirely; an invalid one returns the validation error and lets the
+model keep working. A `route` call made before the node is done is acknowledged but not
+authoritative — the end-of-turn forced call always decides the actual verdict. The
+forced-tool calls (route / re-entry / deliver) go through
 `chat_with_retry`, so transient transport failures retry and `max_tokens` resolves to the
 model's configured output cap rather than a hardcoded signature default. The delivery loop
 reads `finish_reason`: a `length` response is named as truncation and the retry is steered
@@ -551,14 +558,16 @@ This section covers **agent** routing nodes. A script node's verdict is derived
 directly from its exit code or last stdout line (§2) — there is no LLM call and no
 text-parse fallback involved.
 
-A routing node's verdict is **deterministic by construction**. After the node's work turn,
-the node runner makes one **forced `route` tool call** (`tool_choice="required"`) whose
-`label` parameter is an **enum of that node's own labels** — the `cases` keys for a multi-way
-node, or `PASS`/`FAIL` for a binary one. The model can only return a value from that enum, so
-the verdict is always a valid label instead of a fragile free-text line that a stray word can
-derail. The call runs as a separate `provider.chat` (the runner reaches the provider via
-`AgentRunner.provider`) with the node's full conversation as context, and is wrapped so **any
-failure yields no label** (`route_label=None`) — the run never breaks on it.
+A routing node's verdict is **deterministic by construction**. `route` is registered in the
+node's tool registry from turn 1 (§2), so after the node's work turn the node runner makes
+one **forced `route` tool call** — same tools array as the work loop, `tool_choice` pinned to
+`{"type": "function", "function": {"name": "route"}}` — whose `label` parameter is an **enum
+of that node's own labels** — the `cases` keys for a multi-way node, or `PASS`/`FAIL` for a
+binary one. The model can only return a value from that enum, so the verdict is always a
+valid label instead of a fragile free-text line that a stray word can derail. The call runs
+as a separate `provider.chat` (the runner reaches the provider via `AgentRunner.provider`)
+with the node's full conversation as context, and is wrapped so **any failure yields no
+label** (`route_label=None`) — the run never breaks on it.
 
 When the tool call did not produce a valid label — it errored, or the provider did not honour
 the forced call — the engine **falls back to parsing the node's text output**:

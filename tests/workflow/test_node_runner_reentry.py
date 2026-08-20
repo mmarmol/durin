@@ -154,6 +154,25 @@ def test_no_reentries_means_no_assessment_call(tmp_path):
     assert provider.chat_with_retry.await_count == 0
 
 
+def test_assess_forced_call_appends_to_the_loops_full_tool_list(tmp_path):
+    """`assess` has no early-call semantics (unlike `deliver`/`route`), so it is
+    appended to the work loop's rendered tool list for just this one call instead
+    of being registered from turn 1 — the shared prefix still matches the loop's
+    tools exactly, which is what the provider's prompt cache keys on."""
+    nr, provider = _runner(
+        tmp_path,
+        run_results=[_exhausted(), _completed()],
+        chat_responses=[_assess("continue")],
+    )
+    nr(_req(_node(max_reentries=1)))
+    loop_tools = nr.runner.run.await_args_list[0].args[0].tools.get_definitions()
+    forced_kwargs = provider.chat_with_retry.await_args_list[0].kwargs
+    assert forced_kwargs["tools"][:len(loop_tools)] == loop_tools
+    assert len(forced_kwargs["tools"]) == len(loop_tools) + 1
+    assert forced_kwargs["tools"][-1]["function"]["name"] == "assess"
+    assert forced_kwargs["tool_choice"] == {"type": "function", "function": {"name": "assess"}}
+
+
 # ── schema-aware exhaustion path ──────────────────────────────────────────────
 
 
