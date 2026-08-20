@@ -658,7 +658,14 @@ class AgentNodeRunner:
         # required fields (when the node has one) and demands full content — a bare
         # "give your answer" invites a statement of intent ("let me write it to
         # disk") that leaves the deliver call below nothing to transcribe.
-        if node_max_turns is not None and result.stop_reason == "max_iterations":
+        #
+        # Skipped when a valid `deliver` was already captured mid-loop (`delivered`
+        # is `_DeliverCapture`, populated by `_DeliverTool` — see its class docstring):
+        # the structured-output block below returns that payload directly regardless
+        # of what synthesis would have produced, so a synthesis call here would be
+        # made purely to be discarded — an extra LLM round-trip paying for nothing.
+        if (node_max_turns is not None and result.stop_reason == "max_iterations"
+            and not (node_schema is not None and delivered.payload is not None)):
             synthesis_prompt = (
                 "You have used all your tool rounds and can make no further tool "
                 "calls. Based solely on what you have gathered so far, write your "

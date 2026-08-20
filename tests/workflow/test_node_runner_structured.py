@@ -236,3 +236,42 @@ def test_forced_deliver_sends_full_tool_list(tmp_path):
     forced_kwargs = provider.chat_with_retry.await_args.kwargs
     assert forced_kwargs["tools"] == loop_tools
     assert forced_kwargs["tool_choice"] == {"type": "function", "function": {"name": "deliver"}}
+
+
+def test_last_valid_deliver_wins(tmp_path):
+    async def fake_run(spec):
+        await spec.tools.execute("deliver", {"queries": ["first"]})
+        await spec.tools.execute("deliver", {"queries": ["second"]})
+        return AgentRunResult(final_content="", messages=[{"role": "user", "content": "t"}])
+
+    nr, provider = _runner_with_fake_run(tmp_path, fake_run)
+    resp = nr(_req(_schema_node()))
+    assert json.loads(resp.output) == {"queries": ["second"]}
+    provider.chat_with_retry.assert_not_called()
+
+
+def test_early_valid_deliver_skips_the_discarded_synthesis_call_on_exhaustion(tmp_path):
+    """A node with both `output_schema` and `max_turns`: the model delivers validly
+    mid-loop but the run still ends with stop_reason="max_iterations" (it kept working
+    past its own delivery instead of stopping). The max_turns synthesis call — a second,
+    tools-less LLM call whose only job is to force a text answer out of a node that
+    didn't finish — must NOT fire here: its output would just be discarded once
+    `_derive_structured_output` returns the already-captured payload, so making the
+    call at all would be an extra LLM round-trip paying for nothing."""
+    wf = parse_workflow({"name": "d", "start": "plan", "nodes": [
+        {"id": "plan", "kind": "work", "prompt": "Plan.", "max_turns": 3,
+         "output_schema": SCHEMA, "next": None},
+    ]})
+    node = wf.nodes["plan"]
+
+    async def fake_run(spec):
+        await spec.tools.execute("deliver", {"queries": ["a", "b"]})
+        return AgentRunResult(
+            final_content="partial", messages=[{"role": "user", "content": "t"}],
+            stop_reason="max_iterations")
+
+    nr, provider = _runner_with_fake_run(tmp_path, fake_run)
+    resp = nr(_req(node))
+    assert json.loads(resp.output) == {"queries": ["a", "b"]}
+    assert nr.runner.run.await_count == 1          # no second (synthesis) AgentRunner.run call
+    provider.chat_with_retry.assert_not_called()   # no forced deliver call either
