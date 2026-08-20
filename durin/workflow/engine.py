@@ -110,6 +110,17 @@ class NodeRunResponse:
     command: str | None = None
     stdout: str | None = None
     stderr: str | None = None
+    # The model actually resolved for this node's LLM calls (persona override, the
+    # node's explicit model, or the runner's default). None for script nodes and
+    # for anything that ran with no resolvable model. Threaded through to run-folder
+    # provenance (see durin/workflow/provenance.py).
+    model: str | None = None
+    # The provider_key of the runner's provider (stamped by the provider factory).
+    # None for script nodes or when the provider carries no key.
+    provider: str | None = None
+    # sha256 over this call's generation params (provenance.params_hash). None when
+    # the provider exposes no readable generation settings (e.g. a test double).
+    params_hash: str | None = None
 
 
 NodeRunner = Callable[[NodeRunRequest], NodeRunResponse]

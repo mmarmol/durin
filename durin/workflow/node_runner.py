@@ -40,6 +40,7 @@ from durin.workflow.engine import (
 )
 from durin.workflow.node_progress import NodeCheckpointHook, NodeProgressHook
 from durin.workflow.persona_resolve import resolve_persona
+from durin.workflow.provenance import params_hash
 from durin.workflow.session_keys import is_persistent_session, node_session_key
 
 # How often the cancel watcher wakes to poll the hard-cancel flag while a node's
@@ -382,6 +383,13 @@ class AgentNodeRunner:
         # the runner's default. The parser's persona-xor-model guard ensures at most
         # one of persona_model_ref and req.node.model is set at a time.
         model = persona_model_ref or req.node.model or self.default_model
+        provider_key = None
+        resolved_params_hash = None
+        try:
+            provider_key = getattr(self.runner.provider, "provider_key", None)
+            resolved_params_hash = params_hash(self.runner.provider.generation)
+        except Exception:  # noqa: BLE001 - a bare/test-double runner may carry no provider (or no generation); provenance degrades to None
+            pass
 
         node_max_turns = getattr(req.node, "max_turns", None)
         if node_max_turns is not None:
@@ -595,6 +603,9 @@ class AgentNodeRunner:
             # the node had no session — surface that as a persist failure.
             persist_failed=session_key is None,
             route_label=route_label,
+            model=model,
+            provider=provider_key,
+            params_hash=resolved_params_hash,
         )
 
     def _derive_route_label(self, messages: list[dict], labels: list[str], model: str | None) -> str | None:

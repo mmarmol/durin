@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from durin.workflow.engine import NodeRunResponse
 from durin.workflow.provenance import node_hash, params_hash, record, load
 
 def test_node_hash_is_stable_and_order_insensitive():
@@ -33,3 +34,16 @@ def test_params_hash_is_stable():
     assert params_hash(gen1) == params_hash(gen2)
     gen3 = SimpleNamespace(max_tokens=2000, temperature=0.7, reasoning_effort=None, top_p=0.9, top_k=50)
     assert params_hash(gen1) != params_hash(gen3)
+
+def test_node_run_response_provenance_fields_default_to_none():
+    resp = NodeRunResponse(output="x")
+    assert resp.model is None
+    assert resp.provider is None
+    assert resp.params_hash is None
+
+def test_node_run_response_carries_resolved_model(tmp_path):
+    # reuse the harness pattern from tests/workflow/test_node_runner_structured.py
+    from tests.workflow.test_node_runner_structured import _req, _runner_with_deliver, _schema_node
+    nr, provider = _runner_with_deliver(tmp_path, [{"queries": ["a"]}])
+    resp = nr(_req(_schema_node()))
+    assert resp.model == "test-model"
