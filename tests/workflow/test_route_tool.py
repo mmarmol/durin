@@ -126,3 +126,78 @@ def test_route_tool_failure_falls_back_to_text_parse(tmp_path):
     gate_run = next(r for r in result.runs if r.node_id == "gate")
     # route_label is None because the route tool call failed; the engine used text-parse.
     assert gate_run.route_label == "PROCEED"
+
+
+# ── `route` rides the node's tool list from turn 1 (cache-prefix preserving) ──
+
+
+def test_premature_route_call_is_noted_and_forced_call_still_decides(tmp_path):
+    """A `route` call before the node's work is done is just acknowledged — the
+    end-of-turn forced call always decides the actual verdict (the simpler,
+    behavior-preserving design: no tracking of whether the premature call
+    happened to land on the turn's last iteration)."""
+    wf = _multi_way_workflow()
+
+    mock_provider = MagicMock(spec=LLMProvider)
+    mock_provider.get_default_model.return_value = "test-model"
+
+    noted = {}
+
+    async def fake_run(spec):
+        # The engine also dispatches the "worker" node through this same patched
+        # run(); only the "gate" node's registry has `route` registered.
+        if spec.tools.has("route"):
+            noted["result"] = await spec.tools.execute("route", {"label": "DECLINE"})
+        return AgentRunResult(
+            final_content="still working",
+            messages=[{"role": "assistant", "content": "still working"}],
+        )
+
+    route_response = SimpleNamespace(tool_calls=[SimpleNamespace(arguments={"label": "PROCEED"})])
+    mock_provider.chat_with_retry = AsyncMock(return_value=route_response)
+
+    node_runner = _make_node_runner(tmp_path, mock_provider)
+    engine = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1")
+
+    with patch("durin.agent.runner.AgentRunner.run", AsyncMock(side_effect=fake_run)):
+        result = engine.run(wf, "help me")
+
+    assert "noted" in noted["result"].lower()
+    gate_run = next(r for r in result.runs if r.node_id == "gate")
+    # The forced call's label wins, not the premature DECLINE.
+    assert gate_run.route_label == "PROCEED"
+    assert any(r.node_id == "worker" for r in result.runs)
+
+
+def test_forced_route_call_tools_match_the_loop_exactly(tmp_path):
+    wf = _multi_way_workflow()
+
+    mock_provider = MagicMock(spec=LLMProvider)
+    mock_provider.get_default_model.return_value = "test-model"
+
+    seen = {}
+
+    async def fake_run(spec):
+        # The engine also dispatches the "worker" node through this same patched
+        # run(); only the "gate" node's registry has `route` registered.
+        if spec.tools.has("route"):
+            seen["spec"] = spec
+        return AgentRunResult(
+            final_content="proceed with it",
+            messages=[{"role": "assistant", "content": "proceed with it"}],
+        )
+
+    route_response = SimpleNamespace(tool_calls=[SimpleNamespace(arguments={"label": "PROCEED"})])
+    mock_provider.chat_with_retry = AsyncMock(return_value=route_response)
+
+    node_runner = _make_node_runner(tmp_path, mock_provider)
+    engine = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1")
+
+    with patch("durin.agent.runner.AgentRunner.run", AsyncMock(side_effect=fake_run)):
+        engine.run(wf, "help me")
+
+    loop_tools = seen["spec"].tools.get_definitions()
+    assert "route" in {t["function"]["name"] for t in loop_tools}   # registered from turn 1
+    forced_kwargs = mock_provider.chat_with_retry.await_args.kwargs
+    assert forced_kwargs["tools"] == loop_tools
+    assert forced_kwargs["tool_choice"] == {"type": "function", "function": {"name": "route"}}

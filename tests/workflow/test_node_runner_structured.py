@@ -136,3 +136,142 @@ def test_complete_valid_payload_is_accepted_even_when_flagged_length(tmp_path):
     nr, provider = _runner_with_deliver(tmp_path, [r])
     resp = nr(_req(_schema_node()))
     assert json.loads(resp.output) == {"queries": ["a"]}
+
+
+# ── `deliver` rides the node's tool list from turn 1 (cache-prefix preserving) ──
+
+
+def _no_schema_node():
+    wf = parse_workflow({"name": "d", "start": "plan", "nodes": [
+        {"id": "plan", "kind": "work", "prompt": "Plan.", "next": None},
+    ]})
+    return wf.nodes["plan"]
+
+
+def _runner_with_fake_run(tmp_path, fake_run, chat_responses=()):
+    """An AgentNodeRunner whose AgentRunner.run is a caller-supplied coroutine
+    function — used where the fake needs to touch ``spec.tools`` itself (to
+    simulate the model calling a tool mid-loop), unlike ``_runner_with_deliver``
+    which only ever returns a canned result."""
+    provider = MagicMock(spec=LLMProvider)
+    provider.get_default_model.return_value = "test-model"
+    ar = AgentRunner(provider)
+    ar.run = AsyncMock(side_effect=fake_run)
+    provider.chat_with_retry = AsyncMock(side_effect=list(chat_responses)) if chat_responses else AsyncMock()
+    return AgentNodeRunner(ar, SessionManager(workspace=tmp_path), default_model="test-model"), provider
+
+
+def test_deliver_tool_is_registered_when_schema_declared(tmp_path):
+    seen = {}
+
+    async def fake_run(spec):
+        seen["tools"] = spec.tools.tool_names
+        await spec.tools.execute("deliver", {"queries": ["a"]})   # deliver early so no forced call is needed
+        return AgentRunResult(final_content="", messages=[{"role": "user", "content": "t"}])
+
+    nr, _ = _runner_with_fake_run(tmp_path, fake_run)
+    nr(_req(_schema_node()))
+    assert "deliver" in seen["tools"]
+
+
+def test_deliver_tool_absent_when_no_schema_declared(tmp_path):
+    seen = {}
+
+    async def fake_run(spec):
+        seen["tools"] = spec.tools.tool_names
+        return AgentRunResult(final_content="done", messages=[{"role": "user", "content": "t"}])
+
+    nr, _ = _runner_with_fake_run(tmp_path, fake_run)
+    nr(_req(_no_schema_node()))
+    assert "deliver" not in seen["tools"]
+
+
+def test_early_valid_deliver_ends_the_turn_with_the_payload(tmp_path):
+    async def fake_run(spec):
+        await spec.tools.execute("deliver", {"queries": ["a", "b"]})
+        return AgentRunResult(final_content="", messages=[{"role": "user", "content": "t"}])
+
+    nr, provider = _runner_with_fake_run(tmp_path, fake_run)
+    resp = nr(_req(_schema_node()))
+    assert json.loads(resp.output) == {"queries": ["a", "b"]}
+    provider.chat_with_retry.assert_not_called()   # no forced end-of-turn call
+
+
+def test_early_invalid_deliver_returns_validation_error_and_continues(tmp_path):
+    captured = {}
+
+    async def fake_run(spec):
+        captured["result"] = await spec.tools.execute("deliver", {"queries": []})  # minItems violation
+        return AgentRunResult(final_content="prose", messages=[{"role": "user", "content": "t"}])
+
+    nr, provider = _runner_with_fake_run(
+        tmp_path, fake_run,
+        chat_responses=[SimpleNamespace(tool_calls=[SimpleNamespace(arguments={"queries": ["fixed"]})])])
+    resp = nr(_req(_schema_node()))
+    assert "did not satisfy the output schema" in captured["result"]
+    assert "keep working" in captured["result"].lower()
+    assert json.loads(resp.output) == {"queries": ["fixed"]}   # the forced call still ran and decided it
+    provider.chat_with_retry.assert_awaited_once()
+
+
+def test_forced_deliver_sends_full_tool_list(tmp_path):
+    wf = parse_workflow({"name": "d", "start": "plan", "nodes": [
+        {"id": "plan", "kind": "work", "tools": "default", "prompt": "Plan.",
+         "output_schema": SCHEMA, "next": None},
+    ]})
+    node = wf.nodes["plan"]
+    seen = {}
+
+    async def fake_run(spec):
+        seen["spec"] = spec
+        return AgentRunResult(final_content="prose", messages=[{"role": "user", "content": "t"}])
+
+    nr, provider = _runner_with_fake_run(
+        tmp_path, fake_run,
+        chat_responses=[SimpleNamespace(tool_calls=[SimpleNamespace(arguments={"queries": ["a"]})])])
+    nr(_req(node))
+
+    loop_tools = seen["spec"].tools.get_definitions()
+    assert len(loop_tools) > 1, "a real tool set, not just deliver alone"
+    forced_kwargs = provider.chat_with_retry.await_args.kwargs
+    assert forced_kwargs["tools"] == loop_tools
+    assert forced_kwargs["tool_choice"] == {"type": "function", "function": {"name": "deliver"}}
+
+
+def test_last_valid_deliver_wins(tmp_path):
+    async def fake_run(spec):
+        await spec.tools.execute("deliver", {"queries": ["first"]})
+        await spec.tools.execute("deliver", {"queries": ["second"]})
+        return AgentRunResult(final_content="", messages=[{"role": "user", "content": "t"}])
+
+    nr, provider = _runner_with_fake_run(tmp_path, fake_run)
+    resp = nr(_req(_schema_node()))
+    assert json.loads(resp.output) == {"queries": ["second"]}
+    provider.chat_with_retry.assert_not_called()
+
+
+def test_early_valid_deliver_skips_the_discarded_synthesis_call_on_exhaustion(tmp_path):
+    """A node with both `output_schema` and `max_turns`: the model delivers validly
+    mid-loop but the run still ends with stop_reason="max_iterations" (it kept working
+    past its own delivery instead of stopping). The max_turns synthesis call — a second,
+    tools-less LLM call whose only job is to force a text answer out of a node that
+    didn't finish — must NOT fire here: its output would just be discarded once
+    `_derive_structured_output` returns the already-captured payload, so making the
+    call at all would be an extra LLM round-trip paying for nothing."""
+    wf = parse_workflow({"name": "d", "start": "plan", "nodes": [
+        {"id": "plan", "kind": "work", "prompt": "Plan.", "max_turns": 3,
+         "output_schema": SCHEMA, "next": None},
+    ]})
+    node = wf.nodes["plan"]
+
+    async def fake_run(spec):
+        await spec.tools.execute("deliver", {"queries": ["a", "b"]})
+        return AgentRunResult(
+            final_content="partial", messages=[{"role": "user", "content": "t"}],
+            stop_reason="max_iterations")
+
+    nr, provider = _runner_with_fake_run(tmp_path, fake_run)
+    resp = nr(_req(node))
+    assert json.loads(resp.output) == {"queries": ["a", "b"]}
+    assert nr.runner.run.await_count == 1          # no second (synthesis) AgentRunner.run call
+    provider.chat_with_retry.assert_not_called()   # no forced deliver call either

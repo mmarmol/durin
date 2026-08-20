@@ -80,6 +80,106 @@ class _CrossLoopTool(Tool):
         return await _asyncio.wrap_future(fut)
 
 
+def _deliver_validation_error(payload: dict, schema: dict) -> str | None:
+    """Validate a structured-output payload against the node's declared schema.
+    Returns the formatted error (jsonschema's failing path + message), or None
+    when the payload is valid. Shared by the early in-loop ``deliver`` call and
+    the forced end-of-turn retry loop so both report failures identically."""
+    import jsonschema
+
+    try:
+        jsonschema.validate(payload, schema)
+        return None
+    except jsonschema.ValidationError as ve:
+        path = "/".join(str(p) for p in ve.absolute_path) or "(root)"
+        return f"at {path}: {ve.message}"
+
+
+class _DeliverCapture:
+    """Holds an early, schema-valid ``deliver`` call for one node execution, so
+    ``_derive_structured_output`` can return it directly instead of paying for a
+    forced end-of-turn call the model already made moot."""
+
+    def __init__(self) -> None:
+        self.payload: dict | None = None
+
+
+class _DeliverTool(Tool):
+    """The node's structured-output tool, registered in its registry from turn 1
+    (not appended only at the end) so the provider's ``tools`` array — and thus
+    the cached prompt prefix — never changes between the work loop and the final
+    delivery call. A schema-valid call is captured immediately, letting the node
+    skip the forced call entirely; an invalid one reports the exact validation
+    error and asks the model to try again without ending the turn."""
+
+    _plugin_discoverable = False
+
+    def __init__(self, schema: dict, capture: _DeliverCapture) -> None:
+        self._schema = schema
+        self._capture = capture
+
+    @property
+    def name(self) -> str:
+        return "deliver"
+
+    @property
+    def description(self) -> str:
+        return ("Deliver this step's final output as structured data matching "
+                "the required schema.")
+
+    @property
+    def parameters(self) -> dict:
+        return self._schema
+
+    def validate_params(self, params: dict) -> list[str]:
+        # The authoritative check is jsonschema validation in execute() below
+        # (matching the forced-call retry loop's error format exactly) — the
+        # generic base-class validator would produce a different message shape,
+        # and would reject before execute() ever ran.
+        return []
+
+    async def execute(self, **kwargs) -> str:
+        error = _deliver_validation_error(kwargs, self._schema)
+        if error is not None:
+            return (f"That payload did not satisfy the output schema — {error}. "
+                    "Keep working; deliver again when complete.")
+        self._capture.payload = kwargs
+        return "Delivered — this step's output has been recorded."
+
+
+class _RouteTool(Tool):
+    """The node's routing-verdict tool, registered from turn 1 for the same
+    cache-prefix reason as ``_DeliverTool``. A call before the node is done
+    working is just acknowledged — the end-of-turn forced call always decides
+    the actual verdict (simpler and behavior-preserving vs. tracking whether a
+    premature call happened to land on the turn's last iteration — see
+    ``_derive_route_label``)."""
+
+    _plugin_discoverable = False
+
+    def __init__(self, labels: list[str]) -> None:
+        self._labels = labels
+
+    @property
+    def name(self) -> str:
+        return "route"
+
+    @property
+    def description(self) -> str:
+        return "Record your final routing verdict for this step."
+
+    @property
+    def parameters(self) -> dict:
+        return {"type": "object", "properties": {
+            "label": {"type": "string", "enum": self._labels,
+                      "description": "Your verdict — exactly one of the allowed values."},
+            "reason": {"type": "string", "description": "One short line explaining the verdict."},
+        }, "required": ["label"]}
+
+    async def execute(self, **kwargs) -> str:
+        return "Verdict noted — continue your work; your final verdict is decided at the end."
+
+
 _VERDICT = ("\n\nAfter your assessment, end your reply with a single final line: "
             "'PASS' if the work meets the criteria, or 'FAIL' followed by what to fix.")
 
@@ -449,6 +549,26 @@ class AgentNodeRunner:
         hooks.append(checkpoint_hook)
         hook = CompositeHook(hooks)
 
+        # Structured-output / routing verdict tools are registered into the node's
+        # own tool registry from turn 1 (not appended only at the forced end-of-turn
+        # call) so the provider's `tools` array — and thus its cached prompt prefix —
+        # never changes between the work loop and the final verdict/delivery call.
+        # Built once and reused for every AgentRunSpec below (initial run + any
+        # re-entries) so an early `deliver`/`route` call is captured no matter which
+        # pass it happens in.
+        node_schema = getattr(req.node, "output_schema", None)
+        node_cases = getattr(req.node, "cases", None)
+        route_labels = (
+            list(node_cases.keys()) if node_cases
+            else (["PASS", "FAIL"] if getattr(req.node, "routes", False) else None)
+        )
+        tools_registry = self._build_tools(req.node, req.workspace_override)
+        delivered = _DeliverCapture()
+        if node_schema is not None:
+            tools_registry.register(_DeliverTool(node_schema, delivered))
+        if route_labels is not None:
+            tools_registry.register(_RouteTool(route_labels))
+
         # If the agent turn raises (provider/MCP/tool error), the partial conversation
         # would otherwise be lost and the failure would name no node. Persist whatever
         # messages exist (status node_failed) and raise a typed error carrying the node
@@ -456,7 +576,7 @@ class AgentNodeRunner:
         try:
             result = self._run_turn(AgentRunSpec(
                 initial_messages=messages,
-                tools=self._build_tools(req.node, req.workspace_override),
+                tools=tools_registry,
                 model=model,
                 max_iterations=run_max_iterations,
                 max_tool_result_chars=self.max_tool_result_chars,
@@ -495,11 +615,10 @@ class AgentNodeRunner:
         # re-entry first asks the model, via a forced tool call, whether essential
         # work is actually missing — a node that only needs to emit its answer goes
         # straight to synthesis instead of burning a re-entry on it.
-        node_schema = getattr(req.node, "output_schema", None)
         reentries_left = getattr(req.node, "max_reentries", 0) or 0
         while (node_max_turns is not None and result.stop_reason == "max_iterations"
                and reentries_left > 0):
-            if not self._wants_reentry(result.messages, model):
+            if not self._wants_reentry(result.messages, model, tools_registry):
                 break
             reentries_left -= 1
             steer = getattr(req.node, "reentry_prompt", "") or (
@@ -516,7 +635,7 @@ class AgentNodeRunner:
             try:
                 result = self._run_turn(AgentRunSpec(
                     initial_messages=reentry_messages,
-                    tools=self._build_tools(req.node, req.workspace_override),
+                    tools=tools_registry,
                     model=model,
                     max_iterations=run_max_iterations,
                     max_tool_result_chars=self.max_tool_result_chars,
@@ -539,7 +658,14 @@ class AgentNodeRunner:
         # required fields (when the node has one) and demands full content — a bare
         # "give your answer" invites a statement of intent ("let me write it to
         # disk") that leaves the deliver call below nothing to transcribe.
-        if node_max_turns is not None and result.stop_reason == "max_iterations":
+        #
+        # Skipped when a valid `deliver` was already captured mid-loop (`delivered`
+        # is `_DeliverCapture`, populated by `_DeliverTool` — see its class docstring):
+        # the structured-output block below returns that payload directly regardless
+        # of what synthesis would have produced, so a synthesis call here would be
+        # made purely to be discarded — an extra LLM round-trip paying for nothing.
+        if (node_max_turns is not None and result.stop_reason == "max_iterations"
+            and not (node_schema is not None and delivered.payload is not None)):
             synthesis_prompt = (
                 "You have used all your tool rounds and can make no further tool "
                 "calls. Based solely on what you have gathered so far, write your "
@@ -589,20 +715,21 @@ class AgentNodeRunner:
         # model must pick one label from this node's own enum), not from parsing free text.
         # On any failure this is None and the engine falls back to text-parse + default.
         route_label = None
-        node_cases = getattr(req.node, "cases", None)
-        if node_cases:
-            route_label = self._derive_route_label(all_messages, list(node_cases.keys()), model)
-        elif getattr(req.node, "routes", False):
-            route_label = self._derive_route_label(all_messages, ["PASS", "FAIL"], model)
+        if route_labels is not None:
+            route_label = self._derive_route_label(all_messages, route_labels, model, tools_registry)
 
         # A schema'd node delivers its output through a forced tool call validated
         # against the declared JSON Schema — retried IMMEDIATELY with the exact
         # validation error, so a malformed payload costs seconds inside this node
         # instead of a full downstream loop-back. No fallback: after the attempts
-        # the node fails (and the run's failure-resume can retry it).
+        # the node fails (and the run's failure-resume can retry it). An early,
+        # schema-valid `deliver` call already captured during the work loop above
+        # (`_DeliverTool` lives in `tools_registry` from turn 1) is used directly —
+        # see `_derive_structured_output` — paying no extra LLM call.
         if node_schema is not None:
             try:
-                payload = self._derive_structured_output(all_messages, node_schema, model)
+                payload = self._derive_structured_output(
+                    all_messages, node_schema, model, tools_registry, delivered)
             except Exception as exc:  # noqa: BLE001 - typed node failure, engine aborts naming us
                 raise self._on_failure(req, all_messages, exc)
             final_output = json.dumps(payload, ensure_ascii=False, indent=2)
@@ -628,18 +755,14 @@ class AgentNodeRunner:
             params_hash=resolved_params_hash,
         )
 
-    def _derive_route_label(self, messages: list[dict], labels: list[str], model: str | None) -> str | None:
+    def _derive_route_label(self, messages: list[dict], labels: list[str], model: str | None,
+                            tools: ToolRegistry) -> str | None:
         """Deterministic routing verdict via a forced `route` tool call: the model picks exactly
         one label from this node's enum. Returns the chosen label, or None on any failure (the
-        engine then falls back to parsing the node's text output)."""
-        tool = {"type": "function", "function": {
-            "name": "route",
-            "description": "Record your final routing verdict for this step.",
-            "parameters": {"type": "object", "properties": {
-                "label": {"type": "string", "enum": labels,
-                          "description": "Your verdict — exactly one of the allowed values."},
-                "reason": {"type": "string", "description": "One short line explaining the verdict."},
-            }, "required": ["label"]}}}
+        engine then falls back to parsing the node's text output). `tools` is the SAME registry
+        the work loop just rendered — `route` is already in it from turn 1 (see `_RouteTool`) —
+        so this call's tools array is identical to the loop's and the provider's cached prompt
+        prefix survives into the turn's last request; only `tool_choice` pins the verdict."""
         route_messages = list(messages) + [{
             "role": "user",
             "content": ("Record your verdict for this step now by calling the `route` tool with "
@@ -647,7 +770,8 @@ class AgentNodeRunner:
         }]
         try:
             resp = self._chat(
-                messages=route_messages, tools=[tool], tool_choice="required", model=model)
+                messages=route_messages, tools=tools.get_definitions(),
+                tool_choice={"type": "function", "function": {"name": "route"}}, model=model)
             for tc in (getattr(resp, "tool_calls", None) or []):
                 args = getattr(tc, "arguments", None)
                 if args is None:
@@ -672,11 +796,20 @@ class AgentNodeRunner:
         lands in telemetry as ``provider.call`` from the retry wrapper."""
         return asyncio.run(self.runner.provider.chat_with_retry(**kwargs))
 
-    def _wants_reentry(self, messages: list[dict], model: str | None) -> bool:
+    def _wants_reentry(self, messages: list[dict], model: str | None,
+                       tools: ToolRegistry) -> bool:
         """After budget exhaustion, ask the model — via a forced tool call — whether
         essential work is still missing (re-enter) or it can already produce its
         final output from what it gathered (proceed to synthesis). Any failure
-        counts as "can deliver", degrading to the no-re-entry behavior."""
+        counts as "can deliver", degrading to the no-re-entry behavior.
+
+        Unlike `deliver`/`route`, `assess` has no early-call semantics — nothing
+        in the work loop ever prompts the model to call it, so registering it in
+        the node's registry from turn 1 would only add an unused tool to every
+        round. Instead this appends it to `tools`' full rendered list for just
+        this one call: the shared prefix (everything but the appended tail) is
+        still identical to what the work loop just sent, which is what the
+        provider's prompt cache keys on."""
         tool = {"type": "function", "function": {
             "name": "assess",
             "description": "Report whether you can produce your complete final "
@@ -693,7 +826,8 @@ class AgentNodeRunner:
         }]
         try:
             resp = self._chat(
-                messages=convo, tools=[tool], tool_choice="required", model=model)
+                messages=convo, tools=tools.get_definitions() + [tool],
+                tool_choice={"type": "function", "function": {"name": "assess"}}, model=model)
             for tc in (getattr(resp, "tool_calls", None) or []):
                 args = getattr(tc, "arguments", None)
                 if args is None:
@@ -709,25 +843,28 @@ class AgentNodeRunner:
 
     _STRUCTURED_OUTPUT_ATTEMPTS = 3
 
-    def _derive_structured_output(self, messages: list[dict], schema: dict,
-                                  model: str | None) -> dict:
-        """The node's validated payload via a forced ``deliver`` tool call whose
-        parameters ARE the declared schema (the same machinery as the ``route``
-        verdict). Providers don't reliably enforce JSON Schema, so every payload is
-        validated server-side; an invalid one is retried immediately with the exact
-        validation error as feedback. A ``length`` finish_reason is named as
-        truncation and the retry is steered toward a smaller payload; an ``error``
-        finish_reason raises immediately with the provider's message — neither is
-        misreported as a schema failure. Raises after the attempt budget — a
-        schema'd node with no valid payload has failed, there is no text
-        fallback."""
-        import jsonschema
+    def _derive_structured_output(self, messages: list[dict], schema: dict, model: str | None,
+                                  tools: ToolRegistry, captured: _DeliverCapture) -> dict:
+        """The node's validated payload. If the model already delivered a valid
+        payload earlier in the turn — ``_DeliverTool`` is registered in ``tools``
+        from turn 1, so an in-loop call lands in ``captured`` — that payload is
+        returned directly with NO extra LLM call. Otherwise this forces one
+        ``deliver`` tool call now, whose parameters ARE the declared schema (the
+        same machinery as the ``route`` verdict), on ``tools``' full rendered list
+        — identical to what the work loop just sent, ``deliver`` included — so the
+        provider's cached prompt prefix survives into the turn's last request;
+        only ``tool_choice`` pins the verdict. Providers don't reliably enforce
+        JSON Schema, so every payload is validated server-side; an invalid one is
+        retried immediately with the exact validation error as feedback. A
+        ``length`` finish_reason is named as truncation and the retry is steered
+        toward a smaller payload; an ``error`` finish_reason raises immediately
+        with the provider's message — neither is misreported as a schema failure.
+        Raises after the attempt budget — a schema'd node with no valid payload
+        has failed, there is no text fallback."""
+        if captured.payload is not None:
+            return captured.payload
 
-        tool = {"type": "function", "function": {
-            "name": "deliver",
-            "description": "Deliver this step's final output as structured data "
-                           "matching the required schema.",
-            "parameters": schema}}
+        full_tools = tools.get_definitions()
         required_fields = [str(k) for k in (schema.get("required") or [])]
         instruction = ("Deliver your final output now by calling the `deliver` tool. "
                        "The tool's parameters are the required output schema.")
@@ -741,7 +878,8 @@ class AgentNodeRunner:
         last_error = "the model made no deliver tool call"
         for _ in range(self._STRUCTURED_OUTPUT_ATTEMPTS):
             resp = self._chat(
-                messages=convo, tools=[tool], tool_choice="required", model=model)
+                messages=convo, tools=full_tools,
+                tool_choice={"type": "function", "function": {"name": "deliver"}}, model=model)
             finish_reason = getattr(resp, "finish_reason", None)
             if finish_reason == "error":
                 # The retry wrapper already exhausted transport retries — this
@@ -765,14 +903,12 @@ class AgentNodeRunner:
                 if args is not None:
                     break
             if args is not None:
-                try:
-                    jsonschema.validate(args, schema)
+                error = _deliver_validation_error(args, schema)
+                if error is None:
                     # Complete and valid — accept it even if flagged "length":
                     # the cut fell after the payload closed.
                     return args
-                except jsonschema.ValidationError as ve:
-                    path = "/".join(str(p) for p in ve.absolute_path) or "(root)"
-                    last_error = f"at {path}: {ve.message}"
+                last_error = error
             if finish_reason == "length":
                 # The payload was cut at the output-token limit: json_repair
                 # salvages a partial object and validation then blames a missing
