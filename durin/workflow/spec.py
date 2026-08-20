@@ -10,7 +10,7 @@ dataclasses the engine walks deterministically.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Union
 
@@ -102,6 +102,11 @@ class WorkNode:
     output_schema: dict | None = None    # JSON Schema the node's output must satisfy (forced deliver tool)
     output_file: str = ""                # engine-written file (in the working folder) holding the validated payload
     kind: Literal["work"] = "work"
+    # The node's own raw spec dict, exactly as parsed from the workflow definition —
+    # a copy, not an alias to the source dict. Used by provenance.node_hash() to
+    # detect edits (prompt/schema/model changes) between runs for version-gated
+    # artifact reuse; script nodes aren't hashed this way, so they carry no raw field.
+    raw: dict = field(default_factory=dict)
 
     @property
     def routes(self) -> bool:
@@ -461,6 +466,7 @@ def _build_node(raw: dict[str, Any]) -> Node:
             inputs_from=inputs_from,
             output_schema=output_schema,
             output_file=output_file,
+            raw=dict(raw),
         )
     if kind == "script":
         command = raw.get("command", "")

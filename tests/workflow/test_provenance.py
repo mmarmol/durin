@@ -47,3 +47,15 @@ def test_node_run_response_carries_resolved_model(tmp_path):
     nr, provider = _runner_with_deliver(tmp_path, [{"queries": ["a"]}])
     resp = nr(_req(_schema_node()))
     assert resp.model == "test-model"
+
+def test_worknode_retains_raw_spec_for_hashing():
+    from durin.workflow.provenance import node_hash
+    from durin.workflow.spec import parse_workflow
+    src = {"id": "plan", "kind": "work", "prompt": "P1", "output_schema": {"type": "object"}, "next": None}
+    wf = parse_workflow({"name": "d", "start": "plan", "nodes": [src]})
+    raw = wf.nodes["plan"].raw
+    assert raw.get("prompt") == "P1"
+    h1 = node_hash(raw)
+    src2 = dict(src, prompt="P2")
+    wf2 = parse_workflow({"name": "d", "start": "plan", "nodes": [src2]})
+    assert node_hash(wf2.nodes["plan"].raw) != h1
