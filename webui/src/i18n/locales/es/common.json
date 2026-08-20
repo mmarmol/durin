@@ -2185,6 +2185,7 @@
     "outputSchema": "schema de salida (JSON)",
     "outputSchemaInvalid": "JSON inválido — el schema no se guarda hasta que parsee.",
     "outputFile": "archivo de salida",
+    "reuse": "reusar si no cambió (omitir si el productor coincide)",
     "routingShape": "tipo de ruteo",
     "routingShapeBinary": "binario (pass / fail)",
     "routingShapeMultiway": "múltiple (etiquetas personalizadas)",
@@ -2344,6 +2345,7 @@
     "badge": {
       "detached": "segundo plano",
       "schema": "schema",
+      "reuse": "reusar si no cambió",
       "persistent": "sesión persistente",
       "skills_one": "1 skill",
       "skills_other": "{{n}} skills",

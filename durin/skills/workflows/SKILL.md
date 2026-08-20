@@ -74,6 +74,10 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   (work nodes) forces a schema-validated delivery with immediate in-node retry on a
   malformed payload, and `output_file` has the ENGINE write the validated JSON into the
   working folder — prefer these over prose contracts plus downstream validation gates.
+  A node with `output_file` may add `reuse: "if-unchanged"`: on a later run, if the node's
+  definition and the runner's resolved model/provider/params all still match what actually
+  produced that file, the engine skips the node entirely and reuses the artifact — free
+  idempotence for expensive, rarely-changing steps.
 - A work or script node may be **detached** (`detached: true`): launched off the critical
   path — the walk continues immediately, the edge passes through, its output never becomes
   the result, and its failure never sinks the run (side effects: persist, notify, archive).

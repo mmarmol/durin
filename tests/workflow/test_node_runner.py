@@ -405,6 +405,51 @@ def test_node_persona_degrades_gracefully_without_app_config():
     assert captured["model"] == "m"   # fell back to default; no crash
 
 
+# ── reuse_identity (the engine's reuse gate consults this) ───────────────────
+
+
+def test_reuse_identity_resolves_model_provider_and_params(tmp_path):
+    from durin.agent.runner import AgentRunner
+    from durin.providers.base import GenerationSettings
+    from durin.workflow.provenance import params_hash
+
+    sessions = SessionManager(workspace=tmp_path)
+    provider = MagicMock(spec=LLMProvider)
+    provider.provider_key = "test-provider"
+    provider.generation = GenerationSettings(max_tokens=111)
+    nr = AgentNodeRunner(AgentRunner(provider), sessions, default_model="default-model")
+
+    identity = nr.reuse_identity(WorkNode(id="a", model="node-model"))
+
+    assert identity == {
+        "model": "node-model",
+        "provider": "test-provider",
+        "params_hash": params_hash(provider.generation),
+    }
+
+
+def test_reuse_identity_prefers_persona_model_over_node_model(monkeypatch, tmp_path):
+    from durin.agent.runner import AgentRunner
+    from durin.providers.base import GenerationSettings
+    from durin.workflow import node_runner as nr_mod
+    monkeypatch.setattr(nr_mod, "resolve_persona", lambda cfg, name, ws=None: (None, "persona-model"))
+    sessions = SessionManager(workspace=tmp_path)
+    provider = MagicMock(spec=LLMProvider)
+    provider.provider_key = "p"
+    provider.generation = GenerationSettings()
+    nr = AgentNodeRunner(AgentRunner(provider), sessions, default_model="default-model", app_config=object())
+
+    identity = nr.reuse_identity(WorkNode(id="a", persona="engineer", model=None))
+    assert identity["model"] == "persona-model"
+
+
+def test_reuse_identity_returns_none_on_any_failure():
+    # A provider with no `.generation` attribute (a bare/test-double runner) makes
+    # the identity unresolvable — must disable reuse, never crash the caller.
+    nr = AgentNodeRunner(MagicMock(provider=object()), sessions=_fake_sessions(), default_model="m")
+    assert nr.reuse_identity(WorkNode(id="a")) is None
+
+
 # ── max_turns node runner tests ───────────────────────────────────────────────
 
 

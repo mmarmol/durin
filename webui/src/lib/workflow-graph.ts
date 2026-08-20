@@ -28,6 +28,9 @@ export type WorkflowNodeDef = {
   output_schema?: Record<string, unknown> | null;
   // work: engine-written file holding the validated payload (requires output_schema)
   output_file?: string;
+  // work: skip the node when output_file's recorded producer still matches
+  // (requires output_file)
+  reuse?: "if-unchanged" | null;
   max_concurrency?: number;
   reconcile?: "read" | "choose" | "union";
   // work node: per-node visit budget (blank/undefined = inherit workflow default)

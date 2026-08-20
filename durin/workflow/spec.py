@@ -101,6 +101,7 @@ class WorkNode:
     inputs_from: tuple[str, ...] = ()    # named sources composed (labeled) into this node's input
     output_schema: dict | None = None    # JSON Schema the node's output must satisfy (forced deliver tool)
     output_file: str = ""                # engine-written file (in the working folder) holding the validated payload
+    reuse: str | None = None             # "if-unchanged" = skip the node when output_file's recorded producer still matches; requires output_file
     kind: Literal["work"] = "work"
     # The node's own raw spec dict, exactly as parsed from the workflow definition —
     # a copy, not an alias to the source dict. Used by provenance.node_hash() to
@@ -392,6 +393,16 @@ def _build_node(raw: dict[str, Any]) -> Node:
         routes = on_pass is not None or on_fail is not None or cases is not None
         detached = _parse_detached(raw, node_id, routes=routes)
         output_schema, output_file = _parse_output_contract(raw, node_id, routes=routes)
+        reuse = raw.get("reuse")
+        if reuse is not None and reuse != "if-unchanged":
+            raise WorkflowError(
+                f"node {node_id!r}: reuse must be 'if-unchanged' or omitted, got {reuse!r}"
+            )
+        if reuse is not None and not output_file:
+            raise WorkflowError(
+                f"node {node_id!r}: reuse requires output_file (there is nothing "
+                "recorded to compare its producer against without a declared artifact)"
+            )
         # A detached node runs beside the walk; the shared buffer is a sequential
         # continuity mechanism and a concurrent writer would race it.
         if detached and context == "shared":
@@ -466,6 +477,7 @@ def _build_node(raw: dict[str, Any]) -> Node:
             inputs_from=inputs_from,
             output_schema=output_schema,
             output_file=output_file,
+            reuse=reuse,
             raw=dict(raw),
         )
     if kind == "script":

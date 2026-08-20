@@ -23,7 +23,7 @@ class NodeRun:
     worker_index: int | None = None  # for a fan-out worker: its index in the batch (None otherwise)
     branch_id: str | None = None     # for a static-parallel branch: the branch node id (None otherwise)
     budget: int | None = None        # the node's effective visit budget at this pass (None for parallel units)
-    status: str = "ok"               # "ok" (node persisted) | "persist_failed" (save raised) | "node_failed" (the node's agent turn raised)
+    status: str = "ok"               # "ok" (node persisted) | "persist_failed" (save raised) | "node_failed" (the node's agent turn raised) | "reused" (skipped the runner; see origin_run_id)
     error: str | None = None         # failure detail when status is "node_failed"/"persist_failed" (None otherwise)
     exit_code: int | None = None     # script nodes: the subprocess exit code (None for agent nodes)
     duration_s: float | None = None  # wall-clock seconds this pass took (None where not measured)
@@ -44,6 +44,9 @@ class NodeRun:
     model: str | None = None
     provider: str | None = None
     node_hash: str | None = None
+    # Set only when status=="reused": the run_id of the ORIGINAL pass that produced
+    # the artifact this pass reused instead of dispatching the runner (None otherwise).
+    origin_run_id: str | None = None
 
 
 @dataclass

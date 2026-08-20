@@ -843,33 +843,50 @@ class WorkflowEngine:
                     progress=_node_progress,
                 )
 
+                # reuse gate: a WorkNode declaring reuse="if-unchanged" whose declared
+                # output_file was last produced by an IDENTICAL producer (same
+                # reuse-relevant node definition + resolved model/provider/params) skips
+                # the runner entirely — the recorded artifact stands in as this pass's
+                # output. Never for a routing node: output_schema (which output_file
+                # requires) and routing are already mutually exclusive at parse time, so
+                # a reuse hit always falls through to the plain 'next' edge below.
+                reuse_hit: tuple[str, dict] | None = None
+                if (isinstance(node, WorkNode) and node.reuse == "if-unchanged"
+                        and node.output_file and work_dir is not None):
+                    reuse_hit = self._reuse_hit(node, work_dir)
+
                 # Run a full agent turn; for a multi-way node the verdict is a matched
                 # case label; for binary routing it is PASS/FAIL from the first non-empty
                 # line; for a linear node there is no verdict.
                 node_t0 = time.monotonic()
-                try:
-                    runner = self._script_runner if isinstance(node, ScriptNode) else self._node_runner
-                    resp = runner(req)
-                except NodeExecutionError as exc:
-                    # The node's turn raised: record an attributable node_failed run
-                    # (with the persisted session key) so the manifest captures it,
-                    # then re-raise to abort the walk — run() names the node. The
-                    # upstream the node received rides along so the manifest can
-                    # anchor a failure resume with the exact same input.
-                    exc.resume_upstream = upstream_output
-                    runs.append(NodeRun(node_id=node.id, iteration=iteration,
-                                        output="", session_key=exc.session_key,
-                                        budget=budget,
-                                        status="node_failed", error=str(exc.cause),
-                                        exit_code=getattr(exc, "exit_code", None),
-                                        command=getattr(exc, "command", None),
-                                        stdout=getattr(exc, "stdout", None),
-                                        stderr=getattr(exc, "stderr", None),
-                                        duration_s=round(time.monotonic() - node_t0, 3)))
-                    runs[-1].artifacts = sorted(_work_snapshot() - before_files)[:20]
-                    if update_manifest is not None:
-                        update_manifest()
-                    raise
+                if reuse_hit is not None:
+                    reused_output, reuse_entry = reuse_hit
+                    resp = NodeRunResponse(output=reused_output, model=reuse_entry.get("model"),
+                                           provider=reuse_entry.get("provider"))
+                else:
+                    try:
+                        runner = self._script_runner if isinstance(node, ScriptNode) else self._node_runner
+                        resp = runner(req)
+                    except NodeExecutionError as exc:
+                        # The node's turn raised: record an attributable node_failed run
+                        # (with the persisted session key) so the manifest captures it,
+                        # then re-raise to abort the walk — run() names the node. The
+                        # upstream the node received rides along so the manifest can
+                        # anchor a failure resume with the exact same input.
+                        exc.resume_upstream = upstream_output
+                        runs.append(NodeRun(node_id=node.id, iteration=iteration,
+                                            output="", session_key=exc.session_key,
+                                            budget=budget,
+                                            status="node_failed", error=str(exc.cause),
+                                            exit_code=getattr(exc, "exit_code", None),
+                                            command=getattr(exc, "command", None),
+                                            stdout=getattr(exc, "stdout", None),
+                                            stderr=getattr(exc, "stderr", None),
+                                            duration_s=round(time.monotonic() - node_t0, 3)))
+                        runs[-1].artifacts = sorted(_work_snapshot() - before_files)[:20]
+                        if update_manifest is not None:
+                            update_manifest()
+                        raise
                 output = resp.output
                 route_label = getattr(resp, "route_label", None)
                 if node.cases is not None:
@@ -890,7 +907,8 @@ class WorkflowEngine:
                 runs.append(NodeRun(node_id=node.id, iteration=iteration,
                                     output=output, session_key=resp.session_key,
                                     passed=passed, budget=budget,
-                                    status="persist_failed" if resp.persist_failed else "ok",
+                                    status=("reused" if reuse_hit is not None else
+                                            "persist_failed" if resp.persist_failed else "ok"),
                                     exit_code=getattr(resp, "exit_code", None),
                                     command=getattr(resp, "command", None),
                                     stdout=getattr(resp, "stdout", None),
@@ -898,8 +916,14 @@ class WorkflowEngine:
                                     model=getattr(resp, "model", None),
                                     provider=getattr(resp, "provider", None),
                                     node_hash=node_reuse_hash,
-                                    duration_s=round(time.monotonic() - node_t0, 3)))
-                if isinstance(node, WorkNode) and node.output_file and work_dir is not None:
+                                    origin_run_id=(reuse_entry.get("run_id") if reuse_hit is not None else None),
+                                    duration_s=(0.0 if reuse_hit is not None
+                                                else round(time.monotonic() - node_t0, 3))))
+                if (isinstance(node, WorkNode) and node.output_file and work_dir is not None
+                        and reuse_hit is None):
+                    # A reused node does NOT re-stamp provenance — the original entry
+                    # (still identical, since a hit requires an unchanged producer)
+                    # stands, naming the run that actually produced the file.
                     # The ENGINE writes the schema-validated payload: the file cannot be
                     # malformed because the model never types it. A write failure is a
                     # disk problem, not a node problem — log it; the declared-artifacts
@@ -1171,6 +1195,41 @@ class WorkflowEngine:
             output_dir=terminal_output_dir, output_files=output_files,
             final_output_node=final_output_node, missing_artifacts=missing,
         )
+
+    def _reuse_hit(self, node: WorkNode, work_dir: str) -> tuple[str, dict] | None:
+        """Whether *node*'s declared output_file can stand in for a fresh run: the
+        node runner's CURRENT producer identity (model/provider/params_hash — only
+        the runner can resolve persona/model-ref, so this is duck-typed via
+        ``reuse_identity``) must exactly match the stored provenance entry for that
+        file, alongside the node's current reuse_hash. A None on either side of any
+        of the four comparisons means "unknown", which never justifies reuse — same
+        for a runner with no ``reuse_identity`` (a script runner or test double need
+        not implement it) or a failure reading the artifact file. Returns
+        ``(file_text, provenance_entry)`` on a hit, else None (the node runs
+        normally)."""
+        identity_fn = getattr(self._node_runner, "reuse_identity", None)
+        if identity_fn is None:
+            return None
+        identity = identity_fn(node)
+        if identity is None:
+            return None
+        entry = provenance.load(work_dir).get(node.output_file)
+        if entry is None:
+            return None
+
+        def _agree(a, b) -> bool:
+            return a is not None and b is not None and a == b
+
+        if not (_agree(entry.get("node_hash"), provenance.reuse_hash(node.raw))
+                and _agree(entry.get("model"), identity.get("model"))
+                and _agree(entry.get("provider"), identity.get("provider"))
+                and _agree(entry.get("params_hash"), identity.get("params_hash"))):
+            return None
+        try:
+            text = (Path(work_dir) / node.output_file).read_text(encoding="utf-8")
+        except OSError:
+            return None
+        return text, entry
 
     @staticmethod
     def _compose_inputs(node, runs, upstream, resume_outputs=None) -> str:
