@@ -149,7 +149,7 @@ class WorkflowRunResult(Result):
     final_output: str
     final_output_node: str = ""       # which node's output became final_output
     run_id: str                       # the run's manifest id — the key for the read routes below
-    runs: list[dict[str, Any]]        # per-node trace: node_id/iteration/passed/session_key/worker_index/branch_id/budget/status/route_label/exit_code/command/stdout/stderr/output
+    runs: list[dict[str, Any]]        # per-node trace: node_id/iteration/passed/session_key/worker_index/branch_id/budget/status/route_label/exit_code/command/stdout/stderr/model/provider/node_hash/origin_run_id/output
     output_dir: str = ""
     exhausted_node: str = ""
     needs_input_node: str = ""        # set when status=="needs_input": the node that asked
@@ -612,6 +612,14 @@ class WorkflowsService:
                  "command": getattr(r, "command", None),
                  "stdout": getattr(r, "stdout", None),
                  "stderr": getattr(r, "stderr", None),
+                 # Producer identity — same fields and getattr pattern as
+                 # run_log._node_records(), so a run opened straight from this
+                 # synchronous response carries the same producer trail (and, for
+                 # a reused node, the same origin_run_id) a stored manifest does.
+                 "model": getattr(r, "model", None),
+                 "provider": getattr(r, "provider", None),
+                 "node_hash": getattr(r, "node_hash", None),
+                 "origin_run_id": getattr(r, "origin_run_id", None),
                  "output": (r.output or "")[:2000]}
                 for r in result.runs
             ],
