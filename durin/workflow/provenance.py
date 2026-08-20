@@ -22,10 +22,36 @@ def node_hash(node_spec: dict) -> str:
     return hashlib.sha256(_canonical(node_spec).encode("utf-8")).hexdigest()
 
 
+# The node-definition fields that determine what an artifact's content WOULD be —
+# deliberately excludes routing/wiring fields (next, on_pass, on_fail, cases,
+# detached, inputs_from, id, title, ...) so editing a node's place in the graph
+# never invalidates a reusable artifact.
+REUSE_RELEVANT_KEYS = ("prompt", "output_schema", "skills", "mode", "tools",
+                       "model", "persona", "max_turns", "kind")
+
+
+def reuse_hash(raw_node_spec: dict) -> str:
+    """Hash of the node-definition fields that determine an artifact's content.
+    Routing-only edits (next / on_fail / detached wiring) deliberately do not
+    change it, so they never invalidate reuse."""
+    return node_hash({k: raw_node_spec.get(k) for k in REUSE_RELEVANT_KEYS})
+
+
 def params_hash(generation) -> str:
     keys = ("max_tokens", "temperature", "reasoning_effort", "top_p", "top_k")
     payload = {k: getattr(generation, k, None) for k in keys}
     return hashlib.sha256(_canonical(payload).encode("utf-8")).hexdigest()
+
+
+def durin_version() -> str | None:
+    """The installed durin-agent distribution version, or None when it cannot be
+    resolved (e.g. running from source with no installed distribution). Best-effort
+    identification stamped into provenance entries and run manifests — never raises."""
+    try:
+        import importlib.metadata
+        return importlib.metadata.version("durin-agent")
+    except Exception:  # noqa: BLE001 - version stamping is a nicety, never fatal
+        return None
 
 
 def load(work_dir: Path) -> dict[str, dict]:

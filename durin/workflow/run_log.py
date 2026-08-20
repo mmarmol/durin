@@ -106,6 +106,12 @@ def _node_records(result) -> list[dict]:
             "command": getattr(r, "command", None),
             "stdout": getattr(r, "stdout", None),
             "stderr": getattr(r, "stderr", None),
+            # Producer identity: resolved model/provider (agent nodes only) and the
+            # node-definition hash (WorkNode with a raw spec only) — absent (None) on
+            # runs the engine could not resolve, e.g. script nodes or a pre-upgrade trace.
+            "model": getattr(r, "model", None),
+            "provider": getattr(r, "provider", None),
+            "node_hash": getattr(r, "node_hash", None),
         }
         for r in result.runs
     ]
@@ -125,13 +131,18 @@ def start_run(
     work_dir: str | None = None,
     typical_s: dict[str, float] | None = None,
     typical_total_s: float | None = None,
+    spec_hash: str | None = None,
+    durin_version: str | None = None,
 ) -> Path:
     """Write the ``running`` manifest before the walk begins. Returns the record path.
     ``parent_run_id`` marks a nested subworkflow run with the run_id of its caller —
     ``None`` for a top-level run. When ``None`` and a prior manifest for this run_id
     exists (a resume rewrites the record), the prior value is preserved so the
     nested-run marker survives every rewrite. ``work_dir`` is the run's shared working
-    folder, recorded from the start so an in-flight run's artifacts are findable."""
+    folder, recorded from the start so an in-flight run's artifacts are findable.
+    ``spec_hash``/``durin_version`` identify the workflow definition and the engine
+    build that walked it (see ``durin/workflow/provenance.py``); both ``None`` when
+    the caller does not supply them (e.g. a caller with no workflow object)."""
     if parent_run_id is None:
         prior = read_manifest(workspace, name, run_id) or {}
         parent_run_id = prior.get("parent_run_id")
@@ -159,6 +170,10 @@ def start_run(
         # never the sum of the per-node medians above, which would add up branches
         # no single run can all take.
         "typical_total_s": typical_total_s,
+        # Producer identity for the whole run — see update_run/finalize_run, which
+        # carry these two forward unchanged on every later rewrite.
+        "spec_hash": spec_hash,
+        "durin_version": durin_version,
         "runs": [],
     }
     path = _record_path(workspace, name, run_id)
@@ -187,6 +202,8 @@ def update_run(
         "owner": base.get("owner"),
         "typical_s": base.get("typical_s") or {},
         "typical_total_s": base.get("typical_total_s"),
+        "spec_hash": base.get("spec_hash"),
+        "durin_version": base.get("durin_version"),
         # The node that was in flight has now finished; leaving the marker set
         # would pin a completed node as running for readers of the manifest.
         "active_node": None,
@@ -256,6 +273,8 @@ def finalize_run(
         "work_dir": prior.get("work_dir"),
         "typical_s": prior.get("typical_s") or {},
         "typical_total_s": prior.get("typical_total_s"),
+        "spec_hash": prior.get("spec_hash"),
+        "durin_version": prior.get("durin_version"),
         # The terminal output (the answer, the plan, or — on needs_input — the questions),
         # capped, so a historical audit of the run shows the result, not only the trace.
         "final_output": (result.final_output or "")[:8000],

@@ -59,3 +59,45 @@ def test_worknode_retains_raw_spec_for_hashing():
     src2 = dict(src, prompt="P2")
     wf2 = parse_workflow({"name": "d", "start": "plan", "nodes": [src2]})
     assert node_hash(wf2.nodes["plan"].raw) != h1
+
+
+def test_reuse_hash_ignores_routing_only_edits():
+    from durin.workflow.provenance import reuse_hash
+    a = {"id": "n", "prompt": "p", "next": "b", "on_fail": None}
+    b = {"id": "n", "prompt": "p", "next": "z", "on_fail": "retry"}
+    assert reuse_hash(a) == reuse_hash(b)
+
+
+def test_reuse_hash_changes_when_prompt_changes():
+    from durin.workflow.provenance import reuse_hash
+    a = {"id": "n", "prompt": "p"}
+    b = {"id": "n", "prompt": "p2"}
+    assert reuse_hash(a) != reuse_hash(b)
+
+
+def test_reuse_hash_is_projection_of_node_hash():
+    # reuse_hash must equal node_hash of the REUSE_RELEVANT_KEYS projection, not
+    # the whole node dict — proving it does not accidentally hash routing fields.
+    from durin.workflow.provenance import REUSE_RELEVANT_KEYS, node_hash, reuse_hash
+    src = {"id": "n", "prompt": "p", "next": "b", "detached": True}
+    projection = {k: src.get(k) for k in REUSE_RELEVANT_KEYS}
+    assert reuse_hash(src) == node_hash(projection)
+
+
+def test_durin_version_matches_installed_metadata():
+    import importlib.metadata
+
+    from durin.workflow.provenance import durin_version
+    assert durin_version() == importlib.metadata.version("durin-agent")
+
+
+def test_durin_version_returns_none_when_unresolvable(monkeypatch):
+    import importlib.metadata
+
+    from durin.workflow import provenance
+
+    def _raise(name):
+        raise importlib.metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(importlib.metadata, "version", _raise)
+    assert provenance.durin_version() is None
