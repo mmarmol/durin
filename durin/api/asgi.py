@@ -218,14 +218,14 @@ def _build_422(exc: ValidationError) -> Response:
     return Response(body, status_code=422, media_type="application/problem+json")
 
 
-def _result_response(result: Any) -> JSONResponse:
-    """Serialize a service ``Result`` to a 200 JSON response.
+def _result_response(result: Any, *, status_code: int = 200) -> JSONResponse:
+    """Serialize a service ``Result`` to a success JSON response (200 by default).
 
     A returned ``Result`` is always a success: every non-2xx outcome is raised as
     a ``DomainError`` and rendered as problem+json by :func:`_problem_response`,
     so the API has ONE error format for every 4xx/5xx.
     """
-    return JSONResponse(result.model_dump())
+    return JSONResponse(result.model_dump(), status_code=status_code)
 
 
 def _inject_peer_locality(
@@ -371,7 +371,7 @@ def _build_write_handler(
         except DomainError as exc:
             return _problem_response(exc)
 
-        return _result_response(result)
+        return _result_response(result, status_code=bound.spec.status_code)
 
     return endpoint
 

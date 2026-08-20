@@ -96,10 +96,11 @@ def build_openapi() -> dict:
                 },
             }
 
+        status_code = str(spec.status_code)
         if spec.response_model is not None:
             ref = _collect_schemas(spec.response_model, components)
             operation["responses"] = {
-                "200": {
+                status_code: {
                     "description": "Success",
                     "content": {
                         "application/json": {
@@ -109,7 +110,7 @@ def build_openapi() -> dict:
                 }
             }
         else:
-            operation["responses"] = {"200": {"description": "Success"}}
+            operation["responses"] = {status_code: {"description": "Success"}}
 
         paths.setdefault(path, {})[verb] = operation
 

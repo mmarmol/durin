@@ -9,7 +9,9 @@ concurrent version-store snapshot never sees a torn file.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -156,6 +158,15 @@ class WorkflowRunResult(Result):
     output_files: list[str] = []      # relative paths in output_dir (completed runs)
 
 
+class WorkflowLaunchCommand(Command):
+    name: str      # the workflow to run (path param)
+    task: str
+
+
+class WorkflowLaunchResult(Result):
+    run_id: str
+
+
 class WorkflowRunManifestQuery(Query):
     name: str
     run_id: str
@@ -235,6 +246,9 @@ class WorkflowsService:
         # through this loader so it obeys the current default, not the wiring-time
         # snapshot. Left None where no config file backs the surface (tests/catalog).
         self._config_loader = config_loader
+        # Strong-reference set for detached launch()es, so a run's task isn't
+        # GC'd mid-flight — mirrors RunWorkflowTool's identical footgun guard.
+        self._bg_tasks: set = set()
 
     def _live_config(self) -> Any:
         """The config this run must obey: re-read when a loader is wired, else the
@@ -629,6 +643,44 @@ class WorkflowsService:
             output_files=list(result.output_files or []),
         )
 
+    @route(
+        "POST", "/api/v1/workflows/{name}/runs",
+        scope=Scope.WORKFLOWS_WRITE.value,
+        request_model=WorkflowLaunchCommand, response_model=WorkflowLaunchResult,
+        status_code=202,
+        summary="Launch a workflow run detached: returns immediately with the run id, never waits for it to finish.",
+    )
+    async def launch(self, cmd: WorkflowLaunchCommand, principal: Principal) -> WorkflowLaunchResult:
+        principal.require(Scope.WORKFLOWS_WRITE)
+        try:
+            load_workflow(self._workspace, cmd.name)
+        except WorkflowNotFound:
+            raise NotFoundError(f"workflow {cmd.name!r} not found")
+
+        # Pre-generated so it can be returned before the engine ever starts —
+        # same reason run_workflow's background branch does this (see
+        # durin/agent/tools/run_workflow.py).
+        run_id = uuid.uuid4().hex[:12]
+        # No caller-supplied session for a raw API launch (unlike an agent
+        # turn, which has one); key the run to the token that launched it,
+        # the same way the /v1 chat endpoint keys a session to its caller.
+        root_session_key = f"api:{principal.subject}"
+
+        async def _run() -> None:
+            try:
+                await self.execute(
+                    cmd.name, cmd.task, run_id=run_id, root_session_key=root_session_key,
+                )
+            except Exception:
+                logger.exception(
+                    "detached run {} of workflow {!r} failed", run_id, cmd.name,
+                )
+
+        task = asyncio.create_task(_run())
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
+        return WorkflowLaunchResult(run_id=run_id)
+
     async def execute(
         self,
         name: str,
@@ -638,6 +690,7 @@ class WorkflowsService:
         output_format: str | None = None,
         resume_run_id: str | None = None,
         run_id: str | None = None,
+        root_session_key: str | None = None,
     ) -> WorkflowResult:
         if self._app_config is None or self._sessions is None:
             raise UnavailableError("running a workflow is not available on this surface")
@@ -645,8 +698,6 @@ class WorkflowsService:
             workflow = load_workflow(self._workspace, name)
         except WorkflowNotFound:
             raise NotFoundError(f"workflow {name!r} not found")
-
-        import asyncio
 
         from durin.agent.runner import AgentRunner
         from durin.providers.factory import make_provider
@@ -704,6 +755,7 @@ class WorkflowsService:
             run_id_factory=(lambda: run_id) if run_id else None)
         result = await asyncio.to_thread(
             engine.run, workflow, task,
+            root_session_key=root_session_key,
             input_files=input_files,
             output_format=output_format,
             resume=resume,

@@ -2608,7 +2608,8 @@ export interface paths {
         /** List one workflow's persisted runs, newest-first. */
         get: operations["workflows_runs_list"];
         put?: never;
-        post?: never;
+        /** Launch a workflow run detached: returns immediately with the run id, never waits for it to finish. */
+        post: operations["workflows_launch"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5954,6 +5955,18 @@ export interface components {
             };
             /** Name */
             name: string;
+        };
+        /** WorkflowLaunchCommand */
+        WorkflowLaunchCommand: {
+            /** Name */
+            name: string;
+            /** Task */
+            task: string;
+        };
+        /** WorkflowLaunchResult */
+        WorkflowLaunchResult: {
+            /** Run Id */
+            run_id: string;
         };
         /** WorkflowRecApplyCommand */
         WorkflowRecApplyCommand: {
@@ -10495,6 +10508,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkflowRunsListResult"];
+                };
+            };
+        };
+    };
+    workflows_launch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowLaunchCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowLaunchResult"];
                 };
             };
         };

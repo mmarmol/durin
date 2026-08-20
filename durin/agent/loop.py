@@ -314,6 +314,10 @@ class TurnContext:
     had_injections: bool = False
     tool_events: list[dict[str, Any]] = field(default_factory=list)
     llm_ms: float = 0.0
+    # Real per-turn token usage, accumulated across overflow-retry attempts
+    # (see _state_run's _pending_usage handoff). Keys mirror the runner's
+    # accumulated dict (prompt_tokens, completion_tokens, ...).
+    usage: dict[str, int] = field(default_factory=dict)
 
     user_persisted_early: bool = False
     save_skip: int = 0
@@ -496,6 +500,11 @@ class AgentLoop:
         # consumed by the turn.latency breakdown (the per-run telemetry binding
         # can't reach the dispatch loop where the breakdown is emitted).
         self._pending_llm_ms: dict[str, float] = {}
+        # Per-session handoff of the last run's real token usage, consumed by
+        # _state_run the same way as _pending_llm_ms above — the tuple
+        # _run_agent_loop returns is shared by several callers/tests, so new
+        # per-turn telemetry rides this side channel instead of growing it.
+        self._pending_usage: dict[str, dict[str, int]] = {}
         self._extra_hooks: list[AgentHook] = hooks or []
 
         self.context = ContextBuilder(workspace, timezone=timezone, disabled_skills=disabled_skills)
@@ -2075,6 +2084,7 @@ class AgentLoop:
             # Optional model-latency metric; a result that doesn't model timing
             # (test doubles) defaults to 0.0 — the breakdown just shows no LLM time.
             self._pending_llm_ms[session_key] = getattr(result, "llm_ms", 0.0)
+            self._pending_usage[session_key] = dict(result.usage)
         if result.stop_reason == "max_iterations":
             logger.warning("Max iterations ({}) reached", self.max_iterations)
             # Push final content through stream so streaming channels (e.g. Feishu)
@@ -2710,6 +2720,7 @@ class AgentLoop:
         on_stream: Callable[[str], Awaitable[None]] | None,
         *,
         turn_latency_ms: int | None = None,
+        usage: dict[str, int] | None = None,
     ) -> OutboundMessage | None:
         """Assemble the final outbound message from turn results."""
         # MessageTool suppression
@@ -2725,6 +2736,8 @@ class AgentLoop:
             meta["_streamed"] = True
         if turn_latency_ms is not None:
             meta["latency_ms"] = int(turn_latency_ms)
+        if usage:
+            meta["usage"] = dict(usage)
 
         return OutboundMessage(
             channel=msg.channel,
@@ -2872,6 +2885,13 @@ class AgentLoop:
             # loop); accumulate across the overflow-retry so the breakdown sees
             # every round-trip this turn.
             ctx.llm_ms += self._pending_llm_ms.pop(ctx.session_key, 0.0)
+            # Same handoff for real token usage: every overflow-retry attempt
+            # is a genuine, separately-billed LLM call, so its usage adds to
+            # the turn's running total rather than replacing it.
+            for _usage_key, _usage_value in self._pending_usage.pop(
+                ctx.session_key, {}
+            ).items():
+                ctx.usage[_usage_key] = ctx.usage.get(_usage_key, 0) + _usage_value
 
             # In-turn recovery for an overflow that aborted before any tool
             # ran: BUILD's consolidation must have failed (the consolidator
@@ -2981,6 +3001,7 @@ class AgentLoop:
             ctx.had_injections,
             ctx.on_stream,
             turn_latency_ms=ctx.turn_latency_ms,
+            usage=ctx.usage,
         )
         return "ok"
 

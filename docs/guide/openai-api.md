@@ -101,6 +101,14 @@ A successful stream ends with a `finish_reason: "stop"` chunk followed by
 `{"error": ...}` object and `[DONE]` is **not** sent, so a client can tell a
 truncated stream from a complete one.
 
+## Usage
+
+Responses report real token usage for the turn — `prompt_tokens`,
+`completion_tokens`, and `total_tokens` (their sum) — the actual counts the
+model billed, summed across every LLM call the turn made. For `stream: true`,
+usage rides the same `finish_reason: "stop"` chunk rather than a separate
+frame after it.
+
 ## Timeouts
 
 Each request is capped by `gateway.api_request_timeout` (default `120.0`

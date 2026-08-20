@@ -156,8 +156,11 @@ loop. WS and HTTP share the same port.
    TUI and cron — holds `{ADMIN}` and therefore passes every check.
 
 5. **Execution and response.** The handler awaits the service method. A returned
-   `Result` is serialized with `result.model_dump()` and returned as a 200 JSON
-   response. A raised `DomainError` is mapped by `_problem_response()` to an RFC
+   `Result` is serialized with `result.model_dump()` and returned as a JSON
+   response — 200 by default, or the route's declared `status_code` (a write
+   route hands off to background work, e.g. a detached launch, answers 202
+   instead; see `RouteSpec.status_code` in `durin/service/registry.py`). A
+   raised `DomainError` is mapped by `_problem_response()` to an RFC
    9457 `application/problem+json` body: `type: urn:durin:error:<code>`, `title`,
    `status`, `detail`, and an optional `details` extension member carrying
    structured domain payload (e.g. the approval gate's `{refused, verdict,
@@ -246,6 +249,19 @@ completed stream emits a `finish_reason: "stop"` chunk then `data: [DONE]`; a
 failed one emits a single `{"error": ...}` frame and **omits** `[DONE]`, which is
 how a client distinguishes truncation from completion.
 
+Both response shapes carry real token usage, not a placeholder. The agent loop
+accumulates `prompt_tokens`/`completion_tokens` across every LLM call in the
+turn — including overflow-retry attempts — and exposes the sum on
+`OutboundMessage.metadata["usage"]` (`_assemble_outbound` in
+`durin/agent/loop.py`); `_response_usage()` here reshapes that into the
+standard three-key OpenAI contract (`total_tokens` is always recomputed as
+`prompt + completion`, never trusted from upstream). The non-streaming path
+sums usage across the empty-response retry too, since both calls were
+genuinely billed even though the first's content was discarded. Streaming
+puts usage on the terminal `finish_reason: "stop"` chunk rather than a
+separate frame after it; `stream_options.include_usage` isn't parsed, so
+usage is always included.
+
 These routes are hand-mounted, not registry routes, so — like bootstrap, media,
 and hooks — they are outside the generated OpenAPI contract.
 
@@ -300,7 +316,7 @@ URL signing (`get_or_create_media_secret()`), stored base64-encoded in the same
 | Symbol | File | Role |
 |---|---|---|
 | `ServiceRegistry` | `durin/service/registry.py` | Container for service instances and the collected `BoundRoute` list; rejects duplicate names and duplicate `(verb, path)` at registration time |
-| `RouteSpec` | `durin/service/registry.py` | Frozen dataclass: `verb`, `path`, `scope`, `request_model`, `response_model`, `summary` — single source for OpenAPI generation and Starlette routing |
+| `RouteSpec` | `durin/service/registry.py` | Frozen dataclass: `verb`, `path`, `scope`, `request_model`, `response_model`, `summary`, `status_code` (default 200) — single source for OpenAPI generation and Starlette routing |
 | `BoundRoute` | `durin/service/registry.py` | `RouteSpec` + `service_name` + handler callable; iterated by the ASGI adapter and the generator |
 | `route` | `durin/service/registry.py` | Decorator that attaches a `RouteSpec` under `__route_spec__` and returns the method unchanged |
 | `Principal` | `durin/service/principal.py` | Frozen dataclass: `subject`, `scopes: frozenset[str]`, `kind`; `Principal.local()` → `{ADMIN}`, `Principal.remote(subject, scopes)` → token-derived |
@@ -355,6 +371,23 @@ list for workflow-kind tasks) used by the work panel to render per-node and
 per-branch progress. See the generated OpenAPI contract
 (`contract/openapi-v1.json`) and `TasksService` (`durin/service/tasks.py`) for
 the authoritative field definitions.
+
+**`POST /api/v1/workflows/{name}/runs`** (scope `workflows:write`,
+`WorkflowsService.launch`) starts a workflow run detached: it answers 202 with
+`{run_id}` immediately, before the engine has run a single node, and never
+waits for the run to finish. It reaches the engine through the same
+`WorkflowsService.execute` the loops runtime fires through
+(`workflow_exec=_loops_workflows_service.execute` in `durin/cli/commands.py`)
+— `launch` just wraps that call in `asyncio.create_task` instead of awaiting
+it, pre-generating the run id the way `run_workflow`'s agent-tool
+`background=true` branch does (a separate implementation, since an agent turn
+also streams progress and injects the result back into the chat — neither
+applies to a bare API launch). A caller polls the existing read routes below
+for status. There is no caller session to key the run to (unlike an agent
+turn), so `root_session_key` is derived from the calling principal as
+`api:{principal.subject}` — the same "key the run to whoever's asking" idea
+the `/v1` chat endpoint applies to `session_id`. 404s on an unknown workflow
+name before any task is spawned.
 
 **`POST /api/v1/channels/post`** (scope `channels:write`,
 `ChannelPostService`) posts a message through a running channel *and records it
