@@ -242,6 +242,63 @@ def test_chat_saves_base64_image(tmp_path, monkeypatch):
     assert media and len(media) == 1
 
 
+def test_chat_reports_real_usage(tmp_path, monkeypatch):
+    loop = MagicMock()
+    loop.process_direct = AsyncMock(
+        return_value=SimpleNamespace(
+            content="hi",
+            metadata={"usage": {"prompt_tokens": 100, "completion_tokens": 7}},
+        )
+    )
+    client = TestClient(_build_app(tmp_path, monkeypatch, agent_loop=loop))
+    tok = _mint(["chat:write"])
+    r = _chat(client, tok, {"messages": [{"role": "user", "content": "a"}]})
+    assert r.status_code == 200
+    assert r.json()["usage"] == {
+        "prompt_tokens": 100,
+        "completion_tokens": 7,
+        "total_tokens": 107,
+    }
+
+
+def test_chat_defaults_usage_to_zero_when_absent(tmp_path, monkeypatch):
+    client = TestClient(_build_app(tmp_path, monkeypatch))  # _make_loop: no metadata
+    tok = _mint(["chat:write"])
+    r = _chat(client, tok, {"messages": [{"role": "user", "content": "a"}]})
+    assert r.status_code == 200
+    assert r.json()["usage"] == {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+    }
+
+
+def test_chat_retry_sums_usage_across_attempts(tmp_path, monkeypatch):
+    """The empty-response retry issues a second real LLM call; both were
+    billed, so their usage must both land in the reported total."""
+    responses = [
+        SimpleNamespace(
+            content="",
+            metadata={"usage": {"prompt_tokens": 40, "completion_tokens": 0}},
+        ),
+        SimpleNamespace(
+            content="ok",
+            metadata={"usage": {"prompt_tokens": 45, "completion_tokens": 5}},
+        ),
+    ]
+    loop = MagicMock()
+    loop.process_direct = AsyncMock(side_effect=responses)
+    client = TestClient(_build_app(tmp_path, monkeypatch, agent_loop=loop))
+    tok = _mint(["chat:write"])
+    r = _chat(client, tok, {"messages": [{"role": "user", "content": "a"}]})
+    assert r.status_code == 200
+    assert r.json()["usage"] == {
+        "prompt_tokens": 85,
+        "completion_tokens": 5,
+        "total_tokens": 90,
+    }
+
+
 def test_chat_empty_response_retries_then_falls_back(tmp_path, monkeypatch):
     from durin.utils.runtime import EMPTY_FINAL_RESPONSE_MESSAGE
 
@@ -346,6 +403,35 @@ def test_stream_chunks_then_done(tmp_path, monkeypatch):
     assert "".join(deltas) == "Hello"
     finish = json.loads(events[-2])
     assert finish["choices"][0]["finish_reason"] == "stop"
+
+
+def test_stream_final_chunk_reports_usage(tmp_path, monkeypatch):
+    async def _fake_process(**kwargs):
+        await kwargs["on_stream"]("Hello")
+        return SimpleNamespace(
+            content="Hello",
+            metadata={"usage": {"prompt_tokens": 50, "completion_tokens": 3}},
+        )
+
+    loop = MagicMock()
+    loop.process_direct = AsyncMock(side_effect=_fake_process)
+    client = TestClient(_build_app(tmp_path, monkeypatch, agent_loop=loop))
+    tok = _mint(["chat:write"])
+    with client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "a"}], "stream": True},
+        headers=_hdr(tok),
+    ) as r:
+        raw = "".join(r.iter_text())
+    events = _sse_events(raw)
+    finish = json.loads(events[-2])
+    assert finish["choices"][0]["finish_reason"] == "stop"
+    assert finish["usage"] == {
+        "prompt_tokens": 50,
+        "completion_tokens": 3,
+        "total_tokens": 53,
+    }
 
 
 def test_stream_tail_flush_when_no_tokens_emitted(tmp_path, monkeypatch):

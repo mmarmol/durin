@@ -246,6 +246,19 @@ completed stream emits a `finish_reason: "stop"` chunk then `data: [DONE]`; a
 failed one emits a single `{"error": ...}` frame and **omits** `[DONE]`, which is
 how a client distinguishes truncation from completion.
 
+Both response shapes carry real token usage, not a placeholder. The agent loop
+accumulates `prompt_tokens`/`completion_tokens` across every LLM call in the
+turn — including overflow-retry attempts — and exposes the sum on
+`OutboundMessage.metadata["usage"]` (`_assemble_outbound` in
+`durin/agent/loop.py`); `_response_usage()` here reshapes that into the
+standard three-key OpenAI contract (`total_tokens` is always recomputed as
+`prompt + completion`, never trusted from upstream). The non-streaming path
+sums usage across the empty-response retry too, since both calls were
+genuinely billed even though the first's content was discarded. Streaming
+puts usage on the terminal `finish_reason: "stop"` chunk rather than a
+separate frame after it; `stream_options.include_usage` isn't parsed, so
+usage is always included.
+
 These routes are hand-mounted, not registry routes, so — like bootstrap, media,
 and hooks — they are outside the generated OpenAPI contract.
 

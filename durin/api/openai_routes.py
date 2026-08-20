@@ -56,7 +56,9 @@ def _error_json(
     )
 
 
-def _chat_completion_response(content: str, model: str) -> dict[str, Any]:
+def _chat_completion_response(
+    content: str, model: str, usage: dict[str, int]
+) -> dict[str, Any]:
     return {
         "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
         "object": "chat.completion",
@@ -69,7 +71,7 @@ def _chat_completion_response(content: str, model: str) -> dict[str, Any]:
                 "finish_reason": "stop",
             }
         ],
-        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        "usage": usage,
     }
 
 
@@ -82,8 +84,44 @@ def _response_text(value: Any) -> str:
     return str(value)
 
 
+def _response_usage(value: Any) -> dict[str, int]:
+    """Shape ``process_direct`` output into the OpenAI 3-key usage contract.
+
+    The agent loop accumulates real per-turn token counts across every LLM
+    call in ``OutboundMessage.metadata["usage"]`` (see ``_assemble_outbound``
+    in durin/agent/loop.py). ``total_tokens`` is always recomputed as the sum
+    here rather than trusted from upstream, per the OpenAI contract. Missing
+    or malformed metadata (a bare string response, a fake with no usage)
+    reports zero instead of raising.
+    """
+    metadata = getattr(value, "metadata", None) or {}
+    usage = metadata.get("usage") or {}
+    prompt = int(usage.get("prompt_tokens", 0) or 0)
+    completion = int(usage.get("completion_tokens", 0) or 0)
+    return {
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "total_tokens": prompt + completion,
+    }
+
+
+def _add_usage(a: dict[str, int], b: dict[str, int]) -> dict[str, int]:
+    """Sum two usage dicts shaped by ``_response_usage``."""
+    prompt = a["prompt_tokens"] + b["prompt_tokens"]
+    completion = a["completion_tokens"] + b["completion_tokens"]
+    return {
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "total_tokens": prompt + completion,
+    }
+
+
 def _sse_chunk(
-    delta: str, model: str, chunk_id: str, finish_reason: str | None = None
+    delta: str,
+    model: str,
+    chunk_id: str,
+    finish_reason: str | None = None,
+    usage: dict[str, int] | None = None,
 ) -> bytes:
     payload = {
         "id": chunk_id,
@@ -98,6 +136,11 @@ def _sse_chunk(
             }
         ],
     }
+    # OpenAI convention: usage rides the terminal chunk. This gateway doesn't
+    # parse stream_options.include_usage yet, so it always includes it here
+    # rather than gating on an opt-in the caller has no way to send.
+    if usage is not None:
+        payload["usage"] = usage
     return f"data: {json.dumps(payload)}\n\n".encode()
 
 
@@ -211,6 +254,7 @@ def build_openai_routes(
                     timeout=request_timeout,
                 )
                 response_text = _response_text(response)
+                usage = _response_usage(response)
                 if not response_text.strip():
                     logger.warning(
                         "Empty API response for session {}, retrying", session_key
@@ -226,6 +270,9 @@ def build_openai_routes(
                         timeout=request_timeout,
                     )
                     response_text = _response_text(retry)
+                    # The first call was a real, billed LLM round-trip even
+                    # though its content was empty — its usage still counts.
+                    usage = _add_usage(usage, _response_usage(retry))
                     if not response_text.strip():
                         response_text = EMPTY_FINAL_RESPONSE_MESSAGE
         except asyncio.TimeoutError:
@@ -235,14 +282,18 @@ def build_openai_routes(
         except Exception:
             logger.exception("OpenAI API error for session {}", session_key)
             return _error_json(500, "Internal server error", "server_error")
-        return JSONResponse(_chat_completion_response(response_text, model_name))
+        return JSONResponse(_chat_completion_response(response_text, model_name, usage))
 
     def _stream_response(
         text: str, media_paths: list[str], session_key: str, lock: asyncio.Lock
     ) -> StreamingResponse:
         chunk_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
         queue: asyncio.Queue[str | None] = asyncio.Queue()
-        state = {"failed": False, "emitted": False}
+        state = {
+            "failed": False,
+            "emitted": False,
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        }
 
         async def _on_stream(token: str) -> None:
             if token:
@@ -270,6 +321,7 @@ def build_openai_routes(
                         ),
                         timeout=request_timeout,
                     )
+                    state["usage"] = _response_usage(response)
                     if not state["emitted"]:
                         tail = _response_text(response)
                         if tail.strip():
@@ -296,7 +348,13 @@ def build_openai_routes(
                     }
                     yield f"data: {json.dumps(err)}\n\n".encode()
                 else:
-                    yield _sse_chunk("", model_name, chunk_id, finish_reason="stop")
+                    yield _sse_chunk(
+                        "",
+                        model_name,
+                        chunk_id,
+                        finish_reason="stop",
+                        usage=state["usage"],
+                    )
                     yield _SSE_DONE
             finally:
                 # Client disconnect cancels the generator; take the turn down too.
