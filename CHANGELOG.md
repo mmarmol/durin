@@ -5,6 +5,79 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.8.1 — 2026-08-21
+
+### Highlights
+
+- **Identical work is no longer repeated.** Every artifact a workflow writes now
+  carries its producer's identity — which node definition, which model, which
+  configuration, fed by which input — and a node marked `reuse: "if-unchanged"`
+  skips itself when all of it matches, serving the recorded artifact instead of
+  re-paying the tokens. A new `work_key` gives runs a stable working folder to
+  share (loops pass their ticket-correlation key automatically), runs sharing a
+  key serialize instead of racing, a paused run resumes into its own folder, and
+  six signals — definition, model, provider, params, input, content — guard
+  against ever serving stale work. Measured motivation: a re-run of an
+  already-solved support ticket burned 48 minutes and 1.45M tokens rebuilding
+  artifacts that were sitting on disk. (#538, #539, #544, #545)
+
+- **The engine stopped defeating its own prompt cache.** The forced verdict
+  calls (deliver / route / re-entry) used to swap the tool list on the last
+  call of every node, invalidating the provider cache and re-paying the whole
+  conversation — ~14% of a pipeline run's fresh tokens. Verdict tools now ride
+  the node's tool list from the first turn, a valid early delivery or route
+  verdict is accepted on the spot, and the redundant end-of-turn call is
+  skipped. (#540, #543)
+
+- **The API stopped flying blind.** `/v1/chat/completions` reports the tokens a
+  turn really consumed (streaming included), workflows launch directly via
+  `POST /api/v1/workflows/{name}/runs` without paying an agent turn, launched
+  runs can actually be cancelled — the stop flag now clears strictly before the
+  terminal record is written — and an invalid `work_key` is rejected at the
+  door instead of producing a ghost run. (#541, #543, #545)
+
+- **The agent consults past executions instead of re-running them.** A new
+  read-only `workflow_runs` tool searches and inspects prior runs — with each
+  run's model and workflow version visible so the agent can judge whether old
+  work is still trustworthy, and a standing instruction to say when an answer
+  is built on prior work and how old it is. (#542)
+
+### Changes
+
+**Workflows**
+
+- Artifact provenance: `work/.provenance.json` + producer fields on run
+  manifests (`spec_hash`, `durin_version`, per-node `model`/`provider`/
+  `node_hash`); legacy manifests unaffected, verified against production data.
+  (#538)
+- `reuse: "if-unchanged"`, validated fail-loud: incompatible combinations
+  (`detached`, parallel branches, `context: "shared"`, `branches_from` without
+  a declared pool) are parse-time errors with reasons. (#539, #543, #545)
+- `work_key`: stable, collision-proof working folders; same-key serialization
+  via cross-process lock; keyed folders idle for 30 days are swept at most
+  daily, sparing parked runs. (#544, #545)
+- The declared-artifacts contract evaluates what THIS run produced — leftovers
+  in a shared folder neither appear as outputs nor satisfy the contract. (#545)
+- Reused nodes are excluded from typical-duration estimates; run records carry
+  `origin_run_id`. (#539)
+
+**Providers & telemetry**
+
+- `FallbackProvider` reports the real provider name in `provider.call` events
+  and reuse identity. (#543)
+
+**API**
+
+- Real usage on `/v1` (sums over the turn's calls; final SSE chunk). Direct
+  workflow launch endpoint (202 + run_id, `workflows:write`). Cancellation
+  wired for service-launched runs. `work_key` validated at every edge. (#541,
+  #543, #545)
+
+**Tools**
+
+- `workflow_runs` (search/show over past runs, plan-mode allowed); `run_workflow`
+  gains `work_key`. (#542, #544)
+
 ## 0.8.0 — 2026-08-20
 
 ### Highlights
