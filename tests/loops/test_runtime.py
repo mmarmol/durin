@@ -580,6 +580,31 @@ async def test_fire_from_a_correlate_match_passes_the_thread_as_work_key(tmp_pat
     assert captured["work_key"] == "custom:l1:TCK-9001"
 
 
+async def test_fire_from_a_plain_thread_match_passes_no_work_key(tmp_path):
+    """A plain per-channel thread_key (no correlate capture involved) must NOT
+    become a work_key — permanent per-thread keyed folders were never the
+    point (correlate keys are bounded by a real entity like a ticket number;
+    a thread has no such bound). Only matcher.py's correlate-derived
+    "custom:<loop>:<capture>" key may become work_key."""
+    _save(tmp_path)
+    captured = {}
+
+    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None, work_key=None):
+        captured["work_key"] = work_key
+        return _wr("completed")
+
+    async def judge(intent, assertions, evidence):
+        return {"intent_met": True, "assertions": {}}
+
+    ids = iter([f"lr{i}" for i in range(10)])
+    rt = LoopsRuntime(tmp_path, workflow_exec=workflow_exec, judge=judge, keep_runs=20,
+                      check_timeout_s=5, run_id_factory=lambda: next(ids))
+    origin = {"channel": "slack", "thread": "slack:C1:1699999999.0001"}
+    await rt.fire("l1", source="channel", origin=origin)
+
+    assert captured["work_key"] is None
+
+
 async def test_fire_with_no_origin_passes_no_work_key(tmp_path):
     _save(tmp_path)
     captured = {}
@@ -623,7 +648,10 @@ async def test_fire_with_a_session_origin_but_no_thread_passes_no_work_key(tmp_p
 
 async def test_answer_resume_path_passes_no_work_key(tmp_path):
     """The RESUME path (answer()) needs no work_key — it already shares the
-    prior run's working folder via resume_run_id, so it must not be threaded here."""
+    prior run's working folder via resume_run_id, so it must not be threaded
+    here. Uses a correlate-shaped origin thread (not a plain thread_key) so
+    the FIRST fire's work_key is non-None too, giving the resume call
+    something real to contrast against."""
     _save(tmp_path)
     captured = {}
 
@@ -639,13 +667,13 @@ async def test_answer_resume_path_passes_no_work_key(tmp_path):
     ids = iter([f"lr{i}" for i in range(10)])
     rt = LoopsRuntime(tmp_path, workflow_exec=workflow_exec, judge=judge, keep_runs=20,
                       check_timeout_s=5, run_id_factory=lambda: next(ids))
-    origin = {"thread": "thread-abc"}
+    origin = {"thread": "custom:l1:TCK-1"}
     m = await rt.fire("l1", source="channel", origin=origin)
     assert m["status"] == "waiting_info"
     await rt.answer("l1", m["run_id"], "yes")
 
-    assert captured["calls"][0] == "thread-abc"   # the fire passed it
-    assert captured["calls"][1] is None           # the resumed answer() call did not
+    assert captured["calls"][0] == "custom:l1:TCK-1"   # the fire passed it (a correlate match)
+    assert captured["calls"][1] is None                # the resumed answer() call did not
 
 
 @pytest.mark.asyncio

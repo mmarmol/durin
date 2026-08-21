@@ -161,8 +161,11 @@ def test_keyed_work_dir_rejects_invalid_key(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# prune_runs must never reap .workflow/keys/ — it holds stable, caller-keyed
-# working folders, not per-run folders, and has no run_id to protect.
+# prune_runs's RUN-COUNT retention (`keep`) never applies to .workflow/keys/ —
+# it holds stable, caller-keyed working folders, not per-run folders, and has
+# no run_id to protect. It still ages out on its OWN clock (see the
+# age-based retention section below): a fresh keyed dir survives any `keep`,
+# but an idle one past KEYED_WORK_MAX_AGE_DAYS is reaped regardless of `keep`.
 # ---------------------------------------------------------------------------
 
 
@@ -176,3 +179,83 @@ def test_prune_runs_never_touches_the_keys_directory(tmp_path):
     survivors = {p.name for p in (tmp_path / ".workflow").iterdir() if p.is_dir()}
     assert "keys" in survivors
     assert (tmp_path / ".workflow" / "keys" / "w-50e721e4" / "k-8254c329" / "work").is_dir()
+
+
+# ---------------------------------------------------------------------------
+# Age-based retention for keyed dirs: a work_key folder has no run_id and so
+# never ages out via `keep` — its only bound is elapsed idle time
+# (KEYED_WORK_MAX_AGE_DAYS). A dir whose run lock is currently HELD is never
+# removed, no matter how old its content looks.
+# ---------------------------------------------------------------------------
+
+
+def _age_keyed_dir(tmp_path, workflow, key, age_s):
+    """Create a keyed work dir with one file in it, then backdate every path
+    under the key dir (the file, the work/ folder, and the key dir itself) to
+    `age_s` seconds in the past — so its newest-content-mtime is unambiguously
+    old, regardless of which of those paths the retention sweep consults."""
+    import os
+    import time
+
+    work_dir = keyed_work_dir(tmp_path, workflow, key)
+    report = work_dir / "report.md"
+    report.write_text("done")
+    stamp = time.time() - age_s
+    for p in (report, work_dir, work_dir.parent):
+        os.utime(p, (stamp, stamp))
+    return work_dir
+
+
+def test_prune_runs_removes_a_stale_keyed_dir(tmp_path):
+    from durin.workflow.artifacts import KEYED_WORK_MAX_AGE_DAYS
+
+    work_dir = _age_keyed_dir(tmp_path, "w", "k", age_s=(KEYED_WORK_MAX_AGE_DAYS + 1) * 86400)
+    key_dir = work_dir.parent
+
+    prune_runs(tmp_path, keep=1)
+
+    assert not key_dir.exists()
+
+
+def test_prune_runs_keeps_a_fresh_keyed_dir(tmp_path):
+    work_dir = keyed_work_dir(tmp_path, "w", "k")
+    (work_dir / "report.md").write_text("done")
+
+    prune_runs(tmp_path, keep=1)
+
+    assert work_dir.is_dir()
+    assert (work_dir / "report.md").read_text() == "done"
+
+
+def test_prune_runs_never_removes_a_keyed_dir_whose_lock_is_held(tmp_path):
+    """A stale-by-mtime keyed dir whose run lock is currently held by another
+    thread/process must survive — a live (if unusually slow) run must never
+    lose its working folder mid-flight. Holds the lock on a BACKGROUND
+    thread (not this one) so the check exercises a real OS-level flock
+    rather than this module's own reentrant same-thread tracking."""
+    import threading
+
+    from durin.utils.file_lock import cross_process_lock
+    from durin.workflow.artifacts import KEYED_WORK_MAX_AGE_DAYS, keyed_run_lock_target
+
+    work_dir = _age_keyed_dir(tmp_path, "w", "k", age_s=(KEYED_WORK_MAX_AGE_DAYS + 1) * 86400)
+    key_dir = work_dir.parent
+
+    holding = threading.Event()
+    release = threading.Event()
+
+    def _hold():
+        with cross_process_lock(keyed_run_lock_target(work_dir)):
+            holding.set()
+            assert release.wait(timeout=10), "test's own release signal was never sent"
+
+    t = threading.Thread(target=_hold)
+    t.start()
+    try:
+        assert holding.wait(timeout=10), "background thread never acquired the lock"
+        prune_runs(tmp_path, keep=1)
+    finally:
+        release.set()
+        t.join(timeout=10)
+
+    assert key_dir.is_dir()          # protected — its lock was held throughout

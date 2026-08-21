@@ -321,15 +321,22 @@ class LoopsRuntime:
         wf_run_id = self._run_id()
         run_log.update_run(self._ws, spec.name, run_id, workflow_run_id=wf_run_id)
         emit_tool_event("loops.fired", {"loop": spec.name, "source": source, "skipped": False})
-        # A channel-triggered fire whose origin carries a thread (the plain
-        # per-channel thread_key, or a custom correlate key — see matcher.py)
-        # passes it straight through as work_key: the SAME key claims.register
-        # uses below to wake this run on the next inbound message, so a workflow's
-        # reuse gate can find what an earlier fire on this exact thread produced.
-        # None for any fire with no thread (cron, manual, a chat origin — see
-        # agent/tools/loops.py's set_context, which never sets one) — falls back
-        # to the engine's per-run default folder, unchanged from before this.
-        work_key = origin.get("thread") if origin else None
+        # A channel-triggered fire's origin thread becomes work_key ONLY when it
+        # is a CORRELATE-derived claim key — matcher.py's _correlate_key mints
+        # these as "custom:<loop>:<capture>" (the same spec.name and the SAME
+        # key claims.register uses below to wake this run), bounded to a real
+        # entity the operator's regex captured (a ticket number, say), so its
+        # keyed folder has a natural scope. A plain per-channel thread_key has
+        # no such bound — permanent per-thread folders were never the point, so
+        # it passes NO work_key and falls back to the engine's fresh per-run
+        # folder, same as a cron/manual/chat fire (no thread at all — see
+        # agent/tools/loops.py's set_context, which never sets one). The
+        # "custom:" prefix is origin's only signal for this distinction — it is
+        # a plain dict assembled once at match time (matcher.py's
+        # _dispatch_match), with nothing more structured surviving to here.
+        thread = origin.get("thread") if origin else None
+        work_key = (thread if thread is not None and thread.startswith(f"custom:{spec.name}:")
+                    else None)
         try:
             result = await self._exec(spec.workflow, effective_task,
                                       resume_run_id=None, run_id=wf_run_id, work_key=work_key)

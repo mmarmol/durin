@@ -13,13 +13,22 @@ from __future__ import annotations
 import hashlib
 import re
 import shutil
+import time
 from pathlib import Path
+
+from durin.utils.file_lock import cross_process_lock
 
 ARTIFACT_ROOT = ".workflow"
 
 # Subtree of ARTIFACT_ROOT holding keyed (not per-run) working folders. Named once so
 # prune_runs can exclude it by identity rather than by re-typing the literal.
 KEYS_DIRNAME = "keys"
+
+# How long an idle keyed (work_key) dir survives before prune_runs reaps it.
+# A keyed dir has no run_id and so never ages out via `keep` (that retention
+# counts RUNS; a keyed dir lives across arbitrarily many runs sharing one
+# work_key) — elapsed idle time is the only bound it has at all.
+KEYED_WORK_MAX_AGE_DAYS = 30
 
 _SAFE_KEY_PREFIX_MAX_CHARS = 60
 _UNSAFE_KEY_CHARS = re.compile(r"[^a-z0-9._-]")
@@ -107,6 +116,54 @@ def keyed_run_lock_target(work_dir: str | Path) -> Path:
     return Path(work_dir).parent / RUN_LOCK_NAME
 
 
+def _newest_mtime(path: Path) -> float:
+    """The most recent mtime among every file under *path* (recursively), or
+    *path*'s own mtime if it holds no files. A directory's own mtime only
+    bumps when its DIRECT children change, so a write two levels down
+    (``keys/<wf>/<key>/work/report.md``) never bubbles up to
+    ``keys/<wf>/<key>/``'s own mtime — walking the whole subtree is the only
+    reliable "how recently was anything in here touched" signal."""
+    newest = path.stat().st_mtime
+    for p in path.rglob("*"):
+        try:
+            newest = max(newest, p.stat().st_mtime)
+        except OSError:
+            continue
+    return newest
+
+
+def _prune_keyed_dirs(keys_root: Path, max_age_days: float) -> None:
+    """Age-based retention for ``keys/<workflow>/<key>/`` dirs: prune_runs's
+    run-count retention (``keep``) does not apply here — a keyed dir isn't a
+    run and has no run_id — so elapsed idle time is the only bound. Skips
+    (never deletes) a dir whose run lock is currently held: a live run must
+    never lose its working folder mid-flight, however old its last write
+    looked. One bad key dir (a permissions problem, a race) is logged nowhere
+    and simply left for next time — it must never abort the sweep for every
+    other key.
+    """
+    if not keys_root.is_dir():
+        return
+    cutoff = time.time() - max_age_days * 86400
+    for workflow_dir in keys_root.iterdir():
+        if not workflow_dir.is_dir():
+            continue
+        for key_dir in workflow_dir.iterdir():
+            if not key_dir.is_dir():
+                continue
+            try:
+                if _newest_mtime(key_dir) >= cutoff:
+                    continue
+                try:
+                    with cross_process_lock(keyed_run_lock_target(key_dir / "work"), timeout=0):
+                        pass
+                except TimeoutError:
+                    continue   # a run is currently holding this key — never remove it
+                shutil.rmtree(key_dir, ignore_errors=True)
+            except OSError:
+                continue
+
+
 def prune_runs(base: str | Path, keep: int = 20, protect: set[str] | None = None) -> None:
     """Best-effort: keep the `keep` most-recent run subtrees, remove older ones.
 
@@ -116,10 +173,12 @@ def prune_runs(base: str | Path, keep: int = 20, protect: set[str] | None = None
     folder's mtime, so enough newer runs starting during it would push the
     live run out of the retained window and delete its files mid-run.
 
-    ``KEYS_DIRNAME`` (``keys/``) is never a candidate: it holds keyed working
-    folders, not per-run ones — it has no run_id, so age-based pruning would
-    eventually reap it once enough ordinary runs accumulate. Retention there is
-    manual (the caller/operator's responsibility), not this sweep's.
+    ``KEYS_DIRNAME`` (``keys/``) is never a candidate for THIS run-count
+    retention: it holds keyed working folders, not per-run ones, and has no
+    run_id to count against `keep`. It still ages out on its own clock —
+    see ``_prune_keyed_dirs``/``KEYED_WORK_MAX_AGE_DAYS`` — an idle keyed dir
+    past that age is removed here too, lock files included, unless its run
+    lock is currently held.
     """
     try:
         root = Path(base) / ARTIFACT_ROOT
@@ -131,5 +190,6 @@ def prune_runs(base: str | Path, keep: int = 20, protect: set[str] | None = None
                       key=lambda p: p.stat().st_mtime, reverse=True)
         for old in runs[keep:]:
             shutil.rmtree(old, ignore_errors=True)
+        _prune_keyed_dirs(root / KEYS_DIRNAME, KEYED_WORK_MAX_AGE_DAYS)
     except OSError:
         pass
