@@ -31,6 +31,7 @@ from durin.service.types import (
 from durin.utils.atomic_write import atomic_write_text
 from durin.utils.file_lock import cross_process_lock
 from durin.workflow import run_log
+from durin.workflow.artifacts import safe_key
 from durin.workflow.loader import WorkflowNotFound, load_workflow, workflows_dir
 from durin.workflow.result import WorkflowResult
 from durin.workflow.spec import WorkflowError, parse_workflow
@@ -658,6 +659,21 @@ class WorkflowsService:
         except WorkflowNotFound:
             raise NotFoundError(f"workflow {cmd.name!r} not found")
 
+        # Validate BEFORE detaching: an unsafe work_key must never reach the
+        # background task below — by the time it raised there, this route
+        # would already have returned 202 for a run that then fails invisibly
+        # (logged, never reported to the caller). safe_key is the single
+        # source of truth for what a valid key looks like; this just calls it
+        # early instead of duplicating its rules. Empty means "no key" (see
+        # `cmd.work_key or None` below) and is never validated — indistinguishable
+        # from an omitted field on this plain-str command, exactly like every
+        # other work_key surface's same falsy-is-omitted convention.
+        if cmd.work_key:
+            try:
+                safe_key(cmd.work_key)
+            except ValueError as exc:
+                raise ValidationFailedError(f"invalid work_key: {exc}") from exc
+
         # Pre-generated so it can be returned before the engine ever starts —
         # same reason run_workflow's background branch does this (see
         # durin/agent/tools/run_workflow.py).
@@ -701,6 +717,19 @@ class WorkflowsService:
             workflow = load_workflow(self._workspace, name)
         except WorkflowNotFound:
             raise NotFoundError(f"workflow {name!r} not found")
+
+        # Same validation as launch()'s, but gated on `is not None` rather than
+        # truthiness: unlike the HTTP command's plain str field, this parameter
+        # already has a clean "no key" sentinel (None), so an explicitly empty
+        # string here is a real (if invalid) key attempt — matching
+        # WorkflowEngine.run's own is-not-None check for the identical value.
+        # Raised here, before any provider/engine setup below, never as a bare
+        # ValueError surfacing from inside asyncio.to_thread further down.
+        if work_key is not None:
+            try:
+                safe_key(work_key)
+            except ValueError as exc:
+                raise ValidationFailedError(f"invalid work_key: {exc}") from exc
 
         from durin.agent.runner import AgentRunner
         from durin.providers.factory import make_provider
