@@ -113,6 +113,74 @@ async def test_stop_cancels_a_service_launched_run(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_clear_cancel_runs_in_the_same_thread_as_engine_run(tmp_path, monkeypatch):
+    """PR-K round 2 / ITEM 2: root-caused a rare full-suite failure of
+    test_stop_cancels_a_service_launched_run — under genuine event-loop
+    contention (many concurrent runs), a caller polling the manifest can
+    observe status="cancelled" (or any terminal status) before the cancel
+    flag is actually cleared. Reproduced with instrumentation (not guessed):
+    a concurrent-load repro running 15 simultaneous launch+cancel scenarios
+    per round hit the race in 13/150 runs; a serial/isolated repro of the
+    same scenario (40 runs) never did — confirming the gap is real but only
+    opens under scheduling contention, not a test logic bug.
+
+    Root cause: execute() awaited `asyncio.to_thread(engine.run, ...)` and
+    only called `_clear_cancel(rid)` in its OWN `finally`, AFTER that await
+    resolves — which requires an asyncio round-trip (the worker thread
+    signals completion via `call_soon_threadsafe`, then the event loop must
+    actually process that callback) that has no ordering guarantee relative
+    to a caller reading the manifest file `engine.run` already wrote
+    synchronously, moments earlier, in the same worker thread. Under a busy
+    ready queue that round-trip can lag long enough for an external
+    poller — a `tasks(action='stop')` caller, or this test — to see the
+    manifest as terminal first.
+
+    Fix: clear the flag SYNCHRONOUSLY inside the SAME worker thread as
+    engine.run, in engine.run's own immediate wrapper — eliminating the
+    async round-trip for this specific ordering, not just narrowing it.
+    Proven structurally (deterministic, not timing-dependent): clear() must
+    run on the EXACT SAME thread engine.run executed on."""
+    import threading
+
+    from durin.workflow.engine import WorkflowEngine
+
+    threads: dict[str, int] = {}
+    real_run = WorkflowEngine.run
+
+    def spy_run(self, *a, **kw):
+        threads["engine.run"] = threading.get_ident()
+        return real_run(self, *a, **kw)
+
+    real_clear = cancellation.clear
+
+    def spy_clear(rid):
+        threads.setdefault("clear", threading.get_ident())
+        return real_clear(rid)
+
+    monkeypatch.setattr(WorkflowEngine, "run", spy_run)
+    monkeypatch.setattr(cancellation, "clear", spy_clear)
+
+    d = workflows_dir(tmp_path)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "quick.json").write_text(json.dumps({
+        "name": "quick", "start": "only",
+        "nodes": [{"id": "only", "kind": "script", "command": "echo ok", "next": None}],
+    }), encoding="utf-8")
+    svc = _svc(tmp_path)
+
+    with patch("durin.providers.factory.make_provider", return_value=SimpleNamespace(
+            get_default_model=lambda: "m")):
+        await svc.execute("quick", "task")
+
+    assert "engine.run" in threads and "clear" in threads
+    assert threads["clear"] == threads["engine.run"], (
+        "clear() ran on a different thread than engine.run — there is an "
+        "async round-trip between the manifest write and the flag clear, "
+        "which is exactly the TOCTOU window a caller can observe"
+    )
+
+
+@pytest.mark.asyncio
 async def test_normal_completion_leaves_no_cancel_flag(tmp_path):
     """A run that completes without ever being cancelled must not leave a
     stale flag behind either."""

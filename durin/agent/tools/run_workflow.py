@@ -479,6 +479,11 @@ class RunWorkflowTool(Tool, ContextAware):
             prune_keep=app_config.workflow.keep_runs,
             parallel_llm_concurrency=app_config.workflow.parallel_llm_concurrency,
             parallel_script_concurrency=app_config.workflow.parallel_script_concurrency,
+            # Clears the registry entry BEFORE the terminal manifest write, not
+            # after engine.run() returns (see WorkflowEngine.__init__'s on_run_end
+            # docstring) — so `tasks` (which reads the manifest directly) can
+            # never observe a run as terminal while its cancel flag is still set.
+            on_run_end=_clear_cancel,
         )
         root_session_key = self._session_key.get()
         inject_target = {

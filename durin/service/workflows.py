@@ -771,7 +771,14 @@ class WorkflowsService:
             parallel_script_concurrency=wf_cfg.parallel_script_concurrency,
             run_id_factory=lambda: rid,
             cancel_check=lambda: _is_cancelled(rid),
-            hard_cancel_check=lambda: _is_hard_cancelled(rid))
+            hard_cancel_check=lambda: _is_hard_cancelled(rid),
+            # Clears the registry entry BEFORE the terminal manifest write, not
+            # after engine.run() returns — see WorkflowEngine.__init__'s on_run_end
+            # docstring for why the ordering (not just the timing) is what a
+            # caller polling the manifest directly (a status check,
+            # tasks(action='stop')) needs: this makes "the manifest is terminal"
+            # imply "the flag is already cleared", rather than merely usually true.
+            on_run_end=_clear_cancel)
         try:
             result = await asyncio.to_thread(
                 engine.run, workflow, task,
@@ -782,9 +789,9 @@ class WorkflowsService:
                 work_key=work_key,
             )
         finally:
-            # Drop the cancel flag now the run is over (whether or not it was
-            # set) — mirrors run_workflow.py's identical cleanup, so the
-            # registry does not grow without bound.
+            # Idempotent backstop (clear() is a no-op if already absent): covers
+            # a run that never reached _finalize_manifest at all (no workspace,
+            # or a wiring error before the walk starts).
             _clear_cancel(rid)
         # The engine owns the run manifest (started→updated→finalized); no record write here.
         return result

@@ -332,6 +332,7 @@ class WorkflowEngine:
         prune_keep: int = 20,
         parallel_llm_concurrency: int = 2,
         parallel_script_concurrency: int = 4,
+        on_run_end: Callable[[str], None] | None = None,
     ) -> None:
         self._node_runner = node_runner
         self._script_runner = script_runner
@@ -363,6 +364,23 @@ class WorkflowEngine:
         # with the old uniform behavior.
         self._parallel_llm_cap = max(1, parallel_llm_concurrency)
         self._parallel_script_cap = max(1, parallel_script_concurrency)
+        # Optional hook: called with the run_id synchronously, in THIS thread,
+        # immediately before the terminal manifest write (see _finalize_manifest).
+        # Exists so a caller's own cleanup (clearing durin/workflow/cancellation.py's
+        # registry) can be made to happen-before the manifest becomes externally
+        # observable as terminal — not merely "soon after". A caller polling the
+        # manifest directly (a status check, tasks(action='stop')) sees the file the
+        # instant the write() syscall returns, regardless of how much MORE Python
+        # code this thread still has to unwind afterward (returning through nested
+        # try/finally frames, an asyncio round-trip back to the awaiting coroutine);
+        # under GIL contention from many concurrent runs that remaining unwind can
+        # be delayed well past the manifest becoming visible, so "clear after
+        # engine.run() returns" is not just slow, it has no ordering guarantee at
+        # all. Calling the hook BEFORE the write, in this thread's own program
+        # order, is what actually closes the gap: Python never reorders one
+        # thread's own statements, so any reader of the manifest is guaranteed the
+        # hook already ran. Best-effort: an exception here must never break the run.
+        self._on_run_end = on_run_end
 
     def run(
         self,
@@ -654,6 +672,14 @@ class WorkflowEngine:
 
     def _finalize_manifest(self, workflow, result, root_session_key, started_at,
                            parent_run_id=None) -> None:
+        # Runs BEFORE the manifest write (and regardless of whether this engine
+        # even has a workspace to write one) — see on_run_end's own docstring in
+        # __init__ for why the ordering, not just the timing, is what matters here.
+        if self._on_run_end is not None:
+            try:
+                self._on_run_end(result.run_id)
+            except Exception:  # noqa: BLE001 - the hook must never break the run
+                logger.exception("workflow on_run_end hook failed for {}", workflow.name)
         if self._workspace is None:
             return
         try:
