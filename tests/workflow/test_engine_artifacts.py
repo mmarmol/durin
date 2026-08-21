@@ -407,6 +407,84 @@ def test_framing_carries_declared_artifacts(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# output_files / missing_artifacts in a SHARED keyed folder: both must reflect
+# only what THIS run produced (per-node diffs, plus a reused node's
+# output_file), never a bare listing of whatever physically sits in the
+# folder — a work_key folder outlives any single run and can hold an earlier
+# run's leftovers, including files from a node THIS run's graph doesn't even
+# have.
+# ---------------------------------------------------------------------------
+
+
+def test_leftover_from_a_prior_run_does_not_count_as_this_runs_output(tmp_path):
+    """Judge's repro: run 1 (a different workflow definition of the same name)
+    leaves a file in the shared keyed folder; run 2's graph has no node that
+    could have produced it. output_files must not list it."""
+    leftover_wf = parse_workflow({
+        "name": "contract", "start": "leftover",
+        "nodes": [{"id": "leftover", "kind": "script",
+                   "command": "echo leftover > leftover.txt", "next": None}],
+    })
+    _script_engine(tmp_path).run(leftover_wf, "go", work_key="ticket-1")
+
+    later_wf = parse_workflow({
+        "name": "contract", "start": "noop",
+        "nodes": [{"id": "noop", "kind": "script", "command": "true", "next": None}],
+    })
+    result = _script_engine(tmp_path).run(later_wf, "go", work_key="ticket-1")
+
+    assert result.status == "completed"
+    assert "leftover.txt" not in result.output_files
+
+
+def test_declared_artifact_nobody_produced_is_missing_despite_a_leftover_file(tmp_path):
+    """The leftover physically satisfies the declared path by NAME
+    (evidence.json exists on disk) but nothing in THIS run produced it, so
+    it must still be reported missing."""
+    leftover_wf = parse_workflow({
+        "name": "contract2", "start": "leftover",
+        "nodes": [{"id": "leftover", "kind": "script",
+                   "command": "echo leftover > evidence.json", "next": None}],
+    })
+    _script_engine(tmp_path).run(leftover_wf, "go", work_key="ticket-1")
+
+    later_wf = parse_workflow({
+        "name": "contract2", "start": "noop",
+        "output": {"file": True, "artifacts": [{"path": "evidence.json"}]},
+        "nodes": [{"id": "noop", "kind": "script", "command": "true", "next": None}],
+    })
+    result = _script_engine(tmp_path).run(later_wf, "go", work_key="ticket-1")
+
+    assert result.status == "completed"
+    assert result.missing_artifacts == ["evidence.json"]
+    assert (Path(result.output_dir) / "evidence.json").is_file()   # the leftover really is still there
+
+
+def test_reused_nodes_output_file_counts_as_produced(tmp_path):
+    """A node this run REUSED (no fresh write — see the reuse gate) legitimately
+    satisfies the declared-artifact contract; its output_file must count as
+    produced even though the per-node diff sees no change."""
+    def runner(req):
+        return NodeRunResponse(output='{"x": 1}', model="m1", provider="p1", params_hash="h1")
+    runner.reuse_identity = lambda node: {"model": "m1", "provider": "p1", "params_hash": "h1"}
+
+    wf = parse_workflow({
+        "name": "reuse-contract", "start": "producer",
+        "output": {"file": True, "artifacts": [{"path": "out.json"}]},
+        "nodes": [{"id": "producer", "kind": "work", "reuse": "if-unchanged",
+                   "output_schema": {"type": "object"}, "output_file": "out.json", "next": None}],
+    })
+    engine = WorkflowEngine(runner, workspace=str(tmp_path))
+    first = engine.run(wf, "t", work_key="ticket-9")
+    assert first.runs[0].status == "ok"
+
+    second = engine.run(wf, "t", work_key="ticket-9")
+    assert second.runs[0].status == "reused"
+    assert second.missing_artifacts == []
+    assert "out.json" in second.output_files
+
+
+# ---------------------------------------------------------------------------
 # output_file provenance: the engine stamps WHO produced it next to it
 # ---------------------------------------------------------------------------
 

@@ -1294,21 +1294,36 @@ class WorkflowEngine:
                 except Exception:  # noqa: BLE001 - progress is best-effort; never break the run
                     pass
 
-        output_files: list[str] = []
-        if terminal_output_dir is not None:
-            root_dir = Path(terminal_output_dir)
-            # .provenance.json is the engine's own bookkeeping file, not a run
-            # deliverable — excluded so it never leaks into a user-visible listing.
-            output_files = sorted(
-                str(p.relative_to(root_dir)) for p in root_dir.rglob("*")
-                if p.is_file() and p.name != provenance.FILENAME
-            )
+        # THIS RUN'S produced set — never a bare listing of the working folder.
+        # A keyed (work_key) folder outlives any single run, so a directory
+        # listing would credit a leftover file from an EARLIER run sharing
+        # this same folder — possibly from a node THIS run's graph doesn't
+        # even have — to a run that never touched it. Built from what the
+        # engine already knows THIS run did: the union of every node's own
+        # artifact diff (before/after snapshots, computed above per node) plus
+        # the output_file of any node THIS run marked ok/reused. "ok" alone
+        # already has its output_file in the diff (the write happens before
+        # the snapshot); "reused" needs it added explicitly — a reuse hit
+        # skips the write entirely (the file already existed from an earlier
+        # pass, so the diff sees no change) but still legitimately satisfies
+        # the contract. The on-disk existence check guards the "ok" case
+        # against a write failure: a failed write must still surface as
+        # missing, not get credited via status alone.
+        produced: set[str] = set()
+        for r in runs:
+            produced.update(r.artifacts)
+            if r.status in ("ok", "reused"):
+                node_spec = workflow.nodes.get(r.node_id)
+                if (isinstance(node_spec, WorkNode) and node_spec.output_file
+                        and terminal_output_dir is not None
+                        and (Path(terminal_output_dir) / node_spec.output_file).is_file()):
+                    produced.add(node_spec.output_file)
+        output_files = sorted(produced)
         # The declared file contract (output.artifacts): report promised paths the
         # completed run did not produce. A warning, never a failure — the caller
         # (an orchestrating agent or the next stage) learns immediately which file
         # is absent instead of failing confusingly downstream.
         declared = [a["path"] for a in (workflow.output or {}).get("artifacts") or []]
-        produced = set(output_files)
         missing = [p for p in declared if p not in produced]
         return WorkflowResult(
             status="completed", final_output=final_output, runs=runs, run_id=run_id,
