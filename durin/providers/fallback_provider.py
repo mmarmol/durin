@@ -92,6 +92,10 @@ class FallbackProvider(LLMProvider):
     def generation(self, value):
         self._primary.generation = value
 
+    @property
+    def provider_key(self) -> str | None:
+        return self._primary.provider_key
+
     def get_default_model(self) -> str:
         return self._primary.get_default_model()
 
