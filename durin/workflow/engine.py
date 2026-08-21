@@ -148,6 +148,15 @@ class ResumeState:
     # resumed walk — whose in-memory runs list starts empty — can still compose
     # inputs_from blocks for nodes that reference pre-pause/pre-abort sources.
     recorded_outputs: dict[str, str] = field(default_factory=dict)
+    # The work_key the ORIGINAL (paused/failed) run used, if any — read from its
+    # manifest (see build_resume_state). "Same run_id" alone does not guarantee "same
+    # folder" once work_key exists: a keyed run's folder is a function of
+    # (workflow_name, work_key), not run_id, so a resuming caller that does not
+    # re-supply work_key would otherwise silently recompute the default per-run_id
+    # folder instead of the original keyed one — abandoning whatever the pre-pause
+    # nodes wrote. WorkflowEngine.run falls back to this when its own work_key
+    # argument is None.
+    work_key: str | None = None
 
 
 def build_resume_state(manifest: dict, answers: str) -> ResumeState:
@@ -166,6 +175,7 @@ def build_resume_state(manifest: dict, answers: str) -> ResumeState:
         if nid:
             visits[nid] = max(visits.get(nid, 0), int(it))
     recorded_outputs = dict(manifest.get("resume_inputs") or {})
+    work_key = manifest.get("work_key")
     needs_input_node = manifest.get("needs_input_node")
     if needs_input_node:
         questions = manifest.get("final_output") or ""
@@ -179,6 +189,7 @@ def build_resume_state(manifest: dict, answers: str) -> ResumeState:
                 f"--- The user's answers ---\n{answers}\n\nContinue from here."
             ),
             recorded_outputs=recorded_outputs,
+            work_key=work_key,
         )
     return ResumeState(
         run_id=manifest["run_id"],
@@ -186,6 +197,7 @@ def build_resume_state(manifest: dict, answers: str) -> ResumeState:
         visits=visits,
         upstream=manifest.get("resume_upstream"),
         recorded_outputs=recorded_outputs,
+        work_key=work_key,
     )
 
 # Upper bound on messages carried in the running shared-context buffer. A long
@@ -394,8 +406,20 @@ class WorkflowEngine:
         empty ledger and the gate never fires. Precedence: ``work_dir_override`` (a
         subworkflow sharing its parent's folder) wins over ``work_key``, which wins over
         the per-run default. Raises ``ValueError`` (via ``artifacts.safe_key``) if
-        ``work_key`` or the workflow's name sanitizes to nothing usable."""
+        ``work_key`` or the workflow's name sanitizes to nothing usable.
+
+        When ``work_key`` is ``None`` and ``resume`` is given, the ORIGINAL run's
+        work_key (recorded on its manifest, carried on ``resume.work_key``) is used
+        instead — a resume must land back in the same folder the paused/failed run
+        used, and "same run_id" alone only guarantees that for the per-run-id default;
+        a keyed folder is a function of (workflow name, work_key), not run_id, so
+        without this a resumed keyed run would silently abandon whatever its pre-pause
+        nodes wrote. An explicit ``work_key`` argument on the resume call still wins."""
         run_id = resume.run_id if resume is not None else self._run_id_factory()
+        # See the work_key paragraph above: a caller-supplied work_key always wins;
+        # absent that, a resume falls back to whatever the ORIGINAL run recorded.
+        resolved_work_key = work_key if work_key is not None else (
+            resume.work_key if resume is not None else None)
 
         # Pre-flight input validation: check for missing/colliding files and declared-file contracts
         # Must run before prune_runs and _start_manifest so a pre-flight rejection leaves no trace.
@@ -417,8 +441,8 @@ class WorkflowEngine:
         # Precedence: work_dir_override (subworkflows) > work_key (a stable folder
         # across separate runs) > the per-run default (a fresh folder every time).
         work_dir: str | None = work_dir_override or (
-            (str(keyed_work_dir(self._workspace, workflow.name, work_key))
-             if work_key is not None
+            (str(keyed_work_dir(self._workspace, workflow.name, resolved_work_key))
+             if resolved_work_key is not None
              else str(artifact_dir(self._workspace, run_id, "work", None)))
             if self._workspace is not None else None
         )
@@ -429,16 +453,18 @@ class WorkflowEngine:
         # provenance yet", both dispatch, and race to write output_file (a lost
         # update). A subworkflow sharing its parent's work_dir_override needs no lock
         # of its own — it runs synchronously inside the parent's already-locked call.
+        # A resume of a keyed run acquires this exactly as a fresh keyed run does
+        # (resolved_work_key is set the same way either way).
         lock_cm = (
             cross_process_lock(keyed_run_lock_target(work_dir), timeout=_WORK_KEY_LOCK_TIMEOUT_S)
-            if (work_dir_override is None and work_key is not None and self._workspace is not None)
+            if (work_dir_override is None and resolved_work_key is not None and self._workspace is not None)
             else nullcontext()
         )
         try:
             lock_cm.__enter__()
         except TimeoutError as exc:
             raise TimeoutError(
-                f"workflow {workflow.name!r}: another run holding work_key {work_key!r} "
+                f"workflow {workflow.name!r}: another run holding work_key {resolved_work_key!r} "
                 f"did not finish within {_WORK_KEY_LOCK_TIMEOUT_S:.0f}s"
             ) from exc
         try:
@@ -448,7 +474,7 @@ class WorkflowEngine:
             effective_root = root_session_key or f"workflow:{run_id}:root"
             started_at = time.time()
             self._start_manifest(workflow, run_id, effective_root, started_at, task,
-                                 parent_run_id, work_dir=work_dir, work_key=work_key)
+                                 parent_run_id, work_dir=work_dir, work_key=resolved_work_key)
 
             def _update() -> None:
                 self._update_manifest(workflow, run_id, runs)

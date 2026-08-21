@@ -18,8 +18,8 @@ from pathlib import Path
 
 import pytest
 
-from durin.workflow import run_log
-from durin.workflow.engine import NodeRunResponse, WorkflowEngine
+from durin.workflow import provenance, run_log
+from durin.workflow.engine import NodeRunResponse, WorkflowEngine, build_resume_state
 from durin.workflow.spec import parse_workflow
 
 
@@ -249,3 +249,129 @@ def test_concurrent_different_work_keys_do_not_block_each_other(tmp_path):
     assert not t1.is_alive() and not t2.is_alive()
     assert results["run-1"].status == "completed"
     assert results["run-2"].status == "completed"
+
+
+# ---------------------------------------------------------------------------
+# Resume (PR-K round 2 / ITEM 1): resuming a keyed run must land back in the
+# SAME keyed folder even when the caller passes no work_key on the resume
+# call — the manifest already recorded it at park time; ResumeState carries
+# it forward from there. Without this, a paused keyed run's resume silently
+# abandons whatever the pre-pause nodes wrote (a fresh empty per-run_id
+# folder instead), losing artifacts and provenance mid-conversation — the
+# box's primary flow (loop fire with work_key -> park -> answer()/resume).
+# ---------------------------------------------------------------------------
+
+
+def _parking_wf():
+    return parse_workflow({"name": "w", "start": "producer", "max_visits": 3, "nodes": [
+        {"id": "producer", "kind": "work", "reuse": "if-unchanged",
+         "output_schema": {"type": "object"}, "output_file": "out.json", "next": "ask"},
+        {"id": "ask", "kind": "work", "cases": {"READY": "do", "NEED_INFO": "__needs_input__"}},
+        {"id": "do", "kind": "work", "next": None},
+    ]})
+
+
+def _parking_runner():
+    """'ask' asks for more info on its FIRST visit (parking the run) and is
+    READY on any later visit (i.e. once resumed) — the ask/answer round trip
+    every parking scenario in these tests exercises."""
+    calls = []
+    ask_visits = {"n": 0}
+
+    def runner(req):
+        calls.append(req.node.id)
+        if req.node.id == "producer":
+            return NodeRunResponse(output='{"x": 1}', model="m1", provider="p1", params_hash="h1")
+        if req.node.id == "ask":
+            ask_visits["n"] += 1
+            if ask_visits["n"] == 1:
+                return NodeRunResponse(output="need more info\nNEED_INFO")
+            return NodeRunResponse(output="all good\nREADY")
+        return NodeRunResponse(output="done")
+
+    runner.calls = calls
+    runner.reuse_identity = lambda node: {"model": "m1", "provider": "p1", "params_hash": "h1"}
+    return runner
+
+
+def test_resume_of_a_keyed_run_with_no_work_key_keeps_the_same_folder(tmp_path):
+    run_ids = iter(["park-run", "resume-run"])
+    runner = _parking_runner()
+    engine = WorkflowEngine(runner, workspace=str(tmp_path), run_id_factory=lambda: next(run_ids))
+
+    first = engine.run(_parking_wf(), "go", work_key="ticket-1")
+    assert first.status == "needs_input"
+    assert first.needs_input_node == "ask"
+    # needs_input results carry no output_dir (only a completed run's does) —
+    # the manifest is the reliable source for the paused run's work_dir.
+    park_manifest = run_log.read_manifest(tmp_path, "w", first.run_id)
+    park_work_dir = Path(park_manifest["work_dir"])
+    pre_pause_provenance = provenance.load(park_work_dir)
+    assert "out.json" in pre_pause_provenance
+
+    assert park_manifest["work_key"] == "ticket-1"     # recorded at park time
+
+    resume = build_resume_state(park_manifest, "all set")
+    assert resume.work_key == "ticket-1"                # carried forward from the manifest
+
+    # The resuming caller passes NO work_key — exactly the loops answer()/
+    # run_workflow resume_run_id shape today.
+    second = engine.run(_parking_wf(), "all set", resume=resume)
+
+    assert second.status == "completed"
+    assert second.output_dir == str(park_work_dir)      # SAME keyed folder, not a fresh one
+    assert (Path(second.output_dir) / "out.json").is_file()   # pre-pause artifact still there
+    assert provenance.load(Path(second.output_dir)) == pre_pause_provenance  # provenance intact
+    assert runner.calls == ["producer", "ask", "ask", "do"]   # producer never re-ran
+
+
+def test_resume_of_a_keyed_run_acquires_the_keyed_lock(tmp_path, monkeypatch):
+    """The keyed run-lock is acquired on resume exactly as on a fresh keyed
+    run — proven by asserting cross_process_lock is invoked with the SAME
+    keyed lock target for both the original park and the resume."""
+    import durin.workflow.engine as engine_mod
+
+    targets = []
+    real_lock = engine_mod.cross_process_lock
+
+    def spy_lock(target, **kw):
+        targets.append(target)
+        return real_lock(target, **kw)
+
+    monkeypatch.setattr(engine_mod, "cross_process_lock", spy_lock)
+
+    run_ids = iter(["park-run", "resume-run"])
+    runner = _parking_runner()
+    engine = WorkflowEngine(runner, workspace=str(tmp_path), run_id_factory=lambda: next(run_ids))
+
+    first = engine.run(_parking_wf(), "go", work_key="ticket-1")
+    manifest = run_log.read_manifest(tmp_path, "w", first.run_id)
+    resume = build_resume_state(manifest, "all set")
+    engine.run(_parking_wf(), "all set", resume=resume)
+
+    assert len(targets) == 2
+    assert targets[0] == targets[1]                     # same keyed lock target both times
+
+
+def test_resume_of_a_non_keyed_run_is_unchanged(tmp_path):
+    """No work_key ever involved: resume must keep using the plain per-run_id
+    folder exactly as before this fix — a non-keyed park's manifest carries
+    work_key=None, and ResumeState.work_key is None, so the default
+    (run_id-based) folder computation is untouched."""
+    run_ids = iter(["park-run", "resume-run"])
+    runner = _parking_runner()
+    engine = WorkflowEngine(runner, workspace=str(tmp_path), run_id_factory=lambda: next(run_ids))
+
+    first = engine.run(_parking_wf(), "go")   # no work_key
+    assert first.status == "needs_input"
+
+    manifest = run_log.read_manifest(tmp_path, "w", first.run_id)
+    assert manifest["work_key"] is None
+    resume = build_resume_state(manifest, "all set")
+    assert resume.work_key is None
+
+    second = engine.run(_parking_wf(), "all set", resume=resume)
+    assert second.status == "completed"
+    assert second.run_id == first.run_id == "park-run"  # resume forces the SAME run_id
+    assert second.output_dir == str(tmp_path / ".workflow" / "park-run" / "work")
+    assert (tmp_path / ".workflow" / "keys").exists() is False
