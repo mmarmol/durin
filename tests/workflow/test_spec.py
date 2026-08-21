@@ -711,6 +711,42 @@ def test_reuse_rejected_with_shared_context():
                         "nodes": [_reusable_node("a", context="shared", next=None)]})
 
 
+def test_reuse_rejected_when_branches_from_has_no_declared_pool():
+    """`branches_from` with NO candidate 'branches' pool makes ANY work/script
+    node in the workflow runtime-selectable — the parser has no static list to
+    check per-node, so a reuse-declaring node ANYWHERE would silently bypass
+    the reuse gate the same way an explicit parallel branch/worker does."""
+    with pytest.raises(WorkflowError, match="branches_from") as exc:
+        parse_workflow({
+            "name": "w", "start": "picker",
+            "nodes": [
+                {"id": "picker", "kind": "work", "next": "route"},
+                {"id": "route", "kind": "parallel", "branches_from": "picker", "next": "cached"},
+                _reusable_node("cached", next=None),
+            ],
+        })
+    # Names both the parallel node and the reuse-declaring node.
+    assert "route" in str(exc.value)
+    assert "cached" in str(exc.value)
+
+
+def test_reuse_allowed_when_branches_from_has_a_declared_pool_excluding_it():
+    """The same shape, but with an explicit candidate pool (even one that
+    excludes the reuse node) — the candidate set is statically known, so the
+    existing per-branch check applies normally and this parses fine."""
+    wf = parse_workflow({
+        "name": "w", "start": "picker",
+        "nodes": [
+            {"id": "picker", "kind": "work", "next": "route"},
+            {"id": "route", "kind": "parallel", "branches_from": "picker",
+             "branches": ["other"], "next": "cached"},
+            {"id": "other", "kind": "work"},
+            _reusable_node("cached", next=None),
+        ],
+    })
+    assert wf.nodes["route"].branches == ("other",)
+
+
 # ---------------------------------------------------------------------------
 # output.artifacts — the declared file contract (B2)
 # ---------------------------------------------------------------------------

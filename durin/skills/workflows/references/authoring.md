@@ -154,7 +154,7 @@ shapes:
 | `branches` | array of strings | `()` | **Static only.** Non-empty list of branch node ids. Each must be a `work` or `script` node — a deterministic script (fetch, convert, check) may run BESIDE agent branches; its stdin is the parallel's input, its stdout is its branch output, and a non-zero exit fails only that branch. |
 | `worker` | string \| null | none | **Dynamic only.** Id of the `work` node used as the per-item template. |
 | `list_from` | string \| null | none | **Dynamic only.** Id of the upstream node whose output is the runtime list. Required when `worker` is set. |
-| `branches_from` | string \| null | none | **Runtime-selected only.** Id of the node whose output names the branch ids to run this pass. Must reference a declared node. Declare `branches` alongside as the candidate POOL (recommended): resolved ids are validated against it, and the editor draws the candidates connected instead of as floating nodes. |
+| `branches_from` | string \| null | none | **Runtime-selected only.** Id of the node whose output names the branch ids to run this pass. Must reference a declared node. Declare `branches` alongside as the candidate POOL (recommended; REQUIRED if any node in the workflow declares `reuse` — with no pool every node is runtime-selectable, so a reuse-declaring node anywhere is a parse-time error): resolved ids are validated against it, and the editor draws the candidates connected instead of as floating nodes. |
 | `max_concurrency` | int ≥ 1 | unset | Unset (recommended): the GLOBAL per-kind caps govern — LLM branches (work/subworkflow) default 2, script branches default 4, both configurable in Settings → Concurrency (`workflow.parallel_llm_concurrency` / `parallel_script_concurrency`). Script branches never queue behind LLM branches. An explicit int is a uniform override for every branch kind. |
 | `reconcile` | `"read"` \| `"choose"` \| `"union"` | `"read"` | How **static** branch *file writes* merge: `read` = no writes applied; `choose` = each branch writes a private copy, a judge picks one; `union` = apply all, abort on a same-path content conflict. Writing branches fork the run's shared working folder (and only it — never the surrounding durin workspace) — a branch starts from the folder's current files and its writes reconcile back into it. (Dynamic workers and `read` branches are handed the shared folder directly; `reconcile` has no effect on dynamic fan-out.) |
 | `criteria` | string | `""` | **Required when `reconcile` is `choose`** — how the judge picks the winner. |
@@ -199,7 +199,10 @@ The parser rejects a definition (with a clear message) when:
   `output_file` is absolute / `..`-escaping or set without `output_schema`; `reuse` is set
   to anything other than `"if-unchanged"`, set without `output_file`, set on a `detached`
   node, set on a parallel `branches`/`worker` member, or combined with `context: "shared"`
-  (a reused pass contributes no shared-context messages).
+  (a reused pass contributes no shared-context messages); a `branches_from` parallel node
+  declares no candidate `branches` pool while ANY node in the workflow uses `reuse` (with
+  no pool, every work/script node is runtime-selectable, so a reuse-declaring node anywhere
+  could silently bypass the reuse gate).
 - A `parallel` branch id points to a node that is neither `work` nor `script` (parallel
   and subworkflow nodes cannot be branches), or the dynamic `worker` id points to a
   non-`work` node (the worker template stays agent-only on purpose: a script iterates
