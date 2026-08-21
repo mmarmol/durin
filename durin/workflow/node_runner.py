@@ -148,11 +148,11 @@ class _DeliverTool(Tool):
 
 
 class _RouteCapture:
-    """Holds the label from the most recent `route` tool call in one node
-    execution, so the derive step can use it directly when that call turns out
-    to have been the model's LAST action this turn — see
-    ``AgentNodeRunner._final_message_route_call``. Overwritten on every call
-    (not just the first), so it always reflects the most recent verdict."""
+    """Holds the label from the most recent VALID `route` tool call in one node
+    execution, so the derive step can use it directly instead of paying for the
+    forced end-of-turn call — mirrors ``_DeliverCapture`` exactly. Overwritten on
+    every valid call (not just the first), so the LAST one wins, same as
+    ``_DeliverTool``'s "last valid deliver wins" semantics."""
 
     def __init__(self) -> None:
         self.label: str | None = None
@@ -160,13 +160,15 @@ class _RouteCapture:
 
 class _RouteTool(Tool):
     """The node's routing-verdict tool, registered from turn 1 for the same
-    cache-prefix reason as ``_DeliverTool``. Every call's label is captured
-    (overwriting any earlier one); a call before the node is done working is
-    just acknowledged and work continues. If the LAST thing the model does
-    this turn is call `route`, the derive step uses the captured label
-    directly and skips the forced end-of-turn call; a `route` call anywhere
-    EARLIER in the turn is still just noted here — the forced call remains
-    authoritative, since later turns may have changed the model's mind."""
+    cache-prefix reason as ``_DeliverTool``. A VALID call decides the verdict
+    immediately and unconditionally — exactly symmetric with how a valid early
+    `deliver` call ends a schema'd node's turn (see ``_DeliverTool`` /
+    ``_derive_structured_output``): the derive step uses the captured label
+    directly and the forced end-of-turn call is skipped, regardless of where in
+    the turn the call happened. An INVALID label (not one of this node's cases)
+    is neither captured nor acknowledged as decided — it gets a specific,
+    actionable message and the forced call remains authoritative, exactly as
+    when nothing was ever captured."""
 
     _plugin_discoverable = False
 
@@ -190,9 +192,20 @@ class _RouteTool(Tool):
             "reason": {"type": "string", "description": "One short line explaining the verdict."},
         }, "required": ["label"]}
 
+    def validate_params(self, params: dict) -> list[str]:
+        # Mirrors _DeliverTool: do our OWN validation inside execute() below so
+        # an invalid label gets a specific, actionable message instead of a
+        # generic schema-validation rejection that never reaches execute().
+        return []
+
     async def execute(self, **kwargs) -> str:
-        self._capture.label = kwargs.get("label")
-        return "Verdict noted — continue your work; your final verdict is decided at the end."
+        label = kwargs.get("label")
+        if label not in self._labels:
+            return (f"'{label}' is not one of the allowed labels: "
+                    f"{', '.join(self._labels)}. Continue your work; call "
+                    "route again with a valid label when you decide.")
+        self._capture.label = label
+        return "Route recorded — this step's verdict has been recorded."
 
 
 _VERDICT = ("\n\nAfter your assessment, end your reply with a single final line: "
@@ -730,15 +743,12 @@ class AgentNodeRunner:
         # A routing node's verdict comes from a forced `route` tool call (deterministic: the
         # model must pick one label from this node's own enum), not from parsing free text.
         # On any failure this is None and the engine falls back to text-parse + default.
-        # Exception: if the model's LAST action this turn was already a valid `route`
-        # call (nothing followed it that could have changed its mind), that captured
-        # label is used directly and the forced call — an extra LLM round-trip the
-        # model already made moot — is skipped. A `route` call anywhere EARLIER in the
-        # turn is only noted (see `_RouteTool`); the forced call still decides.
+        # A valid `route` call captured anywhere during the work loop above (`_RouteTool`
+        # lives in `tools_registry` from turn 1) is used directly — exactly symmetric with
+        # `_derive_structured_output`'s early-`deliver` reuse — paying no extra LLM call.
         route_label = None
         if route_labels is not None:
-            if (self._final_message_route_call(all_messages)
-                    and routed.label in route_labels):
+            if routed.label is not None:
                 route_label = routed.label
             else:
                 route_label = self._derive_route_label(all_messages, route_labels, model, tools_registry)
@@ -778,23 +788,6 @@ class AgentNodeRunner:
             model=model,
             provider=provider_key,
             params_hash=resolved_params_hash,
-        )
-
-    @staticmethod
-    def _final_message_route_call(messages: list[dict]) -> bool:
-        """True when the LAST message of the turn is an assistant tool call to
-        `route` — i.e. calling `route` was the model's last action, with nothing
-        after it that could have changed the verdict. Used to decide whether the
-        captured label (`_RouteCapture`, populated by `_RouteTool.execute`) can be
-        trusted directly instead of paying for the forced end-of-turn call."""
-        if not messages:
-            return False
-        last = messages[-1]
-        if not isinstance(last, dict) or last.get("role") != "assistant":
-            return False
-        return any(
-            (tc.get("function") or {}).get("name") == "route"
-            for tc in (last.get("tool_calls") or [])
         )
 
     def _derive_route_label(self, messages: list[dict], labels: list[str], model: str | None,
