@@ -741,6 +741,20 @@ class WorkflowsService:
         judge = AgentJudgeRunner(runner, default_model=provider.get_default_model())
         ws = str(self._workspace)
         wf_cfg = app_config.workflow
+
+        # Pre-generate the run id (instead of letting the engine mint one
+        # internally) so the cooperative cancel flags below — and the
+        # tasks(action="stop") gate they back — are keyed by the SAME id the
+        # engine actually uses. Mirrors run_workflow.py's identical
+        # pre-generation and cancel_check/hard_cancel_check wiring (the
+        # agent-launched path); without this, a run started through this
+        # service (the HTTP run/launch routes, or a loop calling execute()
+        # directly) ignored request_cancel() entirely.
+        from durin.workflow.cancellation import clear as _clear_cancel
+        from durin.workflow.cancellation import is_cancelled as _is_cancelled
+        from durin.workflow.cancellation import is_hard_cancelled as _is_hard_cancelled
+        rid = run_id or (resume.run_id if resume is not None else uuid.uuid4().hex[:12])
+
         engine = WorkflowEngine(
             node_runner=node_runner,
             script_runner=script_runner,
@@ -752,14 +766,22 @@ class WorkflowsService:
             max_node_visits=wf_cfg.max_node_visits,
             parallel_llm_concurrency=wf_cfg.parallel_llm_concurrency,
             parallel_script_concurrency=wf_cfg.parallel_script_concurrency,
-            run_id_factory=(lambda: run_id) if run_id else None)
-        result = await asyncio.to_thread(
-            engine.run, workflow, task,
-            root_session_key=root_session_key,
-            input_files=input_files,
-            output_format=output_format,
-            resume=resume,
-        )
+            run_id_factory=lambda: rid,
+            cancel_check=lambda: _is_cancelled(rid),
+            hard_cancel_check=lambda: _is_hard_cancelled(rid))
+        try:
+            result = await asyncio.to_thread(
+                engine.run, workflow, task,
+                root_session_key=root_session_key,
+                input_files=input_files,
+                output_format=output_format,
+                resume=resume,
+            )
+        finally:
+            # Drop the cancel flag now the run is over (whether or not it was
+            # set) — mirrors run_workflow.py's identical cleanup, so the
+            # registry does not grow without bound.
+            _clear_cancel(rid)
         # The engine owns the run manifest (started→updated→finalized); no record write here.
         return result
 
