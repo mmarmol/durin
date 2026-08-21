@@ -7219,6 +7219,11 @@
           "task": {
             "title": "Task",
             "type": "string"
+          },
+          "work_key": {
+            "default": "",
+            "title": "Work Key",
+            "type": "string"
           }
         },
         "required": [

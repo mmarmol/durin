@@ -270,7 +270,7 @@ async def test_run_response_carries_needs_input_node_and_output_files(tmp_path):
     fake_provider.get_default_model.return_value = "m"
 
     def fake_run(self, workflow, task, *, root_session_key=None, input_files=None,
-                 output_format=None, resume=None):
+                 output_format=None, resume=None, work_key=None):
         return WorkflowResult(
             status="needs_input", run_id="r1", final_output="what env?",
             needs_input_node="a", runs=[], output_files=["a.md"],
@@ -298,7 +298,7 @@ async def test_run_response_carries_producer_fields(tmp_path):
     fake_provider.get_default_model.return_value = "m"
 
     def fake_run(self, workflow, task, *, root_session_key=None, input_files=None,
-                 output_format=None, resume=None):
+                 output_format=None, resume=None, work_key=None):
         return WorkflowResult(
             status="completed", run_id="r1", final_output="ok",
             runs=[NodeRun(node_id="a", iteration=1, output="x", status="reused",
@@ -335,7 +335,7 @@ async def test_run_response_serializes_legacy_rows_with_producer_fields_absent(t
     )
 
     def fake_run(self, workflow, task, *, root_session_key=None, input_files=None,
-                 output_format=None, resume=None):
+                 output_format=None, resume=None, work_key=None):
         return WorkflowResult(status="completed", run_id="r1", final_output="ok", runs=[legacy_row])
 
     with patch("durin.providers.factory.make_provider", return_value=fake_provider), \
@@ -366,7 +366,7 @@ async def test_run_resumes_a_needs_input_manifest_with_the_original_task(tmp_pat
     captured = {}
 
     def fake_run(self, workflow, task, *, root_session_key=None, input_files=None,
-                 output_format=None, resume=None):
+                 output_format=None, resume=None, work_key=None):
         captured["task"] = task
         captured["resume"] = resume
         return WorkflowResult(status="completed", run_id="r1", final_output="ok", runs=[])

@@ -113,3 +113,41 @@ async def test_launch_manifest_carries_root_session_key_naming_the_principal(tmp
         manifest = await _wait_for_manifest(tmp_path, "w1", result.run_id)
 
     assert manifest["root_session_key"] == "api:tok-abc123"
+
+
+@pytest.mark.asyncio
+async def test_launch_with_work_key_records_it_and_reuses_the_folder(tmp_path):
+    """The body's optional work_key reaches the engine end to end: the launched
+    run's manifest carries it, and a second launch with the SAME key shares the
+    first launch's working folder (the reuse gate's production entrance)."""
+    _write_script_workflow(tmp_path, "w1")
+    svc = _svc(tmp_path)
+    principal = Principal.remote("tok1", frozenset({Scope.WORKFLOWS_WRITE.value}))
+
+    with patch("durin.providers.factory.make_provider", return_value=SimpleNamespace(
+            get_default_model=lambda: "m")):
+        first = await svc.launch(
+            WorkflowLaunchCommand(name="w1", task="x", work_key="ticket-1"), principal)
+        first_manifest = await _wait_for_manifest(tmp_path, "w1", first.run_id)
+        second = await svc.launch(
+            WorkflowLaunchCommand(name="w1", task="x", work_key="ticket-1"), principal)
+        second_manifest = await _wait_for_manifest(tmp_path, "w1", second.run_id)
+
+    assert first_manifest["work_key"] == "ticket-1"
+    assert second_manifest["work_key"] == "ticket-1"
+    assert second_manifest["work_dir"] == first_manifest["work_dir"]
+    assert second.run_id != first.run_id
+
+
+@pytest.mark.asyncio
+async def test_launch_without_work_key_leaves_it_none(tmp_path):
+    _write_script_workflow(tmp_path, "w1")
+    svc = _svc(tmp_path)
+    principal = Principal.remote("tok1", frozenset({Scope.WORKFLOWS_WRITE.value}))
+
+    with patch("durin.providers.factory.make_provider", return_value=SimpleNamespace(
+            get_default_model=lambda: "m")):
+        result = await svc.launch(WorkflowLaunchCommand(name="w1", task="x"), principal)
+        manifest = await _wait_for_manifest(tmp_path, "w1", result.run_id)
+
+    assert manifest["work_key"] is None

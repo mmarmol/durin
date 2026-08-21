@@ -5962,6 +5962,11 @@ export interface components {
             name: string;
             /** Task */
             task: string;
+            /**
+             * Work Key
+             * @default
+             */
+            work_key: string;
         };
         /** WorkflowLaunchResult */
         WorkflowLaunchResult: {

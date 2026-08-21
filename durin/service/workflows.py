@@ -161,6 +161,7 @@ class WorkflowRunResult(Result):
 class WorkflowLaunchCommand(Command):
     name: str      # the workflow to run (path param)
     task: str
+    work_key: str = ""   # optional: a stable working folder shared by every launch with this key (see WorkflowEngine.run's work_key)
 
 
 class WorkflowLaunchResult(Result):
@@ -670,6 +671,7 @@ class WorkflowsService:
             try:
                 await self.execute(
                     cmd.name, cmd.task, run_id=run_id, root_session_key=root_session_key,
+                    work_key=cmd.work_key or None,
                 )
             except Exception:
                 logger.exception(
@@ -691,6 +693,7 @@ class WorkflowsService:
         resume_run_id: str | None = None,
         run_id: str | None = None,
         root_session_key: str | None = None,
+        work_key: str | None = None,
     ) -> WorkflowResult:
         if self._app_config is None or self._sessions is None:
             raise UnavailableError("running a workflow is not available on this surface")
@@ -776,6 +779,7 @@ class WorkflowsService:
                 input_files=input_files,
                 output_format=output_format,
                 resume=resume,
+                work_key=work_key,
             )
         finally:
             # Drop the cancel flag now the run is over (whether or not it was
