@@ -273,6 +273,17 @@ run, the correlate match wins. Only the first 2000 characters of the message
 are searched, so put the identifier somewhere near the top if your messages
 run long.
 
+**This same correlation value is also what the workflow recognizes as "the
+same subject" across separate fires** — see the shared working folder in
+[workflows.md](workflows.md#passing-work-between-steps). With no Correlate
+set, that stability is per-thread: a customer replying about "the same
+ticket" from a brand-new email thread starts fresh. With `TICKET-(\d+)` set,
+a workflow step built to skip redoing identical work recognizes ticket 42 as
+the same subject no matter which thread or message the reply lands on — and
+two fires that land on the exact same correlation value never run at the
+same time either: the second one waits for the first to finish before it
+starts, rather than both working on the ticket at once.
+
 ## Webhook triggers: firing a loop from another service
 
 A **Webhook** trigger fires a loop from an HTTP call made by something

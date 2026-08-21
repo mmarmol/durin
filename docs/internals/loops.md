@@ -421,6 +421,30 @@ replies that land in unrelated threads (different email threads, different
 Slack channels, a webhook payload with no channel thread at all), instead of
 being confined to whatever thread the first message happened to arrive on.
 
+**The same key is also the workflow's `work_key`.** When a channel-triggered
+fire dispatches (`LoopsRuntime._run`, `durin/loops/runtime.py`), the origin's
+thread value — the custom `correlate` key above when the trigger declares
+one, the plain `thread_key` otherwise — is passed straight through as
+`WorkflowEngine.run`'s `work_key`, unchanged from whatever `claims.register`
+would use to wake this run later (§4j uses the identical value). This is what
+makes a workflow's `reuse: "if-unchanged"` gate reachable across SEPARATE
+fires: repeat messages correlating to the same key share one working folder,
+so a node that already produced its `output_file` on an earlier fire is
+reused instead of redone. A cron or manual fire, or a chat-triggered one
+(no thread in its origin — `agent/tools/loops.py`'s `set_context` never sets
+one), passes no `work_key` and gets today's fresh per-run folder every time.
+Two fires sharing a `work_key` **serialize** (`WorkflowEngine.run` holds a
+cross-process lock on the keyed folder for the whole run) — a
+`concurrency: "parallel"` loop firing twice on the same correlation runs the
+second fire only after the first finishes, never concurrently, so the shared
+folder never sees two writers at once. Declaring `correlate` therefore has a
+second consequence beyond claim routing: it decides the reuse gate's
+GRANULARITY — with no `correlate`, stability is per-THREAD (a customer
+replying from a new email thread about "the same ticket" gets a fresh
+folder); with a `correlate` pattern anchored to a stable identifier (a ticket
+number), stability is genuinely per-TICKET regardless of which thread carries
+the reply.
+
 Each message is resolved through a fixed decision order:
 
 1. **Claim wake — custom keys before the plain thread key.** For every
