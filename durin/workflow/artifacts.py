@@ -78,6 +78,22 @@ def keyed_work_dir(base: str | Path, workflow_name: str, work_key: str) -> Path:
     return d
 
 
+# Lock target name, kept BESIDE the keyed work dir (not inside it) so the ".lock"
+# file cross_process_lock derives never shows up as a run artifact — mirrors
+# workflow/version_store.py's identical VERSION_LOCK_NAME/version_lock_target pattern.
+RUN_LOCK_NAME = ".run"
+
+
+def keyed_run_lock_target(work_dir: str | Path) -> Path:
+    """The cross-process lock target serializing every run sharing *work_dir*'s
+    (workflow, work_key) folder — one shared folder, one writer at a time. Two
+    runs racing on the same key would otherwise both read "no provenance yet",
+    both dispatch, and both write ``output_file``, the second silently clobbering
+    the first's (a lost update) — reachable via, e.g., a loop with
+    ``concurrency: "parallel"`` double-firing on the same correlate key."""
+    return Path(work_dir).parent / RUN_LOCK_NAME
+
+
 def prune_runs(base: str | Path, keep: int = 20, protect: set[str] | None = None) -> None:
     """Best-effort: keep the `keep` most-recent run subtrees, remove older ones.
 

@@ -255,7 +255,10 @@ refines its work in response to loop feedback.
   ticket id, a thread id — anything that names the recurring subject) picks
   a STABLE folder shared by every run with the same key instead, so a node
   declaring `reuse: "if-unchanged"` can find and skip work an earlier run on
-  the same subject already did.
+  the same subject already did. Runs sharing a `work_key` also take turns:
+  if one is still going when another with the same key starts, the second
+  waits for the first to finish (and then, usually, gets to reuse what it
+  just produced) instead of both writing into the same folder at once.
 - **Declared input/output.** A workflow can declare an `input` (optional
   `text` and/or `file`, plus a free-text `description`) and `output`
   descriptor. Declaring `file: true` input means the workflow expects

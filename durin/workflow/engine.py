@@ -22,14 +22,16 @@ import os
 import shutil
 import time
 import uuid
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
 from loguru import logger
 
+from durin.utils.file_lock import cross_process_lock
 from durin.workflow import provenance, run_log, workspace_fork
-from durin.workflow.artifacts import artifact_dir, keyed_work_dir, prune_runs
+from durin.workflow.artifacts import artifact_dir, keyed_run_lock_target, keyed_work_dir, prune_runs
 from durin.workflow.result import NodeRun, WorkflowResult
 from durin.workflow.session_keys import node_session_key
 from durin.workflow.spec import (
@@ -42,6 +44,12 @@ from durin.workflow.spec import (
     node_label,
 )
 from durin.workflow.verdict import parse_label, parse_verdict, strip_label_line, strip_verdict_line
+
+# Generous acquire timeout for a work_key run's cross-process lock: a workflow run
+# can legitimately take many minutes (a multi-node LLM chain) before releasing it —
+# mirrors session/turn_lease.py's identical "tool-heavy work takes a while" reasoning
+# (that one guards a single chat turn; a workflow run can be longer still).
+_WORK_KEY_LOCK_TIMEOUT_S = 1800.0
 
 
 @dataclass
@@ -414,78 +422,103 @@ class WorkflowEngine:
              else str(artifact_dir(self._workspace, run_id, "work", None)))
             if self._workspace is not None else None
         )
-        # The effective root MUST match node_runner's headless rooting: a None calling
-        # session means node sessions are rooted under workflow:<run_id>:root, so the
-        # manifest records that same key or runs_for_session can't find the run.
-        effective_root = root_session_key or f"workflow:{run_id}:root"
-        started_at = time.time()
-        self._start_manifest(workflow, run_id, effective_root, started_at, task,
-                             parent_run_id, work_dir=work_dir, work_key=work_key)
-
-        def _update() -> None:
-            self._update_manifest(workflow, run_id, runs)
-
-        # One tracker per run for launch-and-continue (detached) nodes. Every exit
-        # from the try below joins it before the manifest is finalized, so a run
-        # never reports terminal with a side-effect node silently still running.
-        detached_tracker = _DetachedTracker()
+        # A work_key folder is SHARED across separate runs (unlike a per-run_id one,
+        # which only this run will ever touch) — serialize the whole run on it, one
+        # writer at a time, or two concurrent same-key fires (e.g. a "parallel"-
+        # concurrency loop double-firing on one correlate key) would both read "no
+        # provenance yet", both dispatch, and race to write output_file (a lost
+        # update). A subworkflow sharing its parent's work_dir_override needs no lock
+        # of its own — it runs synchronously inside the parent's already-locked call.
+        lock_cm = (
+            cross_process_lock(keyed_run_lock_target(work_dir), timeout=_WORK_KEY_LOCK_TIMEOUT_S)
+            if (work_dir_override is None and work_key is not None and self._workspace is not None)
+            else nullcontext()
+        )
         try:
-            result = self._walk(
-                workflow, self._frame_task(workflow, task, output_format), run_id, runs,
-                root_session_key=root_session_key,
-                input_files=None if resume else input_files,
-                update_manifest=_update,
-                start_at=resume.start_at if resume else None,
-                initial_visits=dict(resume.visits) if resume else None,
-                initial_upstream=resume.upstream if resume else None,
-                resume_outputs=dict(resume.recorded_outputs) if resume else None,
-                work_dir=work_dir,
-                own_work_dir=work_dir_override is None,
-                detached_tracker=detached_tracker,
-            )
-        except WorkflowConfigError as exc:
-            # A config/wiring error is fatal and re-raised, but finalize the manifest first
-            # so it does not linger as a stale 'running' record — otherwise the crash sweep
-            # would later mislabel a deterministic config bug as 'crashed'.
-            runs.extend(detached_tracker.join())
-            self._finalize_manifest(
-                workflow,
-                WorkflowResult(status="aborted", final_output=f"workflow config error: {exc}",
-                               runs=runs, run_id=run_id),
-                effective_root, started_at, parent_run_id)
-            raise
-        except NodeExecutionError as exc:
-            if isinstance(exc.cause, (ScriptCancelled, WorkInterrupted)):
-                # The in-flight node was cancelled mid-run (a script killed by any
-                # cancel, or a work turn aborted by a hard cancel): end the run
-                # 'cancelled' (not 'aborted'), carrying the partial trace the walk
-                # already built. The walk's node_failed NodeRun for this node stays
-                # as-is (an honest per-node record); only the run-level status changes.
-                result = WorkflowResult(
-                    status="cancelled", final_output="run cancelled", runs=runs, run_id=run_id,
+            lock_cm.__enter__()
+        except TimeoutError as exc:
+            raise TimeoutError(
+                f"workflow {workflow.name!r}: another run holding work_key {work_key!r} "
+                f"did not finish within {_WORK_KEY_LOCK_TIMEOUT_S:.0f}s"
+            ) from exc
+        try:
+            # The effective root MUST match node_runner's headless rooting: a None calling
+            # session means node sessions are rooted under workflow:<run_id>:root, so the
+            # manifest records that same key or runs_for_session can't find the run.
+            effective_root = root_session_key or f"workflow:{run_id}:root"
+            started_at = time.time()
+            self._start_manifest(workflow, run_id, effective_root, started_at, task,
+                                 parent_run_id, work_dir=work_dir, work_key=work_key)
+
+            def _update() -> None:
+                self._update_manifest(workflow, run_id, runs)
+
+            # One tracker per run for launch-and-continue (detached) nodes. Every exit
+            # from the try below joins it before the manifest is finalized, so a run
+            # never reports terminal with a side-effect node silently still running.
+            detached_tracker = _DetachedTracker()
+            try:
+                result = self._walk(
+                    workflow, self._frame_task(workflow, task, output_format), run_id, runs,
+                    root_session_key=root_session_key,
+                    input_files=None if resume else input_files,
+                    update_manifest=_update,
+                    start_at=resume.start_at if resume else None,
+                    initial_visits=dict(resume.visits) if resume else None,
+                    initial_upstream=resume.upstream if resume else None,
+                    resume_outputs=dict(resume.recorded_outputs) if resume else None,
+                    work_dir=work_dir,
+                    own_work_dir=work_dir_override is None,
+                    detached_tracker=detached_tracker,
                 )
-            else:
-                # A named node failure: the walk already appended its node_failed NodeRun.
-                # Carry the node identity into the aborted result so the abort names it,
-                # and the node's exact upstream so the manifest can anchor a resume.
+            except WorkflowConfigError as exc:
+                # A config/wiring error is fatal and re-raised, but finalize the manifest first
+                # so it does not linger as a stale 'running' record — otherwise the crash sweep
+                # would later mislabel a deterministic config bug as 'crashed'.
+                runs.extend(detached_tracker.join())
+                self._finalize_manifest(
+                    workflow,
+                    WorkflowResult(status="aborted", final_output=f"workflow config error: {exc}",
+                                   runs=runs, run_id=run_id),
+                    effective_root, started_at, parent_run_id)
+                raise
+            except NodeExecutionError as exc:
+                if isinstance(exc.cause, (ScriptCancelled, WorkInterrupted)):
+                    # The in-flight node was cancelled mid-run (a script killed by any
+                    # cancel, or a work turn aborted by a hard cancel): end the run
+                    # 'cancelled' (not 'aborted'), carrying the partial trace the walk
+                    # already built. The walk's node_failed NodeRun for this node stays
+                    # as-is (an honest per-node record); only the run-level status changes.
+                    result = WorkflowResult(
+                        status="cancelled", final_output="run cancelled", runs=runs, run_id=run_id,
+                    )
+                else:
+                    # A named node failure: the walk already appended its node_failed NodeRun.
+                    # Carry the node identity into the aborted result so the abort names it,
+                    # and the node's exact upstream so the manifest can anchor a resume.
+                    result = WorkflowResult(
+                        status="aborted",
+                        final_output=f"workflow aborted: node {exc.node_id!r} (iteration {exc.iteration}) failed: {exc.cause}",
+                        runs=runs, run_id=run_id,
+                        failed_node=exc.node_id, failed_iteration=exc.iteration,
+                        resume_upstream=getattr(exc, "resume_upstream", None),
+                    )
+            except Exception as exc:  # noqa: BLE001 - a node failure becomes a typed aborted result
                 result = WorkflowResult(
-                    status="aborted",
-                    final_output=f"workflow aborted: node {exc.node_id!r} (iteration {exc.iteration}) failed: {exc.cause}",
+                    status="aborted", final_output=f"workflow error: {exc}",
                     runs=runs, run_id=run_id,
-                    failed_node=exc.node_id, failed_iteration=exc.iteration,
-                    resume_upstream=getattr(exc, "resume_upstream", None),
                 )
-        except Exception as exc:  # noqa: BLE001 - a node failure becomes a typed aborted result
-            result = WorkflowResult(
-                status="aborted", final_output=f"workflow error: {exc}",
-                runs=runs, run_id=run_id,
-            )
-        # Terminal join: pending detached nodes finish (their failures are records,
-        # never aborts) and land in the trace the manifest is finalized with —
-        # `result.runs` aliases this same list.
-        runs.extend(detached_tracker.join())
-        self._finalize_manifest(workflow, result, effective_root, started_at, parent_run_id)
-        return result
+            # Terminal join: pending detached nodes finish (their failures are records,
+            # never aborts) and land in the trace the manifest is finalized with —
+            # `result.runs` aliases this same list.
+            runs.extend(detached_tracker.join())
+            self._finalize_manifest(workflow, result, effective_root, started_at, parent_run_id)
+            return result
+        finally:
+            # Released on EVERY exit (completion, the WorkflowConfigError re-raise
+            # above, or any other exception) so a keyed run never leaks the lock —
+            # nullcontext's __exit__ is a safe no-op when no lock was acquired.
+            lock_cm.__exit__(None, None, None)
 
     def _preflight_inputs(self, workflow, input_files, run_id, *, resuming: bool):
         """Validate the run's inputs before any node (or manifest) exists. Returns a

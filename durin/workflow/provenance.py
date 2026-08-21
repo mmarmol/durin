@@ -14,7 +14,23 @@ import hashlib
 import json
 from pathlib import Path
 
+from durin.utils.file_lock import cross_process_lock
+
 FILENAME = ".provenance.json"
+
+# BELT: record()/drop() are the only writers of FILENAME, but each does its own
+# unlocked load-mutate-write — two co-writers (any future caller alongside the
+# engine, or record() racing its own drop() cleanup) could still lose an update.
+# Kept BESIDE the work dir (not inside it) so the ".lock" file cross_process_lock
+# derives never shows up as a run artifact — same reasoning as artifacts.py's
+# RUN_LOCK_NAME. Short timeout: this guards a quick in-memory-then-disk write,
+# never a slow operation — a long hold here means something is genuinely stuck.
+_LOCK_NAME = ".provenance-write"
+_LOCK_TIMEOUT_S = 10.0
+
+
+def _lock_target(work_dir: Path) -> Path:
+    return Path(work_dir).parent / _LOCK_NAME
 
 
 def _canonical(obj) -> str:
@@ -120,10 +136,11 @@ def load(work_dir: Path) -> dict[str, dict]:
 
 
 def record(work_dir: Path, filename: str, entry: dict) -> None:
-    data = load(work_dir)
-    data[filename] = entry
-    (Path(work_dir) / FILENAME).write_text(
-        json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    with cross_process_lock(_lock_target(work_dir), timeout=_LOCK_TIMEOUT_S):
+        data = load(work_dir)
+        data[filename] = entry
+        (Path(work_dir) / FILENAME).write_text(
+            json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
 def drop(work_dir: Path, filename: str) -> None:
@@ -132,12 +149,15 @@ def drop(work_dir: Path, filename: str) -> None:
     for the same filename must never be left standing over content that just
     changed, or a later run could treat old metadata as still describing what
     is on disk now. Never raises — a cleanup failure here must not compound the
-    record() failure it exists to contain."""
+    record() failure it exists to contain. Shares record()'s lock target: a
+    drop() racing a record() for the SAME work_dir (record() calls drop() on its
+    own failure path) must serialize too."""
     try:
-        data = load(work_dir)
-        if filename in data:
-            del data[filename]
-            (Path(work_dir) / FILENAME).write_text(
-                json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+        with cross_process_lock(_lock_target(work_dir), timeout=_LOCK_TIMEOUT_S):
+            data = load(work_dir)
+            if filename in data:
+                del data[filename]
+                (Path(work_dir) / FILENAME).write_text(
+                    json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
     except Exception:  # noqa: BLE001 - cleanup is best-effort, never fatal
         pass

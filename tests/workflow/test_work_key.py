@@ -3,8 +3,17 @@ picks a STABLE working folder (``.workflow/keys/<workflow>/<key>/work``) instead
 the fresh-per-run default, so a later run of the same workflow with the same key
 finds the provenance an earlier run stamped — the gate is unreachable without one of
 these entrances (work_key, loop re-entry/resume, or a subworkflow's work_dir_override),
-since a fresh run_id otherwise always starts with an empty ledger."""
+since a fresh run_id otherwise always starts with an empty ledger.
 
+Concurrency: two runs sharing a work_key share one folder — one shared
+provenance ledger and one output_file. Without serialization, two concurrent
+same-key runs race: both read "no provenance yet", both dispatch, both write
+output_file, last writer wins (a lost update) — reachable in production via a
+loop with concurrency:"parallel" double-firing on the same correlate key. See
+the concurrency section below for the fix under test (engine.run acquires a
+cross_process_lock on the keyed dir for the whole run when work_key is set)."""
+
+import threading
 from pathlib import Path
 
 import pytest
@@ -124,3 +133,118 @@ def test_manifest_work_key_survives_mid_walk_update(tmp_path):
     WorkflowEngine(runner, workspace=str(tmp_path), run_id_factory=lambda: "r1").run(
         wf, "t", work_key="ticket-1")
     assert seen["work_key"] == "ticket-1"
+
+
+# ---------------------------------------------------------------------------
+# Concurrency: same-key runs serialize (one shared folder, one writer). No
+# sleeps — every synchronization point below is a threading.Event or a
+# thread.join(); the ONLY thing that lets run B proceed is run A's engine.run()
+# actually releasing its cross_process_lock.
+# ---------------------------------------------------------------------------
+
+
+def _reuse_wf():
+    return parse_workflow({"name": "w", "start": "producer", "nodes": [
+        {"id": "producer", "kind": "work", "reuse": "if-unchanged",
+         "output_schema": {"type": "object"}, "output_file": "out.json", "next": None},
+    ]})
+
+
+def test_concurrent_same_work_key_runs_serialize_and_second_reuses(tmp_path):
+    """Run A's producer node blocks mid-dispatch (holding the work_key lock the
+    whole time, since the lock is acquired before the walk starts). Run B (same
+    work_key) is started only once A's node has confirmably begun — proving B's
+    engine.run() call is what blocks, not test timing. Releasing A is the ONLY
+    event that can let B's own dispatch proceed. If the lock did not serialize
+    them, B would race in and dispatch its own producer call (no provenance
+    stamped yet) while A is still blocked — this test's overlap_log would then
+    show B's entries nested inside A's, and B's result would be "ok", not
+    "reused"."""
+    node_a_started = threading.Event()
+    release_a = threading.Event()
+    overlap_log: list[tuple[str, str]] = []
+    log_lock = threading.Lock()
+
+    def runner(req):
+        with log_lock:
+            overlap_log.append(("start", req.run_id))
+        if req.run_id == "run-a":
+            node_a_started.set()
+            assert release_a.wait(timeout=10), "the test's own release signal was never sent"
+        with log_lock:
+            overlap_log.append(("end", req.run_id))
+        return NodeRunResponse(output='{"x": 1}', model="m1", provider="p1", params_hash="h1")
+
+    runner.reuse_identity = lambda node: {"model": "m1", "provider": "p1", "params_hash": "h1"}
+
+    results: dict[str, object] = {}
+
+    def run_a():
+        engine = WorkflowEngine(runner, workspace=str(tmp_path), run_id_factory=lambda: "run-a")
+        results["a"] = engine.run(_reuse_wf(), "t", work_key="shared-key")
+
+    def run_b():
+        engine = WorkflowEngine(runner, workspace=str(tmp_path), run_id_factory=lambda: "run-b")
+        results["b"] = engine.run(_reuse_wf(), "t", work_key="shared-key")
+
+    thread_a = threading.Thread(target=run_a)
+    thread_b = threading.Thread(target=run_b)
+    thread_a.start()
+    assert node_a_started.wait(timeout=10), "run A's node never started"
+    # A now holds the work_key lock (acquired before the walk) and is blocked
+    # inside its own node. Starting B here means B's engine.run() call is the
+    # only thing that can be waiting on the lock at this point.
+    thread_b.start()
+    # Confirm B is genuinely blocked (not merely "hasn't been scheduled yet")
+    # BEFORE releasing A — a generous bounded join, not a sleep used to dodge a
+    # race: without the lock, B's own dispatch never blocks on anything and
+    # would finish this fast-path run in well under a second regardless of
+    # machine speed, so is_alive() staying True here is the actual proof of
+    # serialization, not a timing guess.
+    thread_b.join(timeout=1.0)
+    assert thread_b.is_alive(), "run B finished before run A released the lock — it never blocked"
+
+    release_a.set()
+    thread_a.join(timeout=10)
+    thread_b.join(timeout=10)
+
+    assert not thread_a.is_alive() and not thread_b.is_alive(), "a run hung — lock never released?"
+    assert results["a"].status == "completed"
+    assert results["b"].status == "completed"
+    assert results["a"].output_dir == results["b"].output_dir
+
+    # The load-bearing assertion: B's producer was NEVER dispatched — it reused
+    # A's freshly-stamped provenance instead, which is only possible if B's
+    # engine.run() waited for A's to fully finish (stamp included) before it
+    # ever looked at the ledger.
+    assert overlap_log == [("start", "run-a"), ("end", "run-a")]
+    assert results["b"].runs[0].status == "reused"
+    assert results["b"].runs[0].origin_run_id == "run-a"
+
+
+def test_concurrent_different_work_keys_do_not_block_each_other(tmp_path):
+    """Sanity check on the other direction: the lock is keyed, not global — two
+    DIFFERENT work_keys must run fully concurrently, neither waiting on the
+    other."""
+    both_started = threading.Barrier(2, timeout=10)
+
+    def runner(req):
+        both_started.wait()  # deadlocks (BrokenBarrierError) if either is still blocked on a lock
+        return NodeRunResponse(output="x")
+
+    results: dict[str, object] = {}
+
+    def run(key, run_id):
+        engine = WorkflowEngine(runner, workspace=str(tmp_path), run_id_factory=lambda: run_id)
+        results[run_id] = engine.run(_wf(), "t", work_key=key)
+
+    t1 = threading.Thread(target=run, args=("key-1", "run-1"))
+    t2 = threading.Thread(target=run, args=("key-2", "run-2"))
+    t1.start()
+    t2.start()
+    t1.join(timeout=10)
+    t2.join(timeout=10)
+
+    assert not t1.is_alive() and not t2.is_alive()
+    assert results["run-1"].status == "completed"
+    assert results["run-2"].status == "completed"

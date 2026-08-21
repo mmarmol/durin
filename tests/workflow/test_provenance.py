@@ -48,6 +48,104 @@ def test_drop_never_raises_on_an_unwritable_path(tmp_path):
     # record() failure it exists to contain.
     drop(tmp_path / "does" / "not" / "exist", "a.json")
 
+
+def test_record_serializes_concurrent_load_mutate_write(tmp_path, monkeypatch):
+    """PR-K belt fix: record()'s load-mutate-write must be under a lock, so two
+    concurrent record() calls for DIFFERENT filenames on the SAME work_dir never
+    lose either entry (without a lock: both read "nothing yet", both write,
+    second write clobbers the first's addition).
+
+    Proven by pausing writer A INSIDE its write (holding the lock, since record's
+    whole load-mutate-write is now inside `with cross_process_lock(...)`), then
+    confirming writer B — attempting the identical critical section — is
+    genuinely blocked (a bounded join, not a sleep used to dodge a race: without
+    the lock B's own write never blocks on anything and finishes in well under a
+    second) until A's write completes."""
+    import threading
+    from pathlib import Path as _Path
+
+    from durin.workflow import provenance
+
+    first_writing = threading.Event()
+    release_first = threading.Event()
+    triggered = {"done": False}
+    real_write_text = _Path.write_text
+
+    def patched_write_text(self, *a, **kw):
+        if self.name == provenance.FILENAME and not triggered["done"]:
+            triggered["done"] = True
+            first_writing.set()
+            assert release_first.wait(timeout=10), "release signal never sent"
+        return real_write_text(self, *a, **kw)
+
+    monkeypatch.setattr(_Path, "write_text", patched_write_text)
+
+    def writer_a():
+        record(tmp_path, "a.json", {"run_id": "a"})
+
+    def writer_b():
+        record(tmp_path, "b.json", {"run_id": "b"})
+
+    ta = threading.Thread(target=writer_a)
+    tb = threading.Thread(target=writer_b)
+    ta.start()
+    assert first_writing.wait(timeout=10), "writer A never reached its write"
+    tb.start()
+    tb.join(timeout=1.0)
+    assert tb.is_alive(), "writer B finished before writer A's write completed — no lock"
+
+    release_first.set()
+    ta.join(timeout=10)
+    tb.join(timeout=10)
+    assert not ta.is_alive() and not tb.is_alive()
+
+    assert load(tmp_path).keys() == {"a.json", "b.json"}   # neither write was lost
+
+
+def test_drop_acquires_the_same_lock_as_record(tmp_path, monkeypatch):
+    """drop() shares record()'s lock target — a drop() racing a record() on the
+    same work_dir must serialize too (drop() runs from record()'s own failure
+    path, so both can be in flight for the same filename)."""
+    import threading
+
+    from durin.workflow import provenance
+
+    record(tmp_path, "a.json", {"run_id": "a"})
+    record(tmp_path, "b.json", {"run_id": "b"})
+
+    dropping = threading.Event()
+    release_drop = threading.Event()
+    real_load = provenance.load
+
+    def patched_load(work_dir):
+        if not dropping.is_set():
+            dropping.set()
+            assert release_drop.wait(timeout=10), "release signal never sent"
+        return real_load(work_dir)
+
+    monkeypatch.setattr(provenance, "load", patched_load)
+
+    def dropper():
+        drop(tmp_path, "a.json")
+
+    def recorder():
+        record(tmp_path, "c.json", {"run_id": "c"})
+
+    t_drop = threading.Thread(target=dropper)
+    t_rec = threading.Thread(target=recorder)
+    t_drop.start()
+    assert dropping.wait(timeout=10), "drop() never reached its locked section"
+    t_rec.start()
+    t_rec.join(timeout=1.0)
+    assert t_rec.is_alive(), "record() proceeded while drop() held the lock — no shared lock"
+
+    release_drop.set()
+    t_drop.join(timeout=10)
+    t_rec.join(timeout=10)
+    assert not t_drop.is_alive() and not t_rec.is_alive()
+
+    assert load(tmp_path).keys() == {"b.json", "c.json"}
+
 def test_params_hash_is_stable():
     gen1 = SimpleNamespace(max_tokens=1000, temperature=0.7, reasoning_effort=None, top_p=0.9, top_k=50)
     gen2 = SimpleNamespace(top_k=50, top_p=0.9, temperature=0.7, max_tokens=1000, reasoning_effort=None)
