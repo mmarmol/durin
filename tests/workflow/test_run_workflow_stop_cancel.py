@@ -67,7 +67,7 @@ async def test_stop_cancels_foreground_engine_cooperatively(tmp_path):
     engine_stopped = threading.Event()
 
     def fake_engine_run(self, workflow, task, *, root_session_key=None,
-                        input_files=None, output_format=None, resume=None):
+                        input_files=None, output_format=None, resume=None, work_key=None):
         # Stand-in for a long engine walk: poll the cooperative flag the way
         # the real engine's cancel_check does between nodes.
         started.set()
@@ -142,7 +142,7 @@ async def test_stop_on_a_foreground_run_cancels_hard(tmp_path):
     saw_hard = threading.Event()
 
     def fake_engine_run(self, workflow, task, *, root_session_key=None,
-                        input_files=None, output_format=None, resume=None):
+                        input_files=None, output_format=None, resume=None, work_key=None):
         started.set()
         deadline = time.time() + 5
         while time.time() < deadline and not _any_cancel_requested():
