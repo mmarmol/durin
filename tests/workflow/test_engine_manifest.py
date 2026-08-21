@@ -276,3 +276,69 @@ def test_legacy_manifest_without_producer_fields_round_trips(tmp_path):
 
     durations = run_log.typical_node_durations(tmp_path, "w")
     assert durations["a"] == 0.1
+
+
+# ---------------------------------------------------------------------------
+# on_run_end (PR-K round 2 / ITEM 2): a caller's cleanup hook, called
+# synchronously BEFORE the terminal manifest write — not "soon after" engine.run()
+# returns. A caller polling the manifest directly (tasks(action='stop'), a
+# status check) becomes observably terminal to that caller ONLY after this
+# hook has already run, by program order within this one thread — no race
+# window, unlike clearing after engine.run() returns (which requires this
+# thread to actually get scheduled again, with no real-time guarantee under
+# contention from other concurrently-running threads).
+# ---------------------------------------------------------------------------
+
+
+def test_on_run_end_runs_before_the_manifest_becomes_terminal(tmp_path):
+    order = []
+
+    def runner(req):
+        return NodeRunResponse(output=f"out {req.node.id}")
+
+    real_finalize = run_log.finalize_run
+
+    def spy_finalize_run(*a, **kw):
+        order.append("manifest_write")
+        return real_finalize(*a, **kw)
+
+    import durin.workflow.run_log as run_log_mod
+    run_log_mod.finalize_run = spy_finalize_run
+    try:
+        engine = WorkflowEngine(
+            runner, workspace=str(tmp_path), run_id_factory=lambda: "r1",
+            on_run_end=lambda run_id: order.append(("on_run_end", run_id)),
+        )
+        res = engine.run(_two_node_wf(), "go")
+    finally:
+        run_log_mod.finalize_run = real_finalize
+
+    assert res.status == "completed"
+    assert order == [("on_run_end", "r1"), "manifest_write"]
+
+
+def test_on_run_end_fires_even_without_a_workspace():
+    def runner(req):
+        return NodeRunResponse(output="x")
+
+    seen = []
+    engine = WorkflowEngine(runner, run_id_factory=lambda: "r1",
+                            on_run_end=lambda run_id: seen.append(run_id))
+    res = engine.run(_two_node_wf(), "go")
+    assert res.status == "completed"
+    assert seen == ["r1"]
+
+
+def test_on_run_end_exception_does_not_break_the_run(tmp_path):
+    def runner(req):
+        return NodeRunResponse(output="x")
+
+    def _boom(run_id):
+        raise RuntimeError("boom")
+
+    engine = WorkflowEngine(runner, workspace=str(tmp_path), run_id_factory=lambda: "r1",
+                            on_run_end=_boom)
+    res = engine.run(_two_node_wf(), "go")
+    assert res.status == "completed"
+    rec = run_log.read_manifest(tmp_path, "w", "r1")
+    assert rec["status"] == "completed"

@@ -321,9 +321,18 @@ class LoopsRuntime:
         wf_run_id = self._run_id()
         run_log.update_run(self._ws, spec.name, run_id, workflow_run_id=wf_run_id)
         emit_tool_event("loops.fired", {"loop": spec.name, "source": source, "skipped": False})
+        # A channel-triggered fire whose origin carries a thread (the plain
+        # per-channel thread_key, or a custom correlate key — see matcher.py)
+        # passes it straight through as work_key: the SAME key claims.register
+        # uses below to wake this run on the next inbound message, so a workflow's
+        # reuse gate can find what an earlier fire on this exact thread produced.
+        # None for any fire with no thread (cron, manual, a chat origin — see
+        # agent/tools/loops.py's set_context, which never sets one) — falls back
+        # to the engine's per-run default folder, unchanged from before this.
+        work_key = origin.get("thread") if origin else None
         try:
             result = await self._exec(spec.workflow, effective_task,
-                                      resume_run_id=None, run_id=wf_run_id)
+                                      resume_run_id=None, run_id=wf_run_id, work_key=work_key)
         except Exception as exc:  # noqa: BLE001
             return await self._finish(spec, run_id, "error", wf_run_id, detail=str(exc))
         return await self._interpret(spec, run_id, result)

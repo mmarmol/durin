@@ -270,7 +270,7 @@ async def test_run_response_carries_needs_input_node_and_output_files(tmp_path):
     fake_provider.get_default_model.return_value = "m"
 
     def fake_run(self, workflow, task, *, root_session_key=None, input_files=None,
-                 output_format=None, resume=None):
+                 output_format=None, resume=None, work_key=None):
         return WorkflowResult(
             status="needs_input", run_id="r1", final_output="what env?",
             needs_input_node="a", runs=[], output_files=["a.md"],
@@ -298,7 +298,7 @@ async def test_run_response_carries_producer_fields(tmp_path):
     fake_provider.get_default_model.return_value = "m"
 
     def fake_run(self, workflow, task, *, root_session_key=None, input_files=None,
-                 output_format=None, resume=None):
+                 output_format=None, resume=None, work_key=None):
         return WorkflowResult(
             status="completed", run_id="r1", final_output="ok",
             runs=[NodeRun(node_id="a", iteration=1, output="x", status="reused",
@@ -335,7 +335,7 @@ async def test_run_response_serializes_legacy_rows_with_producer_fields_absent(t
     )
 
     def fake_run(self, workflow, task, *, root_session_key=None, input_files=None,
-                 output_format=None, resume=None):
+                 output_format=None, resume=None, work_key=None):
         return WorkflowResult(status="completed", run_id="r1", final_output="ok", runs=[legacy_row])
 
     with patch("durin.providers.factory.make_provider", return_value=fake_provider), \
@@ -366,7 +366,7 @@ async def test_run_resumes_a_needs_input_manifest_with_the_original_task(tmp_pat
     captured = {}
 
     def fake_run(self, workflow, task, *, root_session_key=None, input_files=None,
-                 output_format=None, resume=None):
+                 output_format=None, resume=None, work_key=None):
         captured["task"] = task
         captured["resume"] = resume
         return WorkflowResult(status="completed", run_id="r1", final_output="ok", runs=[])
@@ -379,6 +379,46 @@ async def test_run_resumes_a_needs_input_manifest_with_the_original_task(tmp_pat
     assert captured["resume"].start_at == "a"
     assert captured["task"] == "original task"           # the manifest's original task, not the answers
     assert "prod env" in captured["resume"].upstream      # the answers are threaded as upstream input
+
+
+@pytest.mark.asyncio
+async def test_resume_carries_the_parked_runs_work_key_with_none_supplied(tmp_path):
+    """PR-K round 2 / ITEM 1, reusing the parking fixture above: a run parked
+    with a work_key must have that key reach the engine on resume even though
+    the resuming caller (this test, like loops' answer() and run_workflow's
+    resume_run_id path) supplies none — ResumeState.work_key, built from the
+    manifest build_resume_state already reads, carries it forward."""
+    svc, p = _runnable_svc(tmp_path), Principal.local()
+    await svc.save(WorkflowSaveCommand(name="wf", definition=_VALID), p)
+    # start_run (not finalize_run alone) so work_key is actually ON the
+    # manifest finalize_run preserves via prior.get("work_key") — mirrors how
+    # WorkflowEngine.run itself records it at park time.
+    run_log.start_run(tmp_path, "wf", "r1", root_session_key=None, started_at=1.0,
+                      work_key="ticket-1")
+    needs_input = WorkflowResult(
+        status="needs_input", run_id="r1", final_output="what env?", needs_input_node="a",
+        runs=[NodeRun(node_id="a", iteration=1, output="asking")],
+    )
+    run_log.finalize_run(
+        tmp_path, "wf", needs_input,
+        root_session_key=None, started_at=1.0, finished_at=2.0, task="original task",
+    )
+    fake_provider = MagicMock(spec=LLMProvider)
+    fake_provider.get_default_model.return_value = "m"
+    captured = {}
+
+    def fake_run(self, workflow, task, *, root_session_key=None, input_files=None,
+                 output_format=None, resume=None, work_key=None):
+        captured["resume"] = resume
+        captured["work_key_arg"] = work_key   # execute()'s own arg — None, not re-supplied
+        return WorkflowResult(status="completed", run_id="r1", final_output="ok", runs=[])
+
+    with patch("durin.providers.factory.make_provider", return_value=fake_provider), \
+         patch("durin.workflow.engine.WorkflowEngine.run", fake_run):
+        await svc.run(WorkflowRunCommand(name="wf", task="prod env", resume_run_id="r1"), p)
+
+    assert captured["work_key_arg"] is None           # svc.run() never passes work_key on resume
+    assert captured["resume"].work_key == "ticket-1"  # but the manifest's key rides ResumeState
 
 
 @pytest.mark.asyncio

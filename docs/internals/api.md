@@ -387,7 +387,10 @@ for status. There is no caller session to key the run to (unlike an agent
 turn), so `root_session_key` is derived from the calling principal as
 `api:{principal.subject}` — the same "key the run to whoever's asking" idea
 the `/v1` chat endpoint applies to `session_id`. 404s on an unknown workflow
-name before any task is spawned.
+name before any task is spawned. The body accepts an optional `work_key`,
+forwarded to `execute` and on to the engine unchanged — see `workflow.md`'s
+reuse-gate entrances for what it does and why a plain launch with no key
+never gets a stable folder to reuse against.
 
 **`POST /api/v1/channels/post`** (scope `channels:write`,
 `ChannelPostService`) posts a message through a running channel *and records it

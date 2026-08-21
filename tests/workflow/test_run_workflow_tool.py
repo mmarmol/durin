@@ -170,7 +170,7 @@ async def test_input_files_forwarded_to_engine(tmp_path):
     tool = _tool(tmp_path)
     captured = {}
 
-    def fake_run(self, workflow, task, *, root_session_key=None, input_files=None, output_format=None, resume=None):
+    def fake_run(self, workflow, task, *, root_session_key=None, input_files=None, output_format=None, resume=None, work_key=None):
         captured["input_files"] = input_files
         return WorkflowResult(status="completed", run_id="r", final_output="ok", runs=[])
 
@@ -180,6 +180,53 @@ async def test_input_files_forwarded_to_engine(tmp_path):
          patch("durin.workflow.engine.WorkflowEngine.run", fake_run):
         await tool.execute(name="doer", task="t", input_files=["/abs/a.txt", "/abs/b.txt"], background=False)
     assert captured["input_files"] == ["/abs/a.txt", "/abs/b.txt"]
+
+
+@pytest.mark.asyncio
+async def test_work_key_forwarded_to_engine_foreground(tmp_path):
+    _write_workflow(tmp_path, "doer", {
+        "name": "doer", "start": "a",
+        "nodes": [{"id": "a", "kind": "work", "prompt": "p", "next": None}],
+    })
+    tool = _tool(tmp_path)
+    captured = {}
+
+    def fake_run(self, workflow, task, *, root_session_key=None, input_files=None, output_format=None, resume=None, work_key=None):
+        captured["work_key"] = work_key
+        return WorkflowResult(status="completed", run_id="r", final_output="ok", runs=[])
+
+    fake_provider = MagicMock(spec=LLMProvider)
+    fake_provider.get_default_model.return_value = "m"
+    with patch("durin.providers.factory.make_provider", return_value=fake_provider), \
+         patch("durin.workflow.engine.WorkflowEngine.run", fake_run):
+        await tool.execute(name="doer", task="t", work_key="ticket-1", background=False)
+    assert captured["work_key"] == "ticket-1"
+
+
+@pytest.mark.asyncio
+async def test_no_work_key_forwards_none(tmp_path):
+    _write_workflow(tmp_path, "doer", {
+        "name": "doer", "start": "a",
+        "nodes": [{"id": "a", "kind": "work", "prompt": "p", "next": None}],
+    })
+    tool = _tool(tmp_path)
+    captured = {}
+
+    def fake_run(self, workflow, task, *, root_session_key=None, input_files=None, output_format=None, resume=None, work_key=None):
+        captured["work_key"] = work_key
+        return WorkflowResult(status="completed", run_id="r", final_output="ok", runs=[])
+
+    fake_provider = MagicMock(spec=LLMProvider)
+    fake_provider.get_default_model.return_value = "m"
+    with patch("durin.providers.factory.make_provider", return_value=fake_provider), \
+         patch("durin.workflow.engine.WorkflowEngine.run", fake_run):
+        await tool.execute(name="doer", task="t", background=False)
+    assert captured["work_key"] is None
+
+
+def test_work_key_in_tool_parameters_schema(tmp_path):
+    tool = _tool(tmp_path)
+    assert "work_key" in tool.parameters["properties"]
 
 
 @pytest.mark.asyncio
@@ -229,7 +276,7 @@ async def test_resume_builds_resume_state_from_the_manifest(tmp_path):
     captured = {}
 
     def fake_run(self, workflow, task, *, root_session_key=None, input_files=None,
-                 output_format=None, resume=None):
+                 output_format=None, resume=None, work_key=None):
         captured["task"] = task
         captured["resume"] = resume
         return WorkflowResult(status="completed", run_id=resume.run_id, final_output="ok", runs=[])

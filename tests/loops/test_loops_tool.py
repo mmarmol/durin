@@ -19,7 +19,7 @@ def _cron(tmp_path) -> CronService:
 
 
 def _runtime(tmp_path, results):
-    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None):
+    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None, work_key=None):
         return results.pop(0)
 
     async def judge(intent, assertions, evidence):
@@ -230,7 +230,7 @@ async def test_fire_returns_before_the_workflow_finishes(tmp_path):
 
     released = asyncio.Event()
 
-    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None):
+    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None, work_key=None):
         await released.wait()
         return _wr("completed", run_id=run_id)
 
@@ -284,7 +284,7 @@ async def test_runtime_loop_busy_from_a_batched_fire_is_logged_not_swallowed(tmp
     started = asyncio.Event()
     released = asyncio.Event()
 
-    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None):
+    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None, work_key=None):
         started.set()
         await released.wait()
         return _wr("completed", run_id=run_id)
@@ -340,7 +340,7 @@ async def test_a_chat_fire_that_loses_the_race_is_retracted_to_the_session(tmp_p
     released = asyncio.Event()
     outcomes = []
 
-    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None):
+    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None, work_key=None):
         started.set()
         await released.wait()
         return _wr("completed", run_id=run_id)

@@ -110,6 +110,16 @@ _PARAMETERS = {
                 "sessions and visit counts — nothing completed re-runs."
             ),
         },
+        "work_key": {
+            "type": "string",
+            "description": (
+                "Optional. Runs sharing a work_key share a working folder — artifacts "
+                "persist across runs and reuse-enabled nodes can skip identical work. "
+                "Pick a key that names the recurring subject (e.g. a ticket id) so "
+                "repeat calls for the SAME subject reuse its folder; omit it for a "
+                "one-off run, which gets today's fresh per-run folder instead."
+            ),
+        },
     },
     "required": ["name", "task"],
 }
@@ -345,7 +355,7 @@ class RunWorkflowTool(Tool, ContextAware):
         except Exception:  # noqa: BLE001 - best-effort; the run already persisted its manifest
             pass
 
-    async def execute(self, name: str, task: str, output_format: str = "", input_files: list[str] | None = None, background: bool = True, resume_run_id: str = "") -> str:  # type: ignore[override]
+    async def execute(self, name: str, task: str, output_format: str = "", input_files: list[str] | None = None, background: bool = True, resume_run_id: str = "", work_key: str = "") -> str:  # type: ignore[override]
         from durin.agent.runner import AgentRunner
         from durin.providers.factory import make_provider
         from durin.workflow.engine import WorkflowEngine
@@ -469,6 +479,11 @@ class RunWorkflowTool(Tool, ContextAware):
             prune_keep=app_config.workflow.keep_runs,
             parallel_llm_concurrency=app_config.workflow.parallel_llm_concurrency,
             parallel_script_concurrency=app_config.workflow.parallel_script_concurrency,
+            # Clears the registry entry BEFORE the terminal manifest write, not
+            # after engine.run() returns (see WorkflowEngine.__init__'s on_run_end
+            # docstring) — so `tasks` (which reads the manifest directly) can
+            # never observe a run as terminal while its cancel flag is still set.
+            on_run_end=_clear_cancel,
         )
         root_session_key = self._session_key.get()
         inject_target = {
@@ -486,6 +501,7 @@ class RunWorkflowTool(Tool, ContextAware):
                         input_files=input_files or None,
                         output_format=output_format or None,
                         resume=resume,
+                        work_key=work_key or None,
                     )
                     if progress_emit is not None:
                         progress_emit(_terminal_progress_payload(workflow, run_id, result))
@@ -515,6 +531,7 @@ class RunWorkflowTool(Tool, ContextAware):
             input_files=input_files or None,
             output_format=output_format or None,
             resume=resume,
+            work_key=work_key or None,
         ))
         # Strong reference: if /stop cancels the awaiting turn, the detached
         # engine task must not be garbage-collected while its thread runs out.

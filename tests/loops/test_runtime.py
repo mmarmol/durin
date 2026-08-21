@@ -29,7 +29,7 @@ def _mk_runtime(tmp_path, results, judge_verdict=None, asks=None,
                 is_shutting_down=None):
     calls = {"exec": []}
 
-    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None):
+    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None, work_key=None):
         calls["exec"].append((name, task, resume_run_id))
         return results.pop(0)
 
@@ -218,7 +218,7 @@ async def test_fire_reuses_already_bound_telemetry(tmp_path, _isolate_telemetry_
 async def test_workflow_exec_exception_sets_detail_not_ask(tmp_path):
     _save(tmp_path)
 
-    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None):
+    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None, work_key=None):
         raise RuntimeError("boom")
 
     async def judge(intent, assertions, evidence):
@@ -243,7 +243,7 @@ async def test_judge_exception_finalizes_as_error_not_stuck_running(tmp_path):
     _save(tmp_path)
     calls = {"exec": []}
 
-    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None):
+    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None, work_key=None):
         calls["exec"].append((name, task, resume_run_id))
         return _wr("completed")
 
@@ -410,7 +410,7 @@ async def test_answer_releases_claim_even_when_resumed_exec_raises(tmp_path):
     results = [_wr("needs_input", out="[TO:counterpart] confirm?", needs_input_node="gate")]
     calls = {"exec": []}
 
-    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None):
+    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None, work_key=None):
         calls["exec"].append((name, task, resume_run_id))
         if results:
             return results.pop(0)
@@ -534,7 +534,7 @@ async def test_fire_records_the_workflow_run_id_before_the_workflow_finishes(tmp
     _save(tmp_path)
     seen = {}
 
-    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None):
+    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None, work_key=None):
         # Mid-flight: read back what the loop already persisted.
         seen["mid_flight"] = rl.read_run(tmp_path, "l1", "lr0").get("workflow_run_id")
         seen["passed"] = run_id
@@ -550,6 +550,102 @@ async def test_fire_records_the_workflow_run_id_before_the_workflow_finishes(tmp
 
     assert seen["passed"] is not None
     assert seen["mid_flight"] == seen["passed"]
+
+
+# ---------------------------------------------------------------------------
+# work_key (PR-K): the fire path threads its origin's correlate/thread key
+# through to the engine automatically — the SAME key claims.register later
+# uses to wake this run (see _interpret) — so a workflow's reuse gate can find
+# what an EARLIER fire on the same thread already produced.
+# ---------------------------------------------------------------------------
+
+
+async def test_fire_from_a_correlate_match_passes_the_thread_as_work_key(tmp_path):
+    _save(tmp_path)
+    captured = {}
+
+    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None, work_key=None):
+        captured["work_key"] = work_key
+        return _wr("completed")
+
+    async def judge(intent, assertions, evidence):
+        return {"intent_met": True, "assertions": {}}
+
+    ids = iter([f"lr{i}" for i in range(10)])
+    rt = LoopsRuntime(tmp_path, workflow_exec=workflow_exec, judge=judge, keep_runs=20,
+                      check_timeout_s=5, run_id_factory=lambda: next(ids))
+    origin = {"channel": "email", "thread": "custom:l1:TCK-9001"}
+    await rt.fire("l1", source="channel", origin=origin)
+
+    assert captured["work_key"] == "custom:l1:TCK-9001"
+
+
+async def test_fire_with_no_origin_passes_no_work_key(tmp_path):
+    _save(tmp_path)
+    captured = {}
+
+    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None, work_key=None):
+        captured["work_key"] = work_key
+        return _wr("completed")
+
+    async def judge(intent, assertions, evidence):
+        return {"intent_met": True, "assertions": {}}
+
+    ids = iter([f"lr{i}" for i in range(10)])
+    rt = LoopsRuntime(tmp_path, workflow_exec=workflow_exec, judge=judge, keep_runs=20,
+                      check_timeout_s=5, run_id_factory=lambda: next(ids))
+    await rt.fire("l1", source="cron")   # no origin at all — a plain scheduled fire
+
+    assert captured["work_key"] is None
+
+
+async def test_fire_with_a_session_origin_but_no_thread_passes_no_work_key(tmp_path):
+    """A chat-triggered fire's origin carries session/channel/chat_id but never a
+    thread (see agent/tools/loops.py's set_context) — must not pass a bogus key."""
+    _save(tmp_path)
+    captured = {}
+
+    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None, work_key=None):
+        captured["work_key"] = work_key
+        return _wr("completed")
+
+    async def judge(intent, assertions, evidence):
+        return {"intent_met": True, "assertions": {}}
+
+    ids = iter([f"lr{i}" for i in range(10)])
+    rt = LoopsRuntime(tmp_path, workflow_exec=workflow_exec, judge=judge, keep_runs=20,
+                      check_timeout_s=5, run_id_factory=lambda: next(ids))
+    origin = {"kind": "session", "session_key": "sk1", "channel": "websocket", "chat_id": "c1"}
+    await rt.fire("l1", source="chat", origin=origin)
+
+    assert captured["work_key"] is None
+
+
+async def test_answer_resume_path_passes_no_work_key(tmp_path):
+    """The RESUME path (answer()) needs no work_key — it already shares the
+    prior run's working folder via resume_run_id, so it must not be threaded here."""
+    _save(tmp_path)
+    captured = {}
+
+    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None, work_key=None):
+        captured.setdefault("calls", []).append(work_key)
+        if resume_run_id is None:
+            return _wr("needs_input", out="[TO:counterpart] confirm?", needs_input_node="gate")
+        return _wr("completed")
+
+    async def judge(intent, assertions, evidence):
+        return {"intent_met": True, "assertions": {}}
+
+    ids = iter([f"lr{i}" for i in range(10)])
+    rt = LoopsRuntime(tmp_path, workflow_exec=workflow_exec, judge=judge, keep_runs=20,
+                      check_timeout_s=5, run_id_factory=lambda: next(ids))
+    origin = {"thread": "thread-abc"}
+    m = await rt.fire("l1", source="channel", origin=origin)
+    assert m["status"] == "waiting_info"
+    await rt.answer("l1", m["run_id"], "yes")
+
+    assert captured["calls"][0] == "thread-abc"   # the fire passed it
+    assert captured["calls"][1] is None           # the resumed answer() call did not
 
 
 @pytest.mark.asyncio
@@ -887,7 +983,7 @@ async def test_answering_a_run_re_stamps_its_owner_so_the_sweep_leaves_it_alone(
     seen = {}
     dead_owner = {"pid": 999999, "started": "long ago"}
 
-    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None):
+    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None, work_key=None):
         # Mid-resume: this is the window sweep_orphans would run in.
         seen["orphans"] = [r.get("run_id") for r in rl.find_orphans(tmp_path)]
         seen["owner"] = rl.read_run(tmp_path, "l1", "parked").get("owner")
@@ -928,7 +1024,7 @@ async def test_a_slow_relaunch_on_one_loop_does_not_delay_another_loops_outcome(
     pass, and must not wait on either relaunch's own completion."""
     release = asyncio.Event()
 
-    async def slow_workflow_exec(name, task, *, resume_run_id=None, run_id=None):
+    async def slow_workflow_exec(name, task, *, resume_run_id=None, run_id=None, work_key=None):
         await release.wait()
         return _wr_for("completed")
 
