@@ -39,7 +39,8 @@ def test_work_key_gives_a_stable_work_dir_across_separate_runs(tmp_path):
     second = engine.run(_wf(), "t", work_key="ticket-1")
     assert first.run_id != second.run_id           # two distinct runs...
     assert first.output_dir == second.output_dir    # ...sharing ONE working folder
-    assert first.output_dir == str(tmp_path / ".workflow" / "keys" / "w" / "ticket-1" / "work")
+    assert first.output_dir == str(
+        tmp_path / ".workflow" / "keys" / "w-50e721e4" / "ticket-1-737ce60f" / "work")
 
 
 def test_different_work_key_gives_different_work_dirs(tmp_path):
@@ -79,7 +80,7 @@ def test_work_key_sanitizes_workflow_name_and_key(tmp_path):
     engine = WorkflowEngine(_runner_named, workspace=str(tmp_path), run_id_factory=lambda: "r1")
     result = engine.run(wf, "t", work_key="Ticket #23124")
     assert result.output_dir == str(
-        tmp_path / ".workflow" / "keys" / "my_workflow_" / "ticket__23124" / "work"
+        tmp_path / ".workflow" / "keys" / "my_workflow_-c21cf4e9" / "ticket__23124-7e5e630c" / "work"
     )
 
 

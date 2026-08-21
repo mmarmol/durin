@@ -80,16 +80,22 @@ def test_prune_runs_without_protect_behaves_as_before(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# safe_key: sanitizing a caller-supplied workflow_name/work_key into a path segment
+# safe_key: sanitizing a caller-supplied workflow_name/work_key into a path
+# segment. The result is ALWAYS <sanitized-prefix, capped at 60>-<sha256(the
+# ORIGINAL, un-sanitized value)[:8]> — collision-proof by construction (two
+# distinct raw values that happen to sanitize to the same prefix, e.g.
+# "Ticket #1" and "ticket_#1", still get different hash suffixes and
+# therefore different directories) while staying human-readable.
 # ---------------------------------------------------------------------------
 
 
 def test_safe_key_lowercases_and_replaces_unsafe_chars():
-    assert safe_key("Ticket #23124") == "ticket__23124"    # space AND '#' each -> their own '_'
+    # space AND '#' each -> their own '_'; suffix = sha256("Ticket #23124")[:8]
+    assert safe_key("Ticket #23124") == "ticket__23124-7e5e630c"
 
 
 def test_safe_key_keeps_dots_underscores_hyphens():
-    assert safe_key("a.b_c-D") == "a.b_c-d"
+    assert safe_key("a.b_c-D") == "a.b_c-d-bd8597a0"
 
 
 def test_safe_key_rejects_path_separators():
@@ -108,11 +114,27 @@ def test_safe_key_rejects_dots_only():
 
 
 def test_safe_key_strips_leading_dots():
-    assert safe_key(".hidden") == "hidden"
+    assert safe_key(".hidden") == "hidden-16924190"
 
 
-def test_safe_key_caps_at_80_chars():
-    assert safe_key("x" * 200) == "x" * 80
+def test_safe_key_caps_prefix_at_60_chars_then_appends_the_hash_suffix():
+    result = safe_key("x" * 200)
+    assert result == "x" * 60 + "-aa20c23e"
+
+
+def test_safe_key_distinguishes_aliasing_keys_that_sanitize_identically():
+    """The exact case the collision-proofing exists for: two DIFFERENT raw
+    keys ("Ticket #1" has a space+hash; "ticket_#1" already has an
+    underscore) sanitize to the identical prefix "ticket__1" but must not
+    collapse onto the same directory."""
+    a = safe_key("Ticket #1")
+    b = safe_key("ticket_#1")
+    assert a.startswith("ticket__1-") and b.startswith("ticket__1-")
+    assert a != b
+
+
+def test_safe_key_is_deterministic():
+    assert safe_key("Ticket #23124") == safe_key("Ticket #23124")
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +144,8 @@ def test_safe_key_caps_at_80_chars():
 
 def test_keyed_work_dir_shape(tmp_path):
     d = keyed_work_dir(tmp_path, "My Workflow", "Ticket #23124")
-    assert d == tmp_path / ".workflow" / "keys" / "my_workflow" / "ticket__23124" / "work"
+    assert d == (tmp_path / ".workflow" / "keys" / "my_workflow-d33387cb"
+                / "ticket__23124-7e5e630c" / "work")
     assert d.is_dir()
 
 
@@ -152,4 +175,4 @@ def test_prune_runs_never_touches_the_keys_directory(tmp_path):
 
     survivors = {p.name for p in (tmp_path / ".workflow").iterdir() if p.is_dir()}
     assert "keys" in survivors
-    assert (tmp_path / ".workflow" / "keys" / "w" / "k" / "work").is_dir()
+    assert (tmp_path / ".workflow" / "keys" / "w-50e721e4" / "k-8254c329" / "work").is_dir()

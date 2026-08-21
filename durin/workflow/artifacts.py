@@ -10,6 +10,7 @@ the production entrance for the reuse gate (see ``WorkflowEngine.run``'s ``work_
 param), since a fresh per-run folder always starts with an empty provenance ledger."""
 from __future__ import annotations
 
+import hashlib
 import re
 import shutil
 from pathlib import Path
@@ -20,29 +21,41 @@ ARTIFACT_ROOT = ".workflow"
 # prune_runs can exclude it by identity rather than by re-typing the literal.
 KEYS_DIRNAME = "keys"
 
-_SAFE_KEY_MAX_CHARS = 80
+_SAFE_KEY_PREFIX_MAX_CHARS = 60
 _UNSAFE_KEY_CHARS = re.compile(r"[^a-z0-9._-]")
 
 
 def safe_key(value: str) -> str:
     """Sanitize an arbitrary caller-supplied string (a workflow name or a work_key)
-    into a single filesystem-safe path segment: lowercased, every character outside
-    ``[a-z0-9._-]`` replaced with ``_`` (so ``"Ticket #23124"`` -> ``"ticket__23124"``,
-    one ``_`` per replaced character — not collapsed), leading dots stripped (no
-    hidden-file-style names), and capped at 80 chars.
+    into a single filesystem-safe, COLLISION-PROOF path segment:
+    ``<sanitized-prefix, capped at 60 chars>-<sha256(the ORIGINAL value)[:8]>``.
+
+    The prefix is lowercased, every character outside ``[a-z0-9._-]`` replaced with
+    ``_`` (so ``"Ticket #23124"`` -> ``"ticket__23124"``, one ``_`` per replaced
+    character — not collapsed), leading dots stripped (no hidden-file-style names).
+    The hash is always appended, over the exact ORIGINAL (case-sensitive, pre-
+    sanitize) string — never omitted for an already-safe value — because the prefix
+    alone is lossy: two DIFFERENT raw values can sanitize to the identical prefix
+    (``"Ticket #1"`` and ``"ticket_#1"`` both become ``"ticket__1"``), and without the
+    hash they would silently share one directory — cross-key artifact bleed. The
+    8-hex-char suffix (32 bits) makes that collision astronomically unlikely while
+    keeping the segment short and mostly human-readable.
 
     A path separator (``/`` or ``\\``) in the input is rejected outright (``ValueError``)
     rather than merely neutralized: it is the one signal that the caller handed a PATH,
     not an opaque label, and this function's whole job is to guarantee its result is
     exactly one path segment — fail loud instead of silently defusing it into a
-    same-level sibling name. Also raised when the result sanitizes to nothing at all,
-    or to dots only (both are unusable as a directory name)."""
+    same-level sibling name. Also raised when the sanitized prefix is empty or dots
+    only (both are unusable as a directory name) — checked before the hash is ever
+    computed, so a bad key never produces a path that merely LOOKS valid."""
     if "/" in value or "\\" in value:
         raise ValueError(f"key {value!r} must not contain a path separator")
-    cleaned = _UNSAFE_KEY_CHARS.sub("_", value.lower()).lstrip(".")[:_SAFE_KEY_MAX_CHARS]
+    cleaned = _UNSAFE_KEY_CHARS.sub("_", value.lower()).lstrip(".")
     if not cleaned or not cleaned.strip("."):
         raise ValueError(f"key {value!r} sanitizes to an empty or invalid path segment")
-    return cleaned
+    prefix = cleaned[:_SAFE_KEY_PREFIX_MAX_CHARS]
+    suffix = hashlib.sha256(value.encode("utf-8")).hexdigest()[:8]
+    return f"{prefix}-{suffix}"
 
 
 def _root(base: str | Path) -> Path:
