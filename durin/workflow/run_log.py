@@ -133,6 +133,7 @@ def start_run(
     task: str | None = None,
     parent_run_id: str | None = None,
     work_dir: str | None = None,
+    work_key: str | None = None,
     typical_s: dict[str, float] | None = None,
     typical_total_s: float | None = None,
     spec_hash: str | None = None,
@@ -144,9 +145,12 @@ def start_run(
     exists (a resume rewrites the record), the prior value is preserved so the
     nested-run marker survives every rewrite. ``work_dir`` is the run's shared working
     folder, recorded from the start so an in-flight run's artifacts are findable.
-    ``spec_hash``/``durin_version`` identify the workflow definition and the engine
-    build that walked it (see ``durin/workflow/provenance.py``); both ``None`` when
-    the caller does not supply them (e.g. a caller with no workflow object)."""
+    ``work_key`` is the caller-supplied key (see ``WorkflowEngine.run``) that made
+    ``work_dir`` a STABLE folder instead of a fresh per-run one — ``None`` when the
+    run used the default per-run folder. ``spec_hash``/``durin_version`` identify the
+    workflow definition and the engine build that walked it (see
+    ``durin/workflow/provenance.py``); both ``None`` when the caller does not supply
+    them (e.g. a caller with no workflow object)."""
     if parent_run_id is None:
         prior = read_manifest(workspace, name, run_id) or {}
         parent_run_id = prior.get("parent_run_id")
@@ -163,6 +167,7 @@ def start_run(
         "task": task,
         "parent_run_id": parent_run_id,
         "work_dir": work_dir,
+        "work_key": work_key,
         # Which process is executing this run — the crash sweep flips any
         # "running" manifest whose owner is no longer alive.
         "owner": process_identity(),
@@ -203,6 +208,7 @@ def update_run(
         "task": base.get("task"),
         "parent_run_id": base.get("parent_run_id"),
         "work_dir": base.get("work_dir"),
+        "work_key": base.get("work_key"),
         "owner": base.get("owner"),
         "typical_s": base.get("typical_s") or {},
         "typical_total_s": base.get("typical_total_s"),
@@ -275,6 +281,7 @@ def finalize_run(
         "task": effective_task,
         "parent_run_id": effective_parent_run_id,
         "work_dir": prior.get("work_dir"),
+        "work_key": prior.get("work_key"),
         "typical_s": prior.get("typical_s") or {},
         "typical_total_s": prior.get("typical_total_s"),
         "spec_hash": prior.get("spec_hash"),

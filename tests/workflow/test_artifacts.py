@@ -1,5 +1,8 @@
 from pathlib import Path
-from durin.workflow.artifacts import artifact_dir, prune_runs
+
+import pytest
+
+from durin.workflow.artifacts import artifact_dir, keyed_work_dir, prune_runs, safe_key
 
 
 def test_artifact_dir_is_keyed_by_run_node_iteration(tmp_path):
@@ -74,3 +77,79 @@ def test_prune_runs_without_protect_behaves_as_before(tmp_path):
     prune_runs(tmp_path, keep=3)
     survivors = {p.name for p in (tmp_path / ".workflow").iterdir() if p.is_dir()}
     assert survivors == {"r3", "r2", "r1"}
+
+
+# ---------------------------------------------------------------------------
+# safe_key: sanitizing a caller-supplied workflow_name/work_key into a path segment
+# ---------------------------------------------------------------------------
+
+
+def test_safe_key_lowercases_and_replaces_unsafe_chars():
+    assert safe_key("Ticket #23124") == "ticket__23124"    # space AND '#' each -> their own '_'
+
+
+def test_safe_key_keeps_dots_underscores_hyphens():
+    assert safe_key("a.b_c-D") == "a.b_c-d"
+
+
+def test_safe_key_rejects_path_separators():
+    with pytest.raises(ValueError):
+        safe_key("../evil")
+
+
+def test_safe_key_rejects_empty_string():
+    with pytest.raises(ValueError):
+        safe_key("")
+
+
+def test_safe_key_rejects_dots_only():
+    with pytest.raises(ValueError):
+        safe_key("...")
+
+
+def test_safe_key_strips_leading_dots():
+    assert safe_key(".hidden") == "hidden"
+
+
+def test_safe_key_caps_at_80_chars():
+    assert safe_key("x" * 200) == "x" * 80
+
+
+# ---------------------------------------------------------------------------
+# keyed_work_dir: the stable per-(workflow, key) folder under .workflow/keys/
+# ---------------------------------------------------------------------------
+
+
+def test_keyed_work_dir_shape(tmp_path):
+    d = keyed_work_dir(tmp_path, "My Workflow", "Ticket #23124")
+    assert d == tmp_path / ".workflow" / "keys" / "my_workflow" / "ticket__23124" / "work"
+    assert d.is_dir()
+
+
+def test_keyed_work_dir_stable_across_calls(tmp_path):
+    a = keyed_work_dir(tmp_path, "w", "k")
+    b = keyed_work_dir(tmp_path, "w", "k")
+    assert a == b
+
+
+def test_keyed_work_dir_rejects_invalid_key(tmp_path):
+    with pytest.raises(ValueError):
+        keyed_work_dir(tmp_path, "w", "")
+
+
+# ---------------------------------------------------------------------------
+# prune_runs must never reap .workflow/keys/ — it holds stable, caller-keyed
+# working folders, not per-run folders, and has no run_id to protect.
+# ---------------------------------------------------------------------------
+
+
+def test_prune_runs_never_touches_the_keys_directory(tmp_path):
+    keyed_work_dir(tmp_path, "w", "k")
+    for i in range(4):
+        _aged(tmp_path, f"r{i}", age_s=(400 - i * 10))
+
+    prune_runs(tmp_path, keep=1)   # keep=1: every plain run dir but the newest is fair game
+
+    survivors = {p.name for p in (tmp_path / ".workflow").iterdir() if p.is_dir()}
+    assert "keys" in survivors
+    assert (tmp_path / ".workflow" / "keys" / "w" / "k" / "work").is_dir()

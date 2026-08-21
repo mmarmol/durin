@@ -309,6 +309,27 @@ async def test_show_legacy_manifest_no_crash_no_invented_fields(tool: WorkflowRu
 
 
 @pytest.mark.asyncio
+async def test_show_renders_work_key_when_present(tool: WorkflowRunsTool, workspace: Path):
+    _write_manifest(workspace, "diagnose-ticket", "ffffff666666", {
+        "schema": 2, "run_id": "ffffff666666", "workflow": "diagnose-ticket",
+        "status": "completed", "root_session_key": None,
+        "started_at": T0, "finished_at": T0 + 10, "ts": T0 + 10,
+        "task": "t", "parent_run_id": None, "work_dir": None, "work_key": "ticket-23124",
+        "typical_s": {}, "typical_total_s": None, "spec_hash": None, "durin_version": None,
+        "final_output": "done", "final_output_node": None, "needs_input_node": None,
+        "failed_node": None, "output_files": [], "missing_artifacts": [], "runs": [],
+    })
+    out = await tool.execute(action="show", run_id="ffffff666666")
+    assert "work key: ticket-23124" in out
+
+
+@pytest.mark.asyncio
+async def test_show_omits_work_key_line_when_absent(tool: WorkflowRunsTool):
+    out = await tool.execute(action="show", run_id=RUN_MODERN)
+    assert "work key:" not in out
+
+
+@pytest.mark.asyncio
 async def test_show_run_id_validation_rejects_path_traversal(tool: WorkflowRunsTool):
     out = await tool.execute(action="show", run_id="../evil")
     assert "Error" in out

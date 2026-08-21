@@ -29,7 +29,7 @@ from typing import Any, Callable
 from loguru import logger
 
 from durin.workflow import provenance, run_log, workspace_fork
-from durin.workflow.artifacts import artifact_dir, prune_runs
+from durin.workflow.artifacts import artifact_dir, keyed_work_dir, prune_runs
 from durin.workflow.result import NodeRun, WorkflowResult
 from durin.workflow.session_keys import node_session_key
 from durin.workflow.spec import (
@@ -355,6 +355,7 @@ class WorkflowEngine:
         resume: ResumeState | None = None,
         work_dir_override: str | None = None,
         parent_run_id: str | None = None,
+        work_key: str | None = None,
     ) -> WorkflowResult:
         """Run the workflow. A node-execution failure (provider/MCP/tool error) does not
         propagate — it ends the run as a typed ``aborted`` result carrying the partial
@@ -374,7 +375,18 @@ class WorkflowEngine:
         directory instead of creating its own folder under the workspace.
 
         ``parent_run_id`` marks this run as a nested subworkflow invocation, recording
-        the caller's run_id in the manifest — ``None`` for a top-level run."""
+        the caller's run_id in the manifest — ``None`` for a top-level run.
+
+        ``work_key``, when given (and no ``work_dir_override``), picks a STABLE working
+        folder shared by every run of this workflow with the same key — instead of the
+        fresh-per-run folder a top-level run otherwise always gets — so a run's
+        engine-written ``.provenance.json`` survives into the NEXT run with the same
+        key. This is the production entrance for the reuse gate (``reuse:
+        "if-unchanged"``): without a shared folder, a fresh run_id always starts with an
+        empty ledger and the gate never fires. Precedence: ``work_dir_override`` (a
+        subworkflow sharing its parent's folder) wins over ``work_key``, which wins over
+        the per-run default. Raises ``ValueError`` (via ``artifacts.safe_key``) if
+        ``work_key`` or the workflow's name sanitizes to nothing usable."""
         run_id = resume.run_id if resume is not None else self._run_id_factory()
 
         # Pre-flight input validation: check for missing/colliding files and declared-file contracts
@@ -394,8 +406,12 @@ class WorkflowEngine:
         # The run's shared working folder is fixed here (not in the walk) so the
         # manifest can record it from the very first write — an in-flight run's
         # artifacts are then findable by any observer, not only after completion.
+        # Precedence: work_dir_override (subworkflows) > work_key (a stable folder
+        # across separate runs) > the per-run default (a fresh folder every time).
         work_dir: str | None = work_dir_override or (
-            str(artifact_dir(self._workspace, run_id, "work", None))
+            (str(keyed_work_dir(self._workspace, workflow.name, work_key))
+             if work_key is not None
+             else str(artifact_dir(self._workspace, run_id, "work", None)))
             if self._workspace is not None else None
         )
         # The effective root MUST match node_runner's headless rooting: a None calling
@@ -404,7 +420,7 @@ class WorkflowEngine:
         effective_root = root_session_key or f"workflow:{run_id}:root"
         started_at = time.time()
         self._start_manifest(workflow, run_id, effective_root, started_at, task,
-                             parent_run_id, work_dir=work_dir)
+                             parent_run_id, work_dir=work_dir, work_key=work_key)
 
         def _update() -> None:
             self._update_manifest(workflow, run_id, runs)
@@ -537,7 +553,7 @@ class WorkflowEngine:
         return None
 
     def _start_manifest(self, workflow, run_id, root_session_key, started_at, task=None,
-                        parent_run_id=None, work_dir=None) -> None:
+                        parent_run_id=None, work_dir=None, work_key=None) -> None:
         if self._workspace is None:
             return
         typical = {}
@@ -560,6 +576,7 @@ class WorkflowEngine:
             run_log.start_run(self._workspace, workflow.name, run_id,
                               root_session_key=root_session_key, started_at=started_at,
                               task=task, parent_run_id=parent_run_id, work_dir=work_dir,
+                              work_key=work_key,
                               typical_s=typical, typical_total_s=typical_total,
                               spec_hash=provenance.node_hash(
                                   {nid: provenance.node_identity(n) for nid, n in workflow.nodes.items()}),

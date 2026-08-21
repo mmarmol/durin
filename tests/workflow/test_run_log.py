@@ -462,6 +462,54 @@ def test_list_runs_parent_run_id_absent_in_old_manifest_is_none(tmp_path):
     assert got[0]["parent_run_id"] is None
 
 
+# --- work_key (PR-K) ---------------------------------------------------------
+
+
+def test_start_run_records_work_key(tmp_path):
+    run_log.start_run(tmp_path, "wf", "r1", root_session_key=None, started_at=1.0,
+                      work_key="ticket-23124")
+    rec = run_log.read_manifest(tmp_path, "wf", "r1")
+    assert rec["work_key"] == "ticket-23124"
+
+
+def test_start_run_work_key_defaults_to_none(tmp_path):
+    run_log.start_run(tmp_path, "wf", "r1", root_session_key=None, started_at=1.0)
+    rec = run_log.read_manifest(tmp_path, "wf", "r1")
+    assert rec["work_key"] is None
+
+
+def test_update_run_preserves_work_key(tmp_path):
+    run_log.start_run(tmp_path, "wf", "r1", root_session_key=None, started_at=1.0,
+                      work_key="ticket-23124")
+    run_log.update_run(tmp_path, "wf", "r1", _result("r1", status="running"))
+    rec = run_log.read_manifest(tmp_path, "wf", "r1")
+    assert rec["work_key"] == "ticket-23124"
+
+
+def test_finalize_run_preserves_work_key_from_start(tmp_path):
+    # finalize_run does not take work_key explicitly here; it must fall back to
+    # what start_run recorded, mirroring how it already preserves `work_dir`.
+    run_log.start_run(tmp_path, "wf", "r1", root_session_key=None, started_at=1.0,
+                      work_key="ticket-23124")
+    run_log.finalize_run(tmp_path, "wf", _result("r1"), root_session_key=None,
+                         started_at=1.0, finished_at=2.0)
+    rec = run_log.read_manifest(tmp_path, "wf", "r1")
+    assert rec["work_key"] == "ticket-23124"
+
+
+def test_read_manifest_work_key_absent_in_old_manifest_is_none(tmp_path):
+    # Full manifests (read_manifest) round-trip a legacy record with no work_key
+    # field at all as None — the workflow_runs tool's `show` reads this directly.
+    import json
+    d = tmp_path / "workflows-runs" / "wf"
+    d.mkdir(parents=True)
+    (d / "legacy.json").write_text(json.dumps({
+        "run_id": "legacy", "workflow": "wf", "status": "completed", "ts": 1.0, "runs": [],
+    }), encoding="utf-8")
+    rec = run_log.read_manifest(tmp_path, "wf", "legacy")
+    assert rec.get("work_key") is None
+
+
 # --- dream-cursor degradation under pruning (F6) -----------------------------
 
 

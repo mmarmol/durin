@@ -78,6 +78,36 @@ def test_reuse_skips_when_producer_identical(tmp_path):
     assert manifest["runs"][0]["status"] == "reused"
 
 
+def test_reuse_skips_when_producer_identical_via_work_key(tmp_path):
+    """THE acceptance test for PR-K: the same probe as
+    test_reuse_skips_when_producer_identical, but through the PRODUCTION entrance
+    (work_key) instead of the test-only work_dir_override — two separate top-level
+    engine.run() calls, each minting its OWN fresh run_id, sharing a working folder
+    only because they pass the same work_key. Proves the reuse gate is reachable
+    without any test backdoor."""
+    run_ids = iter(["run-a", "run-b"])
+    runner = _Runner(output='{"x": 1}')
+    engine = WorkflowEngine(runner, workspace=str(tmp_path), run_id_factory=lambda: next(run_ids))
+    first = engine.run(_wf(_plan_node()), "t", work_key="ticket-23124")
+    assert first.status == "completed"
+    assert first.run_id == "run-a"
+    assert runner.calls == ["plan"]
+
+    second = engine.run(_wf(_plan_node(reuse="if-unchanged")), "t", work_key="ticket-23124")
+
+    assert second.run_id == "run-b"
+    assert second.output_dir == first.output_dir        # same shared folder, no override
+    assert second.status == "completed"
+    assert runner.calls == ["plan"]                      # never dispatched a 2nd time
+    assert second.runs[0].status == "reused"
+    assert second.runs[0].origin_run_id == first.run_id
+    assert second.final_output == '{"x": 1}'
+
+    manifest = run_log.read_manifest(tmp_path, "w", second.run_id)
+    assert manifest["work_key"] == "ticket-23124"
+    assert manifest["runs"][0]["status"] == "reused"
+
+
 def test_reuse_reruns_when_node_spec_changed(tmp_path):
     runner = _Runner(output='{"x": 1}')
     engine = WorkflowEngine(runner, workspace=str(tmp_path))

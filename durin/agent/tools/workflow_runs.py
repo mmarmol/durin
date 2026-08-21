@@ -426,6 +426,8 @@ class WorkflowRunsTool(Tool):
         work_dir = rec.get("work_dir") or str(
             Path(self._workspace) / ARTIFACT_ROOT / run_id / "work"
         )
+        if rec.get("work_key"):
+            lines.append(f"  work key: {rec['work_key']}")
         lines.append(f"  work dir: {work_dir}")
         lines.extend(self._artifact_lines(Path(work_dir)))
         return "\n".join(lines)
