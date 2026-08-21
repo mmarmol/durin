@@ -281,9 +281,10 @@ def test_output_files_and_artifacts_exclude_provenance_file(tmp_path):
 def test_engine_prune_keep_is_wired(tmp_path):
     import durin.workflow.engine as engine_mod
     seen = {}
-    def fake_prune(base, keep=20, protect=None):
+    def fake_prune(base, keep=20, protect=None, protect_keyed=None):
         seen["keep"] = keep
         seen["protect"] = protect
+        seen["protect_keyed"] = protect_keyed
     orig = engine_mod.prune_runs
     engine_mod.prune_runs = fake_prune
     try:
@@ -296,6 +297,7 @@ def test_engine_prune_keep_is_wired(tmp_path):
     # The engine must hand the pruner the live-run exemption set (empty here —
     # no other run is in flight — but always a set, never omitted).
     assert seen["protect"] == set()
+    assert seen["protect_keyed"] == set()
 
 
 # work_dir_override: nested/subworkflow runs must not prune or crash the parent's folder
@@ -482,6 +484,38 @@ def test_reused_nodes_output_file_counts_as_produced(tmp_path):
     assert second.runs[0].status == "reused"
     assert second.missing_artifacts == []
     assert "out.json" in second.output_files
+
+
+def test_output_file_write_failure_is_reported_missing_not_produced(tmp_path, monkeypatch):
+    """A declared artifact whose output_file write actually failed (a disk
+    problem, per the write site's own comment: "the declared-artifacts
+    warning surfaces the gap at completion") must still show up in
+    missing_artifacts — the produced-set's on-disk existence check must not
+    credit an "ok" node's output_file by status alone, or a write failure
+    would silently satisfy the contract instead of surfacing the gap."""
+    orig_write_text = Path.write_text
+
+    def _boom(self, *a, **kw):
+        if self.name == "out.json":
+            raise OSError("disk full")
+        return orig_write_text(self, *a, **kw)
+
+    def runner(req):
+        return NodeRunResponse(output='{"x": 1}', model="m")
+
+    wf = parse_workflow({
+        "name": "write-fail-contract", "start": "plan",
+        "output": {"file": True, "artifacts": [{"path": "out.json"}]},
+        "nodes": [{"id": "plan", "kind": "work",
+                   "output_schema": {"type": "object"}, "output_file": "out.json", "next": None}],
+    })
+    monkeypatch.setattr(Path, "write_text", _boom)
+    result = WorkflowEngine(runner, workspace=str(tmp_path)).run(wf, "t")
+
+    assert result.status == "completed"
+    assert result.runs[0].status == "ok"          # the node's own turn still succeeded
+    assert result.missing_artifacts == ["out.json"]
+    assert "out.json" not in result.output_files
 
 
 # ---------------------------------------------------------------------------

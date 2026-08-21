@@ -449,9 +449,15 @@ class WorkflowEngine:
         if self._workspace is not None and work_dir_override is None:
             # Live runs are exempt from pruning by status, not by age: a long node
             # freezes its folder's mtime, and enough concurrent runs starting during
-            # it would otherwise evict a mid-flight run's working folder.
+            # it would otherwise evict a mid-flight run's working folder. A parked
+            # (needs_input) keyed run additionally needs protect_keyed, not just
+            # protect: its cross-process lock releases the moment it parks (this
+            # very run() call's own lock_cm.__exit__ below fires on every return,
+            # needs_input included), so the keyed-dir age sweep cannot tell it
+            # apart from a truly dead key by lock state alone.
             prune_runs(self._workspace, keep=self._prune_keep,
-                       protect=run_log.live_run_ids(self._workspace))
+                       protect=run_log.live_run_ids(self._workspace),
+                       protect_keyed=run_log.live_work_keys(self._workspace))
         runs: list[NodeRun] = []
         # The run's shared working folder is fixed here (not in the walk) so the
         # manifest can record it from the very first write — an in-flight run's

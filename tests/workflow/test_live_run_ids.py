@@ -45,6 +45,35 @@ def test_a_corrupt_manifest_is_skipped_not_fatal(tmp_path):
     assert run_log.live_run_ids(tmp_path) == {"r-ok"}
 
 
+def test_live_work_keys_from_running_and_resumable_needs_input(tmp_path):
+    """(workflow, work_key) pairs for exactly the runs live_run_ids protects —
+    running, or a resumable needs_input — that also name a work_key. A
+    running-but-keyless run and a finished (even if keyed) run contribute
+    nothing."""
+    run_log.start_run(tmp_path, "wf-a", "r-running", root_session_key=None, started_at=1.0,
+                       work_key="ticket-1")
+    run_log.start_run(tmp_path, "wf-b", "r-paused", root_session_key=None, started_at=1.0,
+                       work_key="ticket-2")
+    _finalize(tmp_path, "wf-b", "r-paused", "needs_input", needs_input_node="ask")
+    run_log.start_run(tmp_path, "wf-c", "r-keyless", root_session_key=None, started_at=1.0)
+    run_log.start_run(tmp_path, "wf-a", "r-done", root_session_key=None, started_at=1.0,
+                       work_key="ticket-3")
+    _finalize(tmp_path, "wf-a", "r-done", "completed")
+
+    assert run_log.live_work_keys(tmp_path) == {("wf-a", "ticket-1"), ("wf-b", "ticket-2")}
+
+
+def test_live_work_keys_excludes_needs_input_without_reentry_node(tmp_path):
+    run_log.start_run(tmp_path, "wf", "r-ghost", root_session_key=None, started_at=1.0,
+                       work_key="ticket-9")
+    _finalize(tmp_path, "wf", "r-ghost", "needs_input", needs_input_node=None)
+    assert run_log.live_work_keys(tmp_path) == set()
+
+
+def test_live_work_keys_empty_when_no_manifests(tmp_path):
+    assert run_log.live_work_keys(tmp_path) == set()
+
+
 def test_engine_pruning_spares_a_live_foreign_run(tmp_path):
     """The wiring pin: a run started by another engine (its manifest says
     running) keeps its working folder even when this engine's prune pass

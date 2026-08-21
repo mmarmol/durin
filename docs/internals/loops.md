@@ -433,8 +433,9 @@ captured (a ticket number, say), so its keyed folder has a natural scope; a
 plain per-channel `thread_key` has none — keying every thread would grow one
 permanent working folder per thread, unbounded by anything about the
 conversation itself (bounded only by `artifacts.prune_runs`'s own idle-age
-retention — `KEYED_WORK_MAX_AGE_DAYS`, 30 days — not by the thread's own
-lifecycle). This is what
+retention — `KEYED_WORK_MAX_AGE_DAYS`, 30 days, swept at most once a day and
+never while a parked `needs_input` run still claims the key — not by the
+thread's own lifecycle). This is what
 makes a workflow's `reuse: "if-unchanged"` gate reachable across SEPARATE
 fires of a `correlate`-scoped loop: repeat messages correlating to the same
 key share one working folder, so a node that already produced its

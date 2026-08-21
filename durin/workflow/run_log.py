@@ -601,6 +601,39 @@ def live_run_ids(workspace: str | Path) -> set[str]:
     return out
 
 
+def live_work_keys(workspace: str | Path) -> set[tuple[str, str]]:
+    """(workflow, work_key) pairs for every run ``live_run_ids`` would also
+    protect — running, or a resumable ``needs_input`` — that names a work_key.
+
+    A parked (``needs_input``) run releases its keyed folder's cross-process
+    lock the instant it parks (``WorkflowEngine.run``'s lock is scoped to one
+    call, not to the run's whole paused lifetime), so ``artifacts.
+    _prune_keyed_dirs``'s age sweep cannot rely on "is the lock held right
+    now" alone to spare a parked run — it must also consult which
+    (workflow, work_key) pairs a still-live manifest claims, the same "live"
+    definition ``live_run_ids`` uses to protect per-run folders. A run with
+    no work_key contributes nothing (there is no keyed folder to protect).
+    Unreadable manifests are skipped, same as ``live_run_ids``."""
+    out: set[tuple[str, str]] = set()
+    root = runs_root(workspace)
+    if not root.is_dir():
+        return out
+    for f in root.glob("*/*.json"):
+        if f.name == ".cursor.json":
+            continue
+        try:
+            rec = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        status = rec.get("status")
+        if status == "running" or (status == "needs_input" and rec.get("needs_input_node")):
+            workflow = rec.get("workflow")
+            work_key = rec.get("work_key")
+            if workflow and work_key:
+                out.add((workflow, work_key))
+    return out
+
+
 def prune_manifests(workspace: str | Path, name: str, keep: int = 20) -> None:
     """Delete the oldest terminal run manifests for *name* beyond the *keep* most
     recent, keyed by ``ts``. Best-effort: any OSError is swallowed, so a failure here
