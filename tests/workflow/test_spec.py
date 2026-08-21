@@ -660,6 +660,58 @@ def test_persistent_session_rejected_on_parallel_units():
 
 
 # ---------------------------------------------------------------------------
+# reuse combinations that would otherwise silently never fire, or degrade
+# ---------------------------------------------------------------------------
+
+def _reusable_node(node_id, **extra):
+    return {"id": node_id, "kind": "work", "output_schema": {"type": "object"},
+            "output_file": "out.json", "reuse": "if-unchanged", **extra}
+
+
+def test_reuse_rejected_on_detached_node():
+    """A detached node is launched on the engine's side-effect path, which never
+    checks the reuse gate — the setting would parse but silently never fire."""
+    with pytest.raises(WorkflowError, match="detached node cannot use reuse=.if-unchanged."):
+        parse_workflow({"name": "w", "start": "a",
+                        "nodes": [_reusable_node("a", detached=True, next=None)]})
+
+
+def test_reuse_rejected_on_parallel_branch():
+    """A static parallel branch is dispatched straight through the node runner
+    (durin/workflow/engine.py _run_one_branch), bypassing the reuse gate entirely."""
+    with pytest.raises(WorkflowError, match="parallel unit.*cannot use reuse=.if-unchanged."):
+        parse_workflow({
+            "name": "w", "start": "p",
+            "nodes": [
+                {"id": "p", "kind": "parallel", "branches": ["b1"], "next": None},
+                _reusable_node("b1"),
+            ],
+        })
+
+
+def test_reuse_rejected_on_parallel_worker():
+    """A dynamic fan-out worker is dispatched per item straight through the node
+    runner (durin/workflow/engine.py _run_dynamic_parallel), bypassing reuse too."""
+    with pytest.raises(WorkflowError, match="parallel unit.*cannot use reuse=.if-unchanged."):
+        parse_workflow({"name": "w", "start": "orch", "nodes": [
+            {"id": "orch", "kind": "work", "next": "fan"},
+            {"id": "fan", "kind": "parallel", "worker": "dev", "list_from": "orch", "next": "done"},
+            _reusable_node("dev"),
+            {"id": "done", "kind": "work"},
+        ]})
+
+
+def test_reuse_rejected_with_shared_context():
+    """A reused pass skips the node's own turn entirely, so it contributes no
+    messages to the shared buffer this pass — context='shared' would silently
+    degrade the downstream node's input instead of erroring."""
+    with pytest.raises(WorkflowError,
+                       match="reuse cannot be combined with context=.shared."):
+        parse_workflow({"name": "w", "start": "a",
+                        "nodes": [_reusable_node("a", context="shared", next=None)]})
+
+
+# ---------------------------------------------------------------------------
 # output.artifacts — the declared file contract (B2)
 # ---------------------------------------------------------------------------
 

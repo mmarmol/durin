@@ -417,6 +417,22 @@ def _build_node(raw: dict[str, Any]) -> Node:
                 f"node {node_id!r}: a routing node ('on_pass'/'on_fail' or 'cases') cannot use "
                 f"context='shared'"
             )
+        # A detached launch runs on the engine's side-effect path (_launch_detached),
+        # which never checks the reuse gate — the setting would parse but silently
+        # never fire.
+        if reuse is not None and detached:
+            raise WorkflowError(
+                f"node {node_id!r}: a detached node cannot use reuse='if-unchanged' "
+                "(a detached launch never checks the reuse gate)"
+            )
+        # A reused pass skips the node's own turn entirely, so it contributes no
+        # messages to the shared buffer this pass — context='shared' would silently
+        # degrade the downstream node's input instead of erroring.
+        if reuse is not None and context == "shared":
+            raise WorkflowError(
+                f"node {node_id!r}: reuse cannot be combined with context='shared' "
+                "(a reused pass contributes no shared-context messages)"
+            )
         mode_default = "explore" if routes else "build"
         mode = raw.get("mode", mode_default)
         if not isinstance(mode, str) or not mode:
@@ -767,6 +783,20 @@ def parse_workflow(data: dict[str, Any]) -> Workflow:
                     raise WorkflowError(
                         f"node {node.id!r}: parallel unit {ref!r} cannot use session='persistent' "
                         f"(concurrent units have per-unit sessions)"
+                    )
+
+    # A parallel branch/worker is dispatched straight through the node runner
+    # (_run_one_branch / _run_dynamic_parallel), bypassing the engine's reuse gate
+    # entirely — branch membership is only known here, at the ParallelNode side.
+    for node in nodes.values():
+        if isinstance(node, ParallelNode):
+            for ref in (*node.branches, node.worker):
+                target = nodes.get(ref) if ref else None
+                if isinstance(target, WorkNode) and target.reuse is not None:
+                    raise WorkflowError(
+                        f"node {node.id!r}: parallel unit {ref!r} cannot use "
+                        "reuse='if-unchanged' (a parallel branch/worker's reuse gate "
+                        "is never checked)"
                     )
 
     # Anti-Goodhart guard: a routing agent node must not be structurally identical
