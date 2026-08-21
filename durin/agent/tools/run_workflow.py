@@ -358,6 +358,7 @@ class RunWorkflowTool(Tool, ContextAware):
     async def execute(self, name: str, task: str, output_format: str = "", input_files: list[str] | None = None, background: bool = True, resume_run_id: str = "", work_key: str = "") -> str:  # type: ignore[override]
         from durin.agent.runner import AgentRunner
         from durin.providers.factory import make_provider
+        from durin.workflow.artifacts import safe_key
         from durin.workflow.engine import WorkflowEngine
         from durin.workflow.judge import AgentJudgeRunner
         from durin.workflow.loader import WorkflowNotFound, load_workflow, workflows_dir
@@ -369,6 +370,19 @@ class RunWorkflowTool(Tool, ContextAware):
             workflow = load_workflow(self._workspace, name)
         except WorkflowNotFound as exc:
             return f"Error: {exc}"
+
+        # Validate before any side effect below (the version-store snapshot,
+        # the background task) — an unsafe work_key must fail here, in the
+        # turn that called this tool, not silently inside a background task
+        # nobody is watching. Empty means "no key" (matches `work_key or None`
+        # below) and is never validated — indistinguishable from an omitted
+        # argument on this plain-str tool parameter. safe_key is the single
+        # source of truth for what's valid; this only calls it early.
+        if work_key:
+            try:
+                safe_key(work_key)
+            except ValueError as exc:
+                return f"Error: invalid work_key: {exc}"
 
         resume = None
         if resume_run_id:

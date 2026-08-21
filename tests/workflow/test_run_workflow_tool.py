@@ -230,6 +230,26 @@ def test_work_key_in_tool_parameters_schema(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_unsafe_work_key_returns_an_error_without_running(tmp_path):
+    """An unsafe work_key must return a clear error string without ever
+    dispatching the engine or touching the version store — the tool's
+    equivalent of the HTTP launch route's 422, since a tool call has no
+    status code to reject with."""
+    _write_workflow(tmp_path, "doer", {
+        "name": "doer", "start": "a",
+        "nodes": [{"id": "a", "kind": "work", "prompt": "p", "next": None}],
+    })
+    tool = _tool(tmp_path)
+    with patch("durin.providers.factory.make_provider") as fake_make_provider, \
+         patch("durin.workflow.engine.WorkflowEngine.run") as fake_run:
+        out = await tool.execute(name="doer", task="t", work_key="../evil", background=False)
+    assert "work_key" in out.lower()
+    assert out.lower().startswith("error")
+    fake_make_provider.assert_not_called()
+    fake_run.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_resume_rejects_a_run_that_did_not_end_needs_input(tmp_path):
     _write_workflow(tmp_path, "doer", {
         "name": "doer", "start": "a",

@@ -13,7 +13,7 @@ import pytest
 
 from durin.config.schema import ToolsConfig, WorkflowConfig
 from durin.service.principal import Principal, Scope
-from durin.service.types import ForbiddenError, NotFoundError
+from durin.service.types import ForbiddenError, NotFoundError, ValidationFailedError
 from durin.service.workflows import WorkflowLaunchCommand, WorkflowsService
 from durin.session.manager import SessionManager
 from durin.workflow import run_log
@@ -68,6 +68,26 @@ async def test_launch_without_scope_raises_forbidden(tmp_path):
     principal = Principal.remote("tok1", frozenset({Scope.WORKFLOWS_READ.value}))
     with pytest.raises(ForbiddenError):
         await svc.launch(WorkflowLaunchCommand(name="w1", task="x"), principal)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_key", ["../..", "a/b"])
+async def test_launch_rejects_an_unsafe_work_key_before_detaching(tmp_path, bad_key):
+    """An unsafe work_key must reject with a 422-mapped ValidationFailedError
+    BEFORE the background task is ever created — otherwise launch() has
+    already returned 202 for a run that then fails invisibly inside the
+    detached task (the judge's exact repro)."""
+    _write_script_workflow(tmp_path, "w1")
+    svc = _svc(tmp_path)
+    principal = Principal.remote("tok1", frozenset({Scope.WORKFLOWS_WRITE.value}))
+
+    with pytest.raises(ValidationFailedError) as exc_info:
+        await svc.launch(WorkflowLaunchCommand(name="w1", task="x", work_key=bad_key), principal)
+
+    assert "work_key" in str(exc_info.value)
+    # No side effects: nothing was ever detached, so no manifest exists at all.
+    assert not (tmp_path / "workflows-runs").exists()
+    assert not svc._bg_tasks
 
 
 @pytest.mark.asyncio

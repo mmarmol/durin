@@ -258,7 +258,14 @@ refines its work in response to loop feedback.
   the same subject already did. Runs sharing a `work_key` also take turns:
   if one is still going when another with the same key starts, the second
   waits for the first to finish (and then, usually, gets to reuse what it
-  just produced) instead of both writing into the same folder at once.
+  just produced) instead of both writing into the same folder at once. A
+  keyed folder is not pruned along with ordinary run folders — it expires on
+  its own after 30 days of no activity instead, so a recurring subject you
+  keep coming back to keeps its folder, but an abandoned one does not linger
+  forever. A loop's own automatic `work_key` (from its channel trigger) is
+  narrower still: it only applies when the trigger's `correlate` pattern
+  captured this key from the message — a plain thread reply never becomes a
+  `work_key` on its own.
 - **Declared input/output.** A workflow can declare an `input` (optional
   `text` and/or `file`, plus a free-text `description`) and `output`
   descriptor. Declaring `file: true` input means the workflow expects

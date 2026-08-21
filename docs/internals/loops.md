@@ -421,29 +421,40 @@ replies that land in unrelated threads (different email threads, different
 Slack channels, a webhook payload with no channel thread at all), instead of
 being confined to whatever thread the first message happened to arrive on.
 
-**The same key is also the workflow's `work_key`.** When a channel-triggered
-fire dispatches (`LoopsRuntime._run`, `durin/loops/runtime.py`), the origin's
-thread value — the custom `correlate` key above when the trigger declares
-one, the plain `thread_key` otherwise — is passed straight through as
-`WorkflowEngine.run`'s `work_key`, unchanged from whatever `claims.register`
-would use to wake this run later (§4j uses the identical value). This is what
+**A correlate key is also the workflow's `work_key` — a plain thread is
+never one.** When a channel-triggered fire dispatches (`LoopsRuntime._run`,
+`durin/loops/runtime.py`), the origin's thread value is passed through as
+`WorkflowEngine.run`'s `work_key` ONLY when it is the custom `correlate` key
+above (`custom:<loop>:<capture>`, matching THIS loop's own name) — never the
+plain `thread_key`, even though `claims.register` uses that same origin
+thread value, correlate or not, to wake this run later (§4j). This is
+deliberate: a correlate key is bounded to a real entity the trigger's regex
+captured (a ticket number, say), so its keyed folder has a natural scope; a
+plain per-channel `thread_key` has none — keying every thread would grow one
+permanent working folder per thread, unbounded by anything about the
+conversation itself (bounded only by `artifacts.prune_runs`'s own idle-age
+retention — `KEYED_WORK_MAX_AGE_DAYS`, 30 days, swept at most once a day and
+never while a parked `needs_input` run still claims the key — not by the
+thread's own lifecycle). This is what
 makes a workflow's `reuse: "if-unchanged"` gate reachable across SEPARATE
-fires: repeat messages correlating to the same key share one working folder,
-so a node that already produced its `output_file` on an earlier fire is
-reused instead of redone. A cron or manual fire, or a chat-triggered one
-(no thread in its origin — `agent/tools/loops.py`'s `set_context` never sets
-one), passes no `work_key` and gets today's fresh per-run folder every time.
-Two fires sharing a `work_key` **serialize** (`WorkflowEngine.run` holds a
+fires of a `correlate`-scoped loop: repeat messages correlating to the same
+key share one working folder, so a node that already produced its
+`output_file` on an earlier fire is reused instead of redone. A cron or
+manual fire, a chat-triggered one (no thread in its origin —
+`agent/tools/loops.py`'s `set_context` never sets one), or a channel fire
+that matched via the plain `thread_key` rather than a `correlate` capture,
+all pass no `work_key` and get today's fresh per-run folder every time. Two
+fires sharing a `work_key` still **serialize** (`WorkflowEngine.run` holds a
 cross-process lock on the keyed folder for the whole run) — a
 `concurrency: "parallel"` loop firing twice on the same correlation runs the
 second fire only after the first finishes, never concurrently, so the shared
 folder never sees two writers at once. Declaring `correlate` therefore has a
-second consequence beyond claim routing: it decides the reuse gate's
-GRANULARITY — with no `correlate`, stability is per-THREAD (a customer
-replying from a new email thread about "the same ticket" gets a fresh
-folder); with a `correlate` pattern anchored to a stable identifier (a ticket
-number), stability is genuinely per-TICKET regardless of which thread carries
-the reply.
+second consequence beyond claim routing: it is the ONLY way a loop's fires
+get keyed-folder stability (and therefore the reuse gate) at all — with no
+`correlate`, every fire gets a fresh folder regardless of which thread it
+lands on; with a `correlate` pattern anchored to a stable identifier (a
+ticket number), stability is genuinely per-TICKET regardless of which thread
+carries the reply.
 
 Each message is resolved through a fixed decision order:
 

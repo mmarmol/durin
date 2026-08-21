@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from durin.config.schema import ToolsConfig, WorkflowConfig
+from durin.service.types import ValidationFailedError
 from durin.service.workflows import WorkflowsService
 from durin.session.manager import SessionManager
 from durin.workflow import run_log
@@ -56,3 +57,23 @@ async def test_execute_without_work_key_leaves_it_none(tmp_path):
 
     manifest = run_log.read_manifest(tmp_path, "w1", result.run_id)
     assert manifest["work_key"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_key", ["../..", "a/b", ""])
+async def test_execute_rejects_an_unsafe_work_key_before_the_engine_starts(tmp_path, bad_key):
+    """Unlike the HTTP command's plain str field (where empty is
+    indistinguishable from omitted), this parameter already has a clean
+    "no key" sentinel — None — so an explicitly empty string here is a real
+    key attempt, not an omission, matching WorkflowEngine.run's own
+    is-not-None check for the same value (see test_work_key.py's
+    test_work_key_rejects_empty_string at the engine layer). All three must
+    raise BEFORE the engine ever runs (asyncio.to_thread is never reached),
+    never as a bare ValueError surfacing from inside it."""
+    _write_script_workflow(tmp_path, "w1")
+    with patch("durin.providers.factory.make_provider") as fake_make_provider:
+        with pytest.raises(ValidationFailedError) as exc_info:
+            await _svc(tmp_path).execute("w1", "task", work_key=bad_key)
+    assert "work_key" in str(exc_info.value)
+    fake_make_provider.assert_not_called()   # rejected before any provider/engine setup
+    assert run_log.list_runs(tmp_path, "w1") == []

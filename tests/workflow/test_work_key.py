@@ -375,3 +375,93 @@ def test_resume_of_a_non_keyed_run_is_unchanged(tmp_path):
     assert second.run_id == first.run_id == "park-run"  # resume forces the SAME run_id
     assert second.output_dir == str(tmp_path / ".workflow" / "park-run" / "work")
     assert (tmp_path / ".workflow" / "keys").exists() is False
+
+
+# ---------------------------------------------------------------------------
+# Retention vs. a PARKED keyed run: WorkflowEngine.run's cross-process lock
+# releases on EVERY exit of a single run() call — needs_input included, not
+# only completion — so a parked run's keyed dir looks "unlocked" the instant
+# it parks, same as a truly dead key. The age sweep must consult the LIVE
+# manifest (run_log.live_work_keys), not lock state alone, or a keyed run
+# left parked past KEYED_WORK_MAX_AGE_DAYS would have its folder reaped out
+# from under it, and the eventual answer() would resume into a silently
+# recreated EMPTY folder — no prior provenance, no prior artifacts.
+# ---------------------------------------------------------------------------
+
+
+def _age_every_path_under(root: Path, stamp: float) -> None:
+    import os
+
+    for p in list(root.rglob("*")) + [root]:
+        os.utime(p, (stamp, stamp))
+
+
+def _force_keyed_sweep_due(tmp_path) -> None:
+    """An earlier engine.run() call in the same test may have already run
+    (and stamped) a harmless keyed sweep moments ago — push keys/.last-sweep
+    far enough into the past that THIS test's own prune_runs call is not
+    itself skipped by the debounce."""
+    import os
+    import time
+
+    from durin.workflow.artifacts import KEYED_SWEEP_MIN_INTERVAL_S
+
+    marker = Path(tmp_path) / ".workflow" / "keys" / ".last-sweep"
+    if marker.exists():
+        old = time.time() - (KEYED_SWEEP_MIN_INTERVAL_S + 1)
+        os.utime(marker, (old, old))
+
+
+def test_prune_runs_spares_a_parked_keyed_runs_folder_past_the_age_bound(tmp_path):
+    """A keyed run parked in needs_input, its folder artificially aged past
+    30 days, must survive the sweep — the lock alone already released."""
+    import time
+
+    from durin.workflow.artifacts import KEYED_WORK_MAX_AGE_DAYS, prune_runs
+
+    runner = _parking_runner()
+    engine = WorkflowEngine(runner, workspace=str(tmp_path), run_id_factory=lambda: "park-run")
+    parked = engine.run(_parking_wf(), "go", work_key="ticket-1")
+    assert parked.status == "needs_input"
+
+    park_manifest = run_log.read_manifest(tmp_path, "w", parked.run_id)
+    work_dir = Path(park_manifest["work_dir"])
+    key_dir = work_dir.parent
+    _age_every_path_under(key_dir, time.time() - (KEYED_WORK_MAX_AGE_DAYS + 1) * 86400)
+    _force_keyed_sweep_due(tmp_path)
+
+    prune_runs(str(tmp_path), keep=20,
+               protect=run_log.live_run_ids(str(tmp_path)),
+               protect_keyed=run_log.live_work_keys(str(tmp_path)))
+
+    assert key_dir.is_dir(), "a parked (still-resumable) run's keyed folder must survive the sweep"
+    assert (work_dir / "out.json").is_file()
+
+
+def test_prune_runs_removes_the_same_dir_once_the_run_is_finalized(tmp_path):
+    """The other half of the proof: once that SAME parked run is answered and
+    completes, its manifest is no longer live — the sweep is now free to reap
+    the folder past the age bound, same as any other keyed dir."""
+    import time
+
+    from durin.workflow.artifacts import KEYED_WORK_MAX_AGE_DAYS, prune_runs
+
+    runner = _parking_runner()
+    engine = WorkflowEngine(runner, workspace=str(tmp_path), run_id_factory=lambda: "park-run")
+    parked = engine.run(_parking_wf(), "go", work_key="ticket-1")
+    park_manifest = run_log.read_manifest(tmp_path, "w", parked.run_id)
+    work_dir = Path(park_manifest["work_dir"])
+    key_dir = work_dir.parent
+
+    resume = build_resume_state(park_manifest, "all set")
+    finished = engine.run(_parking_wf(), "all set", resume=resume)
+    assert finished.status == "completed"
+
+    _age_every_path_under(key_dir, time.time() - (KEYED_WORK_MAX_AGE_DAYS + 1) * 86400)
+    _force_keyed_sweep_due(tmp_path)
+
+    prune_runs(str(tmp_path), keep=20,
+               protect=run_log.live_run_ids(str(tmp_path)),
+               protect_keyed=run_log.live_work_keys(str(tmp_path)))
+
+    assert not key_dir.exists(), "a finalized run's keyed folder must be reaped past the age bound"

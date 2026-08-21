@@ -33,7 +33,14 @@ class InboundFacts:
     sender: str  # channel-appropriate sender identity
     text: str  # message content
     title: str | None  # email subject; None on chat channels
-    thread_key: str | None  # per-channel thread scoping key, or None
+    thread_key: str | None  # per-channel thread scoping key, or None.
+    # INVARIANT: must never start with "custom:" — that prefix is reserved for
+    # matcher.py's _correlate_key output (loops/runtime.py's _run tells the two
+    # apart by it, to decide whether a channel-fire's origin thread may become
+    # a workflow work_key). Every existing channel below already scopes its own
+    # thread_key under its own channel name (e.g. "slack:", "telegram:") — a
+    # new channel must keep doing the same or it will silently be mistaken for
+    # a correlate match.
     reply: dict  # raw pieces build_reply needs later
     chat: str = ""  # identity of the room/chat the message arrived in
     chat_name: str | None = None  # readable room name, when the channel offers one
