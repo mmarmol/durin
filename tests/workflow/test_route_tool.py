@@ -201,3 +201,126 @@ def test_forced_route_call_tools_match_the_loop_exactly(tmp_path):
     forced_kwargs = mock_provider.chat_with_retry.await_args.kwargs
     assert forced_kwargs["tools"] == loop_tools
     assert forced_kwargs["tool_choice"] == {"type": "function", "function": {"name": "route"}}
+
+
+# ── the forced call is skipped when route was the turn's LAST action ────────
+
+
+def _route_tool_call_message(label: str) -> dict:
+    """An assistant message whose only tool call is `route(label=...)` — the
+    OpenAI-style shape AgentRunner actually appends (see build_assistant_message
+    / ToolCallRequest.to_openai_tool_call)."""
+    return {
+        "role": "assistant", "content": "",
+        "tool_calls": [{
+            "id": "call_1", "type": "function",
+            "function": {"name": "route", "arguments": f'{{"label": "{label}"}}'},
+        }],
+    }
+
+
+def test_route_call_as_final_message_skips_the_forced_call(tmp_path):
+    """When `route` is the LAST thing the model does this turn (nothing follows
+    to change its mind), the captured label is used directly — the forced
+    end-of-turn call is skipped entirely."""
+    wf = _multi_way_workflow()
+
+    mock_provider = MagicMock(spec=LLMProvider)
+    mock_provider.get_default_model.return_value = "test-model"
+    # The forced call must never fire — if it did, this canned response would
+    # route to DECLINE instead of the captured PROCEED, and/or this mock would
+    # simply never be awaited.
+    mock_provider.chat_with_retry = AsyncMock(
+        return_value=SimpleNamespace(tool_calls=[
+            SimpleNamespace(arguments={"label": "DECLINE"})]))
+
+    async def fake_run(spec):
+        if spec.tools.has("route"):
+            await spec.tools.execute("route", {"label": "PROCEED"})
+            return AgentRunResult(
+                final_content="", messages=[_route_tool_call_message("PROCEED")])
+        return AgentRunResult(final_content="done",
+                              messages=[{"role": "assistant", "content": "done"}])
+
+    node_runner = _make_node_runner(tmp_path, mock_provider)
+    engine = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1")
+
+    with patch("durin.agent.runner.AgentRunner.run", AsyncMock(side_effect=fake_run)):
+        result = engine.run(wf, "help me")
+
+    mock_provider.chat_with_retry.assert_not_awaited()
+    gate_run = next(r for r in result.runs if r.node_id == "gate")
+    assert gate_run.route_label == "PROCEED"
+    assert any(r.node_id == "worker" for r in result.runs)
+
+
+def test_route_call_in_an_earlier_message_still_forces_the_final_call(tmp_path):
+    """A `route` call is captured every time it happens (even mid-turn), but if
+    a later message follows it in the same turn, the model had a chance to
+    change its mind — the end-of-turn forced call remains authoritative."""
+    wf = _multi_way_workflow()
+
+    mock_provider = MagicMock(spec=LLMProvider)
+    mock_provider.get_default_model.return_value = "test-model"
+    mock_provider.chat_with_retry = AsyncMock(
+        return_value=SimpleNamespace(tool_calls=[
+            SimpleNamespace(arguments={"label": "PROCEED"})]))
+
+    async def fake_run(spec):
+        if spec.tools.has("route"):
+            await spec.tools.execute("route", {"label": "DECLINE"})
+            return AgentRunResult(
+                final_content="still working",
+                messages=[
+                    _route_tool_call_message("DECLINE"),
+                    {"role": "tool", "tool_call_id": "call_1", "name": "route",
+                     "content": "Verdict noted — continue your work; your final "
+                                "verdict is decided at the end."},
+                    {"role": "assistant", "content": "still working"},
+                ],
+            )
+        return AgentRunResult(final_content="done",
+                              messages=[{"role": "assistant", "content": "done"}])
+
+    node_runner = _make_node_runner(tmp_path, mock_provider)
+    engine = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1")
+
+    with patch("durin.agent.runner.AgentRunner.run", AsyncMock(side_effect=fake_run)):
+        result = engine.run(wf, "help me")
+
+    mock_provider.chat_with_retry.assert_awaited_once()
+    gate_run = next(r for r in result.runs if r.node_id == "gate")
+    # The forced call's label wins, not the earlier (captured) DECLINE.
+    assert gate_run.route_label == "PROCEED"
+
+
+def test_invalid_label_in_final_message_still_forces_the_call(tmp_path):
+    """A route call captured as the turn's final action is only trusted when its
+    label is one of the node's valid cases — the derive step must not blindly
+    trust an invalid one (this should never happen through the real
+    schema-validated tool, but the guard exists regardless)."""
+    wf = _multi_way_workflow()
+
+    mock_provider = MagicMock(spec=LLMProvider)
+    mock_provider.get_default_model.return_value = "test-model"
+    mock_provider.chat_with_retry = AsyncMock(
+        return_value=SimpleNamespace(tool_calls=[
+            SimpleNamespace(arguments={"label": "PROCEED"})]))
+
+    async def fake_run(spec):
+        if spec.tools.has("route"):
+            await spec.tools.execute("route", {"label": "BOGUS"})
+            return AgentRunResult(
+                final_content="", messages=[_route_tool_call_message("BOGUS")])
+        return AgentRunResult(final_content="done",
+                              messages=[{"role": "assistant", "content": "done"}])
+
+    node_runner = _make_node_runner(tmp_path, mock_provider)
+    engine = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1")
+
+    with patch("durin.agent.runner.AgentRunner.run", AsyncMock(side_effect=fake_run)):
+        result = engine.run(wf, "help me")
+
+    mock_provider.chat_with_retry.assert_awaited_once()
+    gate_run = next(r for r in result.runs if r.node_id == "gate")
+    assert gate_run.route_label == "PROCEED"

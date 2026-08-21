@@ -147,18 +147,32 @@ class _DeliverTool(Tool):
         return "Delivered — this step's output has been recorded."
 
 
+class _RouteCapture:
+    """Holds the label from the most recent `route` tool call in one node
+    execution, so the derive step can use it directly when that call turns out
+    to have been the model's LAST action this turn — see
+    ``AgentNodeRunner._final_message_route_call``. Overwritten on every call
+    (not just the first), so it always reflects the most recent verdict."""
+
+    def __init__(self) -> None:
+        self.label: str | None = None
+
+
 class _RouteTool(Tool):
     """The node's routing-verdict tool, registered from turn 1 for the same
-    cache-prefix reason as ``_DeliverTool``. A call before the node is done
-    working is just acknowledged — the end-of-turn forced call always decides
-    the actual verdict (simpler and behavior-preserving vs. tracking whether a
-    premature call happened to land on the turn's last iteration — see
-    ``_derive_route_label``)."""
+    cache-prefix reason as ``_DeliverTool``. Every call's label is captured
+    (overwriting any earlier one); a call before the node is done working is
+    just acknowledged and work continues. If the LAST thing the model does
+    this turn is call `route`, the derive step uses the captured label
+    directly and skips the forced end-of-turn call; a `route` call anywhere
+    EARLIER in the turn is still just noted here — the forced call remains
+    authoritative, since later turns may have changed the model's mind."""
 
     _plugin_discoverable = False
 
-    def __init__(self, labels: list[str]) -> None:
+    def __init__(self, labels: list[str], capture: _RouteCapture) -> None:
         self._labels = labels
+        self._capture = capture
 
     @property
     def name(self) -> str:
@@ -177,6 +191,7 @@ class _RouteTool(Tool):
         }, "required": ["label"]}
 
     async def execute(self, **kwargs) -> str:
+        self._capture.label = kwargs.get("label")
         return "Verdict noted — continue your work; your final verdict is decided at the end."
 
 
@@ -566,8 +581,9 @@ class AgentNodeRunner:
         delivered = _DeliverCapture()
         if node_schema is not None:
             tools_registry.register(_DeliverTool(node_schema, delivered))
+        routed = _RouteCapture()
         if route_labels is not None:
-            tools_registry.register(_RouteTool(route_labels))
+            tools_registry.register(_RouteTool(route_labels, routed))
 
         # If the agent turn raises (provider/MCP/tool error), the partial conversation
         # would otherwise be lost and the failure would name no node. Persist whatever
@@ -714,9 +730,18 @@ class AgentNodeRunner:
         # A routing node's verdict comes from a forced `route` tool call (deterministic: the
         # model must pick one label from this node's own enum), not from parsing free text.
         # On any failure this is None and the engine falls back to text-parse + default.
+        # Exception: if the model's LAST action this turn was already a valid `route`
+        # call (nothing followed it that could have changed its mind), that captured
+        # label is used directly and the forced call — an extra LLM round-trip the
+        # model already made moot — is skipped. A `route` call anywhere EARLIER in the
+        # turn is only noted (see `_RouteTool`); the forced call still decides.
         route_label = None
         if route_labels is not None:
-            route_label = self._derive_route_label(all_messages, route_labels, model, tools_registry)
+            if (self._final_message_route_call(all_messages)
+                    and routed.label in route_labels):
+                route_label = routed.label
+            else:
+                route_label = self._derive_route_label(all_messages, route_labels, model, tools_registry)
 
         # A schema'd node delivers its output through a forced tool call validated
         # against the declared JSON Schema — retried IMMEDIATELY with the exact
@@ -753,6 +778,23 @@ class AgentNodeRunner:
             model=model,
             provider=provider_key,
             params_hash=resolved_params_hash,
+        )
+
+    @staticmethod
+    def _final_message_route_call(messages: list[dict]) -> bool:
+        """True when the LAST message of the turn is an assistant tool call to
+        `route` — i.e. calling `route` was the model's last action, with nothing
+        after it that could have changed the verdict. Used to decide whether the
+        captured label (`_RouteCapture`, populated by `_RouteTool.execute`) can be
+        trusted directly instead of paying for the forced end-of-turn call."""
+        if not messages:
+            return False
+        last = messages[-1]
+        if not isinstance(last, dict) or last.get("role") != "assistant":
+            return False
+        return any(
+            (tc.get("function") or {}).get("name") == "route"
+            for tc in (last.get("tool_calls") or [])
         )
 
     def _derive_route_label(self, messages: list[dict], labels: list[str], model: str | None,
