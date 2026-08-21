@@ -119,12 +119,14 @@ can emit rate-limit events directly without going through `emit_tool_event`.
 Every LLM round-trip emits a `provider.call` event from the provider layer
 itself: `LLMProvider._run_with_retry` times the retry loop and logs once per
 completed call (final success or final error, wall clock with retries
-included), which covers both `chat_with_retry` and `chat_stream_with_retry` —
-i.e. the agent loop, memory/dream, aux invokes, judges, personas, and
-evaluators without instrumenting each caller. Workflow nodes' direct `chat()`
-calls (route verdicts, re-entry assessments, structured-output delivery) and
-the `interpret_image`/`interpret_audio` aux tools emit through the same
-public `emit_call_telemetry` helper. The event carries the provider's
+included) by calling the public `emit_call_telemetry` helper internally,
+which covers both `chat_with_retry` and `chat_stream_with_retry` — i.e. the
+agent loop, memory/dream, aux invokes, judges, personas, evaluators, and a
+workflow node's own route/re-entry/structured-output calls
+(`AgentNodeRunner._chat`, which rides `chat_with_retry`) — without
+instrumenting each caller. The `interpret_image`/`interpret_audio` aux tools
+are the only callers left that invoke `emit_call_telemetry` directly, outside
+the retry wrappers. The event carries the provider's
 config-registry name (stamped as `provider_key` by the factory), the model,
 prompt/cached/completion token counts, `duration_ms`, and the final
 `finish_reason` — the universal "who spent the tokens" record; `cache.usage`

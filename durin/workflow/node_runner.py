@@ -147,18 +147,34 @@ class _DeliverTool(Tool):
         return "Delivered — this step's output has been recorded."
 
 
+class _RouteCapture:
+    """Holds the label from the most recent VALID `route` tool call in one node
+    execution, so the derive step can use it directly instead of paying for the
+    forced end-of-turn call — mirrors ``_DeliverCapture`` exactly. Overwritten on
+    every valid call (not just the first), so the LAST one wins, same as
+    ``_DeliverTool``'s "last valid deliver wins" semantics."""
+
+    def __init__(self) -> None:
+        self.label: str | None = None
+
+
 class _RouteTool(Tool):
     """The node's routing-verdict tool, registered from turn 1 for the same
-    cache-prefix reason as ``_DeliverTool``. A call before the node is done
-    working is just acknowledged — the end-of-turn forced call always decides
-    the actual verdict (simpler and behavior-preserving vs. tracking whether a
-    premature call happened to land on the turn's last iteration — see
-    ``_derive_route_label``)."""
+    cache-prefix reason as ``_DeliverTool``. A VALID call decides the verdict
+    immediately and unconditionally — exactly symmetric with how a valid early
+    `deliver` call ends a schema'd node's turn (see ``_DeliverTool`` /
+    ``_derive_structured_output``): the derive step uses the captured label
+    directly and the forced end-of-turn call is skipped, regardless of where in
+    the turn the call happened. An INVALID label (not one of this node's cases)
+    is neither captured nor acknowledged as decided — it gets a specific,
+    actionable message and the forced call remains authoritative, exactly as
+    when nothing was ever captured."""
 
     _plugin_discoverable = False
 
-    def __init__(self, labels: list[str]) -> None:
+    def __init__(self, labels: list[str], capture: _RouteCapture) -> None:
         self._labels = labels
+        self._capture = capture
 
     @property
     def name(self) -> str:
@@ -176,8 +192,20 @@ class _RouteTool(Tool):
             "reason": {"type": "string", "description": "One short line explaining the verdict."},
         }, "required": ["label"]}
 
+    def validate_params(self, params: dict) -> list[str]:
+        # Mirrors _DeliverTool: do our OWN validation inside execute() below so
+        # an invalid label gets a specific, actionable message instead of a
+        # generic schema-validation rejection that never reaches execute().
+        return []
+
     async def execute(self, **kwargs) -> str:
-        return "Verdict noted — continue your work; your final verdict is decided at the end."
+        label = kwargs.get("label")
+        if label not in self._labels:
+            return (f"'{label}' is not one of the allowed labels: "
+                    f"{', '.join(self._labels)}. Continue your work; call "
+                    "route again with a valid label when you decide.")
+        self._capture.label = label
+        return "Route recorded — this step's verdict has been recorded."
 
 
 _VERDICT = ("\n\nAfter your assessment, end your reply with a single final line: "
@@ -566,8 +594,9 @@ class AgentNodeRunner:
         delivered = _DeliverCapture()
         if node_schema is not None:
             tools_registry.register(_DeliverTool(node_schema, delivered))
+        routed = _RouteCapture()
         if route_labels is not None:
-            tools_registry.register(_RouteTool(route_labels))
+            tools_registry.register(_RouteTool(route_labels, routed))
 
         # If the agent turn raises (provider/MCP/tool error), the partial conversation
         # would otherwise be lost and the failure would name no node. Persist whatever
@@ -714,9 +743,15 @@ class AgentNodeRunner:
         # A routing node's verdict comes from a forced `route` tool call (deterministic: the
         # model must pick one label from this node's own enum), not from parsing free text.
         # On any failure this is None and the engine falls back to text-parse + default.
+        # A valid `route` call captured anywhere during the work loop above (`_RouteTool`
+        # lives in `tools_registry` from turn 1) is used directly — exactly symmetric with
+        # `_derive_structured_output`'s early-`deliver` reuse — paying no extra LLM call.
         route_label = None
         if route_labels is not None:
-            route_label = self._derive_route_label(all_messages, route_labels, model, tools_registry)
+            if routed.label is not None:
+                route_label = routed.label
+            else:
+                route_label = self._derive_route_label(all_messages, route_labels, model, tools_registry)
 
         # A schema'd node delivers its output through a forced tool call validated
         # against the declared JSON Schema — retried IMMEDIATELY with the exact

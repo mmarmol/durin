@@ -660,6 +660,94 @@ def test_persistent_session_rejected_on_parallel_units():
 
 
 # ---------------------------------------------------------------------------
+# reuse combinations that would otherwise silently never fire, or degrade
+# ---------------------------------------------------------------------------
+
+def _reusable_node(node_id, **extra):
+    return {"id": node_id, "kind": "work", "output_schema": {"type": "object"},
+            "output_file": "out.json", "reuse": "if-unchanged", **extra}
+
+
+def test_reuse_rejected_on_detached_node():
+    """A detached node is launched on the engine's side-effect path, which never
+    checks the reuse gate — the setting would parse but silently never fire."""
+    with pytest.raises(WorkflowError, match="detached node cannot use reuse=.if-unchanged."):
+        parse_workflow({"name": "w", "start": "a",
+                        "nodes": [_reusable_node("a", detached=True, next=None)]})
+
+
+def test_reuse_rejected_on_parallel_branch():
+    """A static parallel branch is dispatched straight through the node runner
+    (durin/workflow/engine.py _run_one_branch), bypassing the reuse gate entirely."""
+    with pytest.raises(WorkflowError, match="parallel unit.*cannot use reuse=.if-unchanged."):
+        parse_workflow({
+            "name": "w", "start": "p",
+            "nodes": [
+                {"id": "p", "kind": "parallel", "branches": ["b1"], "next": None},
+                _reusable_node("b1"),
+            ],
+        })
+
+
+def test_reuse_rejected_on_parallel_worker():
+    """A dynamic fan-out worker is dispatched per item straight through the node
+    runner (durin/workflow/engine.py _run_dynamic_parallel), bypassing reuse too."""
+    with pytest.raises(WorkflowError, match="parallel unit.*cannot use reuse=.if-unchanged."):
+        parse_workflow({"name": "w", "start": "orch", "nodes": [
+            {"id": "orch", "kind": "work", "next": "fan"},
+            {"id": "fan", "kind": "parallel", "worker": "dev", "list_from": "orch", "next": "done"},
+            _reusable_node("dev"),
+            {"id": "done", "kind": "work"},
+        ]})
+
+
+def test_reuse_rejected_with_shared_context():
+    """A reused pass skips the node's own turn entirely, so it contributes no
+    messages to the shared buffer this pass — context='shared' would silently
+    degrade the downstream node's input instead of erroring."""
+    with pytest.raises(WorkflowError,
+                       match="reuse cannot be combined with context=.shared."):
+        parse_workflow({"name": "w", "start": "a",
+                        "nodes": [_reusable_node("a", context="shared", next=None)]})
+
+
+def test_reuse_rejected_when_branches_from_has_no_declared_pool():
+    """`branches_from` with NO candidate 'branches' pool makes ANY work/script
+    node in the workflow runtime-selectable — the parser has no static list to
+    check per-node, so a reuse-declaring node ANYWHERE would silently bypass
+    the reuse gate the same way an explicit parallel branch/worker does."""
+    with pytest.raises(WorkflowError, match="branches_from") as exc:
+        parse_workflow({
+            "name": "w", "start": "picker",
+            "nodes": [
+                {"id": "picker", "kind": "work", "next": "route"},
+                {"id": "route", "kind": "parallel", "branches_from": "picker", "next": "cached"},
+                _reusable_node("cached", next=None),
+            ],
+        })
+    # Names both the parallel node and the reuse-declaring node.
+    assert "route" in str(exc.value)
+    assert "cached" in str(exc.value)
+
+
+def test_reuse_allowed_when_branches_from_has_a_declared_pool_excluding_it():
+    """The same shape, but with an explicit candidate pool (even one that
+    excludes the reuse node) — the candidate set is statically known, so the
+    existing per-branch check applies normally and this parses fine."""
+    wf = parse_workflow({
+        "name": "w", "start": "picker",
+        "nodes": [
+            {"id": "picker", "kind": "work", "next": "route"},
+            {"id": "route", "kind": "parallel", "branches_from": "picker",
+             "branches": ["other"], "next": "cached"},
+            {"id": "other", "kind": "work"},
+            _reusable_node("cached", next=None),
+        ],
+    })
+    assert wf.nodes["route"].branches == ("other",)
+
+
+# ---------------------------------------------------------------------------
 # output.artifacts — the declared file contract (B2)
 # ---------------------------------------------------------------------------
 
