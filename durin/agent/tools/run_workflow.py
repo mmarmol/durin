@@ -384,6 +384,17 @@ class RunWorkflowTool(Tool, ContextAware):
             except ValueError as exc:
                 return f"Error: invalid work_key: {exc}"
 
+        # A resumed run already carries the work_key it was started with
+        # (engine semantics: explicit-wins); an explicit, possibly different
+        # work_key here would silently relocate it to another working folder
+        # mid-resume. Reject the combination outright rather than guess which
+        # one the caller meant.
+        if resume_run_id and work_key:
+            return (
+                "Error: pass either resume_run_id or work_key, not both — a "
+                "resumed run keeps the work_key it was started with."
+            )
+
         resume = None
         if resume_run_id:
             from durin.workflow import run_log

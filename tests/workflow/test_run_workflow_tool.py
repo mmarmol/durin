@@ -250,6 +250,34 @@ async def test_unsafe_work_key_returns_an_error_without_running(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_resume_and_work_key_together_is_a_clear_error(tmp_path):
+    """A resumed run already keeps the work_key it was started with, so
+    passing a (possibly different) work_key alongside resume_run_id would
+    silently relocate it -- the tool rejects the combination outright,
+    before even looking up the resume_run_id's manifest, let alone running
+    the engine."""
+    _write_workflow(tmp_path, "doer", {
+        "name": "doer", "start": "a",
+        "nodes": [{"id": "a", "kind": "work", "prompt": "p", "next": None}],
+    })
+    tool = _tool(tmp_path)
+    with patch("durin.providers.factory.make_provider") as fake_make_provider, \
+         patch("durin.workflow.engine.WorkflowEngine.run") as fake_run:
+        # resume_run_id="r1" has no recorded manifest -- if the conflict check
+        # ran after the resume lookup, this would surface a "no run 'r1'
+        # recorded" error instead, which the exact-text assertion below rules out.
+        out = await tool.execute(
+            name="doer", task="t", resume_run_id="r1", work_key="ticket-1", background=False,
+        )
+    assert out == (
+        "Error: pass either resume_run_id or work_key, not both — a resumed "
+        "run keeps the work_key it was started with."
+    )
+    fake_make_provider.assert_not_called()
+    fake_run.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_resume_rejects_a_run_that_did_not_end_needs_input(tmp_path):
     _write_workflow(tmp_path, "doer", {
         "name": "doer", "start": "a",
