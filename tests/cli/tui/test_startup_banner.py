@@ -31,6 +31,10 @@ def test_categorize_tools_groups_by_purpose() -> None:
     assert "unknown_tool" in cats["misc"]
 
 
+def test_workflow_runs_shares_tasks_category() -> None:
+    assert categorize_tools(["workflow_runs", "tasks"])["agent"] == ["tasks", "workflow_runs"]
+
+
 def test_categorize_tools_returns_alphabetically_sorted_groups() -> None:
     cats = categorize_tools(["write_file", "read_file"])
     assert cats["file"] == ["read_file", "write_file"], "tools should be sorted A→Z"
