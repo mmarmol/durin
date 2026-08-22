@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -47,7 +47,9 @@ _DESCRIPTION = (
     "session, not just this one — instead of re-running a workflow to "
     "answer a question about work already done. "
     "action=\"search\": find runs by workflow name or task text (`query`, "
-    "case-insensitive substring) and/or an exact `status`; results are "
+    "case-insensitive substring), an exact `status`, and/or a `since`/`until` "
+    "date range on when the run started (ISO date or datetime; a bare "
+    "`until` date reaches through the end of that day); results are "
     "newest first, capped at `limit` (default 10, max 50), one line each "
     "with run_id/workflow/status/started_at/duration, plus model, a short "
     "spec_hash, and a reused-node count when the manifest carries them. "
@@ -82,6 +84,21 @@ _PARAMETERS = tool_parameters_schema(
             "search only. Optional exact status filter — e.g. 'completed', "
             "'aborted', 'cancelled', 'crashed', 'running', 'needs_input', "
             "'exhausted'. Omit to match any status."
+        ),
+        nullable=True,
+    ),
+    since=StringSchema(
+        description=(
+            "search only. Optional lower bound on when the run started — "
+            "an ISO date ('2024-03-01') or datetime. Omit for no lower bound."
+        ),
+        nullable=True,
+    ),
+    until=StringSchema(
+        description=(
+            "search only. Optional upper bound on when the run started — "
+            "an ISO date or datetime. A bare date means through the END of "
+            "that day (inclusive), not its midnight. Omit for no upper bound."
         ),
         nullable=True,
     ),
@@ -177,6 +194,34 @@ def _iter_manifests(workspace: str | Path):
             yield rec
 
 
+def _parse_date_bound(value: str, *, end_of_day: bool) -> float:
+    """Parse a `since`/`until` bound (ISO date or datetime) to epoch seconds
+    (UTC), tolerantly — via ``datetime.fromisoformat``.
+
+    A bare ISO date (anything ``date.fromisoformat`` accepts, e.g.
+    "2024-03-01") means midnight UTC at the START of that day, EXCEPT for
+    the `until` bound (``end_of_day=True``), where a bare date means the
+    LAST instant of that day instead — so ``until="2024-03-01"`` covers
+    every run that started anywhere in that whole day, not just before its
+    midnight. A full ISO datetime is used exactly as given; a naive one (no
+    offset/Z) is treated as UTC, matching ``started_at``'s own epoch/UTC
+    convention.
+
+    Raises ``ValueError`` on anything unparseable — callers turn that into
+    a clear, parameter-named error message instead of letting it propagate.
+    """
+    try:
+        d = date.fromisoformat(value)
+    except ValueError:
+        dt = datetime.fromisoformat(value)  # raises ValueError on anything invalid
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    if end_of_day:
+        return datetime(d.year, d.month, d.day, 23, 59, 59, 999999, tzinfo=timezone.utc).timestamp()
+    return datetime(d.year, d.month, d.day, tzinfo=timezone.utc).timestamp()
+
+
 def _clamp_limit(limit: int | None) -> int:
     cap = _DEFAULT_LIMIT if limit is None else limit
     try:
@@ -225,10 +270,11 @@ class WorkflowRunsTool(Tool):
     async def execute(  # type: ignore[override]
         self, action: str | None = None, query: str | None = None,
         status: str | None = None, limit: int | None = None,
-        run_id: str | None = None, **kwargs: Any,
+        run_id: str | None = None, since: str | None = None,
+        until: str | None = None, **kwargs: Any,
     ) -> str:
         if action == "search":
-            return self._search(query=query, status=status, limit=limit)
+            return self._search(query=query, status=status, limit=limit, since=since, until=until)
         if action == "show":
             if not run_id:
                 return "Error: 'run_id' is required for show."
@@ -262,10 +308,32 @@ class WorkflowRunsTool(Tool):
             bits.append(f"reused: {reused_n} nodes")
         return "  " + " ".join(bits)
 
-    def _search(self, *, query: str | None, status: str | None, limit: int | None) -> str:
+    def _search(
+        self, *, query: str | None, status: str | None, limit: int | None,
+        since: str | None = None, until: str | None = None,
+    ) -> str:
         cap = _clamp_limit(limit)
         q = (query or "").strip().lower()
         status_filter = (status or "").strip() or None
+
+        since_ts: float | None = None
+        if since:
+            try:
+                since_ts = _parse_date_bound(since, end_of_day=False)
+            except ValueError:
+                return (
+                    f"Error: invalid 'since' value {since!r} — expected an "
+                    "ISO date (YYYY-MM-DD) or datetime."
+                )
+        until_ts: float | None = None
+        if until:
+            try:
+                until_ts = _parse_date_bound(until, end_of_day=True)
+            except ValueError:
+                return (
+                    f"Error: invalid 'until' value {until!r} — expected an "
+                    "ISO date (YYYY-MM-DD) or datetime."
+                )
 
         rows = []
         for rec in _iter_manifests(self._workspace):
@@ -275,6 +343,18 @@ class WorkflowRunsTool(Tool):
                 workflow_name = (rec.get("workflow") or "").lower()
                 task_text = (rec.get("task") or "").lower()
                 if q not in workflow_name and q not in task_text:
+                    continue
+            if since_ts is not None or until_ts is not None:
+                # started_at is always present on a real manifest; a record
+                # missing or with an unparseable one can't be affirmed inside
+                # the requested window, so it's excluded rather than guessed.
+                try:
+                    started_f = float(rec.get("started_at"))
+                except (TypeError, ValueError):
+                    continue
+                if since_ts is not None and started_f < since_ts:
+                    continue
+                if until_ts is not None and started_f > until_ts:
                     continue
             rows.append(rec)
 
@@ -288,6 +368,10 @@ class WorkflowRunsTool(Tool):
                 filters.append(f"query={query!r}")
             if status_filter:
                 filters.append(f"status={status_filter!r}")
+            if since:
+                filters.append(f"since={since!r}")
+            if until:
+                filters.append(f"until={until!r}")
             suffix = f" ({', '.join(filters)})" if filters else ""
             return f"No workflow runs found{suffix}."
 
