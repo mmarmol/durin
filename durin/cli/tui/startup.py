@@ -103,6 +103,7 @@ _TOOL_CATEGORY: dict[str, str] = {
     # agent loop / sub-agents
     "spawn": "agent",
     "tasks": "agent",
+    "workflow_runs": "agent",
     "subagent_monitor": "agent",
     "subagent_output": "agent",
     "long_task": "agent",

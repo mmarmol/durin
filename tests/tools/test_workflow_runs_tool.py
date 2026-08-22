@@ -262,6 +262,71 @@ async def test_search_no_matches(tool: WorkflowRunsTool):
     assert "No workflow runs found" in out
 
 
+# --- search: since/until date filtering ----------------------------------
+# All three fixture runs started on 2023-11-14 UTC: RUN_LEGACY at 22:15:00
+# (T0+100), RUN_MODERN at 22:16:40 (T0+200), RUN_ABORTED at 22:18:20 (T0+300).
+
+
+@pytest.mark.asyncio
+async def test_search_since_excludes_older_runs(tool: WorkflowRunsTool):
+    out = await tool.execute(action="search", since="2023-11-14T22:16:00")
+    assert RUN_LEGACY not in out           # started before the bound
+    assert RUN_MODERN in out               # started after
+    assert RUN_ABORTED in out              # started after
+
+
+@pytest.mark.asyncio
+async def test_search_until_date_only_includes_same_day(tool: WorkflowRunsTool):
+    # A date-only `until` must be inclusive of the WHOLE day, not just up to
+    # midnight at its start -- every fixture run started later that same day.
+    out = await tool.execute(action="search", until="2023-11-14")
+    assert RUN_LEGACY in out
+    assert RUN_MODERN in out
+    assert RUN_ABORTED in out
+
+
+@pytest.mark.asyncio
+async def test_search_until_date_only_excludes_next_day(tool: WorkflowRunsTool):
+    out = await tool.execute(action="search", until="2023-11-13")
+    assert "No workflow runs found" in out
+
+
+@pytest.mark.asyncio
+async def test_search_since_and_until_combine(tool: WorkflowRunsTool):
+    out = await tool.execute(
+        action="search", since="2023-11-14T22:16:00", until="2023-11-14T22:17:00",
+    )
+    assert RUN_MODERN in out
+    assert RUN_LEGACY not in out
+    assert RUN_ABORTED not in out
+
+
+@pytest.mark.asyncio
+async def test_search_date_filter_includes_legacy_manifest_in_range(tool: WorkflowRunsTool):
+    # RUN_LEGACY predates artifact-provenance (no spec_hash/durin_version) but
+    # always carries started_at -- the date filter must not treat it specially.
+    out = await tool.execute(
+        action="search", since="2023-11-14T22:14:00", until="2023-11-14T22:15:30",
+    )
+    assert RUN_LEGACY in out
+    assert RUN_MODERN not in out
+    assert RUN_ABORTED not in out
+
+
+@pytest.mark.asyncio
+async def test_search_invalid_since_is_a_clear_error(tool: WorkflowRunsTool):
+    out = await tool.execute(action="search", since="not-a-date")
+    assert "Error" in out
+    assert "since" in out
+
+
+@pytest.mark.asyncio
+async def test_search_invalid_until_is_a_clear_error(tool: WorkflowRunsTool):
+    out = await tool.execute(action="search", until="also-not-a-date")
+    assert "Error" in out
+    assert "until" in out
+
+
 # --- show ---------------------------------------------------------------
 
 
