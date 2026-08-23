@@ -97,6 +97,7 @@ class WorkNode:
     max_turns: int | None = None         # agentic tool-round budget for this node (None = global default)
     max_reentries: int = 0               # self re-entries after exhausting max_turns (0 = go straight to synthesis)
     reentry_prompt: str = ""             # author steering appended on each re-entry (empty = engine default)
+    approval: bool = False               # require explicit human approval before this node runs
     detached: bool = False               # launch and continue: side-effect node off the critical path
     inputs_from: tuple[str, ...] = ()    # named sources composed (labeled) into this node's input
     output_schema: dict | None = None    # JSON Schema the node's output must satisfy (forced deliver tool)
@@ -117,7 +118,7 @@ class WorkNode:
 
 _AGENT_ONLY_FIELDS = frozenset(
     {"model", "persona", "context", "session", "prompt", "mode", "tools", "skills", "mcps",
-     "max_turns", "max_reentries", "reentry_prompt"}
+     "max_turns", "max_reentries", "reentry_prompt", "approval"}
 )
 
 
@@ -288,6 +289,33 @@ def _parse_detached(raw: dict[str, Any], node_id: str, *, routes: bool) -> bool:
     return detached
 
 
+def _parse_approval(raw: dict[str, Any], node_id: str, *, routes: bool, detached: bool, shared: bool) -> bool:
+    """Validate the ``approval`` flag of a work node. An approval node must run
+    linearly (no routing) and cannot be detached or shared-context (a paused shared
+    node would strand the buffer)."""
+    approval = raw.get("approval", False)
+    if not isinstance(approval, bool):
+        raise WorkflowError(
+            f"node {node_id!r}: approval must be true or false, got {approval!r}"
+        )
+    if approval and routes:
+        raise WorkflowError(
+            f"node {node_id!r}: an approval node cannot route (approval requires linear "
+            "execution) — drop 'on_pass'/'on_fail'/'cases' or 'approval'"
+        )
+    if approval and detached:
+        raise WorkflowError(
+            f"node {node_id!r}: an approval node cannot be detached "
+            "(approval requires pausing the walk) — drop 'detached' or 'approval'"
+        )
+    if approval and shared:
+        raise WorkflowError(
+            f"node {node_id!r}: an approval node cannot use context='shared' "
+            "(a paused shared node would strand the buffer) — drop 'context' or 'approval'"
+        )
+    return approval
+
+
 def _parse_routing(raw: dict[str, Any], node_id: str) -> tuple[str | None, str | None, str | None, dict[str, str | None] | None]:
     """Validate the shared routing fields of a work/script node: returns
     (next, on_pass, on_fail, cases) after enforcing cases well-formedness,
@@ -392,6 +420,7 @@ def _build_node(raw: dict[str, Any]) -> Node:
         next_node, on_pass, on_fail, cases = _parse_routing(raw, node_id)
         routes = on_pass is not None or on_fail is not None or cases is not None
         detached = _parse_detached(raw, node_id, routes=routes)
+        approval = _parse_approval(raw, node_id, routes=routes, detached=detached, shared=context == "shared")
         output_schema, output_file = _parse_output_contract(raw, node_id, routes=routes)
         reuse = raw.get("reuse")
         if reuse is not None and reuse != "if-unchanged":
@@ -489,6 +518,7 @@ def _build_node(raw: dict[str, Any]) -> Node:
             max_turns=node_max_turns,
             max_reentries=max_reentries,
             reentry_prompt=reentry_prompt,
+            approval=approval,
             detached=detached,
             inputs_from=inputs_from,
             output_schema=output_schema,
@@ -740,6 +770,11 @@ def parse_workflow(data: dict[str, Any]) -> Workflow:
                     raise WorkflowError(
                         f"node {node.id!r}: parallel unit {ref!r} cannot be detached "
                         "(branches already run concurrently and their outputs merge)"
+                    )
+                if target is not None and isinstance(target, WorkNode) and target.approval:
+                    raise WorkflowError(
+                        f"node {node.id!r}: parallel unit {ref!r} cannot use approval "
+                        "(approval requires pausing the walk; branches run concurrently)"
                     )
 
     # inputs_from sources must be real nodes, not the node itself, and not detached
