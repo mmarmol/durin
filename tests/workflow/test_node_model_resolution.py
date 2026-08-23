@@ -131,6 +131,27 @@ def test_plain_model_with_differing_config_entry_gets_a_dedicated_provider(tmp_p
     assert spec_b.provider.generation.temperature == 0.7
 
 
+def test_plain_model_with_top_p_entry_reaches_the_dedicated_provider(tmp_path):
+    # adhoc_preset_config used to silently drop top_p/top_k/repeat_penalty
+    # from a ModelEntry — the override-detection saw the difference and built
+    # a dedicated provider, but that provider never actually carried the
+    # declared param. Covers the fix directly (mirrors the temperature test).
+    cfg = _config_with_api_key("zai_coding_plan")
+    cfg.providers.zai_coding_plan.models["glm-mini"] = ModelEntry(top_p=0.5)
+
+    default_provider = _default_provider(provider_key="zai_coding_plan")
+    ar = AgentRunner(default_provider)
+    ar.run = AsyncMock(return_value=AgentRunResult(final_content="ok", messages=[]))
+    nr = AgentNodeRunner(ar, SessionManager(workspace=tmp_path),
+                         default_model="default-model", app_config=cfg)
+
+    nr(_req(WorkNode(id="a", model="glm-mini", next=None)))
+    spec_a = ar.run.call_args.args[0]
+    assert spec_a.model == "glm-mini"
+    assert spec_a.provider.generation.top_p == 0.5             # the entry's override
+    assert spec_a.provider is not default_provider             # dedicated, not the shared default
+
+
 def test_plain_model_with_no_config_entry_reuses_the_default_client(tmp_path):
     # The common case: a bare model name with nothing configured for it must
     # NOT pay for a dedicated provider build.
