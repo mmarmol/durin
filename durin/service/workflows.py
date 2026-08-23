@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -751,7 +752,44 @@ class WorkflowsService:
                     "only a needs_input run (with the answers as task) or an aborted "
                     "run (retried at its failed node) can."
                 )
-            resume = build_resume_state(manifest, task)
+            if manifest.get("ask_kind") == "approval":
+                from durin.workflow.approval import build_approval_resume, parse_approval_reply
+
+                action = parse_approval_reply(task) or "revise"
+                if action == "reject":
+                    # No engine call at all: the approver declined it, which is not
+                    # a failure — finalize 'cancelled' with rejected=True directly.
+                    rejected_result = WorkflowResult(
+                        status="cancelled", ask_kind=None,
+                        final_output=manifest.get("final_output"),
+                        run_id=resume_run_id, rejected=True,
+                    )
+                    run_log.finalize_run(
+                        self._workspace, name, rejected_result,
+                        root_session_key=manifest.get("root_session_key"),
+                        started_at=manifest.get("started_at"), finished_at=time.time(),
+                    )
+                    return rejected_result
+                approval_resume = build_approval_resume(
+                    workflow, manifest, action, task if action == "revise" else "")
+                if approval_resume is None:
+                    # Approve on a terminal approval node (no `next`): the run
+                    # completes now, with the proposal as the final output — again
+                    # no engine call, there is nowhere left for it to resume into.
+                    completed_result = WorkflowResult(
+                        status="completed", final_output=manifest.get("final_output"),
+                        final_output_node=manifest.get("needs_input_node"),
+                        run_id=resume_run_id,
+                    )
+                    run_log.finalize_run(
+                        self._workspace, name, completed_result,
+                        root_session_key=manifest.get("root_session_key"),
+                        started_at=manifest.get("started_at"), finished_at=time.time(),
+                    )
+                    return completed_result
+                resume = approval_resume
+            else:
+                resume = build_resume_state(manifest, task)
             task = manifest.get("task") or task
 
         app_config = self._live_config()
