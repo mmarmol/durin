@@ -4613,6 +4613,18 @@
           "soul": {
             "title": "Soul",
             "type": "string"
+          },
+          "temperature": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Temperature"
           }
         },
         "required": [
@@ -4772,6 +4784,18 @@
             "default": "default",
             "title": "Soul",
             "type": "string"
+          },
+          "temperature": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Temperature"
           }
         },
         "required": [

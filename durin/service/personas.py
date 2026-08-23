@@ -74,6 +74,7 @@ class PersonaItem(Result):
     name: str
     soul: str
     model: str | None = None
+    temperature: float | None = None
     description: str | None = None
     builtin: bool = False
 
@@ -87,6 +88,7 @@ class PersonaUpsertCommand(Command):
     name: str
     soul: str = "default"
     model: str | None = None
+    temperature: float | None = None
     description: str | None = None
 
 
@@ -220,7 +222,8 @@ class PersonasService:
         cfg = load_config(get_config_path())
         items: list[PersonaItem] = []
         for name, p in cfg.personas.items():
-            items.append(PersonaItem(name=name, soul=p.soul, model=p.model, description=p.description, builtin=False))
+            items.append(PersonaItem(name=name, soul=p.soul, model=p.model, temperature=p.temperature,
+                                     description=p.description, builtin=False))
         items.sort(key=lambda i: i.name)
         # The implicit base — the default SOUL + the default model — listed LAST so it is
         # visible and selectable like any other persona. It is the fallback used when no
@@ -259,13 +262,15 @@ class PersonasService:
             raise ValidationFailedError(f"{cmd.name!r} is a reserved persona name")
 
         def _m(cfg: object) -> None:
-            cfg.personas[cmd.name] = PersonaConfig(soul=cmd.soul, model=cmd.model, description=cmd.description)
+            cfg.personas[cmd.name] = PersonaConfig(
+                soul=cmd.soul, model=cmd.model, temperature=cmd.temperature, description=cmd.description)
 
         mutate_config(_m)
         if self._on_config_changed is not None:
             self._on_config_changed()
         return PersonaUpsertResult(
-            persona=PersonaItem(name=cmd.name, soul=cmd.soul, model=cmd.model, description=cmd.description, builtin=False)
+            persona=PersonaItem(name=cmd.name, soul=cmd.soul, model=cmd.model, temperature=cmd.temperature,
+                                description=cmd.description, builtin=False)
         )
 
     @route(
