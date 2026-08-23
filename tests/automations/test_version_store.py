@@ -6,8 +6,8 @@ store/version-store pair (style reference only — written fresh here).
 
 import pytest
 
-from durin.automations.spec import parse_automation
-from durin.automations.store import AutomationNotFound, automations_dir, delete_automation, save_automation
+from durin.automations.spec import AutomationNotFound, parse_automation
+from durin.automations.store import automations_dir, delete_automation, save_automation
 from durin.automations.version_store import AutomationVersionStore
 
 

@@ -1,7 +1,6 @@
 import pytest
-from durin.automations.spec import parse_automation
+from durin.automations.spec import AutomationNotFound, parse_automation
 from durin.automations.store import (
-    AutomationNotFound,
     automations_dir,
     delete_automation,
     list_automations,

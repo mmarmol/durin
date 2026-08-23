@@ -15,13 +15,9 @@ from pathlib import Path
 
 from loguru import logger
 
-from durin.automations.spec import AutomationError, AutomationSpec, automation_to_dict, parse_automation
+from durin.automations.spec import AutomationNotFound, AutomationSpec, automation_to_dict, parse_automation
 from durin.utils.atomic_write import atomic_write_text
 from durin.utils.file_lock import cross_process_lock
-
-
-class AutomationNotFound(AutomationError):
-    """No definition file for the requested automation name."""
 
 
 def automations_dir(workspace: str | Path) -> Path:

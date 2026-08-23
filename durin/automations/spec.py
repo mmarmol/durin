@@ -61,6 +61,10 @@ class AutomationError(ValueError):
     """Malformed automation definition."""
 
 
+class AutomationNotFound(AutomationError):
+    """No definition file for the requested automation name."""
+
+
 @dataclass(frozen=True)
 class Delivery:
     channel: str | None = None
