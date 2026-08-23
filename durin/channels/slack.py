@@ -28,7 +28,7 @@ try:
 except ImportError:  # optional extra `durin-ai[slack]` not installed
     SLACK_AVAILABLE = False
 
-from durin.bus.events import OutboundMessage
+from durin.bus.events import OutboundMessage, SendReceipt
 from durin.bus.queue import MessageBus
 from durin.channels.base import BaseChannel
 from durin.channels.dedup import MessageDeduplicator
@@ -307,11 +307,18 @@ class SlackChannel(BaseChannel):
                 self.logger.warning("socket close failed: {}", e)
             self._socket_client = None
 
-    async def send(self, msg: OutboundMessage) -> None:
-        """Send a message through Slack."""
+    async def send(self, msg: OutboundMessage) -> SendReceipt | None:
+        """Send a message through Slack.
+
+        Returns a ``SendReceipt`` naming the thread this send landed in: the
+        first posted chunk's own ``ts`` when it opens a new thread, or the
+        existing ``thread_ts`` it replied into. ``None`` when nothing was
+        actually posted (progress-only or media-only sends).
+        """
         if not self._web_client:
             self.logger.warning("client not running")
-            return
+            return None
+        receipt: SendReceipt | None = None
         try:
             target_chat_id = await self._resolve_target_chat_id(msg.chat_id)
             slack_meta = msg.metadata.get("slack", {}) if msg.metadata else {}
@@ -350,7 +357,13 @@ class SlackChannel(BaseChannel):
                             status_target, status_ts, chunk, thread_ts_param
                         )
                         continue
-                    await self._web_client.chat_postMessage(**kwargs)
+                    resp = await self._web_client.chat_postMessage(**kwargs)
+                    if index == 0:
+                        # An existing thread's key takes precedence over this
+                        # message's own ts — a reply belongs to the thread it
+                        # replied into, not to itself.
+                        ts = thread_ts_param or resp.get("ts")
+                        receipt = SendReceipt(thread_key=f"slack:{target_chat_id}:{ts}")
 
             for media_path in msg.media or []:
                 try:
@@ -367,6 +380,7 @@ class SlackChannel(BaseChannel):
                 event = slack_meta.get("event", {})
                 await self._update_react_emoji(origin_chat_id, event.get("ts"))
 
+            return receipt
         except Exception:
             self.logger.exception("Error sending message")
             raise

@@ -22,7 +22,7 @@ from typing import Any, Literal
 from loguru import logger
 from pydantic import Field
 
-from durin.bus.events import OutboundMessage
+from durin.bus.events import OutboundMessage, SendReceipt
 from durin.bus.queue import MessageBus
 from durin.channels.base import BaseChannel
 from durin.channels.email_threads import (
@@ -208,8 +208,14 @@ class EmailChannel(BaseChannel):
         """Stop polling loop."""
         self._running = False
 
-    async def send(self, msg: OutboundMessage) -> None:
-        """Send email via SMTP."""
+    async def send(self, msg: OutboundMessage) -> SendReceipt | None:
+        """Send email via SMTP.
+
+        Returns a ``SendReceipt`` for the thread this mail belongs to (the
+        existing thread's digest when replying, otherwise the digest of this
+        mail's own new Message-ID), or ``None`` when nothing was sent or no
+        thread identity could be derived.
+        """
         if not self.config.consent_granted:
             self.logger.warning("Skip email send: consent_granted is false")
             return
@@ -309,6 +315,16 @@ class EmailChannel(BaseChannel):
 
         if entry and digest:
             self._store.record_outbound(digest, own_message_id)
+
+        # The receipt names the thread this send belongs to: the existing
+        # thread's root when replying, or this send's own new Message-ID when
+        # it opens a fresh thread — the same root a future reply resolves
+        # back to via References[0]/In-Reply-To (see _resolve_thread), so a
+        # claim registered on this key gets woken by that reply.
+        thread_root = entry.get("root", "") if entry else (email_msg.get("Message-ID") or "")
+        if not thread_root:
+            return None
+        return SendReceipt(thread_key=thread_digest(thread_root))
 
     def _validate_config(self) -> bool:
         missing = []

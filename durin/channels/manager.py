@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from durin.bus.events import InboundMessage, OutboundMessage
+from durin.bus.events import InboundMessage, OutboundMessage, SendReceipt
 from durin.bus.queue import MessageBus
 from durin.channels.base import BaseChannel
 from durin.config.schema import Config
@@ -752,7 +752,7 @@ class ChannelManager:
                 break
 
     @staticmethod
-    async def _send_once(channel: BaseChannel, msg: OutboundMessage) -> None:
+    async def _send_once(channel: BaseChannel, msg: OutboundMessage) -> SendReceipt | None:
         """Send one outbound message without retry policy."""
         if msg.metadata.get("_reasoning_end"):
             await channel.send_reasoning_end(msg.chat_id, msg.metadata)
@@ -766,7 +766,8 @@ class ChannelManager:
         elif msg.metadata.get("_stream_delta") or msg.metadata.get("_stream_end"):
             await channel.send_delta(msg.chat_id, msg.content, msg.metadata)
         elif not msg.metadata.get("_streamed"):
-            await channel.send(msg)
+            return await channel.send(msg)
+        return None
 
     def _coalesce_stream_deltas(
         self, first_msg: OutboundMessage
@@ -823,7 +824,7 @@ class ChannelManager:
         )
         return merged, non_matching
 
-    async def _send_with_retry(self, channel: BaseChannel, msg: OutboundMessage) -> None:
+    async def _send_with_retry(self, channel: BaseChannel, msg: OutboundMessage) -> SendReceipt | None:
         """Send a message with retry on failure using exponential backoff.
 
         Note: CancelledError is re-raised to allow graceful shutdown.
@@ -832,8 +833,7 @@ class ChannelManager:
 
         for attempt in range(max_attempts):
             try:
-                await self._send_once(channel, msg)
-                return  # Send succeeded
+                return await self._send_once(channel, msg)  # Send succeeded
             except asyncio.CancelledError:
                 raise  # Propagate cancellation for graceful shutdown
             except Exception as e:
@@ -852,6 +852,23 @@ class ChannelManager:
                     await asyncio.sleep(delay)
                 except asyncio.CancelledError:
                     raise  # Propagate cancellation during sleep
+
+    async def send(self, msg: OutboundMessage) -> SendReceipt | None:
+        """Send one message directly through its channel and return the
+        channel's receipt.
+
+        Unlike the outbound-queue path (``publish_outbound`` to the bus,
+        consumed later by ``_dispatch_outbound``), this bypasses the queue
+        so a caller gets the receipt back synchronously — e.g. an approval
+        ask that needs the thread key to register a claim on. Existing
+        dispatch-path callers are unaffected: they still route through the
+        queue and ignore the return value.
+        """
+        channel = self.channels.get(msg.channel)
+        if channel is None:
+            logger.warning("Unknown channel: {}", msg.channel)
+            return None
+        return await self._send_with_retry(channel, msg)
 
     def get_channel(self, name: str) -> BaseChannel | None:
         """Get a channel by name."""

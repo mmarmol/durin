@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from durin.bus.events import OutboundMessage
+from durin.bus.events import OutboundMessage, SendReceipt
 from durin.bus.queue import MessageBus
 from durin.channels.email import EmailChannel, EmailConfig
 
@@ -1354,6 +1354,57 @@ async def test_send_message_id_domain_ignores_display_name(monkeypatch) -> None:
     ))
 
     assert re.match(r"^<[^<>@]+@example\.com>$", sent[0]["Message-ID"])
+
+
+@pytest.mark.asyncio
+async def test_send_returns_receipt_for_existing_thread(monkeypatch) -> None:
+    """Replying within a known thread: the receipt carries that thread's own
+    digest (thread_digest of the thread's root), not a fresh one derived
+    from this reply's own Message-ID."""
+    from durin.channels.email_threads import thread_digest
+
+    channel = EmailChannel(_make_config(), MessageBus())
+    digest = thread_digest("<m1@example.com>")
+    channel._store.upsert_inbound(
+        digest,
+        root="<m1@example.com>",
+        address="alice@example.com",
+        subject="Invoice #42",
+        references=[],
+        message_id="<m1@example.com>",
+    )
+    sent: list = []
+    monkeypatch.setattr(channel, "_smtp_send", lambda m: sent.append(m))
+
+    receipt = await channel.send(OutboundMessage(
+        channel="email",
+        chat_id="alice@example.com",
+        content="Acknowledged.",
+        metadata={"email": {"thread": digest}},
+    ))
+
+    assert len(sent) == 1
+    assert receipt == SendReceipt(thread_key=digest)
+
+
+@pytest.mark.asyncio
+async def test_send_returns_receipt_for_fresh_thread(monkeypatch) -> None:
+    """A proactive send with no known thread opens one: the receipt's digest
+    is derived from this send's own freshly-generated Message-ID, matching
+    what a future reply into it will resolve back to."""
+    from durin.channels.email_threads import thread_digest
+
+    channel = EmailChannel(_make_config(), MessageBus())
+    sent: list = []
+    monkeypatch.setattr(channel, "_smtp_send", lambda m: sent.append(m))
+
+    receipt = await channel.send(OutboundMessage(
+        channel="email", chat_id="bob@example.com", content="Hello there.",
+    ))
+
+    assert len(sent) == 1
+    own_message_id = sent[0]["Message-ID"]
+    assert receipt == SendReceipt(thread_key=thread_digest(own_message_id))
 
 
 @pytest.mark.asyncio
