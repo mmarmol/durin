@@ -253,6 +253,23 @@ constraints: linear `next` only (no routing — its verdict could never reach th
 `context: "shared"`, never a parallel branch/worker, and never the target of a routing
 edge (a loop-back into a possibly-still-running node is undefined). Detached nodes should
 read and persist, not produce files the main path consumes — nothing downstream reads them.
+
+A work node may instead declare **`approval: true`**: after the node's own turn, the
+walk pauses on its output instead of threading it onward — the output is a **proposal**
+a human must approve, revise, or reject before the run continues. Parse-time constraints
+(`_parse_approval`, `durin/workflow/spec.py`): the node must be linear — no
+`on_pass`/`on_fail`/`cases` (a paused node's verdict could never reach a route);
+non-detached (detached already means the walk never waits for it); and non-shared-context
+(a paused shared node would strand the buffer for every later shared node). It can also
+never be a parallel branch or dynamic worker — approval requires pausing the single walk,
+and concurrent units have no walk to pause — including at one remove: a `branches_from`
+node with no declared `branches` pool makes every work node in the workflow
+runtime-selectable (the same hazard `reuse` guards against, above), so the parser refuses
+that combination outright whenever ANY node anywhere declares `approval`, unless an
+explicit candidate pool is declared. The pause itself is a plain `needs_input`:
+`WorkflowResult(status="needs_input", ask_kind="approval")`, the node's own output
+doubling as `final_output` (the proposal) and `needs_input_node` naming the paused node,
+with its exact input preserved as `resume_upstream` for the revise path (§4g).
 **A node's "runs as" is a single choice:** either a specific model (or omitted ⇒ default) or
 a **Persona** (a named SOUL + its model, mutually exclusive with `model`). Setting `persona`
 on a node injects the SOUL body into the node's system prompt and selects the persona's model.
@@ -449,15 +466,23 @@ persists no conversation — script, sub-workflow, parallel. The next `update_ru
 (the node's own completion)
 clears it, and a run whose `status` is no longer `"running"` never reports one — a
 crashed run's last in-flight node does not linger as a phantom "still running" entry.
-On finalization: `needs_input_node` — the node
-that routed to `__needs_input__` (`null` otherwise), the resume re-entry point;
+On finalization: `needs_input_node` — the node the run paused at: a multi-way route to
+`__needs_input__`, a sub-workflow node whose child paused, or a `WorkNode.approval`
+pause (`null` otherwise), the resume re-entry point; `ask_kind` — which kind of pause it
+is, `"question"` for the first two (the human-in-the-loop lives in the invoking agent) or
+`"approval"` for the third (`null` when the run did not pause; see §4g for how each is
+resumed);
 `failed_node` + `resume_upstream` — on an aborted run, the node whose execution raised
 and the EXACT upstream text it received (verbatim, capped), the failure-resume anchors:
 `resume_run_id` on such a run retries the failed node with the same input — completed
 nodes never re-run, and no retry framing pollutes the replayed text (a retried script
 parses its stdin);
 `final_output_node` — which node's output became `final_output` (`null` when no node
-contributed, e.g. an aborted run); `output_files`: the relative paths (within the
+contributed, e.g. an aborted run); `final_route_label` — the verdict that ended the run:
+a matched `cases` label, binary `"PASS"`/`"FAIL"`, or `null` for every other ending (§4d);
+`rejected` — `true` only when a paused approval was answered "reject", so the run ends
+`cancelled` because the approver explicitly declined it rather than because anything
+failed (`false` otherwise); `output_files`: the relative paths (within the
 run's output folder) a completed run produced, empty for a run that ended any other
 status or produced no files (never includes the engine's own `.provenance.json`
 bookkeeping file — same exclusion as a node's `artifacts`, above); `missing_artifacts` — declared `output.artifacts` paths a
@@ -600,6 +625,14 @@ survives if the forced tool call is ever unavailable.
 
 **Terminal routing output.** When a routing node ends the run (its followed edge is null), its output minus the verdict/label line becomes the run's final output when non-empty; a bare-verdict gate leaves the previous node's output in place. A terminal gate that produced real content (a verification summary, a final synthesis) is therefore not silently discarded.
 
+That same terminal moment stamps `WorkflowResult.final_route_label` — and, on the
+finalized manifest, its `final_route_label` field — with whichever verdict actually ended
+the run: the matched `cases` label, or `"PASS"`/`"FAIL"` for a binary gate. It is `None`
+for every other ending — a plain linear node whose `next` is null, a needs_input/approval
+pause, an abort, a cancel — so a caller can tell WHICH verdict closed the run, and
+distinguish that from a run that simply ran off the end of a non-routing chain, without
+re-deriving it from the last row of the per-node trace.
+
 ### 4e. Context vs. session
 
 `context` controls what a node **sees**, not where its work is stored.
@@ -644,6 +677,13 @@ carrying the user's answers. The response carries `run_id`, a per-node trace wit
 each entry, plus `final_output_node` (which node's output became `final_output`),
 `needs_input_node` (the node that asked, when the run ends `needs_input`) and
 `output_files` (relative paths in `output_dir`, for a completed run).
+
+`ask_kind`, `final_route_label`, and `rejected` (§4a) ride the full manifest — read via
+`GET /api/v1/workflows/{name}/runs/{run_id}` above, or `run_log.read_manifest` — but not
+yet this synchronous response, nor the two summary routes' fixed projection
+(`list_runs`/`list_all_runs`, which still stop at `needs_input_node`): a client
+distinguishing an approval pause from a question pause, or reading which verdict ended a
+run, needs the full manifest today, not the summary or the synchronous run response.
 
 ### 4g. Background mode and live progress
 
@@ -702,6 +742,56 @@ visit counts already consumed, and the user's answers as that node's upstream
 input. The shared-context buffer is not reconstructed across a resume —
 persistent-session nodes recover their own history, and files live in the
 working folder.
+
+**Resuming an approval pause — three replies, not one.** `ask_kind` (above, and
+on the manifest) tells a resuming caller which kind of `needs_input` pause this
+is. A `"question"` pause (a multi-way route to `__needs_input__`, or a
+sub-workflow node whose child asked) takes the generic resume above: the
+answers become the asking node's upstream input. An `"approval"` pause is
+resolved instead by `durin/workflow/approval.py`, which reads the reply text
+and picks one of three outcomes. `parse_approval_reply` recognizes a
+single-word reply, case-insensitive with surrounding punctuation stripped,
+against a bilingual vocabulary — approve: `aprobar`, `approve`, `ok`, `sí`,
+`si`, `yes`; reject: `rechazar`, `reject`, `no` — and treats anything else,
+including a multi-word reply that merely starts with one of those words
+("aprobar pero cambia X"), as a **revise** comment rather than a verdict; an
+unrecognized reply defaults to revise, never to approve or reject.
+
+**Approve** resumes past the flagged node at its `next` edge, with the
+recorded proposal threaded in as upstream input — the node itself never
+re-runs. If it has no `next` (a terminal approval), there is nothing to resume
+into: approving it completes the run immediately, with the proposal as
+`final_output`. **Reject** ends the run there, `cancelled`, with
+`rejected: true` marking that the approver explicitly declined it rather than
+anything failing. Both of these are short-circuits — `build_approval_resume`
+returns `None` for them, so neither the `run_workflow` tool nor the
+`WorkflowsService` HTTP resume path (`POST /api/v1/workflows/{name}/run` with
+`resume_run_id`, §4f — both implement this identically) ever calls back into
+the engine; each finalizes directly through `run_log.finalize_short_circuit`,
+which rewrites an existing manifest's terminal fields (`status`, capped
+`final_output`, `finished_at`/`ts`, `rejected`, and clearing
+`active_node`/`needs_input_node`/`ask_kind` to `None`) IN PLACE rather than
+through `finalize_run` — the paused manifest already carries the run's real
+per-node trace, `work_dir`, `work_key`, and `typical_s`/`typical_total_s`, and
+a short-circuit invents no fresh `WorkflowResult.runs`, so rewriting through
+`finalize_run` here would silently discard that trace. **Revise** — anything
+else — resumes AT the flagged node itself (not past it): the SAME node
+re-runs, with the reply framed as feedback alongside the run's ORIGINAL
+upstream text, and its `approval` flag pauses it again with the new proposal —
+the identical mechanism as the first pass, recursively. Because this re-enters
+the same node, it consumes a visit exactly like any other loop-back (§2): a
+chain of revisions bounded by the node's `max_visits` that never converges to
+approve or reject ends the run `exhausted`, naming the approval node, rather
+than pausing forever. Either path's `ResumeState.recorded_outputs` seeds from
+the manifest's own `resume_inputs`, same as the generic resume above, so a
+downstream `inputs_from` reference to a pre-pause source still resolves;
+approve additionally overlays the flagged node's own proposal under its id,
+since the resumed walk starts at `next` and never revisits the flagged node to
+record a fresh output for it. The calling agent's own summary text
+(`run_workflow`'s `_format_result`) does not yet special-case any of this — an
+approval pause is currently framed with the same generic "needs more
+information" text as a question pause, not yet told to ask specifically for
+approve/reject/revise.
 
 **Cooperative cancellation — two modes.** `tasks(action='stop', …)` marks the
 `run_id` in a process-global registry (`durin/workflow/cancellation.py`) with a
@@ -775,6 +865,38 @@ gateway's event loop via
 `asyncio.run_coroutine_threadsafe(bus.publish_outbound(...), main_loop)` before
 being published on the message bus. The WebSocket channel propagates them as
 `tool_events` frames that the work panel consumes in real time.
+
+**Service-path progress: the `runs:feed` sink.** The mechanism above is how an
+*agent-launched* run's frames reach a client: they publish onto the calling
+session's own `chat_id`, because there IS one — the same reason the finished
+result can be injected back via `session_key_override` (above). A
+**service-path** run has no calling chat — today, a loop trigger; potentially
+a raw HTTP launch or an automation tomorrow. `WorkflowsService.__init__`
+(`durin/service/workflows.py`) instead accepts an optional `progress_publish`
+callback; when set, `execute()` wires it into the engine's `progress_emit` and
+every running-node frame is republished onto one fixed key instead of a
+per-chat one: `RUNS_FEED_CHAT_ID = "runs:feed"`. `build_runs_feed_event` wraps
+a service-path payload (`run_id`, `workflow`, `task`, `nodes`, `done`) into the
+exact same `workflow_progress` `tool_events` envelope the per-chat path builds
+— same six keys, `done` expressed via `phase: "end"` rather than its own flag
+— so the existing work-panel renderer consumes a `runs:feed` frame exactly
+like a per-chat one, with no branching for where it came from. Only the loops
+runtime's own `WorkflowsService` instance is wired with `progress_publish`
+today (`_loops_workflows_service` in `durin/cli/commands.py`, whose closure
+marshals each payload from the engine's worker thread back onto the gateway's
+event loop via `asyncio.run_coroutine_threadsafe` — mirroring the per-chat path
+— and publishes a `websocket` channel message on the `runs:feed` chat id,
+dropped harmlessly if the loop is not yet captured or already shut down). The
+registry's own `WorkflowsService` — the instance the HTTP `/api/v1/workflows/*`
+routes actually run against (`durin/service/wiring.py`) — is built with no
+`progress_publish`, so a run launched directly over
+`POST /api/v1/workflows/{name}/runs` or `.../run` publishes no `runs:feed`
+frames yet; only a loop-triggered run does. Either way, `execute()` emits no
+terminal (`done: true`) frame of its own — unlike `run_workflow.py`'s tool
+path, which builds one explicitly from the finished `WorkflowResult` — so a
+`runs:feed` watcher sees a service-path run's live per-node progress but must
+read the run's manifest (§4a) or the global feed (§4f) to learn how it
+actually ended.
 
 Every node entry carries `iteration` (current pass number) and `budget`
 (effective visit limit, `null` where not applicable) so the panels can render
@@ -1015,7 +1137,8 @@ End-to-end for a single `run_workflow` call:
 | `WorkflowWriteTool` | `durin/agent/tools/workflow_write.py` | The `workflow_write` LLM tool (core scope): validates a definition via `parse_workflow` before persisting, refuses overwriting an existing name, defaults `improvement_mode` to `manual`, and commits through the version store. The agent's sanctioned authoring path (also given to the dream's skill-extract sub-agent, so a skill can delegate to a workflow it authored). |
 | `WorkflowScriptWriteTool` | `durin/agent/tools/workflow_script_write.py` | The `workflow_script_write` LLM tool: the sanctioned door for the script files a `script` node runs. Generic write tools are denied under `workflows/` (see [security.md](security.md)), so this is how an agent — and the dream's skill-extract sub-agent — authors a deterministic step. Persists through `save_workflow_script`, the same door the editor's `PUT …/scripts/{name}` route uses. |
 | `dependents_of` / `DependentsTool` | `durin/registry_graph.py`, `durin/agent/tools/dependents.py` | The definition graph read backwards: which workflow nodes name a skill (`skills: [...]`) or a script, which nodes call a workflow as a `subworkflow`, and which loops run it. Reads raw JSON so a malformed sibling cannot make the query fail open. Consumed by the autonomous-mutation barrier in the skills store (see [skills/02_lifecycle_and_curation.md](skills/02_lifecycle_and_curation.md)) and exposed to the agent read-only as the `dependents` tool. |
-| `start_run`, `mark_node_started`, `update_run`, `finalize_run`, `typical_node_durations`, `typical_total_duration`, `read_manifest`, `runs_for_session`, `reconcile_running`, `read_runs_since` | `durin/workflow/run_log.py` | The live run manifest (running→terminal, including the in-flight `active_node` marker and the once-per-run `typical_s`/`typical_total_s` baselines), per-run diagnostic records, crash reconciliation, and the self-improvement signal source. `read_runs_since` callers that need terminal runs should skip records with `status in {"running","crashed"}`. |
+| `start_run`, `mark_node_started`, `update_run`, `finalize_run`, `finalize_short_circuit`, `typical_node_durations`, `typical_total_duration`, `read_manifest`, `runs_for_session`, `reconcile_running`, `read_runs_since` | `durin/workflow/run_log.py` | The live run manifest (running→terminal, including the in-flight `active_node` marker and the once-per-run `typical_s`/`typical_total_s` baselines), per-run diagnostic records, crash reconciliation, and the self-improvement signal source. `finalize_short_circuit` rewrites an existing manifest's terminal fields in place for a resume that never calls the engine (an approval reject or approve-terminal — see `durin/workflow/approval.py`). `read_runs_since` callers that need terminal runs should skip records with `status in {"running","crashed"}`. |
+| `parse_approval_reply`, `build_approval_resume` | `durin/workflow/approval.py` | Interprets a reply to a paused approval node — a bilingual single-word vocabulary → approve/reject/revise — and builds the `ResumeState` for approve/revise (reject and an approve with no `next` short-circuit before ever reaching this module; see §4g). |
 | `WorkflowRunsTool` | `durin/agent/tools/workflow_runs.py` | The `workflow_runs` LLM tool (core scope, read-only): `search` finds past runs by workflow name/task text/status across every session recorded in the workspace (`tasks` only sees the launching session), `show` returns one run's manifest summary, per-node trace, working folder path, and its artifact files from `.provenance.json` (a file the ledger never recorded is labeled "unstamped"), `cost` renders the per-run token/cost table — one summed line per node (LLM calls, prompt/fresh/output tokens, LLM minutes, dominant model) plus a TOTAL line and the reused-node count — aggregated from `provider.call` telemetry across the run AND any child sub-workflow runs (found by walking `parent_run_id` to any depth), matched by run id and by the run's started/finished dates (±1 day, since a telemetry file is dated by local wall-clock time) — so a question about prior work, including what it cost, can be answered by reading a finding instead of re-running the workflow to reproduce it. |
 | `NodeExecutionError` | `durin/workflow/engine.py` | Typed error raised by the node runner when an agent turn or a script node's process fails or times out; carries `node_id`, `iteration`, and `session_key` (`None` for a script node) so the engine can record an attributable `NodeRun` before aborting. |
 | `compute_diagnostics` | `durin/workflow/diagnostics.py` | Reduces run records to recurring per-node trouble (loop-backs, gate fails, script failures with sample error strings) → improvement candidates. |
@@ -1269,7 +1392,12 @@ End-to-end for a single `run_workflow` call:
   so the engine never blocks for input; a run that ends `needs_input` can be **resumed**
   instead of restarted, re-entering the graph at the asking node with the same run id,
   working folder, node sessions and consumed visit counts, and the user's answers as that
-  node's input; before any of that, **pre-flight input validation** rejects a call whose
+  node's input; a work node may instead declare **`approval: true`** to pause the walk on
+  its OWN output as a proposal rather than a question (linear-only; never detached,
+  shared-context, or a parallel unit) — resolved by a bilingual **approve** (resumes past
+  the node), **reject** (ends the run `cancelled` with `rejected: true`), or **revise**
+  (the same node re-runs with the reply as feedback and pauses again, bounded by its own
+  visit budget like any loop-back) reply; before any of that, **pre-flight input validation** rejects a call whose
   declared input files are missing or collide on name (an `aborted` result naming the
   problem, before any node or manifest exists), and a workflow that declares file input
   but received none ends `needs_input` immediately rather than burning a node turn on it;

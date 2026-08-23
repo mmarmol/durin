@@ -383,7 +383,11 @@ it, pre-generating the run id the way `run_workflow`'s agent-tool
 `background=true` branch does (a separate implementation, since an agent turn
 also streams progress and injects the result back into the chat — neither
 applies to a bare API launch). A caller polls the existing read routes below
-for status. There is no caller session to key the run to (unlike an agent
+for status: this registry instance carries no `progress_publish` wiring (see
+`workflow.md`'s service-path progress section), so unlike a loop-triggered run
+— which does publish live per-node progress onto the `runs:feed` WebSocket
+key — a run launched here pushes nothing to poll for in between. There is no
+caller session to key the run to (unlike an agent
 turn), so `root_session_key` is derived from the calling principal as
 `api:{principal.subject}` — the same "key the run to whoever's asking" idea
 the `/v1` chat endpoint applies to `session_id`. 404s on an unknown workflow
