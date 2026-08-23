@@ -88,24 +88,33 @@ class TestIsAchieved:
     """Tests for is_achieved(result, spec) -> bool"""
 
     @pytest.mark.parametrize(
-        "life,final_route_label,expected",
+        "life,final_route_label,status,expected",
         [
             # No life → False
-            (None, None, False),
-            (None, "COBRADA", False),
+            (None, None, "completed", False),
+            (None, "COBRADA", "completed", False),
 
             # achieved_when="any_completed" → True for any completed
-            (Life(intent="test", achieved_when="any_completed"), None, True),
-            (Life(intent="test", achieved_when="any_completed"), "COBRADA", True),
-            (Life(intent="test", achieved_when="any_completed"), "FAIL", True),
+            (Life(intent="test", achieved_when="any_completed"), None, "completed", True),
+            (Life(intent="test", achieved_when="any_completed"), "COBRADA", "completed", True),
+            (Life(intent="test", achieved_when="any_completed"), "FAIL", "completed", True),
 
             # achieved_when="label:X" → True only if final_route_label == "X" (case-sensitive)
-            (Life(intent="test", achieved_when="label:COBRADA"), "COBRADA", True),
-            (Life(intent="test", achieved_when="label:COBRADA"), "cobrada", False),  # Case mismatch
-            (Life(intent="test", achieved_when="label:COBRADA"), "FAIL", False),
-            (Life(intent="test", achieved_when="label:COBRADA"), None, False),
-            (Life(intent="test", achieved_when="label:SUCCESS"), "SUCCESS", True),
-            (Life(intent="test", achieved_when="label:SUCCESS"), "FAIL", False),
+            (Life(intent="test", achieved_when="label:COBRADA"), "COBRADA", "completed", True),
+            (Life(intent="test", achieved_when="label:COBRADA"), "cobrada", "completed", False),  # Case mismatch
+            (Life(intent="test", achieved_when="label:COBRADA"), "FAIL", "completed", False),
+            (Life(intent="test", achieved_when="label:COBRADA"), None, "completed", False),
+            (Life(intent="test", achieved_when="label:SUCCESS"), "SUCCESS", "completed", True),
+            (Life(intent="test", achieved_when="label:SUCCESS"), "FAIL", "completed", False),
+
+            # Regression-locking: is_achieved's internal status=="completed" check.
+            # B5 calls is_achieved directly (not only via classify), so a weakened
+            # internal status check must be caught independently.
+            # These rows verify that non-completed statuses always return False,
+            # regardless of life and final_route_label.
+            (Life(intent="test", achieved_when="any_completed"), None, "exhausted", False),  # exhausted case
+            (Life(intent="test", achieved_when="any_completed"), None, "aborted", False),  # aborted case
+            (Life(intent="test", achieved_when="label:COBRADA"), "COBRADA", "cancelled", False),  # cancelled with matching label case
         ],
         ids=[
             "no_life_none",
@@ -119,11 +128,14 @@ class TestIsAchieved:
             "label_cobrada_none",
             "label_success_match",
             "label_success_mismatch",
+            "regression_any_completed_exhausted",
+            "regression_any_completed_aborted",
+            "regression_label_cobrada_cancelled",
         ],
     )
-    def test_is_achieved(self, life, final_route_label, expected):
+    def test_is_achieved(self, life, final_route_label, status, expected):
         result = WorkflowResult(
-            status="completed",
+            status=status,  # type: ignore
             final_output="test",
             final_route_label=final_route_label,
         )
@@ -182,10 +194,8 @@ class TestShouldDeliver:
             ("when_notable", "rejected", None, ("NOTHING_TO_REPORT",), False),
             ("when_notable", "interrupted", None, ("NOTHING_TO_REPORT",), False),
 
-            # "paused", "rejected", "interrupted" under "failures_only" → False
-            ("failures_only", "paused", None, ("NOTHING_TO_REPORT",), False),
-            ("failures_only", "rejected", None, ("NOTHING_TO_REPORT",), False),
-            ("failures_only", "interrupted", None, ("NOTHING_TO_REPORT",), False),
+            # "paused", "rejected", "interrupted" under "failures_only" → False (covered above at lines 158-160)
+            # Duplicate removed to avoid test suite noise
 
             # Multiple silent labels
             ("when_notable", "completed", "COBRADA", ("NOTHING_TO_REPORT", "COBRADA", "SKIP_ME"), False),
@@ -221,9 +231,6 @@ class TestShouldDeliver:
             "when_notable_paused",
             "when_notable_rejected",
             "when_notable_interrupted",
-            "failures_only_paused",
-            "failures_only_rejected",
-            "failures_only_interrupted",
             "when_notable_multi_silent_cobrada",
             "when_notable_multi_silent_skip_me",
             "when_notable_multi_silent_unexpected",
