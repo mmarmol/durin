@@ -292,6 +292,13 @@ def finalize_run(
         "final_output_node": getattr(result, "final_output_node", None),
         "final_route_label": getattr(result, "final_route_label", None),
         "needs_input_node": getattr(result, "needs_input_node", None),
+        # "approval" (a WorkNode.approval pause) or "question" (a __needs_input__
+        # pause) when status=="needs_input", None otherwise — see
+        # durin/workflow/approval.py for how a paused approval's reply is resolved.
+        "ask_kind": getattr(result, "ask_kind", None),
+        # True only for a run the approver explicitly rejected (status "cancelled")
+        # — distinguishes that from any other reason a run ends cancelled.
+        "rejected": getattr(result, "rejected", False),
         # Failure-resume anchors: which node aborted the run and the EXACT upstream
         # text it received (verbatim — a retried script parses its stdin, so no
         # framing may pollute it). Only present on aborted runs that name a node.
