@@ -5,6 +5,44 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.8.2 — 2026-08-22
+
+### Highlights
+
+- **"What did this run cost?" is now one tool call.** `workflow_runs` gained a
+  `cost` action: the per-run token table — every node with visits collapsed,
+  subworkflow children included, reused nodes counted at zero — computed from
+  the run's own telemetry. An empty result says so explicitly instead of
+  rendering zeros. (#548)
+
+- **A workflow node's model choice now behaves like the chat's.** Node and
+  persona model references resolve through the same machinery as `/model`: a
+  `"provider model"` pair works (it used to be passed raw and would have broken
+  the call), a plain model name picks up its per-model config parameters —
+  which now actually reach the node's calls — and personas can pin a
+  `temperature` ("the reviewer runs cold"). Resolution is cached per run,
+  falls back safely on a bad reference, and everything a node resolves enters
+  its reuse identity, so changed parameters never serve stale work. Along the
+  way: `/model` itself had silently dropped `top_p`/`top_k`/`repeat_penalty`
+  from per-model config since forever — fixed for every caller. (#549)
+
+### Changes
+
+**Tools**
+
+- `workflow_runs`: `cost` action (anchored file matching, midnight-spanning
+  runs covered); `search` filters by date (`since`/`until`, end-of-day
+  inclusive); correct TUI startup category. (#547, #548)
+- `run_workflow` rejects `resume_run_id` + `work_key` together — a resumed run
+  keeps the key it was started with. (#547)
+
+**Workflows & config**
+
+- Node/persona model refs resolve via presets; per-model generation params
+  (temperature, sampling) apply to node calls; `PersonaConfig.temperature`
+  (webui persona editor included); `repeat_penalty` joins the reuse params
+  identity (existing artifacts re-run once and re-stamp). (#549)
+
 ## 0.8.1 — 2026-08-21
 
 ### Highlights
