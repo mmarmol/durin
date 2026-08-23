@@ -6,6 +6,13 @@ rewrite; a per-automation cross-process lock guards save/delete because the
 webui, the agent tool, and the CLI may write concurrently — writers touching
 different automations never block each other, only same-name writers
 serialize.
+
+Saving validates the chain-trigger graph (durin.automations.chains) so no
+save can close a cycle across automations. Deleting does not: removing a
+chain source leaves any other automation's chain trigger pointing at a name
+that no longer exists, but that dangling trigger is inert rather than
+invalid — chain_targets simply never matches it — so v1 accepts it rather
+than chasing down and rewriting every downstream chain trigger on delete.
 """
 
 from __future__ import annotations
@@ -55,6 +62,9 @@ def save_automation(
     actor: str = "user",
     reason: str = "saved",
 ) -> None:
+    from durin.automations.chains import validate_chain_edges
+
+    validate_chain_edges(workspace, spec)
     d = automations_dir(workspace)
     d.mkdir(parents=True, exist_ok=True)
     path = _path(workspace, spec.name)
