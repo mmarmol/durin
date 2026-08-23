@@ -410,24 +410,25 @@ class RunWorkflowTool(Tool, ContextAware):
                         f"needs_input run (with the answers as task) or an aborted run "
                         f"(retried at its failed node) can.")
             if manifest.get("ask_kind") == "approval":
-                import time
-
                 from durin.workflow.approval import build_approval_resume, parse_approval_reply
                 from durin.workflow.result import WorkflowResult
 
                 action = parse_approval_reply(task) or "revise"
                 if action == "reject":
                     # No engine call at all: the approver declined it, which is not
-                    # a failure — finalize 'cancelled' with rejected=True directly.
+                    # a failure — finalize 'cancelled' with rejected=True directly,
+                    # IN PLACE on the existing manifest (preserves its per-node
+                    # trace and work_dir; finalize_run would instead rewrite them
+                    # away from this minimal result's empty runs=[]).
+                    run_log.finalize_short_circuit(
+                        self._workspace, name, resume_run_id,
+                        status="cancelled", final_output=manifest.get("final_output"),
+                        rejected=True,
+                    )
                     result = WorkflowResult(
                         status="cancelled", ask_kind=None,
                         final_output=manifest.get("final_output"),
                         run_id=resume_run_id, rejected=True,
-                    )
-                    run_log.finalize_run(
-                        self._workspace, name, result,
-                        root_session_key=manifest.get("root_session_key"),
-                        started_at=manifest.get("started_at"), finished_at=time.time(),
                     )
                     return _format_result(
                         result, output_files=bool((workflow.output or {}).get("file")))
@@ -437,15 +438,14 @@ class RunWorkflowTool(Tool, ContextAware):
                     # Approve on a terminal approval node (no `next`): the run
                     # completes now, with the proposal as the final output — again
                     # no engine call, there is nowhere left for it to resume into.
+                    run_log.finalize_short_circuit(
+                        self._workspace, name, resume_run_id,
+                        status="completed", final_output=manifest.get("final_output"),
+                    )
                     result = WorkflowResult(
                         status="completed", final_output=manifest.get("final_output"),
                         final_output_node=manifest.get("needs_input_node"),
                         run_id=resume_run_id,
-                    )
-                    run_log.finalize_run(
-                        self._workspace, name, result,
-                        root_session_key=manifest.get("root_session_key"),
-                        started_at=manifest.get("started_at"), finished_at=time.time(),
                     )
                     return _format_result(
                         result, output_files=bool((workflow.output or {}).get("file")))

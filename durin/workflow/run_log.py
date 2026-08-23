@@ -318,6 +318,43 @@ def finalize_run(
     return path
 
 
+def finalize_short_circuit(
+    workspace: str | Path, name: str, run_id: str, *,
+    status: str, final_output: str | None, rejected: bool = False,
+) -> dict:
+    """Rewrite an existing manifest to a terminal status IN PLACE, preserving every
+    field it already has — ``runs``, ``work_dir``, ``work_key``, ``task``,
+    ``typical_s``/``typical_total_s``, ``spec_hash``, ``durin_version``,
+    ``root_session_key``, ``started_at``, etc.
+
+    For a resume reply that ends the run WITHOUT invoking the engine (an approval
+    reject, or an approve on a terminal approval node with no ``next``): unlike
+    ``finalize_run``, there is no fresh ``WorkflowResult`` carrying a real per-node
+    trace here, so rewriting the record from one (with an empty ``runs``) would
+    silently discard the trace the paused manifest already recorded. Reading the
+    prior record and overriding only the terminal fields keeps that trace intact.
+
+    Sets ``status``, ``final_output`` (capped exactly like ``finalize_run`` caps
+    it), ``finished_at``/``ts``, ``rejected``, clears ``active_node`` (nothing is
+    in flight any more), and drops the pause markers ``needs_input_node`` and
+    ``ask_kind`` to ``None`` — the run is no longer answerable. Returns the
+    rewritten dict."""
+    prior = read_manifest(workspace, name, run_id) or {}
+    now = time.time()
+    record = dict(prior)
+    record["status"] = status
+    record["final_output"] = (final_output or "")[:8000]
+    record["finished_at"] = now
+    record["ts"] = now
+    record["rejected"] = rejected
+    record["active_node"] = None
+    record["needs_input_node"] = None
+    record["ask_kind"] = None
+    path = _record_path(workspace, name, run_id)
+    path.write_text(json.dumps(record), encoding="utf-8")
+    return record
+
+
 def write_run(workspace: str | Path, name: str, result, *, ts: float | None = None) -> Path:
     """Persist a run's terminal trace in one shot. Thin wrapper over ``finalize_run`` for
     callers that don't write a live manifest (the dream-pass tests; standalone runs)."""
