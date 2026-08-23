@@ -8,7 +8,7 @@ from typing import Any
 
 from loguru import logger
 
-from durin.bus.events import InboundMessage, OutboundMessage
+from durin.bus.events import InboundMessage, OutboundMessage, SendReceipt
 from durin.bus.queue import MessageBus
 from durin.pairing import is_approved
 
@@ -113,12 +113,16 @@ class BaseChannel(ABC):
         pass
 
     @abstractmethod
-    async def send(self, msg: OutboundMessage) -> None:
+    async def send(self, msg: OutboundMessage) -> SendReceipt | None:
         """
         Send a message through this channel.
 
         Args:
             msg: The message to send.
+
+        Returns a ``SendReceipt`` identifying the thread this send landed in,
+        when the channel can determine one; ``None`` otherwise. Channels that
+        don't implement receipts return ``None`` implicitly.
 
         Implementations should raise on delivery failure so the channel manager
         can apply any retry policy in one place.

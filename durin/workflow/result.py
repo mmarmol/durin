@@ -54,6 +54,7 @@ class WorkflowResult:
     status: Literal["completed", "needs_input", "exhausted", "aborted", "cancelled"]
     final_output: str | None
     final_output_node: str | None = None  # which node's output became final_output
+    final_route_label: str | None = None  # the label that ended the run: matched cases label, "PASS"/"FAIL", or None (linear end, pause, abort)
     runs: list[NodeRun] = field(default_factory=list)
     run_id: str = ""
     output_dir: str | None = None  # the terminal node's output folder, if any
@@ -64,3 +65,5 @@ class WorkflowResult:
     resume_upstream: str | None = None  # aborted runs: the exact upstream text the failed node received (for failure resume)
     output_files: list[str] = field(default_factory=list)  # relative paths in output_dir (completed runs)
     missing_artifacts: list[str] = field(default_factory=list)  # declared output.artifacts paths absent at completion (warning, not failure)
+    ask_kind: str | None = None  # set when status=="needs_input": "approval" (a WorkNode.approval pause) or "question" (a __needs_input__ pause); None otherwise
+    rejected: bool = False  # set when a paused approval was answered "reject": the run ended cancelled because the approver declined it, not because of a failure

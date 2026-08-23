@@ -446,8 +446,8 @@ Every channel is a subclass of `BaseChannel` with three abstract methods:
   unconditionally and set `is_dm=True` when the message arrived in a private
   chat so the central gate can distinguish DM from group context.
 - `stop()` — graceful shutdown.
-- `send(msg: OutboundMessage)` — deliver a final response; raise on failure so
-  the manager retries.
+- `send(msg: OutboundMessage) -> SendReceipt | None` — deliver a final
+  response; raise on failure so the manager retries.
 
 Adapters may transform content before delivery. Discord's `send` converts GFM
 tables to bullet lists before chunking, since Discord's client does not render
@@ -459,6 +459,33 @@ metadata)` and `send_reasoning_delta(chat_id, delta, metadata)`. The
 `supports_streaming` property returns `True` only when both `config.streaming`
 is true and the subclass actually overrides `send_delta` (checked by identity
 against `BaseChannel.send_delta`).
+
+### Send receipts
+
+`send` returns a `SendReceipt` (`durin/bus/events.py`, frozen, single field
+`thread_key: str | None`) identifying the thread the send landed in, so a
+caller can later register a claim that a reply into that thread should wake.
+`thread_key` follows the same per-channel vocabulary the inbound loop matcher
+keys claims on (see "Per-channel thread-key semantics" in `loops.md`):
+
+- **Slack** — `slack:<chat_id>:<ts>`: the existing `thread_ts` when the send
+  replies into one, else the ts of whatever message now carries the first
+  chunk — a fresh `chat_postMessage`, or a pending status message the send
+  took over via `chat_update` instead of posting fresh (the common shape for
+  a plain answer, e.g. an approval ask, landing while a status line shows).
+- **Email** — the bare thread digest (`email_threads.thread_digest`, 16 hex
+  chars, no channel prefix): the existing thread's digest when replying,
+  otherwise the digest of the send's own new Message-ID (the same root a
+  future reply resolves back to).
+- Every other channel, and any send the channel could not resolve a thread for
+  (progress-only or media-only Slack sends; an email with no Message-ID),
+  returns `None`.
+
+`ChannelManager.send(msg)` is a synchronous passthrough that looks up the
+channel and returns its receipt directly — distinct from the fire-and-forget
+`publish_outbound` → `_dispatch_outbound` queue path above, which never
+surfaces a receipt to its caller (nothing currently reads the value
+`_send_once`/`_send_with_retry` propagate through it).
 
 ### Streaming edit budgets
 
@@ -770,11 +797,12 @@ background worker. `approve_code` moves an entry from pending to approved;
 | Symbol | File | Role |
 |---|---|---|
 | `BaseChannel` | `durin/channels/base.py` | Abstract adapter base. Owns `_handle_message` (publishes to bus; no auth), `is_allowed` (policy called by the gate, not the channel), `supports_streaming`, `send`, `send_delta`, `send_reasoning_delta`, `send_reasoning_end`, `transcribe_audio`. |
-| `ChannelManager` | `durin/channels/manager.py` | Lifecycle and dispatch coordinator. `_init_channels` discovers and instantiates. `_dispatch_outbound` applies gating, coalescing, dedup, and retry. `start_all` / `stop_all` manage the asyncio task tree. |
+| `ChannelManager` | `durin/channels/manager.py` | Lifecycle and dispatch coordinator. `_init_channels` discovers and instantiates. `_dispatch_outbound` applies gating, coalescing, dedup, and retry. `start_all` / `stop_all` manage the asyncio task tree. `send(msg)` bypasses the queue to return the channel's `SendReceipt` directly. |
 | `MessageBus` | `durin/bus/queue.py` | Two `asyncio.Queue` objects (`inbound`, `outbound`). `publish_inbound` runs the installed inbound-authorizer gate before enqueuing; `set_inbound_authorizer` wires the gate. |
 | `InboundMessage` | `durin/bus/events.py` | Channel-to-loop event: `channel`, `sender_id`, `chat_id`, `content`, `media`, `metadata`, `session_key_override`. `session_key` property returns override or `"channel:chat_id"`. |
 | `MessageDeduplicator` | `durin/channels/dedup.py` | Shared TTL + size-capped id cache guarding against transport redelivery. In-memory by default; an optional `persist_path` backs it with an atomically-written JSON file for transports whose redelivery window can span a restart. See "Inbound deduplication" above. |
 | `OutboundMessage` | `durin/bus/events.py` | Loop-to-channel event: `channel`, `chat_id`, `content`, `reply_to`, `media`, `metadata`, `buttons`. Metadata carries routing and flag keys such as `_progress`, `_stream_delta`, `_reasoning_delta`, `_retry_wait`. |
+| `SendReceipt` | `durin/bus/events.py` | Frozen dataclass returned by `send`: `thread_key: str | None` naming the thread a send landed in, in the inbound matcher's per-channel key vocabulary. See "Send receipts" above. |
 | `discover_all` | `durin/channels/registry.py` | Returns merged dict of built-in (pkgutil scan) + external (entry_points) channel classes. Built-ins shadow plugins of the same name. |
 | `generate_code` | `durin/pairing/store.py` | Creates a pairing code (`ABCD-EFGH` format, 8 chars) for an unapproved DM sender and writes it to `pairing.json` with a TTL. |
 | `approve_code` | `durin/pairing/store.py` | Moves a pending code to the approved set; returns `(channel, sender_id)` or `None` if expired or absent. |

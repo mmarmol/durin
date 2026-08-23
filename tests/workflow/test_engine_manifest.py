@@ -7,6 +7,25 @@ from durin.workflow.engine import NodeRunResponse, WorkflowEngine
 from durin.workflow.spec import parse_workflow
 
 
+def test_manifest_records_final_route_label(tmp_path):
+    wf = parse_workflow({
+        "name": "d", "start": "a",
+        "nodes": [
+            {"id": "a", "kind": "work", "next": "g"},
+            {"id": "g", "kind": "work", "cases": {"DONE": None, "MORE": "a"}},
+        ],
+    })
+    outputs = {"a": "out-a", "g": "verdict\nDONE"}
+
+    def runner(req):
+        return NodeRunResponse(output=outputs[req.node.id])
+
+    eng = WorkflowEngine(runner, workspace=str(tmp_path), run_id_factory=lambda: "r1")
+    res = eng.run(wf, "t")
+    manifest = run_log.read_manifest(tmp_path, "d", res.run_id)
+    assert manifest["final_route_label"] == "DONE"
+
+
 def _two_node_wf():
     return parse_workflow({"name": "w", "start": "a", "max_visits": 3, "nodes": [
         {"id": "a", "kind": "work", "next": "b"},

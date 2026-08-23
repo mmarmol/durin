@@ -52,3 +52,18 @@ class OutboundMessage:
     metadata: dict[str, Any] = field(default_factory=dict)
     buttons: list[list[str]] = field(default_factory=list)
 
+
+@dataclass(frozen=True)
+class SendReceipt:
+    """Identifies the thread a channel ``send`` landed in.
+
+    ``thread_key`` follows the same per-channel vocabulary the inbound loop
+    matcher keys claims on (e.g. ``slack:<chat_id>:<thread_ts>``, or the bare
+    email thread digest with no channel prefix), so a claim registered from a
+    send's receipt is woken by the reply that later lands on that thread.
+    ``None`` when the channel could not determine a thread identity for this
+    send (or does not implement receipts at all).
+    """
+
+    thread_key: str | None
+

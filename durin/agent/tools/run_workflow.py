@@ -409,7 +409,49 @@ class RunWorkflowTool(Tool, ContextAware):
                         f"'{manifest.get('status')}' and cannot be resumed — only a "
                         f"needs_input run (with the answers as task) or an aborted run "
                         f"(retried at its failed node) can.")
-            resume = build_resume_state(manifest, task)
+            if manifest.get("ask_kind") == "approval":
+                from durin.workflow.approval import build_approval_resume, parse_approval_reply
+                from durin.workflow.result import WorkflowResult
+
+                action = parse_approval_reply(task) or "revise"
+                if action == "reject":
+                    # No engine call at all: the approver declined it, which is not
+                    # a failure — finalize 'cancelled' with rejected=True directly,
+                    # IN PLACE on the existing manifest (preserves its per-node
+                    # trace and work_dir; finalize_run would instead rewrite them
+                    # away from this minimal result's empty runs=[]).
+                    run_log.finalize_short_circuit(
+                        self._workspace, name, resume_run_id,
+                        status="cancelled", final_output=manifest.get("final_output"),
+                        rejected=True,
+                    )
+                    result = WorkflowResult(
+                        status="cancelled", ask_kind=None,
+                        final_output=manifest.get("final_output"),
+                        run_id=resume_run_id, rejected=True,
+                    )
+                    return _format_result(
+                        result, output_files=bool((workflow.output or {}).get("file")))
+                approval_resume = build_approval_resume(
+                    workflow, manifest, action, task if action == "revise" else "")
+                if approval_resume is None:
+                    # Approve on a terminal approval node (no `next`): the run
+                    # completes now, with the proposal as the final output — again
+                    # no engine call, there is nowhere left for it to resume into.
+                    run_log.finalize_short_circuit(
+                        self._workspace, name, resume_run_id,
+                        status="completed", final_output=manifest.get("final_output"),
+                    )
+                    result = WorkflowResult(
+                        status="completed", final_output=manifest.get("final_output"),
+                        final_output_node=manifest.get("needs_input_node"),
+                        run_id=resume_run_id,
+                    )
+                    return _format_result(
+                        result, output_files=bool((workflow.output or {}).get("file")))
+                resume = approval_resume
+            else:
+                resume = build_resume_state(manifest, task)
             task = manifest.get("task") or task
 
         # Snapshot the current definitions into the workflow version history (captures

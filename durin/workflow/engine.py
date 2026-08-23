@@ -159,6 +159,20 @@ class ResumeState:
     work_key: str | None = None
 
 
+def manifest_visit_counts(manifest: dict) -> dict[str, int]:
+    """Per-node visit counts already consumed by a run, from its manifest's per-node
+    trace: each node's max recorded iteration. Shared by ``build_resume_state`` and
+    ``build_approval_resume`` (``durin/workflow/approval.py``) — both need the same
+    "how many times did this node already run" counts to seed a resumed walk's
+    per-node budget tracking."""
+    visits: dict[str, int] = {}
+    for r in manifest.get("runs", []):
+        nid, it = r.get("node_id"), r.get("iteration", 1)
+        if nid:
+            visits[nid] = max(visits.get(nid, 0), int(it))
+    return visits
+
+
 def build_resume_state(manifest: dict, answers: str) -> ResumeState:
     """The ResumeState for re-entering a paused or failed run, built from its manifest.
     The caller validates resumability first (``needs_input`` with a ``needs_input_node``,
@@ -169,11 +183,7 @@ def build_resume_state(manifest: dict, answers: str) -> ResumeState:
     answers framed against its questions; a FAILED node receives the exact upstream
     text it had the first time, verbatim — a retried script parses its stdin, so no
     retry framing may pollute it."""
-    visits: dict[str, int] = {}
-    for r in manifest.get("runs", []):
-        nid, it = r.get("node_id"), r.get("iteration", 1)
-        if nid:
-            visits[nid] = max(visits.get(nid, 0), int(it))
+    visits = manifest_visit_counts(manifest)
     recorded_outputs = dict(manifest.get("resume_inputs") or {})
     work_key = manifest.get("work_key")
     needs_input_node = manifest.get("needs_input_node")
@@ -762,6 +772,7 @@ class WorkflowEngine:
         terminal_output_dir: str | None = work_dir
         final_output: str | None = None
         final_output_node: str | None = None
+        final_route_label: str | None = None  # the label that ends the run: matched cases label, "PASS"/"FAIL", or None
         current: str | None = start_at or workflow.start
 
         # Seed input_files into the shared working folder so the start node reads them as
@@ -1120,7 +1131,7 @@ class WorkflowEngine:
                         # strip it like the terminal-completion path does (falling back to
                         # the raw output if the label was the only line).
                         return WorkflowResult(
-                            status="needs_input",
+                            status="needs_input", ask_kind="question",
                             final_output=strip_label_line(output, node.cases) or output,
                             runs=runs, run_id=run_id, needs_input_node=node.id,
                             final_output_node=node.id,
@@ -1141,6 +1152,7 @@ class WorkflowEngine:
                         if residue:
                             final_output = residue
                             final_output_node = node.id
+                        final_route_label = label
                     current = target
                 elif node.routes:
                     if not passed:
@@ -1155,7 +1167,26 @@ class WorkflowEngine:
                         if residue:
                             final_output = residue
                             final_output_node = node.id
+                        final_route_label = "PASS" if passed else "FAIL"
                 else:
+                    if node.kind == "work" and node.approval:
+                        # Pause the walk instead of threading output to `next`: an
+                        # approval node is parse-guaranteed linear (durin/workflow/spec.py's
+                        # _parse_approval), so this is the only branch it can ever reach.
+                        # No "already approved" flag is needed here — an approve-resume
+                        # re-enters at `next` (build_approval_resume), so this node's body
+                        # never runs on that path at all; a revise-resume re-enters AT this
+                        # node, which is exactly this code path again, and it pauses again
+                        # with the new proposal — the intended behavior, not a bug.
+                        return WorkflowResult(
+                            status="needs_input", ask_kind="approval", final_output=output,
+                            final_output_node=node.id, needs_input_node=node.id,
+                            # Uncapped here — finalize_run applies the same
+                            # RESUME_UPSTREAM_MAX_CHARS cap it applies to the failure
+                            # path's resume_upstream, uniformly, at manifest-write time.
+                            resume_upstream=node_input,
+                            runs=runs, run_id=run_id, output_dir=terminal_output_dir,
+                        )
                     upstream_output = output
                     final_output = output
                     final_output_node = node.id
@@ -1195,7 +1226,7 @@ class WorkflowEngine:
                     # framed answers as its task (its prior files persist in the shared
                     # working folder).
                     return WorkflowResult(
-                        status="needs_input", final_output=output, runs=runs,
+                        status="needs_input", ask_kind="question", final_output=output, runs=runs,
                         run_id=run_id, needs_input_node=node.id,
                         final_output_node=node.id,
                     )
@@ -1335,6 +1366,7 @@ class WorkflowEngine:
             status="completed", final_output=final_output, runs=runs, run_id=run_id,
             output_dir=terminal_output_dir, output_files=output_files,
             final_output_node=final_output_node, missing_artifacts=missing,
+            final_route_label=final_route_label,
         )
 
     def _reuse_hit(self, node: WorkNode, work_dir: str, *, task: str, node_input: str | None,

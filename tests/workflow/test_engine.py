@@ -1052,3 +1052,39 @@ def test_cancelled_during_non_terminal_subworkflow_node_still_reports_cancelled(
     assert after_ran == []                          # "after" never ran
     assert res.final_output == "child-partial-output"
     assert res.final_output_node == "sub"
+
+
+def test_cases_terminal_stamps_final_route_label():
+    wf = parse_workflow({
+        "name": "d", "start": "a",
+        "nodes": [
+            {"id": "a", "kind": "work", "next": "g"},
+            {"id": "g", "kind": "work", "cases": {"DONE": None, "MORE": "a"}},
+        ],
+    })
+    eng, _ = _engine({"a": "out-a", "g": "verdict\nDONE"})
+    res = eng.run(wf, "t")
+    assert res.status == "completed"
+    assert res.final_route_label == "DONE"
+
+
+def test_binary_terminal_stamps_pass_label():
+    wf = parse_workflow({
+        "name": "d", "start": "a",
+        "nodes": [
+            {"id": "a", "kind": "work", "next": "g"},
+            {"id": "g", "kind": "work", "on_pass": None, "on_fail": "a"},
+        ],
+    })
+    eng, _ = _engine({"a": "out-a", "g": "PASS\nall good"})
+    res = eng.run(wf, "t")
+    assert res.final_route_label == "PASS"
+
+
+def test_linear_end_has_no_final_route_label():
+    wf = parse_workflow({
+        "name": "d", "start": "a",
+        "nodes": [{"id": "a", "kind": "work", "next": None}],
+    })
+    eng, _ = _engine({"a": "out"})
+    assert eng.run(wf, "t").final_route_label is None

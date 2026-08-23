@@ -42,6 +42,34 @@ from durin.workflow.version_store import WorkflowVersionStore, version_lock_targ
 # write cheap.
 _MAX_SCRIPT_CONTENT_BYTES = 256 * 1024
 
+# The websocket "chat" key the runs pane's live feed subscribes to. An
+# agent-launched run publishes its progress on the calling session's own
+# chat_id (see run_workflow.py); a service-path run — a loop trigger today, an
+# automation or a raw HTTP launch tomorrow — has no calling chat to attach to,
+# so every such run publishes onto this one fixed key instead.
+RUNS_FEED_CHAT_ID = "runs:feed"
+
+
+def build_runs_feed_event(payload: dict) -> dict:
+    """Build the `workflow_progress` `tool_events` envelope from a service-path
+    progress payload (`run_id`, `workflow`, `task`, `nodes`, `done`).
+
+    Same six keys, same field names, as `durin/agent/tools/run_workflow.py`'s
+    own per-chat progress publisher builds — so the existing work-panel
+    renderer consumes a `runs:feed` frame exactly like a per-chat one, with no
+    branching for "where did this come from". `done` is expressed the same
+    way that publisher expresses it: via `phase` ("end" instead of a separate
+    top-level flag), not carried as its own key.
+    """
+    return {
+        "version": 1,
+        "phase": "end" if payload.get("done") else "running",
+        "call_id": f"workflow:{payload['run_id']}",
+        "name": "workflow_progress",
+        "arguments": {"workflow": payload["workflow"], "task": payload.get("task", "")},
+        "nodes": payload["nodes"],
+    }
+
 
 def _validate_script_name(name: str) -> None:
     """Reject anything but a single relative path segment.
@@ -239,7 +267,8 @@ class WorkflowRecApplyResult(Result):
 
 class WorkflowsService:
     def __init__(self, workspace: Path, *, app_config: Any = None, sessions: Any = None,
-                 config_loader: Callable[[], Any] | None = None) -> None:
+                 config_loader: Callable[[], Any] | None = None,
+                 progress_publish: Callable[[dict], None] | None = None) -> None:
         self._workspace = Path(workspace)
         self._app_config = app_config   # for the run endpoint (provider); None on the catalog registry
         self._sessions = sessions       # SessionManager for node-session persistence during a run
@@ -248,6 +277,11 @@ class WorkflowsService:
         # through this loader so it obeys the current default, not the wiring-time
         # snapshot. Left None where no config file backs the surface (tests/catalog).
         self._config_loader = config_loader
+        # Optional live-progress sink for a service-path run (see RUNS_FEED_CHAT_ID
+        # above). None (the default, and always on the catalog/wiring registrations)
+        # means execute() builds the engine with no progress_emit at all — a run
+        # that behaves exactly as before this existed.
+        self._progress_publish = progress_publish
         # Strong-reference set for detached launch()es, so a run's task isn't
         # GC'd mid-flight — mirrors RunWorkflowTool's identical footgun guard.
         self._bg_tasks: set = set()
@@ -751,7 +785,44 @@ class WorkflowsService:
                     "only a needs_input run (with the answers as task) or an aborted "
                     "run (retried at its failed node) can."
                 )
-            resume = build_resume_state(manifest, task)
+            if manifest.get("ask_kind") == "approval":
+                from durin.workflow.approval import build_approval_resume, parse_approval_reply
+
+                action = parse_approval_reply(task) or "revise"
+                if action == "reject":
+                    # No engine call at all: the approver declined it, which is not
+                    # a failure — finalize 'cancelled' with rejected=True directly,
+                    # IN PLACE on the existing manifest (preserves its per-node
+                    # trace and work_dir; finalize_run would instead rewrite them
+                    # away from this minimal result's empty runs=[]).
+                    run_log.finalize_short_circuit(
+                        self._workspace, name, resume_run_id,
+                        status="cancelled", final_output=manifest.get("final_output"),
+                        rejected=True,
+                    )
+                    return WorkflowResult(
+                        status="cancelled", ask_kind=None,
+                        final_output=manifest.get("final_output"),
+                        run_id=resume_run_id, rejected=True,
+                    )
+                approval_resume = build_approval_resume(
+                    workflow, manifest, action, task if action == "revise" else "")
+                if approval_resume is None:
+                    # Approve on a terminal approval node (no `next`): the run
+                    # completes now, with the proposal as the final output — again
+                    # no engine call, there is nowhere left for it to resume into.
+                    run_log.finalize_short_circuit(
+                        self._workspace, name, resume_run_id,
+                        status="completed", final_output=manifest.get("final_output"),
+                    )
+                    return WorkflowResult(
+                        status="completed", final_output=manifest.get("final_output"),
+                        final_output_node=manifest.get("needs_input_node"),
+                        run_id=resume_run_id,
+                    )
+                resume = approval_resume
+            else:
+                resume = build_resume_state(manifest, task)
             task = manifest.get("task") or task
 
         app_config = self._live_config()
@@ -787,6 +858,27 @@ class WorkflowsService:
         from durin.workflow.cancellation import is_hard_cancelled as _is_hard_cancelled
         rid = run_id or (resume.run_id if resume is not None else uuid.uuid4().hex[:12])
 
+        # Wrap each engine frame as {run_id, workflow, task, nodes, done} for
+        # the publisher — the SHAPE the engine hands progress_emit (see
+        # WorkflowEngine's own progress_emit calls), just relabeled with this
+        # run's workflow name and task so a caller with no other context (a
+        # global feed, not a per-workflow one) can still tell runs apart —
+        # `task` capped the same way a run manifest's own `task` field is
+        # (durin/workflow/run_log.py). The engine never emits a terminal
+        # (done=True) frame on its own; a caller that needs one builds it from
+        # the returned WorkflowResult, same as run_workflow.py does.
+        progress_emit = None
+        if self._progress_publish is not None:
+            def _emit_progress(payload: dict) -> None:
+                self._progress_publish({
+                    "run_id": payload["run_id"],
+                    "workflow": name,
+                    "task": task[:200],
+                    "nodes": payload["nodes"],
+                    "done": False,
+                })
+            progress_emit = _emit_progress
+
         engine = WorkflowEngine(
             node_runner=node_runner,
             script_runner=script_runner,
@@ -799,6 +891,7 @@ class WorkflowsService:
             parallel_llm_concurrency=wf_cfg.parallel_llm_concurrency,
             parallel_script_concurrency=wf_cfg.parallel_script_concurrency,
             run_id_factory=lambda: rid,
+            progress_emit=progress_emit,
             cancel_check=lambda: _is_cancelled(rid),
             hard_cancel_check=lambda: _is_hard_cancelled(rid),
             # Clears the registry entry BEFORE the terminal manifest write, not

@@ -28,7 +28,7 @@ try:
 except ImportError:  # optional extra `durin-ai[slack]` not installed
     SLACK_AVAILABLE = False
 
-from durin.bus.events import OutboundMessage
+from durin.bus.events import OutboundMessage, SendReceipt
 from durin.bus.queue import MessageBus
 from durin.channels.base import BaseChannel
 from durin.channels.dedup import MessageDeduplicator
@@ -307,11 +307,21 @@ class SlackChannel(BaseChannel):
                 self.logger.warning("socket close failed: {}", e)
             self._socket_client = None
 
-    async def send(self, msg: OutboundMessage) -> None:
-        """Send a message through Slack."""
+    async def send(self, msg: OutboundMessage) -> SendReceipt | None:
+        """Send a message through Slack.
+
+        Returns a ``SendReceipt`` naming the thread this send landed in: an
+        existing ``thread_ts`` it replied into, else the ts of whatever
+        message now carries the first chunk — a fresh ``chat_postMessage``,
+        or a pending status message this send took over via ``chat_update``
+        (the common shape for a plain answer that lands while a status line
+        is showing). ``None`` when nothing was actually posted or edited
+        (progress-only or media-only sends).
+        """
         if not self._web_client:
             self.logger.warning("client not running")
-            return
+            return None
+        receipt: SendReceipt | None = None
         try:
             target_chat_id = await self._resolve_target_chat_id(msg.chat_id)
             slack_meta = msg.metadata.get("slack", {}) if msg.metadata else {}
@@ -349,8 +359,21 @@ class SlackChannel(BaseChannel):
                         await self._replace_stream_message(
                             status_target, status_ts, chunk, thread_ts_param
                         )
+                        # The status message just became the answer; it lives
+                        # at status_target (not target_chat_id, which can
+                        # differ for a cross-channel send), so that's where
+                        # this thread's key comes from.
+                        receipt = SendReceipt(
+                            thread_key=f"slack:{status_target}:{thread_ts_param or status_ts}"
+                        )
                         continue
-                    await self._web_client.chat_postMessage(**kwargs)
+                    resp = await self._web_client.chat_postMessage(**kwargs)
+                    if index == 0:
+                        # An existing thread's key takes precedence over this
+                        # message's own ts — a reply belongs to the thread it
+                        # replied into, not to itself.
+                        ts = thread_ts_param or resp.get("ts")
+                        receipt = SendReceipt(thread_key=f"slack:{target_chat_id}:{ts}")
 
             for media_path in msg.media or []:
                 try:
@@ -367,6 +390,7 @@ class SlackChannel(BaseChannel):
                 event = slack_meta.get("event", {})
                 await self._update_react_emoji(origin_chat_id, event.get("ts"))
 
+            return receipt
         except Exception:
             self.logger.exception("Error sending message")
             raise
