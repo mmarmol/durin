@@ -1490,10 +1490,47 @@ def _run_gateway(
     from durin.loops.runtime import LoopsRuntime
     from durin.loops.store import load_loop as _load_loop
     from durin.memory.model_resolve import resolve_aux_preset
+    from durin.service.workflows import RUNS_FEED_CHAT_ID
     from durin.service.workflows import WorkflowsService as _LoopsWorkflowsService
+
+    # Marshals a service-path run's progress frames onto the runs:feed
+    # websocket key. The engine walk that calls this runs on a worker thread
+    # (WorkflowsService.execute's asyncio.to_thread), so publishing to the bus
+    # must hop back onto the gateway's own event loop via
+    # run_coroutine_threadsafe — exactly like run_workflow.py's identical
+    # per-chat progress publisher. That loop isn't running yet at this point
+    # in startup, so it is captured once `run()` begins further below (a
+    # publish attempted before then, or after shutdown, is simply dropped).
+    _workflow_progress_loop: asyncio.AbstractEventLoop | None = None
+
+    def _publish_workflow_progress(payload: dict) -> None:
+        loop = _workflow_progress_loop
+        if loop is None or loop.is_closed():
+            return
+        ev = {
+            "version": 1,
+            "phase": "running",
+            "call_id": f"workflow:{payload['run_id']}",
+            "name": "workflow_progress",
+            "arguments": {},
+            **payload,
+        }
+        try:
+            asyncio.run_coroutine_threadsafe(
+                bus.publish_outbound(OutboundMessage(
+                    channel="websocket",
+                    chat_id=RUNS_FEED_CHAT_ID,
+                    content="",
+                    metadata={"_progress": True, "_tool_hint": True, "_tool_events": [ev]},
+                )),
+                loop,
+            )
+        except Exception:  # noqa: BLE001 - best-effort; never break the run
+            pass
 
     _loops_workflows_service = _LoopsWorkflowsService(
         config.workspace_path, app_config=config, sessions=session_manager,
+        progress_publish=_publish_workflow_progress,
     )
 
     def _loop_model_preset_ref() -> str | None:
@@ -1973,6 +2010,11 @@ def _run_gateway(
         from durin.memory.dream_supervisor import register_progress_loop
 
         register_progress_loop(asyncio.get_running_loop())
+        # Same reason as the dream registration just above: a service-path
+        # workflow run's progress frames are published from a worker thread
+        # (see _publish_workflow_progress) and need this loop to hop back onto.
+        nonlocal _workflow_progress_loop
+        _workflow_progress_loop = asyncio.get_running_loop()
         # Without an explicit SIGTERM handler, Python's default action
         # terminates the process instantly — the `finally` block below
         # never runs, so `durin gateway stop` (which sends SIGTERM) would

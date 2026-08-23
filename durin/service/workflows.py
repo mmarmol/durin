@@ -42,6 +42,13 @@ from durin.workflow.version_store import WorkflowVersionStore, version_lock_targ
 # write cheap.
 _MAX_SCRIPT_CONTENT_BYTES = 256 * 1024
 
+# The websocket "chat" key the runs pane's live feed subscribes to. An
+# agent-launched run publishes its progress on the calling session's own
+# chat_id (see run_workflow.py); a service-path run — a loop trigger today, an
+# automation or a raw HTTP launch tomorrow — has no calling chat to attach to,
+# so every such run publishes onto this one fixed key instead.
+RUNS_FEED_CHAT_ID = "runs:feed"
+
 
 def _validate_script_name(name: str) -> None:
     """Reject anything but a single relative path segment.
@@ -239,7 +246,8 @@ class WorkflowRecApplyResult(Result):
 
 class WorkflowsService:
     def __init__(self, workspace: Path, *, app_config: Any = None, sessions: Any = None,
-                 config_loader: Callable[[], Any] | None = None) -> None:
+                 config_loader: Callable[[], Any] | None = None,
+                 progress_publish: Callable[[dict], None] | None = None) -> None:
         self._workspace = Path(workspace)
         self._app_config = app_config   # for the run endpoint (provider); None on the catalog registry
         self._sessions = sessions       # SessionManager for node-session persistence during a run
@@ -248,6 +256,11 @@ class WorkflowsService:
         # through this loader so it obeys the current default, not the wiring-time
         # snapshot. Left None where no config file backs the surface (tests/catalog).
         self._config_loader = config_loader
+        # Optional live-progress sink for a service-path run (see RUNS_FEED_CHAT_ID
+        # above). None (the default, and always on the catalog/wiring registrations)
+        # means execute() builds the engine with no progress_emit at all — a run
+        # that behaves exactly as before this existed.
+        self._progress_publish = progress_publish
         # Strong-reference set for detached launch()es, so a run's task isn't
         # GC'd mid-flight — mirrors RunWorkflowTool's identical footgun guard.
         self._bg_tasks: set = set()
@@ -824,6 +837,26 @@ class WorkflowsService:
         from durin.workflow.cancellation import is_hard_cancelled as _is_hard_cancelled
         rid = run_id or (resume.run_id if resume is not None else uuid.uuid4().hex[:12])
 
+        # Wrap each engine frame as {run_id, workflow, nodes, done} for the
+        # publisher — the SHAPE the engine hands progress_emit (see
+        # WorkflowEngine's own progress_emit calls), just relabeled with this
+        # run's workflow name so a caller with no other context (a global feed,
+        # not a per-workflow one) can still tell runs apart. The engine never
+        # emits a terminal (done=True) frame on its own; a caller that needs one
+        # builds it from the returned WorkflowResult, same as run_workflow.py does.
+        progress_emit = None
+        if self._progress_publish is not None:
+            publish = self._progress_publish
+
+            def _emit_progress(payload: dict) -> None:
+                publish({
+                    "run_id": payload["run_id"],
+                    "workflow": name,
+                    "nodes": payload["nodes"],
+                    "done": False,
+                })
+            progress_emit = _emit_progress
+
         engine = WorkflowEngine(
             node_runner=node_runner,
             script_runner=script_runner,
@@ -836,6 +869,7 @@ class WorkflowsService:
             parallel_llm_concurrency=wf_cfg.parallel_llm_concurrency,
             parallel_script_concurrency=wf_cfg.parallel_script_concurrency,
             run_id_factory=lambda: rid,
+            progress_emit=progress_emit,
             cancel_check=lambda: _is_cancelled(rid),
             hard_cancel_check=lambda: _is_hard_cancelled(rid),
             # Clears the registry entry BEFORE the terminal manifest write, not
