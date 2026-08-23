@@ -265,7 +265,12 @@ def _parse_delivery(raw: dict) -> Delivery:
     notify = raw.get("notify", "always")
     if notify not in _NOTIFY_MODES:
         raise AutomationError(f"delivery.notify must be one of {_NOTIFY_MODES}")
-    silent_labels = tuple(raw.get("silent_labels") or ("NOTHING_TO_REPORT",))
+    # Absent or explicit null both mean "use the default silence list". An
+    # explicit [] is a different, legal config meaning no label is ever
+    # silenced — it must not collapse into the default just because an empty
+    # tuple/list is falsy.
+    raw_silent_labels = raw.get("silent_labels")
+    silent_labels = ("NOTHING_TO_REPORT",) if raw_silent_labels is None else tuple(raw_silent_labels)
     for label in silent_labels:
         if not isinstance(label, str) or not label.strip():
             raise AutomationError("delivery.silent_labels must all be non-empty strings")

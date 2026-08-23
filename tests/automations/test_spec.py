@@ -634,6 +634,17 @@ def test_delivery_explicit_null_silent_labels_falls_back_to_default():
     assert spec.delivery.silent_labels == ("NOTHING_TO_REPORT",)
 
 
+def test_delivery_explicit_empty_silent_labels_means_nothing_is_silent():
+    """Absent or null means "use the default silence list"; an explicit []
+    is a different, legal configuration meaning no label is ever silenced
+    (every completed run is notable under notify: when_notable). These must
+    not collapse to the same value."""
+    data = _minimal() | {"delivery": {"silent_labels": []}}
+    spec = parse_automation(data)
+    assert spec.delivery.silent_labels == ()
+    assert parse_automation(automation_to_dict(spec)) == spec
+
+
 def test_parse_rejects_empty_string_silent_label():
     data = _minimal() | {"delivery": {"silent_labels": ["ACHIEVED", ""]}}
     with pytest.raises(AutomationError):
