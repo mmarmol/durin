@@ -22,10 +22,11 @@ from __future__ import annotations
 import json
 import re
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+import durin.telemetry.logger as telemetry_logger
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.schema import IntegerSchema, StringSchema, tool_parameters_schema
 from durin.workflow import provenance, run_log
@@ -58,6 +59,14 @@ _DESCRIPTION = (
     "folder path, and the artifact files recorded there (each with its "
     "producer model and date, or labeled \"unstamped\" when the file "
     "exists but was never recorded). "
+    "action=\"cost\": the per-run token table — one line per node (LLM "
+    "calls, prompt/fresh/output tokens, LLM minutes, dominant model), "
+    "visits of the same node collapsed into one summed line, aggregated "
+    "from this run's provider.call telemetry AND that of any child "
+    "sub-workflow runs it launched (a run's cost includes its children), "
+    "plus a TOTAL line and how many nodes were reused for free. States "
+    "plainly when no telemetry is found for the run's date(s) instead of "
+    "showing a table of zeros. "
     "When you answer from a prior run, state the run's date. If the "
     "producer's model or workflow version differs from the current "
     "configuration, say so. Prefer re-running when the user asked for an "
@@ -68,8 +77,10 @@ _DESCRIPTION = (
 _PARAMETERS = tool_parameters_schema(
     action=StringSchema(
         "What to do: search (find past runs by workflow name or task text, "
-        "optionally filtered by status) | show (full detail for one run by id).",
-        enum=["search", "show"],
+        "optionally filtered by status) | show (full detail for one run by "
+        "id) | cost (per-run token/cost table for one run by id, including "
+        "its child sub-workflow runs).",
+        enum=["search", "show", "cost"],
     ),
     query=StringSchema(
         description=(
@@ -109,7 +120,10 @@ _PARAMETERS = tool_parameters_schema(
         nullable=True,
     ),
     run_id=StringSchema(
-        description="show only. The run id to show (from a prior search's [run_id]).",
+        description=(
+            "show | cost only. The run id to show or cost (from a prior "
+            "search's [run_id])."
+        ),
         nullable=True,
     ),
     required=["action"],
@@ -279,7 +293,11 @@ class WorkflowRunsTool(Tool):
             if not run_id:
                 return "Error: 'run_id' is required for show."
             return self._show(run_id)
-        return f"Error: unknown action {action!r} (use search | show)."
+        if action == "cost":
+            if not run_id:
+                return "Error: 'run_id' is required for cost."
+            return self._cost(run_id)
+        return f"Error: unknown action {action!r} (use search | show | cost)."
 
     def _summary_line(self, rec: dict) -> str:
         """The one-line summary shared by a search row and show's header —
@@ -514,4 +532,192 @@ class WorkflowRunsTool(Tool):
             lines.append(f"  work key: {rec['work_key']}")
         lines.append(f"  work dir: {work_dir}")
         lines.extend(self._artifact_lines(Path(work_dir)))
+        return "\n".join(lines)
+
+    @staticmethod
+    def _descendant_manifests(workspace: str | Path, run_id: str) -> list[dict]:
+        """Every manifest that is a descendant of *run_id* via ``parent_run_id``,
+        at any depth. A subworkflow's child can itself launch a subworkflow, and
+        each generation's ``parent_run_id`` only names its immediate parent, so a
+        single pass would miss grandchildren — this walks the closure instead."""
+        children_by_parent: dict[str, list[dict]] = {}
+        for m in _iter_manifests(workspace):
+            parent = m.get("parent_run_id")
+            if parent:
+                children_by_parent.setdefault(parent, []).append(m)
+        out: list[dict] = []
+        seen = {run_id}
+        frontier = [run_id]
+        while frontier:
+            next_frontier: list[str] = []
+            for rid in frontier:
+                for child in children_by_parent.get(rid, []):
+                    cid = child.get("run_id")
+                    if cid and cid not in seen:
+                        seen.add(cid)
+                        out.append(child)
+                        next_frontier.append(cid)
+            frontier = next_frontier
+        return out
+
+    @staticmethod
+    def _candidate_telemetry_dates(manifests: list[dict]) -> set[str]:
+        """ISO dates a node visit's telemetry file could be stamped with: each
+        manifest's started_at/finished_at date and today's, each ±1 day.
+
+        Telemetry filenames carry the LOCAL calendar date at write time (see
+        ``get_session_logger``'s ``date.today()``), which can land a day off
+        from a naive read of started_at/finished_at (timezone rounding), and a
+        run can itself span midnight — the buffer absorbs both without needing
+        to know which."""
+        dates: set[str] = set()
+        timestamps: list[float] = [time.time()]
+        for m in manifests:
+            for key in ("started_at", "finished_at"):
+                ts = m.get(key)
+                if ts is not None:
+                    timestamps.append(ts)
+        for ts in timestamps:
+            try:
+                base = datetime.fromtimestamp(float(ts)).date()
+            except (TypeError, ValueError, OSError, OverflowError):
+                continue
+            for delta in (-1, 0, 1):
+                dates.add((base + timedelta(days=delta)).isoformat())
+        return dates
+
+    @staticmethod
+    def _sanitize_session_key(key: str) -> str:
+        """Mirror ``get_session_logger``'s filename-safe encoding of a session
+        key, without that function's directory-creating side effect — this
+        tool is read-only and must never touch the telemetry directory."""
+        safe = re.sub(r"[^\w\-]", "_", key)[:80]
+        return re.sub(r"\.{2,}", "_", safe)
+
+    def _cost(self, run_id: str) -> str:
+        if not _RUN_ID_RE.match(run_id):
+            return (
+                f"Error: {run_id!r} is not a valid run id (expected lowercase "
+                "letters, digits, and hyphens, at least 6 characters)."
+            )
+        root = run_log.runs_root(self._workspace)
+        match = next(root.glob(f"*/{run_id}.json"), None) if root.is_dir() else None
+        if match is None:
+            return f"No workflow run found with id {run_id!r}."
+        rec = run_log.read_manifest(self._workspace, match.parent.name, run_id)
+        if rec is None:
+            return f"No workflow run found with id {run_id!r}."
+
+        children = self._descendant_manifests(self._workspace, run_id)
+        all_manifests = [rec] + children
+        run_ids = [m.get("run_id") for m in all_manifests if m.get("run_id")]
+        candidate_dates = self._candidate_telemetry_dates(all_manifests)
+
+        # sanitized session_key -> (owning run_id, node_id): lets a matched
+        # telemetry file be attributed back to the exact node visit that
+        # produced it, rather than guessed from the sanitized filename alone
+        # (a node_id can itself contain digits/underscores, which would make
+        # splitting it back out of "workflow_<run>_<node>_<iter>" ambiguous).
+        prefix_to_node: dict[str, tuple[str, str]] = {}
+        for m in all_manifests:
+            m_run_id = m.get("run_id") or "?"
+            for r in (m.get("runs") or []):
+                if not isinstance(r, dict):
+                    continue
+                sk = r.get("session_key")
+                if sk:
+                    prefix_to_node[self._sanitize_session_key(sk)] = (
+                        m_run_id, r.get("node_id") or "?",
+                    )
+
+        tel_dir = telemetry_logger._DEFAULT_DIR
+        buckets: dict[tuple[str, str], dict[str, Any]] = {}
+        any_calls = False
+
+        if tel_dir.is_dir():
+            for f in tel_dir.glob("workflow_*.jsonl"):
+                name = f.name
+                if not any(rid in name for rid in run_ids):
+                    continue
+                if not any(d in name for d in candidate_dates):
+                    continue
+                stem = name[: -len(".jsonl")]
+                node_key = None
+                for d in candidate_dates:
+                    suffix = f"_{d}"
+                    if stem.endswith(suffix):
+                        node_key = prefix_to_node.get(stem[: -len(suffix)])
+                        break
+                if node_key is None:
+                    node_key = ("?", "(unattributed)")
+                try:
+                    raw_lines = f.read_text(encoding="utf-8").splitlines()
+                except OSError:
+                    continue
+                for line in raw_lines:
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if event.get("type") != "provider.call":
+                        continue
+                    data = event.get("data") or {}
+                    any_calls = True
+                    b = buckets.setdefault(node_key, {
+                        "calls": 0, "prompt": 0, "cached": 0, "out": 0,
+                        "duration_ms": 0.0, "models": {},
+                    })
+                    b["calls"] += 1
+                    b["prompt"] += int(data.get("prompt_tokens", 0) or 0)
+                    b["cached"] += int(data.get("cached_tokens", 0) or 0)
+                    b["out"] += int(data.get("completion_tokens", 0) or 0)
+                    b["duration_ms"] += float(data.get("duration_ms", 0) or 0)
+                    model = data.get("model")
+                    if model:
+                        b["models"][model] = b["models"].get(model, 0) + 1
+
+        reused_total = sum(_reused_count(m.get("runs") or []) for m in all_manifests)
+
+        if not any_calls:
+            lines = ["No provider.call telemetry found for this run's date(s)."]
+            if reused_total:
+                lines.append(f"  reused nodes: {reused_total} — they cost 0")
+            return "\n".join(lines)
+
+        rows = []
+        for (node_run_id, node_id), b in buckets.items():
+            label = node_id if node_run_id == run_id else f"{node_id}@{node_run_id}"
+            dominant_model = max(b["models"], key=b["models"].get) if b["models"] else "?"
+            fresh = b["prompt"] - b["cached"]
+            llm_minutes = b["duration_ms"] / 1000.0 / 60.0
+            rows.append({
+                "label": label, "calls": b["calls"], "prompt": b["prompt"],
+                "fresh": fresh, "out": b["out"], "llm_minutes": llm_minutes,
+                "model": dominant_model,
+            })
+        rows.sort(key=lambda r: (-r["prompt"], r["label"]))
+
+        lines = [self._summary_line(rec)]
+        if children:
+            lines.append(f"  cost includes {len(children)} child run(s)")
+        shown = rows[:_MAX_ARTIFACTS]
+        for r in shown:
+            lines.append(
+                f"  {r['label']} calls={r['calls']} prompt={r['prompt']} "
+                f"fresh={r['fresh']} out={r['out']} llm={r['llm_minutes']:.1f}m "
+                f"model={r['model']}"
+            )
+        if len(rows) > _MAX_ARTIFACTS:
+            lines.append(f"  …and {len(rows) - _MAX_ARTIFACTS} more")
+
+        total_calls = sum(r["calls"] for r in rows)
+        total_prompt = sum(r["prompt"] for r in rows)
+        total_fresh = sum(r["fresh"] for r in rows)
+        total_out = sum(r["out"] for r in rows)
+        total_llm = sum(r["llm_minutes"] for r in rows)
+        lines.append(
+            f"TOTAL: calls={total_calls} prompt={total_prompt} fresh={total_fresh} "
+            f"out={total_out} llm={total_llm:.1f}m — reused nodes: {reused_total} "
+            "— they cost 0"
+        )
         return "\n".join(lines)

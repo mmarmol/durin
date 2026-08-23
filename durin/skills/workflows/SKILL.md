@@ -143,6 +143,8 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   returns the result directly). `tasks` only sees runs launched THIS session — for a run from
   earlier (any session), use `workflow_runs(action="search", query=...)` to find it and
   `action="show"` to read its manifest and artifact files instead of running the workflow again.
+  `action="cost"` gives the per-run token/cost table (per node, plus a total) instead of
+  hand-computing it from telemetry — it includes any child sub-workflow runs.
   **Getting files back:** when the workflow declares it outputs files
   (`output: {"file": true}`), the summary reports the run's working-folder path AND lists the
   produced files — read them there, and copy out anything that must outlive the run (working
