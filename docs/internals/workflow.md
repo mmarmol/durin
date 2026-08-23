@@ -763,11 +763,19 @@ re-runs. If it has no `next` (a terminal approval), there is nothing to resume
 into: approving it completes the run immediately, with the proposal as
 `final_output`. **Reject** ends the run there, `cancelled`, with
 `rejected: true` marking that the approver explicitly declined it rather than
-anything failing. Both of these are short-circuits — `build_approval_resume`
-returns `None` for them, so neither the `run_workflow` tool nor the
-`WorkflowsService` HTTP resume path (`POST /api/v1/workflows/{name}/run` with
-`resume_run_id`, §4f — both implement this identically) ever calls back into
-the engine; each finalizes directly through `run_log.finalize_short_circuit`,
+anything failing. Both of these are short-circuits — neither the
+`run_workflow` tool nor the `WorkflowsService` HTTP resume path
+(`POST /api/v1/workflows/{name}/run` with `resume_run_id`, §4f — both
+implement this identically) ever calls back into the engine for them — but
+they reach `durin/workflow/approval.py` differently. **Reject** is
+intercepted by the caller before `build_approval_resume` is ever invoked: the
+caller branches on `action == "reject"` first, so the module is never
+consulted for it (its own docstring says so) — there is no engine state to
+build for a decline. **Approve** on a node with no `next` (a terminal
+approval) DOES call `build_approval_resume`, which returns `None` from
+inside once it sees there is nothing to resume into; the caller treats that
+`None` the same way, finalizing the run itself rather than resuming into
+anything. Either path finalizes directly through `run_log.finalize_short_circuit`,
 which rewrites an existing manifest's terminal fields (`status`, capped
 `final_output`, `finished_at`/`ts`, `rejected`, and clearing
 `active_node`/`needs_input_node`/`ask_kind` to `None`) IN PLACE rather than
@@ -1138,7 +1146,7 @@ End-to-end for a single `run_workflow` call:
 | `WorkflowScriptWriteTool` | `durin/agent/tools/workflow_script_write.py` | The `workflow_script_write` LLM tool: the sanctioned door for the script files a `script` node runs. Generic write tools are denied under `workflows/` (see [security.md](security.md)), so this is how an agent — and the dream's skill-extract sub-agent — authors a deterministic step. Persists through `save_workflow_script`, the same door the editor's `PUT …/scripts/{name}` route uses. |
 | `dependents_of` / `DependentsTool` | `durin/registry_graph.py`, `durin/agent/tools/dependents.py` | The definition graph read backwards: which workflow nodes name a skill (`skills: [...]`) or a script, which nodes call a workflow as a `subworkflow`, and which loops run it. Reads raw JSON so a malformed sibling cannot make the query fail open. Consumed by the autonomous-mutation barrier in the skills store (see [skills/02_lifecycle_and_curation.md](skills/02_lifecycle_and_curation.md)) and exposed to the agent read-only as the `dependents` tool. |
 | `start_run`, `mark_node_started`, `update_run`, `finalize_run`, `finalize_short_circuit`, `typical_node_durations`, `typical_total_duration`, `read_manifest`, `runs_for_session`, `reconcile_running`, `read_runs_since` | `durin/workflow/run_log.py` | The live run manifest (running→terminal, including the in-flight `active_node` marker and the once-per-run `typical_s`/`typical_total_s` baselines), per-run diagnostic records, crash reconciliation, and the self-improvement signal source. `finalize_short_circuit` rewrites an existing manifest's terminal fields in place for a resume that never calls the engine (an approval reject or approve-terminal — see `durin/workflow/approval.py`). `read_runs_since` callers that need terminal runs should skip records with `status in {"running","crashed"}`. |
-| `parse_approval_reply`, `build_approval_resume` | `durin/workflow/approval.py` | Interprets a reply to a paused approval node — a bilingual single-word vocabulary → approve/reject/revise — and builds the `ResumeState` for approve/revise (reject and an approve with no `next` short-circuit before ever reaching this module; see §4g). |
+| `parse_approval_reply`, `build_approval_resume` | `durin/workflow/approval.py` | Interprets a reply to a paused approval node — a bilingual single-word vocabulary → approve/reject/revise — and builds the `ResumeState` for approve/revise. Reject short-circuits before ever reaching this module (the caller finalizes `cancelled` directly); an approve with no `next` DOES reach it and gets `None` back, which the caller turns into a `completed` finalize instead of a resume (see §4g). |
 | `WorkflowRunsTool` | `durin/agent/tools/workflow_runs.py` | The `workflow_runs` LLM tool (core scope, read-only): `search` finds past runs by workflow name/task text/status across every session recorded in the workspace (`tasks` only sees the launching session), `show` returns one run's manifest summary, per-node trace, working folder path, and its artifact files from `.provenance.json` (a file the ledger never recorded is labeled "unstamped"), `cost` renders the per-run token/cost table — one summed line per node (LLM calls, prompt/fresh/output tokens, LLM minutes, dominant model) plus a TOTAL line and the reused-node count — aggregated from `provider.call` telemetry across the run AND any child sub-workflow runs (found by walking `parent_run_id` to any depth), matched by run id and by the run's started/finished dates (±1 day, since a telemetry file is dated by local wall-clock time) — so a question about prior work, including what it cost, can be answered by reading a finding instead of re-running the workflow to reproduce it. |
 | `NodeExecutionError` | `durin/workflow/engine.py` | Typed error raised by the node runner when an agent turn or a script node's process fails or times out; carries `node_id`, `iteration`, and `session_key` (`None` for a script node) so the engine can record an attributable `NodeRun` before aborting. |
 | `compute_diagnostics` | `durin/workflow/diagnostics.py` | Reduces run records to recurring per-node trouble (loop-backs, gate fails, script failures with sample error strings) → improvement candidates. |
