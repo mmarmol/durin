@@ -668,6 +668,15 @@ def test_delivery_silent_labels_default():
     assert spec.delivery.silent_labels == ("NOTHING_TO_REPORT",)
 
 
+def test_delivery_explicit_null_silent_labels_falls_back_to_default():
+    """An explicit JSON null (as opposed to omitting the key) must not crash
+    the parser with a bare TypeError; it is treated the same as omitted,
+    like every other list/dict-shaped field here."""
+    data = _minimal() | {"delivery": {"silent_labels": None}}
+    spec = parse_automation(data)
+    assert spec.delivery.silent_labels == ("NOTHING_TO_REPORT",)
+
+
 def test_parse_rejects_empty_string_silent_label():
     data = _minimal() | {"delivery": {"silent_labels": ["ACHIEVED", ""]}}
     with pytest.raises(AutomationError):
