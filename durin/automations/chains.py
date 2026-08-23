@@ -93,7 +93,13 @@ def validate_chain_edges(workspace: str | Path, spec: AutomationSpec) -> None:
 
     def _find_cycle(node: str) -> list[str] | None:
         if node in in_progress:
-            return [node]
+            # A revisit only means THIS save closes a cycle when the node
+            # we've come back around to is the root under validation. A
+            # revisit of some OTHER in-progress node indicates a cycle
+            # elsewhere in the graph that spec.name merely has a path into —
+            # not one it closes — so this branch reports nothing and lets
+            # its sibling edges keep exploring instead of raising here.
+            return [node] if node == spec.name else None
         if node in visited:
             return None
         visited.add(node)

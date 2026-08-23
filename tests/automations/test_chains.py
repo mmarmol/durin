@@ -122,6 +122,50 @@ def test_unrelated_pre_existing_cycle_does_not_block_a_save_that_ignores_it(tmp_
     assert (d / "z.json").exists()
 
 
+def test_edge_pointing_into_a_preexisting_cycle_it_does_not_close_still_saves(tmp_path):
+    """A stray x<->y cycle already on disk (hand-written, bypassing
+    save_automation) must not become a permanent trap. A brand-new automation
+    whose only edge points INTO that cycle (w -> x) closes nothing itself —
+    w is not part of any path back to w — so its save must succeed.
+    """
+    import json
+
+    d = automations_dir(tmp_path)
+    d.mkdir(parents=True)
+    (d / "x.json").write_text(json.dumps({
+        "name": "x", "workflow": "wf",
+        "triggers": [{"source": "chain", "chain_automation": "y", "chain_when": "any"}],
+    }))
+    (d / "y.json").write_text(json.dumps({
+        "name": "y", "workflow": "wf",
+        "triggers": [{"source": "chain", "chain_automation": "x", "chain_when": "any"}],
+    }))
+
+    save_automation(tmp_path, _spec("w", chains_to="x"))  # must not raise
+
+    assert (d / "w.json").exists()
+
+
+def test_root_cycle_detected_past_a_harmless_second_edge(tmp_path):
+    """The saved spec has two chain edges: one harmless (r -> p, a dead end),
+    one that closes a cycle back to the root (r -> q -> r). The harmless
+    branch exploring cleanly first must not mask the real cycle on the
+    second branch."""
+    save_automation(tmp_path, _spec("p"))  # dead end: no chain trigger
+    save_automation(tmp_path, _spec("q", chains_to="r"))  # q -> r: fine, r doesn't chain back yet
+
+    data = {
+        "name": "r",
+        "workflow": "wf",
+        "triggers": [
+            {"source": "chain", "chain_automation": "p", "chain_when": "any"},
+            {"source": "chain", "chain_automation": "q", "chain_when": "any"},
+        ],
+    }
+    with pytest.raises(AutomationError):
+        save_automation(tmp_path, parse_automation(data))
+
+
 # --- chain_targets: outcome-filtered matching -----------------------------
 
 
