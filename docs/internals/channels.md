@@ -468,9 +468,11 @@ caller can later register a claim that a reply into that thread should wake.
 `thread_key` follows the same per-channel vocabulary the inbound loop matcher
 keys claims on (see "Per-channel thread-key semantics" in `loops.md`):
 
-- **Slack** — `slack:<chat_id>:<ts>`, built from the first posted chunk's own
-  `ts` when the send opens a new thread, or from the existing `thread_ts` when
-  it replies into one.
+- **Slack** — `slack:<chat_id>:<ts>`: the existing `thread_ts` when the send
+  replies into one, else the ts of whatever message now carries the first
+  chunk — a fresh `chat_postMessage`, or a pending status message the send
+  took over via `chat_update` instead of posting fresh (the common shape for
+  a plain answer, e.g. an approval ask, landing while a status line shows).
 - **Email** — the bare thread digest (`email_threads.thread_digest`, 16 hex
   chars, no channel prefix): the existing thread's digest when replying,
   otherwise the digest of the send's own new Message-ID (the same root a

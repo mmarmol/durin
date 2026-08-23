@@ -310,10 +310,13 @@ class SlackChannel(BaseChannel):
     async def send(self, msg: OutboundMessage) -> SendReceipt | None:
         """Send a message through Slack.
 
-        Returns a ``SendReceipt`` naming the thread this send landed in: the
-        first posted chunk's own ``ts`` when it opens a new thread, or the
-        existing ``thread_ts`` it replied into. ``None`` when nothing was
-        actually posted (progress-only or media-only sends).
+        Returns a ``SendReceipt`` naming the thread this send landed in: an
+        existing ``thread_ts`` it replied into, else the ts of whatever
+        message now carries the first chunk — a fresh ``chat_postMessage``,
+        or a pending status message this send took over via ``chat_update``
+        (the common shape for a plain answer that lands while a status line
+        is showing). ``None`` when nothing was actually posted or edited
+        (progress-only or media-only sends).
         """
         if not self._web_client:
             self.logger.warning("client not running")
@@ -355,6 +358,13 @@ class SlackChannel(BaseChannel):
                         status_target, status_ts = claimed
                         await self._replace_stream_message(
                             status_target, status_ts, chunk, thread_ts_param
+                        )
+                        # The status message just became the answer; it lives
+                        # at status_target (not target_chat_id, which can
+                        # differ for a cross-channel send), so that's where
+                        # this thread's key comes from.
+                        receipt = SendReceipt(
+                            thread_key=f"slack:{status_target}:{thread_ts_param or status_ts}"
                         )
                         continue
                     resp = await self._web_client.chat_postMessage(**kwargs)
