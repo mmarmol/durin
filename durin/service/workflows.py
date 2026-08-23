@@ -846,10 +846,8 @@ class WorkflowsService:
         # builds it from the returned WorkflowResult, same as run_workflow.py does.
         progress_emit = None
         if self._progress_publish is not None:
-            publish = self._progress_publish
-
             def _emit_progress(payload: dict) -> None:
-                publish({
+                self._progress_publish({
                     "run_id": payload["run_id"],
                     "workflow": name,
                     "nodes": payload["nodes"],
