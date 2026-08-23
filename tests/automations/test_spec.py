@@ -594,58 +594,15 @@ def test_parse_rejects_chain_with_semantic():
         parse_automation(data)
 
 
-def test_parse_chain_trigger_correlate_roundtrip():
-    # A chain fire carries the upstream automation's own output text, so
-    # (unlike schedule) correlate is meaningful here too: it can pull an
-    # identifier out of that upstream text.
+def test_parse_rejects_chain_with_correlate():
+    # correlate is a channel/webhook-only field: it is only ever consulted
+    # while matching an inbound channel message or webhook payload, so on a
+    # chain trigger it would be an accepted-but-permanently-dead field.
+    # Rejected outright, exactly like schedule rejects it.
     data = _minimal()
     data["triggers"] = [{"source": "chain", "chain_automation": "upstream", "correlate": r"ticket-(\d+)"}]
-    spec = parse_automation(data)
-    assert spec.triggers[0].correlate == r"ticket-(\d+)"
-    assert parse_automation(automation_to_dict(spec)) == spec
-
-
-def test_parse_rejects_chain_correlate_zero_groups():
-    data = _minimal()
-    data["triggers"] = [{"source": "chain", "chain_automation": "upstream", "correlate": "no-group-here"}]
     with pytest.raises(AutomationError):
         parse_automation(data)
-
-
-# --- inert-correlate warning -------------------------------------------------
-
-
-def test_warns_but_keeps_correlate_with_no_channel_or_webhook_trigger(caplog):
-    """correlate is only ever consulted by a channel or webhook inbound
-    match; a chain-only automation that sets it declares something that will
-    never be evaluated. That is advisory, not an error: keep the value and
-    warn, the same way an undeclared filter key is handled."""
-    data = _minimal()
-    data["triggers"] = [{"source": "chain", "chain_automation": "upstream", "correlate": r"ticket-(\d+)"}]
-
-    with caplog.at_level(logging.WARNING, logger="durin.automations.spec"):
-        spec = parse_automation(data)
-
-    assert spec.triggers[0].correlate == r"ticket-(\d+)"
-    assert any("correlate" in r.getMessage() for r in caplog.records)
-
-
-def test_does_not_warn_when_a_channel_trigger_coexists(caplog):
-    data = _minimal()
-    data["triggers"] = [
-        {"source": "chain", "chain_automation": "upstream", "correlate": r"ticket-(\d+)"},
-        {"source": "channel", "channel": "email"},
-    ]
-    with caplog.at_level(logging.WARNING, logger="durin.automations.spec"):
-        parse_automation(data)
-    assert caplog.records == []
-
-
-def test_does_not_warn_when_correlate_is_unset():
-    data = _minimal()
-    data["triggers"] = [{"source": "chain", "chain_automation": "upstream"}]
-    # No channel/webhook trigger and no correlate set either: nothing to warn about.
-    parse_automation(data)  # must not raise
 
 
 # --- delivery ----------------------------------------------------------------

@@ -37,23 +37,24 @@ _ON_STUCK_MODES = ("escalate_pause", "notify", "keep")
 _CHAIN_WHEN_MODES = ("achieved", "completed", "failed", "any")
 
 # Field ownership per trigger source, used to reject foreign fields outright
-# so the four trigger shapes never mix. "semantic" and "correlate" are each
-# owned by more than one source (see below), everything else by exactly one.
+# so the four trigger shapes never mix. "semantic" and "correlate" are both
+# owned jointly by channel and webhook (never schedule or chain); everything
+# else by exactly one source.
 _SCHEDULE_ONLY_FIELDS = {"schedule", "task"}
 _CHANNEL_ONLY_FIELDS = {"channel", "filters", "match"}
 _WEBHOOK_ONLY_FIELDS = {"hook"}
 _CHAIN_ONLY_FIELDS = {"chain_automation", "chain_when"}
+_CHANNEL_OR_WEBHOOK_FIELDS = {"semantic", "correlate"}
 
-_SCHEDULE_FORBIDDEN_FIELDS = _CHANNEL_ONLY_FIELDS | _WEBHOOK_ONLY_FIELDS | {"semantic", "correlate"} | _CHAIN_ONLY_FIELDS
+_SCHEDULE_FORBIDDEN_FIELDS = _CHANNEL_ONLY_FIELDS | _WEBHOOK_ONLY_FIELDS | _CHANNEL_OR_WEBHOOK_FIELDS | _CHAIN_ONLY_FIELDS
 _CHANNEL_FORBIDDEN_FIELDS = _SCHEDULE_ONLY_FIELDS | _WEBHOOK_ONLY_FIELDS | _CHAIN_ONLY_FIELDS
 _WEBHOOK_FORBIDDEN_FIELDS = _SCHEDULE_ONLY_FIELDS | _CHANNEL_ONLY_FIELDS | _CHAIN_ONLY_FIELDS
-# "correlate" is not forbidden here: unlike a schedule fire, a chain fire
-# carries the upstream automation's own final text (see AutomationsRuntime's
-# chain dispatch), so a capture-group pattern has something to match against.
-# It stays inert without a channel/webhook trigger in the same automation
-# (nothing else ever consults a chain trigger's correlate) — that combination
-# is warned about below, not rejected.
-_CHAIN_FORBIDDEN_FIELDS = _SCHEDULE_ONLY_FIELDS | _CHANNEL_ONLY_FIELDS | _WEBHOOK_ONLY_FIELDS | {"semantic"}
+# correlate is only ever consulted while matching an inbound channel message
+# or webhook payload (v1's work-key derivation runs off matcher-produced
+# origins only), so it is channel/webhook-only, same as semantic: a chain
+# trigger rejects both outright rather than accepting a field nothing will
+# ever read.
+_CHAIN_FORBIDDEN_FIELDS = _SCHEDULE_ONLY_FIELDS | _CHANNEL_ONLY_FIELDS | _WEBHOOK_ONLY_FIELDS | _CHANNEL_OR_WEBHOOK_FIELDS
 
 
 class AutomationError(ValueError):
@@ -92,7 +93,7 @@ class AutomationTrigger:
     semantic: str | None = None  # channel or webhook trigger: optional model-judged condition
     match: Literal["wake_or_new", "always_new"] = "wake_or_new"  # channel trigger only
     hook: str | None = None  # webhook trigger only: the hook name that fires this trigger
-    correlate: str | None = None  # channel, webhook, or chain trigger: optional single-capture-group regex
+    correlate: str | None = None  # channel or webhook trigger only: optional single-capture-group regex
     chain_automation: str | None = None  # chain trigger only: the upstream automation's name
     chain_when: Literal["achieved", "completed", "failed", "any"] = "any"  # chain trigger only
 
@@ -258,25 +259,6 @@ def _parse_trigger(raw: dict, i: int) -> AutomationTrigger:
     return _parse_schedule_trigger(raw, i)
 
 
-def _warn_inert_correlate(name: str, triggers: tuple[AutomationTrigger, ...]) -> None:
-    """correlate is only ever consulted while matching an inbound channel
-    message or webhook payload. An automation with no channel/webhook
-    trigger at all has nothing to consult it, so a correlate set elsewhere
-    (only reachable today via a chain trigger) will never be evaluated.
-    Advisory only, like the undeclared-filter-key check above: keep the
-    value, just warn."""
-    if any(t.source in ("channel", "webhook") for t in triggers):
-        return
-    for i, t in enumerate(triggers):
-        if t.correlate:
-            logger.warning(
-                "automations: %r trigger[%d] declares correlate but no channel/webhook trigger exists; "
-                "this pattern will never be evaluated",
-                name,
-                i,
-            )
-
-
 def _parse_delivery(raw: dict) -> Delivery:
     if not isinstance(raw, dict):
         raise AutomationError("delivery must be an object")
@@ -335,7 +317,6 @@ def parse_automation(data: dict) -> AutomationSpec:
     if not isinstance(workflow, str) or not workflow.strip():
         raise AutomationError("workflow is required")
     triggers = tuple(_parse_trigger(t, i) for i, t in enumerate(data.get("triggers") or []))
-    _warn_inert_correlate(name, triggers)
     concurrency = data.get("concurrency", "single")
     if concurrency not in ("single", "parallel"):
         raise AutomationError("concurrency must be 'single' or 'parallel'")
@@ -363,10 +344,7 @@ def _trigger_to_dict(t: AutomationTrigger) -> dict:
             entry["correlate"] = t.correlate
         return entry
     if t.source == "chain":
-        entry = {"source": "chain", "chain_automation": t.chain_automation, "chain_when": t.chain_when}
-        if t.correlate is not None:
-            entry["correlate"] = t.correlate
-        return entry
+        return {"source": "chain", "chain_automation": t.chain_automation, "chain_when": t.chain_when}
     entry = {"source": "channel", "channel": t.channel, "filters": t.filters, "match": t.match}
     if t.semantic is not None:
         entry["semantic"] = t.semantic
