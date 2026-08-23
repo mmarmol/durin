@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -648,6 +648,139 @@ async def test_cost_no_telemetry_says_so_explicitly(tmp_path: Path, monkeypatch)
     assert "no provider.call telemetry found for this run's date(s)" in out.lower()
     assert "calls=0" not in out
     assert "TOTAL" not in out
+    # the reader still needs to know WHICH run this empty result is about.
+    assert f"[{run_id}]" in out
+    assert "cost-workflow" in out
+
+
+@pytest.mark.asyncio
+async def test_cost_filename_match_is_anchored_not_substring(tmp_path: Path, monkeypatch):
+    # A telemetry file for a DIFFERENT run whose id merely starts with this
+    # run's id (this run's id as a strict prefix of a longer id) must not be
+    # folded into this run's cost -- an unanchored "rid in name" containment
+    # check would silently corrupt the total if the id format ever grows a
+    # separator (today's fixed-length hex ids can't collide, but the check
+    # itself must not depend on that).
+    tel_dir = tmp_path / "telemetry"
+    monkeypatch.setattr(telemetry_logger, "_DEFAULT_DIR", tel_dir)
+    run_id = "aaaaaa111111"
+    _write_manifest(tmp_path, "cost-workflow", run_id, _cost_manifest(
+        run_id, "cost-workflow", parent_run_id=None,
+        runs=[{"node_id": "fetch", "iteration": 1, "status": "ok",
+               "session_key": f"workflow:{run_id}:fetch:1"}],
+    ))
+    _write_telemetry(tel_dir, f"workflow_{run_id}_fetch_1_{COST_DATE}.jsonl", [
+        {"provider": "anthropic", "model": "claude-sonnet-5", "prompt_tokens": 100,
+         "cached_tokens": 0, "completion_tokens": 10, "duration_ms": 1000.0,
+         "finish_reason": "stop"},
+    ])
+    # A different, unrelated run whose id has run_id as a strict PREFIX.
+    other_id = run_id + "x999"
+    _write_telemetry(tel_dir, f"workflow_{other_id}_fetch_1_{COST_DATE}.jsonl", [
+        {"provider": "anthropic", "model": "claude-opus-5", "prompt_tokens": 99999,
+         "cached_tokens": 0, "completion_tokens": 99999, "duration_ms": 999999.0,
+         "finish_reason": "stop"},
+    ])
+    tool = WorkflowRunsTool(workspace=str(tmp_path))
+    out = await tool.execute(action="cost", run_id=run_id)
+    total_line = next(ln for ln in out.splitlines() if ln.startswith("TOTAL"))
+    assert "calls=1" in total_line     # only this run's own file
+    assert "prompt=100" in total_line
+    assert "99999" not in out          # the other run's tokens never leaked in
+
+
+@pytest.mark.asyncio
+async def test_cost_sums_telemetry_spanning_midnight(tmp_path: Path, monkeypatch):
+    # started_at 23:50 UTC, finished_at 00:10 UTC the next day -- two visits
+    # of the same node, one telemetry file dated each side of midnight, must
+    # both be found and summed (this is exactly what the +-1 day tolerance
+    # in `_candidate_telemetry_dates` exists for).
+    tel_dir = tmp_path / "telemetry"
+    monkeypatch.setattr(telemetry_logger, "_DEFAULT_DIR", tel_dir)
+    run_id = "bbbbbb222222"
+    started_at = datetime(2024, 3, 5, 23, 50, 0, tzinfo=timezone.utc).timestamp()
+    finished_at = datetime(2024, 3, 6, 0, 10, 0, tzinfo=timezone.utc).timestamp()
+    manifest = _cost_manifest(
+        run_id, "cost-workflow", parent_run_id=None,
+        runs=[
+            {"node_id": "fetch", "iteration": 1, "status": "ok",
+             "session_key": f"workflow:{run_id}:fetch:1"},
+            {"node_id": "fetch", "iteration": 2, "status": "ok",
+             "session_key": f"workflow:{run_id}:fetch:2"},
+        ],
+    )
+    manifest["started_at"] = started_at
+    manifest["finished_at"] = finished_at
+    manifest["ts"] = finished_at
+    _write_manifest(tmp_path, "cost-workflow", run_id, manifest)
+
+    _write_telemetry(tel_dir, f"workflow_{run_id}_fetch_1_2024-03-05.jsonl", [
+        {"provider": "anthropic", "model": "claude-sonnet-5", "prompt_tokens": 100,
+         "cached_tokens": 0, "completion_tokens": 10, "duration_ms": 1000.0,
+         "finish_reason": "stop"},
+    ])
+    _write_telemetry(tel_dir, f"workflow_{run_id}_fetch_2_2024-03-06.jsonl", [
+        {"provider": "anthropic", "model": "claude-sonnet-5", "prompt_tokens": 200,
+         "cached_tokens": 0, "completion_tokens": 20, "duration_ms": 2000.0,
+         "finish_reason": "stop"},
+    ])
+    tool = WorkflowRunsTool(workspace=str(tmp_path))
+    out = await tool.execute(action="cost", run_id=run_id)
+    total_line = next(ln for ln in out.splitlines() if ln.startswith("TOTAL"))
+    assert "calls=2" in total_line
+    assert "prompt=300" in total_line   # 100 + 200 -- both sides of midnight counted
+
+
+@pytest.mark.asyncio
+async def test_cost_includes_grandchild_run(tmp_path: Path, monkeypatch):
+    # parent -> child -> grandchild, each linked only by parent_run_id to its
+    # IMMEDIATE parent -- the grandchild's telemetry must still reach the
+    # top-level run's cost, proving the descendant walk isn't one level deep.
+    tel_dir = tmp_path / "telemetry"
+    monkeypatch.setattr(telemetry_logger, "_DEFAULT_DIR", tel_dir)
+    parent_id = "aaaaaa000001"
+    child_id = "bbbbbb000002"
+    grandchild_id = "cccccc000003"
+
+    _write_manifest(tmp_path, "parent-workflow", parent_id, _cost_manifest(
+        parent_id, "parent-workflow", parent_run_id=None,
+        runs=[{"node_id": "parent_step", "iteration": 1, "status": "ok",
+               "session_key": f"workflow:{parent_id}:parent_step:1"}],
+    ))
+    _write_manifest(tmp_path, "child-workflow", child_id, _cost_manifest(
+        child_id, "child-workflow", parent_run_id=parent_id,
+        runs=[{"node_id": "child_step", "iteration": 1, "status": "ok",
+               "session_key": f"workflow:{child_id}:child_step:1"}],
+    ))
+    _write_manifest(tmp_path, "grandchild-workflow", grandchild_id, _cost_manifest(
+        grandchild_id, "grandchild-workflow", parent_run_id=child_id,
+        runs=[{"node_id": "grandchild_step", "iteration": 1, "status": "ok",
+               "session_key": f"workflow:{grandchild_id}:grandchild_step:1"}],
+    ))
+
+    _write_telemetry(tel_dir, f"workflow_{parent_id}_parent_step_1_{COST_DATE}.jsonl", [
+        {"provider": "anthropic", "model": "claude-sonnet-5", "prompt_tokens": 10,
+         "cached_tokens": 0, "completion_tokens": 1, "duration_ms": 100.0,
+         "finish_reason": "stop"},
+    ])
+    _write_telemetry(tel_dir, f"workflow_{child_id}_child_step_1_{COST_DATE}.jsonl", [
+        {"provider": "anthropic", "model": "claude-sonnet-5", "prompt_tokens": 20,
+         "cached_tokens": 0, "completion_tokens": 2, "duration_ms": 100.0,
+         "finish_reason": "stop"},
+    ])
+    _write_telemetry(tel_dir, f"workflow_{grandchild_id}_grandchild_step_1_{COST_DATE}.jsonl", [
+        {"provider": "anthropic", "model": "claude-sonnet-5", "prompt_tokens": 30,
+         "cached_tokens": 0, "completion_tokens": 3, "duration_ms": 100.0,
+         "finish_reason": "stop"},
+    ])
+
+    tool = WorkflowRunsTool(workspace=str(tmp_path))
+    out = await tool.execute(action="cost", run_id=parent_id)
+    assert "grandchild_step" in out
+    assert grandchild_id in out
+    total_line = next(ln for ln in out.splitlines() if ln.startswith("TOTAL"))
+    assert "calls=3" in total_line
+    assert "prompt=60" in total_line   # 10 + 20 + 30
 
 
 # --- gating -------------------------------------------------------------

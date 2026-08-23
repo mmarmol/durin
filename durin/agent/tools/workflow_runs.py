@@ -637,7 +637,12 @@ class WorkflowRunsTool(Tool):
         if tel_dir.is_dir():
             for f in tel_dir.glob("workflow_*.jsonl"):
                 name = f.name
-                if not any(rid in name for rid in run_ids):
+                # Anchored on the literal "workflow_<rid>_" prefix, not a bare
+                # substring test — run ids are fixed-length hex today so a
+                # containment check can't collide, but the id format is free to
+                # grow a separator later, and an unanchored match would then
+                # silently fold one run's telemetry into another's total.
+                if not any(name.startswith(f"workflow_{rid}_") for rid in run_ids):
                     continue
                 if not any(d in name for d in candidate_dates):
                     continue
@@ -679,7 +684,10 @@ class WorkflowRunsTool(Tool):
         reused_total = sum(_reused_count(m.get("runs") or []) for m in all_manifests)
 
         if not any_calls:
-            lines = ["No provider.call telemetry found for this run's date(s)."]
+            lines = [
+                self._summary_line(rec),
+                "No provider.call telemetry found for this run's date(s).",
+            ]
             if reused_total:
                 lines.append(f"  reused nodes: {reused_total} — they cost 0")
             return "\n".join(lines)
