@@ -290,6 +290,7 @@ def finalize_run(
         # capped, so a historical audit of the run shows the result, not only the trace.
         "final_output": (result.final_output or "")[:8000],
         "final_output_node": getattr(result, "final_output_node", None),
+        "final_route_label": getattr(result, "final_route_label", None),
         "needs_input_node": getattr(result, "needs_input_node", None),
         # Failure-resume anchors: which node aborted the run and the EXACT upstream
         # text it received (verbatim — a retried script parses its stdin, so no

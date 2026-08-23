@@ -762,6 +762,7 @@ class WorkflowEngine:
         terminal_output_dir: str | None = work_dir
         final_output: str | None = None
         final_output_node: str | None = None
+        final_route_label: str | None = None  # the label that ends the run: matched cases label, "PASS"/"FAIL", or None
         current: str | None = start_at or workflow.start
 
         # Seed input_files into the shared working folder so the start node reads them as
@@ -1141,6 +1142,7 @@ class WorkflowEngine:
                         if residue:
                             final_output = residue
                             final_output_node = node.id
+                        final_route_label = label
                     current = target
                 elif node.routes:
                     if not passed:
@@ -1155,6 +1157,7 @@ class WorkflowEngine:
                         if residue:
                             final_output = residue
                             final_output_node = node.id
+                        final_route_label = "PASS" if passed else "FAIL"
                 else:
                     upstream_output = output
                     final_output = output
@@ -1335,6 +1338,7 @@ class WorkflowEngine:
             status="completed", final_output=final_output, runs=runs, run_id=run_id,
             output_dir=terminal_output_dir, output_files=output_files,
             final_output_node=final_output_node, missing_artifacts=missing,
+            final_route_label=final_route_label,
         )
 
     def _reuse_hit(self, node: WorkNode, work_dir: str, *, task: str, node_input: str | None,
