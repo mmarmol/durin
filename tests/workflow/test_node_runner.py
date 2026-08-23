@@ -376,7 +376,7 @@ def test_node_persona_applies_soul_and_model(monkeypatch):
             return R()
 
     from durin.workflow import node_runner as nr_mod
-    monkeypatch.setattr(nr_mod, "resolve_persona", lambda cfg, name, ws=None: ("ENGINEER SOUL", "persona-model"))
+    monkeypatch.setattr(nr_mod, "resolve_persona", lambda cfg, name, ws=None: ("ENGINEER SOUL", "persona-model", None))
     nr = nr_mod.AgentNodeRunner(Runner(), sessions=_fake_sessions(), default_model="m", app_config=object())
     node = WorkNode(id="a", persona="engineer")
     nr(NodeRunRequest(node=node, task="t", upstream_output=None, shared_context=[], run_id="r", iteration=1, root_session_key=None))
@@ -432,7 +432,7 @@ def test_reuse_identity_prefers_persona_model_over_node_model(monkeypatch, tmp_p
     from durin.agent.runner import AgentRunner
     from durin.providers.base import GenerationSettings
     from durin.workflow import node_runner as nr_mod
-    monkeypatch.setattr(nr_mod, "resolve_persona", lambda cfg, name, ws=None: (None, "persona-model"))
+    monkeypatch.setattr(nr_mod, "resolve_persona", lambda cfg, name, ws=None: (None, "persona-model", None))
     sessions = SessionManager(workspace=tmp_path)
     provider = MagicMock(spec=LLMProvider)
     provider.provider_key = "p"

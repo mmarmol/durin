@@ -93,7 +93,13 @@ def node_identity(node) -> dict:
 
 
 def params_hash(generation) -> str:
-    keys = ("max_tokens", "temperature", "reasoning_effort", "top_p", "top_k")
+    """sha256 over the generation-params fields that affect a call's output —
+    duck-typed via getattr so any object exposing these attributes (a real
+    GenerationSettings, a test double) works. Every field a provider's
+    generation actually carries belongs here: a config change to one that's
+    NOT hashed (e.g. the historical repeat_penalty gap) would silently alter
+    outputs without invalidating a node's reuse identity."""
+    keys = ("max_tokens", "temperature", "reasoning_effort", "top_p", "top_k", "repeat_penalty")
     payload = {k: getattr(generation, k, None) for k in keys}
     return hashlib.sha256(_canonical(payload).encode("utf-8")).hexdigest()
 

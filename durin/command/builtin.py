@@ -551,6 +551,11 @@ def adhoc_preset_config(config: Any, provider: str, model: str):
         reasoning_effort=(
             entry.reasoning_effort if entry and entry.reasoning_effort is not None else None
         ),
+        top_p=(entry.top_p if entry and entry.top_p is not None else None),
+        top_k=(entry.top_k if entry and entry.top_k is not None else None),
+        repeat_penalty=(
+            entry.repeat_penalty if entry and entry.repeat_penalty is not None else None
+        ),
     )
 
 

@@ -262,6 +262,19 @@ provider + model), not from the snapshot the surface was built with — so chang
 model applies to the next run without a gateway restart. The chat model picker is deliberately
 *not* that default: it swaps the model for the conversation only, and a workflow run keeps
 using the saved default.
+A node's (or its persona's) `model` accepts any of the picker's forms — a `model_presets`
+name, a `"provider model"` pair, or a plain model name — resolved through the same machinery
+as the chat loop's `/model` command (`durin/workflow/node_runner.py:AgentNodeRunner._resolve_node_provider`):
+a pair is registered as an ad-hoc preset so it is never handed to a provider as a raw
+two-word string, and a plain name picks up its `providers.<name>.models` entry (per-model
+`temperature`/`max_tokens`/etc., see the configuration guide) when one is declared, building
+a dedicated provider only when that entry's params actually differ from the run's default —
+a bare name with nothing configured for it keeps sharing the default client. A persona's own
+`temperature`, when set, overrides whatever the resolved model would otherwise use. Resolved
+providers are cached per run (per node) so repeated nodes on the same ref don't rebuild one.
+This resolution is also what `reuse: "if-unchanged"` compares against: an unresolvable ref logs
+a warning, runs the node against the default provider/model anyway (a workflow run never dies
+on a bad ref), but reports an unknown producer identity so that node's reuse gate never fires.
 
 A **parallel** node runs branches concurrently and merges their text outputs into the next
 node's input. It has three shapes — **static** (a fixed `branches` list of work- or script-node ids, each

@@ -97,6 +97,7 @@ describe("personas API helpers", () => {
       name: "assistant",
       soul: "default",
       model: null,
+      temperature: null,
       description: null,
     });
 
@@ -109,6 +110,7 @@ describe("personas API helpers", () => {
           name: "assistant",
           soul: "default",
           model: null,
+          temperature: null,
           description: null,
         }),
       }),

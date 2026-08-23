@@ -4801,6 +4801,11 @@ export interface components {
             name: string;
             /** Soul */
             soul: string;
+            /**
+             * Temperature
+             * @default null
+             */
+            temperature: number | null;
         };
         /**
          * PersonaListQuery
@@ -4869,6 +4874,11 @@ export interface components {
              * @default default
              */
             soul: string;
+            /**
+             * Temperature
+             * @default null
+             */
+            temperature: number | null;
         };
         /** PersonaUpsertResult */
         PersonaUpsertResult: {

@@ -798,6 +798,7 @@ class PersonaConfig(Base):
     soul: str = Field(default="default", description='SoulStore slug for the persona\'s SOUL; "default" = the workspace SOUL.md')
     model: str | None = Field(default=None, description='Model picker ref (a preset name or a "provider model" pair); None uses the global default model')
     description: str | None = Field(default=None, description="Human-readable description shown in the persona picker")
+    temperature: float | None = Field(default=None, description="Generation temperature override; None uses the resolved model's own temperature")
 
 
 class ModeConfig(Base):

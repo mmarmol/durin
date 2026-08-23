@@ -32,6 +32,15 @@ function errLabel(e: unknown): string {
   return e instanceof ApiError ? `HTTP ${e.status}` : (e as Error).message;
 }
 
+/** Empty string -> unset (null); anything else parses as a float, discarding
+ *  a non-numeric entry rather than sending it to the API. */
+function parseTemperature(s: string): number | null {
+  const trimmed = s.trim();
+  if (!trimmed) return null;
+  const n = Number(trimmed);
+  return Number.isFinite(n) ? n : null;
+}
+
 const labelClass = "block text-[12px] font-medium text-foreground/80 mb-1";
 const inputClass =
   "w-full rounded-md border border-border/60 bg-background px-3 py-1.5 text-[13px] text-foreground " +
@@ -189,6 +198,9 @@ function PersonaForm({
   const { t } = useTranslation();
   const [name, setName] = useState(editPersona?.name ?? "");
   const [model, setModel] = useState(editPersona?.model ?? "");
+  const [temperature, setTemperature] = useState(
+    editPersona?.temperature != null ? String(editPersona.temperature) : "",
+  );
   const [soul, setSoul] = useState(editPersona?.soul ?? DEFAULT_SOUL_SLUG);
   const [description, setDescription] = useState(editPersona?.description ?? "");
   const [saving, setSaving] = useState(false);
@@ -204,6 +216,7 @@ function PersonaForm({
       await savePersona(token, {
         name: name.trim(),
         model: model.trim() || null,
+        temperature: parseTemperature(temperature),
         soul: soul || DEFAULT_SOUL_SLUG,
         description: description.trim() || null,
       });
@@ -267,6 +280,21 @@ function PersonaForm({
       <div>
         <label className={labelClass}>{t("settings.personas.fieldModel")}</label>
         <ModelSelectField value={model} onChange={handleModelChange} />
+      </div>
+      <div>
+        <label htmlFor="persona-temperature" className={labelClass}>
+          {t("settings.personas.fieldTemperature")}
+        </label>
+        <input
+          id="persona-temperature"
+          type="text"
+          inputMode="decimal"
+          className={inputClass}
+          value={temperature}
+          onChange={(e) => setTemperature(e.target.value)}
+          placeholder={t("settings.personas.temperaturePlaceholder")}
+          autoComplete="off"
+        />
       </div>
       <div>
         <label htmlFor="persona-soul" className={labelClass}>

@@ -1647,7 +1647,11 @@ class AgentLoop:
             channel=channel,
             chat_id=chat_id,
         )
-        return resolve_persona(self.app_config, name, self.workspace)
+        # A persona's own `temperature` (third element) is not wired into the
+        # loop's snapshot path yet — see durin/workflow/node_runner.py for the
+        # workflow-node equivalent, which IS wired (the motivating case).
+        soul_body, model_ref, _temperature = resolve_persona(self.app_config, name, self.workspace)
+        return soul_body, model_ref
 
     def _build_initial_messages(
         self,

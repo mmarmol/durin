@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import dataclasses
 import json
 import threading
 from typing import Any
@@ -249,26 +250,193 @@ class AgentNodeRunner:
         # i.e. once per workflow run — and shared by every node's registry,
         # so N nodes don't pay N provider constructions.
         self._aux_providers: dict | None = None
+        # Per-run cache of resolved (provider, model) pairs for a "provider
+        # model" pair or a registered preset name, keyed by the raw picker ref
+        # — mirrors _aux_providers: N nodes sharing the same ref pay for one
+        # provider construction, not N. Never caches a resolution FAILURE (see
+        # _resolve_node_provider), so a transient config problem gets another
+        # chance on the next node rather than being pinned for the whole run.
+        self._node_providers: dict[str, tuple[Any, str]] = {}
 
     def reuse_identity(self, node) -> dict | None:
         """The producer identity a run of *node* right now would stamp into
         provenance — model, provider and generation-params hash, resolved exactly
-        as ``_execute`` resolves them. Used by the engine's reuse gate to compare
-        against a stored artifact's recorded producer; duck-typed (``getattr(...,
-        "reuse_identity", None)``) so a script runner or test double need not
-        implement it. None on any failure — an unresolvable identity must disable
-        reuse, never crash the run."""
+        as ``_execute`` resolves them (through ``_resolve_node_provider`` — a
+        preset name, a "provider model" pair, or a plain model name; a persona's
+        own ``temperature`` overrides the resolved generation's). Used by the
+        engine's reuse gate to compare against a stored artifact's recorded
+        producer; duck-typed (``getattr(..., "reuse_identity", None)``) so a
+        script runner or test double need not implement it. None on any
+        failure — including a provider whose ``.generation`` cannot be read —
+        an unresolvable identity must disable reuse, never crash the run."""
         try:
-            _soul, persona_model_ref = resolve_persona(
-                self._app_config, getattr(node, "persona", None), self.sessions.workspace)
-            model = persona_model_ref or node.model or self.default_model
+            persona_name = getattr(node, "persona", None)
+            _soul, persona_model_ref, persona_temperature = resolve_persona(
+                self._app_config, persona_name, self.sessions.workspace)
+            resolved = self._resolve_node_provider(persona_model_ref or getattr(node, "model", None))
+            if resolved is None:
+                return None
+            provider, model = resolved
+            generation = provider.generation
+            if persona_temperature is not None:
+                generation = dataclasses.replace(generation, temperature=persona_temperature)
             return {
                 "model": model,
-                "provider": getattr(self.runner.provider, "provider_key", None),
-                "params_hash": params_hash(self.runner.provider.generation),
+                "provider": getattr(provider, "provider_key", None),
+                "params_hash": params_hash(generation),
             }
         except Exception:  # noqa: BLE001 - unknown identity must disable reuse, never crash
             return None
+
+    def _resolve_node_provider(self, ref: str | None) -> tuple[Any, str] | None:
+        """Resolve a model picker ref — a persona's ``model`` or a node's own
+        ``model`` — to the ``(provider, bare_model_name)`` pair its LLM calls
+        should use, through the SAME machinery the chat loop's ``/model``
+        command resolves against (see ``AgentLoop._resolve_model_override``):
+        a preset name, a ``"provider model"`` pair, or a plain model name. A
+        pair is registered as an ad-hoc preset exactly like ``/model`` does,
+        so it is NEVER handed to a provider as a raw ``"provider model"``
+        string — the latent bug this fixes (a persona's pair ref used to
+        reach the call unresolved).
+
+        ``ref=None`` (no persona/node override at all) returns the runner's
+        own provider and ``self.default_model`` — today's zero-resolution
+        behavior, unchanged. A ref that resolves to the SAME provider and
+        generation params the default already runs with reuses the default
+        client rather than building a new one (the common case: a bare model
+        name with no per-model override) — see ``_build_node_provider``.
+        Successful resolutions are cached on this instance for the run's
+        lifetime (keyed by the raw ref), mirroring ``_aux_providers``.
+
+        Returns ``None`` on any resolution failure (logged) — callers fall
+        back to the default provider/model to keep the run going (mirrors
+        ``resolve_persona``'s fail-open posture), but MUST treat ``None`` as
+        an UNKNOWN identity for reuse purposes — never as "resolved to the
+        default".
+        """
+        if ref is None:
+            try:
+                return self.runner.provider, self.default_model
+            except Exception:  # noqa: BLE001 - a bare/test-double runner may carry no provider at all
+                return None
+        cached = self._node_providers.get(ref)
+        if cached is not None:
+            return cached
+        try:
+            resolved = self._build_node_provider(ref)
+        except Exception:  # noqa: BLE001 - unresolvable ref must never kill a workflow run
+            logger.warning(
+                "workflow: could not resolve model ref {!r} for a node; "
+                "falling back to the default provider/model", ref,
+            )
+            return None
+        self._node_providers[ref] = resolved
+        return resolved
+
+    def _build_node_provider(self, ref: str) -> tuple[Any, str]:
+        """The resolution work for ``_resolve_node_provider`` — split out so
+        every failure mode, from any branch, is caught by that one fail-open
+        wrapper. May raise."""
+        from durin.command.builtin import adhoc_preset_config
+        from durin.providers.factory import make_provider
+
+        config = self._app_config
+        parts = ref.split()
+        if len(parts) == 2:
+            # The picker's "provider model" pair form — register an ad-hoc
+            # preset exactly like /model's cmd_model does, so it resolves on
+            # the NAMED provider (including a cross-provider switch) instead
+            # of reaching a provider as a raw two-word string.
+            provider_name, model = parts
+            preset = adhoc_preset_config(config, provider_name, model)
+            return make_provider(config, preset=preset), preset.model
+
+        if config is not None:
+            try:
+                preset = config.resolve_preset(ref)
+            except Exception:  # noqa: BLE001 - not a registered preset (or a broken config double); fall through to a plain model name
+                pass
+            else:
+                return make_provider(config, preset=preset), preset.model
+
+        # A plain model name, not a registered preset: the pre-existing
+        # workflow behavior sends it straight to the default provider. Only
+        # build a dedicated client when the model's OWN config entry declares
+        # generation params that differ from what the default provider
+        # already runs with — the common case (no such entry) reuses the
+        # default client instead of paying for a new one just to serve the
+        # same params.
+        try:
+            default_provider = self.runner.provider
+            default_provider_key = getattr(default_provider, "provider_key", None)
+            override = self._model_entry_override(config, default_provider_key, ref)
+        except Exception:  # noqa: BLE001 - can't inspect the default provider/config; fall back to it verbatim
+            default_provider = getattr(self.runner, "provider", None)
+            default_provider_key = None
+            override = None
+        if override is None:
+            return default_provider, ref
+        preset = adhoc_preset_config(config, default_provider_key or "auto", ref)
+        return make_provider(config, preset=preset), preset.model
+
+    def _model_entry_override(self, config, provider_key: str | None, model: str):
+        """The ``GenerationSettings`` *model*'s per-model ``ModelEntry`` under
+        *provider_key* would produce, or ``None`` when there is no config, no
+        provider_key, no entry, or the entry's declared fields already match
+        the default provider's CURRENT generation (nothing to override) —
+        the signal for whether a plain model name needs its own provider
+        instance. Unset entry fields fall back to the default provider's own
+        generation (not the config's generic defaults), so an entry that only
+        declares e.g. temperature doesn't spuriously look "different" on the
+        fields it left unset."""
+        if config is None or not provider_key:
+            return None
+        provider_cfg = getattr(config.providers, provider_key, None)
+        entry = (getattr(provider_cfg, "models", None) or {}).get(model)
+        if entry is None:
+            return None
+        base = self.runner.provider.generation
+        overrides = {
+            field: value
+            for field, value in (
+                ("temperature", entry.temperature),
+                ("max_tokens", entry.max_tokens),
+                ("reasoning_effort", entry.reasoning_effort),
+                ("top_p", entry.top_p),
+                ("top_k", entry.top_k),
+                ("repeat_penalty", entry.repeat_penalty),
+            )
+            if value is not None
+        }
+        candidate = dataclasses.replace(base, **overrides)
+        return candidate if candidate != base else None
+
+    def _resolve_node_call(self, persona_model_ref: str | None, node_model: str | None,
+                           persona_temperature: float | None):
+        """Best-effort ``(provider, model, generation)`` for an ACTUAL node
+        run — unlike ``_resolve_node_provider``, this never signals failure:
+        an unresolvable ref degrades to the runner's own default
+        provider/model (workflow runs must not die on a bad ref), and a
+        provider whose ``.generation`` cannot be read (a bare/test-double
+        provider) degrades ``generation`` to ``None`` independently —
+        mirroring the pre-existing provider_key/params_hash split this
+        replaces. *persona_temperature* (when set) overrides the resolved
+        generation's temperature on a COPY (``dataclasses.replace``) — the
+        resolved provider's own (possibly cached/shared) generation is never
+        mutated."""
+        resolved = self._resolve_node_provider(persona_model_ref or node_model)
+        if resolved is None:
+            provider, model = getattr(self.runner, "provider", None), self.default_model
+        else:
+            provider, model = resolved
+        generation = None
+        try:
+            generation = provider.generation
+            if persona_temperature is not None:
+                generation = dataclasses.replace(generation, temperature=persona_temperature)
+        except Exception:  # noqa: BLE001 - a bare/test-double provider may carry no generation; params degrade to None
+            generation = None
+        return provider, model, generation
 
     @staticmethod
     def _pass_note(req: NodeRunRequest) -> str:
@@ -476,7 +644,7 @@ class AgentNodeRunner:
 
         # Apply persona: prepend its SOUL body and use its model ref when set.
         persona_name = getattr(req.node, "persona", None)
-        persona_soul, persona_model_ref = resolve_persona(
+        persona_soul, persona_model_ref, persona_temperature = resolve_persona(
             self._app_config, persona_name, self.sessions.workspace)
         if persona_soul:
             system = f"{persona_soul}\n\n{system}" if system else persona_soul
@@ -528,16 +696,18 @@ class AgentNodeRunner:
             messages.append({"role": "user", "content": user})
 
         # Persona model when a persona is set, else the node's explicit model, else
-        # the runner's default. The parser's persona-xor-model guard ensures at most
-        # one of persona_model_ref and req.node.model is set at a time.
-        model = persona_model_ref or req.node.model or self.default_model
-        provider_key = None
-        resolved_params_hash = None
-        try:
-            provider_key = getattr(self.runner.provider, "provider_key", None)
-            resolved_params_hash = params_hash(self.runner.provider.generation)
-        except Exception:  # noqa: BLE001 - a bare/test-double runner may carry no provider (or no generation); provenance degrades to None
-            pass
+        # the runner's default — resolved through the SAME preset machinery the
+        # chat loop's /model picker uses (a preset name, a "provider model" pair,
+        # or a plain model name), so a persona's pair ref is never handed to the
+        # provider as a raw "provider model" string (see _resolve_node_provider).
+        # The parser's persona-xor-model guard ensures at most one of
+        # persona_model_ref and req.node.model is set at a time. A persona's own
+        # temperature (when declared) overrides the resolved generation's.
+        node_provider, model, node_generation = self._resolve_node_call(
+            persona_model_ref, req.node.model, persona_temperature)
+        provider_key = getattr(node_provider, "provider_key", None)
+        resolved_params_hash = (
+            params_hash(node_generation) if node_generation is not None else None)
 
         node_max_turns = getattr(req.node, "max_turns", None)
         if node_max_turns is not None:
@@ -607,6 +777,8 @@ class AgentNodeRunner:
                 initial_messages=messages,
                 tools=tools_registry,
                 model=model,
+                provider=node_provider,
+                temperature=persona_temperature,
                 max_iterations=run_max_iterations,
                 max_tool_result_chars=self.max_tool_result_chars,
                 # Nodes are read/search-heavy (gather, review, verify): run independent
@@ -647,7 +819,8 @@ class AgentNodeRunner:
         reentries_left = getattr(req.node, "max_reentries", 0) or 0
         while (node_max_turns is not None and result.stop_reason == "max_iterations"
                and reentries_left > 0):
-            if not self._wants_reentry(result.messages, model, tools_registry):
+            if not self._wants_reentry(result.messages, model, tools_registry,
+                                       provider=node_provider, temperature=persona_temperature):
                 break
             reentries_left -= 1
             steer = getattr(req.node, "reentry_prompt", "") or (
@@ -666,6 +839,8 @@ class AgentNodeRunner:
                     initial_messages=reentry_messages,
                     tools=tools_registry,
                     model=model,
+                    provider=node_provider,
+                    temperature=persona_temperature,
                     max_iterations=run_max_iterations,
                     max_tool_result_chars=self.max_tool_result_chars,
                     concurrent_tools=True,
@@ -716,6 +891,8 @@ class AgentNodeRunner:
                     initial_messages=synthesis_messages,
                     tools=ToolRegistry(),   # no tools — model must emit text
                     model=model,
+                    provider=node_provider,
+                    temperature=persona_temperature,
                     max_iterations=1,
                     max_tool_result_chars=self.max_tool_result_chars,
                 ), req.cancel_check)
@@ -751,7 +928,9 @@ class AgentNodeRunner:
             if routed.label is not None:
                 route_label = routed.label
             else:
-                route_label = self._derive_route_label(all_messages, route_labels, model, tools_registry)
+                route_label = self._derive_route_label(
+                    all_messages, route_labels, model, tools_registry,
+                    provider=node_provider, temperature=persona_temperature)
 
         # A schema'd node delivers its output through a forced tool call validated
         # against the declared JSON Schema — retried IMMEDIATELY with the exact
@@ -764,7 +943,8 @@ class AgentNodeRunner:
         if node_schema is not None:
             try:
                 payload = self._derive_structured_output(
-                    all_messages, node_schema, model, tools_registry, delivered)
+                    all_messages, node_schema, model, tools_registry, delivered,
+                    provider=node_provider, temperature=persona_temperature)
             except Exception as exc:  # noqa: BLE001 - typed node failure, engine aborts naming us
                 raise self._on_failure(req, all_messages, exc)
             final_output = json.dumps(payload, ensure_ascii=False, indent=2)
@@ -791,13 +971,17 @@ class AgentNodeRunner:
         )
 
     def _derive_route_label(self, messages: list[dict], labels: list[str], model: str | None,
-                            tools: ToolRegistry) -> str | None:
+                            tools: ToolRegistry, *, provider=None,
+                            temperature: float | None = None) -> str | None:
         """Deterministic routing verdict via a forced `route` tool call: the model picks exactly
         one label from this node's enum. Returns the chosen label, or None on any failure (the
         engine then falls back to parsing the node's text output). `tools` is the SAME registry
         the work loop just rendered — `route` is already in it from turn 1 (see `_RouteTool`) —
         so this call's tools array is identical to the loop's and the provider's cached prompt
-        prefix survives into the turn's last request; only `tool_choice` pins the verdict."""
+        prefix survives into the turn's last request; only `tool_choice` pins the verdict.
+        `provider`/`temperature` are the node's resolved call identity (see
+        `_resolve_node_provider` / `_execute`) — None defaults to the runner's own provider
+        and generation temperature, exactly as before this parameter existed."""
         route_messages = list(messages) + [{
             "role": "user",
             "content": ("Record your verdict for this step now by calling the `route` tool with "
@@ -806,7 +990,8 @@ class AgentNodeRunner:
         try:
             resp = self._chat(
                 messages=route_messages, tools=tools.get_definitions(),
-                tool_choice={"type": "function", "function": {"name": "route"}}, model=model)
+                tool_choice={"type": "function", "function": {"name": "route"}}, model=model,
+                provider=provider, temperature=temperature)
             for tc in (getattr(resp, "tool_calls", None) or []):
                 args = getattr(tc, "arguments", None)
                 if args is None:
@@ -820,7 +1005,7 @@ class AgentNodeRunner:
             logger.opt(exception=True).debug("route-tool verdict failed; falling back to text parse")
         return None
 
-    def _chat(self, **kwargs) -> LLMResponse:
+    def _chat(self, *, provider=None, **kwargs) -> LLMResponse:
         """One provider round-trip for the forced-tool verdict/delivery calls
         (route / re-entry / deliver), via ``chat_with_retry``: transient
         transport failures retry instead of failing the call, ``max_tokens``
@@ -828,11 +1013,16 @@ class AgentNodeRunner:
         silently used the 4096 signature default — a reasoning model plus a
         large deliver payload overflowed it, truncating the tool arguments),
         long generations ride the streaming transport, and the round-trip
-        lands in telemetry as ``provider.call`` from the retry wrapper."""
-        return asyncio.run(self.runner.provider.chat_with_retry(**kwargs))
+        lands in telemetry as ``provider.call`` from the retry wrapper.
+        ``provider`` (the node's resolved call identity — see
+        ``_resolve_node_provider``) defaults to the runner's own provider,
+        exactly as before this parameter existed."""
+        target = provider if provider is not None else self.runner.provider
+        return asyncio.run(target.chat_with_retry(**kwargs))
 
     def _wants_reentry(self, messages: list[dict], model: str | None,
-                       tools: ToolRegistry) -> bool:
+                       tools: ToolRegistry, *, provider=None,
+                       temperature: float | None = None) -> bool:
         """After budget exhaustion, ask the model — via a forced tool call — whether
         essential work is still missing (re-enter) or it can already produce its
         final output from what it gathered (proceed to synthesis). Any failure
@@ -862,7 +1052,8 @@ class AgentNodeRunner:
         try:
             resp = self._chat(
                 messages=convo, tools=tools.get_definitions() + [tool],
-                tool_choice={"type": "function", "function": {"name": "assess"}}, model=model)
+                tool_choice={"type": "function", "function": {"name": "assess"}}, model=model,
+                provider=provider, temperature=temperature)
             for tc in (getattr(resp, "tool_calls", None) or []):
                 args = getattr(tc, "arguments", None)
                 if args is None:
@@ -879,7 +1070,8 @@ class AgentNodeRunner:
     _STRUCTURED_OUTPUT_ATTEMPTS = 3
 
     def _derive_structured_output(self, messages: list[dict], schema: dict, model: str | None,
-                                  tools: ToolRegistry, captured: _DeliverCapture) -> dict:
+                                  tools: ToolRegistry, captured: _DeliverCapture, *,
+                                  provider=None, temperature: float | None = None) -> dict:
         """The node's validated payload. If the model already delivered a valid
         payload earlier in the turn — ``_DeliverTool`` is registered in ``tools``
         from turn 1, so an in-loop call lands in ``captured`` — that payload is
@@ -914,7 +1106,8 @@ class AgentNodeRunner:
         for _ in range(self._STRUCTURED_OUTPUT_ATTEMPTS):
             resp = self._chat(
                 messages=convo, tools=full_tools,
-                tool_choice={"type": "function", "function": {"name": "deliver"}}, model=model)
+                tool_choice={"type": "function", "function": {"name": "deliver"}}, model=model,
+                provider=provider, temperature=temperature)
             finish_reason = getattr(resp, "finish_reason", None)
             if finish_reason == "error":
                 # The retry wrapper already exhausted transport retries — this

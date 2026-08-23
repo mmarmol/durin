@@ -171,6 +171,7 @@ job. Each entry under `personas` is keyed by persona name and is a `PersonaConfi
 |---|---|---|
 | `soul` | `default` | SoulStore slug for the persona's SOUL; `default` = the workspace `SOUL.md` |
 | `model` | `null` | Model picker ref (a preset name or a `provider model` pair); `null` uses the global default model |
+| `temperature` | `null` | Generation temperature override; `null` uses the resolved model's own temperature |
 | `description` | `null` | Human-readable description shown in the persona picker |
 
 ---
