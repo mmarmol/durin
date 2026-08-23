@@ -58,28 +58,38 @@ def build_approval_resume(
     "revise": the walk resumes AT the flagged node itself, so it re-runs with
     ``comment`` framed as feedback alongside the run's original upstream text.
 
-    ``ResumeState.recorded_outputs`` is left empty except on "approve": the
-    resumed walk's own in-memory trace starts empty and never visits the flagged
-    node again (it resumes past it), so without seeding the node's own output
-    under its id here, a downstream node's ``inputs_from`` reference to it would
-    wrongly read as "no output recorded" after the resume. A "revise" resume
-    needs no such seeding — the node re-runs and its fresh output lands in the
-    resumed walk's own trace like any other node's.
+    ``ResumeState.recorded_outputs`` always starts from the manifest's own
+    ``resume_inputs`` (the same seed ``build_resume_state`` uses) — the pause
+    already recorded it, for the SAME reason any other needs_input/aborted pause
+    does (``run_log._resume_inputs``): the resumed walk's own in-memory trace
+    starts empty, so any node's ``inputs_from`` reference to a source that ran
+    BEFORE the pause (and is not about to run again this pass) has nowhere else to
+    resolve from. On top of that seed, "approve" overlays the flagged node's own
+    output (the proposal) under its id: on that path the resumed walk starts at
+    ``next`` and never revisits the flagged node at all (it resumes past it), so
+    a downstream ``inputs_from`` reference to it would otherwise read as "no
+    output recorded" even though it very much ran. The overlay wins over whatever
+    ``resume_inputs`` may already hold for that id, since the proposal is the
+    freshest, most authoritative value. "revise" needs no such overlay — the node
+    re-runs and its fresh output lands in the resumed walk's own trace like any
+    other node's.
     """
     node_id = manifest["needs_input_node"]
     visits = manifest_visit_counts(manifest)
     work_key = manifest.get("work_key")
+    recorded_outputs = dict(manifest.get("resume_inputs") or {})
     if action == "approve":
         node = workflow.nodes[node_id]
         if node.next is None:
             return None
         proposal = manifest.get("final_output")
+        recorded_outputs[node_id] = proposal or ""
         return ResumeState(
             run_id=manifest["run_id"],
             start_at=node.next,
             visits=visits,
             upstream=proposal,
-            recorded_outputs={node_id: proposal or ""},
+            recorded_outputs=recorded_outputs,
             work_key=work_key,
         )
     original = manifest.get("resume_upstream") or ""
@@ -88,5 +98,6 @@ def build_approval_resume(
         start_at=node_id,
         visits=visits,
         upstream=f"{original}\n\n[Revision requested by approver]\n{comment}",
+        recorded_outputs=recorded_outputs,
         work_key=work_key,
     )
