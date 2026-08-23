@@ -1490,7 +1490,7 @@ def _run_gateway(
     from durin.loops.runtime import LoopsRuntime
     from durin.loops.store import load_loop as _load_loop
     from durin.memory.model_resolve import resolve_aux_preset
-    from durin.service.workflows import RUNS_FEED_CHAT_ID
+    from durin.service.workflows import RUNS_FEED_CHAT_ID, build_runs_feed_event
     from durin.service.workflows import WorkflowsService as _LoopsWorkflowsService
 
     # Marshals a service-path run's progress frames onto the runs:feed
@@ -1507,14 +1507,11 @@ def _run_gateway(
         loop = _workflow_progress_loop
         if loop is None or loop.is_closed():
             return
-        ev = {
-            "version": 1,
-            "phase": "running",
-            "call_id": f"workflow:{payload['run_id']}",
-            "name": "workflow_progress",
-            "arguments": {},
-            **payload,
-        }
+        # build_runs_feed_event mirrors run_workflow.py's own workflow_progress
+        # schema exactly (same six keys, done expressed via phase, not as its
+        # own key) so the existing work-panel renderer consumes a runs:feed
+        # frame unchanged.
+        ev = build_runs_feed_event(payload)
         try:
             asyncio.run_coroutine_threadsafe(
                 bus.publish_outbound(OutboundMessage(

@@ -50,6 +50,27 @@ _MAX_SCRIPT_CONTENT_BYTES = 256 * 1024
 RUNS_FEED_CHAT_ID = "runs:feed"
 
 
+def build_runs_feed_event(payload: dict) -> dict:
+    """Build the `workflow_progress` `tool_events` envelope from a service-path
+    progress payload (`run_id`, `workflow`, `task`, `nodes`, `done`).
+
+    Same six keys, same field names, as `durin/agent/tools/run_workflow.py`'s
+    own per-chat progress publisher builds — so the existing work-panel
+    renderer consumes a `runs:feed` frame exactly like a per-chat one, with no
+    branching for "where did this come from". `done` is expressed the same
+    way that publisher expresses it: via `phase` ("end" instead of a separate
+    top-level flag), not carried as its own key.
+    """
+    return {
+        "version": 1,
+        "phase": "end" if payload.get("done") else "running",
+        "call_id": f"workflow:{payload['run_id']}",
+        "name": "workflow_progress",
+        "arguments": {"workflow": payload["workflow"], "task": payload.get("task", "")},
+        "nodes": payload["nodes"],
+    }
+
+
 def _validate_script_name(name: str) -> None:
     """Reject anything but a single relative path segment.
 
@@ -837,19 +858,22 @@ class WorkflowsService:
         from durin.workflow.cancellation import is_hard_cancelled as _is_hard_cancelled
         rid = run_id or (resume.run_id if resume is not None else uuid.uuid4().hex[:12])
 
-        # Wrap each engine frame as {run_id, workflow, nodes, done} for the
-        # publisher — the SHAPE the engine hands progress_emit (see
+        # Wrap each engine frame as {run_id, workflow, task, nodes, done} for
+        # the publisher — the SHAPE the engine hands progress_emit (see
         # WorkflowEngine's own progress_emit calls), just relabeled with this
-        # run's workflow name so a caller with no other context (a global feed,
-        # not a per-workflow one) can still tell runs apart. The engine never
-        # emits a terminal (done=True) frame on its own; a caller that needs one
-        # builds it from the returned WorkflowResult, same as run_workflow.py does.
+        # run's workflow name and task so a caller with no other context (a
+        # global feed, not a per-workflow one) can still tell runs apart —
+        # `task` capped the same way a run manifest's own `task` field is
+        # (durin/workflow/run_log.py). The engine never emits a terminal
+        # (done=True) frame on its own; a caller that needs one builds it from
+        # the returned WorkflowResult, same as run_workflow.py does.
         progress_emit = None
         if self._progress_publish is not None:
             def _emit_progress(payload: dict) -> None:
                 self._progress_publish({
                     "run_id": payload["run_id"],
                     "workflow": name,
+                    "task": task[:200],
                     "nodes": payload["nodes"],
                     "done": False,
                 })
