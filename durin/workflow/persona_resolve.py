@@ -9,11 +9,11 @@ from __future__ import annotations
 
 def resolve_persona(
     config: object, name: str | None, workspace: object = None
-) -> tuple[str | None, str | None]:
-    """Resolve a persona NAME to ``(soul_body, model_ref)``.
+) -> tuple[str | None, str | None, float | None]:
+    """Resolve a persona NAME to ``(soul_body, model_ref, temperature)``.
 
-    Returns ``(None, None)`` when *name* is falsy, the persona is unknown, or
-    any load step fails. Never raises — callers fall back to the default SOUL
+    Returns ``(None, None, None)`` when *name* is falsy, the persona is unknown,
+    or any load step fails. Never raises — callers fall back to the default SOUL
     and default model.
 
     The ``if not name`` short-circuit is equivalent to the old loop path: the
@@ -27,14 +27,14 @@ def resolve_persona(
     Falls back to ``config.workspace_path`` when not given.
     """
     if not name:
-        return None, None
+        return None, None, None
     try:
         persona = config.resolve_persona(name) if config is not None else None  # type: ignore[union-attr]
         if persona is None:
-            return None, None
+            return None, None, None
         from durin.souls.store import SoulStore
         root = workspace if workspace is not None else config.workspace_path  # type: ignore[union-attr]
         body = SoulStore(root).read(persona.soul)
-        return (body or None), persona.model
+        return (body or None), persona.model, persona.temperature
     except Exception:  # noqa: BLE001 — best-effort; caller falls back gracefully
-        return None, None
+        return None, None, None
