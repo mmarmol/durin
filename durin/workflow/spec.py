@@ -854,6 +854,24 @@ def parse_workflow(data: dict[str, Any]) -> Workflow:
                         f"{other.id!r}) so the candidate set is statically known"
                     )
 
+    # Same reasoning for approval: pool-less branches_from makes every work node
+    # runtime-selectable, so an approval-requiring node could be selected to run
+    # in parallel with siblings — approval requires pausing the walk, which is
+    # incompatible with concurrent execution. Declaring the pool lets the per-
+    # branch/worker loop above enforce the constraint normally.
+    for node in nodes.values():
+        if isinstance(node, ParallelNode) and node.branches_from is not None and not node.branches:
+            for other in nodes.values():
+                if isinstance(other, WorkNode) and other.approval:
+                    raise WorkflowError(
+                        f"node {node.id!r}: 'branches_from' with no declared candidate "
+                        f"'branches' pool makes every work/script node runtime-selectable, "
+                        f"which would make node {other.id!r} (approval required) runtime-selectable "
+                        f"alongside parallel siblings (approval requires pausing the walk) — "
+                        f"declare an explicit 'branches' pool (even one that excludes "
+                        f"{other.id!r}) so the candidate set is statically known"
+                    )
+
     # Anti-Goodhart guard: a routing agent node must not be structurally identical
     # to its producer. If a predecessor P (agent WorkNode, P.id != J.id) shares the
     # same model, mode, and prompt as routing agent node J, the graph is rejected.

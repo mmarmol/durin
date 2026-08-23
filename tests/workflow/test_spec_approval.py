@@ -41,3 +41,26 @@ def test_approval_rejected_on_parallel_unit():
             {"id": "p", "kind": "parallel", "branches": ["b"], "next": None},
             {"id": "b", "kind": "work", "approval": True},
         ]))
+
+
+def test_approval_rejected_with_branches_from_pool_less():
+    """approval: true anywhere in workflow conflicts with pool-less branches_from
+    because pool-less branches_from makes every work node runtime-selectable."""
+    with pytest.raises(WorkflowError):
+        parse_workflow(_wf([
+            {"id": "p", "kind": "parallel", "branches_from": "router", "next": None},
+            {"id": "router", "kind": "script", "command": "echo b", "next": None},
+            {"id": "a", "kind": "work", "approval": True, "next": None},
+            {"id": "b", "kind": "work", "next": None},
+        ]))
+
+
+def test_approval_parses_with_branches_from_pool():
+    """approval: true is fine when branches_from has a declared candidate pool."""
+    wf = parse_workflow(_wf([
+        {"id": "p", "kind": "parallel", "branches_from": "router", "branches": ["b"], "next": None},
+        {"id": "router", "kind": "script", "command": "echo b", "next": None},
+        {"id": "a", "kind": "work", "approval": True, "next": None},
+        {"id": "b", "kind": "work", "next": None},
+    ]))
+    assert wf.nodes["a"].approval is True
