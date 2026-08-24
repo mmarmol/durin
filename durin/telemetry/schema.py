@@ -1672,6 +1672,40 @@ class LoopsEventMatchedEvent(TypedDict):
     action: str
 
 
+class AutomationsFiredEvent(TypedDict):
+    """An automation was fired (triggered to run)."""
+
+    automation: str
+    source: str
+    skipped: bool
+
+
+class AutomationsRunFinishedEvent(TypedDict):
+    """An automation run completed."""
+
+    automation: str
+    run_id: str
+    status: str
+    final_route_label: str | None
+
+
+class AutomationsEscalatedEvent(TypedDict):
+    """An automation was escalated due to consecutive failures."""
+
+    automation: str
+    run_id: str
+    consecutive_unachieved: int
+
+
+class AutomationsDeliveredEvent(TypedDict):
+    """An automation run outcome was delivered."""
+
+    automation: str
+    run_id: str
+    channel: str
+    result: str
+
+
 class DocumentsOcrJobEvent(TypedDict):
     """One OCR worker run ended, one way or another.
 
@@ -1837,6 +1871,11 @@ EVENTS: dict[str, type] = {
     "loops.run_finished": LoopsRunFinishedEvent,
     "loops.escalated": LoopsEscalatedEvent,
     "loops.event_matched": LoopsEventMatchedEvent,
+    # Automations subsystem
+    "automations.fired": AutomationsFiredEvent,
+    "automations.run_finished": AutomationsRunFinishedEvent,
+    "automations.escalated": AutomationsEscalatedEvent,
+    "automations.delivered": AutomationsDeliveredEvent,
     "skill.curation_run": SkillCurationRunEvent,
     "skill.suggestion_resolved": SkillSuggestionResolvedEvent,
     "skill.observation_resolved": SkillObservationResolvedEvent,
