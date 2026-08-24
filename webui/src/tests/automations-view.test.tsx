@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,6 +16,10 @@ vi.mock("@/lib/api", async (importOriginal) => {
     listAutomations: vi.fn(),
     listAllAutomationRuns: vi.fn(),
     listCronJobs: vi.fn(),
+    listWorkflows: vi.fn(),
+    saveAutomation: vi.fn(),
+    deleteAutomation: vi.fn(),
+    getAutomationsHooksSecret: vi.fn(),
   };
 });
 
@@ -23,12 +27,22 @@ vi.mock("@/lib/api", async (importOriginal) => {
 // AND every row's run dots) and the cron jobs (for next-fire) in one
 // Promise.all on mount — there is no tab to hide an unstubbed fetch behind,
 // so every test must stub all three or the view falls back to its error
-// banner instead of rendering anything the test expects.
+// banner instead of rendering anything the test expects. The editor form
+// (opened via New automation / Editar) additionally fetches listWorkflows
+// and listAutomations again for its own selects — stub those too whenever a
+// test drives the form, not just the list.
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(api.listAutomations).mockResolvedValue([]);
   vi.mocked(api.listAllAutomationRuns).mockResolvedValue([]);
   vi.mocked(api.listCronJobs).mockResolvedValue([]);
+  vi.mocked(api.listWorkflows).mockResolvedValue([]);
+  vi.mocked(api.saveAutomation).mockResolvedValue(undefined);
+  vi.mocked(api.deleteAutomation).mockResolvedValue(undefined);
+  vi.mocked(api.getAutomationsHooksSecret).mockResolvedValue({
+    secret: "whsec_abc123",
+    path_template: "/api/v1/hooks/{hook}",
+  });
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -400,14 +414,62 @@ describe("AutomationsView", () => {
     await screen.findByText(/no automations yet/i);
   });
 
-  it("clicking New automation does not throw and leaves the view intact", async () => {
+  it("clicking New automation opens the create form, replacing the list; Cancel returns to it", async () => {
     vi.mocked(api.listAutomations).mockResolvedValue(ALL_AUTOMATIONS);
     const user = userEvent.setup();
     render(wrap(<AutomationsView />));
 
     await screen.findByText("soporte-guard");
     await user.click(screen.getByRole("button", { name: /new automation/i }));
-    expect(screen.getByText("soporte-guard")).toBeInTheDocument();
+
+    expect(screen.queryByText("soporte-guard")).not.toBeInTheDocument();
+    const nameInput = await screen.findByLabelText(/^name/i);
+    expect((nameInput as HTMLInputElement).value).toBe("");
+
+    await user.click(screen.getByRole("button", { name: /^cancel$/i }));
+    expect(await screen.findByText("soporte-guard")).toBeInTheDocument();
+  });
+
+  it("Editar on a row opens the form prefilled with that automation's own definition", async () => {
+    vi.mocked(api.listAutomations).mockResolvedValue(ALL_AUTOMATIONS);
+    vi.mocked(api.listWorkflows).mockResolvedValue(["cobrar-factura"]);
+    const user = userEvent.setup();
+    render(wrap(<AutomationsView />));
+
+    const row = await rowFor("cobrar-fac-1042");
+    await user.click(row.getByRole("button", { name: /edit/i }));
+
+    const nameInput = (await screen.findByLabelText(/^name/i)) as HTMLInputElement;
+    expect(nameInput.value).toBe("cobrar-fac-1042");
+    expect(nameInput).toHaveAttribute("readOnly");
+    expect((screen.getByLabelText(/^workflow$/i) as HTMLSelectElement).value).toBe("cobrar-factura");
+  });
+
+  it("saving from the editor calls saveAutomation, then refreshes and returns to the list", async () => {
+    // publicar-changelog (CHANGELOG): a webhook + chain trigger, both fully
+    // filled by the fixture — unlike cobrar-fac-1042's schedule trigger,
+    // there's no required-but-fixture-omitted field (task) that would block
+    // native form submission here.
+    // listAutomations is stubbed to always resolve ALL_AUTOMATIONS here: it's
+    // fetched both by AutomationsView's own refresh and, independently, by
+    // the form's chain-trigger automation-select — the assertion below cares
+    // about the visible outcome (back on a refreshed list), not the exact
+    // fetch count.
+    vi.mocked(api.listAutomations).mockResolvedValue(ALL_AUTOMATIONS);
+    vi.mocked(api.listWorkflows).mockResolvedValue(["changelog-post"]);
+    const user = userEvent.setup();
+    render(wrap(<AutomationsView />));
+
+    const row = await rowFor("publicar-changelog");
+    await user.click(row.getByRole("button", { name: /edit/i }));
+    await screen.findByLabelText(/^name/i);
+
+    await user.click(screen.getByRole("button", { name: /save & enable/i }));
+
+    await waitFor(() => expect(api.saveAutomation).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText("publicar-changelog")).toBeInTheDocument();
+    // Back on the list view proper — the editor's own "Name" field is gone.
+    expect(screen.queryByLabelText(/^name/i)).not.toBeInTheDocument();
   });
 });
 

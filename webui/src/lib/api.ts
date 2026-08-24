@@ -1158,7 +1158,7 @@ export interface AutomationTrigger {
     at_ms?: number;
   };
   task?: string; // schedule trigger only: the clock fire's task text
-  channel?: string; // channel trigger only: email/telegram/slack/discord/whatsapp
+  channel?: "email" | "telegram" | "slack" | "discord" | "whatsapp"; // channel trigger only
   filters?: Record<string, string>; // channel trigger only: open key->value map
   semantic?: string; // channel or webhook trigger: optional model-judged condition
   match?: "wake_or_new" | "always_new"; // channel trigger only

@@ -1,9 +1,11 @@
+import { Pencil } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { LifeChip } from "@/components/automations/LifeChip";
 import { RunDots } from "@/components/automations/RunDots";
 import { TriggerChips } from "@/components/automations/TriggerChips";
-import type { AutomationRun, AutomationSummary, CronJobRow } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import type { AutomationDef, AutomationRun, AutomationSummary, CronJobRow } from "@/lib/api";
 import { fmtDateTime } from "@/lib/format";
 
 /** The earliest upcoming fire among the cron jobs B7's sync created for this
@@ -28,10 +30,12 @@ export function ListView({
   automations,
   runs,
   cronJobs,
+  onEdit,
 }: {
   automations: AutomationSummary[];
   runs: AutomationRun[];
   cronJobs: CronJobRow[];
+  onEdit: (def: AutomationDef) => void;
 }) {
   const { t } = useTranslation();
   return (
@@ -73,6 +77,15 @@ export function ListView({
                   </span>
                 )}
                 <LifeChip automation={def} />
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 shrink-0 gap-1 px-2"
+                  onClick={() => onEdit(def)}
+                >
+                  <Pencil className="h-3.5 w-3.5" aria-hidden />
+                  {t("automations.list.edit")}
+                </Button>
               </div>
             );
           })}

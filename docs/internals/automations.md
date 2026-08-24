@@ -530,10 +530,13 @@ migrated. Both legacy sections are otherwise inert.
 `automations`) a generic filesystem write tool refuses to touch
 (`durin/agent/tools/filesystem.py`'s `_resolve_write`) — reads stay legitimate, but a
 definition can only be written through the door that validates and versions it: the
-`automations` tool's `create`/`enable`/`pause` actions today, or a future webui
-automations editor (not yet built — see the guide's "Managing automations today").
-This closes the same gap that once let workflow edits land unvalidated and
-unversioned.
+`automations` tool's `create`/`enable`/`pause` actions, the webui's automations
+editor, or a script calling the HTTP API directly — see the guide's "Managing
+automations today". All three ultimately call the same `save_automation()` store
+function (directly for the agent tool; through `AutomationsService.save` /
+`PUT /api/v1/automations/{name}` for the webui editor and direct API callers), so
+validation and versioning happen exactly once regardless of the door. This closes
+the same gap that once let workflow edits land unvalidated and unversioned.
 
 ### Service surface
 

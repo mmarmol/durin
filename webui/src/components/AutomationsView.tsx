@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Loader2, Plus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { AutomationForm } from "@/components/automations/AutomationForm";
 import { ListView } from "@/components/automations/ListView";
 import { NeedsYouTray } from "@/components/automations/NeedsYouTray";
 import { Button } from "@/components/ui/button";
@@ -10,6 +11,7 @@ import {
   listAllAutomationRuns,
   listAutomations,
   listCronJobs,
+  type AutomationDef,
   type AutomationRun,
   type AutomationSummary,
   type CronJobRow,
@@ -30,31 +32,67 @@ export function AutomationsView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
-  // The editor (workflow/triggers/delivery/help/life form) lands in a later
-  // task; this just gives the button a real, wired destination to grow into
-  // instead of leaving the onClick empty.
-  const [, setCreating] = useState(false);
+  // undefined = editor closed (showing the list); null = creating a new
+  // automation; an AutomationDef = editing that one. A row's own
+  // AutomationSummary satisfies AutomationDef structurally (it's a superset),
+  // so ListView's onEdit can hand it straight in without a getAutomation
+  // round-trip.
+  const [editing, setEditing] = useState<AutomationDef | null | undefined>(undefined);
+
+  // Reusable for both the initial mount and a post-save/delete reload from
+  // the editor — the editor's own onDone calls this directly, so a save
+  // doesn't need a page nav to see its own effect in the list.
+  const refresh = useCallback(async () => {
+    setError(null);
+    try {
+      const [defs, runFeed, jobs] = await Promise.all([
+        listAutomations(token),
+        listAllAutomationRuns(token),
+        listCronJobs(token),
+      ]);
+      setAutomations(defs);
+      setRuns(runFeed);
+      setCronJobs(jobs);
+    } catch (e) {
+      setError(errMsg(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [token]);
 
   useEffect(() => {
-    let cancelled = false;
-    setError(null);
-    Promise.all([listAutomations(token), listAllAutomationRuns(token), listCronJobs(token)])
-      .then(([defs, runFeed, jobs]) => {
-        if (cancelled) return;
-        setAutomations(defs);
-        setRuns(runFeed);
-        setCronJobs(jobs);
-      })
-      .catch((e) => {
-        if (!cancelled) setError(errMsg(e));
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [token]);
+    void refresh();
+  }, [refresh]);
+
+  if (editing !== undefined) {
+    return (
+      <div className="flex h-full w-full flex-col overflow-hidden">
+        <div className="flex items-center gap-2 border-b px-3 py-2">
+          <button
+            type="button"
+            onClick={() => setEditing(undefined)}
+            className="text-xs text-muted-foreground hover:text-foreground"
+          >
+            {t("automations.form.back")}
+          </button>
+          <span className="text-xs font-medium text-foreground/80">
+            {editing ? t("automations.form.editTitle", { name: editing.name }) : t("automations.form.newTitle")}
+          </span>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <AutomationForm
+            token={token}
+            editAutomation={editing}
+            onDone={() => {
+              setEditing(undefined);
+              void refresh();
+            }}
+            onCancel={() => setEditing(undefined)}
+          />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-full w-full flex-col overflow-hidden">
@@ -65,7 +103,7 @@ export function AutomationsView() {
               <h1 className="text-[17px] font-semibold">{t("automations.title")}</h1>
               <p className="mt-0.5 text-[12.5px] text-muted-foreground">{t("automations.subtitle")}</p>
             </div>
-            <Button size="sm" className="shrink-0 gap-1.5" onClick={() => setCreating(true)}>
+            <Button size="sm" className="shrink-0 gap-1.5" onClick={() => setEditing(null)}>
               <Plus className="h-3.5 w-3.5" aria-hidden />
               {t("automations.list.new")}
             </Button>
@@ -86,7 +124,7 @@ export function AutomationsView() {
                 selectedRunId={selectedRunId}
                 onSelect={(run) => setSelectedRunId(run.run_id)}
               />
-              <ListView automations={automations} runs={runs} cronJobs={cronJobs} />
+              <ListView automations={automations} runs={runs} cronJobs={cronJobs} onEdit={setEditing} />
             </>
           )}
         </div>
