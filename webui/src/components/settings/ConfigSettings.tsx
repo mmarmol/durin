@@ -313,8 +313,11 @@ export function ConfigSettings({ token }: { token: string }) {
     [token, t],
   );
 
+  // "loops" is migration-only legacy input (read once by a boot migration
+  // into automations.*, then ignored — the loops subsystem no longer
+  // exists), so the editor must not offer it as a section to edit.
   const sections = useMemo(
-    () => (config ? Object.entries(config) : []),
+    () => (config ? Object.entries(config).filter(([name]) => name !== "loops") : []),
     [config],
   );
 
