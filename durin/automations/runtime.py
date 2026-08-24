@@ -503,8 +503,14 @@ class AutomationsRuntime:
                     # _chain_fire's busy handler sets them, and they must
                     # ride along so the resumed fire picks up the same chain
                     # hop count instead of silently restarting at depth 0.
+                    origin = event.get("origin")
+                    emit_tool_event("automations.event_matched", {
+                        "automation": spec.name,
+                        "source_channel": (origin or {}).get("channel", ""),
+                        "action": "drained",
+                    })
                     self._spawn(self._drain_fire(spec.name, task=event.get("content"),
-                                                  origin=event.get("origin"),
+                                                  origin=origin,
                                                   source=event.get("source") or "channel",
                                                   chain_depth=event.get("chain_depth") or 0))
         except Exception:  # noqa: BLE001 — contained; see comment above

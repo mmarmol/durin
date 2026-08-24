@@ -1706,6 +1706,22 @@ class AutomationsDeliveredEvent(TypedDict):
     result: str
 
 
+class AutomationsEventMatchedEvent(TypedDict):
+    """An inbound channel message was routed by the trigger matcher.
+
+    ``action`` is one of: woke (claim-wake resumed a paused run), fired (a
+    trigger matched and a new run was started), queued (a trigger matched
+    but the automation was busy and the event was queued), passed_busy (a
+    trigger matched, the automation was busy, and no queue was wired so the
+    message fell through as a normal turn instead), drained (a run finished
+    and the automation's queue had a fresh event, which was fired next).
+    """
+
+    automation: str
+    source_channel: str
+    action: str
+
+
 class DocumentsOcrJobEvent(TypedDict):
     """One OCR worker run ended, one way or another.
 
@@ -1876,6 +1892,7 @@ EVENTS: dict[str, type] = {
     "automations.run_finished": AutomationsRunFinishedEvent,
     "automations.escalated": AutomationsEscalatedEvent,
     "automations.delivered": AutomationsDeliveredEvent,
+    "automations.event_matched": AutomationsEventMatchedEvent,
     "skill.curation_run": SkillCurationRunEvent,
     "skill.suggestion_resolved": SkillSuggestionResolvedEvent,
     "skill.observation_resolved": SkillObservationResolvedEvent,

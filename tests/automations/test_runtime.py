@@ -758,6 +758,30 @@ async def test_post_finish_drains_next_fresh_queued_event(tmp_path):
     assert automation_queue.pending(tmp_path, "a1") == 0
 
 
+async def test_post_finish_drain_emits_event_matched_drained(tmp_path, _isolate_telemetry_dir):
+    """Mirrors durin.loops.runtime's own placement: the "drained" action is
+    emitted right where the queue drain finds a fresh event, before the
+    re-fire is scheduled — not from the matcher, which never sees a drained
+    event at all."""
+    import json
+
+    _save(tmp_path)
+    origin = {"channel": "email", "thread": "t1"}
+    automation_queue.push(tmp_path, "a1", {"content": "queued task", "origin": origin})
+    rt, _ = _mk_runtime(tmp_path, [_wr("completed"), _wr("completed")])
+
+    await rt.fire("a1", source="manual")
+    await _drain()
+
+    files = list(_isolate_telemetry_dir.glob("*.jsonl"))
+    events = [json.loads(line) for f in files for line in f.read_text(encoding="utf-8").strip().splitlines()]
+    matched = [e for e in events if e["type"] == "automations.event_matched"]
+    assert len(matched) == 1
+    assert matched[0]["data"]["automation"] == "a1"
+    assert matched[0]["data"]["source_channel"] == "email"
+    assert matched[0]["data"]["action"] == "drained"
+
+
 async def test_post_finish_skips_drain_for_parallel_concurrency(tmp_path):
     _save(tmp_path, concurrency="parallel")
     automation_queue.push(tmp_path, "a1", {"content": "queued task", "origin": {"channel": "email"}})

@@ -14,7 +14,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Literal
 
-from durin.loops.channel_meta import CHANNEL_FILTER_KEYS
+from durin.automations.channel_meta import CHANNEL_FILTER_KEYS
 
 logger = logging.getLogger(__name__)
 
