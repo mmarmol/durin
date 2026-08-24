@@ -144,7 +144,7 @@ folder — not a new one.
 
 The web dashboard's Automations section lists every definition — its triggers,
 what it runs, and its life condition — with a "Needs you" tray for pending
-approvals and questions. Revisar/Responder expands the selected one inline
+approvals and questions. Review/Answer expands the selected one inline
 into a resolution card: an approval shows the exact proposal quoted and offers
 approve / correct-with-a-comment / reject, a question is a free-text answer —
 the same three-way resolution a channel reply or the `automations` tool
@@ -152,8 +152,8 @@ drives, just from the dashboard. Resolving one refreshes it out of the tray
 immediately. The section also has an editor for creating a definition or
 changing an existing one's triggers, workflow, delivery, help routing, and
 life condition visually, the same way the Workflows pane already lets you
-build a flow graph visually. Clicking a definition opens its detail: an
-"Ejecutar ahora" button to fire a manual run on demand, live, node-by-node
+build a flow graph visually. Clicking a definition opens its detail: a
+"Run now" button to fire a manual run on demand, live, node-by-node
 progress for any run currently in flight, and a run history where each entry
 shows its cause, outcome, and delivery record (or approval record, for a run a
 human resolved) — with a link into the Workflows pane's own run detail for the

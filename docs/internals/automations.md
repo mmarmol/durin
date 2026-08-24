@@ -280,7 +280,7 @@ possibly-restarted process than the one that fired it) and releases the claim
 question, `_park` registers a fresh claim, so releasing first never races a
 just-registered one. For an `ask_kind == "approval"` pause, an explicit `action`
 (the agent tool's `resolution` parameter, the webui Automations inbox's
-Aprobar/Corregir/Rechazar, or any other caller of the HTTP answer route passing
+Approve/Revise/Reject, or any other caller of the HTTP answer route passing
 one) bypasses free-text parsing and synthesizes the canonical resume text
 (`"approve"`/`"reject"`); with no
 explicit action, `durin.workflow.approval.parse_approval_reply` interprets the reply
