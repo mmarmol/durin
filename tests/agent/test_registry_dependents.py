@@ -26,6 +26,12 @@ def _loop(ws, name, workflow):
         {"name": name, "workflow": workflow, "goal": {"intent": "x"}}))
 
 
+def _automation(ws, name, workflow):
+    d = ws / "automations"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{name}.json").write_text(json.dumps({"name": name, "workflow": workflow}))
+
+
 def test_finds_the_workflow_node_that_names_a_skill(tmp_path):
     _workflow(tmp_path, "triage", [{"id": "a", "kind": "work", "skills": ["mxhero-support-api"]}])
 
@@ -52,6 +58,34 @@ def test_finds_the_subflow_caller_and_the_loop(tmp_path):
 
     assert {(d.kind, d.name, d.via) for d in deps} == {
         ("workflow", "parent", "subworkflow"), ("loop", "nightly", "workflow")}
+
+
+def test_finds_the_automation_that_runs_a_workflow(tmp_path):
+    """Automation edges are scanned the same way as loop edges — the automations
+    package built beside loops until cutover retires it."""
+    _workflow(tmp_path, "child", [{"id": "a", "kind": "work"}])
+    _automation(tmp_path, "morning-digest", "child")
+
+    deps = dependents_of(tmp_path, workflow="child")
+
+    assert [(d.kind, d.name, d.via, d.where) for d in deps] == [
+        ("automation", "morning-digest", "workflow", "")]
+
+
+def test_finds_the_subflow_caller_the_loop_and_the_automation_together(tmp_path):
+    """The loop and automation edges coexist — neither shadows the other."""
+    _workflow(tmp_path, "child", [{"id": "a", "kind": "work"}])
+    _workflow(tmp_path, "parent", [{"id": "s", "kind": "subworkflow", "workflow": "child"}])
+    _loop(tmp_path, "nightly", "child")
+    _automation(tmp_path, "morning-digest", "child")
+
+    deps = dependents_of(tmp_path, workflow="child")
+
+    assert {(d.kind, d.name, d.via) for d in deps} == {
+        ("workflow", "parent", "subworkflow"),
+        ("loop", "nightly", "workflow"),
+        ("automation", "morning-digest", "workflow"),
+    }
 
 
 def test_an_unreferenced_artifact_has_no_dependents(tmp_path):

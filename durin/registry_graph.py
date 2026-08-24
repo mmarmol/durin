@@ -1,11 +1,12 @@
 """What references a registry artifact — the reverse of the definition graph.
 
-Workflows and loops name the things they depend on: a work node names `skills`,
-a script node names a file under `workflows/scripts/`, a sub-flow node names
-another workflow, and a loop names the workflow it runs. Those edges were only
-ever read forwards (to run something); nothing could answer the reverse question
-— *who depends on this?* — so a mutation could remove or rewrite an artifact out
-from under a workflow that references it by name.
+Workflows, loops, and automations name the things they depend on: a work node
+names `skills`, a script node names a file under `workflows/scripts/`, a
+sub-flow node names another workflow, and a loop or an automation names the
+workflow it runs. Those edges were only ever read forwards (to run something);
+nothing could answer the reverse question — *who depends on this?* — so a
+mutation could remove or rewrite an artifact out from under a workflow that
+references it by name.
 
 Reads raw JSON rather than the parsed models on purpose: this answers questions
 about definitions that may be mid-edit or invalid, and a barrier that raises on a
@@ -21,7 +22,9 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class Dependent:
-    kind: str    # "workflow" | "loop" — what does the referencing
+    kind: str    # "workflow" | "loop" | "automation" — what does the referencing.
+                 # Loop and automation edges coexist until the loops cutover retires
+                 # the "loop" kind.
     name: str    # its name
     via: str     # the edge: "skills" | "script" | "subworkflow" | "workflow"
     where: str   # node id inside a workflow; "" when the whole artifact refers
@@ -83,6 +86,9 @@ def dependents_of(
         for name, definition in _definitions(ws / "loops"):
             if definition.get("workflow") == workflow:
                 out.append(Dependent("loop", name, "workflow", ""))
+        for name, definition in _definitions(ws / "automations"):
+            if definition.get("workflow") == workflow:
+                out.append(Dependent("automation", name, "workflow", ""))
 
     return out
 

@@ -16,6 +16,301 @@
         "title": "AcceptSuggestionCommand",
         "type": "object"
       },
+      "AutomationAnswerCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "anyOf": [
+              {
+                "enum": [
+                  "approve",
+                  "revise",
+                  "reject"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Action"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "run_id",
+          "text"
+        ],
+        "title": "AutomationAnswerCommand",
+        "type": "object"
+      },
+      "AutomationAnswerResult": {
+        "properties": {
+          "run": {
+            "additionalProperties": true,
+            "title": "Run",
+            "type": "object"
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "title": "AutomationAnswerResult",
+        "type": "object"
+      },
+      "AutomationDeleteCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "AutomationDeleteCommand",
+        "type": "object"
+      },
+      "AutomationDeleteResult": {
+        "properties": {
+          "deleted": {
+            "title": "Deleted",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "deleted"
+        ],
+        "title": "AutomationDeleteResult",
+        "type": "object"
+      },
+      "AutomationFireCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "task": {
+            "default": "",
+            "title": "Task",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "AutomationFireCommand",
+        "type": "object"
+      },
+      "AutomationFireResult": {
+        "properties": {
+          "run": {
+            "additionalProperties": true,
+            "title": "Run",
+            "type": "object"
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "title": "AutomationFireResult",
+        "type": "object"
+      },
+      "AutomationGetQuery": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "AutomationGetQuery",
+        "type": "object"
+      },
+      "AutomationGetResult": {
+        "properties": {
+          "definition": {
+            "additionalProperties": true,
+            "title": "Definition",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "definition"
+        ],
+        "title": "AutomationGetResult",
+        "type": "object"
+      },
+      "AutomationRunsQuery": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "default": 50,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "AutomationRunsQuery",
+        "type": "object"
+      },
+      "AutomationRunsResult": {
+        "properties": {
+          "runs": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Runs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "runs"
+        ],
+        "title": "AutomationRunsResult",
+        "type": "object"
+      },
+      "AutomationSaveCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "definition": {
+            "additionalProperties": true,
+            "title": "Definition",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "definition"
+        ],
+        "title": "AutomationSaveCommand",
+        "type": "object"
+      },
+      "AutomationSaveResult": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "AutomationSaveResult",
+        "type": "object"
+      },
+      "AutomationsHooksSecretQuery": {
+        "additionalProperties": false,
+        "description": "No inputs \u2014 returns the shared webhook ingress secret.",
+        "properties": {},
+        "title": "AutomationsHooksSecretQuery",
+        "type": "object"
+      },
+      "AutomationsHooksSecretResult": {
+        "properties": {
+          "path_template": {
+            "title": "Path Template",
+            "type": "string"
+          },
+          "secret": {
+            "title": "Secret",
+            "type": "string"
+          }
+        },
+        "required": [
+          "secret",
+          "path_template"
+        ],
+        "title": "AutomationsHooksSecretResult",
+        "type": "object"
+      },
+      "AutomationsListQuery": {
+        "additionalProperties": false,
+        "description": "No inputs \u2014 lists every automation, each with its live counts and life state.",
+        "properties": {},
+        "title": "AutomationsListQuery",
+        "type": "object"
+      },
+      "AutomationsListResult": {
+        "properties": {
+          "automations": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Automations",
+            "type": "array"
+          }
+        },
+        "required": [
+          "automations"
+        ],
+        "title": "AutomationsListResult",
+        "type": "object"
+      },
+      "AutomationsRunsQuery": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "default": 50,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "title": "AutomationsRunsQuery",
+        "type": "object"
+      },
+      "AutomationsRunsResult": {
+        "properties": {
+          "runs": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Runs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "runs"
+        ],
+        "title": "AutomationsRunsResult",
+        "type": "object"
+      },
       "BackgroundTask": {
         "properties": {
           "ended_at": {
@@ -7896,6 +8191,263 @@
         },
         "summary": "Issue a new API token (plaintext returned once)",
         "x-required-scope": "system:write"
+      }
+    },
+    "/api/v1/automations": {
+      "get": {
+        "operationId": "automations_list",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutomationsListQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomationsListResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "List all automation definitions, with live counts and life state.",
+        "x-required-scope": "automations:read"
+      }
+    },
+    "/api/v1/automations/hooks-secret": {
+      "get": {
+        "operationId": "automations_hooks_secret",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutomationsHooksSecretQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomationsHooksSecretResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Return the shared webhook ingress secret and its path template.",
+        "x-required-scope": "automations:write"
+      }
+    },
+    "/api/v1/automations/runs": {
+      "get": {
+        "operationId": "automations_runs_feed",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutomationsRunsQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomationsRunsResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Global activity feed across every automation, newest-first.",
+        "x-required-scope": "automations:read"
+      }
+    },
+    "/api/v1/automations/{name}": {
+      "delete": {
+        "operationId": "automations_delete",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutomationDeleteCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomationDeleteResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Delete an automation definition.",
+        "x-required-scope": "automations:write"
+      },
+      "get": {
+        "operationId": "automations_get",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutomationGetQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomationGetResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Load one automation's full definition.",
+        "x-required-scope": "automations:read"
+      },
+      "put": {
+        "operationId": "automations_save",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutomationSaveCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomationSaveResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Create or update an automation definition.",
+        "x-required-scope": "automations:write"
+      }
+    },
+    "/api/v1/automations/{name}/fire": {
+      "post": {
+        "operationId": "automations_fire",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutomationFireCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomationFireResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Manually fire an automation.",
+        "x-required-scope": "automations:write"
+      }
+    },
+    "/api/v1/automations/{name}/runs": {
+      "get": {
+        "operationId": "automations_runs_list",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutomationRunsQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomationRunsResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "List one automation's persisted runs, newest-first.",
+        "x-required-scope": "automations:read"
+      }
+    },
+    "/api/v1/automations/{name}/runs/{run_id}/answer": {
+      "post": {
+        "operationId": "automations_answer",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutomationAnswerCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomationAnswerResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Answer an automation run awaiting an operator or a counterpart reply.",
+        "x-required-scope": "automations:write"
       }
     },
     "/api/v1/channels": {

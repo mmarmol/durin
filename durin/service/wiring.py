@@ -62,10 +62,17 @@ def build_service_registry(
     ``loops_runtime`` is optional: the unified gateway passes the live
     ``LoopsRuntime`` so ``LoopsService`` can fire/answer runs; surfaces
     without one leave it ``None`` and those two routes report unavailable.
+
+    ``AutomationsService`` is registered beside ``LoopsService`` with no
+    runtime parameter of its own yet: the gateway does not build an
+    ``AutomationsRuntime`` until the cutover task wires it in, so its
+    fire/answer routes report unavailable here regardless of ``loops_runtime``
+    — mirroring exactly how ``LoopsService`` behaves with no runtime.
     """
     from durin.jobs.registry import JobRegistry
     from durin.security.api_tokens import ApiTokenStore
     from durin.service.auth import AuthService
+    from durin.service.automations import AutomationsService
     from durin.service.channels_discord import DiscordService
     from durin.service.channels_post import ChannelPostService
     from durin.service.channels_runtime import ChannelsRuntimeService
@@ -151,6 +158,9 @@ def build_service_registry(
         sessions=session_manager, jobs=JobRegistry()))
     registry.register("loops", LoopsService(
         workspace=_workspace(), cron_service=cron_service, runtime=loops_runtime,
+        hooks_secret=lambda: ApiTokenStore().get_or_create_hooks_secret()))
+    registry.register("automations", AutomationsService(
+        workspace=_workspace(), cron_service=cron_service,
         hooks_secret=lambda: ApiTokenStore().get_or_create_hooks_secret()))
 
     # Crash recovery: the gateway is the long-lived process, so its boot is the natural

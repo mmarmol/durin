@@ -332,6 +332,33 @@ class WorkflowsService:
             except Exception:  # noqa: BLE001
                 logger.exception("could not repoint loop {} after renaming {}", dep.name, old)
 
+    def _repoint_automations(self, old: str, new: str) -> None:
+        """Follow a rename into the automations that run this workflow.
+
+        Mirrors `_repoint_loops` exactly, for the automations package built
+        beside loops until cutover: an automation lives in its own directory
+        with its own version store, so it needs its own save — `save_automation`,
+        commit included. Without this a rename left every automation running the
+        workflow pointing at a name that no longer resolves.
+
+        Best-effort: the rename itself already landed, and an automation that
+        cannot be rewritten must not turn a successful rename into an error.
+        """
+        from dataclasses import replace as _replace
+
+        from durin.automations.store import load_automation, save_automation
+        from durin.registry_graph import dependents_of
+
+        for dep in dependents_of(self._workspace, workflow=old):
+            if dep.kind != "automation":
+                continue
+            try:
+                spec = load_automation(self._workspace, dep.name)
+                save_automation(self._workspace, _replace(spec, workflow=new), actor="user",
+                                 reason=f"workflow {old} was renamed to {new}")
+            except Exception:  # noqa: BLE001
+                logger.exception("could not repoint automation {} after renaming {}", dep.name, old)
+
     def _commit(self, paths: list[Path], subject: str, reason: str) -> None:
         """Record an editor mutation in the workflow version store.
 
@@ -612,6 +639,7 @@ class WorkflowsService:
             "renamed in the workflow editor (definition, removal and caller references)",
         )
         self._repoint_loops(cmd.name, target)
+        self._repoint_automations(cmd.name, target)
         # Carry the run history (manifests, recommendations, dream cursor) to the new
         # name. Best-effort: a failure here never undoes the definition rename.
         src_runs = run_log.runs_root(self._workspace) / cmd.name

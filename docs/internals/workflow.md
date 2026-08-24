@@ -678,7 +678,7 @@ The `WorkflowsService` exposes read routes for run manifests:
 
 | Route | What it returns |
 |---|---|
-| `GET /api/v1/workflows/{name}/runs?limit=` | that workflow's persisted run summaries (`run_id`, `status`, `started_at`, `finished_at`, `task` capped at 200 chars, `needs_input_node`, `parent_run_id`), newest-first, capped at `limit` (default 20) |
+| `GET /api/v1/workflows/{name}/runs?limit=` | that workflow's persisted run summaries (`run_id`, `status`, `started_at`, `finished_at`, `task` capped at 200 chars, `needs_input_node`, `parent_run_id`, `origin`, `ask_kind`, `final_route_label`, `rejected`), newest-first, capped at `limit` (default 20) |
 | `GET /api/v1/workflows/{name}/runs/{run_id}` | one run's manifest (live or terminal) |
 | `GET /api/v1/workflows/runs?session=<key>` | all run manifests whose `root_session_key` matches, newest-first |
 | `GET /api/v1/workflows/runs?limit=` (no `session`) | the global feed across every workflow, newest-first, capped at `limit` (default 50) — except `needs_input` entries, which are always included regardless of the cap since they are actionable resume points |
@@ -692,11 +692,13 @@ each entry, plus `final_output_node` (which node's output became `final_output`)
 `output_files` (relative paths in `output_dir`, for a completed run).
 
 `ask_kind`, `final_route_label`, and `rejected` (§4a) ride the full manifest — read via
-`GET /api/v1/workflows/{name}/runs/{run_id}` above, or `run_log.read_manifest` — but not
-yet this synchronous response, nor the two summary routes' fixed projection
-(`list_runs`/`list_all_runs`, which still stop at `needs_input_node`): a client
-distinguishing an approval pause from a question pause, or reading which verdict ended a
-run, needs the full manifest today, not the summary or the synchronous run response.
+`GET /api/v1/workflows/{name}/runs/{run_id}` above, or `run_log.read_manifest` — and also
+the two summary routes' projection (`list_runs`/`list_all_runs`), which additionally
+carries `origin` (the manifest's `root_session_key`, under the name the webui's
+tray/inbox filters on). Only the synchronous `POST .../run` response (above) still lacks
+them, stopping at `needs_input_node`/`final_output_node`: a caller distinguishing an
+approval pause from a question pause, or reading which verdict ended a run, needs the
+summary or the full manifest today, not the synchronous run response.
 
 ### 4g. Background mode and live progress
 
@@ -1157,7 +1159,7 @@ End-to-end for a single `run_workflow` call:
 | `ListWorkflowsTool` | `durin/agent/tools/list_workflows.py` | The `list_workflows` LLM tool (core scope, read-only) that lists the workspace's workflows with their `description` and I/O for discovery; an optional `query` filters by name/description. |
 | `WorkflowWriteTool` | `durin/agent/tools/workflow_write.py` | The `workflow_write` LLM tool (core scope): validates a definition via `parse_workflow` before persisting, refuses overwriting an existing name, defaults `improvement_mode` to `manual`, and commits through the version store. The agent's sanctioned authoring path (also given to the dream's skill-extract sub-agent, so a skill can delegate to a workflow it authored). |
 | `WorkflowScriptWriteTool` | `durin/agent/tools/workflow_script_write.py` | The `workflow_script_write` LLM tool: the sanctioned door for the script files a `script` node runs. Generic write tools are denied under `workflows/` (see [security.md](security.md)), so this is how an agent — and the dream's skill-extract sub-agent — authors a deterministic step. Persists through `save_workflow_script`, the same door the editor's `PUT …/scripts/{name}` route uses. |
-| `dependents_of` / `DependentsTool` | `durin/registry_graph.py`, `durin/agent/tools/dependents.py` | The definition graph read backwards: which workflow nodes name a skill (`skills: [...]`) or a script, which nodes call a workflow as a `subworkflow`, and which loops run it. Reads raw JSON so a malformed sibling cannot make the query fail open. Consumed by the autonomous-mutation barrier in the skills store (see [skills/02_lifecycle_and_curation.md](skills/02_lifecycle_and_curation.md)) and exposed to the agent read-only as the `dependents` tool. |
+| `dependents_of` / `DependentsTool` | `durin/registry_graph.py`, `durin/agent/tools/dependents.py` | The definition graph read backwards: which workflow nodes name a skill (`skills: [...]`) or a script, which nodes call a workflow as a `subworkflow`, and which loops or automations run it. Reads raw JSON so a malformed sibling cannot make the query fail open. Consumed by the autonomous-mutation barrier in the skills store (see [skills/02_lifecycle_and_curation.md](skills/02_lifecycle_and_curation.md)) and exposed to the agent read-only as the `dependents` tool. |
 | `start_run`, `mark_node_started`, `update_run`, `finalize_run`, `finalize_short_circuit`, `typical_node_durations`, `typical_total_duration`, `read_manifest`, `runs_for_session`, `reconcile_running`, `read_runs_since` | `durin/workflow/run_log.py` | The live run manifest (running→terminal, including the in-flight `active_node` marker and the once-per-run `typical_s`/`typical_total_s` baselines), per-run diagnostic records, crash reconciliation, and the self-improvement signal source. `finalize_short_circuit` rewrites an existing manifest's terminal fields in place for a resume that never calls the engine (an approval reject or approve-terminal — see `durin/workflow/approval.py`). `read_runs_since` callers that need terminal runs should skip records with `status in {"running","crashed"}`. |
 | `parse_approval_reply`, `build_approval_resume` | `durin/workflow/approval.py` | Interprets a reply to a paused approval node — a bilingual single-word vocabulary → approve/reject/revise — and builds the `ResumeState` for approve/revise. Reject short-circuits before ever reaching this module (the caller finalizes `cancelled` directly); an approve with no `next` DOES reach it and gets `None` back, which the caller turns into a `completed` finalize instead of a resume (see §4g). |
 | `WorkflowRunsTool` | `durin/agent/tools/workflow_runs.py` | The `workflow_runs` LLM tool (core scope, read-only): `search` finds past runs by workflow name/task text/status across every session recorded in the workspace (`tasks` only sees the launching session), `show` returns one run's manifest summary, per-node trace, working folder path, and its artifact files from `.provenance.json` (a file the ledger never recorded is labeled "unstamped"), `cost` renders the per-run token/cost table — one summed line per node (LLM calls, prompt/fresh/output tokens, LLM minutes, dominant model) plus a TOTAL line and the reused-node count — aggregated from `provider.call` telemetry across the run AND any child sub-workflow runs (found by walking `parent_run_id` to any depth), matched by run id and by the run's started/finished dates (±1 day, since a telemetry file is dated by local wall-clock time) — so a question about prior work, including what it cost, can be answered by reading a finding instead of re-running the workflow to reproduce it. |
@@ -1205,9 +1207,9 @@ End-to-end for a single `run_workflow` call:
   (excess is truncated with a notice); `workflow.script_log_max_chars` (default 4000)
   caps what that node's stdout and stderr contribute to the run manifest — a separate,
   tighter bound because the manifest is rewritten in full after every node.
-- **A delete refuses while something still points at it.** A `subworkflow` node and a
-  loop both name a workflow by name, so removing one they run breaks them silently.
-  `DELETE …/{name}` consults the reverse graph (`durin/registry_graph.py`) and returns
+- **A delete refuses while something still points at it.** A `subworkflow` node, a
+  loop, and an automation all name a workflow by name, so removing one they run
+  breaks them silently. `DELETE …/{name}` consults the reverse graph (`durin/registry_graph.py`) and returns
   a validation error naming the dependents; retarget or remove those first. This is the
   same question the dream's skill barrier asks (see
   [skills/02_lifecycle_and_curation.md](skills/02_lifecycle_and_curation.md)) — *what
@@ -1227,10 +1229,11 @@ End-to-end for a single `run_workflow` call:
   new name to use as a starting point); **rename** (`…/{name}/rename` — move the definition
   to a new name; carries the run-history directory (manifests, recommendations, dream
   cursor) along best-effort, rewrites the moved manifests' inner `workflow` field,
-  repoints `subworkflow` nodes in every other definition, and repoints the **loops**
-  that run it — sub-flow callers share the definition directory and the rename's single
-  commit, while a loop lives in its own directory with its own version store, so it is
-  re-saved through `save_loop` and versioned there); **run** (`…/{name}/run` — executes the workflow on a task and
+  repoints `subworkflow` nodes in every other definition, and repoints the **loops and
+  automations** that run it — sub-flow callers share the definition directory and the
+  rename's single commit, while a loop or an automation lives in its own directory with
+  its own version store, so it is re-saved through `save_loop`/`save_automation` and
+  versioned there); **run** (`…/{name}/run` — executes the workflow on a task and
   returns the per-node trace); the **recommendations** queue (`…/recommendations`,
   `…/recommendations/{id}/apply`, `…/recommendations/{id}/dismiss`); and `GET
   /api/v1/workflows/scripts`, which lists the filenames under
