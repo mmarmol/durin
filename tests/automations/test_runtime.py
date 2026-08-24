@@ -16,6 +16,32 @@ from durin.bus.events import SendReceipt
 from durin.workflow.result import WorkflowResult
 
 
+@pytest.fixture(autouse=True)
+def _isolate_telemetry_dir(tmp_path, monkeypatch):
+    """AutomationsRuntime binds a session telemetry logger around
+    fire/try_fire/answer (durin/automations/runtime.py) since those
+    entrypoints run outside an agent turn's bound ContextVar. The suite-wide
+    conftest fixture already keeps every test off the real
+    ~/.cache/durin/telemetry, but it is session-scoped (one shared directory
+    for the whole run) — a test asserting on JSONL content here needs its OWN
+    fresh, single-file directory instead."""
+    import durin.telemetry.logger as telemetry_logger
+
+    telemetry_dir = tmp_path / "_telemetry"
+    monkeypatch.setattr(telemetry_logger, "_DEFAULT_DIR", telemetry_dir)
+    return telemetry_dir
+
+
+class _RecordingTelemetry:
+    """Minimal telemetry-sink double: records (event_type, data) pairs."""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict]] = []
+
+    def log(self, event_type: str, data: dict) -> None:
+        self.events.append((event_type, dict(data)))
+
+
 def _spec(name="a1", workflow="w1", **over) -> AutomationSpec:
     base = dict(name=name, workflow=workflow, enabled=True, triggers=(),
                 delivery=Delivery(), help=Help(), life=None, concurrency="single")
@@ -222,11 +248,13 @@ async def test_on_stuck_keep_mode_is_silent(tmp_path):
 
 
 async def test_rejected_run_does_not_re_trigger_an_already_reached_stuck_escalation(tmp_path):
-    """Mirrors durin.loops.runtime's own gate (`if record["status"] in
-    ("no_goal", "error")`): the stuck check only runs when THIS run's own
-    status counts toward the streak. A rejected run is streak-transparent —
-    it must not re-fire escalation just because an OLDER streak already
-    crossed max_attempts."""
+    """The stuck check only runs when THIS run's own status counts toward the
+    streak (failed/completed). A rejected run is streak-transparent — the
+    escalation must not re-fire just because an OLDER streak already crossed
+    max_attempts; consecutive_unachieved would still report the same count
+    either way, so re-checking on a transparent run only spams the help
+    destination and redundantly re-saves the automation with nothing new
+    having failed."""
     _save(tmp_path, life=Life(intent="x", max_attempts=1, on_stuck="notify"))
     asks = []
 
@@ -756,3 +784,240 @@ async def test_post_finish_skips_drain_when_this_run_just_disabled_the_automatio
 
     assert len(calls["exec"]) == 1  # no drained second fire
     assert automation_queue.pending(tmp_path, "a1") == 1  # left untouched
+
+
+# ---------------------------------------------------------------------------
+# Fix round 1, finding 1: chain dispatch is a safely-backgrounded task — a
+# busy single-concurrency target is queued (not lost), and an unhandled
+# exception is logged rather than becoming an untraceable dropped task.
+# ---------------------------------------------------------------------------
+
+async def test_chain_into_busy_single_target_queues_event_and_drains_after_free(tmp_path):
+    _save(tmp_path)  # a1
+    _save(tmp_path, name="downstream", workflow="w2",
+         triggers=(AutomationTrigger(source="chain", chain_automation="a1", chain_when="any"),))
+
+    rt, calls = _mk_runtime(tmp_path, [
+        _wr("needs_input", out="q", ask_kind="question"),  # 1: downstream's own first fire -> pauses
+        _wr("completed", out="upstream done"),              # 2: a1 finishes -> chains into busy downstream
+        _wr("completed"),                                   # 3: downstream's answer() resume -> completes
+        _wr("completed"),                                   # 4: downstream's drained chain re-fire -> completes
+    ])
+
+    d = await rt.fire("downstream", source="manual")
+    assert d["status"] == "paused"
+
+    m = await rt.fire("a1", source="manual")
+    assert m["status"] == "completed"
+    await _drain()
+
+    # The chain fire lost the race (downstream busy) — queued, not dropped.
+    assert automation_queue.pending(tmp_path, "downstream") == 1
+
+    d2 = await rt.answer("downstream", d["run_id"], "answering")
+    assert d2["status"] == "completed"
+    await _drain()
+
+    # _post_finish's own queue drain picks up the chained event once
+    # downstream frees its concurrency slot.
+    assert automation_queue.pending(tmp_path, "downstream") == 0
+    downstream_tasks = [c["task"] for c in calls["exec"] if c["name"] == "w2"]
+    assert "upstream done" in downstream_tasks
+
+
+async def test_chain_fire_exception_is_logged_not_lost(tmp_path, caplog):
+    """A chain target that no longer exists (AutomationNotFound, uncaught by
+    fire() itself) must be logged by _chain_fire, not turned into an
+    asyncio "Task exception was never retrieved" warning nobody ever reads."""
+    rt, _ = _mk_runtime(tmp_path, [])
+
+    handler_id = loguru_logger.add(caplog.handler, format="{message}", level="ERROR")
+    try:
+        with caplog.at_level(logging.ERROR):
+            await rt._chain_fire("does-not-exist", "task text", 1)
+    finally:
+        loguru_logger.remove(handler_id)
+
+    assert any("chained fire" in r.getMessage() for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Fix round 1, finding 2: telemetry producers land now, mirroring the exact
+# bind-around-the-call mechanism durin.loops.runtime uses.
+# ---------------------------------------------------------------------------
+
+async def test_fire_emits_telemetry_when_unbound(tmp_path, _isolate_telemetry_dir):
+    import json
+
+    from durin.telemetry.logger import current_telemetry
+
+    telemetry_dir = _isolate_telemetry_dir
+    _save(tmp_path, delivery=Delivery(channel="email", to="ops@x.com"))
+    rt, _ = _mk_runtime(tmp_path, [_wr("completed")])
+
+    assert current_telemetry() is None
+    await rt.fire("a1", source="manual")
+    assert current_telemetry() is None  # unbound again after the call returns
+
+    files = list(telemetry_dir.glob("*.jsonl"))
+    assert len(files) == 1
+    events = [json.loads(line) for line in files[0].read_text(encoding="utf-8").strip().splitlines()]
+    event_types = [e["type"] for e in events]
+    assert "automations.fired" in event_types
+    assert "automations.run_finished" in event_types
+    assert "automations.delivered" in event_types
+
+    fired = next(e for e in events if e["type"] == "automations.fired")
+    # emit_tool_event auto-injects session_key/iteration when absent — check
+    # the fields this call site actually sets, not the full payload shape.
+    assert fired["data"]["automation"] == "a1"
+    assert fired["data"]["source"] == "manual"
+    assert fired["data"]["skipped"] is False
+
+
+async def test_fire_reuses_already_bound_telemetry(tmp_path, _isolate_telemetry_dir):
+    from durin.telemetry.logger import bind_telemetry, reset_telemetry
+
+    telemetry_dir = _isolate_telemetry_dir
+    _save(tmp_path)
+    rt, _ = _mk_runtime(tmp_path, [_wr("completed")])
+
+    fake = _RecordingTelemetry()
+    token = bind_telemetry(fake)
+    try:
+        await rt.fire("a1", source="manual")
+    finally:
+        reset_telemetry(token)
+
+    event_types = [event_type for event_type, _ in fake.events]
+    assert "automations.fired" in event_types
+    assert "automations.run_finished" in event_types
+    assert not telemetry_dir.exists() or list(telemetry_dir.glob("*.jsonl")) == []
+
+
+async def test_try_fire_busy_skip_emits_fired_with_skipped_true(tmp_path, _isolate_telemetry_dir):
+    import json
+
+    _save(tmp_path)
+    rt, _ = _mk_runtime(tmp_path, [_wr("needs_input", out="q", ask_kind="question")])
+    await rt.fire("a1", source="manual")  # leaves an active paused run
+    assert await rt.try_fire("a1", source="cron") is None
+
+    files = list(_isolate_telemetry_dir.glob("*.jsonl"))
+    events = [json.loads(line) for f in files for line in f.read_text(encoding="utf-8").strip().splitlines()]
+    skipped = [e for e in events if e["type"] == "automations.fired" and e["data"].get("skipped") is True]
+    assert len(skipped) == 1
+    assert skipped[0]["data"]["automation"] == "a1"
+    assert skipped[0]["data"]["source"] == "cron"
+
+
+async def test_try_fire_disabled_skip_emits_no_telemetry(tmp_path, _isolate_telemetry_dir):
+    """Mirrors durin.loops.runtime's own try_fire: a disabled skip is silent
+    — only the busy skip carries a signal, since disabled is a deliberate,
+    already-visible configuration state rather than a race worth flagging."""
+    import json
+
+    _save(tmp_path, enabled=False)
+    rt, _ = _mk_runtime(tmp_path, [])
+    assert await rt.try_fire("a1", source="cron") is None
+
+    files = list(_isolate_telemetry_dir.glob("*.jsonl"))
+    events = [json.loads(line) for f in files for line in f.read_text(encoding="utf-8").strip().splitlines()]
+    assert events == []
+
+
+async def test_stuck_escalation_emits_automations_escalated(tmp_path, _isolate_telemetry_dir):
+    import json
+
+    _save(tmp_path, life=Life(intent="x", max_attempts=1, on_stuck="notify"))
+    rt, _ = _mk_runtime(tmp_path, [_wr("exhausted")])
+    m = await rt.fire("a1", source="cron")
+    assert m["status"] == "failed"
+
+    files = list(_isolate_telemetry_dir.glob("*.jsonl"))
+    events = [json.loads(line) for f in files for line in f.read_text(encoding="utf-8").strip().splitlines()]
+    escalated = [e for e in events if e["type"] == "automations.escalated"]
+    assert len(escalated) == 1
+    assert escalated[0]["data"]["automation"] == "a1"
+    assert escalated[0]["data"]["run_id"] == m["run_id"]
+    assert escalated[0]["data"]["consecutive_unachieved"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Fix round 1, finding 3: on_outcome receives the routed destination.
+# ---------------------------------------------------------------------------
+
+async def test_on_outcome_receives_the_delivery_destination(tmp_path):
+    _save(tmp_path, delivery=Delivery(channel="email", to="ops@x.com", notify="always"))
+    received = []
+
+    async def on_outcome(outcome):
+        received.append(outcome)
+
+    rt, _ = _mk_runtime(tmp_path, [_wr("completed")], on_outcome=on_outcome)
+    m = await rt.fire("a1", source="cron")
+    assert m["status"] == "completed"
+
+    assert len(received) == 1
+    assert received[0].kind == "delivery"
+    assert received[0].channel == "email"
+    assert received[0].to == "ops@x.com"
+
+
+async def test_on_outcome_receives_the_session_destination(tmp_path):
+    _save(tmp_path)
+    received = []
+
+    async def on_outcome(outcome):
+        received.append(outcome)
+
+    rt, _ = _mk_runtime(tmp_path, [_wr("completed")], on_outcome=on_outcome)
+    origin = {"kind": "session", "session_key": "websocket:abc", "channel": "websocket", "chat_id": "c1"}
+    m = await rt.fire("a1", source="chat", origin=origin)
+    assert m["status"] == "completed"
+
+    assert received[0].kind == "session"
+    # A session destination carries no channel/to of its own — the wiring
+    # layer routes it from outcome.origin["session_key"] instead, same as
+    # dest.origin, so channel/to stay None rather than duplicating it.
+    assert received[0].channel is None
+    assert received[0].to is None
+    assert received[0].origin["session_key"] == "websocket:abc"
+
+
+async def test_on_outcome_receives_the_help_backstop_destination(tmp_path):
+    _save(tmp_path, delivery=Delivery(channel=None, notify="never"), help=Help(channel="slack", to="ops-room"))
+    received = []
+
+    async def on_outcome(outcome):
+        received.append(outcome)
+
+    rt, _ = _mk_runtime(tmp_path, [_wr("exhausted")], on_outcome=on_outcome)
+    m = await rt.fire("a1", source="cron")
+    assert m["status"] == "failed"
+
+    assert received[0].kind == "help"
+    assert received[0].channel == "slack"
+    assert received[0].to == "ops-room"
+
+
+# ---------------------------------------------------------------------------
+# Fix round 1, finding 5: achieved on a help-only automation must be heard.
+# ---------------------------------------------------------------------------
+
+async def test_achieved_on_help_only_automation_routes_to_help(tmp_path):
+    _save(tmp_path, life=Life(intent="x", achieved_when="any_completed"),
+         delivery=Delivery(channel=None), help=Help(channel="slack", to="ops-room"))
+    received = []
+
+    async def on_outcome(outcome):
+        received.append(outcome)
+
+    rt, _ = _mk_runtime(tmp_path, [_wr("completed")], on_outcome=on_outcome)
+    m = await rt.fire("a1", source="cron")
+    assert m["status"] == "achieved"
+
+    assert received[0].kind == "help"
+    assert received[0].channel == "slack" and received[0].to == "ops-room"
+    record = rl.read_run(tmp_path, "a1", m["run_id"])
+    assert record["delivery"]["result"] == "delivered"

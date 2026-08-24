@@ -34,12 +34,19 @@ from pathlib import Path
 
 from loguru import logger
 
+from durin.agent.tools._telemetry import emit_tool_event
 from durin.automations import claims, queue, run_log
 from durin.automations.chains import CHAIN_HOP_CAP, chain_targets
 from durin.automations.classify import classify, should_deliver
 from durin.automations.outcome import AutomationOutcome, build_outcome, route
 from durin.automations.spec import AutomationNotFound, AutomationSpec
 from durin.automations.store import load_automation, save_automation
+from durin.telemetry.logger import (
+    bind_telemetry,
+    current_telemetry,
+    get_session_logger,
+    reset_telemetry,
+)
 from durin.workflow.approval import parse_approval_reply
 from durin.workflow.result import WorkflowResult
 
@@ -56,6 +63,23 @@ def _parse_ask(text: str) -> tuple[bool, str]:
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
+
+
+def _bind_automations_telemetry(name: str):
+    """Bind a session telemetry logger for this automation dispatch.
+
+    `fire`/`try_fire`/`answer` run outside an agent turn (cron dispatch, HTTP
+    request) where AgentLoop never binds `current_telemetry()`, so
+    `emit_tool_event` calls below would silently no-op. Bind an
+    `automation:<name>` session logger for the duration of the call — unless
+    a logger is already bound (e.g. `fire` invoked from inside a live agent
+    turn), in which case leave the caller's binding alone so events keep
+    flowing to the active session's file. Returns the reset token, or None
+    if nothing was bound here.
+    """
+    if current_telemetry() is not None:
+        return None
+    return bind_telemetry(get_session_logger(f"automation:{name}"))
 
 
 class AutomationBusy(Exception):
@@ -81,11 +105,28 @@ class AutomationsRuntime:
         # cancelled BY that shutdown apart from one a user deliberately
         # stopped — both arrive here as the same WorkflowResult.status.
         self._is_shutting_down = is_shutting_down or (lambda: False)
-        # Strong references for sweep_orphans' backgrounded relaunches (see
-        # asyncio's own warning: a task with no other reference can be
-        # garbage-collected mid-flight). Discarded via the task's own
-        # done-callback once it finishes.
-        self._sweep_tasks: set[asyncio.Task] = set()
+        # Strong references for every backgrounded task this runtime starts
+        # (sweep_orphans' relaunches, chain dispatch, single-concurrency
+        # queue drain) — asyncio's own warning: a task with no other
+        # reference can be garbage-collected mid-flight. Discarded via each
+        # task's own done-callback once it finishes.
+        self._bg_tasks: set[asyncio.Task] = set()
+
+    def _spawn(self, coro) -> asyncio.Task:
+        """Background a coroutine with a strong reference, never awaited here.
+
+        Every backgrounded call in this class goes through this one place so
+        none of them can be silently garbage-collected mid-flight, and so an
+        unhandled exception inside one is guaranteed to reach a logger
+        instead of surfacing only as asyncio's own untraceable "Task
+        exception was never retrieved" warning — each coroutine passed here
+        is responsible for catching and logging its own failures (see
+        `_relaunch_orphan`, `_chain_fire`, `_drain_fire`).
+        """
+        task = asyncio.create_task(coro)
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
+        return task
 
     def reserve_run_id(self) -> str:
         """Mint a run id a caller can report before the run exists.
@@ -100,24 +141,42 @@ class AutomationsRuntime:
     async def fire(self, name: str, *, source: str, task: str | None = None,
                     origin: dict | None = None, run_id: str | None = None,
                     chain_depth: int = 0) -> dict:
-        spec = load_automation(self._ws, name)
-        if spec.concurrency == "single" and run_log.active_runs(self._ws, name):
-            raise AutomationBusy(f"automation '{name}' already has an active run")
-        return await self._run(spec, source=source, task=task, origin=origin,
-                                run_id=run_id, chain_depth=chain_depth)
+        token = _bind_automations_telemetry(name)
+        try:
+            spec = load_automation(self._ws, name)
+            if spec.concurrency == "single" and run_log.active_runs(self._ws, name):
+                raise AutomationBusy(f"automation '{name}' already has an active run")
+            return await self._run(spec, source=source, task=task, origin=origin,
+                                    run_id=run_id, chain_depth=chain_depth)
+        finally:
+            if token is not None:
+                reset_telemetry(token)
 
     async def try_fire(self, name: str, *, source: str, origin: dict | None = None) -> dict | None:
-        spec = load_automation(self._ws, name)
-        if not spec.enabled:
-            logger.info("automations: '{}' fire from {} skipped — disabled", name, source)
-            return None
-        if spec.concurrency == "single" and run_log.active_runs(self._ws, name):
-            logger.info("automations: '{}' fire from {} skipped — already busy", name, source)
-            return None
-        return await self._run(spec, source=source, task=None, origin=origin)
+        token = _bind_automations_telemetry(name)
+        try:
+            spec = load_automation(self._ws, name)
+            if not spec.enabled:
+                return None
+            if spec.concurrency == "single" and run_log.active_runs(self._ws, name):
+                emit_tool_event("automations.fired", {"automation": name, "source": source, "skipped": True})
+                return None
+            return await self._run(spec, source=source, task=None, origin=origin)
+        finally:
+            if token is not None:
+                reset_telemetry(token)
 
     async def answer(self, name: str, run_id: str, text: str, *,
                        action: str | None = None, by: str = "operator") -> dict:
+        token = _bind_automations_telemetry(name)
+        try:
+            return await self._answer(name, run_id, text, action=action, by=by)
+        finally:
+            if token is not None:
+                reset_telemetry(token)
+
+    async def _answer(self, name: str, run_id: str, text: str, *,
+                        action: str | None, by: str) -> dict:
         spec = load_automation(self._ws, name)
         record = run_log.read_run(self._ws, name, run_id)
         if not record or record.get("status") != "paused":
@@ -171,12 +230,33 @@ class AutomationsRuntime:
     async def sweep_orphans(self) -> list[str]:
         """Finalize runs whose process died, tell somebody, relaunch what never ran.
 
-        See ``durin.loops.runtime.LoopsRuntime.sweep_orphans`` for the full
-        rationale (existence of the workflow's own manifest is what decides
-        relaunch-safety, not a count of completed nodes); this is the same
-        two-pass shape (finalize+notify every orphan first, background every
-        relaunch only once that pass is done) ported onto automations' run
-        records.
+        A run killed with its process did not fail — it produced no result at
+        all. Whether relaunching it is safe turns on one question: did any
+        work happen? The existence of the workflow's own manifest answers it
+        — the engine writes that manifest before it walks anything, so no
+        manifest means the run never got going: the original cause is still
+        unserved and a fresh run is the first attempt, not a retry. Existence,
+        not a count of completed nodes, is the test: a node is recorded only
+        when it finishes, so a run killed inside its first node shows an
+        empty node list while being the most likely to have already posted
+        somewhere external — reading "no nodes" as safe would relaunch
+        exactly those.
+
+        Finalizing and notifying every orphan happens in one pass, BEFORE any
+        relaunch starts: a relaunch runs a full replacement workflow (a slow
+        run is the common case), and awaiting it inline here would stall
+        every later orphan's own finalize/notify behind it — and, since a
+        `single`-concurrency automation's manifest stays "running" until
+        finalized, could even make an unrelated automation's orphan look busy
+        to a concurrent fire attempt for the whole time. Each relaunch is
+        instead started with `asyncio.create_task` (tracked via `_spawn`)
+        once every orphan in this pass is already finalized and notified.
+
+        A disabled (paused) automation is never relaunched — `fire`
+        deliberately ignores `enabled` (a manual run-now must work on a
+        paused automation), so this sweep is the only place that switch gets
+        honoured for a run nobody asked for; the notice says so rather than
+        promising a replacement that will never come.
         """
         from durin.workflow import run_log as wf_run_log
 
@@ -226,9 +306,7 @@ class AutomationsRuntime:
         for rec, new_run_id in to_relaunch:
             logger.info("automations: relaunching automation '{}' run {} as {} — no work had started",
                         rec.get("automation") or "", rec.get("run_id") or "", new_run_id)
-            task = asyncio.create_task(self._relaunch_orphan(rec, new_run_id))
-            self._sweep_tasks.add(task)
-            task.add_done_callback(self._sweep_tasks.discard)
+            self._spawn(self._relaunch_orphan(rec, new_run_id))
         return handled
 
     async def _relaunch_orphan(self, rec: dict, new_run_id: str) -> None:
@@ -297,6 +375,7 @@ class AutomationsRuntime:
         # later sweep has for asking whether the workflow ever started.
         wf_run_id = self._run_id()
         run_log.update_run(self._ws, spec.name, run_id, workflow_run_id=wf_run_id)
+        emit_tool_event("automations.fired", {"automation": spec.name, "source": source, "skipped": False})
 
         # A channel-triggered fire's origin thread becomes work_key ONLY when
         # it is a correlate-derived claim key (matcher-minted as
@@ -375,6 +454,10 @@ class AutomationsRuntime:
     async def _post_finish(self, spec: AutomationSpec, run_id: str, record: dict,
                              result: WorkflowResult | None, *, chain_depth: int) -> dict:
         status = record["status"]
+        emit_tool_event("automations.run_finished", {
+            "automation": spec.name, "run_id": run_id, "status": status,
+            "final_route_label": record.get("final_route_label"),
+        })
         achieved = status == "achieved"
         deliver = achieved or should_deliver(status, record.get("final_route_label"), spec.delivery)
         outcome = build_outcome(spec.name, record)
@@ -388,15 +471,14 @@ class AutomationsRuntime:
             disabled_now = self._disable(spec, reason="achieved")
         elif (status in ("failed", "completed") and spec.life is not None
                 and spec.life.max_attempts is not None):
-            # Gated on THIS run's own status counting toward the streak
-            # (mirrors durin.loops.runtime's `if record["status"] in
-            # ("no_goal", "error")`) — a "rejected" or "interrupted" run is
-            # streak-transparent (run_log.STREAK_TRANSPARENT) and must not
-            # re-trigger the stuck check on its own: consecutive_unachieved
-            # would still report whatever an OLDER streak already reached,
-            # and re-firing escalate_pause/notify on every subsequent
-            # transparent run would spam the help destination and redundantly
-            # re-save the automation without any NEW failure having occurred.
+            # Gated on THIS run's own status counting toward the streak — a
+            # "rejected" or "interrupted" run is streak-transparent
+            # (run_log.STREAK_TRANSPARENT) and must not re-trigger the stuck
+            # check on its own: consecutive_unachieved would still report
+            # whatever an OLDER streak already reached, and re-firing
+            # escalate_pause/notify on every subsequent transparent run would
+            # spam the help destination and redundantly re-save the
+            # automation without any NEW failure having occurred.
             streak = run_log.consecutive_unachieved(self._ws, spec.name)
             if streak >= spec.life.max_attempts:
                 disabled_now = await self._on_stuck(spec, run_id, streak)
@@ -415,8 +497,8 @@ class AutomationsRuntime:
             if spec.enabled and not disabled_now and spec.concurrency == "single":
                 event = queue.pop_fresh(self._ws, spec.name, self._queue_ttl_s)
                 if event is not None:
-                    asyncio.create_task(self._drain_fire(spec.name, task=event.get("content"),
-                                                          origin=event.get("origin")))
+                    self._spawn(self._drain_fire(spec.name, task=event.get("content"),
+                                                  origin=event.get("origin")))
         except Exception:  # noqa: BLE001 — contained; see comment above
             logger.exception(
                 "automations: post-outcome housekeeping (prune/queue-drain) for '{}' run {} failed",
@@ -439,6 +521,8 @@ class AutomationsRuntime:
         mode = spec.life.on_stuck
         if mode == "keep":
             return False
+        emit_tool_event("automations.escalated", {"automation": spec.name, "run_id": run_id,
+                                                   "consecutive_unachieved": streak})
         text = f"automation '{spec.name}' has not reached its goal in {streak} consecutive attempts"
         await self._say_help(spec, run_id, "escalation", text, None)
         if mode == "escalate_pause":
@@ -449,23 +533,40 @@ class AutomationsRuntime:
                                  outcome: AutomationOutcome, dest) -> None:
         at_ms = _now_ms()
         if dest is None:
-            run_log.record_delivery(self._ws, spec.name, run_id,
-                                     channel=spec.delivery.channel or "", to=spec.delivery.to or "",
-                                     result="silenced", at_ms=at_ms)
+            channel, to, result = spec.delivery.channel or "", spec.delivery.to or "", "silenced"
+            run_log.record_delivery(self._ws, spec.name, run_id, channel=channel, to=to,
+                                     result=result, at_ms=at_ms)
+            emit_tool_event("automations.delivered", {"automation": spec.name, "run_id": run_id,
+                                                       "channel": channel, "result": result})
             return
         if dest.kind == "session":
+            # record_delivery's channel/to are plain (non-Optional) strings
+            # for the run log, so a session destination — which has no
+            # channel/to of its own, only a session_key inside `origin` —
+            # gets a synthetic "session"/<session_key> pair there. The
+            # outcome handed to on_outcome is NOT given this synthetic pair:
+            # it keeps channel=None/to=None (matching Destination's own
+            # session shape) since the wiring layer routes a session
+            # destination from `outcome.origin["session_key"]`, same as
+            # `dest.origin` here.
             channel, to = "session", (dest.origin or {}).get("session_key") or ""
         else:
             channel, to = dest.channel or "", dest.to or ""
+        # The wiring layer must receive the routed destination directly
+        # rather than recompute it — see AutomationOutcome's own field
+        # comments for why re-deriving it independently is unsafe.
+        routed_outcome = dataclasses.replace(outcome, kind=dest.kind, channel=dest.channel, to=dest.to)
         result = "delivered"
         if self._on_outcome is not None:
             try:
-                await self._on_outcome(outcome)
+                await self._on_outcome(routed_outcome)
             except Exception:  # noqa: BLE001 — delivery is best-effort; still recorded as failed
                 logger.exception("automations: outcome delivery for '{}' run {} failed", spec.name, run_id)
                 result = "failed"
         run_log.record_delivery(self._ws, spec.name, run_id, channel=channel, to=to,
                                  result=result, at_ms=at_ms)
+        emit_tool_event("automations.delivered", {"automation": spec.name, "run_id": run_id,
+                                                   "channel": channel, "result": result})
 
     async def _dispatch_chains(self, name: str, status: str, result: WorkflowResult | None,
                                  outcome: AutomationOutcome, chain_depth: int) -> None:
@@ -483,8 +584,35 @@ class AutomationsRuntime:
             if target_spec.name in seen:
                 continue
             seen.add(target_spec.name)
-            asyncio.create_task(self.fire(target_spec.name, source="chain", task=chain_task,
-                                           chain_depth=chain_depth + 1))
+            self._spawn(self._chain_fire(target_spec.name, chain_task, chain_depth + 1))
+
+    async def _chain_fire(self, target_name: str, task: str, chain_depth: int) -> None:
+        """Fire one chain-dispatched target, backgrounded by _dispatch_chains.
+
+        Runs via `_spawn` (asyncio.create_task under the hood), so an
+        exception raised in here never reaches the finishing run's own
+        caller — it would only ever surface as asyncio's own untraceable
+        "Task exception was never retrieved" warning, silently losing the
+        whole downstream fire. Every path below must therefore handle its
+        own failure instead of letting anything propagate.
+        """
+        try:
+            await self.fire(target_name, source="chain", task=task, chain_depth=chain_depth)
+        except AutomationBusy:
+            # Only ever raised when the target is single-concurrency and
+            # already has an active run — the same holding area the queue
+            # drain already services for a busy channel-triggered fire.
+            # Losing the chain here would drop the whole downstream fire with
+            # nothing to show for it; queuing it instead means the target's
+            # own next _post_finish drains it once its active run frees the
+            # concurrency slot.
+            queue.push(self._ws, target_name, {"content": task, "origin": None})
+            logger.warning(
+                "automations: chained fire for '{}' lost the fire race (now busy); "
+                "queued for next available slot", target_name
+            )
+        except Exception:  # noqa: BLE001 — a chained fire's failure must not go unlogged
+            logger.exception("automations: chained fire for '{}' raised an unhandled exception", target_name)
 
     async def _say_help(self, spec: AutomationSpec, run_id: str, kind: str, text: str, proposal):
         if self._help is None:

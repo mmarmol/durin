@@ -102,3 +102,48 @@ def test_delivery_destination_preferred_over_help_backstop_when_both_apply():
     dest = route(_out(status="failed", origin=None), deliver=True,
                  delivery=Delivery(channel="email", to="ops@x.com"), help=Help(channel="slack", to="C2"))
     assert dest.kind == "delivery"
+
+
+# ---------------------------------------------------------------------------
+# Fix round 1, finding 3: AutomationOutcome carries the routed destination
+# (populated by AutomationsRuntime._deliver_outcome, not build_outcome).
+# ---------------------------------------------------------------------------
+
+def test_build_outcome_leaves_destination_fields_unset():
+    out = build_outcome("nightly", _record())
+    assert out.kind is None
+    assert out.channel is None
+    assert out.to is None
+
+
+# ---------------------------------------------------------------------------
+# Fix round 1, finding 5: achieved on a help-only automation must be heard —
+# achieving is the counterpart of escalating.
+# ---------------------------------------------------------------------------
+
+def test_achieved_with_only_help_channel_routes_to_help():
+    dest = route(_out(status="achieved", origin=None), deliver=True,
+                 delivery=Delivery(channel=None), help=Help(channel="slack", to="ops-room"))
+    assert dest.kind == "help"
+    assert dest.channel == "slack" and dest.to == "ops-room"
+
+
+def test_achieved_with_neither_channel_configured_is_still_undeliverable():
+    """Never invents a destination — even for achieved."""
+    dest = route(_out(status="achieved", origin=None), deliver=True,
+                 delivery=Delivery(channel=None), help=Help(channel=None))
+    assert dest is None
+
+
+def test_achieved_prefers_the_delivery_channel_over_help_when_both_configured():
+    dest = route(_out(status="achieved", origin=None), deliver=True,
+                 delivery=Delivery(channel="email", to="ops@x.com"), help=Help(channel="slack", to="C2"))
+    assert dest.kind == "delivery"
+    assert dest.channel == "email"
+
+
+def test_achieved_help_backstop_still_yields_to_a_session_origin():
+    origin = {"kind": "session", "session_key": "websocket:abc"}
+    dest = route(_out(status="achieved", origin=origin), deliver=True,
+                 delivery=Delivery(channel=None), help=Help(channel="slack", to="ops-room"))
+    assert dest.kind == "session"
