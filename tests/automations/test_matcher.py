@@ -12,12 +12,17 @@ from durin.automations.store import save_automation
 
 
 @pytest.fixture(autouse=True)
-def _isolate_telemetry_dir(tmp_path, monkeypatch):
+def _per_test_telemetry_dir(tmp_path, monkeypatch):
     """TriggerMatcher._emit binds a session telemetry logger around the
     synchronous automations.event_matched emit (mirrors AutomationsRuntime's
     own binding in durin/automations/runtime.py) since there is no bound
     logger outside an agent turn. Without this, tests would write real JSONL
-    files to the developer's ~/.cache/durin/telemetry."""
+    files to the developer's ~/.cache/durin/telemetry. Deliberately NOT
+    named `_isolate_telemetry_dir`: that name collides with the
+    session-scoped guard of the same name in tests/conftest.py, and a
+    fixture defined in a test module shadows a same-named one from a parent
+    conftest for every test in that module — reusing the name would
+    silently disable the suite-wide guard for this entire file."""
     import durin.telemetry.logger as telemetry_logger
 
     telemetry_dir = tmp_path / "_telemetry"

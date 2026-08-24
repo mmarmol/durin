@@ -94,7 +94,7 @@ class AutomationAnswerCommand(Command):
     run_id: str
     text: str
     # An explicit action (webui buttons) bypasses durin.workflow.approval.parse_approval_reply's
-    # keyword parsing — see AutomationsRuntime._answer.
+    # keyword parsing — see AutomationsRuntime._answer_prologue.
     action: Literal["approve", "revise", "reject"] | None = None
 
 

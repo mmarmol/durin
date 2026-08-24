@@ -149,8 +149,10 @@ async def test_answer_resumes_run(tmp_path):
     assert "resumed in the background" in out
     assert "do NOT poll" in out
 
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
+    # answer_nowait backgrounds the resume on the RUNTIME's own _bg_tasks,
+    # not tool._fires (that set is _fire's own backgrounding) — wait for it
+    # directly rather than sleep(0), same reasoning as above.
+    await asyncio.gather(*rt._bg_tasks)
     assert rl.read_run(tmp_path, "a1", run_id)["status"] == "completed"
 
 
@@ -182,8 +184,10 @@ async def test_answer_forwards_resolution_and_by_agent(tmp_path):
     assert record["approval"]["action"] == "approve"
     assert record["approval"]["by"] == "agent"
 
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
+    # answer_nowait backgrounds the resume on the RUNTIME's own _bg_tasks,
+    # not tool._fires (that set is _fire's own backgrounding) — wait for it
+    # directly rather than sleep(0), same reasoning as above.
+    await asyncio.gather(*rt._bg_tasks)
     assert rl.read_run(tmp_path, "a1", run_id)["status"] == "completed"
 
 

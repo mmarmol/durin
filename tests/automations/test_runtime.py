@@ -24,14 +24,18 @@ from durin.workflow.result import WorkflowResult
 
 
 @pytest.fixture(autouse=True)
-def _isolate_telemetry_dir(tmp_path, monkeypatch):
+def _per_test_telemetry_dir(tmp_path, monkeypatch):
     """AutomationsRuntime binds a session telemetry logger around
     fire/try_fire/answer (durin/automations/runtime.py) since those
-    entrypoints run outside an agent turn's bound ContextVar. The suite-wide
-    conftest fixture already keeps every test off the real
-    ~/.cache/durin/telemetry, but it is session-scoped (one shared directory
-    for the whole run) — a test asserting on JSONL content here needs its OWN
-    fresh, single-file directory instead."""
+    entrypoints run outside an agent turn's bound ContextVar. A test in this
+    file asserting on JSONL content needs its OWN fresh, single-file
+    directory rather than the suite-wide session-scoped one in
+    tests/conftest.py (which is shared across the whole run, so several
+    tests' events would land in the same file) — hence a second,
+    differently-named guard here rather than reusing that fixture's name:
+    a fixture defined in a test module shadows a same-named one from a
+    parent conftest for every test in that module, which would silently
+    disable the outer, suite-wide guard for this entire file."""
     import durin.telemetry.logger as telemetry_logger
 
     telemetry_dir = tmp_path / "_telemetry"
@@ -681,6 +685,47 @@ async def test_answer_nowait_raises_when_run_is_not_paused(tmp_path):
         await rt.answer_nowait("a1", m["run_id"], "too late")
 
 
+async def test_answer_nowait_continuation_failure_finalizes_failed_and_logs(tmp_path, caplog, monkeypatch):
+    """A continuation failure AFTER `_exec` succeeds (classify/finalize/
+    post_finish raising) must not leave the run stuck `running` forever —
+    `find_orphans` explicitly skips a `running` manifest owned by a
+    still-live process, so nothing else would ever reclaim it — and must
+    not surface only as asyncio's own untraceable "Task exception was never
+    retrieved" warning."""
+    import durin.automations.runtime as runtime_module
+
+    _save(tmp_path)
+    rt, _ = _mk_runtime(tmp_path, [
+        _wr("needs_input", out="q", ask_kind="question"),
+        _wr("completed"),
+    ])
+    m = await rt.fire("a1", source="manual")
+    assert m["status"] == "paused"
+
+    def _poisoned_classify(result, spec):
+        raise RuntimeError("boom: poisoned classify")
+
+    monkeypatch.setattr(runtime_module, "classify", _poisoned_classify)
+
+    handler_id = loguru_logger.add(caplog.handler, format="{message}", level="ERROR")
+    try:
+        with caplog.at_level(logging.ERROR):
+            result = await rt.answer_nowait("a1", m["run_id"], "go ahead")
+            assert result["status"] == "running"   # unchanged: prologue only
+            await _drain()
+    finally:
+        loguru_logger.remove(handler_id)
+
+    # The task completed (was caught internally, not left dangling) —
+    # nothing pending means nothing for asyncio to complain about at GC.
+    assert rt._bg_tasks == set()
+
+    final = rl.read_run(tmp_path, "a1", m["run_id"])
+    assert final["status"] == "failed"
+    assert "boom: poisoned classify" in (final.get("detail") or "")
+    assert any("backgrounded answer continuation" in r.getMessage() for r in caplog.records)
+
+
 # ---------------------------------------------------------------------------
 # Stop
 # ---------------------------------------------------------------------------
@@ -746,7 +791,9 @@ async def test_stop_running_run_hard_upgrades_and_never_downgrades(tmp_path):
         clear("stop-hard-1")
 
 
-async def test_stop_paused_run_finalizes_interrupted_and_releases_claim(tmp_path):
+async def test_stop_paused_run_finalizes_interrupted_and_releases_claim(tmp_path, _per_test_telemetry_dir):
+    import json
+
     _save(tmp_path)
     rt, _ = _mk_runtime(tmp_path, [
         _wr("needs_input", out="[TO:counterpart] please confirm", ask_kind="question"),
@@ -760,6 +807,17 @@ async def test_stop_paused_run_finalizes_interrupted_and_releases_claim(tmp_path
 
     assert stopped["status"] == "interrupted"
     assert stopped["detail"] == "stopped by operator"
+
+    # _post_finish is skipped for a paused-run stop (no delivery, no
+    # chains), but automations.run_finished must still land — otherwise
+    # the telemetry stream shows this run as started-and-never-finished.
+    files = list(_per_test_telemetry_dir.glob("*.jsonl"))
+    events = [json.loads(line) for f in files for line in f.read_text(encoding="utf-8").strip().splitlines()]
+    finished = [e for e in events if e["type"] == "automations.run_finished"
+                and e["data"].get("run_id") == m["run_id"]]
+    assert len(finished) == 1
+    assert finished[0]["data"]["status"] == "interrupted"
+    assert finished[0]["data"]["automation"] == "a1"
     assert stopped["workflow_run_id"] == m["workflow_run_id"]
     assert claims.lookup(tmp_path, "thread-xyz") is None
 
@@ -1052,7 +1110,7 @@ async def test_post_finish_drains_next_fresh_queued_event(tmp_path):
     assert automation_queue.pending(tmp_path, "a1") == 0
 
 
-async def test_post_finish_drain_emits_event_matched_drained(tmp_path, _isolate_telemetry_dir):
+async def test_post_finish_drain_emits_event_matched_drained(tmp_path, _per_test_telemetry_dir):
     """The "drained" action is emitted right where the queue drain finds a
     fresh event, before the re-fire is scheduled — not from the matcher,
     which never sees a drained event at all."""
@@ -1066,7 +1124,7 @@ async def test_post_finish_drain_emits_event_matched_drained(tmp_path, _isolate_
     await rt.fire("a1", source="manual")
     await _drain()
 
-    files = list(_isolate_telemetry_dir.glob("*.jsonl"))
+    files = list(_per_test_telemetry_dir.glob("*.jsonl"))
     events = [json.loads(line) for f in files for line in f.read_text(encoding="utf-8").strip().splitlines()]
     matched = [e for e in events if e["type"] == "automations.event_matched"]
     assert len(matched) == 1
@@ -1163,12 +1221,12 @@ async def test_chain_fire_exception_is_logged_not_lost(tmp_path, caplog):
 # bind-around-the-call mechanism throughout.
 # ---------------------------------------------------------------------------
 
-async def test_fire_emits_telemetry_when_unbound(tmp_path, _isolate_telemetry_dir):
+async def test_fire_emits_telemetry_when_unbound(tmp_path, _per_test_telemetry_dir):
     import json
 
     from durin.telemetry.logger import current_telemetry
 
-    telemetry_dir = _isolate_telemetry_dir
+    telemetry_dir = _per_test_telemetry_dir
     _save(tmp_path, delivery=Delivery(channel="email", to="ops@x.com"))
     rt, _ = _mk_runtime(tmp_path, [_wr("completed")])
 
@@ -1192,10 +1250,10 @@ async def test_fire_emits_telemetry_when_unbound(tmp_path, _isolate_telemetry_di
     assert fired["data"]["skipped"] is False
 
 
-async def test_fire_reuses_already_bound_telemetry(tmp_path, _isolate_telemetry_dir):
+async def test_fire_reuses_already_bound_telemetry(tmp_path, _per_test_telemetry_dir):
     from durin.telemetry.logger import bind_telemetry, reset_telemetry
 
-    telemetry_dir = _isolate_telemetry_dir
+    telemetry_dir = _per_test_telemetry_dir
     _save(tmp_path)
     rt, _ = _mk_runtime(tmp_path, [_wr("completed")])
 
@@ -1212,7 +1270,7 @@ async def test_fire_reuses_already_bound_telemetry(tmp_path, _isolate_telemetry_
     assert not telemetry_dir.exists() or list(telemetry_dir.glob("*.jsonl")) == []
 
 
-async def test_try_fire_busy_skip_emits_fired_with_skipped_true(tmp_path, _isolate_telemetry_dir):
+async def test_try_fire_busy_skip_emits_fired_with_skipped_true(tmp_path, _per_test_telemetry_dir):
     import json
 
     _save(tmp_path)
@@ -1220,7 +1278,7 @@ async def test_try_fire_busy_skip_emits_fired_with_skipped_true(tmp_path, _isola
     await rt.fire("a1", source="manual")  # leaves an active paused run
     assert await rt.try_fire("a1", source="cron") is None
 
-    files = list(_isolate_telemetry_dir.glob("*.jsonl"))
+    files = list(_per_test_telemetry_dir.glob("*.jsonl"))
     events = [json.loads(line) for f in files for line in f.read_text(encoding="utf-8").strip().splitlines()]
     skipped = [e for e in events if e["type"] == "automations.fired" and e["data"].get("skipped") is True]
     assert len(skipped) == 1
@@ -1228,7 +1286,7 @@ async def test_try_fire_busy_skip_emits_fired_with_skipped_true(tmp_path, _isola
     assert skipped[0]["data"]["source"] == "cron"
 
 
-async def test_answer_nowait_continuation_binds_its_own_telemetry(tmp_path, _isolate_telemetry_dir):
+async def test_answer_nowait_continuation_binds_its_own_telemetry(tmp_path, _per_test_telemetry_dir):
     """_answer_continuation runs as a separate backgrounded task, outside
     answer_nowait's own bind-around-the-prologue scope (already unbound and
     returned by the time the caller sees the running record) — it must bind
@@ -1252,14 +1310,14 @@ async def test_answer_nowait_continuation_binds_its_own_telemetry(tmp_path, _iso
 
     await _drain()
 
-    files = list(_isolate_telemetry_dir.glob("*.jsonl"))
+    files = list(_per_test_telemetry_dir.glob("*.jsonl"))
     events = [json.loads(line) for f in files for line in f.read_text(encoding="utf-8").strip().splitlines()]
     event_types = [e["type"] for e in events]
     assert event_types.count("automations.run_finished") == 1
     assert event_types.count("automations.delivered") == 1
 
 
-async def test_try_fire_disabled_skip_emits_no_telemetry(tmp_path, _isolate_telemetry_dir):
+async def test_try_fire_disabled_skip_emits_no_telemetry(tmp_path, _per_test_telemetry_dir):
     """A disabled skip is silent — only the busy skip carries a signal, since
     disabled is a deliberate, already-visible configuration state rather than
     a race worth flagging."""
@@ -1269,12 +1327,12 @@ async def test_try_fire_disabled_skip_emits_no_telemetry(tmp_path, _isolate_tele
     rt, _ = _mk_runtime(tmp_path, [])
     assert await rt.try_fire("a1", source="cron") is None
 
-    files = list(_isolate_telemetry_dir.glob("*.jsonl"))
+    files = list(_per_test_telemetry_dir.glob("*.jsonl"))
     events = [json.loads(line) for f in files for line in f.read_text(encoding="utf-8").strip().splitlines()]
     assert events == []
 
 
-async def test_stuck_escalation_emits_automations_escalated(tmp_path, _isolate_telemetry_dir):
+async def test_stuck_escalation_emits_automations_escalated(tmp_path, _per_test_telemetry_dir):
     import json
 
     _save(tmp_path, life=Life(intent="x", max_attempts=1, on_stuck="notify"))
@@ -1282,7 +1340,7 @@ async def test_stuck_escalation_emits_automations_escalated(tmp_path, _isolate_t
     m = await rt.fire("a1", source="cron")
     assert m["status"] == "failed"
 
-    files = list(_isolate_telemetry_dir.glob("*.jsonl"))
+    files = list(_per_test_telemetry_dir.glob("*.jsonl"))
     events = [json.loads(line) for f in files for line in f.read_text(encoding="utf-8").strip().splitlines()]
     escalated = [e for e in events if e["type"] == "automations.escalated"]
     assert len(escalated) == 1
@@ -1430,7 +1488,7 @@ async def test_chain_depth_survives_the_busy_queue_drain_path_so_the_cap_still_b
     assert any("refused" in r.getMessage() for r in caplog.records)
 
 
-async def test_drained_chain_fire_records_source_chain_in_cause_and_telemetry(tmp_path, _isolate_telemetry_dir):
+async def test_drained_chain_fire_records_source_chain_in_cause_and_telemetry(tmp_path, _per_test_telemetry_dir):
     import json
 
     _save(tmp_path)
@@ -1457,7 +1515,7 @@ async def test_drained_chain_fire_records_source_chain_in_cause_and_telemetry(tm
     drained_run = next(r for r in runs if r["run_id"] not in (d["run_id"], d2["run_id"]))
     assert drained_run["cause"]["kind"] == "chain"
 
-    files = list(_isolate_telemetry_dir.glob("*.jsonl"))
+    files = list(_per_test_telemetry_dir.glob("*.jsonl"))
     events = [json.loads(line) for f in files for line in f.read_text(encoding="utf-8").strip().splitlines()]
     downstream_fired = [e for e in events if e["type"] == "automations.fired"
                         and e["data"].get("automation") == "downstream"]

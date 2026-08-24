@@ -309,7 +309,7 @@ should block for it:
   `answer` case), the only source of telemetry for the backgrounded case.
 
 **Stopping (`stop`)** ends a `running` or `paused` run on operator request; any other
-status is refused (`ValueError`, mapped to `400` by the service). The two active
+status is refused (`ValueError`, mapped to `422` by the service). The two active
 statuses end differently because only one of them has a workflow actually in flight:
 
 - **`running`** — registers the run's `workflow_run_id` with

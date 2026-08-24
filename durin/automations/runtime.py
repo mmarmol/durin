@@ -215,7 +215,7 @@ class AutomationsRuntime:
         finally:
             if token is not None:
                 reset_telemetry(token)
-        self._spawn(self._answer_continuation(spec, run_id, record, resume_text, chain_depth=0))
+        self._spawn(self._answer_continuation_guarded(spec, run_id, record, resume_text, chain_depth=0))
         return run_log.read_run(self._ws, name, run_id)
 
     def _answer_prologue(self, name: str, run_id: str, text: str, *,
@@ -299,6 +299,38 @@ class AutomationsRuntime:
             if token is not None:
                 reset_telemetry(token)
 
+    async def _answer_continuation_guarded(self, spec: AutomationSpec, run_id: str, record: dict,
+                                             resume_text: str, *, chain_depth: int) -> None:
+        """Thin wrapper `answer_nowait` backgrounds instead of
+        `_answer_continuation` directly. `answer()` still awaits
+        `_answer_continuation` inline so its exceptions keep propagating to
+        its own caller (existing behavior, existing tests) — this wrapper
+        exists only for the backgrounded path.
+
+        `_answer_continuation`'s own guard covers `self._exec` failing; it
+        has none for `_handle_result`/`_post_finish` raising afterward
+        (classify, a disk write, delivery, chain dispatch). Backgrounded via
+        `_spawn`, an exception escaping there would otherwise only ever
+        surface as asyncio's own untraceable "Task exception was never
+        retrieved" warning at GC time — and the run would stay
+        `status="running"` forever: `find_orphans` explicitly skips a
+        `running` manifest owned by a still-live process, so no sweep would
+        ever reclaim it, and a `single`-concurrency automation would refuse
+        every later trigger as busy. Mirrors `_chain_fire`/`_drain_fire`'s
+        own top-level guard.
+        """
+        try:
+            await self._answer_continuation(spec, run_id, record, resume_text, chain_depth=chain_depth)
+        except Exception as exc:  # noqa: BLE001 — must not go unlogged or leave the run stuck running
+            logger.exception("automations: backgrounded answer continuation for '{}' run {} failed",
+                              spec.name, run_id)
+            try:
+                run_log.finalize_run(self._ws, spec.name, run_id, status="failed", detail=str(exc),
+                                      workflow_run_id=record["workflow_run_id"])
+            except Exception:  # noqa: BLE001 — the finalize attempt itself must not go unlogged either
+                logger.exception("automations: failed to finalize '{}' run {} after continuation failure",
+                                  spec.name, run_id)
+
     async def stop(self, name: str, run_id: str, *, hard: bool = False) -> dict:
         token = _bind_automations_telemetry(name)
         try:
@@ -325,7 +357,14 @@ class AutomationsRuntime:
             # downgrades an already-hard request).
             from durin.workflow.cancellation import request_cancel
 
-            request_cancel(record["workflow_run_id"], hard=hard)
+            # `workflow_run_id` is None for the narrow window between
+            # start_run (writes "running" with it still unset) and the
+            # update_run that fills it in, just before `_exec` starts — a
+            # stop landing in exactly that window has nothing to cancel yet;
+            # registering a None key would be a no-op that never clears.
+            workflow_run_id = record.get("workflow_run_id")
+            if workflow_run_id:
+                request_cancel(workflow_run_id, hard=hard)
             return record
 
         if status == "paused":
@@ -335,6 +374,14 @@ class AutomationsRuntime:
                                         detail="stopped by operator",
                                         workflow_run_id=record["workflow_run_id"])
             claims.release_run(self._ws, name, run_id)
+            # _post_finish is skipped below, but it is also the only place
+            # automations.run_finished is normally emitted — emit it here
+            # too, or a stopped run reads as started-and-never-finished in
+            # the telemetry stream.
+            emit_tool_event("automations.run_finished", {
+                "automation": name, "run_id": run_id, "status": "interrupted",
+                "final_route_label": rec.get("final_route_label"),
+            })
             # Deliberately skips _post_finish: an operator stop is not an
             # outcome to deliver, and must not dispatch chains. But queue
             # draining is the one piece of _post_finish's housekeeping that
@@ -594,10 +641,12 @@ class AutomationsRuntime:
             return
         # source is always present: matcher._queue_event stamps it from the
         # triggering channel ("webhook" or "channel"), and a chain-originated
-        # event queued by _chain_fire's or _drain_fire's own busy handler
-        # sets it explicitly to "chain" — the "channel" fallback here only
-        # guards an event queued before that stamp existed. chain_depth
-        # defaults to 0 for an ordinary channel-queued event
+        # event queued by _chain_fire's own busy handler sets it explicitly
+        # to "chain" — _drain_fire's own busy handler instead re-pushes
+        # whatever source rode in unchanged (it re-queues an already-drained
+        # event, it does not originate one), so the "channel" fallback here
+        # only guards an event queued before the stamp existed at all.
+        # chain_depth defaults to 0 for an ordinary channel-queued event
         # (matcher._queue_event never sets it) — only a chain-originated
         # event sets it explicitly, and it must ride along so the resumed
         # fire picks up the same chain hop count instead of silently
