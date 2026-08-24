@@ -9,16 +9,6 @@ import { relativeTime } from "@/lib/format";
 import { useClient } from "@/providers/ClientProvider";
 import { cn } from "@/lib/utils";
 
-const ASK_CAP = 160;
-
-// Mirrors NeedsYouTray's own capText (webui/src/components/automations/NeedsYouTray.tsx)
-// — same shape, kept local rather than imported, the same precedent
-// RunHistory.tsx already set for this exact helper.
-function capText(text: string, max: number): string {
-  const trimmed = text.trim();
-  return trimmed.length > max ? `${trimmed.slice(0, max - 1)}…` : trimmed;
-}
-
 function errMsg(e: unknown): string {
   if (e instanceof ApiError) return e.detail ? `HTTP ${e.status}: ${e.detail}` : `HTTP ${e.status}`;
   return (e as Error).message;
@@ -57,6 +47,14 @@ export function InboxView({
 
   const isApproval = run.ask_kind === "approval";
   const commentEmpty = comment.trim() === "";
+  // _park (durin/automations/runtime.py) sets `proposal = ask` for the
+  // ordinary (non-counterpart) approval case — ask and proposal are the same
+  // string there, so showing both separately would just print the identical
+  // text twice. A counterpart-tagged approval always has `proposal: null`
+  // regardless of ask_kind, so this falls back to ask for that shape instead
+  // of rendering an empty quote. One body, sourced from whichever field
+  // actually carries content.
+  const proposalText = run.proposal ?? run.ask;
 
   async function submit(action: Action) {
     setSubmitting(action);
@@ -93,8 +91,7 @@ export function InboxView({
       <div className="flex flex-col gap-2.5 px-3.5 py-3">
         {isApproval ? (
           <>
-            {run.ask && <p className="text-[12.5px] text-muted-foreground">{capText(run.ask, ASK_CAP)}</p>}
-            {run.proposal && <div className={quoteCls}>{run.proposal}</div>}
+            {proposalText && <div className={quoteCls}>{proposalText}</div>}
             <Textarea
               value={comment}
               onChange={(e) => setComment(e.target.value)}

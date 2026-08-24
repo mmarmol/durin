@@ -49,10 +49,27 @@ function run(overrides: Partial<api.AutomationRun>): api.AutomationRun {
   };
 }
 
+// Faithful to the backend, not an independent guess: _park
+// (durin/automations/runtime.py) sets `proposal = ask if ask_kind ==
+// "approval" else None` for the ordinary (non-counterpart) case — ask and
+// proposal are literally the same string, not two different pieces of text.
+const APPROVAL_TEXT =
+  "Subject: Invoice FAC-1042 reminder — Hola Laura, te escribo por la factura FAC-1042, vencida el 12/08.";
+
 const APPROVAL: api.AutomationRun = run({
   ask_kind: "approval",
-  ask: "Send a reminder to client@acme.com about invoice FAC-1042, due 08/12",
-  proposal: "Subject: Invoice FAC-1042 reminder…",
+  ask: APPROVAL_TEXT,
+  proposal: APPROVAL_TEXT,
+});
+
+// A counterpart-tagged approval (the ask was directed at a specific thread
+// participant): _park's `is_counterpart` branch always sets `proposal: null`
+// there, regardless of ask_kind — only `ask` carries content in this shape.
+const APPROVAL_COUNTERPART: api.AutomationRun = run({
+  run_id: "r-fac-b",
+  ask_kind: "approval",
+  ask: "Approve sending the corrected reminder to the same recipient?",
+  proposal: null,
 });
 
 const QUESTION: api.AutomationRun = run({
@@ -66,12 +83,22 @@ const QUESTION: api.AutomationRun = run({
 // -- InboxView (direct) ------------------------------------------------------
 
 describe("InboxView", () => {
-  it("renders the automation name, capped ask text and the quoted proposal for an approval", () => {
+  it("renders the automation name and the proposal exactly once for an ordinary approval (ask and proposal are the same string, per _park)", () => {
     render(wrap(<InboxView run={APPROVAL} onResolved={() => {}} />));
 
     expect(screen.getByText("cobrar-fac-1042")).toBeInTheDocument();
-    expect(screen.getByText(/Send a reminder to client@acme.com/)).toBeInTheDocument();
-    expect(screen.getByText("Subject: Invoice FAC-1042 reminder…")).toBeInTheDocument();
+    // Not getByText: a duplicate-rendering regression must fail loudly with
+    // "found 2 elements", not silently pass because the first match happened
+    // to be the right one.
+    expect(screen.getAllByText(APPROVAL_TEXT)).toHaveLength(1);
+  });
+
+  it("falls back to the ask text in the quote when proposal is null (a counterpart-tagged approval)", () => {
+    render(wrap(<InboxView run={APPROVAL_COUNTERPART} onResolved={() => {}} />));
+
+    expect(
+      screen.getByText("Approve sending the corrected reminder to the same recipient?"),
+    ).toBeInTheDocument();
   });
 
   it("Aprobar posts action 'approve' with empty text and reports resolution", async () => {
@@ -185,7 +212,7 @@ describe("AutomationsView -> InboxView wiring", () => {
     render(wrap(<AutomationsView />));
 
     await user.click(await screen.findByRole("button", { name: "Review" }));
-    expect(await screen.findByText("Subject: Invoice FAC-1042 reminder…")).toBeInTheDocument();
+    expect(await screen.findByText(APPROVAL_TEXT)).toBeInTheDocument();
 
     const callsBefore = vi.mocked(api.listAllAutomationRuns).mock.calls.length;
     await user.click(screen.getByRole("button", { name: "Approve" }));
@@ -194,7 +221,7 @@ describe("AutomationsView -> InboxView wiring", () => {
       expect(vi.mocked(api.listAllAutomationRuns).mock.calls.length).toBeGreaterThan(callsBefore),
     );
     await waitFor(() =>
-      expect(screen.queryByText("Subject: Invoice FAC-1042 reminder…")).not.toBeInTheDocument(),
+      expect(screen.queryByText(APPROVAL_TEXT)).not.toBeInTheDocument(),
     );
     // The tray itself is also gone now — the run is no longer paused in the
     // (mocked) refreshed feed, and the tray hides entirely when nothing is
