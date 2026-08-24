@@ -67,6 +67,24 @@ def test_explicit_automations_wins_over_legacy_loops_per_field():
     assert cfg.loops.queue_ttl_s == 90
 
 
+def test_explicit_automations_default_value_is_not_clobbered_by_differing_legacy():
+    """The exact case that motivated `model_fields_set` over value comparison
+    on the migration validator: automations explicitly sets a field to the
+    SAME value as its schema default, while legacy loops sets that field to
+    something different. A naive "is automations.X still at its default?"
+    value check would misread the explicit default as "unset" and clobber it
+    with the legacy value — this pins the correct behavior (explicit wins)."""
+    cfg = Config.model_validate({
+        "loops": {"keep_runs": 5, "queue_ttl_s": 7200},
+        "automations": {"keep_runs": 20, "queue_ttl_s": 3600},
+    })
+    assert cfg.automations.keep_runs == 20
+    assert cfg.automations.queue_ttl_s == 3600
+    # loops stays untouched either way
+    assert cfg.loops.keep_runs == 5
+    assert cfg.loops.queue_ttl_s == 7200
+
+
 def test_no_migration_and_no_deprecation_log_when_neither_section_given(caplog):
     with caplog.at_level(logging.WARNING, logger="durin.config.schema"):
         cfg = Config()
