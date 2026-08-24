@@ -7,7 +7,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   return {
     ...actual,
-    listAllLoopRuns: vi.fn().mockResolvedValue([]),
+    listAllAutomationRuns: vi.fn().mockResolvedValue([]),
   };
 });
 
@@ -87,7 +87,7 @@ vi.mock("@/lib/durin-client", () => {
 });
 
 import App from "@/App";
-import { listAllLoopRuns } from "@/lib/api";
+import { listAllAutomationRuns } from "@/lib/api";
 
 describe("App layout", () => {
   beforeEach(() => {
@@ -97,7 +97,7 @@ describe("App layout", () => {
     createChatSpy.mockClear();
     deleteChatSpy.mockReset();
     toggleThemeSpy.mockReset();
-    (listAllLoopRuns as unknown as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue([]);
+    (listAllAutomationRuns as unknown as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue([]);
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
@@ -491,37 +491,23 @@ describe("App layout", () => {
     expect(await screen.findByRole("button", { name: /voice|start voice/i })).toBeInTheDocument();
   });
 
-  it("shows the loops needs-you badge when a run needs the operator", async () => {
-    (listAllLoopRuns as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([
+  it("shows the automations needs-you badge when a run is paused", async () => {
+    (listAllAutomationRuns as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([
       {
+        automation: "cobrar-fac-1042",
         run_id: "run-1",
-        loop: "loop-a",
-        status: "needs_operator",
-        source: "manual",
-        task: "task",
-        ask: null,
-        goal_reached: null,
+        status: "paused",
+        cause: { kind: "schedule", excerpt: "" },
+        ask: "Send the reminder?",
+        ask_kind: "approval",
         started_at: 0,
-        finished_at: null,
-        detail: null,
-        origin: null,
-        checks: null,
-        workflow_run_id: null,
       },
       {
+        automation: "cobrar-fac-1042",
         run_id: "run-2",
-        loop: "loop-a",
-        status: "waiting_info",
-        source: "manual",
-        task: "task",
-        ask: null,
-        goal_reached: null,
+        status: "running",
+        cause: { kind: "schedule", excerpt: "" },
         started_at: 0,
-        finished_at: null,
-        detail: null,
-        origin: null,
-        checks: null,
-        workflow_run_id: null,
       },
     ]);
 
@@ -529,19 +515,19 @@ describe("App layout", () => {
 
     await waitFor(() => expect(connectSpy).toHaveBeenCalled());
     const sidebar = screen.getByRole("navigation", { name: "Sidebar navigation" });
-    const loopsButton = within(sidebar).getByRole("button", { name: /Loops/ });
-    await waitFor(() => expect(within(loopsButton).getByText("1")).toBeInTheDocument());
+    const automationsButton = within(sidebar).getByRole("button", { name: /Automations/ });
+    await waitFor(() => expect(within(automationsButton).getByText("1")).toBeInTheDocument());
   });
 
-  it("hides the loops needs-you badge when no run needs the operator", async () => {
-    (listAllLoopRuns as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+  it("hides the automations needs-you badge when no run is paused", async () => {
+    (listAllAutomationRuns as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 
     render(<App />);
 
     await waitFor(() => expect(connectSpy).toHaveBeenCalled());
     const sidebar = screen.getByRole("navigation", { name: "Sidebar navigation" });
-    const loopsButton = within(sidebar).getByRole("button", { name: /Loops/ });
-    await waitFor(() => expect(listAllLoopRuns).toHaveBeenCalled());
-    expect(within(loopsButton).queryByText(/^\d+$/)).not.toBeInTheDocument();
+    const automationsButton = within(sidebar).getByRole("button", { name: /Automations/ });
+    await waitFor(() => expect(listAllAutomationRuns).toHaveBeenCalled());
+    expect(within(automationsButton).queryByText(/^\d+$/)).not.toBeInTheDocument();
   });
 });

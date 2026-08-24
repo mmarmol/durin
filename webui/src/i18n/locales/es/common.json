@@ -1326,6 +1326,68 @@
       "removeFilter": "Quitar filtro"
     }
   },
+  "automations": {
+    "title": "Automatizaciones",
+    "subtitle": "Trabajo que corre solo: qué lo dispara, qué workflow ejecuta y por dónde habla.",
+    "list": {
+      "new": "Nueva automatización",
+      "title": "Definiciones",
+      "count_one": "{{count}} automatización",
+      "count_other": "{{count}} automatizaciones",
+      "loading": "Cargando…",
+      "empty": "Todavía no hay automatizaciones — hacé clic en Nueva automatización para crear una.",
+      "runs": "corre",
+      "nextFire": "próxima: {{when}}",
+      "runningCount": "{{count}} corriendo",
+      "life": {
+        "achieved": "✓ lograda",
+        "stuck": "escalada",
+        "active": "activa",
+        "paused": "pausada",
+        "goal": "objetivo",
+        "goalAttempt": "objetivo · intento {{attempt}}/{{max}}",
+        "goalAttemptOpen": "objetivo · intento {{attempt}}"
+      },
+      "runStatus": {
+        "running": "corriendo",
+        "paused": "pausada",
+        "achieved": "lograda",
+        "completed": "completada",
+        "failed": "falló",
+        "rejected": "rechazada",
+        "interrupted": "interrumpida"
+      }
+    },
+    "chips": {
+      "everyDays_one": "cada día",
+      "everyDays_other": "cada {{count}} días",
+      "everyHours_one": "cada hora",
+      "everyHours_other": "cada {{count}} horas",
+      "everyMinutes_one": "cada minuto",
+      "everyMinutes_other": "cada {{count}} minutos",
+      "everySeconds_one": "cada segundo",
+      "everySeconds_other": "cada {{count}} segundos",
+      "scheduleAt": "una vez · {{when}}",
+      "scheduleCron": "cron",
+      "scheduleGeneric": "horario",
+      "webhook": "webhook · {{hook}}",
+      "chain": "tras {{name}}",
+      "channel_email": "Email",
+      "channel_telegram": "Telegram",
+      "channel_slack": "Slack",
+      "channel_discord": "Discord",
+      "channel_whatsapp": "WhatsApp"
+    },
+    "tray": {
+      "title": "Te necesita",
+      "pending_one": "{{count}} pendiente",
+      "pending_other": "{{count}} pendientes",
+      "approval": "aprobación",
+      "question": "pregunta",
+      "review": "Revisar",
+      "answer": "Responder"
+    }
+  },
   "skills": {
     "view": "Ver",
     "remove": "Eliminar",

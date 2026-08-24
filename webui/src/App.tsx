@@ -6,7 +6,7 @@ import { MemoryGraphView } from "@/components/MemoryGraphView";
 import { DreamView } from "@/components/DreamView";
 import { SkillsView } from "@/components/SkillsView";
 import { WorkflowsView } from "@/components/WorkflowsView";
-import { LoopsView } from "@/components/LoopsView";
+import { AutomationsView } from "@/components/AutomationsView";
 import { strandedRuns } from "@/components/workflows/RunsView";
 import { ToastProvider } from "@/components/ui/toast";
 import { SettingsView } from "@/components/settings/SettingsView";
@@ -20,7 +20,7 @@ import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { useSessions } from "@/hooks/useSessions";
 import { useTheme } from "@/hooks/useTheme";
 import { cn } from "@/lib/utils";
-import { listAllLoopRuns, listAllWorkflowRuns, setApiReauthHandler } from "@/lib/api";
+import { listAllAutomationRuns, listAllWorkflowRuns, setApiReauthHandler } from "@/lib/api";
 import { setCurrentToken } from "@/lib/http";
 import { deriveWsUrl, fetchBootstrap, signout } from "@/lib/bootstrap";
 import { DurinClient } from "@/lib/durin-client";
@@ -50,7 +50,7 @@ type BootState =
 const SIDEBAR_STORAGE_KEY = "durin-webui.sidebar";
 const RESTART_STARTED_KEY = "durin-webui.restartStartedAt";
 const SIDEBAR_WIDTH = 272;
-type ShellView = "chat" | "settings" | "memory_graph" | "skills" | "workflows" | "loops" | "dream";
+type ShellView = "chat" | "settings" | "memory_graph" | "skills" | "workflows" | "automations" | "dream";
 
 function AuthForm({
   failed,
@@ -333,7 +333,7 @@ function Shell({
   const [restartToast, setRestartToast] = useState<string | null>(null);
   const [isRestarting, setIsRestarting] = useState(false);
   const [strandedRunsCount, setStrandedRunsCount] = useState(0);
-  const [loopsNeedsYouCount, setLoopsNeedsYouCount] = useState(0);
+  const [automationsNeedsYouCount, setAutomationsNeedsYouCount] = useState(0);
 
   useEffect(() => {
     try {
@@ -479,8 +479,8 @@ function Shell({
     setMobileSidebarOpen(false);
   }, []);
 
-  const onOpenLoops = useCallback(() => {
-    setView("loops");
+  const onOpenAutomations = useCallback(() => {
+    setView("automations");
     setMobileSidebarOpen(false);
   }, []);
 
@@ -541,22 +541,23 @@ function Shell({
     };
   }, [token]);
 
-  // Poll the global loop run feed for the Loops sidebar button's needs-you
-  // badge count. Only needs_operator counts — waiting_info is a run paused
-  // for its own trigger source (e.g. a channel reply), not the operator.
+  // Poll the global automation run feed for the Automations sidebar button's
+  // needs-you badge count. A "paused" run is always parked on an approval or
+  // a question — the only reason durin/automations/runtime.py's `_park` ever
+  // sets that status — so every paused run belongs on this badge.
   useEffect(() => {
     let cancelled = false;
     const load = () => {
-      listAllLoopRuns(token)
+      listAllAutomationRuns(token)
         .then((runs) => {
           if (!cancelled) {
-            setLoopsNeedsYouCount(
-              runs.filter((run) => run.status === "needs_operator").length,
+            setAutomationsNeedsYouCount(
+              runs.filter((run) => run.status === "paused").length,
             );
           }
         })
         .catch(() => {
-          if (!cancelled) setLoopsNeedsYouCount(0);
+          if (!cancelled) setAutomationsNeedsYouCount(0);
         });
     };
     load();
@@ -650,9 +651,9 @@ function Shell({
     onOpenWorkflows,
     workflowsActive: view === "workflows",
     strandedRunsCount,
-    onOpenLoops,
-    loopsActive: view === "loops",
-    loopsNeedsYouCount,
+    onOpenAutomations,
+    automationsActive: view === "automations",
+    automationsNeedsYouCount,
     onOpenDream,
     dreamActive: view === "dream",
   };
@@ -764,9 +765,9 @@ function Shell({
             <WorkflowsView />
           </div>
         )}
-        {view === "loops" && (
+        {view === "automations" && (
           <div className="absolute inset-0 flex flex-col">
-            <LoopsView />
+            <AutomationsView />
           </div>
         )}
         {view === "dream" && (

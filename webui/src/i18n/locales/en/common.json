@@ -1591,6 +1591,68 @@
       "removeFilter": "Remove filter"
     }
   },
+  "automations": {
+    "title": "Automations",
+    "subtitle": "Work that runs on its own: what triggers it, what workflow it runs, and where it talks.",
+    "list": {
+      "new": "New automation",
+      "title": "Definitions",
+      "count_one": "{{count}} automation",
+      "count_other": "{{count}} automations",
+      "loading": "Loading…",
+      "empty": "No automations yet — click New automation to create one.",
+      "runs": "runs",
+      "nextFire": "next: {{when}}",
+      "runningCount": "{{count}} running",
+      "life": {
+        "achieved": "✓ achieved",
+        "stuck": "escalated",
+        "active": "active",
+        "paused": "paused",
+        "goal": "goal",
+        "goalAttempt": "goal · attempt {{attempt}}/{{max}}",
+        "goalAttemptOpen": "goal · attempt {{attempt}}"
+      },
+      "runStatus": {
+        "running": "running",
+        "paused": "paused",
+        "achieved": "achieved",
+        "completed": "completed",
+        "failed": "failed",
+        "rejected": "rejected",
+        "interrupted": "interrupted"
+      }
+    },
+    "chips": {
+      "everyDays_one": "every day",
+      "everyDays_other": "every {{count}} days",
+      "everyHours_one": "every hour",
+      "everyHours_other": "every {{count}} hours",
+      "everyMinutes_one": "every minute",
+      "everyMinutes_other": "every {{count}} minutes",
+      "everySeconds_one": "every second",
+      "everySeconds_other": "every {{count}} seconds",
+      "scheduleAt": "once · {{when}}",
+      "scheduleCron": "cron",
+      "scheduleGeneric": "schedule",
+      "webhook": "webhook · {{hook}}",
+      "chain": "after {{name}}",
+      "channel_email": "Email",
+      "channel_telegram": "Telegram",
+      "channel_slack": "Slack",
+      "channel_discord": "Discord",
+      "channel_whatsapp": "WhatsApp"
+    },
+    "tray": {
+      "title": "Needs you",
+      "pending_one": "{{count}} pending",
+      "pending_other": "{{count}} pending",
+      "approval": "approval",
+      "question": "question",
+      "review": "Review",
+      "answer": "Answer"
+    }
+  },
   "skills": {
     "view": "View",
     "remove": "Remove",
