@@ -16,6 +16,7 @@ from durin.service.workflows import (
     WorkflowGetQuery,
     WorkflowRunCommand,
     WorkflowRunResult,
+    WorkflowRunsListQuery,
     WorkflowSaveCommand,
     WorkflowScriptGetQuery,
     WorkflowScriptPutCommand,
@@ -490,6 +491,41 @@ async def test_session_runs_global_feed_carries_questions_on_needs_input(tmp_pat
         needs_input_node="gate"), root_session_key=None, started_at=1.0, finished_at=1.0)
     result = await svc.session_runs(WorkflowSessionRunsQuery(), p)
     assert result.runs[0]["questions"] == "which env?"
+
+
+@pytest.mark.asyncio
+async def test_session_runs_global_feed_carries_origin_ask_kind_route_label_and_rejected(tmp_path):
+    """The global feed route (no `session`) must expose origin/ask_kind/
+    final_route_label/rejected on each row — the webui tray/inbox filters
+    `origin?.startsWith("automation:")` and reads these without a second
+    per-run manifest fetch."""
+    svc, p = _svc(tmp_path), Principal.local()
+    run_log.finalize_run(tmp_path, "wf", WorkflowResult(
+        status="cancelled", final_output="no", runs=[], run_id="r1", rejected=True,
+        final_route_label="REJECTED"),
+        root_session_key="automation:digest", started_at=1.0, finished_at=1.0)
+    result = await svc.session_runs(WorkflowSessionRunsQuery(), p)
+    row = result.runs[0]
+    assert row["origin"] == "automation:digest"
+    assert row["rejected"] is True
+    assert row["final_route_label"] == "REJECTED"
+    assert row["ask_kind"] is None
+
+
+@pytest.mark.asyncio
+async def test_runs_list_route_carries_origin_ask_kind_route_label_and_rejected(tmp_path):
+    """Same fields on the per-workflow route (`…/{name}/runs`)."""
+    svc, p = _svc(tmp_path), Principal.local()
+    run_log.finalize_run(tmp_path, "wf", WorkflowResult(
+        status="needs_input", final_output="approve?", runs=[], run_id="r1",
+        needs_input_node="gate", ask_kind="approval"),
+        root_session_key="sess:1", started_at=1.0, finished_at=1.0)
+    result = await svc.runs_list(WorkflowRunsListQuery(name="wf"), p)
+    row = result.runs[0]
+    assert row["origin"] == "sess:1"
+    assert row["ask_kind"] == "approval"
+    assert row["rejected"] is False
+    assert row["final_route_label"] is None
 
 
 # --- list_scripts route: filenames under <workspace>/workflows/scripts/ -----

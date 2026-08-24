@@ -53,7 +53,7 @@ class MessageBus:
         """Register a handler run on every authorized inbound message, before
         it is enqueued.
 
-        fn(msg) returns truthy when it has consumed the message (e.g. loops'
+        fn(msg) returns truthy when it has consumed the message (e.g. automations'
         TriggerMatcher routing it to a claim wake or a fired run) — the
         message is then NOT enqueued. Interceptors run in registration order;
         the first truthy return wins and later interceptors are skipped. May

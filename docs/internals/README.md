@@ -68,7 +68,7 @@ indexes.
 ## 4. Subsystem dependencies
 
 The agent loop is the hub. The runner executes LLM and tool iterations for it;
-tools, MCP, memory, skills, and user-defined workflows and loops are the
+tools, MCP, memory, skills, and user-defined workflows and automations are the
 capabilities it reaches (voice adds a spoken I/O path over the websocket surface).
 Channels and the loop are decoupled by the message bus. Providers feed the runner. The API wraps a
 service layer that talks to the same core. Cron and dream are cold-path services
@@ -92,7 +92,7 @@ flowchart TB
         MCP["mcp client"]
         MEM["memory"]
         SKILLS["skills"]
-        WF["workflow / loops"]
+        WF["workflow / automations"]
     end
 
     subgraph coldpath["Cold path"]
@@ -172,7 +172,7 @@ End-to-end flow for a single inbound message:
 | MCP client | [mcp.md](mcp.md) | Connecting Model Context Protocol servers, exposing their tools, discovery and OAuth. |
 | Cron | [cron.md](cron.md) | Scheduled work: reminders and agent tasks, per-run isolated sessions, run history. |
 | Workflow engine | [workflow.md](workflow.md) | User-defined flow graphs: work/script/subworkflow/parallel nodes, routing, loop-back, per-node model/context/tools, the `run_workflow` tool. |
-| Loops | [loops.md](loops.md) | Goal-driven recurring work: firing a workflow on a trigger, verifying the result against a goal, escalation, and the `loops` tool. |
+| Automations | [automations.md](automations.md) | Standing triggers over workflows: schedule/channel/webhook/chain triggers, delivery/help routing, the life condition and single-case doctrine, chaining, migration from the retired loops subsystem. |
 | Jobs | [jobs.md](jobs.md) | The long-work registry: work too slow for a turn (local OCR of scanned PDFs today), per-unit resumable progress, restart reconciliation, the `tasks` tool and tray. |
 | Channels & bus | [channels.md](channels.md) | Chat surfaces, the async message bus, inbound/outbound routing and session keys. |
 | Voice | [voice.md](voice.md) | Conversational speech: gateway voice sessions, the STT→agent→TTS loop, spoken-rendition, the browser thin client. |

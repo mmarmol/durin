@@ -192,9 +192,10 @@ def _is_read_route(bound: BoundRoute) -> bool:
     """True for every GET route — query/path params, no request body.
 
     Classification is by HTTP verb alone, not by the route's declared scope:
-    a GET route's scope is usually ``:read`` but need not be (e.g. the loops
-    hooks-secret route is GET with a ``:write`` scope, since exposing the
-    webhook ingress secret is a more sensitive read than a normal listing);
+    a GET route's scope is usually ``:read`` but need not be (e.g. the
+    automations hooks-secret route is GET with a ``:write`` scope, since
+    exposing the webhook ingress secret is a more sensitive read than a
+    normal listing);
     the scope only gates access via ``principal.require()`` inside the
     handler, it does not change which handler builder parses the request.
     """
@@ -564,10 +565,11 @@ def build_gateway_http_app(
         static_token:     Static bearer token for ``/api/v1/*``.
         static_dist_path: If provided, serve the built SPA from this directory.
                           Falls back to ``channel._static_dist_path`` if None.
-        hook_dispatcher:  ``durin.loops.hooks.HookDispatcher`` for the webhook
-                          ingress route. ``None`` on surfaces without one (the
-                          route then reports 503 for any hook, same shape as
-                          the loops runtime's "not available" routes).
+        hook_dispatcher:  ``durin.automations.hooks.HookDispatcher`` for the
+                          webhook ingress route. ``None`` on surfaces without
+                          one (the route then reports 503 for any hook, same
+                          shape as the automations runtime's "not available"
+                          routes).
         agent_loop:       The live ``AgentLoop`` backing ``/v1/chat/completions``.
                           ``None`` leaves the whole ``/v1`` surface unmounted.
         model_name:       Model id reported by ``/v1/models`` and echoed in
@@ -703,7 +705,7 @@ def build_gateway_http_app(
         result = await hook_dispatcher.dispatch(request.path_params["hook"], payload)
         if result.get("result") == "no_match":
             return _problem_response(
-                NotFoundError(f"no enabled loop matches hook {request.path_params['hook']!r}")
+                NotFoundError(f"no enabled automation matches hook {request.path_params['hook']!r}")
             )
         return JSONResponse(result, status_code=202)
 

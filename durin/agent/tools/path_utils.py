@@ -13,13 +13,15 @@ WORKSPACE_BOUNDARY_NOTE = (
 
 # The write door each registry owns, keyed by the registry directory's name.
 # The refusal has to name the RIGHT door: a single hardcoded "use skill_publish"
-# message sent an agent trying to edit a loop definition off to the skills
-# workflow, which cost it several turns before it found `loops(action=…)`.
+# message sent an agent trying to edit an automation definition off to the
+# skills workflow, which cost it several turns before it found `automations(action=…)`.
 _REGISTRY_DOORS = {
     "skills": "author the skill under skill-drafts/<name>/ and run skill_publish",
     "workflows": ("use workflow_write / workflow_edit, or workflow_script_write "
                   "for workflows/scripts/"),
-    "loops": "use the loops tool — action='create' replaces an existing definition",
+    "automations": ("use the automations tool — action='create' replaces an existing "
+                     "definition, action='enable'/'pause' toggles it — or the webui's "
+                     "automations editor"),
 }
 
 

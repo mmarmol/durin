@@ -106,3 +106,24 @@ def test_loops_preset_ref_is_resolved() -> None:
     c.agents.aux_models.loops = AuxModelConfig(preset="fast")
     p = resolve_aux_preset(c, purpose="loops")
     assert p.model == "fast-model"
+
+
+def test_automations_returns_none_when_unconfigured() -> None:
+    # Mirrors loops: automations does NOT fall back to the default preset —
+    # None tells the caller to ride the live session model instead.
+    assert resolve_aux_preset(_real_cfg(), purpose="automations") is None
+
+
+def test_automations_aux_pair_is_honored_verbatim() -> None:
+    c = _real_cfg()
+    c.agents.aux_models.automations = AuxModelConfig(model="automations-model", provider="nvidia")
+    p = resolve_aux_preset(c, purpose="automations")
+    assert (p.model, p.provider) == ("automations-model", "nvidia")
+
+
+def test_automations_preset_ref_is_resolved() -> None:
+    c = _real_cfg()
+    c.model_presets["fast"] = c.resolve_default_preset().model_copy(update={"model": "fast-model"})
+    c.agents.aux_models.automations = AuxModelConfig(preset="fast")
+    p = resolve_aux_preset(c, purpose="automations")
+    assert p.model == "fast-model"

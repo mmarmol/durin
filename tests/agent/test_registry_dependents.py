@@ -1,10 +1,10 @@
 """Who references this? — the question nothing in the system could answer.
 
 Workflow work nodes name skills, script nodes name a file under
-workflows/scripts/, sub-flow nodes name another workflow, and a loop names the
-workflow it runs. Those edges are computable, but no code consulted them, so the
-dream could fuse away a skill a workflow depends on and leave the reference
-dangling.
+workflows/scripts/, sub-flow nodes name another workflow, and an automation
+names the workflow it runs. Those edges are computable, but no code consulted
+them, so the dream could fuse away a skill a workflow depends on and leave the
+reference dangling.
 """
 
 import json
@@ -19,11 +19,10 @@ def _workflow(ws, name, nodes):
         {"name": name, "start": nodes[0]["id"], "nodes": nodes}))
 
 
-def _loop(ws, name, workflow):
-    d = ws / "loops"
+def _automation(ws, name, workflow):
+    d = ws / "automations"
     d.mkdir(parents=True, exist_ok=True)
-    (d / f"{name}.json").write_text(json.dumps(
-        {"name": name, "workflow": workflow, "goal": {"intent": "x"}}))
+    (d / f"{name}.json").write_text(json.dumps({"name": name, "workflow": workflow}))
 
 
 def test_finds_the_workflow_node_that_names_a_skill(tmp_path):
@@ -43,15 +42,36 @@ def test_finds_the_workflow_node_that_runs_a_script(tmp_path):
     assert [(d.kind, d.name, d.via) for d in deps] == [("workflow", "triage", "script")]
 
 
-def test_finds_the_subflow_caller_and_the_loop(tmp_path):
+def test_finds_the_subflow_caller(tmp_path):
     _workflow(tmp_path, "child", [{"id": "a", "kind": "work"}])
     _workflow(tmp_path, "parent", [{"id": "s", "kind": "subworkflow", "workflow": "child"}])
-    _loop(tmp_path, "nightly", "child")
+
+    deps = dependents_of(tmp_path, workflow="child")
+
+    assert [(d.kind, d.name, d.via) for d in deps] == [("workflow", "parent", "subworkflow")]
+
+
+def test_finds_the_automation_that_runs_a_workflow(tmp_path):
+    _workflow(tmp_path, "child", [{"id": "a", "kind": "work"}])
+    _automation(tmp_path, "morning-digest", "child")
+
+    deps = dependents_of(tmp_path, workflow="child")
+
+    assert [(d.kind, d.name, d.via, d.where) for d in deps] == [
+        ("automation", "morning-digest", "workflow", "")]
+
+
+def test_finds_the_subflow_caller_and_the_automation_together(tmp_path):
+    _workflow(tmp_path, "child", [{"id": "a", "kind": "work"}])
+    _workflow(tmp_path, "parent", [{"id": "s", "kind": "subworkflow", "workflow": "child"}])
+    _automation(tmp_path, "morning-digest", "child")
 
     deps = dependents_of(tmp_path, workflow="child")
 
     assert {(d.kind, d.name, d.via) for d in deps} == {
-        ("workflow", "parent", "subworkflow"), ("loop", "nightly", "workflow")}
+        ("workflow", "parent", "subworkflow"),
+        ("automation", "morning-digest", "workflow"),
+    }
 
 
 def test_an_unreferenced_artifact_has_no_dependents(tmp_path):

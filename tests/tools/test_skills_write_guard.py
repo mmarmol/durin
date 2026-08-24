@@ -106,16 +106,17 @@ async def test_write_tool_guard_registry_dirs_false_allows_isolated_staging_writ
     [
         ("skills", "skills/x/SKILL.md", "skill_publish"),
         ("workflows", "workflows/x.json", "workflow_write"),
-        ("loops", "loops/x.json", "loops tool"),
+        ("automations", "automations/x.json", "automations tool"),
     ],
 )
 def test_refusal_names_the_registry_that_actually_blocked(tmp_path, registry, path, door):
     """The refusal has to point at the right door. One hardcoded "use
-    skill_publish" message sent an agent editing a loop definition into the
-    skills workflow, costing it several turns before it found `loops(action=…)`.
+    skill_publish" message sent an agent editing a registry definition into
+    the skills workflow, costing it several turns before it found the right
+    tool.
     """
     ws = tmp_path
-    denied = [ws / d for d in ("skills", "workflows", "loops")]
+    denied = [ws / d for d in ("skills", "workflows", "automations")]
     with pytest.raises(PermissionError) as exc:
         resolve_workspace_path(path, ws, allowed_dir=ws, denied_subdirs=denied)
     message = str(exc.value)

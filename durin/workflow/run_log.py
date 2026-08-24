@@ -555,7 +555,14 @@ def typical_total_duration(
 
 def list_runs(workspace: str | Path, name: str, limit: int = 20) -> list[dict]:
     """Newest-first manifest summaries for one workflow — the run-history listing.
-    Full manifests stay one read away via read_manifest."""
+    Full manifests stay one read away via read_manifest.
+
+    ``origin`` is the manifest's ``root_session_key`` under the name the webui's
+    tray/inbox filters on (e.g. distinguishing an `automation:<name>` origin from
+    an interactive session). ``ask_kind``, ``final_route_label``, and ``rejected``
+    ride along too, so a caller building a feed row no longer needs the full
+    manifest just to tell an approval pause from a question pause, read which
+    verdict ended a run, or know a cancelled run was an explicit rejection."""
     d = _wf_dir(workspace, name)
     if not d.is_dir():
         return []
@@ -575,6 +582,10 @@ def list_runs(workspace: str | Path, name: str, limit: int = 20) -> list[dict]:
             "task": (rec.get("task") or "")[:200],
             "needs_input_node": rec.get("needs_input_node"),
             "parent_run_id": rec.get("parent_run_id"),
+            "origin": rec.get("root_session_key"),
+            "ask_kind": rec.get("ask_kind"),
+            "final_route_label": rec.get("final_route_label"),
+            "rejected": rec.get("rejected", False),
         })
     out.sort(key=lambda r: r.get("started_at") or 0.0, reverse=True)
     return out[:max(1, int(limit))]

@@ -27,7 +27,7 @@ def build_service_registry(
     mcp_runtime: Any = None,
     subagent_manager: Any = None,
     channel_manager: Any = None,
-    loops_runtime: Any = None,
+    automations_runtime: Any = None,
     tool_registry_resolver: Callable[[], Any] | None = None,
     on_config_changed: Callable[[], None] | None = None,
     on_default_changed: Callable[[], None] | None = None,
@@ -59,13 +59,15 @@ def build_service_registry(
     what the running agent can call; surfaces without a loop leave it ``None`` and
     the catalog falls back to loader discovery (core built-ins only).
 
-    ``loops_runtime`` is optional: the unified gateway passes the live
-    ``LoopsRuntime`` so ``LoopsService`` can fire/answer runs; surfaces
-    without one leave it ``None`` and those two routes report unavailable.
+    ``automations_runtime`` is optional: the unified gateway passes the live
+    ``AutomationsRuntime`` so ``AutomationsService`` can fire/answer runs;
+    surfaces without one (the websocket channel's shim registry) leave it
+    ``None`` and those two routes report unavailable.
     """
     from durin.jobs.registry import JobRegistry
     from durin.security.api_tokens import ApiTokenStore
     from durin.service.auth import AuthService
+    from durin.service.automations import AutomationsService
     from durin.service.channels_discord import DiscordService
     from durin.service.channels_post import ChannelPostService
     from durin.service.channels_runtime import ChannelsRuntimeService
@@ -76,7 +78,6 @@ def build_service_registry(
     from durin.service.config import ConfigService
     from durin.service.cron import CronService
     from durin.service.health import HealthService
-    from durin.service.loops import LoopsService
     from durin.service.mcp import McpService
     from durin.service.memory import MemoryService
     from durin.service.modes import ModesService
@@ -112,7 +113,7 @@ def build_service_registry(
         cron_service=cron_service,
         bus=bus,
         channel_manager=channel_manager,
-        loops_runtime=loops_runtime,
+        automations_runtime=automations_runtime,
     )
     registry.register("secrets", SecretsService())
     registry.register("cron", CronService(cron_scheduler=cron_service))
@@ -149,8 +150,8 @@ def build_service_registry(
     registry.register("tasks", TasksService(
         workspace=_workspace(), subagent_manager=subagent_manager,
         sessions=session_manager, jobs=JobRegistry()))
-    registry.register("loops", LoopsService(
-        workspace=_workspace(), cron_service=cron_service, runtime=loops_runtime,
+    registry.register("automations", AutomationsService(
+        workspace=_workspace(), cron_service=cron_service, runtime=automations_runtime,
         hooks_secret=lambda: ApiTokenStore().get_or_create_hooks_secret()))
 
     # Crash recovery: the gateway is the long-lived process, so its boot is the natural
@@ -166,21 +167,20 @@ def build_service_registry(
     except Exception:  # noqa: BLE001 - crash reconciliation is best-effort
         pass
 
-    # Loop-run reconciliation is NOT here: an orphaned loop run has to be
+    # Automation-run reconciliation is NOT here: an orphaned run has to be
     # reported to whoever fired it and, when no work had started, relaunched —
     # neither of which a file-only sweep thread can do. The gateway starts an
-    # async sweep on its LoopsRuntime instead.
+    # async sweep on its AutomationsRuntime instead.
 
     # Sweep stale claims (a thread-to-waiting-run mapping released on the
     # normal answer path) that were never released, e.g. the process died
-    # before a run reached waiting_info's release or the counterpart just
-    # never replied. Claims are conversation-scoped, not tied to any
-    # queue_ttl_s config knob, so a flat week-long constant bounds them
-    # instead.
+    # before a run reached its release or the counterpart just never
+    # replied. Claims are conversation-scoped, not tied to any queue_ttl_s
+    # config knob, so a flat week-long constant bounds them instead.
     try:
-        from durin.loops import claims as loops_claims
+        from durin.automations import claims as automations_claims
 
-        loops_claims.prune(_workspace(), max_age_s=7 * 24 * 3600)
+        automations_claims.prune(_workspace(), max_age_s=7 * 24 * 3600)
     except Exception:  # noqa: BLE001 - best-effort sweep
         pass
 

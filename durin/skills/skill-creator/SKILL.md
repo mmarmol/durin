@@ -47,11 +47,12 @@ authoring a skill — the default is **not** "a skill":
   steps — the things one prompt handles badly. Use durin's workflow engine, not a skill;
   read the `workflows` skill. Do **not** write a skill that merely narrates a multi-step
   process that should be a workflow.
-- **A loop** — when it is a *standing* objective that events should keep re-activating:
-  fire on matching messages or webhooks, verify a goal each run, park for replies, escalate
-  when stuck. That is durin's loops feature (a workflow body + triggers + a verifiable
-  goal), not a skill; read the `loops` skill. Do **not** write a skill that narrates a
-  monitoring/handling procedure a loop should own.
+- **An automation** — when it is a *standing* objective that events should keep
+  re-activating: fire on a schedule, matching messages, webhooks, or another automation's
+  outcome, deliver the result, optionally pursue a verifiable **life** condition until
+  achieved. That is durin's automations feature (a workflow body + triggers + delivery +
+  an optional life condition), not a skill; read the `automations` skill. Do **not** write
+  a skill that narrates a monitoring/handling procedure an automation should own.
 - **A skill (prose)** — when it is reusable knowledge or runtime judgment the agent applies
   itself: domain facts, conventions, a decision procedure, when-to-do-what guidance.
 

@@ -7,17 +7,20 @@ here to a full ``ModelPresetConfig`` (provider + model + endpoint + key):
 1. Purpose override — ``agents.aux_models.memory`` (a preset ref or an inline
    model+provider pair) for ``purpose="memory"``; ``skills.security.llm_judge``
    (model + provider) for ``purpose="judge"``; ``agents.aux_models.loops`` for
-   ``purpose="loops"``.
+   ``purpose="loops"``; ``agents.aux_models.automations`` for
+   ``purpose="automations"``.
 2. ``memory.dream.model_override`` (DEPRECATED, memory purpose only) — a bare
    name, placed by provider auto-detection from the name.
 3. The user's default preset.
 
-``purpose="loops"`` is the one exception to "never returns None" below: loops'
-per-message trigger filter and goal-judge calls are meant to ride whatever
-model is live in the interactive session by default (not a separately
-resolved default preset that could lag a live ``/model`` switch), so an
-unconfigured ``aux_models.loops`` resolves to ``None`` and the caller passes
-that straight through as "no override" to ``AgentLoop.process_direct``.
+``purpose="loops"`` and ``purpose="automations"`` are the two exceptions to
+"never returns None" below: their per-message trigger filter calls (loops'
+goal-judge call too) are meant to ride whatever model is live in the
+interactive session by default (not a separately resolved default preset
+that could lag a live ``/model`` switch), so an unconfigured
+``aux_models.loops`` / ``aux_models.automations`` resolves to ``None`` and
+the caller passes that straight through as "no override" to
+``AgentLoop.process_direct``.
 
 When a knob names a model without a provider (or with ``"auto"``), the
 provider is detected from the model name among the CONFIGURED providers — the
@@ -68,15 +71,16 @@ def resolve_aux_preset(app_config: Any, *, purpose: str):
 
     NEVER returns a hardcoded model: the invoke builds the provider from this,
     so the call runs on the user's own provider / endpoint / key. ``purpose``
-    is ``"memory"``, ``"judge"``, or ``"loops"``. ``"loops"`` is the only
-    purpose that can return ``None`` (see the module docstring) — every other
-    purpose falls back to the whole default preset instead.
+    is ``"memory"``, ``"judge"``, ``"loops"``, or ``"automations"``. ``"loops"``
+    and ``"automations"`` are the only purposes that can return ``None`` (see
+    the module docstring) — every other purpose falls back to the whole
+    default preset instead.
     """
     default = app_config.resolve_default_preset()
 
-    if purpose == "loops":
+    if purpose in ("loops", "automations"):
         try:
-            aux = app_config.agents.aux_models.loops
+            aux = getattr(app_config.agents.aux_models, purpose)
         except AttributeError:
             aux = None
         if aux is None:

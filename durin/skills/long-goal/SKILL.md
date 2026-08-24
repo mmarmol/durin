@@ -14,8 +14,8 @@ Use these tools when the user wants **multi-turn sustained work** on **one** cle
 
 > **Boundary:** `long_task` keeps a goal visible **inside this conversation** — the user is
 > present and collaborating. If the objective should live **outside** any chat — fire on
-> events, verify a goal per run, wait for external replies, escalate when stuck — that is a
-> **loop** (read the `loops` skill), not a `long_task`.
+> events, pursue a life condition until it's achieved, wait for external replies, escalate
+> when stuck — that is an **automation** (read the `automations` skill), not a `long_task`.
 
 ## Start fast
 

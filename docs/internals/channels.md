@@ -280,21 +280,21 @@ interceptors are skipped. A falsy return lets the message fall through to the
 next interceptor, and eventually to the normal inbound queue, unconsumed. An
 interceptor may be sync or async. An exception raised by an interceptor is
 caught and logged; the message is never dropped on that error, it simply
-continues past the interceptor as if it had returned falsy. The [loops](loops.md)
-subsystem's `TriggerMatcher.handle_inbound` is the only consumer: it wakes a
-claim-waiting loop run or fires a newly
-matched loop trigger, consuming the message so it never reaches the agent as a
-normal turn.
+continues past the interceptor as if it had returned falsy. The automations
+subsystem's `TriggerMatcher.handle_inbound` (`durin/automations/matcher.py`)
+is the only consumer: it wakes a claim-waiting automation run or fires a
+newly matched automation trigger, consuming the message so it never reaches
+the agent as a normal turn.
 
 **Trigger-only messages.** `InboundMessage.trigger_only` marks a message that
-may fire loop triggers but must never become a conversation — an app posting
-alerts into a room. It runs the authorizer gate and the interceptors like any
-other message; the difference is at the end of `publish_inbound`, where an
-unconsumed trigger-only message is **dropped instead of enqueued**. Without
-that, a notification no loop happened to match would land in the agent's queue
-and be answered in the room, turning every app post into a conversation nobody
-asked for. Such messages also skip the `_wants_stream` flag, since nothing is
-waiting on a streamed reply.
+may fire automation triggers but must never become a conversation — an app
+posting alerts into a room. It runs the authorizer gate and the interceptors
+like any other message; the difference is at the end of `publish_inbound`,
+where an unconsumed trigger-only message is **dropped instead of enqueued**.
+Without that, a notification no automation happened to match would land in
+the agent's queue and be answered in the room, turning every app post into a
+conversation nobody asked for. Such messages also skip the `_wants_stream`
+flag, since nothing is waiting on a streamed reply.
 
 The channel contract is to be **pure transport**: publish unconditionally with
 `is_dm` set and let the gate authorize — a channel should NOT re-implement
@@ -322,7 +322,7 @@ Slack additionally treats an app's post (the `bot_message` subtype, or a
 `bot_id` alongside a real user id) as an event rather than an address to
 durin: `group_policy` is skipped for it, because that policy governs joining a
 conversation and a mention-only room would otherwise hide every notification
-from loop triggers. What contains these is authorization — an app must be
+from automation triggers. What contains these is authorization — an app must be
 approved like any other sender — plus `trigger_only`, which keeps an
 unmatched post from reaching the agent. Slack posts them without the working
 reaction, without thread context, and with the attachment's `footer` and
@@ -465,8 +465,8 @@ against `BaseChannel.send_delta`).
 `send` returns a `SendReceipt` (`durin/bus/events.py`, frozen, single field
 `thread_key: str | None`) identifying the thread the send landed in, so a
 caller can later register a claim that a reply into that thread should wake.
-`thread_key` follows the same per-channel vocabulary the inbound loop matcher
-keys claims on (see "Per-channel thread-key semantics" in `loops.md`):
+`thread_key` follows the same per-channel vocabulary the inbound automations
+matcher keys claims on (`durin/automations/channel_meta.py`'s `InboundFacts.thread_key`):
 
 - **Slack** — `slack:<chat_id>:<ts>`: the existing `thread_ts` when the send
   replies into one, else the ts of whatever message now carries the first

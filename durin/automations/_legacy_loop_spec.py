@@ -1,0 +1,253 @@
+"""Frozen copy of the deleted loops package's own definition parser, kept ONLY so
+``durin.automations.migrate.migrate_loops`` can still read a pre-existing
+``<workspace>/loops/*.json`` file after the loops package itself was deleted
+at the automations cutover. Never extend this for new functionality — it
+exists purely to parse an on-disk shape that predates automations and cannot
+change; a new capability belongs in ``durin.automations.spec`` instead.
+
+A loop bound triggers to a workflow body and a verifiable goal; the workflow
+was referenced by name only, never touching workflow-engine semantics.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from typing import Literal
+
+from loguru import logger
+
+from durin.automations.channel_meta import CHANNEL_FILTER_KEYS
+
+_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+_SCHEDULE_KINDS = {"at", "every", "cron"}
+_SCHEDULE_ALLOWED_KEYS = {
+    "cron": {"kind", "expr", "tz"},
+    "every": {"kind", "every_ms"},
+    "at": {"kind", "at_ms"},
+}
+_CHANNEL_ONLY_FIELDS = {"channel", "filters", "semantic", "match", "hook", "correlate"}
+_CHANNEL_KINDS = {"email", "telegram", "slack", "discord", "whatsapp"}
+_CHANNEL_MATCH_MODES = {"wake_or_new", "always_new"}
+_WEBHOOK_ONLY_FIELDS = {"hook"}
+_WEBHOOK_FORBIDDEN_FIELDS = {"schedule", "channel", "filters", "match"}
+
+
+class LoopError(ValueError):
+    """Malformed loop definition."""
+
+
+@dataclass(frozen=True)
+class GoalCheck:
+    kind: Literal["script", "assertion"]
+    required: bool
+    command: str | None = None  # script: shell command, exit 0 = pass
+    text: str | None = None     # assertion: sentence judged against evidence
+
+
+@dataclass(frozen=True)
+class LoopTrigger:
+    source: Literal["cron", "channel", "webhook"]
+    schedule: dict = field(default_factory=dict)  # CronSchedule-shaped: kind/at_ms/every_ms/expr/tz
+    channel: str | None = None  # channel trigger only: email/telegram/slack/discord/whatsapp
+    filters: dict = field(default_factory=dict)  # channel trigger only: open key->value map
+    semantic: str | None = None  # channel or webhook trigger: optional model-judged condition
+    match: Literal["wake_or_new", "always_new"] = "wake_or_new"  # channel trigger only
+    hook: str | None = None  # webhook trigger only: the hook name that fires this trigger
+    correlate: str | None = None  # channel or webhook trigger: optional single-capture-group regex
+
+
+@dataclass(frozen=True)
+class LoopSpec:
+    name: str
+    workflow: str
+    goal_intent: str
+    checks: tuple[GoalCheck, ...] = ()
+    checks_sufficient: bool = False
+    triggers: tuple[LoopTrigger, ...] = ()
+    enabled: bool = True
+    concurrency: Literal["single", "parallel"] = "single"
+    stuck_after: int = 3
+    operator_channel: str | None = None
+    operator_to: str | None = None
+
+
+def _parse_check(raw: dict, i: int) -> GoalCheck:
+    kind = raw.get("kind")
+    if kind not in ("script", "assertion"):
+        raise LoopError(f"check[{i}]: kind must be 'script' or 'assertion'")
+    required = bool(raw.get("required", True))
+    command = raw.get("command")
+    text = raw.get("text")
+    if kind == "script" and not (isinstance(command, str) and command.strip()):
+        raise LoopError(f"check[{i}]: script check needs a non-empty 'command'")
+    if kind == "assertion" and not (isinstance(text, str) and text.strip()):
+        raise LoopError(f"check[{i}]: assertion check needs a non-empty 'text'")
+    return GoalCheck(kind=kind, required=required, command=command, text=text)
+
+
+def _parse_trigger(raw: dict, i: int) -> LoopTrigger:
+    source = raw.get("source")
+    if source not in ("cron", "channel", "webhook"):
+        raise LoopError(f"trigger[{i}]: source must be 'cron', 'channel', or 'webhook'")
+    if source == "channel":
+        return _parse_channel_trigger(raw, i)
+    if source == "webhook":
+        return _parse_webhook_trigger(raw, i)
+
+    present = _CHANNEL_ONLY_FIELDS & set(raw)
+    if present:
+        raise LoopError(f"trigger[{i}]: cron trigger cannot set {sorted(present)}")
+    sched = raw.get("schedule") or {}
+    kind = sched.get("kind")
+    if kind not in _SCHEDULE_KINDS:
+        raise LoopError(f"trigger[{i}]: schedule.kind must be one of {sorted(_SCHEDULE_KINDS)}")
+    unknown = set(sched) - _SCHEDULE_ALLOWED_KEYS[kind]
+    if unknown:
+        raise LoopError(
+            f"trigger[{i}]: unknown schedule key(s) {sorted(unknown)} for kind {kind!r}"
+        )
+    if kind == "cron":
+        expr = sched.get("expr")
+        if not isinstance(expr, str) or not expr.strip():
+            raise LoopError(f"trigger[{i}]: cron schedule requires a non-empty 'expr'")
+        try:
+            from croniter import croniter
+        except ImportError:
+            croniter = None  # type: ignore[assignment]
+        if croniter is not None:
+            try:
+                croniter(expr)
+            except (ValueError, KeyError) as exc:
+                raise LoopError(f"trigger[{i}]: invalid cron expression {expr!r}: {exc}") from None
+        tz = sched.get("tz")
+        if tz is not None:
+            try:
+                from zoneinfo import ZoneInfo
+
+                ZoneInfo(tz)
+            except Exception:
+                raise LoopError(f"trigger[{i}]: unknown timezone {tz!r}") from None
+    elif kind == "every":
+        every_ms = sched.get("every_ms")
+        if not isinstance(every_ms, int) or isinstance(every_ms, bool) or every_ms < 1:
+            raise LoopError(f"trigger[{i}]: 'every' schedule requires integer every_ms >= 1")
+    elif kind == "at":
+        at_ms = sched.get("at_ms")
+        if not isinstance(at_ms, int) or isinstance(at_ms, bool) or at_ms < 1:
+            raise LoopError(f"trigger[{i}]: 'at' schedule requires integer at_ms >= 1")
+    return LoopTrigger(source="cron", schedule=dict(sched))
+
+
+def _parse_correlate(raw: dict, i: int) -> str | None:
+    correlate = raw.get("correlate")
+    if correlate is None:
+        return None
+    if not isinstance(correlate, str) or not correlate.strip():
+        raise LoopError(f"trigger[{i}]: correlate must be a non-empty string if set")
+    try:
+        pattern = re.compile(correlate)
+    except re.error:
+        raise LoopError(f"trigger[{i}]: correlate must be a regex with exactly one capture group") from None
+    if pattern.groups != 1:
+        raise LoopError(f"trigger[{i}]: correlate must be a regex with exactly one capture group")
+    return correlate
+
+
+def _parse_channel_trigger(raw: dict, i: int) -> LoopTrigger:
+    if "schedule" in raw:
+        raise LoopError(f"trigger[{i}]: channel trigger cannot set 'schedule'")
+    present = _WEBHOOK_ONLY_FIELDS & set(raw)
+    if present:
+        raise LoopError(f"trigger[{i}]: channel trigger cannot set {sorted(present)}")
+    channel = raw.get("channel")
+    if channel not in _CHANNEL_KINDS:
+        raise LoopError(f"trigger[{i}]: channel must be one of {sorted(_CHANNEL_KINDS)}")
+    filters = raw.get("filters") or {}
+    if not isinstance(filters, dict):
+        raise LoopError(f"trigger[{i}]: filters must be an object")
+    undeclared = set(filters) - CHANNEL_FILTER_KEYS.get(channel, frozenset())
+    if undeclared:
+        logger.warning(
+            "migrate: legacy loop trigger[{}] filters on {} which the {} channel never populates; "
+            "this trigger would never have matched",
+            i,
+            sorted(undeclared),
+            channel,
+        )
+    for key, value in filters.items():
+        if not isinstance(value, str) or not value.strip():
+            raise LoopError(f"trigger[{i}]: filter {key!r} must be a non-empty string")
+    semantic = raw.get("semantic")
+    if semantic is not None and not (isinstance(semantic, str) and semantic.strip()):
+        raise LoopError(f"trigger[{i}]: semantic must be a non-empty string if set")
+    match = raw.get("match", "wake_or_new")
+    if match not in _CHANNEL_MATCH_MODES:
+        raise LoopError(f"trigger[{i}]: match must be one of {sorted(_CHANNEL_MATCH_MODES)}")
+    correlate = _parse_correlate(raw, i)
+    return LoopTrigger(
+        source="channel",
+        channel=channel,
+        filters=dict(filters),
+        semantic=semantic,
+        match=match,
+        correlate=correlate,
+    )
+
+
+def _parse_webhook_trigger(raw: dict, i: int) -> LoopTrigger:
+    present = _WEBHOOK_FORBIDDEN_FIELDS & set(raw)
+    if present:
+        raise LoopError(f"trigger[{i}]: webhook trigger cannot set {sorted(present)}")
+    hook = raw.get("hook")
+    if not isinstance(hook, str) or not _NAME_RE.match(hook):
+        raise LoopError(f"trigger[{i}]: hook must match ^[a-z0-9][a-z0-9_-]{{0,63}}$")
+    semantic = raw.get("semantic")
+    if semantic is not None and not (isinstance(semantic, str) and semantic.strip()):
+        raise LoopError(f"trigger[{i}]: semantic must be a non-empty string if set")
+    correlate = _parse_correlate(raw, i)
+    return LoopTrigger(source="webhook", hook=hook, semantic=semantic, correlate=correlate)
+
+
+def parse_loop(data: dict) -> LoopSpec:
+    if not isinstance(data, dict):
+        raise LoopError("loop definition must be an object")
+    name = data.get("name")
+    if not isinstance(name, str) or not _NAME_RE.match(name):
+        raise LoopError("name must match ^[a-z0-9][a-z0-9_-]{0,63}$")
+    workflow = data.get("workflow")
+    if not isinstance(workflow, str) or not workflow.strip():
+        raise LoopError("workflow is required")
+    goal = data.get("goal") or {}
+    intent = goal.get("intent")
+    if not isinstance(intent, str) or not intent.strip():
+        raise LoopError("goal.intent is required")
+    checks = tuple(_parse_check(c, i) for i, c in enumerate(goal.get("checks") or []))
+    checks_sufficient = bool(goal.get("checks_sufficient", False))
+    if checks_sufficient:
+        if any(c.kind == "assertion" for c in checks):
+            raise LoopError("goal.checks_sufficient requires all checks to be scripts, not assertions")
+        if not any(c.required for c in checks):
+            raise LoopError("goal.checks_sufficient requires at least one required check")
+    triggers = tuple(_parse_trigger(t, i) for i, t in enumerate(data.get("triggers") or []))
+    concurrency = data.get("concurrency", "single")
+    if concurrency not in ("single", "parallel"):
+        raise LoopError("concurrency must be 'single' or 'parallel'")
+    stuck_after = data.get("stuck_after", 3)
+    if isinstance(stuck_after, bool) or not isinstance(stuck_after, int) or stuck_after < 1:
+        raise LoopError("stuck_after must be an integer >= 1")
+    operator_channel = data.get("operator_channel") or None
+    operator_to = data.get("operator_to") or None
+    return LoopSpec(
+        name=name,
+        workflow=workflow.strip(),
+        goal_intent=intent.strip(),
+        checks=checks,
+        checks_sufficient=checks_sufficient,
+        triggers=triggers,
+        enabled=bool(data.get("enabled", True)),
+        concurrency=concurrency,
+        stuck_after=stuck_after,
+        operator_channel=operator_channel,
+        operator_to=operator_to,
+    )

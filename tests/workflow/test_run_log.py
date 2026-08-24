@@ -308,6 +308,41 @@ def test_list_runs_caps_task_at_200_chars(tmp_path):
     assert len(got[0]["task"]) == 200
 
 
+def test_list_runs_carries_origin_ask_kind_final_route_label_and_rejected(tmp_path):
+    """A summary row must expose enough to distinguish an approval pause from a
+    question pause, read which verdict ended a run, know a cancelled run was an
+    explicit rejection, and filter by origin (the tray/inbox use) — without a
+    second fetch of the full manifest."""
+    from durin.workflow.result import WorkflowResult
+
+    run_log.finalize_run(tmp_path, "wf", WorkflowResult(
+        status="cancelled", final_output="no", run_id="r1", rejected=True,
+        final_route_label="REJECTED"),
+        root_session_key="automation:digest", started_at=1.0, finished_at=2.0)
+    run_log.finalize_run(tmp_path, "wf", WorkflowResult(
+        status="needs_input", final_output="approve?", run_id="r2",
+        needs_input_node="gate", ask_kind="approval"),
+        root_session_key="sess:1", started_at=3.0, finished_at=3.0)
+
+    got = {r["run_id"]: r for r in run_log.list_runs(tmp_path, "wf")}
+    assert got["r1"]["origin"] == "automation:digest"
+    assert got["r1"]["rejected"] is True
+    assert got["r1"]["final_route_label"] == "REJECTED"
+    assert got["r1"]["ask_kind"] is None
+    assert got["r2"]["origin"] == "sess:1"
+    assert got["r2"]["ask_kind"] == "approval"
+    assert got["r2"]["rejected"] is False
+
+
+def test_list_runs_defaults_origin_and_ask_kind_to_none_when_absent(tmp_path):
+    run_log.start_run(tmp_path, "wf", "r1", root_session_key=None, started_at=1.0)
+    got = run_log.list_runs(tmp_path, "wf")
+    assert got[0]["origin"] is None
+    assert got[0]["ask_kind"] is None
+    assert got[0]["final_route_label"] is None
+    assert got[0]["rejected"] is False
+
+
 def test_list_runs_respects_limit(tmp_path):
     for i in range(3):
         run_log.start_run(tmp_path, "wf", f"r{i}", root_session_key=None,
@@ -616,6 +651,19 @@ def test_list_all_runs_terminal_entries_have_no_questions_field(tmp_path):
 
 def test_list_all_runs_no_workflows_is_empty(tmp_path):
     assert run_log.list_all_runs(tmp_path) == []
+
+
+def test_list_all_runs_carries_origin_from_root_session_key(tmp_path):
+    """The global feed rides on list_runs, so it gets origin/ask_kind/
+    final_route_label/rejected for free — this proves it end-to-end on the
+    actual route `session_runs` (no `session`) reads from."""
+    from durin.workflow.result import WorkflowResult
+
+    run_log.finalize_run(tmp_path, "wf", WorkflowResult(
+        status="completed", final_output="a", run_id="r1"),
+        root_session_key="automation:digest", started_at=1.0, finished_at=1.0)
+    got = run_log.list_all_runs(tmp_path)
+    assert got[0]["origin"] == "automation:digest"
 
 
 def test_legacy_needs_input_without_reentry_node_is_prunable(tmp_path):

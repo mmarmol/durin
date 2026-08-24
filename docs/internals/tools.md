@@ -132,7 +132,7 @@ included), exec, search, web, memory search and memory writes,
 Tools stay core-only when they are interactive (`ask_user_question`, plan
 mode, todos), session-bound (`message`, `session_search`), orchestrating
 (`spawn` and its lifecycle tools, `run_workflow` — both would recurse from
-a background worker), standing-state creators (`cron`, `loops`),
+a background worker), standing-state creators (`cron`, `automations`),
 destructive (`memory_forget`), or self-modifying (`skill_edit`,
 `skill_import`). Those classes declare `_scopes = {"core"}` explicitly,
 with the reason in a comment, rather than relying on the base default.
@@ -341,7 +341,7 @@ controls which MCP tools are registered.
 | Capability bridges | `interpret_image`, `interpret_audio`, `execute_code`, `notebook_edit` |
 | Secrets | `list_secrets`, `request_secret` (`update=true` asks the user to replace an existing secret's value; the agent never sees values) |
 | Scheduling | `cron` |
-| Loops | `loops` |
+| Automations | `automations` |
 | Self-inspection | `my` |
 
 ---

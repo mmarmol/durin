@@ -784,7 +784,7 @@ class SlackChannel(BaseChannel):
         subtype = event.get("subtype")
         # Slack uses subtype=file_share for user messages with attachments.
         # bot_message is how apps post (ticket alerts, monitors, CI digests):
-        # allowed through so loop triggers can see them, and published as
+        # allowed through so automation triggers can see them, and published as
         # trigger-only below so durin never answers one as conversation.
         # Other subtypes (message_changed / deleted / channel_join / ...) stay
         # ignored.
@@ -829,7 +829,7 @@ class SlackChannel(BaseChannel):
         # group_policy governs whether durin joins a conversation, so it does
         # not apply to an app's post: that is an event, not something addressed
         # to durin, and a mention-only room would otherwise hide every
-        # notification from loop triggers. What contains those is authorization
+        # notification from automation triggers. What contains those is authorization
         # at the gate — an app must be approved like any other sender.
         if is_dm:
             if not self.config.dm_enabled:

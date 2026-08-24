@@ -180,6 +180,7 @@ class CronService:
                             ),
                             session_key=j["payload"].get("sessionKey") or j["payload"].get("session_key"),
                             loop=j["payload"].get("loop"),
+                            automation=j["payload"].get("automation"),
                         ),
                         state=CronJobState(
                             next_run_at_ms=j.get("state", {}).get("nextRunAtMs"),
@@ -322,6 +323,7 @@ class CronService:
                         "channelMeta": j.payload.channel_meta,
                         "sessionKey": j.payload.session_key,
                         "loop": j.payload.loop,
+                        "automation": j.payload.automation,
                     },
                     "state": {
                         "nextRunAtMs": j.state.next_run_at_ms,
@@ -749,6 +751,40 @@ class CronService:
         logger.info("Cron: registered system job '{}' ({})", job.name, job.id)
         return job
 
+    def remove_system_job(self, job_id: str) -> Literal["removed", "not_found"]:
+        """Remove a job by id, bypassing the ``protected`` guard in ``remove_job``.
+
+        Counterpart to ``register_system_job``: sync code that owns a
+        reserved id namespace (e.g. ``durin.automations.cron_sync``'s
+        ``automation:`` prefix) must be able to prune its own stale jobs even
+        when their ``payload.kind`` (``system_event``, ``automation_trigger``)
+        is one ``remove_job`` protects from the public API. Never call this
+        with a job id sourced from user/API input.
+        """
+        with self._lock:
+            store = self._load_store()
+            job = next((j for j in store.jobs if j.id == job_id), None)
+            if job is None:
+                return "not_found"
+
+            before = len(store.jobs)
+            store.jobs = [j for j in store.jobs if j.id != job_id]
+            removed = len(store.jobs) < before
+
+            if removed:
+                if self._running:
+                    self._save_store()
+                else:
+                    self._append_action("del", {"job_id": job_id})
+
+        if removed:
+            if self._running:
+                self._arm_timer()
+            logger.info("Cron: removed owned job {}", job_id)
+            return "removed"
+
+        return "not_found"
+
     def prune_orphaned_system_jobs(self, known_system_ids: set[str]) -> list[str]:
         """Remove persisted system jobs the code no longer manages.
 
@@ -786,7 +822,7 @@ class CronService:
             job = next((j for j in store.jobs if j.id == job_id), None)
             if job is None:
                 return "not_found"
-            if job.payload.kind == "system_event":
+            if job.payload.kind in ("system_event", "automation_trigger"):
                 logger.info("Cron: refused to remove protected system job {}", job_id)
                 return "protected"
 
@@ -856,7 +892,7 @@ class CronService:
             job = next((j for j in store.jobs if j.id == job_id), None)
             if job is None:
                 return "not_found"
-            if job.payload.kind == "system_event":
+            if job.payload.kind in ("system_event", "automation_trigger"):
                 return "protected"
 
             if schedule is not None:

@@ -1631,43 +1631,52 @@ class WorkflowImproveStructuralEvent(TypedDict):
     kind: NotRequired[str | None]  # "prompt" | "command" | "script_file" | None (unrecognized shape)
 
 
-class LoopsFiredEvent(TypedDict):
-    """A loop was fired (triggered to run)."""
+class AutomationsFiredEvent(TypedDict):
+    """An automation was fired (triggered to run)."""
 
-    loop: str
+    automation: str
     source: str
     skipped: bool
 
 
-class LoopsRunFinishedEvent(TypedDict):
-    """A loop run completed."""
+class AutomationsRunFinishedEvent(TypedDict):
+    """An automation run completed."""
 
-    loop: str
+    automation: str
     run_id: str
     status: str
-    goal_reached: bool
+    final_route_label: str | None
 
 
-class LoopsEscalatedEvent(TypedDict):
-    """A loop was escalated due to consecutive failures."""
+class AutomationsEscalatedEvent(TypedDict):
+    """An automation was escalated due to consecutive failures."""
 
-    loop: str
+    automation: str
     run_id: str
-    consecutive_no_goal: int
+    consecutive_unachieved: int
 
 
-class LoopsEventMatchedEvent(TypedDict):
+class AutomationsDeliveredEvent(TypedDict):
+    """An automation run outcome was delivered."""
+
+    automation: str
+    run_id: str
+    channel: str
+    result: str
+
+
+class AutomationsEventMatchedEvent(TypedDict):
     """An inbound channel message was routed by the trigger matcher.
 
-    ``action`` is one of: woke (claim-wake resumed a waiting_info run),
-    fired (a trigger matched and a new run was started), queued (a trigger
-    matched but the loop was busy and the event was queued), passed_busy
-    (a trigger matched, the loop was busy, and no queue was wired so the
+    ``action`` is one of: woke (claim-wake resumed a paused run), fired (a
+    trigger matched and a new run was started), queued (a trigger matched
+    but the automation was busy and the event was queued), passed_busy (a
+    trigger matched, the automation was busy, and no queue was wired so the
     message fell through as a normal turn instead), drained (a run finished
-    and the loop's queue had a fresh event, which was fired next).
+    and the automation's queue had a fresh event, which was fired next).
     """
 
-    loop: str
+    automation: str
     source_channel: str
     action: str
 
@@ -1832,11 +1841,12 @@ EVENTS: dict[str, type] = {
     "workflow.improve.applied": WorkflowImproveAppliedEvent,
     "workflow.improve.reverted": WorkflowImproveRevertedEvent,
     "workflow.improve.structural": WorkflowImproveStructuralEvent,
-    # Loops subsystem
-    "loops.fired": LoopsFiredEvent,
-    "loops.run_finished": LoopsRunFinishedEvent,
-    "loops.escalated": LoopsEscalatedEvent,
-    "loops.event_matched": LoopsEventMatchedEvent,
+    # Automations subsystem
+    "automations.fired": AutomationsFiredEvent,
+    "automations.run_finished": AutomationsRunFinishedEvent,
+    "automations.escalated": AutomationsEscalatedEvent,
+    "automations.delivered": AutomationsDeliveredEvent,
+    "automations.event_matched": AutomationsEventMatchedEvent,
     "skill.curation_run": SkillCurationRunEvent,
     "skill.suggestion_resolved": SkillSuggestionResolvedEvent,
     "skill.observation_resolved": SkillObservationResolvedEvent,
