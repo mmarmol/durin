@@ -632,6 +632,14 @@ class AutomationsRuntime:
             # either wrongly silence that notice or wrongly deliver this one.
             record = run_log.finalize_run(self._ws, spec.name, run_id, status="interrupted",
                                            workflow_run_id=wf_run_id)
+            # _post_finish is bypassed here, and it is the only place
+            # automations.run_finished is normally emitted — emit it here
+            # too (mirrors stop's own paused branch), or a cancelled run
+            # reads as started-and-never-finished in the telemetry stream.
+            emit_tool_event("automations.run_finished", {
+                "automation": spec.name, "run_id": run_id, "status": "interrupted",
+                "final_route_label": record.get("final_route_label"),
+            })
             try:
                 run_log.prune_runs(self._ws, spec.name, self._keep_runs)
                 self._drain_queue_if_single(spec)

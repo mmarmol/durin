@@ -795,7 +795,7 @@ async def test_stop_running_run_hard_upgrades_and_never_downgrades(tmp_path):
         clear("stop-hard-1")
 
 
-async def test_cancelled_result_finalizes_interrupted_not_failed_and_delivers_nothing(tmp_path):
+async def test_cancelled_result_finalizes_interrupted_not_failed_and_delivers_nothing(tmp_path, _per_test_telemetry_dir):
     """Design ruling: a non-shutdown cancelled result (what the engine
     produces once it honors a `stop`'s request_cancel) must get the exact
     same honest contract the paused branch already gives an operator stop —
@@ -834,6 +834,18 @@ async def test_cancelled_result_finalizes_interrupted_not_failed_and_delivers_no
     assert rl.consecutive_unachieved(tmp_path, "a1") == 0   # streak-transparent
     drained_calls = [c for c in calls["exec"] if c["task"] == "queued while running"]
     assert len(drained_calls) == 1   # queue drain still runs
+
+    # The intercept bypasses _post_finish (the normal run_finished emitter),
+    # so it must emit the event itself — otherwise a cancelled run reads as
+    # started-and-never-finished in the telemetry stream (same contract the
+    # paused-stop branch already honors).
+    import json
+    files = list(_per_test_telemetry_dir.glob("*.jsonl"))
+    events = [json.loads(line) for f in files for line in f.read_text(encoding="utf-8").strip().splitlines()]
+    finished = [e for e in events if e["type"] == "automations.run_finished"
+                and e["data"].get("run_id") == m["run_id"]]
+    assert len(finished) == 1
+    assert finished[0]["data"]["status"] == "interrupted"
 
 
 async def test_cancelled_result_dispatches_no_chain(tmp_path):
