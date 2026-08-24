@@ -280,7 +280,12 @@ async def test_fire_with_no_task_and_no_schedule_trigger_synthesizes_a_run_task(
 
 
 @pytest.mark.asyncio
-async def test_answer_resumes_a_waiting_run(tmp_path):
+async def test_answer_returns_running_immediately_then_resumes_in_the_background(tmp_path):
+    """The route must not block for the whole resume: it returns the record
+    re-read as `running` right away, and the actual resume — same workflow
+    call a blocking answer would have made — completes afterward."""
+    import asyncio
+
     rt, calls = _runtime(tmp_path, [
         _wr("needs_input", out="which env?", needs_input_node="gate"), _wr("completed"),
     ])
@@ -290,18 +295,29 @@ async def test_answer_resumes_a_waiting_run(tmp_path):
     run_id = fired.run["run_id"]
 
     result = await svc.answer(AutomationAnswerCommand(name="a1", run_id=run_id, text="prod"), p)
-    assert result.run["status"] == "completed"
+    assert result.run["status"] == "running"
+    assert len(calls["exec"]) == 1   # the resume hasn't run yet
+
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
     # AutomationsRuntime mints and persists its own workflow_run_id at fire time
     # (run_id_factory's SECOND draw, "ar1" — the first, "ar0", is the automation's
     # own run_id) and resumes with THAT id, independent of whatever run_id the
     # (fake) workflow result object itself carries.
     assert calls["exec"][1] == ("w1", "prod", "ar1")
+    final = automation_run_log.read_run(tmp_path, "a1", run_id)
+    assert final["status"] == "completed"
 
 
 @pytest.mark.asyncio
 async def test_answer_with_explicit_action_bypasses_keyword_parsing(tmp_path):
     """An explicit `action` (webui buttons) rides through as the canonical resume
-    text regardless of what `text` says — see AutomationsRuntime._answer."""
+    text regardless of what `text` says — see AutomationsRuntime._answer_prologue.
+    The approval verdict is recorded in the prologue, so it is already on the
+    record returned immediately, even though the resume itself is backgrounded."""
+    import asyncio
+
     rt, calls = _runtime(tmp_path, [
         _wr("needs_input", out="proceed?", needs_input_node="gate", ask_kind="approval"),
         _wr("completed"),
@@ -313,10 +329,13 @@ async def test_answer_with_explicit_action_bypasses_keyword_parsing(tmp_path):
 
     result = await svc.answer(
         AutomationAnswerCommand(name="a1", run_id=run_id, text="whatever, ignored", action="approve"), p)
-    assert result.run["status"] == "completed"
-    assert calls["exec"][1][1] == "approve"   # not "whatever, ignored"
+    assert result.run["status"] == "running"
     assert result.run["approval"]["action"] == "approve"
     assert result.run["approval"]["by"] == "operator"
+
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert calls["exec"][1][1] == "approve"   # not "whatever, ignored"
 
 
 @pytest.mark.asyncio
@@ -603,7 +622,10 @@ def test_hooks_secret_route_requires_automations_write_scope(tmp_path):
 
 def test_answer_route_accepts_an_explicit_action_over_http(tmp_path):
     """End-to-end: the webui's approve/reject buttons post an explicit `action`
-    alongside `text`, and the route must forward it to the runtime unchanged."""
+    alongside `text`, and the route must forward it to the runtime unchanged.
+    The route returns immediately (status `running`) rather than waiting for
+    the resume to finish; the approval verdict is recorded in the prologue,
+    so it is already on the record in this same response."""
     import asyncio
 
     from durin.api.asgi import build_api_app
@@ -635,7 +657,8 @@ def test_answer_route_accepts_an_explicit_action_over_http(tmp_path):
         headers=headers,
     )
     assert resp.status_code == 200
-    assert resp.json()["run"]["status"] == "completed"
+    assert resp.json()["run"]["status"] == "running"
+    assert resp.json()["run"]["approval"]["action"] == "approve"
 
 
 def test_stop_route_finalizes_a_paused_run_over_http(tmp_path):

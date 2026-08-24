@@ -136,7 +136,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Answer an automation run awaiting an operator or a counterpart reply. */
+        /** Answer an automation run awaiting an operator or a counterpart reply; returns immediately (status `running`) without waiting for the resume to finish. */
         post: operations["automations_answer"];
         delete?: never;
         options?: never;

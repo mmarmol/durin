@@ -614,6 +614,74 @@ async def test_answer_raises_when_run_is_not_paused(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# answer_nowait
+# ---------------------------------------------------------------------------
+
+async def test_answer_nowait_returns_running_record_before_the_resume_finishes(tmp_path):
+    """The whole point: an HTTP caller or a chat turn must not be held open
+    for the length of the resume. answer_nowait returns as soon as its
+    synchronous prologue is done, with the record re-read as `running` —
+    the resume itself (the same workflow call a blocking answer() would
+    have made) only completes once the backgrounded continuation gets a
+    turn on the event loop."""
+    _save(tmp_path)
+    rt, calls = _mk_runtime(tmp_path, [
+        _wr("needs_input", out="which env?", ask_kind="question"),
+        _wr("completed"),
+    ])
+    m = await rt.fire("a1", source="manual")
+    assert m["status"] == "paused"
+
+    result = await rt.answer_nowait("a1", m["run_id"], "prod")
+    assert result["status"] == "running"
+    assert len(calls["exec"]) == 1   # the resume call hasn't happened yet
+
+    await _drain()
+
+    assert calls["exec"][1]["task"] == "prod"
+    assert rl.read_run(tmp_path, "a1", m["run_id"])["status"] == "completed"
+
+
+async def test_answer_nowait_records_approval_even_when_the_resume_then_fails(tmp_path):
+    """Regression: the approval verdict used to be stamped only after a
+    successful resume, so a resume that then failed lost the record of what
+    the operator actually decided. It is now recorded in the synchronous
+    prologue, before the resume is even attempted — it must survive the
+    resume failing."""
+    _save(tmp_path)
+
+    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None,
+                            work_key=None, root_session_key=None):
+        if resume_run_id is None:
+            return _wr("needs_input", out="proceed?", ask_kind="approval")
+        raise RuntimeError("boom")
+
+    ids = iter([f"nowait-fail-{i}" for i in range(10)])
+    rt = AutomationsRuntime(tmp_path, workflow_exec=workflow_exec, keep_runs=20,
+                            run_id_factory=lambda: next(ids))
+    m = await rt.fire("a1", source="manual")
+    assert m["status"] == "paused"
+
+    result = await rt.answer_nowait("a1", m["run_id"], "whatever", action="approve")
+    assert result["approval"] == {"action": "approve", "by": "operator", "at_ms": result["approval"]["at_ms"]}
+
+    await _drain()
+
+    final = rl.read_run(tmp_path, "a1", m["run_id"])
+    assert final["status"] == "failed"
+    assert final["approval"]["action"] == "approve"   # survived the failure
+
+
+async def test_answer_nowait_raises_when_run_is_not_paused(tmp_path):
+    _save(tmp_path)
+    rt, _ = _mk_runtime(tmp_path, [_wr("completed")])
+    m = await rt.fire("a1", source="manual")
+    assert m["status"] == "completed"
+    with pytest.raises(ValueError):
+        await rt.answer_nowait("a1", m["run_id"], "too late")
+
+
+# ---------------------------------------------------------------------------
 # Stop
 # ---------------------------------------------------------------------------
 
@@ -1158,6 +1226,37 @@ async def test_try_fire_busy_skip_emits_fired_with_skipped_true(tmp_path, _isola
     assert len(skipped) == 1
     assert skipped[0]["data"]["automation"] == "a1"
     assert skipped[0]["data"]["source"] == "cron"
+
+
+async def test_answer_nowait_continuation_binds_its_own_telemetry(tmp_path, _isolate_telemetry_dir):
+    """_answer_continuation runs as a separate backgrounded task, outside
+    answer_nowait's own bind-around-the-prologue scope (already unbound and
+    returned by the time the caller sees the running record) — it must bind
+    its own telemetry logger, or every event the resume produces would
+    silently no-op instead of landing on disk."""
+    import json
+
+    from durin.telemetry.logger import current_telemetry
+
+    _save(tmp_path, delivery=Delivery(channel="email", to="ops@x.com"))
+    rt, _ = _mk_runtime(tmp_path, [
+        _wr("needs_input", out="q", ask_kind="question"),
+        _wr("completed"),
+    ])
+    m = await rt.fire("a1", source="manual")
+
+    assert current_telemetry() is None
+    result = await rt.answer_nowait("a1", m["run_id"], "go ahead")
+    assert result["status"] == "running"
+    assert current_telemetry() is None
+
+    await _drain()
+
+    files = list(_isolate_telemetry_dir.glob("*.jsonl"))
+    events = [json.loads(line) for f in files for line in f.read_text(encoding="utf-8").strip().splitlines()]
+    event_types = [e["type"] for e in events]
+    assert event_types.count("automations.run_finished") == 1
+    assert event_types.count("automations.delivered") == 1
 
 
 async def test_try_fire_disabled_skip_emits_no_telemetry(tmp_path, _isolate_telemetry_dir):

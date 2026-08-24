@@ -320,23 +320,29 @@ class AutomationsTool(Tool):
             )
 
     async def _answer(self, name: str, run_id: str, answer: str, resolution: str | None) -> str:
+        """Resume a paused run and return; the outcome arrives as a follow-up.
+
+        Mirrors `_fire`: the resume is a full workflow run and can take as
+        long as the original fire would have, so the tool call must not
+        hold the agent's turn open for it. `AutomationsRuntime.answer_nowait`
+        already backgrounds the actual resume itself (see its own
+        docstring) — no extra asyncio.create_task wrapping needed here,
+        just await its quick synchronous prologue and report that it
+        resumed.
+        """
         try:
-            record = await self._runtime.answer(name, run_id, answer, action=resolution, by="agent")
+            record = await self._runtime.answer_nowait(name, run_id, answer, action=resolution, by="agent")
         except AutomationNotFound as exc:
             return f"Error: {exc}"
         except ValueError as exc:
             return f"Error: {exc}"
-        return self._format_run(name, record)
-
-    @staticmethod
-    def _format_run(name: str, record: dict) -> str:
-        status = record.get("status")
-        line = f"Automation '{name}' run {record.get('run_id')}: {status}"
-        if status == "paused" and record.get("ask"):
-            line += f"\n  Asking: {record['ask']}"
-        if status == "achieved":
-            line += " (life condition achieved — the automation disabled itself)"
-        return line
+        return (
+            f"Automation '{name}' run {record.get('run_id')} resumed in the background — "
+            "do NOT poll for it; its outcome arrives through the automation's normal "
+            "delivery/help routing once the resume finishes. Use "
+            f"automations(action='status', name='{name}') only if the user asks for an "
+            "update."
+        )
 
     def _set_enabled(self, name: str, enable: bool) -> str:
         try:

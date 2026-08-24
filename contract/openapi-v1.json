@@ -8133,7 +8133,7 @@
             "description": "Success"
           }
         },
-        "summary": "Answer an automation run awaiting an operator or a counterpart reply.",
+        "summary": "Answer an automation run awaiting an operator or a counterpart reply; returns immediately (status `running`) without waiting for the resume to finish.",
         "x-required-scope": "automations:write"
       }
     },

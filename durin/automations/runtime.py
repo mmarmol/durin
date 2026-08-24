@@ -177,15 +177,57 @@ class AutomationsRuntime:
 
     async def answer(self, name: str, run_id: str, text: str, *,
                        action: str | None = None, by: str = "operator") -> dict:
+        """Answer a paused run and block until the resume finishes.
+
+        Kept for existing internal callers/tests that need the resume's
+        FINAL outcome rather than a running-record snapshot — composes the
+        same prologue `answer_nowait` uses with an inline (not backgrounded)
+        await of the continuation. Prefer `answer_nowait` for anything
+        HTTP- or chat-facing: the resume is a full workflow run and can take
+        minutes, which is fine to await internally but not behind an HTTP
+        request or a chat turn (see `answer_nowait`'s own docstring).
+        """
         token = _bind_automations_telemetry(name)
         try:
-            return await self._answer(name, run_id, text, action=action, by=by)
+            spec, record, resume_text = self._answer_prologue(name, run_id, text, action=action, by=by)
+            return await self._answer_continuation(spec, run_id, record, resume_text, chain_depth=0)
         finally:
             if token is not None:
                 reset_telemetry(token)
 
-    async def _answer(self, name: str, run_id: str, text: str, *,
-                        action: str | None, by: str) -> dict:
+    async def answer_nowait(self, name: str, run_id: str, text: str, *,
+                              action: str | None = None, by: str = "operator") -> dict:
+        """Answer a paused run without waiting for the resume to finish.
+
+        Runs the prologue (validation, ownership/claim, resolving the
+        answer into resume text, recording an approval verdict) inline and
+        synchronously, then backgrounds the actual resume — the same
+        potentially-minutes-long workflow run `fire` already backgrounds
+        (see `reserve_run_id`'s docstring) — and returns immediately with
+        the record re-read as `running`. The caller checks on the eventual
+        outcome the same way it would check on a `fire`: polling status, or
+        waiting for the outcome to arrive through the automation's normal
+        delivery/help routing.
+        """
+        token = _bind_automations_telemetry(name)
+        try:
+            spec, record, resume_text = self._answer_prologue(name, run_id, text, action=action, by=by)
+        finally:
+            if token is not None:
+                reset_telemetry(token)
+        self._spawn(self._answer_continuation(spec, run_id, record, resume_text, chain_depth=0))
+        return run_log.read_run(self._ws, name, run_id)
+
+    def _answer_prologue(self, name: str, run_id: str, text: str, *,
+                           action: str | None, by: str) -> tuple[AutomationSpec, dict, str]:
+        """Everything about answering a paused run that has to happen
+        synchronously, before the (possibly long) resume starts: validate
+        the run is actually waiting, re-stamp ownership, release the claim,
+        and resolve free text/an explicit action into the canonical resume
+        text. Returns ``(spec, the ORIGINAL pre-resume record, resume_text)``
+        — the continuation needs the original record only for its stable
+        ``workflow_run_id``, not anything this prologue mutates.
+        """
         spec = load_automation(self._ws, name)
         record = run_log.read_run(self._ws, name, run_id)
         if not record or record.get("status") != "paused":
@@ -223,19 +265,39 @@ class AutomationsRuntime:
             else:
                 resolved_action = parse_approval_reply(text) or "revise"
                 resume_text = text
+            # Recorded HERE, before the resume even starts, not after a
+            # successful one: the operator's decision is a fact regardless
+            # of how the resume turns out. Stamping it only on success would
+            # lose the record entirely if the resume then failed.
+            if resolved_action is not None:
+                run_log.record_approval(self._ws, name, run_id, action=resolved_action, by=by, at_ms=_now_ms())
 
+        return spec, record, resume_text
+
+    async def _answer_continuation(self, spec: AutomationSpec, run_id: str, record: dict,
+                                     resume_text: str, *, chain_depth: int) -> dict:
+        """The actual resume: everything after `_answer_prologue` returns.
+
+        Runs either inline (`answer`, still under the caller's own telemetry
+        binding) or backgrounded (`answer_nowait`, outside any caller
+        context) — `_bind_automations_telemetry` binds its own logger only
+        when nothing is already bound, so this call is a no-op in the
+        inline case and the one that matters in the backgrounded case.
+        """
+        token = _bind_automations_telemetry(spec.name)
         try:
-            result = await self._exec(spec.workflow, resume_text, resume_run_id=record["workflow_run_id"],
-                                       root_session_key=f"automation:{spec.name}")
-        except Exception as exc:  # noqa: BLE001 — any failure ends the run honestly
-            rec = run_log.finalize_run(self._ws, name, run_id, status="failed", detail=str(exc),
-                                        workflow_run_id=record["workflow_run_id"])
-            return await self._post_finish(spec, run_id, rec, None, chain_depth=0)
+            try:
+                result = await self._exec(spec.workflow, resume_text, resume_run_id=record["workflow_run_id"],
+                                           root_session_key=f"automation:{spec.name}")
+            except Exception as exc:  # noqa: BLE001 — any failure ends the run honestly
+                rec = run_log.finalize_run(self._ws, spec.name, run_id, status="failed", detail=str(exc),
+                                            workflow_run_id=record["workflow_run_id"])
+                return await self._post_finish(spec, run_id, rec, None, chain_depth=chain_depth)
 
-        if ask_kind == "approval" and resolved_action is not None:
-            run_log.record_approval(self._ws, name, run_id, action=resolved_action, by=by, at_ms=_now_ms())
-
-        return await self._handle_result(spec, run_id, result, chain_depth=0)
+            return await self._handle_result(spec, run_id, result, chain_depth=chain_depth)
+        finally:
+            if token is not None:
+                reset_telemetry(token)
 
     async def stop(self, name: str, run_id: str, *, hard: bool = False) -> dict:
         token = _bind_automations_telemetry(name)
