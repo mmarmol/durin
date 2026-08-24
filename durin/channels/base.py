@@ -226,9 +226,9 @@ class BaseChannel(ABC):
         channel — and any direct publisher — is gated uniformly and no channel
         can bypass it.
 
-        ``trigger_only`` marks a message that may fire loop triggers but must
-        never reach the agent as conversation; it is still authorized like any
-        other."""
+        ``trigger_only`` marks a message that may fire automation triggers but
+        must never reach the agent as conversation; it is still authorized
+        like any other."""
         meta = metadata or {}
         if self.supports_streaming and not trigger_only:
             meta = {**meta, "_wants_stream": True}

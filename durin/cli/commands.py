@@ -1505,6 +1505,7 @@ def _run_gateway(
     from durin.automations.judge import build_filter_prompt as _automations_build_filter_prompt
     from durin.automations.judge import parse_filter_verdict as _automations_parse_filter_verdict
     from durin.automations.matcher import TriggerMatcher
+    from durin.automations.outcome import ACTIONABLE_STATUSES
     from durin.automations.runtime import AutomationsRuntime
     from durin.memory.model_resolve import resolve_aux_preset
     from durin.service.workflows import RUNS_FEED_CHAT_ID, build_runs_feed_event
@@ -1618,7 +1619,11 @@ def _run_gateway(
         (durin.automations.outcome.route, applied inside the runtime's own
         _deliver_outcome) — this reads them verbatim and never re-routes:
         the runtime already persisted a delivery record against this exact
-        destination, so recomputing one here could disagree with it.
+        destination, so recomputing one here could disagree with it. An
+        outcome that routed nowhere is logged rather than dropped in silence
+        when its status is actionable (failed/interrupted) — an automation
+        that finishes into the void is the failure this backstop exists to
+        catch.
         """
         if outcome.kind == "session":
             from durin.bus.events import InboundMessage
@@ -1644,11 +1649,23 @@ def _run_gateway(
             await _deliver_to_channel(OutboundMessage(
                 channel=outcome.channel, chat_id=outcome.to or "direct", content=outcome.summary,
             ))
-        # else: no routed channel — either AutomationsRuntime.report_no_outcome's
+            return
+
+        # No routed channel — either AutomationsRuntime.report_no_outcome's
         # best-effort retraction path (which deliberately bypasses routing; see
         # its docstring) or a help/delivery destination with no channel
-        # configured. Either way the runtime itself decided there is nowhere
-        # to send this, not this wiring layer.
+        # configured. The runtime itself decided there is nowhere to send
+        # this — reading ACTIONABLE_STATUSES here is a status check, not a
+        # routing decision, so it does not violate the verbatim-destination
+        # contract above. An actionable status with nowhere to go must still
+        # be loud about it, mirroring the backstop the former loops wiring
+        # had for the same case.
+        if outcome.status in ACTIONABLE_STATUSES:
+            logger.warning(
+                "automations: automation '{}' run {} ended '{}' with nowhere "
+                "routed to tell — nobody was told",
+                outcome.automation, outcome.run_id, outcome.status,
+            )
 
     # Flips True the instant the gateway begins a graceful shutdown
     # (_request_shutdown, below — SIGTERM/SIGINT/SIGHUP). AutomationsRuntime

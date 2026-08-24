@@ -705,7 +705,7 @@ def build_gateway_http_app(
         result = await hook_dispatcher.dispatch(request.path_params["hook"], payload)
         if result.get("result") == "no_match":
             return _problem_response(
-                NotFoundError(f"no enabled loop matches hook {request.path_params['hook']!r}")
+                NotFoundError(f"no enabled automation matches hook {request.path_params['hook']!r}")
             )
         return JSONResponse(result, status_code=202)
 

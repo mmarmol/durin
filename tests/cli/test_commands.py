@@ -2261,6 +2261,286 @@ def test_gateway_migration_failure_does_not_crash_boot(monkeypatch, tmp_path: Pa
     assert result.exit_code == 0
 
 
+def _setup_automations_callbacks_test(monkeypatch, tmp_path: Path):
+    """Full gateway boot far enough that `channels` in `_run_gateway`'s scope
+    is actually assigned to a live (fake) ChannelManager before the run stops
+    — unlike `_setup_automations_wiring_test`'s scaffold, which stops via a
+    RAISING fake ChannelManager and therefore never reaches that assignment.
+    `_on_automation_help`'s closure calls `channels.send(...)`, so exercising
+    it needs this fuller boot. Returns `seen`, where:
+    - `seen["automations_runtime"]` is the real AutomationsRuntime (captured
+      via the same register_automations_tool() seam production code calls);
+      its `._help` / `._on_outcome` attributes ARE the real, wired
+      `_on_automation_help` / `_on_automation_outcome` closures.
+    - `seen["sent"]` records every OutboundMessage passed to the fake
+      ChannelManager's `.send(...)`.
+    - `seen["bus"]` is the MagicMock message bus — `publish_outbound` /
+      `publish_inbound` are AsyncMocks, inspectable via `.call_args`.
+    """
+    config_file = _write_instance_config(tmp_path)
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path / "ws")
+    config.gateway.port = 18796
+    seen: dict[str, object] = {"sent": []}
+
+    bus = MagicMock()
+    bus.publish_outbound = AsyncMock()
+    bus.publish_inbound = AsyncMock()
+    seen["bus"] = bus
+
+    class _FakeDream:
+        model = None
+        max_batch_size = 0
+        max_iterations = 0
+
+        async def run(self) -> None:
+            return None
+
+    class _FakeSessionManager:
+        def flush_all(self) -> int:
+            return 0
+
+    class _FakeAgentLoop:
+        @classmethod
+        def from_config(cls, config, bus=None, **extra):
+            return cls(**extra)
+        def __init__(self, **_kwargs) -> None:
+            self.model = "test-model"
+            self.provider = object()
+            self.dream = _FakeDream()
+            self.sessions = _FakeSessionManager()
+
+        def build_concurrency_snapshot(self):
+            return {"lanes": {}, "queued": 0, "work": []}
+
+        def register_automations_tool(self, runtime) -> None:
+            seen["automations_runtime"] = runtime
+
+        async def run(self) -> None:
+            await asyncio.Event().wait()
+
+        async def close_mcp(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+    class _FakeChannelManager:
+        def __init__(self, _config, _bus, **_kwargs) -> None:
+            self.enabled_channels = []
+
+        async def send(self, msg):
+            from durin.bus.events import SendReceipt
+
+            seen["sent"].append(msg)
+            return SendReceipt(thread_key="fake-thread-key")
+
+        async def start_all(self) -> None:
+            await asyncio.Event().wait()
+
+        async def stop_all(self) -> None:
+            return None
+
+        def get_channel(self, _name: str):
+            return None
+
+    class _FakeCronService:
+        def __init__(self, _store_path: Path, **_kwargs) -> None:
+            self.on_job = None
+
+        async def start(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+        def status(self) -> dict[str, int]:
+            return {"jobs": 0}
+
+        def register_system_job(self, _job) -> None:
+            return None
+
+        def prune_orphaned_system_jobs(self, _known_system_ids) -> list:
+            return []
+
+    class _FakeServer:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        async def serve_forever(self) -> None:
+            raise _StopGatewayError("stop")
+
+    async def _fake_start_server(handler, host: str, port: int):
+        return _FakeServer()
+
+    _patch_cli_command_runtime(
+        monkeypatch,
+        config,
+        message_bus=lambda: bus,
+        session_manager=lambda _workspace: object(),
+    )
+    monkeypatch.setattr("durin.cli.commands.AgentLoop", _FakeAgentLoop)
+    monkeypatch.setattr("durin.channels.manager.ChannelManager", _FakeChannelManager)
+    monkeypatch.setattr("durin.cron.service.CronService", _FakeCronService)
+    monkeypatch.setattr("asyncio.start_server", _fake_start_server)
+
+    result = runner.invoke(app, ["gateway", "--config", str(config_file)])
+    # Unlike _setup_automations_wiring_test's early-stop scaffold (a RAISING
+    # fake ChannelManager, whose _StopGatewayError propagates straight out of
+    # gateway_root), this boot runs the coroutine far enough that
+    # _StopGatewayError instead surfaces inside run()'s own top-level
+    # exception handler ("Gateway crashed unexpectedly", logged, swallowed)
+    # — mirroring _setup_full_boot_gateway_test's identical assertion.
+    assert result.exit_code == 0
+    return seen
+
+
+def test_on_help_ask_approval_renders_header_proposal_and_instructions(monkeypatch, tmp_path: Path) -> None:
+    from durin.automations.spec import parse_automation
+
+    seen = _setup_automations_callbacks_test(monkeypatch, tmp_path)
+    runtime = seen["automations_runtime"]
+    spec = parse_automation({"name": "a1", "workflow": "w1", "help": {"channel": "slack", "to": "#ops"}})
+
+    receipt = asyncio.run(runtime._help(spec, "run1", "approval", "needs sign-off", "proposed change X"))
+
+    assert len(seen["sent"]) == 1
+    msg = seen["sent"][0]
+    assert msg.channel == "slack"
+    assert msg.chat_id == "#ops"
+    assert "🔒" in msg.content and "a1" in msg.content
+    assert "needs sign-off" in msg.content
+    assert "proposed change X" in msg.content
+    assert "aprobar" in msg.content and "rechazar" in msg.content
+    assert receipt is not None
+    assert receipt.thread_key == "fake-thread-key"
+
+
+def test_on_help_ask_question_renders_question_header(monkeypatch, tmp_path: Path) -> None:
+    from durin.automations.spec import parse_automation
+
+    seen = _setup_automations_callbacks_test(monkeypatch, tmp_path)
+    runtime = seen["automations_runtime"]
+    spec = parse_automation({"name": "a1", "workflow": "w1", "help": {"channel": "slack", "to": "#ops"}})
+
+    receipt = asyncio.run(runtime._help(spec, "run1", "question", "which vendor?", None))
+
+    assert len(seen["sent"]) == 1
+    msg = seen["sent"][0]
+    assert "❓" in msg.content and "a1" in msg.content
+    assert "which vendor?" in msg.content
+    assert receipt is not None
+
+
+def test_on_help_ask_escalation_never_renders_as_a_question(monkeypatch, tmp_path: Path) -> None:
+    """Carried ruling: an escalation must never be rendered with the question
+    header/instructions — the wording says which one actually happened."""
+    from durin.automations.spec import parse_automation
+
+    seen = _setup_automations_callbacks_test(monkeypatch, tmp_path)
+    runtime = seen["automations_runtime"]
+    spec = parse_automation({"name": "a1", "workflow": "w1", "help": {"channel": "slack", "to": "#ops"}})
+
+    asyncio.run(runtime._help(spec, "run1", "escalation", "3 consecutive unachieved attempts", None))
+
+    assert len(seen["sent"]) == 1
+    msg = seen["sent"][0]
+    assert "⚠️" in msg.content and "a1" in msg.content
+    assert "3 consecutive unachieved attempts" in msg.content
+    assert "❓" not in msg.content
+    assert "Pregunta" not in msg.content
+
+
+def test_on_help_ask_without_help_channel_returns_none_and_sends_nothing(monkeypatch, tmp_path: Path) -> None:
+    from durin.automations.spec import parse_automation
+
+    seen = _setup_automations_callbacks_test(monkeypatch, tmp_path)
+    runtime = seen["automations_runtime"]
+    spec = parse_automation({"name": "a1", "workflow": "w1"})  # no help.channel
+
+    result = asyncio.run(runtime._help(spec, "run1", "question", "anybody there?", None))
+
+    assert result is None
+    assert seen["sent"] == []
+
+
+def test_on_outcome_session_destination_injects_inbound_with_tag(monkeypatch, tmp_path: Path) -> None:
+    from durin.automations.outcome import AutomationOutcome
+
+    seen = _setup_automations_callbacks_test(monkeypatch, tmp_path)
+    runtime = seen["automations_runtime"]
+    outcome = AutomationOutcome(
+        automation="a1", run_id="run1", status="completed", summary="all done",
+        origin={"channel": "websocket", "chat_id": "c1", "session_key": "websocket:c1"},
+        workflow_run_id="wf1", final_route_label=None,
+        kind="session", channel=None, to=None,
+    )
+
+    asyncio.run(runtime._on_outcome(outcome))
+
+    seen["bus"].publish_inbound.assert_awaited_once()
+    msg = seen["bus"].publish_inbound.call_args.args[0]
+    assert msg.session_key_override == "websocket:c1"
+    assert msg.metadata["injected_event"] == "automation_outcome"
+    assert msg.metadata["automation"] == "a1"
+    assert "all done" in msg.content
+    seen["bus"].publish_outbound.assert_not_awaited()
+
+
+def test_on_outcome_channel_destination_publishes_outbound_verbatim(monkeypatch, tmp_path: Path) -> None:
+    from durin.automations.outcome import AutomationOutcome
+
+    seen = _setup_automations_callbacks_test(monkeypatch, tmp_path)
+    runtime = seen["automations_runtime"]
+    outcome = AutomationOutcome(
+        automation="a1", run_id="run1", status="completed", summary="done for real",
+        origin=None, workflow_run_id="wf1", final_route_label=None,
+        kind="delivery", channel="telegram", to="user-1",
+    )
+
+    asyncio.run(runtime._on_outcome(outcome))
+
+    seen["bus"].publish_outbound.assert_awaited_once()
+    msg = seen["bus"].publish_outbound.call_args.args[0]
+    assert msg.channel == "telegram"
+    assert msg.chat_id == "user-1"
+    assert msg.content == "done for real"
+    seen["bus"].publish_inbound.assert_not_awaited()
+
+
+def test_on_outcome_undeliverable_actionable_logs_warning_and_sends_nothing(monkeypatch, tmp_path: Path) -> None:
+    """AutomationsRuntime.report_no_outcome's best-effort retraction path
+    (and any other route()-decided "nowhere to go" case) carries kind=None,
+    channel=None — this must never silently vanish when the status is
+    actionable (failed/interrupted)."""
+    from loguru import logger
+
+    from durin.automations.outcome import AutomationOutcome
+
+    seen = _setup_automations_callbacks_test(monkeypatch, tmp_path)
+    runtime = seen["automations_runtime"]
+    outcome = AutomationOutcome(
+        automation="a1", run_id="run1", status="interrupted",
+        summary="produced no outcome — relaunch failed",
+        origin=None, workflow_run_id=None, final_route_label=None,
+        kind=None, channel=None, to=None,
+    )
+
+    warnings: list[str] = []
+    sink = logger.add(lambda message: warnings.append(str(message)), level="WARNING")
+    try:
+        asyncio.run(runtime._on_outcome(outcome))
+    finally:
+        logger.remove(sink)
+
+    seen["bus"].publish_outbound.assert_not_awaited()
+    seen["bus"].publish_inbound.assert_not_awaited()
+    assert any("a1" in w and "run1" in w for w in warnings)
+
+
 def test_channels_login_requires_channel_name() -> None:
     result = runner.invoke(app, ["channels", "login"])
 

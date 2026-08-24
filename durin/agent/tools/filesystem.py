@@ -45,7 +45,7 @@ class _FsTool(Tool, ContextAware):
         self._post_edit_config = post_edit_config
         # Whether _resolve_write() refuses writes under the registry dirs that
         # own their own validated, versioned write door (skills/, workflows/,
-        # loops/, automations/ — see _resolve_write). On by default so every LLM-facing
+        # automations/ — see _resolve_write). On by default so every LLM-facing
         # instance (main loop, subagents, execute_code — all built via
         # `create(ctx)`) is protected. Callers that hand-build a tool over an
         # isolated, non-live workspace (e.g. a throwaway staging copy that is

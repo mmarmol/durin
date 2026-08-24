@@ -281,7 +281,7 @@ class ApiTokenStore:
         Unlike the media secret (raw HMAC signing bytes, base64-wrapped),
         this is compared verbatim against the ``X-Durin-Hook-Secret`` header
         on ``POST /api/v1/hooks/{hook}`` and shown directly to operators via
-        ``GET /api/v1/loops/hooks-secret``, so it is generated and stored as
+        ``GET /api/v1/automations/hooks-secret``, so it is generated and stored as
         a plain URL-safe token string.
         """
         with _LOCK, cross_process_lock(self._path):

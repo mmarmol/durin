@@ -287,14 +287,14 @@ newly matched automation trigger, consuming the message so it never reaches
 the agent as a normal turn.
 
 **Trigger-only messages.** `InboundMessage.trigger_only` marks a message that
-may fire loop triggers but must never become a conversation — an app posting
-alerts into a room. It runs the authorizer gate and the interceptors like any
-other message; the difference is at the end of `publish_inbound`, where an
-unconsumed trigger-only message is **dropped instead of enqueued**. Without
-that, a notification no loop happened to match would land in the agent's queue
-and be answered in the room, turning every app post into a conversation nobody
-asked for. Such messages also skip the `_wants_stream` flag, since nothing is
-waiting on a streamed reply.
+may fire automation triggers but must never become a conversation — an app
+posting alerts into a room. It runs the authorizer gate and the interceptors
+like any other message; the difference is at the end of `publish_inbound`,
+where an unconsumed trigger-only message is **dropped instead of enqueued**.
+Without that, a notification no automation happened to match would land in
+the agent's queue and be answered in the room, turning every app post into a
+conversation nobody asked for. Such messages also skip the `_wants_stream`
+flag, since nothing is waiting on a streamed reply.
 
 The channel contract is to be **pure transport**: publish unconditionally with
 `is_dm` set and let the gate authorize — a channel should NOT re-implement
