@@ -33,10 +33,19 @@ export function DetailView({
   onBack,
   onOpenWorkflowRun,
   onAutomationSaved,
+  feedShowsActivity = false,
 }: {
   automation: AutomationSummary;
   onBack: () => void;
   onOpenWorkflowRun: (workflow: string, runId: string) => void;
+  // True when the parent's global runs feed shows a running/paused run for
+  // THIS automation. The local poll below is gated on activity, but its own
+  // `runs` list starts empty — a detail opened BEFORE the first run exists
+  // would otherwise never notice a run started elsewhere (cron, chat, a
+  // chain) until the next full remount, because nothing re-arms the poll.
+  // The parent's feed is refreshed independently, so it is the signal that
+  // can see what this view's own list cannot yet.
+  feedShowsActivity?: boolean;
   // Called after the pause/resume toggle saves — AutomationsView's own
   // top-level refresh (automations + runs + cron jobs), the same one a
   // save from the editor triggers. AutomationSummary is a superset of
@@ -77,16 +86,8 @@ export function DetailView({
 
   const anyRunning = useMemo(() => runs.some((r) => r.status === "running"), [runs]);
 
-  // While this automation has a run in flight, keep the run list fresh —
-  // AutomationRun.status only ever changes via a fresh fetch (it is not
-  // derived from the live workflow_progress frames LiveRunCard consumes), so
-  // without this a finished run would stay parked under "running now"
-  // forever. Same cadence/pattern as RunsView.tsx's own anyRunning poll.
-  useEffect(() => {
-    if (!anyRunning) return;
-    const id = setInterval(() => void refresh(), 4000);
-    return () => clearInterval(id);
-  }, [anyRunning, refresh]);
+  // The activity-gated 4s poll lives just below onFireNow: it depends on
+  // the `firing` state declared there.
 
   const runningRuns = useMemo(() => runs.filter((r) => r.status === "running"), [runs]);
   const selectedRun = useMemo(
@@ -126,6 +127,22 @@ export function DetailView({
       setFiring(false);
     }
   }, [token, automation.name, refresh, t]);
+
+  // While this automation has a run in flight, keep the run list fresh —
+  // AutomationRun.status only ever changes via a fresh fetch (it is not
+  // derived from the live workflow_progress frames LiveRunCard consumes), so
+  // without this a finished run would stay parked under "running now"
+  // forever. Same cadence/pattern as RunsView.tsx's own anyRunning poll.
+  // `firing` and `feedShowsActivity` arm it too: `anyRunning` alone comes
+  // from this view's own list, which is empty when the detail was opened
+  // before the first run existed — the fire request blocks until the run
+  // finishes, so without those signals the run would stay invisible for its
+  // whole lifetime.
+  useEffect(() => {
+    if (!anyRunning && !firing && !feedShowsActivity) return;
+    const id = setInterval(() => void refresh(), 4000);
+    return () => clearInterval(id);
+  }, [anyRunning, firing, feedShowsActivity, refresh]);
 
   // Pause/resume: flips `enabled` on the automation's own current
   // definition and saves it wholesale (PUT has no partial-update form).
