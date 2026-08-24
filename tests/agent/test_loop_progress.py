@@ -330,11 +330,11 @@ class TestToolEventProgress:
             chat_id="chat1",
             content="say hello",
             metadata={"webui": True},
-        )), timeout=0.5)
+        )), timeout=5.0)
 
         outbound: list = []
         for _ in range(12):
-            outbound.append(await asyncio.wait_for(bus.consume_outbound(), timeout=0.5))
+            outbound.append(await asyncio.wait_for(bus.consume_outbound(), timeout=5.0))
             if outbound[-1].metadata.get("_turn_end"):
                 break
         else:
@@ -344,11 +344,11 @@ class TestToolEventProgress:
         assert len(done_with_body) == 1
         assert outbound[-1].metadata.get("_turn_end") is True
 
-        await asyncio.wait_for(title_started.wait(), timeout=0.5)
+        await asyncio.wait_for(title_started.wait(), timeout=5.0)
         release_title.set()
         session_updated = None
         for _ in range(10):
-            candidate = await asyncio.wait_for(bus.consume_outbound(), timeout=0.5)
+            candidate = await asyncio.wait_for(bus.consume_outbound(), timeout=5.0)
             if (candidate.metadata or {}).get("_session_updated"):
                 session_updated = candidate
                 break

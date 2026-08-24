@@ -1612,6 +1612,29 @@ def test_gateway_builds_the_automations_runtime_from_config_values(monkeypatch, 
     assert runtime._queue_ttl_s == 111
 
 
+def test_gateway_wires_on_spec_saved_to_sync_automation_jobs(monkeypatch, tmp_path: Path) -> None:
+    """E2: the AutomationsRuntime's on_spec_saved callback (invoked by _disable
+    after auto-disabling an achieved or stuck automation) must be wired to
+    sync_automation_jobs, or a disabled automation's schedule-trigger cron job
+    keeps ticking against it forever (it kept try_firing and skipping — the UI
+    even kept showing a misleading "next run" for something that will never
+    fire again)."""
+    from durin.automations.spec import parse_automation
+
+    synced: list[tuple] = []
+    monkeypatch.setattr(
+        "durin.cli.commands.sync_automation_jobs",
+        lambda cron_service, spec: synced.append((cron_service, spec)),
+    )
+    seen, _config, _bus = _setup_automations_wiring_test(monkeypatch, tmp_path)
+
+    runtime = seen["automations_runtime"]
+    spec = parse_automation({"name": "a1", "workflow": "w1", "enabled": False})
+    runtime._on_spec_saved(spec)
+
+    assert synced == [(seen["cron"], spec)]
+
+
 def test_gateway_automation_trigger_cron_job_dispatches_try_fire(monkeypatch, tmp_path: Path) -> None:
     """An automation_trigger job must fire the real AutomationsRuntime.try_fire
     (source="schedule"), carrying the job's own payload message through as the

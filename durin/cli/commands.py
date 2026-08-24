@@ -58,6 +58,7 @@ from rich.text import Text
 from durin import __logo__, __version__
 from durin.agent.loop import AgentLoop
 from durin.automations.cron_sync import sync_all as sync_automation_cron_jobs
+from durin.automations.cron_sync import sync_automation_jobs
 from durin.automations.migrate import migrate_loops
 
 
@@ -1687,6 +1688,12 @@ def _run_gateway(
         queue_ttl_s=config.automations.queue_ttl_s,
         on_outcome=_on_automation_outcome,
         is_shutting_down=lambda: _shutdown_requested,
+        # Auto-disable (achieved / escalate_pause) saves the spec with
+        # enabled=False but, on its own, never touches that automation's
+        # schedule-trigger cron jobs — without this, a disabled automation's
+        # job keeps ticking forever (try_fire, then skip). Mirrors how
+        # AutomationsService.save keeps cron in sync after a manual edit.
+        on_spec_saved=lambda spec: sync_automation_jobs(cron, spec),
     )
     agent.register_automations_tool(automations_runtime)
 

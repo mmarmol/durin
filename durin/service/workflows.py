@@ -776,6 +776,18 @@ class WorkflowsService:
         resume = None
         if resume_run_id:
             manifest = run_log.read_manifest(self._workspace, name, resume_run_id)
+            # A resume that names no root_session_key of its own (the common case
+            # — the webui's answer/resume actions, an automation's resumed answer)
+            # must not leave this None: WorkflowEngine.run's _start_manifest
+            # re-stamps root_session_key on EVERY call, resume included, and reads
+            # None as "synthesize a fresh workflow:<run_id>:root" — silently
+            # overwriting whatever root the run's FIRST call recorded (e.g. an
+            # automation's "automation:<name>" attribution) with a synthetic one.
+            # Falling back to the manifest's own recorded value preserves it
+            # through that re-stamp for every resume caller that doesn't pass one
+            # explicitly.
+            if root_session_key is None and manifest is not None:
+                root_session_key = manifest.get("root_session_key")
             paused = (manifest is not None and manifest.get("status") == "needs_input"
                       and manifest.get("needs_input_node"))
             failed = (manifest is not None and manifest.get("status") == "aborted"

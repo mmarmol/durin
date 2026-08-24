@@ -59,7 +59,7 @@ def _wr(status, **kw):
 
 
 def _mk_runtime(tmp_path, results, *, on_help_ask=None, on_counterpart_ask=None,
-                on_outcome=None, is_shutting_down=None, queue_ttl_s=3600):
+                on_outcome=None, is_shutting_down=None, queue_ttl_s=3600, on_spec_saved=None):
     calls = {"exec": []}
 
     async def workflow_exec(name, task, *, resume_run_id=None, run_id=None,
@@ -73,7 +73,8 @@ def _mk_runtime(tmp_path, results, *, on_help_ask=None, on_counterpart_ask=None,
     rt = AutomationsRuntime(tmp_path, workflow_exec=workflow_exec, keep_runs=20,
                             on_help_ask=on_help_ask, on_counterpart_ask=on_counterpart_ask,
                             on_outcome=on_outcome, run_id_factory=lambda: next(ids),
-                            queue_ttl_s=queue_ttl_s, is_shutting_down=is_shutting_down)
+                            queue_ttl_s=queue_ttl_s, is_shutting_down=is_shutting_down,
+                            on_spec_saved=on_spec_saved)
     return rt, calls
 
 
@@ -211,6 +212,44 @@ async def test_achieved_auto_disables_always_delivers_and_chains_still_fire(tmp_
     assert downstream_calls[0]["task"] == "great success"
 
 
+async def test_achieved_auto_disable_invokes_on_spec_saved_with_the_disabled_spec(tmp_path):
+    """E2: the runtime's auto-disable must tell the caller a spec was saved
+    disabled, so a wired-in cron sync can drop the now-pointless schedule job
+    — without this, an achieved automation's cron job keeps ticking forever
+    (try_fire, then skip, since the spec is disabled) with a misleading
+    "next run" still shown for something that will never fire again."""
+    _save(tmp_path, life=Life(intent="get to done", achieved_when="any_completed"))
+    saved = []
+    rt, _ = _mk_runtime(tmp_path, [_wr("completed", out="great success")],
+                        on_spec_saved=lambda spec: saved.append(spec))
+    m = await rt.fire("a1", source="manual")
+    assert m["status"] == "achieved"
+
+    assert len(saved) == 1
+    assert saved[0].name == "a1"
+    assert saved[0].enabled is False
+
+
+async def test_on_spec_saved_raising_is_logged_and_does_not_fail_the_run(tmp_path, caplog):
+    _save(tmp_path, life=Life(intent="get to done", achieved_when="any_completed"))
+
+    def _boom(spec):
+        raise RuntimeError("cron sync exploded")
+
+    rt, _ = _mk_runtime(tmp_path, [_wr("completed", out="great success")], on_spec_saved=_boom)
+
+    handler_id = loguru_logger.add(caplog.handler, format="{message}", level="ERROR")
+    try:
+        with caplog.at_level(logging.ERROR):
+            m = await rt.fire("a1", source="manual")
+    finally:
+        loguru_logger.remove(handler_id)
+
+    assert m["status"] == "achieved"
+    assert load_automation(tmp_path, "a1").enabled is False
+    assert any("on_spec_saved" in r.getMessage() for r in caplog.records)
+
+
 async def test_failures_streak_reaching_max_attempts_escalate_pause_disables(tmp_path):
     _save(tmp_path, life=Life(intent="x", max_attempts=2, on_stuck="escalate_pause"))
     asks = []
@@ -232,6 +271,26 @@ async def test_failures_streak_reaching_max_attempts_escalate_pause_disables(tmp
     escalations = [a for a in asks if a[2] == "escalation"]
     assert len(escalations) == 1
     assert escalations[0][0] == "a1"
+
+
+async def test_escalate_pause_invokes_on_spec_saved_with_the_disabled_spec(tmp_path):
+    """E2 again, via the OTHER auto-disable path: escalate_pause disables an
+    automation stuck past its max_attempts streak the same way an achieved
+    goal does — _disable is the one shared method, so this must sync too."""
+    _save(tmp_path, life=Life(intent="x", max_attempts=1, on_stuck="escalate_pause"))
+    saved = []
+
+    async def on_help_ask(spec, run_id, kind, text, proposal):
+        return None
+
+    rt, _ = _mk_runtime(tmp_path, [_wr("exhausted")], on_help_ask=on_help_ask,
+                        on_spec_saved=lambda spec: saved.append(spec))
+    m = await rt.fire("a1", source="cron")
+    assert m["status"] == "failed"
+
+    assert len(saved) == 1
+    assert saved[0].name == "a1"
+    assert saved[0].enabled is False
 
 
 async def test_on_stuck_notify_mode_notifies_but_does_not_disable(tmp_path):
@@ -466,6 +525,10 @@ async def test_answer_action_approve_resumes_with_approve_text_and_records_appro
     assert m2["status"] == "completed"
     assert calls["exec"][1]["task"] == "approve"
     assert calls["exec"][1]["resume_run_id"] == wf_run_id
+    # E1: the resume exec must carry the same root the initial fire used, or
+    # the engine's own re-stamp-on-resume clobbers the manifest's attribution
+    # with a synthesized workflow:<run_id>:root, losing the automation origin.
+    assert calls["exec"][1]["root_session_key"] == "automation:a1"
 
     record = rl.read_run(tmp_path, "a1", m["run_id"])
     assert record["approval"] == {"action": "approve", "by": "alice", "at_ms": record["approval"]["at_ms"]}

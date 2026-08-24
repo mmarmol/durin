@@ -39,7 +39,7 @@ def _write_approval_workflow(tmp_path, name):
     }), encoding="utf-8")
 
 
-async def _pause_at_approval(tmp_path, name, *, proposal):
+async def _pause_at_approval(tmp_path, name, *, proposal, root_session_key=None):
     """Run the workflow for real, through the service, up to its approval pause —
     so the manifest carries a GENUINE non-empty per-node trace and work_dir, not a
     hand-built fixture. The only thing faked is the LLM turn itself (AgentRunner.run
@@ -58,7 +58,7 @@ async def _pause_at_approval(tmp_path, name, *, proposal):
                                  messages=[{"role": "assistant", "content": proposal}])
     with patch("durin.providers.factory.make_provider", return_value=fake_provider), \
          patch("durin.agent.runner.AgentRunner.run", AsyncMock(return_value=fake_result)):
-        result = await _svc(tmp_path).execute(name, "chase invoice")
+        result = await _svc(tmp_path).execute(name, "chase invoice", root_session_key=root_session_key)
     assert result.status == "needs_input" and result.ask_kind == "approval"
     return result.run_id
 
@@ -82,6 +82,36 @@ async def test_reject_finalizes_cancelled_preserving_the_manifest_trace(tmp_path
     assert manifest["ask_kind"] is None
     assert [r["node_id"] for r in manifest["runs"]] == [r["node_id"] for r in before["runs"]]
     assert manifest["work_dir"] == before["work_dir"]
+
+
+@pytest.mark.asyncio
+async def test_revise_resume_with_no_root_session_key_preserves_the_original_root(tmp_path):
+    """E1: a resume call that names no root_session_key of its own (the common
+    case — an operator's answer, an automation's resumed answer) must not let
+    the engine synthesize a fresh workflow:<run_id>:root and clobber the root
+    the FIRST call recorded. "revise" is the only approval-reply action that
+    re-invokes the engine on a TERMINAL approval node (approve/reject both
+    short-circuit without calling it — see the two tests above), so it's the
+    one that exercises the engine's own re-stamp on a resume."""
+    _write_approval_workflow(tmp_path, "w3")
+    run_id = await _pause_at_approval(tmp_path, "w3", proposal="the drafted email",
+                                      root_session_key="automation:e2e-aprobacion")
+    before = run_log.read_manifest(tmp_path, "w3", run_id)
+    assert before["root_session_key"] == "automation:e2e-aprobacion"
+
+    fake_provider = MagicMock(spec=LLMProvider)
+    fake_provider.get_default_model.return_value = "test-model"
+    fake_provider.provider_key = "test-provider"
+    fake_provider.generation = GenerationSettings()
+    fake_result = AgentRunResult(final_content="the revised email",
+                                 messages=[{"role": "assistant", "content": "the revised email"}])
+    with patch("durin.providers.factory.make_provider", return_value=fake_provider), \
+         patch("durin.agent.runner.AgentRunner.run", AsyncMock(return_value=fake_result)):
+        result = await _svc(tmp_path).execute("w3", "please tweak the tone", resume_run_id=run_id)
+
+    assert result.status == "needs_input" and result.ask_kind == "approval"
+    manifest = run_log.read_manifest(tmp_path, "w3", run_id)
+    assert manifest["root_session_key"] == "automation:e2e-aprobacion"
 
 
 @pytest.mark.asyncio

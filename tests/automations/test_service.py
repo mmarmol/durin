@@ -260,14 +260,19 @@ async def test_fire_with_an_explicit_task_never_falls_back(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_fire_with_no_task_and_no_schedule_trigger_stays_taskless(tmp_path):
+async def test_fire_with_no_task_and_no_schedule_trigger_synthesizes_a_run_task(tmp_path):
+    """E3: a trigger-less automation fired with no explicit task must never
+    reach the workflow with task=None — the node runner renders a None task
+    as the literal string "None" in the draft node's user message. Falls back
+    to the same "Run the <workflow> workflow" synthesis the loops->automations
+    migration uses for a cron trigger with no task text of its own."""
     rt, calls = _runtime(tmp_path, [_wr("completed")])
     svc, p = _svc(tmp_path, runtime=rt), Principal.local()
     await svc.save(AutomationSaveCommand(name="a1", definition=_VALID), p)  # no triggers at all
 
     await svc.fire(AutomationFireCommand(name="a1"), p)
 
-    assert calls["exec"][0][1] is None
+    assert calls["exec"][0][1] == "Run the w1 workflow"
 
 
 # --- answer ------------------------------------------------------------------

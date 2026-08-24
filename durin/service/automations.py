@@ -255,17 +255,23 @@ class AutomationsService:
 
         ``cmd.task`` overrides the workflow's prompt for this one run. The
         webui's "Run now" button never prompts for one, so when it (or any
-        other caller) leaves it blank, fall back to the FIRST enabled
-        schedule trigger's own ``task`` text, if the automation declares one —
-        a scheduled automation fired manually then still gets the same prompt
+        other caller) leaves it blank, fall back to the FIRST schedule
+        trigger's own ``task`` text, if the automation declares one — a
+        scheduled automation fired manually then still gets the same prompt
         its clock trigger would have sent, instead of running with none at
         all. An automation with no schedule trigger (channel/webhook/chain
-        only) still fires with no task, same as before.
+        only, or no triggers at all) instead falls back to a synthesized
+        "Run the <workflow> workflow" — the same text ``durin.automations.
+        migrate`` synthesizes for a cron trigger with no task text of its
+        own — so ``task`` is never ``None`` from this route: the node runner
+        has no placeholder for a missing task and renders one as the literal
+        string "None" in the draft node's user message.
         """
         principal.require(Scope.AUTOMATIONS_WRITE)
         if self._runtime is None:
             raise UnavailableError("firing an automation is not available on this surface")
         task = cmd.task or None
+        spec = None
         if task is None:
             try:
                 spec = load_automation(self._workspace, cmd.name)
@@ -273,6 +279,8 @@ class AutomationsService:
                 spec = None
             if spec is not None:
                 task = next((t.task or None for t in spec.triggers if t.source == "schedule"), None)
+                if task is None:
+                    task = f"Run the {spec.workflow} workflow"
         try:
             record = await self._runtime.fire(cmd.name, source="manual", task=task)
         except AutomationBusy as exc:
