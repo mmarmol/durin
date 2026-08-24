@@ -26,9 +26,10 @@ run. With none at all, it fires only when you tell it to.
 - **Schedule** — the same shapes as a cron job (`at`, `every`, or `cron` with an
   expression and timezone), plus the task text the run receives.
 - **Channel** — a message arriving on `email`, `telegram`, `slack`, `discord`, or
-  `whatsapp` that matches a `filters` map (sender, subject, chat, or a
-  channel-specific field — most keys are exact matches, `*_contains` keys are
-  substring matches) and, optionally, a `semantic` condition judged by the model
+  `whatsapp` that matches a `filters` map (sender, chat, or a channel-specific
+  field, all exact matches; `subject_contains` — email only — and the other
+  `*_contains` keys are substring matches instead) and, optionally, a
+  `semantic` condition judged by the model
   ("this looks like a customer complaint", not just a keyword). By default
   (`match: "wake_or_new"`), a matching message on a thread where a run is already
   **paused** resumes that run instead of starting a new one; set

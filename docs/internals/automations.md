@@ -123,8 +123,10 @@ trigger (or vice versa) is rejected at parse time, so the four shapes never mix:
   unknown key for the given `kind` is rejected outright rather than surfacing later
   as a `TypeError` when `cron_sync` builds the real `CronSchedule`) plus `task`, the
   text the fired run's workflow receives. `cron` validates the expression with
-  `croniter` and the timezone with `zoneinfo` when available; a malformed value fails
-  the save, not the first firing.
+  `croniter` when it's installed (import-guarded — silently skipped otherwise)
+  and, whenever `tz` is set, always validates it with `zoneinfo` (stdlib, not
+  optional — an unknown timezone raises regardless of whether `croniter` ran);
+  either failure fails the save, not the first firing.
 - **`channel`** — `channel` (`email`/`telegram`/`slack`/`discord`/`whatsapp`),
   `filters` (an open key→value map — see §4c for how a filter is matched and which
   keys each channel actually populates), an optional `semantic` condition (prose
