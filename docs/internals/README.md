@@ -172,6 +172,7 @@ End-to-end flow for a single inbound message:
 | MCP client | [mcp.md](mcp.md) | Connecting Model Context Protocol servers, exposing their tools, discovery and OAuth. |
 | Cron | [cron.md](cron.md) | Scheduled work: reminders and agent tasks, per-run isolated sessions, run history. |
 | Workflow engine | [workflow.md](workflow.md) | User-defined flow graphs: work/script/subworkflow/parallel nodes, routing, loop-back, per-node model/context/tools, the `run_workflow` tool. |
+| Automations | [automations.md](automations.md) | Standing triggers over workflows: schedule/channel/webhook/chain triggers, delivery/help routing, the life condition and single-case doctrine, chaining, migration from the retired loops subsystem. |
 | Jobs | [jobs.md](jobs.md) | The long-work registry: work too slow for a turn (local OCR of scanned PDFs today), per-unit resumable progress, restart reconciliation, the `tasks` tool and tray. |
 | Channels & bus | [channels.md](channels.md) | Chat surfaces, the async message bus, inbound/outbound routing and session keys. |
 | Voice | [voice.md](voice.md) | Conversational speech: gateway voice sessions, the STT→agent→TTS loop, spoken-rendition, the browser thin client. |

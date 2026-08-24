@@ -47,6 +47,8 @@ How to install, configure, and run durin.
   (PDF, Office, EPUB, web pages) to read now or remember into the Library.
 - [Workflows](guide/workflows.md) — defining and running multi-step flow
   graphs: nodes, routing, loops, and parallel branches.
+- [Automations](guide/automations.md) — standing triggers (schedule, channel,
+  webhook, chained) that fire a workflow and deliver its result on their own.
 
 ### Internals — for contributors and curious readers
 
@@ -63,6 +65,8 @@ Direct jumps to the most-read component docs:
 - [Channels & message bus](internals/channels.md) — how surfaces reach the loop.
 - [Cron](internals/cron.md) — scheduled work (reminders and agent tasks).
 - [Workflow engine](internals/workflow.md) — user-defined flow graphs the agent runs.
+- [Automations](internals/automations.md) — standing triggers that run a workflow
+  and deliver its outcome.
 
 ## Mental model
 
