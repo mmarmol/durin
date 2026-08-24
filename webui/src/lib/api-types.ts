@@ -23,6 +23,127 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/automations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List all automation definitions, with live counts and life state. */
+        get: operations["automations_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/automations/hooks-secret": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Return the shared webhook ingress secret and its path template. */
+        get: operations["automations_hooks_secret"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/automations/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Global activity feed across every automation, newest-first. */
+        get: operations["automations_runs_feed"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/automations/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Load one automation's full definition. */
+        get: operations["automations_get"];
+        /** Create or update an automation definition. */
+        put: operations["automations_save"];
+        post?: never;
+        /** Delete an automation definition. */
+        delete: operations["automations_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/automations/{name}/fire": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Manually fire an automation. */
+        post: operations["automations_fire"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/automations/{name}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List one automation's persisted runs, newest-first. */
+        get: operations["automations_runs_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/automations/{name}/runs/{run_id}/answer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Answer an automation run awaiting an operator or a counterpart reply. */
+        post: operations["automations_answer"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/channels": {
         parameters: {
             query?: never;
@@ -648,144 +769,6 @@ export interface paths {
         };
         /** Read JSONL log segments (gateway or telemetry) with pagination */
         get: operations["health_logs_list"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/loops": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List all loop definitions, with live run counts. */
-        get: operations["loops_list"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/loops/hooks-secret": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Return the shared webhook ingress secret and its path template. */
-        get: operations["loops_hooks_secret"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/loops/runs": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Global activity feed across every loop, newest-first. */
-        get: operations["loops_runs_feed"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/loops/{name}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Load one loop's full definition. */
-        get: operations["loops_get"];
-        /** Create or update a loop definition. */
-        put: operations["loops_save"];
-        post?: never;
-        /** Delete a loop definition. */
-        delete: operations["loops_delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/loops/{name}/fire": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Manually fire a loop. */
-        post: operations["loops_fire"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/loops/{name}/runs": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List one loop's persisted runs, newest-first. */
-        get: operations["loops_runs_list"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/loops/{name}/runs/{run_id}/answer": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Answer a loop run awaiting an operator or a counterpart reply. */
-        post: operations["loops_answer"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/loops/{name}/stats": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Outcome stats for one loop: recent terminal runs, convergence, escalation rate. */
-        get: operations["loops_stats"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2645,6 +2628,138 @@ export interface components {
             /** Id */
             id: string;
         };
+        /** AutomationAnswerCommand */
+        AutomationAnswerCommand: {
+            /**
+             * Action
+             * @default null
+             */
+            action: ("approve" | "revise" | "reject") | null;
+            /** Name */
+            name: string;
+            /** Run Id */
+            run_id: string;
+            /** Text */
+            text: string;
+        };
+        /** AutomationAnswerResult */
+        AutomationAnswerResult: {
+            /** Run */
+            run: {
+                [key: string]: unknown;
+            };
+        };
+        /** AutomationDeleteCommand */
+        AutomationDeleteCommand: {
+            /** Name */
+            name: string;
+        };
+        /** AutomationDeleteResult */
+        AutomationDeleteResult: {
+            /** Deleted */
+            deleted: boolean;
+        };
+        /** AutomationFireCommand */
+        AutomationFireCommand: {
+            /** Name */
+            name: string;
+            /**
+             * Task
+             * @default
+             */
+            task: string;
+        };
+        /** AutomationFireResult */
+        AutomationFireResult: {
+            /** Run */
+            run: {
+                [key: string]: unknown;
+            };
+        };
+        /** AutomationGetQuery */
+        AutomationGetQuery: {
+            /** Name */
+            name: string;
+        };
+        /** AutomationGetResult */
+        AutomationGetResult: {
+            /** Definition */
+            definition: {
+                [key: string]: unknown;
+            };
+            /** Name */
+            name: string;
+        };
+        /** AutomationRunsQuery */
+        AutomationRunsQuery: {
+            /**
+             * Limit
+             * @default 50
+             */
+            limit: number;
+            /** Name */
+            name: string;
+        };
+        /** AutomationRunsResult */
+        AutomationRunsResult: {
+            /** Runs */
+            runs: {
+                [key: string]: unknown;
+            }[];
+        };
+        /** AutomationSaveCommand */
+        AutomationSaveCommand: {
+            /** Definition */
+            definition: {
+                [key: string]: unknown;
+            };
+            /** Name */
+            name: string;
+        };
+        /** AutomationSaveResult */
+        AutomationSaveResult: {
+            /** Name */
+            name: string;
+        };
+        /**
+         * AutomationsHooksSecretQuery
+         * @description No inputs — returns the shared webhook ingress secret.
+         */
+        AutomationsHooksSecretQuery: Record<string, never>;
+        /** AutomationsHooksSecretResult */
+        AutomationsHooksSecretResult: {
+            /** Path Template */
+            path_template: string;
+            /** Secret */
+            secret: string;
+        };
+        /**
+         * AutomationsListQuery
+         * @description No inputs — lists every automation, each with its live counts and life state.
+         */
+        AutomationsListQuery: Record<string, never>;
+        /** AutomationsListResult */
+        AutomationsListResult: {
+            /** Automations */
+            automations: {
+                [key: string]: unknown;
+            }[];
+        };
+        /** AutomationsRunsQuery */
+        AutomationsRunsQuery: {
+            /**
+             * Limit
+             * @default 50
+             */
+            limit: number;
+        };
+        /** AutomationsRunsResult */
+        AutomationsRunsResult: {
+            /** Runs */
+            runs: {
+                [key: string]: unknown;
+            }[];
+        };
         /** BackgroundTask */
         BackgroundTask: {
             /** Ended At */
@@ -2896,6 +3011,11 @@ export interface components {
         };
         /** CronJobItem */
         CronJobItem: {
+            /**
+             * Automation
+             * @default null
+             */
+            automation: string | null;
             /** Channel */
             channel: string;
             /** Created At Ms */
@@ -3584,157 +3704,6 @@ export interface components {
             next_cursor: unknown;
             /** Scanned Through Ts */
             scanned_through_ts: unknown;
-        };
-        /** LoopAnswerCommand */
-        LoopAnswerCommand: {
-            /** Answer */
-            answer: string;
-            /** Name */
-            name: string;
-            /** Run Id */
-            run_id: string;
-        };
-        /** LoopAnswerResult */
-        LoopAnswerResult: {
-            /** Run */
-            run: {
-                [key: string]: unknown;
-            };
-        };
-        /** LoopDeleteCommand */
-        LoopDeleteCommand: {
-            /** Name */
-            name: string;
-        };
-        /** LoopDeleteResult */
-        LoopDeleteResult: {
-            /** Deleted */
-            deleted: boolean;
-        };
-        /** LoopFireCommand */
-        LoopFireCommand: {
-            /** Name */
-            name: string;
-            /**
-             * Task
-             * @default
-             */
-            task: string;
-        };
-        /** LoopFireResult */
-        LoopFireResult: {
-            /** Run */
-            run: {
-                [key: string]: unknown;
-            };
-        };
-        /** LoopGetQuery */
-        LoopGetQuery: {
-            /** Name */
-            name: string;
-        };
-        /** LoopGetResult */
-        LoopGetResult: {
-            /** Definition */
-            definition: {
-                [key: string]: unknown;
-            };
-            /** Name */
-            name: string;
-        };
-        /** LoopRunsQuery */
-        LoopRunsQuery: {
-            /**
-             * Limit
-             * @default 50
-             */
-            limit: number;
-            /** Name */
-            name: string;
-        };
-        /** LoopRunsResult */
-        LoopRunsResult: {
-            /** Runs */
-            runs: {
-                [key: string]: unknown;
-            }[];
-        };
-        /** LoopSaveCommand */
-        LoopSaveCommand: {
-            /** Definition */
-            definition: {
-                [key: string]: unknown;
-            };
-            /** Name */
-            name: string;
-        };
-        /** LoopSaveResult */
-        LoopSaveResult: {
-            /** Name */
-            name: string;
-        };
-        /** LoopStatsQuery */
-        LoopStatsQuery: {
-            /** Name */
-            name: string;
-        };
-        /** LoopStatsResult */
-        LoopStatsResult: {
-            /** Convergence */
-            convergence: number | null;
-            /** Counts */
-            counts: {
-                [key: string]: number;
-            };
-            /** Escalation Rate */
-            escalation_rate: number | null;
-            /** Name */
-            name: string;
-            /** Outcomes */
-            outcomes: {
-                [key: string]: unknown;
-            }[];
-            /** Pending Events */
-            pending_events: number;
-        };
-        /**
-         * LoopsHooksSecretQuery
-         * @description No inputs — returns the shared webhook ingress secret.
-         */
-        LoopsHooksSecretQuery: Record<string, never>;
-        /** LoopsHooksSecretResult */
-        LoopsHooksSecretResult: {
-            /** Path Template */
-            path_template: string;
-            /** Secret */
-            secret: string;
-        };
-        /**
-         * LoopsListQuery
-         * @description No inputs — lists every loop, each with its live run counts.
-         */
-        LoopsListQuery: Record<string, never>;
-        /** LoopsListResult */
-        LoopsListResult: {
-            /** Loops */
-            loops: {
-                [key: string]: unknown;
-            }[];
-        };
-        /** LoopsRunsQuery */
-        LoopsRunsQuery: {
-            /**
-             * Limit
-             * @default 50
-             */
-            limit: number;
-        };
-        /** LoopsRunsResult */
-        LoopsRunsResult: {
-            /** Runs */
-            runs: {
-                [key: string]: unknown;
-            }[];
         };
         /**
          * MCPOAuthConfig
@@ -6311,6 +6280,222 @@ export interface operations {
             };
         };
     };
+    automations_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutomationsListQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomationsListResult"];
+                };
+            };
+        };
+    };
+    automations_hooks_secret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutomationsHooksSecretQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomationsHooksSecretResult"];
+                };
+            };
+        };
+    };
+    automations_runs_feed: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutomationsRunsQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomationsRunsResult"];
+                };
+            };
+        };
+    };
+    automations_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutomationGetQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomationGetResult"];
+                };
+            };
+        };
+    };
+    automations_save: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutomationSaveCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomationSaveResult"];
+                };
+            };
+        };
+    };
+    automations_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutomationDeleteCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomationDeleteResult"];
+                };
+            };
+        };
+    };
+    automations_fire: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutomationFireCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomationFireResult"];
+                };
+            };
+        };
+    };
+    automations_runs_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutomationRunsQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomationRunsResult"];
+                };
+            };
+        };
+    };
+    automations_answer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutomationAnswerCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomationAnswerResult"];
+                };
+            };
+        };
+    };
     config_channels_list: {
         parameters: {
             query?: never;
@@ -7291,246 +7476,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LogsListResult"];
-                };
-            };
-        };
-    };
-    loops_list: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["LoopsListQuery"];
-            };
-        };
-        responses: {
-            /** @description Success */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LoopsListResult"];
-                };
-            };
-        };
-    };
-    loops_hooks_secret: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["LoopsHooksSecretQuery"];
-            };
-        };
-        responses: {
-            /** @description Success */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LoopsHooksSecretResult"];
-                };
-            };
-        };
-    };
-    loops_runs_feed: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["LoopsRunsQuery"];
-            };
-        };
-        responses: {
-            /** @description Success */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LoopsRunsResult"];
-                };
-            };
-        };
-    };
-    loops_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["LoopGetQuery"];
-            };
-        };
-        responses: {
-            /** @description Success */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LoopGetResult"];
-                };
-            };
-        };
-    };
-    loops_save: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["LoopSaveCommand"];
-            };
-        };
-        responses: {
-            /** @description Success */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LoopSaveResult"];
-                };
-            };
-        };
-    };
-    loops_delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["LoopDeleteCommand"];
-            };
-        };
-        responses: {
-            /** @description Success */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LoopDeleteResult"];
-                };
-            };
-        };
-    };
-    loops_fire: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["LoopFireCommand"];
-            };
-        };
-        responses: {
-            /** @description Success */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LoopFireResult"];
-                };
-            };
-        };
-    };
-    loops_runs_list: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["LoopRunsQuery"];
-            };
-        };
-        responses: {
-            /** @description Success */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LoopRunsResult"];
-                };
-            };
-        };
-    };
-    loops_answer: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["LoopAnswerCommand"];
-            };
-        };
-        responses: {
-            /** @description Success */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LoopAnswerResult"];
-                };
-            };
-        };
-    };
-    loops_stats: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["LoopStatsQuery"];
-            };
-        };
-        responses: {
-            /** @description Success */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LoopStatsResult"];
                 };
             };
         };

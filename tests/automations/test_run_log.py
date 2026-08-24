@@ -12,6 +12,11 @@ def _cause(kind="schedule", excerpt="fired", trigger_index=0):
     return {"kind": kind, "excerpt": excerpt, "trigger_index": trigger_index}
 
 
+def _seed(tmp_path, automation, run_id, status, started_at):
+    rl.start_run(tmp_path, automation, run_id, cause=_cause())
+    rl.update_run(tmp_path, automation, run_id, status=status, started_at=started_at)
+
+
 def test_runs_root_path(tmp_path):
     assert rl.runs_root(tmp_path) == tmp_path / "automations-runs"
 
@@ -179,6 +184,61 @@ def test_prune_does_not_keep_achieved_beyond_the_limit(tmp_path):
         rl.finalize_run(tmp_path, "a", f"r{i}", status="achieved")
     rl.prune_runs(tmp_path, "a", keep=2)
     assert len(rl.list_runs(tmp_path, "a", limit=50)) == 2
+
+
+# --- list_runs / list_all_runs exempt paused runs from the cap (F8) ---------
+
+
+def test_list_runs_exempts_a_paused_run_from_the_limit(tmp_path):
+    """A paused run is an actionable resume point — the only status
+    AutomationsRuntime._park ever sets — and must never drop off the listing
+    just because enough newer terminal runs piled up ahead of it, mirroring
+    durin.workflow.run_log.list_all_runs's identical needs_input exemption."""
+    _seed(tmp_path, "a", "old-paused", "paused", started_at=0.0)
+    for i in range(10):
+        _seed(tmp_path, "a", f"r{i}", "completed", started_at=float(i + 1))
+
+    listed = rl.list_runs(tmp_path, "a", limit=5)
+
+    assert "old-paused" in {m["run_id"] for m in listed}
+    assert len(listed) == 6  # 5 kept terminal + the paused one
+
+
+def test_list_runs_still_caps_terminal_runs_at_the_limit(tmp_path):
+    """The exemption is paused-only — an ordinary terminal-run overflow is
+    still capped, same as before this fix."""
+    for i in range(10):
+        _seed(tmp_path, "a", f"r{i}", "completed", started_at=float(i))
+
+    assert len(rl.list_runs(tmp_path, "a", limit=5)) == 5
+
+
+def test_list_all_runs_exempts_a_paused_run_from_the_global_cap(tmp_path):
+    """Same exemption applied to the global cross-automation feed: 120
+    terminal runs plus one old paused run must never push the paused run out
+    of the default limit=100 window."""
+    _seed(tmp_path, "a", "old-paused", "paused", started_at=0.0)
+    for i in range(120):
+        _seed(tmp_path, "a", f"r{i}", "completed", started_at=float(i + 1))
+
+    listed = rl.list_all_runs(tmp_path)
+
+    assert "old-paused" in {m["run_id"] for m in listed}
+    assert len(listed) == 101  # 100 kept terminal + the paused one
+
+
+def test_list_all_runs_exempts_paused_across_different_automations(tmp_path):
+    """The global feed's exemption applies across the merged cross-automation
+    set, not just within one automation's own runs."""
+    _seed(tmp_path, "a", "a-paused", "paused", started_at=0.0)
+    _seed(tmp_path, "b", "b-paused", "paused", started_at=0.0)
+    for i in range(120):
+        _seed(tmp_path, "a", f"r{i}", "completed", started_at=float(i + 1))
+
+    listed = rl.list_all_runs(tmp_path)
+
+    ids = {m["run_id"] for m in listed}
+    assert {"a-paused", "b-paused"} <= ids
 
 
 def test_find_orphans_reports_stale_ownerless_run(tmp_path):

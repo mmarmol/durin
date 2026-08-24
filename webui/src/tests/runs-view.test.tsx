@@ -76,6 +76,21 @@ const LEGACY_NEEDS_INPUT: api.WorkflowGlobalRun = {
   needs_input_node: null,
 };
 
+// A needs_input run that belongs to an automation (origin set by
+// AutomationsRuntime) — genuinely resumable (has a needs_input_node), but
+// owned by the Automations section's own "Te necesita" inbox instead of this
+// tab's tray. See strandedRuns' own two-inboxes comment.
+const NEEDS_INPUT_AUTOMATION: api.WorkflowGlobalRun = {
+  workflow: "cobrar-factura",
+  run_id: "run-automation-paused",
+  status: "needs_input",
+  started_at: 1500,
+  finished_at: null,
+  task: "reclamar la factura FAC-1042",
+  needs_input_node: "enviar-recordatorio",
+  origin: "automation:cobrar-fac-1042",
+};
+
 // A parent pipeline and the two sub-runs it spawned. The feed delivers them
 // newest-first — children ABOVE their parent, the exact interleaving the
 // grouped tree exists to undo.
@@ -120,6 +135,18 @@ describe("strandedRuns", () => {
 
   it("excludes needs_input entries with no needs_input_node (not resumable)", () => {
     expect(strandedRuns([NEEDS_INPUT, LEGACY_NEEDS_INPUT]).map((r) => r.run_id)).toEqual([
+      "run-waiting",
+    ]);
+  });
+
+  it("excludes a resumable needs_input entry whose origin belongs to an automation", () => {
+    expect(strandedRuns([NEEDS_INPUT, NEEDS_INPUT_AUTOMATION]).map((r) => r.run_id)).toEqual([
+      "run-waiting",
+    ]);
+  });
+
+  it("does not exclude a run with no origin at all (an ordinary interactive session)", () => {
+    expect(strandedRuns([{ ...NEEDS_INPUT, origin: null }]).map((r) => r.run_id)).toEqual([
       "run-waiting",
     ]);
   });
@@ -321,6 +348,33 @@ describe("RunsView", () => {
     // Tray (built from strandedRuns) surfaces only the resumable one: exactly
     // one entry carries the tray's "paused …" affordance.
     expect(screen.getAllByText(/paused .*ago/i)).toHaveLength(1);
+  });
+
+  it("shows the automations-inbox footer link only when an automation-origin paused run exists, and fires the callback", async () => {
+    vi.mocked(api.listAllWorkflowRuns).mockResolvedValue([NEEDS_INPUT_AUTOMATION]);
+    const onOpenAutomations = vi.fn();
+    const user = userEvent.setup();
+    render(wrap(<RunsView onOpenAutomations={onOpenAutomations} />));
+
+    const link = await screen.findByRole("button", { name: /view automations inbox/i });
+    await user.click(link);
+    expect(onOpenAutomations).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides the automations-inbox footer link when no automation-origin paused run exists", async () => {
+    vi.mocked(api.listAllWorkflowRuns).mockResolvedValue([NEEDS_INPUT, COMPLETED]);
+    render(wrap(<RunsView />));
+
+    await screen.findByText("summarize the week");
+    expect(screen.queryByRole("button", { name: /view automations inbox/i })).not.toBeInTheDocument();
+  });
+
+  it("shows both the ordinary tray and the automations-inbox link together when both kinds of paused run exist", async () => {
+    vi.mocked(api.listAllWorkflowRuns).mockResolvedValue([NEEDS_INPUT, NEEDS_INPUT_AUTOMATION]);
+    render(wrap(<RunsView />));
+
+    await screen.findByText(/Which environment — staging or prod\?/);
+    expect(screen.getByRole("button", { name: /view automations inbox/i })).toBeInTheDocument();
   });
 
   it("polls while a run is still running", async () => {
@@ -623,6 +677,53 @@ describe("RunsView", () => {
     expect(screen.getByText(/b-step/)).toBeInTheDocument();
     expect(screen.queryByText(/a-step/)).not.toBeInTheDocument();
   });
+
+  it("honors initialSelection: selects the matching run and loads its manifest without a click", async () => {
+    vi.mocked(api.listAllWorkflowRuns).mockResolvedValue([
+      { workflow: "digest", run_id: "run-done", status: "completed", started_at: 2000, finished_at: 2100, task: "summarize the week", needs_input_node: null },
+      { workflow: "onboarding", run_id: "run-waiting", status: "needs_input", started_at: 1000, finished_at: null, task: "set up the account", needs_input_node: "ask" },
+    ]);
+    // needs_input (not completed) deliberately: RunDetail renders a
+    // needs_input manifest's final_output as plain text, never through its
+    // lazy-loaded MarkdownText path (see RunDetail.tsx's needs_input banner
+    // vs. its completed-with-output branch) — this proves initialSelection's
+    // own selection/fetch wiring without depending on an unrelated lazy
+    // Suspense boundary this test has no reason to exercise.
+    vi.mocked(api.getWorkflowRunManifest).mockResolvedValue({
+      status: "needs_input",
+      final_output: "Which environment — staging or prod?",
+      needs_input_node: "ask",
+      run_id: "run-waiting",
+      runs: [],
+    });
+
+    render(wrap(<RunsView initialSelection={{ workflow: "onboarding", runId: "run-waiting" }} />));
+
+    // Bare findByText, no chained .toBeInTheDocument(): its own resolution
+    // already is the assertion (see the "renders the final output as
+    // markdown" test's fix note below for why chaining a second, later check
+    // on the same resolved reference is a real, not just theoretical, TOCTOU
+    // gap under load — every other findByText in this file already does it
+    // this way).
+    await screen.findByText(/Which environment — staging or prod\?/);
+    expect(api.getWorkflowRunManifest).toHaveBeenCalledWith("tok", "onboarding", "run-waiting");
+  });
+
+  it("does nothing (no crash, no selection) when initialSelection names a run outside the fetched feed", async () => {
+    // vi.restoreAllMocks() in afterEach does not reset a vi.mock()-factory
+    // vi.fn()'s call history (see the other call-count assertions in this
+    // file) — clear explicitly so an earlier test's calls can't leak in and
+    // make a real "no fetch happened" regression look like it's passing.
+    const manifestSpy = vi.mocked(api.getWorkflowRunManifest);
+    manifestSpy.mockClear();
+    vi.mocked(api.listAllWorkflowRuns).mockResolvedValue([COMPLETED]);
+
+    render(wrap(<RunsView initialSelection={{ workflow: "ghost", runId: "nowhere" }} />));
+
+    await screen.findByText("summarize the week"); // the feed still renders normally
+    expect(screen.getByText(/Select a run/i)).toBeInTheDocument();
+    expect(manifestSpy).not.toHaveBeenCalled();
+  });
 });
 
 describe("RunDetail", () => {
@@ -685,9 +786,19 @@ describe("RunDetail", () => {
       run_id: "r4",
       runs: [],
     });
-    // The markdown body (or its plain-text fallback while the renderer lazy-loads)
-    // carries the output text.
-    expect(await screen.findByText(/All good\./)).toBeInTheDocument();
+    // Root-caused a real, reproduced flake here (not a guess): findByText's own
+    // resolution is not itself flaky, but chaining .toBeInTheDocument() on its
+    // result adds a second, LATER check of that same element reference. When
+    // MarkdownText's lazy import is still settling (its Suspense fallback
+    // renders this exact text as plain text first — see MarkdownText.tsx), the
+    // fallback element findByText resolved to can be swapped out for the real
+    // rendered markdown between the await and the follow-up check, so the
+    // now-detached reference correctly reads as "not in the document" even
+    // though equivalent text is still on screen via the new element. Asserting
+    // through findByText's own resolution (which every other findByText in
+    // this file already does bare, without a chained .toBeInTheDocument())
+    // closes that gap instead of widening a timeout that was never the cause.
+    await screen.findByText(/All good\./);
     expect(screen.getByRole("button", { name: /copy final output/i })).toBeInTheDocument();
   });
 });

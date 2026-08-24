@@ -1670,10 +1670,21 @@ export function SeedUpdatesBanner({ token, onApplied }: {
   );
 }
 
-export function WorkflowsView() {
+export function WorkflowsView({
+  initialSelection,
+  onOpenAutomations,
+}: {
+  // A deep link from the automations detail view ("Ver ejecución completa
+  // →"): forces the runs pane open and passes the run straight through to
+  // RunsView, which does the actual selecting once its feed has loaded.
+  initialSelection?: { workflow: string; runId: string } | null;
+  // Threaded straight through to RunsView's own tray footer link — see its
+  // doc comment.
+  onOpenAutomations?: () => void;
+}) {
   const { t } = useTranslation();
   const { token } = useClient();
-  const [pane, setPane] = useState<WorkflowsPane>("editor");
+  const [pane, setPane] = useState<WorkflowsPane>(initialSelection ? "runs" : "editor");
   const [names, setNames] = useState<string[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [def, setDef] = useState<WorkflowDef | null>(null);
@@ -2226,7 +2237,7 @@ export function WorkflowsView() {
         }}
       />
       <div className={cn("flex min-h-0 flex-1", pane !== "runs" && "hidden")}>
-        <RunsView />
+        <RunsView initialSelection={initialSelection} onOpenAutomations={onOpenAutomations} />
       </div>
       <div className={cn("flex min-h-0 flex-1", pane !== "editor" && "hidden")}>
       <aside className="w-56 shrink-0 overflow-y-auto border-r p-2">

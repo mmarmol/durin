@@ -12,8 +12,12 @@ import type { InboundEvent, ToolProgressEvent, WorkActivity, WorkBranch, WorkIte
  * Map a raw node array (from either live WS frames or polled BackgroundTask)
  * into WorkNode[]. Nodes with null/absent branches map to WorkNode with no
  * branches property.
+ *
+ * Exported so other `runs:feed` consumers (the automations detail view's
+ * LiveRunCard) reuse this exact parser instead of re-deriving the same
+ * mapping — the wire shape is shared, so the parser should be too.
  */
-function toWorkNodes(
+export function toWorkNodes(
   raw: Array<{
     id: string;
     label?: string;

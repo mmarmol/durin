@@ -309,7 +309,16 @@ class TriggerMatcher:
 
     async def _fire(self, name: str, channel: str, content: str, origin: dict) -> None:
         try:
-            await self._runtime.fire(name, source="channel", task=content, origin=origin)
+            # HookDispatcher (webhook trigger ingress) reuses this same method
+            # with a synthetic channel="webhook" (see this module's own
+            # docstring) — passing that through as cause.kind lets a run
+            # history distinguish a webhook fire from an ordinary inbound
+            # message. Every real inbound channel (email/slack/telegram/
+            # discord/whatsapp) still collapses to the generic "channel"
+            # bucket, matching cause.kind's existing vocabulary — this is not
+            # a per-channel breakdown.
+            source = "webhook" if channel == "webhook" else "channel"
+            await self._runtime.fire(name, source=source, task=content, origin=origin)
             self._emit(name, channel, "fired")
         except AutomationBusy:
             # Belt and braces: the pending-fires guard should make this

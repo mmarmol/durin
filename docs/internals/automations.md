@@ -279,9 +279,9 @@ possibly-restarted process than the one that fired it) and releases the claim
 *before* resuming — if the resumed workflow immediately asks another tagged
 question, `_park` registers a fresh claim, so releasing first never races a
 just-registered one. For an `ask_kind == "approval"` pause, an explicit `action`
-(the agent tool's `resolution` parameter, or any caller of the HTTP answer route
-passing one — the service DTO carries the field even though no webui surface
-drives it yet) bypasses free-text parsing and synthesizes the canonical resume text
+(the agent tool's `resolution` parameter, the webui Automations inbox's
+Approve/Revise/Reject, or any other caller of the HTTP answer route passing
+one) bypasses free-text parsing and synthesizes the canonical resume text
 (`"approve"`/`"reject"`); with no
 explicit action, `durin.workflow.approval.parse_approval_reply` interprets the reply
 text, defaulting to `"revise"` when it doesn't parse as approve/reject — the same
@@ -530,10 +530,13 @@ migrated. Both legacy sections are otherwise inert.
 `automations`) a generic filesystem write tool refuses to touch
 (`durin/agent/tools/filesystem.py`'s `_resolve_write`) — reads stay legitimate, but a
 definition can only be written through the door that validates and versions it: the
-`automations` tool's `create`/`enable`/`pause` actions today, or a future webui
-automations editor (not yet built — see the guide's "Managing automations today").
-This closes the same gap that once let workflow edits land unvalidated and
-unversioned.
+`automations` tool's `create`/`enable`/`pause` actions, the webui's automations
+editor, or a script calling the HTTP API directly — see the guide's "Managing
+automations today". All three ultimately call the same `save_automation()` store
+function (directly for the agent tool; through `AutomationsService.save` /
+`PUT /api/v1/automations/{name}` for the webui editor and direct API callers), so
+validation and versioning happen exactly once regardless of the door. This closes
+the same gap that once let workflow edits land unvalidated and unversioned.
 
 ### Service surface
 

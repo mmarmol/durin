@@ -120,12 +120,28 @@ def _load_dir(d: Path) -> list[dict]:
     return out
 
 
+def _cap_exempting_paused(runs: list[dict], limit: int) -> list[dict]:
+    """Cap a newest-first run list at ``limit``, except a ``paused`` run is
+    never dropped for it. A paused run is parked on an operator/counterpart
+    answer (the only status AutomationsRuntime._park ever sets) — it is an
+    actionable resume point, not history, and the "Needs you" tray must never
+    lose one to a run-count cap. Mirrors durin.workflow.run_log.list_all_runs's
+    identical ``needs_input`` exemption: paused entries are set aside first,
+    the cap applies to everything else, then the two groups are merged back
+    into one newest-first list."""
+    paused = [m for m in runs if m.get("status") == "paused"]
+    rest = [m for m in runs if m.get("status") != "paused"][:limit]
+    out = paused + rest
+    out.sort(key=lambda m: (m.get("started_at") or 0, m.get("run_id") or ""), reverse=True)
+    return out
+
+
 def list_runs(ws, automation: str, limit: int | None = 50) -> list[dict]:
     d = _dir(ws, automation)
     if not d.is_dir():
         return []
     runs = _load_dir(d)
-    return runs if limit is None else runs[:limit]
+    return runs if limit is None else _cap_exempting_paused(runs, limit)
 
 
 def list_all_runs(ws, limit: int = 100) -> list[dict]:
@@ -136,8 +152,7 @@ def list_all_runs(ws, limit: int = 100) -> list[dict]:
     for d in root.iterdir():
         if d.is_dir():
             out.extend(_load_dir(d))
-    out.sort(key=lambda m: (m.get("started_at") or 0, m.get("run_id") or ""), reverse=True)
-    return out[:limit]
+    return _cap_exempting_paused(out, limit)
 
 
 def active_runs(ws, automation: str) -> list[dict]:

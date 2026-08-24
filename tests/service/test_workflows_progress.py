@@ -98,6 +98,27 @@ async def test_no_progress_publisher_by_default_does_not_break_execute(tmp_path)
     assert result.status == "completed"
 
 
+@pytest.mark.asyncio
+async def test_progress_publish_survives_a_none_task(tmp_path):
+    """F1d belt-and-suspenders: a caller with no task at all (e.g. an
+    automation fired via try_fire before F1's fix, or any future caller that
+    leaves task unset) must not silently lose every progress frame.
+    WorkflowEngine wraps its progress_emit call in a bare try/except that
+    swallows any exception as best-effort, so an unguarded `task[:200]` here
+    would fail invisibly instead of raising anywhere visible — this asserts
+    frames still publish, with task normalized to ''."""
+    _write_two_node_workflow(tmp_path, "w3")
+    frames: list[dict] = []
+    service = _svc(tmp_path, progress_publish=frames.append)
+
+    result = await _run(service, "w3", task=None)
+
+    assert result.status == "completed"
+    assert frames, "expected at least one progress frame even with task=None"
+    for frame in frames:
+        assert frame["task"] == ""
+
+
 def test_build_runs_feed_event_mirrors_the_run_workflow_schema():
     """Same six keys, same field names, as run_workflow.py's own progress
     publisher (durin/agent/tools/run_workflow.py) — so a runs:feed frame and a

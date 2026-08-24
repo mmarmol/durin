@@ -32,8 +32,18 @@ const selectCls = "h-7 min-w-0 rounded-md border border-border bg-background px-
 // hunting down which workflow/session they belong to. A needs_input run written
 // before the resume feature shipped has no needs_input_node and can't be resumed;
 // it still shows up in the ordinary feed, just not here.
+//
+// Two-inboxes ownership rule: a run whose origin is an automation (origin
+// starts with "automation:" — set by AutomationsRuntime, the same underlying
+// workflow-engine pause an AutomationRun's status "paused" reflects) is
+// excluded here even though it is genuinely needs_input/resumable. It belongs
+// to the Automations section's own "Te necesita" inbox instead — surfacing it
+// in both places would mean the same paused run demands attention twice, in
+// two different vocabularies (approve/reject vs. plain resume).
 export function strandedRuns(runs: WorkflowGlobalRun[]): WorkflowGlobalRun[] {
-  return runs.filter((r) => r.status === "needs_input" && !!r.needs_input_node);
+  return runs.filter(
+    (r) => r.status === "needs_input" && !!r.needs_input_node && !r.origin?.startsWith("automation:"),
+  );
 }
 
 export type RunTree = { entry: WorkflowGlobalRun; children: RunTree[] };
@@ -221,7 +231,24 @@ function TaskText({ text }: { text: string }) {
   );
 }
 
-export function RunsView() {
+export function RunsView({
+  initialSelection,
+  onOpenAutomations,
+}: {
+  // A deep link from another screen (the automations detail view's "Ver
+  // ejecución completa →"): the run to select and load as soon as the feed
+  // has loaded. Consumed once — a later prop change (e.g. the caller re-uses
+  // the same App.tsx state for a second drill-in while this component stays
+  // mounted) does not re-trigger it, since RunsView normally only mounts
+  // fresh per navigation anyway (see App.tsx's conditional view render).
+  initialSelection?: { workflow: string; runId: string } | null;
+  // The tray's cross-link to the Automations section's own inbox (rendered
+  // only when an automation-origin paused run exists — see strandedRuns'
+  // two-inboxes comment above). Optional so the many pre-existing tests that
+  // never touch that footer don't need to stub it; App.tsx always supplies a
+  // real one in production, mirroring onOpenWorkflowRun's own precedent.
+  onOpenAutomations?: () => void;
+}) {
   const { token } = useClient();
   const { t } = useTranslation();
   const [runs, setRuns] = useState<WorkflowGlobalRun[]>([]);
@@ -305,6 +332,17 @@ export function RunsView() {
 
   const tray = useMemo(() => strandedRuns(runs), [runs]);
 
+  // The mirror image of strandedRuns' own exclusion: how many automation-origin
+  // paused runs exist right now, so the footer link below only shows up when
+  // there is somewhere for it to actually send the user.
+  const automationTrayCount = useMemo(
+    () =>
+      runs.filter(
+        (r) => r.status === "needs_input" && !!r.needs_input_node && !!r.origin?.startsWith("automation:"),
+      ).length,
+    [runs],
+  );
+
   const workflowNames = useMemo(
     () => Array.from(new Set(runs.map((r) => r.workflow))).sort(),
     [runs],
@@ -382,6 +420,25 @@ export function RunsView() {
     },
     [token],
   );
+
+  // Consume a deep-linked initialSelection exactly once: find the matching
+  // entry in the just-loaded feed and open it, the same way a row click
+  // would. Guarded on `loading` so it waits for the mount fetch to land
+  // instead of searching an empty array, and on the ref so a later re-render
+  // (e.g. a poll tick updating `runs`) never re-triggers it. A run outside
+  // the feed's default fetch window (not among the most recent global runs)
+  // is silently not found — there is no "fetch one run summary by id"
+  // endpoint to fall back to, and `WorkflowRunResult` (the manifest) does not
+  // carry the started_at/task fields a WorkflowGlobalRun needs to render.
+  const initialSelectionConsumed = useRef(false);
+  useEffect(() => {
+    if (initialSelectionConsumed.current || !initialSelection || loading) return;
+    initialSelectionConsumed.current = true;
+    const entry = runs.find(
+      (r) => r.run_id === initialSelection.runId && r.workflow === initialSelection.workflow,
+    );
+    if (entry) void onSelectEntry(entry);
+  }, [initialSelection, loading, runs, onSelectEntry]);
 
   // Row click: open the run's detail, or close it when it's already the open one
   // (toggling back to the empty pane / the list on small screens).
@@ -476,6 +533,15 @@ export function RunsView() {
                     <TrayRow key={entry.run_id} entry={entry} onClick={() => onRowClick(entry)} />
                   ))}
                 </div>
+              )}
+              {automationTrayCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => onOpenAutomations?.()}
+                  className="mb-2 w-full rounded-md px-2 py-1 text-left text-[11px] text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+                >
+                  {t("runs.openAutomationsInbox")}
+                </button>
               )}
               {feed.length === 0 && (
                 <p className="px-1 py-1 text-xs text-muted-foreground">{t("runs.empty")}</p>

@@ -142,10 +142,23 @@ folder — not a new one.
 
 ## Managing automations today
 
-durin doesn't yet ship a web dashboard surface for automations at all — no visual
-editor and no read-only panel either (both are coming in a future release, the same
-way the Workflows pane already lets you build a flow graph visually). Until then, an
-automation is defined and driven entirely through:
+The web dashboard's Automations section lists every definition — its triggers,
+what it runs, and its life condition — with a "Needs you" tray for pending
+approvals and questions. Review/Answer expands the selected one inline
+into a resolution card: an approval shows the exact proposal quoted and offers
+approve / correct-with-a-comment / reject, a question is a free-text answer —
+the same three-way resolution a channel reply or the `automations` tool
+drives, just from the dashboard. Resolving one refreshes it out of the tray
+immediately. The section also has an editor for creating a definition or
+changing an existing one's triggers, workflow, delivery, help routing, and
+life condition visually, the same way the Workflows pane already lets you
+build a flow graph visually. Clicking a definition opens its detail: a
+"Run now" button to fire a manual run on demand, live, node-by-node
+progress for any run currently in flight, and a run history where each entry
+shows its cause, outcome, and delivery record (or approval record, for a run a
+human resolved) — with a link into the Workflows pane's own run detail for the
+full execution trace (nodes, sessions, artifacts). Beyond the dashboard, an
+automation can also be defined and driven through:
 
 - **The agent, in chat.** Describe the standing work you want — "each time an email
   with INV-4471 in the subject arrives, run the chase-invoice workflow and ping me

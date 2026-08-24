@@ -137,6 +137,23 @@ async def test_try_fire_skips_disabled_automation(tmp_path):
     assert calls["exec"] == []
 
 
+async def test_try_fire_passes_task_through_to_the_workflow(tmp_path):
+    """F1: a scheduled fire's task (the cron job's own payload message) must
+    reach the workflow's prompt — try_fire used to hardcode task=None,
+    leaving a scheduled automation's workflow with nothing to act on."""
+    _save(tmp_path)
+    rt, calls = _mk_runtime(tmp_path, [_wr("completed")])
+    await rt.try_fire("a1", source="schedule", task="renew the certs")
+    assert calls["exec"][0]["task"] == "renew the certs"
+
+
+async def test_try_fire_with_no_task_still_defaults_to_none(tmp_path):
+    _save(tmp_path)
+    rt, calls = _mk_runtime(tmp_path, [_wr("completed")])
+    await rt.try_fire("a1", source="schedule")
+    assert calls["exec"][0]["task"] is None
+
+
 async def test_single_concurrency_busy_raises_and_try_fire_skips(tmp_path):
     _save(tmp_path)
     rt, _ = _mk_runtime(tmp_path, [_wr("needs_input", out="q", ask_kind="question")])

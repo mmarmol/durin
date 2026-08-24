@@ -117,7 +117,11 @@ async def test_matching_hook_fires(tmp_path):
     assert result == {"result": "fired", "automation": "l1"}
     assert len(rt.fire_calls) == 1
     name, source, task, origin = rt.fire_calls[0]
-    assert name == "l1" and source == "channel" and task == "new order #42"
+    # source ("webhook", not "channel"): matcher.py's _fire distinguishes a
+    # webhook-origin fire (this dispatcher's synthetic channel="webhook") from
+    # an ordinary inbound-channel one, so a run's cause.kind can tell the two
+    # apart — see matcher.py's own _fire docstring comment.
+    assert name == "l1" and source == "webhook" and task == "new order #42"
     assert origin == {
         "channel": "webhook", "sender": "orders", "chat_id": "orders",
         "thread": None, "subject": "orders", "reply": {},

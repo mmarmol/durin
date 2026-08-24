@@ -1433,7 +1433,11 @@ def _run_gateway(
                 return None
             # No origin by construction: a scheduled fire has nobody waiting on
             # it, so its outcome belongs to the automation's declared destination.
-            await automations_runtime.try_fire(job.payload.automation, source="schedule")
+            # task comes from the CronPayload this job was synced from
+            # (durin.automations.cron_sync's message=trig.task) — without it the
+            # workflow's prompt is None, not merely empty.
+            await automations_runtime.try_fire(
+                job.payload.automation, source="schedule", task=job.payload.message or None)
             return None
 
         from durin.cron.prompting import build_cron_turn_prompt

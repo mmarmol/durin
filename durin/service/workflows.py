@@ -868,13 +868,18 @@ class WorkflowsService:
         # (durin/workflow/run_log.py). The engine never emits a terminal
         # (done=True) frame on its own; a caller that needs one builds it from
         # the returned WorkflowResult, same as run_workflow.py does.
+        # `task or ""` guards a genuinely None task (e.g. an automation fired
+        # with none) — WorkflowEngine calls progress_emit inside a bare
+        # try/except that swallows any exception as best-effort, so a bare
+        # `task[:200]` TypeError here would silently drop every frame for the
+        # whole run instead of raising anywhere visible.
         progress_emit = None
         if self._progress_publish is not None:
             def _emit_progress(payload: dict) -> None:
                 self._progress_publish({
                     "run_id": payload["run_id"],
                     "workflow": name,
-                    "task": task[:200],
+                    "task": (task or "")[:200],
                     "nodes": payload["nodes"],
                     "done": False,
                 })

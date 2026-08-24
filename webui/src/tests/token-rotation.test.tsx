@@ -12,7 +12,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   return {
     ...actual,
-    listAllLoopRuns: vi.fn().mockResolvedValue([]),
+    listAllAutomationRuns: vi.fn().mockResolvedValue([]),
     listAllWorkflowRuns: vi.fn().mockResolvedValue([]),
   };
 });
@@ -73,7 +73,7 @@ vi.mock("@/lib/durin-client", () => {
 });
 
 import App from "@/App";
-import { listAllLoopRuns, listAllWorkflowRuns } from "@/lib/api";
+import { listAllAutomationRuns, listAllWorkflowRuns } from "@/lib/api";
 import { fetchBootstrap } from "@/lib/bootstrap";
 import { setCurrentToken } from "@/lib/http";
 
@@ -110,7 +110,7 @@ describe("token rotation", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     expect(fetchBootstrap).toHaveBeenCalledTimes(1);
-    expect(listAllLoopRuns).toHaveBeenCalledTimes(1);
+    expect(listAllAutomationRuns).toHaveBeenCalledTimes(1);
     expect(listAllWorkflowRuns).toHaveBeenCalledTimes(1);
 
     // Cross the proactive-refresh mark (80% of the 10s TTL = 8s).
@@ -121,7 +121,7 @@ describe("token rotation", () => {
 
     // The rotation must not have re-fired the [token]-keyed effects: the
     // badge polls only run again on their own 30s interval.
-    expect(listAllLoopRuns).toHaveBeenCalledTimes(1);
+    expect(listAllAutomationRuns).toHaveBeenCalledTimes(1);
     expect(listAllWorkflowRuns).toHaveBeenCalledTimes(1);
   });
 });

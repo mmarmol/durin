@@ -6,7 +6,7 @@ import { MemoryGraphView } from "@/components/MemoryGraphView";
 import { DreamView } from "@/components/DreamView";
 import { SkillsView } from "@/components/SkillsView";
 import { WorkflowsView } from "@/components/WorkflowsView";
-import { LoopsView } from "@/components/LoopsView";
+import { AutomationsView } from "@/components/AutomationsView";
 import { strandedRuns } from "@/components/workflows/RunsView";
 import { ToastProvider } from "@/components/ui/toast";
 import { SettingsView } from "@/components/settings/SettingsView";
@@ -20,7 +20,7 @@ import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { useSessions } from "@/hooks/useSessions";
 import { useTheme } from "@/hooks/useTheme";
 import { cn } from "@/lib/utils";
-import { listAllLoopRuns, listAllWorkflowRuns, setApiReauthHandler } from "@/lib/api";
+import { listAllAutomationRuns, listAllWorkflowRuns, setApiReauthHandler } from "@/lib/api";
 import { setCurrentToken } from "@/lib/http";
 import { deriveWsUrl, fetchBootstrap, signout } from "@/lib/bootstrap";
 import { DurinClient } from "@/lib/durin-client";
@@ -50,7 +50,7 @@ type BootState =
 const SIDEBAR_STORAGE_KEY = "durin-webui.sidebar";
 const RESTART_STARTED_KEY = "durin-webui.restartStartedAt";
 const SIDEBAR_WIDTH = 272;
-type ShellView = "chat" | "settings" | "memory_graph" | "skills" | "workflows" | "loops" | "dream";
+type ShellView = "chat" | "settings" | "memory_graph" | "skills" | "workflows" | "automations" | "dream";
 
 function AuthForm({
   failed,
@@ -321,6 +321,18 @@ function Shell({
   const { sessions, loading, refresh, createChat, deleteChat, renameChat } = useSessions();
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [view, setView] = useState<ShellView>("chat");
+  // A deep link into the Workflows section's runs pane, set by the
+  // automations detail view's "Ver ejecución completa →" (onOpenWorkflowRun
+  // below). Cleared by the plain Workflows nav (onOpenWorkflows) so a later
+  // ordinary visit to the section does not re-force the runs pane onto a
+  // stale run.
+  const [openWorkflowRun, setOpenWorkflowRun] = useState<{ workflow: string; runId: string } | null>(null);
+  // A deep link into the Automations section's detail view, set by the cron
+  // settings screen's "Abrir automatización →" (onOpenAutomationDetail
+  // below). Cleared by the plain Automations nav (onOpenAutomations) so a
+  // later ordinary visit to the section opens on the list, not a stale
+  // detail — same pairing as openWorkflowRun/onOpenWorkflows above.
+  const [openAutomationDetail, setOpenAutomationDetail] = useState<string | null>(null);
   const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
   const [desktopSidebarOpen, setDesktopSidebarOpen] =
     useState<boolean>(readSidebarOpen);
@@ -333,7 +345,7 @@ function Shell({
   const [restartToast, setRestartToast] = useState<string | null>(null);
   const [isRestarting, setIsRestarting] = useState(false);
   const [strandedRunsCount, setStrandedRunsCount] = useState(0);
-  const [loopsNeedsYouCount, setLoopsNeedsYouCount] = useState(0);
+  const [automationsNeedsYouCount, setAutomationsNeedsYouCount] = useState(0);
 
   useEffect(() => {
     try {
@@ -477,10 +489,38 @@ function Shell({
   const onOpenWorkflows = useCallback(() => {
     setView("workflows");
     setMobileSidebarOpen(false);
+    // A plain nav click, not a drill-in: forget any earlier deep link so
+    // WorkflowsView opens on its normal editor pane instead of re-forcing
+    // the runs pane onto whatever run was last opened that way.
+    setOpenWorkflowRun(null);
   }, []);
 
-  const onOpenLoops = useCallback(() => {
-    setView("loops");
+  const onOpenAutomations = useCallback(() => {
+    setView("automations");
+    setMobileSidebarOpen(false);
+    // A plain nav click, not a drill-in: forget any earlier deep link so
+    // AutomationsView opens on its normal list instead of re-forcing the
+    // detail view onto whatever automation was last opened that way.
+    setOpenAutomationDetail(null);
+  }, []);
+
+  // Cron settings' read-only automation rows (C6): opens Automations with
+  // that automation's own DetailView preselected (AutomationsView reads
+  // openAutomationDetail once its own list has loaded — see its
+  // initialDetailName prop).
+  const onOpenAutomationDetail = useCallback((name: string) => {
+    setOpenAutomationDetail(name);
+    setView("automations");
+    setMobileSidebarOpen(false);
+  }, []);
+
+  // The automations detail view's drill-in into the executions screen: opens
+  // Workflows on its runs pane with this run selected (WorkflowsView reads
+  // openWorkflowRun to decide the initial pane; RunsView does the actual
+  // selecting once its feed has loaded — see its initialSelection prop).
+  const onOpenWorkflowRun = useCallback((workflow: string, runId: string) => {
+    setOpenWorkflowRun({ workflow, runId });
+    setView("workflows");
     setMobileSidebarOpen(false);
   }, []);
 
@@ -541,22 +581,23 @@ function Shell({
     };
   }, [token]);
 
-  // Poll the global loop run feed for the Loops sidebar button's needs-you
-  // badge count. Only needs_operator counts — waiting_info is a run paused
-  // for its own trigger source (e.g. a channel reply), not the operator.
+  // Poll the global automation run feed for the Automations sidebar button's
+  // needs-you badge count. A "paused" run is always parked on an approval or
+  // a question — the only reason durin/automations/runtime.py's `_park` ever
+  // sets that status — so every paused run belongs on this badge.
   useEffect(() => {
     let cancelled = false;
     const load = () => {
-      listAllLoopRuns(token)
+      listAllAutomationRuns(token)
         .then((runs) => {
           if (!cancelled) {
-            setLoopsNeedsYouCount(
-              runs.filter((run) => run.status === "needs_operator").length,
+            setAutomationsNeedsYouCount(
+              runs.filter((run) => run.status === "paused").length,
             );
           }
         })
         .catch(() => {
-          if (!cancelled) setLoopsNeedsYouCount(0);
+          if (!cancelled) setAutomationsNeedsYouCount(0);
         });
     };
     load();
@@ -650,9 +691,9 @@ function Shell({
     onOpenWorkflows,
     workflowsActive: view === "workflows",
     strandedRunsCount,
-    onOpenLoops,
-    loopsActive: view === "loops",
-    loopsNeedsYouCount,
+    onOpenAutomations,
+    automationsActive: view === "automations",
+    automationsNeedsYouCount,
     onOpenDream,
     dreamActive: view === "dream",
   };
@@ -739,6 +780,7 @@ function Shell({
                 setActiveKey(key);
                 setView("chat");
               }}
+              onOpenAutomation={onOpenAutomationDetail}
             />
           </div>
         )}
@@ -761,12 +803,12 @@ function Shell({
         )}
         {view === "workflows" && (
           <div className="absolute inset-0 flex flex-col">
-            <WorkflowsView />
+            <WorkflowsView initialSelection={openWorkflowRun} onOpenAutomations={onOpenAutomations} />
           </div>
         )}
-        {view === "loops" && (
+        {view === "automations" && (
           <div className="absolute inset-0 flex flex-col">
-            <LoopsView />
+            <AutomationsView onOpenWorkflowRun={onOpenWorkflowRun} initialDetailName={openAutomationDetail} />
           </div>
         )}
         {view === "dream" && (
