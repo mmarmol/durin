@@ -84,20 +84,31 @@ export function AutomationsView({
     void refresh();
   }, [refresh]);
 
-  // Self-refresh every 30s — the same cadence App.tsx's sidebar badges already
-  // poll the same two feeds at, so a user sitting on this section sees runs
-  // and life-state changes (a schedule tick, an operator answering elsewhere)
-  // without needing to navigate away and back. Skipped entirely while the
-  // editor is open (`editing !== undefined`): a background refresh doesn't
-  // touch `editing` itself, but re-fetching mid-edit is pure risk for no
-  // benefit here, so the interval just doesn't run rather than needing to
-  // reconcile with in-progress form state. Re-armed the moment the editor
-  // closes.
+  // A `running` run polls fast for the same reason DetailView's own
+  // anyRunning does (an AutomationRun's status only ever changes via a
+  // fresh fetch); a `paused` one is included too, since answering it from
+  // this screen only returns answer_nowait's immediate `running` snapshot —
+  // the actual outcome lands a poll later, and this is the screen where an
+  // operator answers from the inbox and then watches it settle.
+  const anyRunningOrPausedPending = useMemo(
+    () => runs.some((r) => r.status === "running" || r.status === "paused"),
+    [runs],
+  );
+
+  // Self-refresh — 4s while anyRunningOrPausedPending, else the 30s cadence
+  // App.tsx's sidebar badges already poll the same two feeds at, so a user
+  // sitting on this section sees runs and life-state changes (a schedule
+  // tick, an operator answering elsewhere) without needing to navigate away
+  // and back. Skipped entirely while the editor is open
+  // (`editing !== undefined`): a background refresh doesn't touch `editing`
+  // itself, but re-fetching mid-edit is pure risk for no benefit here, so
+  // the interval just doesn't run rather than needing to reconcile with
+  // in-progress form state. Re-armed the moment the editor closes.
   useEffect(() => {
     if (editing !== undefined) return;
-    const id = setInterval(() => void refresh(), 30_000);
+    const id = setInterval(() => void refresh(), anyRunningOrPausedPending ? 4000 : 30_000);
     return () => clearInterval(id);
-  }, [editing, refresh]);
+  }, [editing, refresh, anyRunningOrPausedPending]);
 
   // Consume a deep-linked initialDetailName exactly once: find the matching
   // definition in the just-loaded list and open its DetailView, the same way

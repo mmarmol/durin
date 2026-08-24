@@ -1443,11 +1443,16 @@
       "revise": "Yêu cầu sửa",
       "reject": "Từ chối",
       "answerAndResume": "Trả lời và tiếp tục",
+      "stop": "Dừng lượt chạy này",
+      "stopConfirmTitle": "Dừng lượt chạy này?",
+      "stopConfirmBody": "Kết thúc lượt chạy ngay bây giờ mà không có phản hồi — lượt chạy sẽ không tiếp tục.",
+      "alreadyResolved": "Lượt chạy này đã chuyển trạng thái.",
       "confirmed": {
         "approve": "Đã duyệt.",
         "revise": "Đã gửi yêu cầu sửa.",
         "reject": "Đã từ chối.",
-        "answer": "Đã gửi câu trả lời — lượt chạy đã tiếp tục."
+        "answer": "Đã gửi câu trả lời — lượt chạy đã tiếp tục.",
+        "stop": "Đã dừng lượt chạy."
       }
     },
     "form": {
@@ -1552,8 +1557,10 @@
       "live": {
         "title": "Đang chạy",
         "stop": "Dừng",
+        "stopping": "Đang dừng…",
+        "forceStop": "Buộc dừng",
         "stopConfirmTitle": "Dừng lượt chạy {{runId}}?",
-        "stopConfirmBody": "Lượt chạy dừng ngay lập tức; mọi công việc đang dang dở sẽ mất."
+        "stopConfirmBody": "Yêu cầu lượt chạy dừng lại ở bước quy trình tiếp theo. Bước đang thực hiện sẽ hoàn tất và được giữ lại."
       },
       "history": {
         "title": "Lượt chạy",

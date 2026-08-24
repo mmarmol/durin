@@ -1255,11 +1255,16 @@
       "revise": "Corregir",
       "reject": "Rechazar",
       "answerAndResume": "Responder y reanudar",
+      "stop": "Detener esta corrida",
+      "stopConfirmTitle": "¿Detener esta corrida?",
+      "stopConfirmBody": "Termina la corrida ahora sin una respuesta — no se reanudará.",
+      "alreadyResolved": "Esta corrida ya avanzó.",
       "confirmed": {
         "approve": "Aprobado.",
         "revise": "Corrección enviada.",
         "reject": "Rechazado.",
-        "answer": "Respuesta enviada — corrida reanudada."
+        "answer": "Respuesta enviada — corrida reanudada.",
+        "stop": "Corrida detenida."
       }
     },
     "form": {
@@ -1364,8 +1369,10 @@
       "live": {
         "title": "Corriendo ahora",
         "stop": "Detener",
+        "stopping": "Deteniéndose…",
+        "forceStop": "Forzar detención",
         "stopConfirmTitle": "¿Detener la corrida {{runId}}?",
-        "stopConfirmBody": "La corrida se detiene al instante; el trabajo en curso se pierde."
+        "stopConfirmBody": "Pide a la corrida detenerse en su próximo paso del flujo. El paso en curso termina y se conserva."
       },
       "history": {
         "title": "Corridas",

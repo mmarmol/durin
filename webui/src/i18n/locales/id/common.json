@@ -1443,11 +1443,16 @@
       "revise": "Revisi",
       "reject": "Tolak",
       "answerAndResume": "Jawab & lanjutkan",
+      "stop": "Hentikan run ini",
+      "stopConfirmTitle": "Hentikan run ini?",
+      "stopConfirmBody": "Mengakhiri run sekarang tanpa jawaban — run tidak akan dilanjutkan.",
+      "alreadyResolved": "Run ini sudah berubah status.",
       "confirmed": {
         "approve": "Disetujui.",
         "revise": "Revisi terkirim.",
         "reject": "Ditolak.",
-        "answer": "Jawaban terkirim — run dilanjutkan."
+        "answer": "Jawaban terkirim — run dilanjutkan.",
+        "stop": "Run dihentikan."
       }
     },
     "form": {
@@ -1552,8 +1557,10 @@
       "live": {
         "title": "Sedang berjalan",
         "stop": "Hentikan",
+        "stopping": "Menghentikan…",
+        "forceStop": "Paksa hentikan",
         "stopConfirmTitle": "Hentikan run {{runId}}?",
-        "stopConfirmBody": "Run berhenti seketika; semua pekerjaan yang masih berlangsung akan hilang."
+        "stopConfirmBody": "Meminta run berhenti di langkah alur kerja berikutnya. Langkah yang sedang berjalan akan selesai dan disimpan."
       },
       "history": {
         "title": "Run",

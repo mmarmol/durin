@@ -1443,11 +1443,16 @@
       "revise": "退回修改",
       "reject": "拒絕",
       "answerAndResume": "回答並繼續",
+      "stop": "停止此執行",
+      "stopConfirmTitle": "停止此執行？",
+      "stopConfirmBody": "立即結束執行且不回覆——執行將不會恢復。",
+      "alreadyResolved": "此執行狀態已變化。",
       "confirmed": {
         "approve": "已核准。",
         "revise": "已送出修改意見。",
         "reject": "已拒絕。",
-        "answer": "已送出回答——執行已繼續。"
+        "answer": "已送出回答——執行已繼續。",
+        "stop": "執行已停止。"
       }
     },
     "form": {
@@ -1552,8 +1557,10 @@
       "live": {
         "title": "目前執行中",
         "stop": "停止",
+        "stopping": "正在停止…",
+        "forceStop": "強制停止",
         "stopConfirmTitle": "停止執行 {{runId}}？",
-        "stopConfirmBody": "執行會立即停止；仍在進行中的工作將會遺失。"
+        "stopConfirmBody": "請求執行在下一個工作流程步驟處停止。目前進行中的步驟會完成並保留。"
       },
       "history": {
         "title": "執行紀錄",

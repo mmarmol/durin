@@ -148,20 +148,28 @@ approvals and questions. Review/Answer expands the selected one inline
 into a resolution card: an approval shows the exact proposal quoted and offers
 approve / correct-with-a-comment / reject, a question is a free-text answer —
 the same three-way resolution a channel reply or the `automations` tool
-drives, just from the dashboard. Resolving one refreshes it out of the tray
-immediately. The section also has an editor for creating a definition or
-changing an existing one's triggers, workflow, delivery, help routing, and
-life condition visually, the same way the Workflows pane already lets you
-build a flow graph visually. Clicking a definition opens its detail: a
-"Run now" button to fire a manual run on demand, a pause/resume control that
-flips whether the automation is currently enabled (it works just as well on
-one a life condition already disabled — resuming it re-arms its triggers),
-live node-by-node progress for any run currently in flight with a stop
-control to cancel it early, and a run history where each entry shows its
-cause, outcome, and delivery record (or approval record, for a run a human
-resolved) — with a link into the Workflows pane's own run detail for the
-full execution trace (nodes, sessions, artifacts). Beyond the dashboard, an
-automation can also be defined and driven through:
+drives, just from the dashboard. A secondary "Stop this run" control on the
+same card ends it instead, without a reply — the deterministic case: nothing
+is running to wait for, so it stops immediately and does not resume. Resolving
+one refreshes it out of the tray immediately. The section also has an editor
+for creating a definition or changing an existing one's triggers, workflow,
+delivery, help routing, and life condition visually, the same way the
+Workflows pane already lets you build a flow graph visually. Clicking a
+definition opens its detail: a "Run now" button to fire a manual run on
+demand, a pause/resume control that flips whether the automation is currently
+enabled (it works just as well on one a life condition already disabled —
+resuming it re-arms its triggers), live node-by-node progress for any run
+currently in flight with a stop control, and a run history where each entry
+shows its cause, outcome, and delivery record (or approval record, for a run a
+human resolved) — with a link into the Workflows pane's own run detail for the
+full execution trace (nodes, sessions, artifacts). Stopping an in-flight run
+is a request, not instant: it asks the run to stop at its next workflow step
+(the step already in progress finishes and is kept), then shows as
+interrupted — never delivered as an outcome, whatever the delivery policy
+says. Clicking Stop again while that request is pending offers a second,
+stronger option instead of repeating the same no-op: Force stop interrupts a
+work node's turn mid-flight rather than waiting for the next step boundary.
+Beyond the dashboard, an automation can also be defined and driven through:
 
 - **The agent, in chat.** Describe the standing work you want — "each time an email
   with INV-4471 in the subject arrives, run the chase-invoice workflow and ping me

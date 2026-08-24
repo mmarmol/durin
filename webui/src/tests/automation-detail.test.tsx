@@ -467,6 +467,47 @@ describe("LiveRunCard", () => {
     expect(await screen.findByText("run already finished")).toBeInTheDocument();
     expect(onStopped).not.toHaveBeenCalled();
   });
+
+  it("after a graceful stop, offers Force stop instead of re-enabling Stop, and it calls stopAutomationRun with hard=true", async () => {
+    const { client } = makeFakeClient();
+    const r = run({ run_id: "r7", automation: "soporte-guard", status: "running", workflow_run_id: null });
+    const user = userEvent.setup();
+    render(wrap(<LiveRunCard run={r} workflow="slack-ticket-pipeline" onStopped={() => {}} />, client));
+
+    await user.click(screen.getByRole("button", { name: /^detener$|^stop$/i }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: /^detener$|^stop$/i }));
+    await waitFor(() => expect(api.stopAutomationRun).toHaveBeenCalledTimes(1));
+
+    // The graceful Stop button is gone; only Force stop remains.
+    expect(screen.queryByRole("button", { name: /^detener$|^stop$/i })).not.toBeInTheDocument();
+    const forceButton = screen.getByRole("button", { name: /forzar detención|force stop/i });
+
+    await user.click(forceButton);
+
+    await waitFor(() =>
+      expect(api.stopAutomationRun).toHaveBeenNthCalledWith(2, "tok", "soporte-guard", "r7", true),
+    );
+  });
+
+  it("a lost-race 422 from stop is treated as the run having moved on: no error banner, still calls onStopped", async () => {
+    vi.mocked(api.stopAutomationRun).mockRejectedValueOnce(
+      new api.ApiError(422, "HTTP 422", "run is not active"),
+    );
+    const { client } = makeFakeClient();
+    const r = run({ status: "running", workflow_run_id: null });
+    const onStopped = vi.fn();
+    const user = userEvent.setup();
+    render(wrap(<LiveRunCard run={r} workflow="slack-ticket-pipeline" onStopped={onStopped} />, client));
+
+    await user.click(screen.getByRole("button", { name: /^detener$|^stop$/i }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: /^detener$|^stop$/i }));
+
+    await waitFor(() => expect(onStopped).toHaveBeenCalled());
+    expect(screen.queryByText(/422/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/run is not active/)).not.toBeInTheDocument();
+  });
 });
 
 // -- DetailView --------------------------------------------------------------

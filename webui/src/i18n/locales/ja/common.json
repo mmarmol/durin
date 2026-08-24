@@ -1443,11 +1443,16 @@
       "revise": "修正",
       "reject": "拒否",
       "answerAndResume": "回答して再開",
+      "stop": "この実行を停止",
+      "stopConfirmTitle": "この実行を停止しますか?",
+      "stopConfirmBody": "返信せずに今すぐ実行を終了します — 再開されません。",
+      "alreadyResolved": "この実行はすでに先へ進んでいます。",
       "confirmed": {
         "approve": "承認しました。",
         "revise": "修正依頼を送信しました。",
         "reject": "拒否しました。",
-        "answer": "回答を送信しました — 実行を再開します。"
+        "answer": "回答を送信しました — 実行を再開します。",
+        "stop": "実行を停止しました。"
       }
     },
     "form": {
@@ -1552,8 +1557,10 @@
       "live": {
         "title": "実行中",
         "stop": "停止",
+        "stopping": "停止中…",
+        "forceStop": "強制停止",
         "stopConfirmTitle": "実行 {{runId}} を停止しますか？",
-        "stopConfirmBody": "実行は直ちに停止します。進行中の作業は失われます。"
+        "stopConfirmBody": "次のワークフローステップで停止するよう実行に要求します。進行中のステップは完了し、その結果は保持されます。"
       },
       "history": {
         "title": "実行",

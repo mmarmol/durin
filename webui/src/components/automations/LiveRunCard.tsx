@@ -125,12 +125,19 @@ function LiveNodeRow({ node, now, typicalS }: { node: WorkNode; now: number; typ
  *  websocket key every service-path run publishes onto (A5); the manifest
  *  poll is both the fallback while no live frame has arrived yet and the
  *  terminal source of truth once the run finishes. The header's "Detener"
- *  control calls `POST .../runs/{run_id}/stop`: for a `running` run this
- *  requests cancellation of the in-flight workflow (it finalizes on its own
- *  once the engine unwinds, same as any other stopped run); for a `paused`
- *  one — should this card ever be handed one — there is no workflow in
- *  flight, so the backend finalizes it directly. Either way the card itself
- *  does nothing beyond calling the endpoint and asking its parent to refresh
+ *  control calls `POST .../runs/{run_id}/stop`: for a `running` run this is
+ *  a REQUEST, not instant — it asks the run to stop at its next workflow
+ *  step (the in-flight step finishes and is kept) and the run finalizes on
+ *  its own once the engine unwinds, `interrupted`, never delivered as an
+ *  outcome; for a `paused` one — should this card ever be handed one —
+ *  there is no workflow in flight, so the backend finalizes it directly.
+ *  Once a graceful stop is accepted, the button is replaced by a "Forzar
+ *  detención" follow-up (`hard=true`, interrupts a work node's turn
+ *  mid-flight rather than waiting for the next node boundary) held until
+ *  the run actually leaves `running`; a stop or force-stop that finds the
+ *  run already gone (422) is treated as good news — the same refresh a
+ *  successful one triggers, not an error. Either way the card itself does
+ *  nothing beyond calling the endpoint and asking its parent to refresh
  *  once the request is accepted; it does not wait for the run to actually
  *  finish unwinding. */
 export function LiveRunCard({
@@ -151,9 +158,24 @@ export function LiveRunCard({
   const [manifest, setManifest] = useState<WorkflowRunResult | null>(null);
   const [confirmingStop, setConfirmingStop] = useState(false);
   const [stopping, setStopping] = useState(false);
+  // Set once a graceful stop is accepted and held until this card unmounts
+  // (the run leaves `running` on a later refresh) — a graceful stop is a
+  // REQUEST, not instant, so re-enabling the same button would invite a
+  // confusing repeat click that's actually a no-op (request_cancel only
+  // escalates on an explicit hard=true; a second graceful call changes
+  // nothing). While set, the only action offered is the one thing a repeat
+  // click should actually do: force it.
+  const [stopRequested, setStopRequested] = useState(false);
   const [stopError, setStopError] = useState<string | null>(null);
 
   const runId = run.workflow_run_id;
+
+  // A stop or force-stop that 422s ("run is not active") means the run
+  // already moved on — finished, or was already stopped by something else
+  // — between the last refresh and this click. The right response is the
+  // same refresh a successful stop triggers, not an error banner for news
+  // that is actually good.
+  const isLostRace = (e: unknown) => e instanceof ApiError && e.status === 422;
 
   // The automation's own run id (run.run_id) — distinct from `runId` above,
   // which is the underlying *workflow* engine's run id used for the
@@ -164,9 +186,25 @@ export function LiveRunCard({
     setStopError(null);
     try {
       await stopAutomationRun(token, run.automation, run.run_id);
+      setStopRequested(true);
       onStopped();
     } catch (e) {
-      setStopError(errMsg(e));
+      if (isLostRace(e)) onStopped();
+      else setStopError(errMsg(e));
+    } finally {
+      setStopping(false);
+    }
+  };
+
+  const handleForceStop = async () => {
+    setStopping(true);
+    setStopError(null);
+    try {
+      await stopAutomationRun(token, run.automation, run.run_id, true);
+      onStopped();
+    } catch (e) {
+      if (isLostRace(e)) onStopped();
+      else setStopError(errMsg(e));
     } finally {
       setStopping(false);
     }
@@ -237,20 +275,40 @@ export function LiveRunCard({
         <span>{t("automations.detail.live.title")}</span>
         <div className="flex items-center gap-2">
           {stopError && <span className="text-[11px] font-normal text-destructive">{stopError}</span>}
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={stopping}
-            onClick={() => setConfirmingStop(true)}
-            className="gap-1.5 text-destructive hover:text-destructive"
-          >
-            {stopping ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
-            ) : (
-              <Square className="h-3.5 w-3.5" aria-hidden />
-            )}
-            {t("automations.detail.live.stop")}
-          </Button>
+          {stopRequested ? (
+            <>
+              <span className="text-[11px] text-muted-foreground">{t("automations.detail.live.stopping")}</span>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={stopping}
+                onClick={() => void handleForceStop()}
+                className="gap-1.5 text-destructive hover:text-destructive"
+              >
+                {stopping ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+                ) : (
+                  <Square className="h-3.5 w-3.5" aria-hidden />
+                )}
+                {t("automations.detail.live.forceStop")}
+              </Button>
+            </>
+          ) : (
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={stopping}
+              onClick={() => setConfirmingStop(true)}
+              className="gap-1.5 text-destructive hover:text-destructive"
+            >
+              {stopping ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+              ) : (
+                <Square className="h-3.5 w-3.5" aria-hidden />
+              )}
+              {t("automations.detail.live.stop")}
+            </Button>
+          )}
         </div>
       </div>
       <div className="flex items-start gap-2 px-3.5 py-2 text-[12.5px]">

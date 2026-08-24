@@ -1443,11 +1443,16 @@
       "revise": "Corriger",
       "reject": "Rejeter",
       "answerAndResume": "Répondre et reprendre",
+      "stop": "Arrêter cette exécution",
+      "stopConfirmTitle": "Arrêter cette exécution ?",
+      "stopConfirmBody": "Termine l’exécution maintenant sans réponse — elle ne reprendra pas.",
+      "alreadyResolved": "Cette exécution a déjà évolué.",
       "confirmed": {
         "approve": "Approuvé.",
         "revise": "Correction envoyée.",
         "reject": "Rejeté.",
-        "answer": "Réponse envoyée — exécution reprise."
+        "answer": "Réponse envoyée — exécution reprise.",
+        "stop": "Exécution arrêtée."
       }
     },
     "form": {
@@ -1552,8 +1557,10 @@
       "live": {
         "title": "En cours",
         "stop": "Arrêter",
+        "stopping": "Arrêt en cours…",
+        "forceStop": "Forcer l’arrêt",
         "stopConfirmTitle": "Arrêter l’exécution {{runId}} ?",
-        "stopConfirmBody": "L’exécution s’arrête immédiatement ; tout travail encore en cours est perdu."
+        "stopConfirmBody": "Demande à l’exécution de s’arrêter à sa prochaine étape du flux. L’étape en cours se termine et est conservée."
       },
       "history": {
         "title": "Exécutions",

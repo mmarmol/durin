@@ -1443,11 +1443,16 @@
       "revise": "수정",
       "reject": "거부",
       "answerAndResume": "답변하고 재개",
+      "stop": "이 실행 중지",
+      "stopConfirmTitle": "이 실행을 중지하시겠습니까?",
+      "stopConfirmBody": "답변 없이 지금 실행을 종료합니다 — 재개되지 않습니다.",
+      "alreadyResolved": "이 실행은 이미 진행되었습니다.",
       "confirmed": {
         "approve": "승인했습니다.",
         "revise": "수정 요청을 보냈습니다.",
         "reject": "거부했습니다.",
-        "answer": "답변을 보냈습니다 — 실행이 재개됩니다."
+        "answer": "답변을 보냈습니다 — 실행이 재개됩니다.",
+        "stop": "실행이 중지되었습니다."
       }
     },
     "form": {
@@ -1552,8 +1557,10 @@
       "live": {
         "title": "지금 실행 중",
         "stop": "중지",
+        "stopping": "중지하는 중…",
+        "forceStop": "강제 중지",
         "stopConfirmTitle": "실행 {{runId}}을(를) 중지할까요?",
-        "stopConfirmBody": "실행이 즉시 중지됩니다. 진행 중이던 작업은 사라집니다."
+        "stopConfirmBody": "다음 워크플로 단계에서 중지하도록 실행에 요청합니다. 진행 중인 단계는 완료되어 유지됩니다."
       },
       "history": {
         "title": "실행",

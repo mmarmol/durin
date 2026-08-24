@@ -521,7 +521,13 @@ splits per-topic files into `~/.durin/config.json.d/`, backs up the original
 as `config.json.legacy`, and rewrites `config.json` as a one-line marker
 `{"_layout": "split"}`. The section set is derived from the serialized config
 (every non-default top-level key) so newly added sections are never silently
-dropped.
+dropped. The settings editor's own section list is a filtered view of this,
+not identical to it: `ConfigSettings.tsx` drops `loops` before rendering —
+migration-only legacy input (read once by the boot migration into
+`automations.*`, never written by anything current) that the editor has no
+reason to offer as an editable section. `docs/guide/configuration.md` still
+documents the `loops` keys as CLI-settable, which remains accurate — the
+filter is a webui-only presentation choice, not a config-model change.
 
 `save_config()` writes only non-default fields (`exclude_defaults=True`) back
 to the split directory. `mutate_config()` performs an atomic
