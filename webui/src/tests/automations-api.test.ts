@@ -27,12 +27,19 @@ const MOCK_DEF: AutomationDef = {
   concurrency: "single",
 };
 
+// A fresh "running" run — run_log.start_run always initializes these four
+// keys to null (see durin/automations/run_log.py:49-66), so this mock locks
+// in the present-but-null reality rather than omitting them.
 const MOCK_RUN: AutomationRun = {
   automation: "digest",
   run_id: "run-1",
   status: "running",
   cause: { kind: "manual", excerpt: "" },
   started_at: 1000,
+  workflow_run_id: null,
+  finished_at: null,
+  delivery: null,
+  approval: null,
 };
 
 function errorResponse(status: number) {
@@ -320,6 +327,21 @@ describe("automations API helpers", () => {
         }),
       );
       expect(result).toEqual([MOCK_RUN]);
+    });
+
+    it("round-trips workflow_run_id/finished_at/delivery/approval as null, not absent, for a fresh running run", async () => {
+      vi.mocked(fetch).mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ runs: [MOCK_RUN] }),
+      } as Response);
+
+      const [result] = await listAutomationRuns("tok", "digest");
+
+      expect(result.workflow_run_id).toBeNull();
+      expect(result.finished_at).toBeNull();
+      expect(result.delivery).toBeNull();
+      expect(result.approval).toBeNull();
     });
 
     it("throws ApiError on failure", async () => {

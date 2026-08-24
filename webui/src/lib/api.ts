@@ -1222,13 +1222,16 @@ export interface AutomationRun {
   ask?: string;
   ask_kind?: "approval" | "question";
   proposal?: string | null;
-  workflow_run_id?: string;
+  // workflow_run_id/finished_at/delivery/approval are always-present keys on
+  // the manifest (run_log.start_run initializes all four to null) — null is
+  // the default state of every active run, not "not yet observed."
+  workflow_run_id?: string | null;
   detail?: string | null;
   final_route_label?: string | null;
   started_at: number;
-  finished_at?: number;
-  delivery?: { channel: string; to: string; result: string; at_ms: number };
-  approval?: { action: string; by: string; at_ms: number };
+  finished_at?: number | null;
+  delivery?: { channel: string; to: string; result: string; at_ms: number } | null;
+  approval?: { action: string; by: string; at_ms: number } | null;
 }
 
 export async function listAutomations(
