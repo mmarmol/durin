@@ -499,7 +499,8 @@ export async function listWorkflowRuns(
 
 // One row of the global run feed (GET .../workflows/runs with no `session`), across
 // every workflow, newest-first. `questions` is present only on a needs_input entry
-// (the manifest's final_output, capped at 500 chars).
+// (the manifest's final_output, capped at 500 chars). `origin` is the manifest's
+// root_session_key (e.g. an `automation:<name>` origin vs. an interactive session).
 export type WorkflowGlobalRun = {
   workflow: string;
   run_id: string;
@@ -509,6 +510,10 @@ export type WorkflowGlobalRun = {
   task: string;
   needs_input_node: string | null;
   parent_run_id?: string | null;
+  origin?: string | null;
+  ask_kind?: string | null;
+  final_route_label?: string | null;
+  rejected?: boolean;
   questions?: string;
 };
 
@@ -787,6 +792,7 @@ export interface CronJobRow {
   model: string | null;
   persona: string | null;
   channel: string;
+  automation?: string | null;
   state: {
     next_run_at_ms: number | null;
     last_run_at_ms: number | null;
@@ -1129,6 +1135,212 @@ export async function getLoopStats(
 ): Promise<LoopStats> {
   return request<LoopStats>(
     `${base}/api/v1/loops/${encodeURIComponent(name)}/stats`,
+    token,
+  );
+}
+
+// -- automations ----------------------------------------------------------
+//
+// Field shapes are grounded in durin/service/automations.py (response
+// envelopes), durin/automations/spec.py (automation_to_dict — AutomationDef/
+// AutomationTrigger) and durin/automations/run_log.py (the run manifest —
+// AutomationRun). See each interface's comment for the source of fields that
+// aren't self-evident from the name.
+
+export interface AutomationTrigger {
+  source: "schedule" | "channel" | "webhook" | "chain";
+  // schedule trigger only: CronSchedule-shaped.
+  schedule?: {
+    kind: "at" | "every" | "cron";
+    expr?: string;
+    tz?: string;
+    every_ms?: number;
+    at_ms?: number;
+  };
+  task?: string; // schedule trigger only: the clock fire's task text
+  channel?: string; // channel trigger only: email/telegram/slack/discord/whatsapp
+  filters?: Record<string, string>; // channel trigger only: open key->value map
+  semantic?: string; // channel or webhook trigger: optional model-judged condition
+  match?: "wake_or_new" | "always_new"; // channel trigger only
+  hook?: string; // webhook trigger only: the hook name that fires this trigger
+  correlate?: string; // channel or webhook trigger only: optional single-capture-group regex
+  chain_automation?: string; // chain trigger only: the upstream automation's name
+  chain_when?: "achieved" | "completed" | "failed" | "any"; // chain trigger only
+}
+
+export interface AutomationDef {
+  name: string;
+  workflow: string;
+  enabled: boolean;
+  triggers: AutomationTrigger[];
+  delivery: {
+    channel?: string;
+    to?: string;
+    notify: "always" | "failures_only" | "when_notable" | "never";
+    silent_labels: string[];
+  };
+  help: { channel?: string; to?: string };
+  life?: {
+    intent: string;
+    achieved_when: string;
+    max_attempts?: number;
+    on_stuck: "escalate_pause" | "notify" | "keep";
+  };
+  concurrency: "single" | "parallel";
+}
+
+// AutomationsService.list() = automation_to_dict() + _counts() + _life_state()
+// (durin/service/automations.py). `stuck` is _life_state()'s ceiling flag —
+// true once `attempts` reaches `life.max_attempts`, regardless of `on_stuck`.
+export interface AutomationSummary extends AutomationDef {
+  active_runs: number;
+  paused: number;
+  pending_events: number;
+  attempts: number;
+  achieved: boolean;
+  stuck: boolean;
+}
+
+// The trigger context recorded at fire time — present only for a
+// channel-triggered run (durin.automations.matcher._dispatch_match); null for
+// manual/cron/chain fires, which have nobody behind them.
+export interface AutomationRunOrigin {
+  channel: string;
+  sender: string;
+  chat_id: string;
+  thread: string | null;
+  subject: string | null;
+  reply: Record<string, unknown>;
+}
+
+export interface AutomationRun {
+  automation: string;
+  run_id: string;
+  status: "running" | "paused" | "achieved" | "completed" | "failed" | "rejected" | "interrupted";
+  cause: { kind: string; excerpt: string; trigger_index?: number | null };
+  origin?: AutomationRunOrigin | null;
+  ask?: string;
+  ask_kind?: "approval" | "question";
+  proposal?: string | null;
+  workflow_run_id?: string;
+  detail?: string | null;
+  final_route_label?: string | null;
+  started_at: number;
+  finished_at?: number;
+  delivery?: { channel: string; to: string; result: string; at_ms: number };
+  approval?: { action: string; by: string; at_ms: number };
+}
+
+export async function listAutomations(
+  token: string,
+  base: string = "",
+): Promise<AutomationSummary[]> {
+  const body = await request<{ automations: AutomationSummary[] }>(
+    `${base}/api/v1/automations`,
+    token,
+  );
+  return body.automations;
+}
+
+export async function getAutomation(
+  token: string,
+  name: string,
+  base: string = "",
+): Promise<AutomationDef> {
+  const body = await request<{ name: string; definition: AutomationDef }>(
+    `${base}/api/v1/automations/${encodeURIComponent(name)}`,
+    token,
+  );
+  return body.definition;
+}
+
+export async function saveAutomation(
+  token: string,
+  def: AutomationDef,
+  base: string = "",
+): Promise<void> {
+  await put<{ name: string }>(
+    `${base}/api/v1/automations/${encodeURIComponent(def.name)}`,
+    token,
+    { definition: def },
+  );
+}
+
+export async function deleteAutomation(
+  token: string,
+  name: string,
+  base: string = "",
+): Promise<void> {
+  await del<{ deleted: boolean }>(
+    `${base}/api/v1/automations/${encodeURIComponent(name)}`,
+    token,
+    {},
+  );
+}
+
+export async function fireAutomation(
+  token: string,
+  name: string,
+  task?: string,
+  base: string = "",
+): Promise<{ run_id: string }> {
+  const body = await post<{ run: AutomationRun }>(
+    `${base}/api/v1/automations/${encodeURIComponent(name)}/fire`,
+    token,
+    { task: task ?? "" },
+  );
+  return { run_id: body.run.run_id };
+}
+
+export async function answerAutomationRun(
+  token: string,
+  name: string,
+  runId: string,
+  text: string,
+  action?: "approve" | "revise" | "reject",
+  base: string = "",
+): Promise<AutomationRun> {
+  const body = await post<{ run: AutomationRun }>(
+    `${base}/api/v1/automations/${encodeURIComponent(name)}/runs/${encodeURIComponent(runId)}/answer`,
+    token,
+    { text, action },
+  );
+  return body.run;
+}
+
+export async function listAutomationRuns(
+  token: string,
+  name: string,
+  limit: number = 50,
+  base: string = "",
+): Promise<AutomationRun[]> {
+  const body = await request<{ runs: AutomationRun[] }>(
+    `${base}/api/v1/automations/${encodeURIComponent(name)}/runs?limit=${encodeURIComponent(String(limit))}`,
+    token,
+  );
+  return body.runs;
+}
+
+export async function listAllAutomationRuns(
+  token: string,
+  limit: number = 100,
+  base: string = "",
+): Promise<AutomationRun[]> {
+  const body = await request<{ runs: AutomationRun[] }>(
+    `${base}/api/v1/automations/runs?limit=${encodeURIComponent(String(limit))}`,
+    token,
+  );
+  return body.runs;
+}
+
+/** The shared webhook ingress secret (AUTOMATIONS_WRITE-scoped) — fetch only
+ *  on explicit user action (a "show secret" click), never on mount. */
+export async function getAutomationsHooksSecret(
+  token: string,
+  base: string = "",
+): Promise<{ secret: string; path_template: string }> {
+  return request<{ secret: string; path_template: string }>(
+    `${base}/api/v1/automations/hooks-secret`,
     token,
   );
 }
