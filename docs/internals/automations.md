@@ -392,8 +392,12 @@ jobs, one per trigger, with a deterministic id
 `payload.kind == "automation_trigger"`. `sync_automation_jobs` diffs the wanted set
 against the automation's existing `automation:`-prefixed jobs and reconciles via
 `register_system_job`/`remove_system_job`; it runs on every automation save and
-delete (`durin.service.automations`, `durin.agent.tools.automations`), and
-`sync_all` re-syncs every stored automation at gateway boot, additionally pruning
+delete (`durin.service.automations`, `durin.agent.tools.automations`), and after
+the runtime's own auto-disable (achieved or `escalate_pause`, §4b) via
+`AutomationsRuntime`'s `on_spec_saved` callback (wired in `durin.cli.commands`) —
+without it, a disabled automation's schedule-trigger job would keep ticking
+(try-firing and skipping) instead of going away with it. `sync_all` re-syncs
+every stored automation at gateway boot, additionally pruning
 any orphaned `automation:*` job (owning automation deleted) and — unconditionally,
 regardless of match — every surviving legacy `loop:*` job. A disabled automation, or
 a trigger whose `source` isn't `schedule`, contributes no job.

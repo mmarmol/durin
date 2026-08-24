@@ -31,6 +31,7 @@ import dataclasses
 import time
 import uuid
 from pathlib import Path
+from typing import Callable
 
 from loguru import logger
 
@@ -90,7 +91,8 @@ class AutomationsRuntime:
     def __init__(self, workspace, *, workflow_exec, keep_runs: int,
                  on_help_ask=None, on_counterpart_ask=None, on_outcome=None,
                  run_id_factory=None, queue_ttl_s: int = 3600,
-                 is_shutting_down=None):
+                 is_shutting_down=None,
+                 on_spec_saved: Callable[[AutomationSpec], None] | None = None):
         self._ws = Path(workspace)
         self._exec = workflow_exec
         self._keep_runs = keep_runs
@@ -99,6 +101,12 @@ class AutomationsRuntime:
         self._on_outcome = on_outcome
         self._run_id = run_id_factory or (lambda: uuid.uuid4().hex[:12])
         self._queue_ttl_s = queue_ttl_s
+        # () -> None, called (best-effort) after `_disable` saves a spec with
+        # enabled=False (achieved or escalate_pause) — lets the gateway keep
+        # that automation's schedule-trigger cron jobs in sync (durin.
+        # automations.cron_sync.sync_automation_jobs) so a disabled automation
+        # stops ticking. None on a surface with no cron to sync (tests, tooling).
+        self._on_spec_saved = on_spec_saved
         # () -> bool, true once the gateway has begun a graceful shutdown.
         # Consulted only right before finalizing an aborted/cancelled result
         # that is NOT a deliberate approval rejection, to tell a workflow
@@ -217,7 +225,8 @@ class AutomationsRuntime:
                 resume_text = text
 
         try:
-            result = await self._exec(spec.workflow, resume_text, resume_run_id=record["workflow_run_id"])
+            result = await self._exec(spec.workflow, resume_text, resume_run_id=record["workflow_run_id"],
+                                       root_session_key=f"automation:{spec.name}")
         except Exception as exc:  # noqa: BLE001 — any failure ends the run honestly
             rec = run_log.finalize_run(self._ws, name, run_id, status="failed", detail=str(exc),
                                         workflow_run_id=record["workflow_run_id"])
@@ -524,13 +533,18 @@ class AutomationsRuntime:
         return record
 
     def _disable(self, spec: AutomationSpec, *, reason: str) -> bool:
+        disabled = dataclasses.replace(spec, enabled=False)
         try:
-            save_automation(self._ws, dataclasses.replace(spec, enabled=False),
-                             actor="system", reason=reason)
-            return True
+            save_automation(self._ws, disabled, actor="system", reason=reason)
         except Exception:  # noqa: BLE001 — disabling is best-effort; the run itself already finished
             logger.exception("automations: failed to disable '{}' (reason={})", spec.name, reason)
             return False
+        if self._on_spec_saved is not None:
+            try:
+                self._on_spec_saved(disabled)
+            except Exception:  # noqa: BLE001 — best-effort; the disable itself already succeeded
+                logger.exception("automations: on_spec_saved callback for '{}' failed", spec.name)
+        return True
 
     async def _on_stuck(self, spec: AutomationSpec, run_id: str, streak: int) -> bool:
         mode = spec.life.on_stuck
