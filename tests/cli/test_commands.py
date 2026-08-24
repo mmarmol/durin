@@ -1614,16 +1614,19 @@ def test_gateway_builds_the_automations_runtime_from_config_values(monkeypatch, 
 
 def test_gateway_automation_trigger_cron_job_dispatches_try_fire(monkeypatch, tmp_path: Path) -> None:
     """An automation_trigger job must fire the real AutomationsRuntime.try_fire
-    (source="schedule") instead of falling through to the generic agent-turn
-    dispatch below — a real, tool-enabled turn on an unrelated free-form
-    prompt would run in production if this guard were ever removed."""
+    (source="schedule"), carrying the job's own payload message through as the
+    fire's task (F1: without it, try_fire used to hardcode task=None and the
+    workflow's prompt ended up None, not merely empty) — instead of falling
+    through to the generic agent-turn dispatch below, a real, tool-enabled
+    turn on an unrelated free-form prompt would run in production if this
+    guard were ever removed."""
     seen, _config, bus = _setup_automations_wiring_test(monkeypatch, tmp_path)
 
     runtime = seen["automations_runtime"]
     fired: list[tuple] = []
 
-    async def _fake_try_fire(name, *, source, origin=None):
-        fired.append((name, source))
+    async def _fake_try_fire(name, *, source, task=None, origin=None):
+        fired.append((name, source, task))
         return None
 
     runtime.try_fire = _fake_try_fire
@@ -1637,7 +1640,7 @@ def test_gateway_automation_trigger_cron_job_dispatches_try_fire(monkeypatch, tm
     response = asyncio.run(cron.on_job(job))
 
     assert response is None
-    assert fired == [("a1", "schedule")]
+    assert fired == [("a1", "schedule", "run the digest")]
     assert seen["process_direct_called"] is False
     bus.publish_outbound.assert_not_awaited()
 

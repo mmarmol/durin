@@ -152,7 +152,8 @@ class AutomationsRuntime:
             if token is not None:
                 reset_telemetry(token)
 
-    async def try_fire(self, name: str, *, source: str, origin: dict | None = None) -> dict | None:
+    async def try_fire(self, name: str, *, source: str, task: str | None = None,
+                         origin: dict | None = None) -> dict | None:
         token = _bind_automations_telemetry(name)
         try:
             spec = load_automation(self._ws, name)
@@ -161,7 +162,7 @@ class AutomationsRuntime:
             if spec.concurrency == "single" and run_log.active_runs(self._ws, name):
                 emit_tool_event("automations.fired", {"automation": name, "source": source, "skipped": True})
                 return None
-            return await self._run(spec, source=source, task=None, origin=origin)
+            return await self._run(spec, source=source, task=task, origin=origin)
         finally:
             if token is not None:
                 reset_telemetry(token)

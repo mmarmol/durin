@@ -251,11 +251,30 @@ class AutomationsService:
         summary="Manually fire an automation.",
     )
     async def fire(self, cmd: AutomationFireCommand, principal: Principal) -> AutomationFireResult:
+        """Manually fire an automation ("Run now" in the webui detail view).
+
+        ``cmd.task`` overrides the workflow's prompt for this one run. The
+        webui's "Run now" button never prompts for one, so when it (or any
+        other caller) leaves it blank, fall back to the FIRST enabled
+        schedule trigger's own ``task`` text, if the automation declares one —
+        a scheduled automation fired manually then still gets the same prompt
+        its clock trigger would have sent, instead of running with none at
+        all. An automation with no schedule trigger (channel/webhook/chain
+        only) still fires with no task, same as before.
+        """
         principal.require(Scope.AUTOMATIONS_WRITE)
         if self._runtime is None:
             raise UnavailableError("firing an automation is not available on this surface")
+        task = cmd.task or None
+        if task is None:
+            try:
+                spec = load_automation(self._workspace, cmd.name)
+            except AutomationNotFound:
+                spec = None
+            if spec is not None:
+                task = next((t.task or None for t in spec.triggers if t.source == "schedule"), None)
         try:
-            record = await self._runtime.fire(cmd.name, source="manual", task=cmd.task or None)
+            record = await self._runtime.fire(cmd.name, source="manual", task=task)
         except AutomationBusy as exc:
             raise ValidationFailedError(f"automation busy: {exc}")
         except AutomationNotFound as exc:

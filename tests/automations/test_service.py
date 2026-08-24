@@ -228,6 +228,48 @@ async def test_fire_missing_automation_raises_not_found(tmp_path):
         await svc.fire(AutomationFireCommand(name="ghost"), p)
 
 
+@pytest.mark.asyncio
+async def test_fire_with_no_task_falls_back_to_the_first_schedule_triggers_task(tmp_path):
+    """F1c: the webui's "Run now" button never asks for a task — a scheduled
+    automation fired manually with none must still get the same prompt its
+    clock trigger would have sent, not run with no task at all."""
+    rt, calls = _runtime(tmp_path, [_wr("completed")])
+    svc, p = _svc(tmp_path, runtime=rt), Principal.local()
+    definition = {**_VALID, "triggers": [
+        {"source": "schedule", "schedule": {"kind": "cron", "expr": "0 7 * * *"}, "task": "run the digest"},
+    ]}
+    await svc.save(AutomationSaveCommand(name="a1", definition=definition), p)
+
+    await svc.fire(AutomationFireCommand(name="a1"), p)
+
+    assert calls["exec"][0][1] == "run the digest"
+
+
+@pytest.mark.asyncio
+async def test_fire_with_an_explicit_task_never_falls_back(tmp_path):
+    rt, calls = _runtime(tmp_path, [_wr("completed")])
+    svc, p = _svc(tmp_path, runtime=rt), Principal.local()
+    definition = {**_VALID, "triggers": [
+        {"source": "schedule", "schedule": {"kind": "cron", "expr": "0 7 * * *"}, "task": "scheduled task"},
+    ]}
+    await svc.save(AutomationSaveCommand(name="a1", definition=definition), p)
+
+    await svc.fire(AutomationFireCommand(name="a1", task="explicit task"), p)
+
+    assert calls["exec"][0][1] == "explicit task"
+
+
+@pytest.mark.asyncio
+async def test_fire_with_no_task_and_no_schedule_trigger_stays_taskless(tmp_path):
+    rt, calls = _runtime(tmp_path, [_wr("completed")])
+    svc, p = _svc(tmp_path, runtime=rt), Principal.local()
+    await svc.save(AutomationSaveCommand(name="a1", definition=_VALID), p)  # no triggers at all
+
+    await svc.fire(AutomationFireCommand(name="a1"), p)
+
+    assert calls["exec"][0][1] is None
+
+
 # --- answer ------------------------------------------------------------------
 
 
