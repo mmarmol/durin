@@ -203,6 +203,8 @@ All write routes require `CRON_WRITE` scope; the list route requires `CRON_READ`
 
 The webui exposes a dedicated cron panel in Settings (the **Cron** section), showing each job's schedule label, mode, the persona or model it runs as, last/next run times, status badge, and run history. The panel provides a form to create new jobs, toggle, edit, remove, and manually trigger a run. System jobs are shown for inspection but their remove and edit actions are disabled.
 
+Automation-owned (`automation_trigger`) rows go further: no toggle, run, edit, or remove action at all, since the backend already refuses those writes for this `payload.kind` (see "Automation trigger jobs" above). The row is marked with a badge and a short note instead, and links out to that automation's own detail view — where editing and manual firing actually live. A show/hide pill above the list can filter these rows out entirely when they clutter the operator's own jobs; it only renders when at least one exists, and defaults to showing them, since the point of listing them here at all is that Cron stays the system's complete schedule agenda, not just the user-editable slice of it.
+
 ## 7. Rationale
 
 The two-lock design (`_tick_lock` + `_lock`) serves a specific purpose: `_tick_lock` prevents two scheduler processes from simultaneously entering the tick path (which would cause double execution), while `_lock` — released before `on_job` — prevents a deadlock when the job callback constructs its own non-running `CronService` and calls a mutator. Holding `_lock` across a potentially multi-minute execution would also block every concurrent reader (webui list, CLI status).

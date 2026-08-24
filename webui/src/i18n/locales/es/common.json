@@ -723,6 +723,12 @@
           "name": "Consolidación de memoria de entidades",
           "note": "Pasada diaria (3am local) más disparadores reactivos (post-compactación / cierre de sesión) que procesa las sesiones recientes — extrae atributos de entidades, mina skills, deduplica entidades y destila el pin always-on."
         }
+      },
+      "automationRow": {
+        "toggle": "Mostrar horarios de automatizaciones ({{count}})",
+        "note": "Pertenece a la automatización — se edita ahí.",
+        "readOnlyBadge": "solo lectura",
+        "openAutomation": "Abrir automatización →"
       }
     },
     "modes": {

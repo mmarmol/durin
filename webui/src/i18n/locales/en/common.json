@@ -723,6 +723,12 @@
           "name": "Entity memory consolidation",
           "note": "Daily pass (3am local) plus reactive triggers (post-compaction / session-close) that processes recent sessions — extracts entity attributes, mines skills, deduplicates entities, and distills the always-on pin."
         }
+      },
+      "automationRow": {
+        "toggle": "Show automation schedules ({{count}})",
+        "note": "Belongs to the automation — edit it there.",
+        "readOnlyBadge": "read only",
+        "openAutomation": "Open automation →"
       }
     },
     "modes": {

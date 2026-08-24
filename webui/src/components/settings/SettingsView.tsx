@@ -124,6 +124,9 @@ interface SettingsViewProps {
   onRestart?: () => void;
   isRestarting?: boolean;
   onOpenSession?: (sessionKey: string) => void;
+  // Cron settings' read-only automation rows (C6): "Abrir automatización →"
+  // threads down into CronSettings, mirroring onOpenSession's own precedent.
+  onOpenAutomation?: (name: string) => void;
 }
 
 export function SettingsView({
@@ -137,6 +140,7 @@ export function SettingsView({
   onRestart,
   isRestarting = false,
   onOpenSession,
+  onOpenAutomation,
 }: SettingsViewProps) {
   const { t } = useTranslation();
   const { token } = useClient();
@@ -432,7 +436,7 @@ export function SettingsView({
               ) : activeSection === "mcp" ? (
                 <McpSettings token={token} />
               ) : activeSection === "cron" ? (
-                <CronSettings token={token} onOpenSession={onOpenSession} />
+                <CronSettings token={token} onOpenSession={onOpenSession} onOpenAutomation={onOpenAutomation} />
               ) : activeSection === "secrets" ? (
                 <SecretsSettings token={token} />
               ) : activeSection === "advanced" ? (

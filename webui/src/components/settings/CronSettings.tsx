@@ -371,9 +371,18 @@ function CronForm({
 export function CronSettings({
   token,
   onOpenSession,
+  onOpenAutomation,
 }: {
   token: string;
   onOpenSession?: (sessionKey: string) => void;
+  // C6: a job row owned by an automation (job.automation set) renders an
+  // "Open automation →" button instead of the usual edit/delete/toggle/run
+  // actions; this fires it with the automation's name. Optional so the
+  // existing cron-form/cron-history/cron-api tests (which never touch an
+  // automation-owned row) don't need to stub it — SettingsView always
+  // supplies a real one in production, mirroring onOpenSession's own
+  // precedent.
+  onOpenAutomation?: (name: string) => void;
 }) {
   const { t, i18n } = useTranslation();
   const [jobs, setJobs] = useState<CronJobRow[] | null>(null);
@@ -382,6 +391,12 @@ export function CronSettings({
   const [busyId, setBusyId] = useState<string | null>(null);
   // null = form closed; 'new' = create; CronJobRow = edit
   const [formTarget, setFormTarget] = useState<"new" | CronJobRow | null>(null);
+  // Cron is the system's complete schedule agenda, including the jobs an
+  // automation owns (read-only here — they're edited from Automations).
+  // Shown by default; a pill above the list can hide them when they clutter
+  // the view the operator's own jobs live in. Hidden by n===0 below, not
+  // here, so the count itself stays available even while off.
+  const [showAutomationRows, setShowAutomationRows] = useState(true);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -443,6 +458,9 @@ export function CronSettings({
     await refresh();
   };
 
+  const automationJobCount = jobs?.filter((j) => !!j.automation).length ?? 0;
+  const visibleJobs = jobs && !showAutomationRows ? jobs.filter((j) => !j.automation) : jobs;
+
   return (
     <div className="space-y-8">
       <section>
@@ -481,6 +499,27 @@ export function CronSettings({
           </div>
         ) : null}
 
+        {/* Show/hide pill for automation-owned rows — the established
+            segmented-pill idiom (LoopsView's pane switcher), applied to a
+            single toggle. Hidden entirely when there's nothing to filter. */}
+        {automationJobCount > 0 ? (
+          <div className="mb-3 flex h-7 w-fit rounded-full bg-muted p-0.5">
+            <button
+              type="button"
+              onClick={() => setShowAutomationRows((v) => !v)}
+              aria-pressed={showAutomationRows}
+              className={cn(
+                "rounded-full px-3 text-[12.5px] font-medium transition-colors",
+                showAutomationRows
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:bg-muted/60",
+              )}
+            >
+              {t("settings.cron.automationRow.toggle", { count: automationJobCount })}
+            </button>
+          </div>
+        ) : null}
+
         <SettingsGroup>
           {loading && jobs === null ? (
             <SettingsRow title={t("settings.cron.loading")}>
@@ -497,7 +536,7 @@ export function CronSettings({
               </span>
             </SettingsRow>
           ) : (
-            jobs.map((job) => (
+            visibleJobs!.map((job) => (
               <CronRow
                 key={job.id}
                 job={job}
@@ -508,6 +547,7 @@ export function CronSettings({
                 onEdit={() => setFormTarget(job)}
                 locale={i18n.language}
                 onOpenSession={onOpenSession}
+                onOpenAutomation={onOpenAutomation}
               />
             ))
           )}
@@ -526,6 +566,7 @@ function CronRow({
   onEdit,
   locale,
   onOpenSession,
+  onOpenAutomation,
 }: {
   job: CronJobRow;
   busy: boolean;
@@ -535,6 +576,7 @@ function CronRow({
   onEdit: () => void;
   locale: string;
   onOpenSession?: (sessionKey: string) => void;
+  onOpenAutomation?: (name: string) => void;
 }) {
   const { t } = useTranslation();
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -545,10 +587,15 @@ function CronRow({
   // shouldn't have to know the internal name to understand what the job
   // does. Map known system ids to a translated display label + a short
   // explanation; for user-created jobs (or unknown system ones) we fall
-  // back to the raw job.name.
-  const displayName = job.is_system
-    ? t(`settings.cron.systemJobs.${job.id}.name`, { defaultValue: job.name })
-    : job.name;
+  // back to the raw job.name. An automation-owned job's own `name` is an
+  // internal sync label (durin/automations/cron_sync.py's
+  // "automation <name> trigger <idx>") never meant for display — its
+  // `automation` field carries the actual automation name instead.
+  const displayName = job.automation
+    ? job.automation
+    : job.is_system
+      ? t(`settings.cron.systemJobs.${job.id}.name`, { defaultValue: job.name })
+      : job.name;
   const systemNote = job.is_system
     ? t(`settings.cron.systemJobs.${job.id}.note`, { defaultValue: "" })
     : "";
@@ -558,7 +605,7 @@ function CronRow({
       title={
         <span className="flex items-center gap-2">
           <Clock className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
-          <span>{displayName}</span>
+          <span>{job.automation ? `🗓 ${displayName}` : displayName}</span>
           {job.is_system ? (
             <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
               {t("settings.cron.systemBadge")}
@@ -575,6 +622,7 @@ function CronRow({
         <span className="flex flex-col gap-0.5 text-[11px] text-muted-foreground">
           <span className="font-mono">{job.schedule.label}</span>
           {systemNote ? <span>{systemNote}</span> : null}
+          {job.automation ? <span>{t("settings.cron.automationRow.note")}</span> : null}
           {job.message ? <span className="truncate">{job.message}</span> : null}
           <span>
             {t("settings.cron.fieldNext")}: <span className="tabular-nums">{next}</span>
@@ -602,59 +650,80 @@ function CronRow({
         </span>
       }
     >
-      <div className="flex items-center gap-2">
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={busy || !job.enabled || !!job.state.executing}
-          onClick={onRun}
-          className="rounded-full"
-          title={t("settings.cron.runNow")}
-        >
-          {job.state.executing ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
-          ) : (
-            <Play className="h-3.5 w-3.5" aria-hidden />
+      {job.automation ? (
+        // Automation-owned: the backend already protects remove/update for
+        // these (CronService.remove_job / update_job refuse
+        // automation_trigger jobs — see cron_sync.py), so the UI must not
+        // offer them either. Firing also lives on the automation's own
+        // detail view (its "Ejecutar ahora"), not here.
+        <div className="flex items-center gap-2">
+          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+            {t("settings.cron.automationRow.readOnlyBadge")}
+          </span>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => onOpenAutomation?.(job.automation as string)}
+            className="rounded-full"
+          >
+            {t("settings.cron.automationRow.openAutomation")}
+          </Button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={busy || !job.enabled || !!job.state.executing}
+            onClick={onRun}
+            className="rounded-full"
+            title={t("settings.cron.runNow")}
+          >
+            {job.state.executing ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+            ) : (
+              <Play className="h-3.5 w-3.5" aria-hidden />
+            )}
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={busy}
+            onClick={() => onToggle(!job.enabled)}
+            className="rounded-full"
+          >
+            {job.enabled
+              ? t("settings.models.enabled")
+              : t("settings.models.disabled")}
+          </Button>
+          {/* System jobs cannot be edited or removed (only disabled). */}
+          {job.is_system ? null : (
+            <>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={busy}
+                onClick={onEdit}
+                className="rounded-full text-muted-foreground"
+                title={t("settings.cron.editJob")}
+                aria-label={t("settings.cron.editJob")}
+              >
+                <Pencil className="h-3.5 w-3.5" aria-hidden />
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={busy}
+                onClick={onRemove}
+                className="rounded-full text-muted-foreground hover:text-destructive"
+                title={t("settings.cron.remove")}
+              >
+                <Trash2 className="h-3.5 w-3.5" aria-hidden />
+              </Button>
+            </>
           )}
-        </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={busy}
-          onClick={() => onToggle(!job.enabled)}
-          className="rounded-full"
-        >
-          {job.enabled
-            ? t("settings.models.enabled")
-            : t("settings.models.disabled")}
-        </Button>
-        {/* System jobs cannot be edited or removed (only disabled). */}
-        {job.is_system ? null : (
-          <>
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={busy}
-              onClick={onEdit}
-              className="rounded-full text-muted-foreground"
-              title={t("settings.cron.editJob")}
-              aria-label={t("settings.cron.editJob")}
-            >
-              <Pencil className="h-3.5 w-3.5" aria-hidden />
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={busy}
-              onClick={onRemove}
-              className="rounded-full text-muted-foreground hover:text-destructive"
-              title={t("settings.cron.remove")}
-            >
-              <Trash2 className="h-3.5 w-3.5" aria-hidden />
-            </Button>
-          </>
-        )}
-      </div>
+        </div>
+      )}
     </SettingsRow>
     {/* Run history expandable section */}
     <RunHistory

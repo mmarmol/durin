@@ -327,6 +327,12 @@ function Shell({
   // ordinary visit to the section does not re-force the runs pane onto a
   // stale run.
   const [openWorkflowRun, setOpenWorkflowRun] = useState<{ workflow: string; runId: string } | null>(null);
+  // A deep link into the Automations section's detail view, set by the cron
+  // settings screen's "Abrir automatización →" (onOpenAutomationDetail
+  // below). Cleared by the plain Automations nav (onOpenAutomations) so a
+  // later ordinary visit to the section opens on the list, not a stale
+  // detail — same pairing as openWorkflowRun/onOpenWorkflows above.
+  const [openAutomationDetail, setOpenAutomationDetail] = useState<string | null>(null);
   const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
   const [desktopSidebarOpen, setDesktopSidebarOpen] =
     useState<boolean>(readSidebarOpen);
@@ -490,6 +496,20 @@ function Shell({
   }, []);
 
   const onOpenAutomations = useCallback(() => {
+    setView("automations");
+    setMobileSidebarOpen(false);
+    // A plain nav click, not a drill-in: forget any earlier deep link so
+    // AutomationsView opens on its normal list instead of re-forcing the
+    // detail view onto whatever automation was last opened that way.
+    setOpenAutomationDetail(null);
+  }, []);
+
+  // Cron settings' read-only automation rows (C6): opens Automations with
+  // that automation's own DetailView preselected (AutomationsView reads
+  // openAutomationDetail once its own list has loaded — see its
+  // initialDetailName prop).
+  const onOpenAutomationDetail = useCallback((name: string) => {
+    setOpenAutomationDetail(name);
     setView("automations");
     setMobileSidebarOpen(false);
   }, []);
@@ -760,6 +780,7 @@ function Shell({
                 setActiveKey(key);
                 setView("chat");
               }}
+              onOpenAutomation={onOpenAutomationDetail}
             />
           </div>
         )}
@@ -787,7 +808,7 @@ function Shell({
         )}
         {view === "automations" && (
           <div className="absolute inset-0 flex flex-col">
-            <AutomationsView onOpenWorkflowRun={onOpenWorkflowRun} />
+            <AutomationsView onOpenWorkflowRun={onOpenWorkflowRun} initialDetailName={openAutomationDetail} />
           </div>
         )}
         {view === "dream" && (

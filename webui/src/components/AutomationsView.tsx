@@ -27,12 +27,18 @@ function errMsg(e: unknown): string {
 
 export function AutomationsView({
   onOpenWorkflowRun,
+  initialDetailName,
 }: {
   // Drills into the executions screen for a run this automation launched
   // (RunDetailCard's "Ver ejecución completa →"). Optional so the many
   // existing list/editor tests that never reach the detail view don't need
   // to stub it — App.tsx always supplies a real one in production.
   onOpenWorkflowRun?: (workflow: string, runId: string) => void;
+  // A deep link from the cron settings screen's "Abrir automatización →"
+  // button (C6): the automation to open DetailView on as soon as the list
+  // has loaded. Consumed once — see RunsView's initialSelection for the
+  // same pattern (and the same "outside the loaded set" no-op behavior).
+  initialDetailName?: string | null;
 }) {
   const { token } = useClient();
   const { t } = useTranslation();
@@ -77,6 +83,21 @@ export function AutomationsView({
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // Consume a deep-linked initialDetailName exactly once: find the matching
+  // definition in the just-loaded list and open its DetailView, the same way
+  // a row click would. Guarded on `loading` so it waits for the mount fetch
+  // to land instead of searching an empty array, and on the ref so a later
+  // re-render never re-triggers it. A name outside the loaded set is
+  // silently not found — same no-op precedent as RunsView's own
+  // initialSelection.
+  const initialDetailConsumed = useRef(false);
+  useEffect(() => {
+    if (initialDetailConsumed.current || !initialDetailName || loading) return;
+    initialDetailConsumed.current = true;
+    const match = automations.find((a) => a.name === initialDetailName);
+    if (match) setDetail(match);
+  }, [initialDetailName, loading, automations]);
 
   // The run NeedsYouTray's Revisar/Responder selected, if it is still
   // paused — filtered on status (not just id) so InboxView disappears the

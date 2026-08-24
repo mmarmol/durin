@@ -473,6 +473,28 @@ describe("AutomationsView", () => {
   });
 });
 
+// -- AutomationsView initialDetailName ---------------------------------------
+
+describe("AutomationsView initialDetailName", () => {
+  it("preselects the named automation's DetailView once the list has loaded (C6's 'Abrir automatización' deep link)", async () => {
+    vi.mocked(api.listAutomations).mockResolvedValue(ALL_AUTOMATIONS);
+    render(wrap(<AutomationsView initialDetailName="cobrar-fac-1042" />));
+
+    await screen.findByRole("button", { name: "Back" });
+    expect(screen.getByText("cobrar-fac-1042")).toBeInTheDocument();
+    // Left the list: its own "New automation" button is gone.
+    expect(screen.queryByRole("button", { name: /new automation/i })).not.toBeInTheDocument();
+  });
+
+  it("does nothing (no crash, list renders normally) when initialDetailName names an automation outside the loaded set", async () => {
+    vi.mocked(api.listAutomations).mockResolvedValue(ALL_AUTOMATIONS);
+    render(wrap(<AutomationsView initialDetailName="ghost-automation" />));
+
+    await screen.findByText("soporte-guard"); // the list still renders normally
+    expect(screen.queryByRole("button", { name: "Back" })).not.toBeInTheDocument();
+  });
+});
+
 // -- NeedsYouTray (via AutomationsView) --------------------------------------
 
 describe("NeedsYouTray", () => {
