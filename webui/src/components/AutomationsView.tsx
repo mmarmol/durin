@@ -211,6 +211,11 @@ export function AutomationsView({
         onBack={() => setDetail(null)}
         onOpenWorkflowRun={onOpenWorkflowRun ?? (() => {})}
         onAutomationSaved={refresh}
+        feedShowsActivity={runs.some(
+          (r) =>
+            r.automation === detail.name &&
+            (r.status === "running" || r.status === "paused"),
+        )}
       />
     );
   }

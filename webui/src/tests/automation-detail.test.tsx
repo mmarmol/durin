@@ -552,6 +552,33 @@ describe("DetailView", () => {
     vi.useRealTimers();
   });
 
+  it("polls while the parent feed shows activity, so a run started before this view had any runs of its own becomes visible", async () => {
+    vi.useFakeTimers();
+    const listSpy = vi.mocked(api.listAutomationRuns);
+    listSpy.mockClear();
+    // Mount fetch returns nothing (the detail was opened before the first
+    // run existed); the fire itself blocks server-side, so only a poll can
+    // surface the run — and anyRunning can't arm it from an empty list.
+    listSpy
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([run({ run_id: "r-live", status: "running", cause: { kind: "manual", excerpt: "run now" }, delivery: null })]);
+
+    render(wrap(
+      <DetailView automation={AUTOMATION} onBack={() => {}} onOpenWorkflowRun={() => {}} onAutomationSaved={async () => {}} feedShowsActivity />,
+      {},
+    ));
+    await act(async () => {});
+    expect(screen.getByText(/no runs yet/i)).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4_000);
+    });
+
+    expect(screen.getByTestId("run-history-row")).toBeInTheDocument();
+    expect(screen.queryByText(/no runs yet/i)).not.toBeInTheDocument();
+    vi.useRealTimers();
+  });
+
   it("Ejecutar ahora fires the automation and refreshes the run list", async () => {
     const listSpy = vi.mocked(api.listAutomationRuns);
     listSpy.mockClear();
