@@ -1631,47 +1631,6 @@ class WorkflowImproveStructuralEvent(TypedDict):
     kind: NotRequired[str | None]  # "prompt" | "command" | "script_file" | None (unrecognized shape)
 
 
-class LoopsFiredEvent(TypedDict):
-    """A loop was fired (triggered to run)."""
-
-    loop: str
-    source: str
-    skipped: bool
-
-
-class LoopsRunFinishedEvent(TypedDict):
-    """A loop run completed."""
-
-    loop: str
-    run_id: str
-    status: str
-    goal_reached: bool
-
-
-class LoopsEscalatedEvent(TypedDict):
-    """A loop was escalated due to consecutive failures."""
-
-    loop: str
-    run_id: str
-    consecutive_no_goal: int
-
-
-class LoopsEventMatchedEvent(TypedDict):
-    """An inbound channel message was routed by the trigger matcher.
-
-    ``action`` is one of: woke (claim-wake resumed a waiting_info run),
-    fired (a trigger matched and a new run was started), queued (a trigger
-    matched but the loop was busy and the event was queued), passed_busy
-    (a trigger matched, the loop was busy, and no queue was wired so the
-    message fell through as a normal turn instead), drained (a run finished
-    and the loop's queue had a fresh event, which was fired next).
-    """
-
-    loop: str
-    source_channel: str
-    action: str
-
-
 class AutomationsFiredEvent(TypedDict):
     """An automation was fired (triggered to run)."""
 
@@ -1882,11 +1841,6 @@ EVENTS: dict[str, type] = {
     "workflow.improve.applied": WorkflowImproveAppliedEvent,
     "workflow.improve.reverted": WorkflowImproveRevertedEvent,
     "workflow.improve.structural": WorkflowImproveStructuralEvent,
-    # Loops subsystem
-    "loops.fired": LoopsFiredEvent,
-    "loops.run_finished": LoopsRunFinishedEvent,
-    "loops.escalated": LoopsEscalatedEvent,
-    "loops.event_matched": LoopsEventMatchedEvent,
     # Automations subsystem
     "automations.fired": AutomationsFiredEvent,
     "automations.run_finished": AutomationsRunFinishedEvent,

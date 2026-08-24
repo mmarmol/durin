@@ -1,6 +1,5 @@
-"""Tests for the automations config section (successor to loops; see
-LoopsConfig — both stay live and functional until the automations cutover
-removes the loops side). Legacy `loops.*` keys populate the matching
+"""Tests for the automations config section (successor to LoopsConfig, which
+is now legacy-only). Legacy `loops.*` keys populate the matching
 `automations.*` field (with a deprecation log) when automations doesn't set
 it explicitly; `loops.check_timeout_s` has no automations equivalent and is
 never migrated."""

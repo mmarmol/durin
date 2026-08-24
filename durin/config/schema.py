@@ -753,20 +753,21 @@ class AuxModelsConfig(Base):
     # Resolved fresh at each spawn, so a hot-reloaded change takes effect
     # immediately.
     subagents: AuxModelConfig | None = Field(default=None, description="Model for spawned subagents (background spawn/tasks runs); unset = the subagent inherits the parent session's model")
-    # DEPRECATED — kept alive (and functional) until the automations cutover
-    # removes the loops subsystem entirely; see `automations` below.
-    loops: AuxModelConfig | None = Field(default=None, description="DEPRECATED — prefer aux_models.automations. Model for loops' goal judge and semantic trigger filter calls; unset = those calls ride the agent's live default model")
+    # LEGACY — the loops subsystem this configured no longer exists; kept only
+    # so an old config file's value still migrates into `automations` below
+    # (see `_migrate_legacy_loops_aux_model`). Nothing else reads it.
+    loops: AuxModelConfig | None = Field(default=None, description="LEGACY — read once by the migration below, then ignored; set aux_models.automations instead")
     automations: AuxModelConfig | None = Field(default=None, description="Model for automations' semantic trigger-filter calls; unset = ride the agent's live default model")
 
     @model_validator(mode="after")
     def _migrate_legacy_loops_aux_model(self) -> "AuxModelsConfig":
-        # `loops` stays live and functional until the automations cutover, so
-        # this only populates `automations` — it never clears `loops`.
+        # One-time migration for an old config file: populates `automations`
+        # from `loops` when set; `loops` itself is otherwise dead config,
+        # never read at runtime.
         if self.automations is None and self.loops is not None:
             logger.warning(
-                "config: aux_models.loops is deprecated — rename to "
-                "aux_models.automations (aux_models.loops keeps working "
-                "until the automations cutover)"
+                "config: aux_models.loops is deprecated and no longer read at "
+                "runtime beyond this migration — rename it to aux_models.automations"
             )
             self.automations = self.loops.model_copy()
         return self
@@ -1045,17 +1046,21 @@ class WorkflowConfig(Base):
 
 
 class LoopsConfig(Base):
-    """Loops subsystem configuration."""
+    """LEGACY — the loops subsystem this configured no longer exists.
 
-    keep_runs: int = Field(default=20, ge=1, description="Finalized loop-run manifests kept per loop (needs_operator runs are never pruned).")
-    check_timeout_s: int = Field(default=60, ge=1, le=3600, description="Timeout in seconds for a single script goal check.")
-    queue_ttl_s: int = Field(default=3600, ge=60, description="How long a queued channel event stays fresh before the drain hook drops it unfired.")
+    Kept only so an old config file's `keep_runs`/`queue_ttl_s` still
+    migrate into `AutomationsConfig` (see `Config._migrate_legacy_loops_config`);
+    `check_timeout_s` has no automations equivalent and is never migrated.
+    Nothing reads this section at runtime otherwise."""
+
+    keep_runs: int = Field(default=20, ge=1, description="LEGACY — read once by the migration on Config, then ignored.")
+    check_timeout_s: int = Field(default=60, ge=1, le=3600, description="LEGACY — has no automations equivalent; never read at runtime.")
+    queue_ttl_s: int = Field(default=3600, ge=60, description="LEGACY — read once by the migration on Config, then ignored.")
 
 
 class AutomationsConfig(Base):
-    """Automations subsystem configuration (successor to LoopsConfig; both
-    stay live and functional until the automations cutover removes the
-    loops side — see `Config.loops` and the legacy-key migration on
+    """Automations subsystem configuration (successor to LoopsConfig, which
+    is now legacy-only — see `Config.loops` and the legacy-key migration on
     `Config`). No `check_timeout_s` equivalent: automations classifies a
     run's outcome from the workflow's own result instead of a separately
     timed goal-check pass, so there is no per-check timeout to bound."""
@@ -1400,7 +1405,7 @@ class Config(BaseSettings):
     documents: DocumentsConfig = Field(default_factory=DocumentsConfig, description="Document reading: extraction limits and local OCR for scanned PDFs")
     cron: CronConfig = Field(default_factory=CronConfig, description="Cron scheduler: run history and per-run session retention")
     workflow: WorkflowConfig = Field(default_factory=WorkflowConfig, description="Workflow engine: node-visit caps and run-folder retention")
-    loops: LoopsConfig = Field(default_factory=LoopsConfig, description="Loops subsystem settings.")
+    loops: LoopsConfig = Field(default_factory=LoopsConfig, description="LEGACY — read once by the automations config migration below, then ignored; the loops subsystem itself no longer exists.")
     automations: AutomationsConfig = Field(default_factory=AutomationsConfig, description="Automations subsystem settings.")
     skills: SkillsConfig = Field(default_factory=SkillsConfig, description="Skill subsystem governance: import security, install policy, discovery registries")
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig, description="API credentials and per-model parameter overrides for every LLM provider")
@@ -1454,12 +1459,12 @@ class Config(BaseSettings):
 
     @model_validator(mode="after")
     def _migrate_legacy_loops_config(self) -> "Config":
-        """Legacy `loops.keep_runs` / `loops.queue_ttl_s` populate the matching
-        `automations.*` field when automations doesn't set it explicitly (R6
-        sequencing: LoopsConfig stays live and functional until the
-        automations cutover removes it). `loops.check_timeout_s` has no
-        automations equivalent and is never migrated. `loops` is left
-        untouched either way — both configs stay live until the cutover."""
+        """One-time migration for an old config file: legacy
+        `loops.keep_runs` / `loops.queue_ttl_s` populate the matching
+        `automations.*` field when automations doesn't set it explicitly.
+        `loops.check_timeout_s` has no automations equivalent and is never
+        migrated. `loops` is left untouched either way — it is otherwise
+        dead config, never read at runtime."""
         loops_set = self.loops.model_fields_set
         automations_set = self.automations.model_fields_set
         migrated: dict[str, int] = {}
@@ -1469,9 +1474,8 @@ class Config(BaseSettings):
             migrated["queue_ttl_s"] = self.loops.queue_ttl_s
         if migrated:
             logger.warning(
-                "config: loops.%s is deprecated — migrated into "
-                "automations.* (rename to automations.*; loops.* keeps "
-                "working until the automations cutover)",
+                "config: loops.%s is deprecated and no longer read at "
+                "runtime beyond this migration — rename it to automations.*",
                 "/".join(sorted(migrated)),
             )
             self.automations = self.automations.model_copy(update=migrated)
