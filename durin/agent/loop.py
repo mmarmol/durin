@@ -487,15 +487,11 @@ class AgentLoop:
         # inject a custom dict directly.
         self._aux_providers: dict[str, AuxProviderHandle] = dict(aux_providers or {})
         self.cron_service = cron_service
-        # Set post-construction via register_loops_tool(): the gateway's
-        # LoopsRuntime judge closure calls agent.process_direct(), so it can
-        # only be built after this AgentLoop already exists — unlike
-        # cron_service, it cannot be threaded through here at __init__ time.
-        self.loops_runtime: Any | None = None
-        # Same story as loops_runtime, one door down: set post-construction
-        # via register_automations_tool() once the gateway's
-        # AutomationsRuntime exists. Lives beside loops_runtime until the
-        # loops cutover retires that one.
+        # Set post-construction via register_automations_tool(): the
+        # gateway's AutomationsRuntime closures call agent.process_direct(),
+        # so it can only be built after this AgentLoop already exists —
+        # unlike cron_service, it cannot be threaded through here at
+        # __init__ time.
         self.automations_runtime: Any | None = None
         self.restrict_to_workspace = restrict_to_workspace
         self._start_time = time.time()
@@ -1175,7 +1171,6 @@ class AgentLoop:
             bus=self.bus,
             subagent_manager=self.subagents,
             cron_service=self.cron_service,
-            loops_runtime=self.loops_runtime,
             automations_runtime=self.automations_runtime,
             sessions=self.sessions,
             provider_snapshot_loader=self._provider_snapshot_loader,
@@ -1196,47 +1191,16 @@ class AgentLoop:
 
         logger.info("Registered {} tools: {}", len(registered), registered)
 
-    def register_loops_tool(self, loops_runtime: Any) -> None:
-        """Add the ``loops`` tool once the gateway's LoopsRuntime is ready.
-
-        ``LoopsRuntime`` is built after this AgentLoop (its judge closure calls
-        ``agent.process_direct``), so ``_register_default_tools()`` never saw
-        it at ``__init__`` time. The gateway calls this once, right after
-        constructing its ``LoopsRuntime``, to register the tool onto the live
-        registry the same way the plugin loader would have.
-        """
-        from durin.agent.tools.context import ToolContext
-        from durin.agent.tools.loops import LoopsTool
-
-        self.loops_runtime = loops_runtime
-        ctx = ToolContext(
-            config=self.tools_config,
-            workspace=str(self.workspace),
-            cron_service=self.cron_service,
-            loops_runtime=loops_runtime,
-        )
-        if LoopsTool.enabled(ctx):
-            tool = LoopsTool.create(ctx)
-            if self.tools.has(tool.name):
-                # Same collision warning ToolLoader.load emits — this path
-                # registers outside that loader (see docstring), but a name
-                # clash deserves the same visibility.
-                logger.warning(
-                    "Tool name collision: {} from {} overwrites existing",
-                    tool.name, LoopsTool.__name__,
-                )
-            self.tools.register(tool)
-
     def register_automations_tool(self, automations_runtime: Any) -> None:
         """Add the ``automations`` tool once the gateway's AutomationsRuntime is ready.
 
-        Mirrors ``register_loops_tool`` exactly, one door down:
-        ``self.automations_runtime`` starts ``None`` at ``__init__`` time, so
-        ``_register_default_tools()`` never sees a live runtime there either —
-        whatever wires the gateway's ``AutomationsRuntime`` together must call
-        this once construction finishes, to register the tool onto the live
-        registry the same way the plugin loader would have. Stays alongside
-        ``register_loops_tool`` until the loops cutover retires it.
+        ``AutomationsRuntime``'s closures call ``agent.process_direct``, so it
+        is built after this AgentLoop already exists — ``self.automations_runtime``
+        starts ``None`` at ``__init__`` time, so ``_register_default_tools()``
+        never sees a live runtime there. Whatever wires the gateway's
+        ``AutomationsRuntime`` together must call this once construction
+        finishes, to register the tool onto the live registry the same way
+        the plugin loader would have.
         """
         from durin.agent.tools.automations import AutomationsTool
         from durin.agent.tools.context import ToolContext

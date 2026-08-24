@@ -1,7 +1,12 @@
-"""Loop definition schema and validation.
+"""Frozen copy of the deleted loops package's own definition parser, kept ONLY so
+``durin.automations.migrate.migrate_loops`` can still read a pre-existing
+``<workspace>/loops/*.json`` file after the loops package itself was deleted
+at the automations cutover. Never extend this for new functionality — it
+exists purely to parse an on-disk shape that predates automations and cannot
+change; a new capability belongs in ``durin.automations.spec`` instead.
 
-A loop binds triggers to a workflow body and a verifiable goal. It never
-touches workflow-engine semantics; the workflow is referenced by name only.
+A loop bound triggers to a workflow body and a verifiable goal; the workflow
+was referenced by name only, never touching workflow-engine semantics.
 """
 
 from __future__ import annotations
@@ -12,39 +17,24 @@ from typing import Literal
 
 from loguru import logger
 
-from durin.loops.channel_meta import CHANNEL_FILTER_KEYS
+from durin.automations.channel_meta import CHANNEL_FILTER_KEYS
 
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 _SCHEDULE_KINDS = {"at", "every", "cron"}
-# Keys each schedule kind accepts. `durin.loops.cron_sync.sync_loop_jobs` does
-# `CronSchedule(**trig.schedule)` at sync time (boot + save) — an unknown key
-# raises TypeError there, well after the definition was already saved. Reject
-# it here instead so a bad/misnamed key (e.g. "timezone" instead of "tz")
-# fails at parse time with a clear LoopError.
 _SCHEDULE_ALLOWED_KEYS = {
     "cron": {"kind", "expr", "tz"},
     "every": {"kind", "every_ms"},
     "at": {"kind", "at_ms"},
 }
-# Fields that only make sense on a channel or webhook trigger. Rejected
-# outright on a cron trigger (and vice versa for "schedule") so the shapes
-# never mix.
 _CHANNEL_ONLY_FIELDS = {"channel", "filters", "semantic", "match", "hook", "correlate"}
 _CHANNEL_KINDS = {"email", "telegram", "slack", "discord", "whatsapp"}
 _CHANNEL_MATCH_MODES = {"wake_or_new", "always_new"}
-# Fields exclusive to the webhook shape, rejected on a channel trigger.
 _WEBHOOK_ONLY_FIELDS = {"hook"}
-# Fields exclusive to the channel shape, rejected on a webhook trigger
-# (besides "schedule", which every non-cron source already forbids).
 _WEBHOOK_FORBIDDEN_FIELDS = {"schedule", "channel", "filters", "match"}
 
 
 class LoopError(ValueError):
     """Malformed loop definition."""
-
-
-class LoopNotFound(LoopError):
-    """No definition file for the requested loop name."""
 
 
 @dataclass(frozen=True)
@@ -60,7 +50,7 @@ class LoopTrigger:
     source: Literal["cron", "channel", "webhook"]
     schedule: dict = field(default_factory=dict)  # CronSchedule-shaped: kind/at_ms/every_ms/expr/tz
     channel: str | None = None  # channel trigger only: email/telegram/slack/discord/whatsapp
-    filters: dict = field(default_factory=dict)  # channel trigger only: open key->value map, see durin.loops.channel_meta
+    filters: dict = field(default_factory=dict)  # channel trigger only: open key->value map
     semantic: str | None = None  # channel or webhook trigger: optional model-judged condition
     match: Literal["wake_or_new", "always_new"] = "wake_or_new"  # channel trigger only
     hook: str | None = None  # webhook trigger only: the hook name that fires this trigger
@@ -121,8 +111,6 @@ def _parse_trigger(raw: dict, i: int) -> LoopTrigger:
         expr = sched.get("expr")
         if not isinstance(expr, str) or not expr.strip():
             raise LoopError(f"trigger[{i}]: cron schedule requires a non-empty 'expr'")
-        # Mirror durin.cron.service._validate_schedule_for_add's add-time check:
-        # reject a bad expr here instead of letting it silently never fire.
         try:
             from croniter import croniter
         except ImportError:
@@ -178,16 +166,11 @@ def _parse_channel_trigger(raw: dict, i: int) -> LoopTrigger:
     filters = raw.get("filters") or {}
     if not isinstance(filters, dict):
         raise LoopError(f"trigger[{i}]: filters must be an object")
-    # Warn, never reject: the filter vocabulary is open, and a channel may
-    # legitimately emit a key it did not declare. Rejecting here would make
-    # the declaration a second source of truth able to block a working
-    # trigger. The warning still earns its keep — an undeclared key matches
-    # nothing, so without it the trigger would just stay silent forever.
     undeclared = set(filters) - CHANNEL_FILTER_KEYS.get(channel, frozenset())
     if undeclared:
         logger.warning(
-            "loops: trigger[{}] filters on {} which the {} channel never populates; "
-            "this trigger will not match",
+            "migrate: legacy loop trigger[{}] filters on {} which the {} channel never populates; "
+            "this trigger would never have matched",
             i,
             sorted(undeclared),
             channel,
@@ -242,10 +225,6 @@ def parse_loop(data: dict) -> LoopSpec:
     checks = tuple(_parse_check(c, i) for i, c in enumerate(goal.get("checks") or []))
     checks_sufficient = bool(goal.get("checks_sufficient", False))
     if checks_sufficient:
-        # Exists to make script-only loops zero-LLM: an assertion always needs
-        # the judge, so checks_sufficient=True is incompatible with one. At
-        # least one required check must exist, or there is no hard evidence
-        # to declare the goal reached without asking the model.
         if any(c.kind == "assertion" for c in checks):
             raise LoopError("goal.checks_sufficient requires all checks to be scripts, not assertions")
         if not any(c.required for c in checks):
@@ -272,42 +251,3 @@ def parse_loop(data: dict) -> LoopSpec:
         operator_channel=operator_channel,
         operator_to=operator_to,
     )
-
-
-def _trigger_to_dict(t: LoopTrigger) -> dict:
-    if t.source == "cron":
-        return {"source": "cron", "schedule": t.schedule}
-    if t.source == "webhook":
-        entry: dict = {"source": "webhook", "hook": t.hook}
-        if t.semantic is not None:
-            entry["semantic"] = t.semantic
-        if t.correlate is not None:
-            entry["correlate"] = t.correlate
-        return entry
-    entry = {"source": "channel", "channel": t.channel, "filters": t.filters, "match": t.match}
-    if t.semantic is not None:
-        entry["semantic"] = t.semantic
-    if t.correlate is not None:
-        entry["correlate"] = t.correlate
-    return entry
-
-
-def loop_to_dict(spec: LoopSpec) -> dict:
-    return {
-        "name": spec.name,
-        "enabled": spec.enabled,
-        "workflow": spec.workflow,
-        "goal": {
-            "intent": spec.goal_intent,
-            "checks": [
-                {k: v for k, v in {"kind": c.kind, "required": c.required, "command": c.command, "text": c.text}.items() if v is not None}
-                for c in spec.checks
-            ],
-            "checks_sufficient": spec.checks_sufficient,
-        },
-        "triggers": [_trigger_to_dict(t) for t in spec.triggers],
-        "concurrency": spec.concurrency,
-        "stuck_after": spec.stuck_after,
-        "operator_channel": spec.operator_channel,
-        "operator_to": spec.operator_to,
-    }

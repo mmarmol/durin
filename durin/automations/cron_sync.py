@@ -2,14 +2,11 @@
 system-registered (idempotent across boots, refreshed on every sync), one
 per enabled ``schedule`` trigger.
 
-Ported from ``durin/loops/cron_sync.py`` (``durin/loops/`` stays untouched
-and importable until a later gateway-wiring task cuts over to this module
-and retires it entirely — deleting it now would break the still-live loops
-package mid-migration). The behavior here adds a wrinkle the loops version
-never needed: ``CronService.remove_job`` protects ``automation_trigger``
-jobs from the public API (they are owned by an automation, not a
-user-editable cron entry — mirroring how ``system_event`` jobs are
-protected). This module's own removal paths
+The former loops package had an equivalent module; this one adds a wrinkle
+that one never needed: ``CronService.remove_job`` protects
+``automation_trigger`` jobs from the public API (they are owned by an
+automation, not a user-editable cron entry — mirroring how ``system_event``
+jobs are protected). This module's own removal paths
 (``sync_automation_jobs``'s stale-id cleanup, ``remove_automation_jobs``,
 and ``sync_all``'s orphan sweep) therefore use
 ``CronService.remove_system_job`` — the bypass door ``register_system_job``
@@ -17,19 +14,16 @@ already relies on for writes — instead of ``remove_job``.
 
 ``sync_all`` ALSO prunes every legacy ``loop:*`` cron job, unconditionally,
 regardless of whether a same-named loop or automation still exists. This is
-the self-healing backstop for the eventual loops cutover: once the
-gateway's ``loop_trigger`` dispatch branch is retired, a surviving
-``loop:*`` job would fire an empty agent turn on its next tick with no
-handler for it. The boot migration (``durin.automations.migrate``) also
-prunes ``loop:*`` jobs on the same occasion — this is deliberate
-belt-and-suspenders, not a conflict; both removals are idempotent.
+the self-healing backstop for the loops cutover: the gateway's
+``loop_trigger`` cron dispatch is now a log-and-skip (see
+``durin.cli.commands``'s ``on_cron_job``), so a surviving ``loop:*`` job
+would otherwise sit there forever with nothing left to fire it. The boot
+migration (``durin.automations.migrate``) also prunes ``loop:*`` jobs on the
+same occasion — this is deliberate belt-and-suspenders, not a conflict; both
+removals are idempotent.
 
-IMPORTANT — not wired yet: this module is built and tested standalone.
-``sync_all`` is destructive toward loops' own cron jobs, so it must NOT be
-called from anywhere until the gateway cutover task rewires
-``durin/cli/commands.py`` to call it in place of (not alongside) loops'
-``sync_all``. Until that lands, the gateway continues to run
-``durin.loops.cron_sync.sync_all`` at boot as today.
+Called at gateway boot (``durin.cli.commands``), right after
+``durin.automations.migrate.migrate_loops``.
 """
 
 from __future__ import annotations
@@ -39,9 +33,9 @@ from durin.automations.store import list_automations
 from durin.cron.types import CronJob, CronPayload, CronSchedule
 
 _PREFIX = "automation:"
-# Legacy loop job id prefix (durin.loops.cron_sync.loop_job_id's format).
-# Not imported from durin.loops — that package is deleted at cutover and this
-# module must keep working after it is gone.
+# Legacy loop job id prefix (the deleted loops package's own cron_sync used
+# the same f"loop:{loop_name}:{idx}" format) — matched as a plain string
+# since the loops package no longer exists to import it from.
 _LEGACY_LOOP_PREFIX = "loop:"
 
 
@@ -83,7 +77,7 @@ def sync_all(cron_service, workspace) -> None:
     """Boot reconcile: sync every stored automation, then prune orphaned
     ``automation:*`` jobs (owning automation no longer exists) and every
     legacy ``loop:*`` job, unconditionally. See the module docstring for why
-    the legacy prune is unconditional and why this is not wired in yet."""
+    the legacy prune is unconditional."""
     known: set[str] = set()
     for spec in list_automations(workspace):
         sync_automation_jobs(cron_service, spec)

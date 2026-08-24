@@ -759,10 +759,9 @@ async def test_post_finish_drains_next_fresh_queued_event(tmp_path):
 
 
 async def test_post_finish_drain_emits_event_matched_drained(tmp_path, _isolate_telemetry_dir):
-    """Mirrors durin.loops.runtime's own placement: the "drained" action is
-    emitted right where the queue drain finds a fresh event, before the
-    re-fire is scheduled — not from the matcher, which never sees a drained
-    event at all."""
+    """The "drained" action is emitted right where the queue drain finds a
+    fresh event, before the re-fire is scheduled — not from the matcher,
+    which never sees a drained event at all."""
     import json
 
     _save(tmp_path)
@@ -866,8 +865,8 @@ async def test_chain_fire_exception_is_logged_not_lost(tmp_path, caplog):
 
 
 # ---------------------------------------------------------------------------
-# Fix round 1, finding 2: telemetry producers land now, mirroring the exact
-# bind-around-the-call mechanism durin.loops.runtime uses.
+# Fix round 1, finding 2: telemetry producers land now, using the same
+# bind-around-the-call mechanism throughout.
 # ---------------------------------------------------------------------------
 
 async def test_fire_emits_telemetry_when_unbound(tmp_path, _isolate_telemetry_dir):
@@ -936,9 +935,9 @@ async def test_try_fire_busy_skip_emits_fired_with_skipped_true(tmp_path, _isola
 
 
 async def test_try_fire_disabled_skip_emits_no_telemetry(tmp_path, _isolate_telemetry_dir):
-    """Mirrors durin.loops.runtime's own try_fire: a disabled skip is silent
-    — only the busy skip carries a signal, since disabled is a deliberate,
-    already-visible configuration state rather than a race worth flagging."""
+    """A disabled skip is silent — only the busy skip carries a signal, since
+    disabled is a deliberate, already-visible configuration state rather than
+    a race worth flagging."""
     import json
 
     _save(tmp_path, enabled=False)

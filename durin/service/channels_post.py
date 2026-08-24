@@ -13,10 +13,11 @@ send alone would still leave no session. The key it records under is the one
 the channel itself derives for that conversation, so a later human reply lands
 in the same session and continues it instead of opening a second one.
 
-This does not carry loop *status* into a counterpart's thread — that stays
-routed by ``durin.loops.outcome.route``, which deliberately refuses to report
-internal status to the external party a channel origin identifies. What travels
-here is the workflow's own prose, which was already being posted anyway.
+This does not carry an automation's *status* into a counterpart's thread —
+that stays routed by ``durin.automations.outcome.route``, which deliberately
+refuses to report internal status to the external party a channel origin
+identifies. What travels here is the workflow's own prose, which was already
+being posted anyway.
 """
 
 from __future__ import annotations

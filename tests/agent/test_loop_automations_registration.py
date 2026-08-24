@@ -1,9 +1,8 @@
 """AgentLoop.register_automations_tool: the automations tool's late-binding
-registration path, added beside register_loops_tool (durin/agent/loop.py) for
-the same reason — the gateway builds each runtime after this AgentLoop
-already exists, so _register_default_tools() never sees either one at
-__init__ time. Loops stays live and unmodified until its own cutover task
-retires it."""
+registration path (durin/agent/loop.py) — the gateway builds the
+AutomationsRuntime after this AgentLoop already exists (its closures call
+agent.process_direct), so _register_default_tools() never sees it at
+__init__ time."""
 
 from __future__ import annotations
 
@@ -39,19 +38,3 @@ def test_register_automations_tool_adds_the_tool_and_stores_the_runtime(tmp_path
     assert loop.automations_runtime is runtime
     assert loop.tools.has("automations")
     assert loop.tools.get("automations").name == "automations"
-
-
-def test_register_automations_tool_leaves_the_loops_tool_alone(tmp_path):
-    """B11 adds the automations tool beside the loops one — it must not
-    disturb loops' own (separate) registration path, which stays live until
-    a later cutover task retires it."""
-    loop = _make_loop(tmp_path)
-    loop.register_automations_tool(object())
-
-    assert loop.loops_runtime is None
-    assert not loop.tools.has("loops")
-
-    loop.register_loops_tool(object())
-
-    assert loop.tools.has("loops")
-    assert loop.tools.has("automations")

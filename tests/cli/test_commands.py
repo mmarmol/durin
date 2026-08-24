@@ -1313,7 +1313,7 @@ def test_gateway_cron_evaluator_receives_scheduled_reminder_context(
         def build_concurrency_snapshot(self):
             return {"lanes": {}, "queued": 0, "work": []}
 
-        def register_loops_tool(self, runtime) -> None:
+        def register_automations_tool(self, runtime) -> None:
             return None
 
         async def process_direct(self, *_args, **_kwargs):
@@ -1454,7 +1454,7 @@ def test_gateway_cron_job_passes_none_on_progress_for_bus_callback(
         def build_concurrency_snapshot(self):
             return {"lanes": {}, "queued": 0, "work": []}
 
-        def register_loops_tool(self, runtime) -> None:
+        def register_automations_tool(self, runtime) -> None:
             return None
 
         async def process_direct(self, *_args, on_progress=None, **_kwargs):
@@ -1512,24 +1512,27 @@ def test_gateway_cron_job_passes_none_on_progress_for_bus_callback(
     bus.publish_outbound.assert_not_awaited()
 
 
-def test_gateway_automation_trigger_cron_job_is_ignored_not_dispatched_as_an_agent_turn(
-    monkeypatch, tmp_path: Path
-) -> None:
-    """An automation_trigger job is registered TODAY by AutomationsService.save
-    (via sync_automation_jobs, wired live in durin/service/wiring.py) the moment
-    a schedule trigger is saved through PUT /api/v1/automations/{name} — but
-    nothing wires the automations runtime into the gateway yet. Without a
-    short-circuit beside loop_trigger's, _execute_job (durin/cron/service.py)
-    has no kind filter of its own and this would fall through to the generic
-    agent-turn dispatch below: a real, tool-enabled agent turn on an unrelated
-    free-form prompt, reachable in production today. It must be a no-op instead,
-    exactly like loop_trigger's own short-circuit just above it."""
+def _setup_automations_wiring_test(monkeypatch, tmp_path: Path, *, config_overrides=None):
+    """Shared scaffold for the automation_trigger/loop_trigger cron-dispatch
+    tests below: a real gateway boot up through cron + automations wiring,
+    stopped right after (via _StopAfterCronSetup raising when ChannelManager
+    is constructed, which happens immediately after that wiring in
+    durin.cli.commands._run_gateway) — before the unified ASGI app or the
+    orphan-sweep task, neither of which any of these tests need. Returns
+    (seen, config, bus) — `seen["cron"]` is the fake CronService instance
+    (its `on_job` is the real `on_cron_job` closure) and `seen["automations_runtime"]`
+    is the real AutomationsRuntime the gateway constructed, captured via the
+    same register_automations_tool() seam production code calls.
+    `config_overrides`, when given, is called with the Config instance right
+    after construction so a test can tune a knob before the gateway reads it."""
     config_file = tmp_path / "instance" / "config.json"
     config_file.parent.mkdir(parents=True)
     config_file.write_text("{}")
 
     config = Config()
     config.agents.defaults.workspace = str(tmp_path / "config-workspace")
+    if config_overrides is not None:
+        config_overrides(config)
     bus = MagicMock()
     bus.publish_outbound = AsyncMock()
     seen: dict[str, object] = {"process_direct_called": False}
@@ -1566,8 +1569,8 @@ def test_gateway_automation_trigger_cron_job_is_ignored_not_dispatched_as_an_age
         def build_concurrency_snapshot(self):
             return {"lanes": {}, "queued": 0, "work": []}
 
-        def register_loops_tool(self, runtime) -> None:
-            return None
+        def register_automations_tool(self, runtime) -> None:
+            seen["automations_runtime"] = runtime
 
         async def process_direct(self, *_args, **_kwargs):
             seen["process_direct_called"] = True
@@ -1592,12 +1595,80 @@ def test_gateway_automation_trigger_cron_job_is_ignored_not_dispatched_as_an_age
 
     result = runner.invoke(app, ["gateway", "--config", str(config_file)])
     assert isinstance(result.exception, _StopGatewayError)
+    return seen, config, bus
+
+
+def test_gateway_builds_the_automations_runtime_from_config_values(monkeypatch, tmp_path: Path) -> None:
+    """The AutomationsRuntime the gateway constructs must read its knobs from
+    config.automations, not hardcode or silently drop them."""
+    def _tune(config: Config) -> None:
+        config.automations.keep_runs = 7
+        config.automations.queue_ttl_s = 111
+
+    seen, _config, _bus = _setup_automations_wiring_test(monkeypatch, tmp_path, config_overrides=_tune)
+
+    runtime = seen["automations_runtime"]
+    assert runtime._keep_runs == 7
+    assert runtime._queue_ttl_s == 111
+
+
+def test_gateway_automation_trigger_cron_job_dispatches_try_fire(monkeypatch, tmp_path: Path) -> None:
+    """An automation_trigger job must fire the real AutomationsRuntime.try_fire
+    (source="schedule") instead of falling through to the generic agent-turn
+    dispatch below — a real, tool-enabled turn on an unrelated free-form
+    prompt would run in production if this guard were ever removed."""
+    seen, _config, bus = _setup_automations_wiring_test(monkeypatch, tmp_path)
+
+    runtime = seen["automations_runtime"]
+    fired: list[tuple] = []
+
+    async def _fake_try_fire(name, *, source, origin=None):
+        fired.append((name, source))
+        return None
+
+    runtime.try_fire = _fake_try_fire
 
     cron = seen["cron"]
     job = CronJob(
         id="automation:a1:0",
         name="automation a1 trigger 0",
         payload=CronPayload(kind="automation_trigger", automation="a1", message="run the digest"),
+    )
+    response = asyncio.run(cron.on_job(job))
+
+    assert response is None
+    assert fired == [("a1", "schedule")]
+    assert seen["process_direct_called"] is False
+    bus.publish_outbound.assert_not_awaited()
+
+
+def test_gateway_automation_trigger_with_no_name_is_skipped(monkeypatch, tmp_path: Path) -> None:
+    seen, _config, _bus = _setup_automations_wiring_test(monkeypatch, tmp_path)
+
+    runtime = seen["automations_runtime"]
+    runtime.try_fire = AsyncMock()
+
+    cron = seen["cron"]
+    job = CronJob(id="automation:orphan:0", name="orphan", payload=CronPayload(kind="automation_trigger"))
+    response = asyncio.run(cron.on_job(job))
+
+    assert response is None
+    runtime.try_fire.assert_not_awaited()
+
+
+def test_gateway_leftover_loop_trigger_cron_job_logs_and_skips(monkeypatch, tmp_path: Path) -> None:
+    """A loop_trigger job surviving from before the loops cutover (an
+    unmigrated store, or one that ticks before sync_all's boot-time prune
+    runs) must never fall through to the generic agent-turn dispatch below —
+    there is no loops runtime left to fire it, and the prompt would be an
+    empty, unrelated free-form turn."""
+    seen, _config, bus = _setup_automations_wiring_test(monkeypatch, tmp_path)
+
+    cron = seen["cron"]
+    job = CronJob(
+        id="loop:l1:0",
+        name="loop l1 trigger 0",
+        payload=CronPayload(kind="loop_trigger", loop="l1"),
     )
     response = asyncio.run(cron.on_job(job))
 
@@ -1788,7 +1859,7 @@ def test_gateway_health_endpoint_binds_and_serves_expected_responses(
         def build_concurrency_snapshot(self):
             return {"lanes": {}, "queued": 0, "work": []}
 
-        def register_loops_tool(self, runtime) -> None:
+        def register_automations_tool(self, runtime) -> None:
             return None
 
         async def run(self) -> None:
@@ -1919,16 +1990,17 @@ def test_gateway_health_endpoint_binds_and_serves_expected_responses(
     assert missing_response.endswith("\r\n\r\nNot Found")
 
 
-def test_gateway_starts_the_loops_orphan_sweep_task(monkeypatch, tmp_path: Path) -> None:
-    """Deleting the asyncio.create_task(_loops_orphan_sweep()) call (or the
-    `await cron.start()` it follows) would leave every loop run orphaned by a
-    restart un-reconciled forever, and the rest of the suite would stay green
-    — nothing else asserts the gateway actually schedules the sweep. Reset
-    the module-level handle first so a leftover reference from an earlier
-    test in this file can't make this pass for the wrong reason."""
+def test_gateway_starts_the_automations_orphan_sweep_task(monkeypatch, tmp_path: Path) -> None:
+    """Deleting the asyncio.create_task(_automations_orphan_sweep()) call (or
+    the `await cron.start()` it follows) would leave every automation run
+    orphaned by a restart un-reconciled forever, and the rest of the suite
+    would stay green — nothing else asserts the gateway actually schedules
+    the sweep. Reset the module-level handle first so a leftover reference
+    from an earlier test in this file can't make this pass for the wrong
+    reason."""
     import durin.cli.commands as cli_commands
 
-    monkeypatch.setattr(cli_commands, "_loops_sweep_task", None)
+    monkeypatch.setattr(cli_commands, "_automations_sweep_task", None)
 
     config_file = _write_instance_config(tmp_path)
     config = Config()
@@ -1959,7 +2031,7 @@ def test_gateway_starts_the_loops_orphan_sweep_task(monkeypatch, tmp_path: Path)
         def build_concurrency_snapshot(self):
             return {"lanes": {}, "queued": 0, "work": []}
 
-        def register_loops_tool(self, runtime) -> None:
+        def register_automations_tool(self, runtime) -> None:
             return None
 
         async def run(self) -> None:
@@ -2038,8 +2110,155 @@ def test_gateway_starts_the_loops_orphan_sweep_task(monkeypatch, tmp_path: Path)
     result = runner.invoke(app, ["gateway", "--config", str(config_file)])
 
     assert result.exit_code == 0
-    assert cli_commands._loops_sweep_task is not None
-    assert isinstance(cli_commands._loops_sweep_task, asyncio.Task)
+    assert cli_commands._automations_sweep_task is not None
+    assert isinstance(cli_commands._automations_sweep_task, asyncio.Task)
+
+
+def _setup_full_boot_gateway_test(monkeypatch, tmp_path: Path):
+    """Shared scaffold for boot-order tests: a full gateway boot (through
+    `cron.start()` and the boot-order migrate/sync block) that reaches
+    `result.exit_code == 0` via _FakeServer.serve_forever raising
+    _StopGatewayError, mirroring test_gateway_starts_the_automations_orphan_sweep_task's
+    fixture set exactly. Returns config with an explicit, hermetic workspace."""
+    config_file = _write_instance_config(tmp_path)
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path / "ws")
+    config.gateway.port = 18794
+
+    class _FakeDream:
+        model = None
+        max_batch_size = 0
+        max_iterations = 0
+
+        async def run(self) -> None:
+            return None
+
+    class _FakeSessionManager:
+        def flush_all(self) -> int:
+            return 0
+
+    class _FakeAgentLoop:
+        @classmethod
+        def from_config(cls, config, bus=None, **extra):
+            return cls(**extra)
+        def __init__(self, **_kwargs) -> None:
+            self.model = "test-model"
+            self.provider = object()
+            self.dream = _FakeDream()
+            self.sessions = _FakeSessionManager()
+
+        def build_concurrency_snapshot(self):
+            return {"lanes": {}, "queued": 0, "work": []}
+
+        def register_automations_tool(self, runtime) -> None:
+            return None
+
+        async def run(self) -> None:
+            await asyncio.Event().wait()
+
+        async def close_mcp(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+    class _FakeChannelManager:
+        def __init__(self, _config, _bus, **_kwargs) -> None:
+            self.enabled_channels = ["telegram", "discord"]
+
+        async def start_all(self) -> None:
+            await asyncio.Event().wait()
+
+        async def stop_all(self) -> None:
+            return None
+
+        def get_channel(self, _name: str):
+            return None
+
+    class _FakeCronService:
+        def __init__(self, _store_path: Path, **_kwargs) -> None:
+            self.on_job = None
+
+        async def start(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+        def status(self) -> dict[str, int]:
+            return {"jobs": 0}
+
+        def register_system_job(self, _job) -> None:
+            return None
+
+        def prune_orphaned_system_jobs(self, _known_system_ids) -> list:
+            return []
+
+    class _FakeServer:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        async def serve_forever(self) -> None:
+            raise _StopGatewayError("stop")
+
+    async def _fake_start_server(handler, host: str, port: int):
+        return _FakeServer()
+
+    class _FakeBus:
+        def add_inbound_interceptor(self, _fn) -> None:
+            return None
+
+    _patch_cli_command_runtime(
+        monkeypatch,
+        config,
+        message_bus=lambda: _FakeBus(),
+        session_manager=lambda _workspace: object(),
+    )
+    monkeypatch.setattr("durin.cli.commands.AgentLoop", _FakeAgentLoop)
+    monkeypatch.setattr("durin.channels.manager.ChannelManager", _FakeChannelManager)
+    monkeypatch.setattr("durin.cron.service.CronService", _FakeCronService)
+    monkeypatch.setattr("asyncio.start_server", _fake_start_server)
+    return config, config_file
+
+
+def test_gateway_calls_migrate_before_automation_cron_sync(monkeypatch, tmp_path: Path) -> None:
+    """migrate_loops must run before sync_all — sync_all's own boot-order
+    prune assumes any loops/ -> automations/ conversion already happened."""
+    _config, config_file = _setup_full_boot_gateway_test(monkeypatch, tmp_path)
+    order: list[str] = []
+
+    monkeypatch.setattr(
+        "durin.cli.commands.migrate_loops",
+        lambda *_a, **_k: order.append("migrate") or [],
+    )
+    monkeypatch.setattr(
+        "durin.cli.commands.sync_automation_cron_jobs",
+        lambda *_a, **_k: order.append("sync"),
+    )
+
+    result = runner.invoke(app, ["gateway", "--config", str(config_file)])
+
+    assert result.exit_code == 0
+    assert order == ["migrate", "sync"]
+
+
+def test_gateway_migration_failure_does_not_crash_boot(monkeypatch, tmp_path: Path) -> None:
+    """A migrate_loops I/O failure (e.g. a permissions error on a hand-edited
+    workspace) must never take the gateway down with it — the boot-order call
+    is wrapped in try/except-log."""
+    _config, config_file = _setup_full_boot_gateway_test(monkeypatch, tmp_path)
+
+    def _boom(*_a, **_k):
+        raise OSError("disk on fire")
+
+    monkeypatch.setattr("durin.cli.commands.migrate_loops", _boom)
+
+    result = runner.invoke(app, ["gateway", "--config", str(config_file)])
+
+    assert result.exit_code == 0
 
 
 def test_channels_login_requires_channel_name() -> None:

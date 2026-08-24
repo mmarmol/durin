@@ -1,15 +1,17 @@
 """Tests for the boot-time loops -> automations converter.
 
-durin.automations.migrate is NOT wired anywhere yet (a later gateway-cutover
-task calls it) — these tests drive it directly. Fixtures are written to disk
-through the real durin.loops.spec/store functions so the on-disk shape being
-migrated is exactly what a live loops installation would have, not a
-hand-guessed approximation.
+Called at gateway boot, before durin.automations.cron_sync.sync_all (see
+durin.cli.commands) — these tests drive it directly. Fixtures are written as
+plain JSON matching exactly the shape the (now-deleted) loops package's own
+store.save_loop used to write, so the on-disk shape being migrated is the
+same one a live loops installation would have had, not a hand-guessed
+approximation.
 """
 
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from loguru import logger
 
@@ -19,8 +21,10 @@ from durin.automations.spec import Delivery, Help, Life
 from durin.automations.store import automations_dir, load_automation
 from durin.cron.service import CronService
 from durin.cron.types import CronJob, CronPayload, CronSchedule
-from durin.loops.spec import parse_loop
-from durin.loops.store import loops_dir, save_loop
+
+
+def loops_dir(workspace: Path) -> Path:
+    return Path(workspace) / "loops"
 
 
 def _guard_support_tickets_dict():
@@ -52,7 +56,14 @@ def _guard_support_tickets_dict():
 
 
 def _save_loop(tmp_path, data: dict):
-    save_loop(tmp_path, parse_loop(data))
+    """Write a loop definition exactly as the deleted loops package's
+    store.save_loop would have (one JSON file per loop, keyed by name) —
+    every fixture dict below is already the canonical on-disk shape
+    (loop_to_dict's own output shape), so no parse/serialize round-trip
+    is needed to reproduce it."""
+    d = loops_dir(tmp_path)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{data['name']}.json").write_text(json.dumps(data), encoding="utf-8")
 
 
 def _cron_loop_dict(name="nightly-brief", workflow="nightly-brief-wf"):

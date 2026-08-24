@@ -21,6 +21,13 @@ class CronSchedule:
 @dataclass
 class CronPayload:
     """What to do when the job runs."""
+    # "loop_trigger" is legacy-parse-only: the loops package that used to
+    # dispatch it is gone, but the member (and the "loop" field below) must
+    # stay so an old, unmigrated persisted store still PARSES — durin.
+    # automations.cron_sync.sync_all prunes any surviving "loop_trigger" job
+    # at boot, and durin.cli.commands's on_cron_job logs-and-skips one that
+    # ticks before that prune runs. Removing either would crash loading an
+    # unmigrated store instead.
     kind: Literal["system_event", "agent_turn", "loop_trigger", "automation_trigger"] = "agent_turn"
     mode: Literal["reminder", "task"] = "reminder"
     message: str = ""
@@ -32,7 +39,7 @@ class CronPayload:
     to: str | None = None  # e.g. phone number
     channel_meta: dict = field(default_factory=dict)  # channel-specific routing (e.g. Slack thread_ts)
     session_key: str | None = None  # original session key for correct session recording
-    loop: str | None = None  # loop name, set when kind == "loop_trigger"
+    loop: str | None = None  # legacy-parse-only: loop name, set when kind == "loop_trigger"
     automation: str | None = None  # automation name, set when kind == "automation_trigger"
 
 

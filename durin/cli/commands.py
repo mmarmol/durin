@@ -57,6 +57,8 @@ from rich.text import Text
 
 from durin import __logo__, __version__
 from durin.agent.loop import AgentLoop
+from durin.automations.cron_sync import sync_all as sync_automation_cron_jobs
+from durin.automations.migrate import migrate_loops
 
 
 def _resolve_static_token(raw: str) -> str:
@@ -1177,10 +1179,10 @@ def gateway_logs_cmd(
         pass
 
 
-_LOOPS_SWEEP_PERIOD_S = 600.0
+_AUTOMATIONS_SWEEP_PERIOD_S = 600.0
 # Strong reference for the process lifetime: an un-awaited task is
 # collectable, and a collected sweep silently stops reconciling.
-_loops_sweep_task: asyncio.Task | None = None
+_automations_sweep_task: asyncio.Task | None = None
 
 
 def _run_gateway(
@@ -1409,27 +1411,29 @@ def _run_gateway(
                 )
             return None
 
-        # Loop triggers fire the loops runtime directly (not the agent turn below).
+        # A cron job created by the (deleted) loops package may still be
+        # sitting in an unmigrated store's persisted jobs.json — CronPayload
+        # keeps parsing "loop_trigger"/"loop" for exactly this (see
+        # durin.cron.types). durin.automations.cron_sync.sync_all's
+        # unconditional prune removes these at boot, but a job that ticks in
+        # the window before that prune runs must not fall through to the
+        # generic agent turn below (an empty free-form prompt with no
+        # handler) — log and skip instead of dispatching anywhere.
         if job.payload.kind == "loop_trigger":
-            if not job.payload.loop:
-                logger.warning("loop_trigger cron job {} has no loop name; skipping", job.id)
-                return None
-            # No origin by construction: a scheduled fire has nobody waiting on
-            # it, so its outcome belongs to the loop's declared destination.
-            await loops_runtime.try_fire(job.payload.loop, source="cron")
+            logger.info(
+                "loop_trigger cron job {} ticked (legacy; pending prune); skipping", job.id,
+            )
             return None
 
-        # An automation's schedule trigger registers this same job kind today
-        # (AutomationsService.save -> sync_automation_jobs), but nothing wires
-        # it to the automations runtime yet. Falling through to the generic
-        # agent turn below would run an unrelated free-form prompt instead of
-        # firing the automation, so ignore it here until the automations
-        # runtime dispatch replaces this guard when the gateway wires it.
         if job.payload.kind == "automation_trigger":
-            logger.info(
-                "automation_trigger cron job {} ticked before the automations dispatch is wired; ignoring",
-                job.id,
-            )
+            if not job.payload.automation:
+                logger.warning(
+                    "automation_trigger cron job {} has no automation name; skipping", job.id,
+                )
+                return None
+            # No origin by construction: a scheduled fire has nobody waiting on
+            # it, so its outcome belongs to the automation's declared destination.
+            await automations_runtime.try_fire(job.payload.automation, source="schedule")
             return None
 
         from durin.cron.prompting import build_cron_turn_prompt
@@ -1487,24 +1491,24 @@ def _run_gateway(
 
     cron.on_job = on_cron_job
 
-    # Loops: cron-triggered runs, verified against an LLM judge, with operator
-    # asks/escalations delivered through the same channel path cron uses. A
-    # dedicated WorkflowsService instance (workflows_service isn't built yet at
-    # this point — build_service_registry constructs its own further down).
+    # Automations: cron/channel/webhook-triggered runs, classified from the
+    # workflow's own result (durin.automations.classify — no LLM goal judge),
+    # with operator/counterpart asks and outcomes delivered through the same
+    # channel path cron uses. A dedicated WorkflowsService instance
+    # (workflows_service isn't built yet at this point — build_service_registry
+    # constructs its own further down).
     import time
 
-    from durin.loops import channel_meta as _loop_channel_meta
-    from durin.loops import queue as _loops_queue
-    from durin.loops.judge import build_filter_prompt as _loop_build_filter_prompt
-    from durin.loops.judge import build_prompt as _loop_build_prompt
-    from durin.loops.judge import parse_filter_verdict as _loop_parse_filter_verdict
-    from durin.loops.judge import parse_verdict as _loop_parse_verdict
-    from durin.loops.matcher import TriggerMatcher
-    from durin.loops.runtime import LoopsRuntime
-    from durin.loops.store import load_loop as _load_loop
+    from durin.automations import channel_meta as _automations_channel_meta
+    from durin.automations import queue as _automations_queue
+    from durin.automations.hooks import HookDispatcher
+    from durin.automations.judge import build_filter_prompt as _automations_build_filter_prompt
+    from durin.automations.judge import parse_filter_verdict as _automations_parse_filter_verdict
+    from durin.automations.matcher import TriggerMatcher
+    from durin.automations.runtime import AutomationsRuntime
     from durin.memory.model_resolve import resolve_aux_preset
     from durin.service.workflows import RUNS_FEED_CHAT_ID, build_runs_feed_event
-    from durin.service.workflows import WorkflowsService as _LoopsWorkflowsService
+    from durin.service.workflows import WorkflowsService as _AutomationsWorkflowsService
 
     # Marshals a service-path run's progress frames onto the runs:feed
     # websocket key. The engine walk that calls this runs on a worker thread
@@ -1538,57 +1542,58 @@ def _run_gateway(
         except Exception:  # noqa: BLE001 - best-effort; never break the run
             pass
 
-    _loops_workflows_service = _LoopsWorkflowsService(
+    _automations_workflows_service = _AutomationsWorkflowsService(
         config.workspace_path, app_config=config, sessions=session_manager,
         progress_publish=_publish_workflow_progress,
     )
 
-    def _loop_model_preset_ref() -> str | None:
-        """Resolve agents.aux_models.loops to the "provider model" picker-ref
-        string process_direct's model_preset expects. None means "no aux
-        override" — loops is the one aux purpose that does NOT fall back to a
-        separately resolved default preset (see durin.memory.model_resolve),
-        so the call rides the agent's own live model instead."""
-        preset = resolve_aux_preset(config, purpose="loops")
+    def _automations_model_preset_ref() -> str | None:
+        """Resolve agents.aux_models.automations to the "provider model"
+        picker-ref string process_direct's model_preset expects. None means
+        "no aux override" — automations is one of the two aux purposes that
+        does NOT fall back to a separately resolved default preset (see
+        durin.memory.model_resolve), so the call rides the agent's own live
+        model instead."""
+        preset = resolve_aux_preset(config, purpose="automations")
         return f"{preset.provider} {preset.model}" if preset is not None else None
 
-    async def _loop_judge(intent: str, assertions: list[str], evidence: str) -> dict:
-        prompt = _loop_build_prompt(intent, assertions, evidence)
+    async def _automations_semantic_judge(condition: str, summary: str) -> bool:
+        prompt = _automations_build_filter_prompt(condition, summary)
         resp = await agent.process_direct(
-            # loop:judge:run:{ms} — matches durin.cron.reaper's run-session
-            # pattern so judge sessions are reaped like cron run sessions
-            # instead of accumulating forever.
-            prompt, session_key=f"loop:judge:run:{int(time.time() * 1000)}",
-            model_preset=_loop_model_preset_ref(),
+            # automation:filter:run:{ms} — matches durin.cron.reaper's
+            # run-session pattern so filter-judge sessions are reaped like
+            # cron run sessions instead of accumulating forever.
+            prompt, session_key=f"automation:filter:run:{int(time.time() * 1000)}",
+            model_preset=_automations_model_preset_ref(),
         )
-        return _loop_parse_verdict(resp.content if resp else "")
+        return _automations_parse_filter_verdict(resp.content if resp else "")
 
-    async def _loop_semantic_judge(condition: str, summary: str) -> bool:
-        prompt = _loop_build_filter_prompt(condition, summary)
-        resp = await agent.process_direct(
-            # loop:filter:run:{ms} — reaped by the same run-session pattern as
-            # loop:judge:run: (see durin.cron.reaper).
-            prompt, session_key=f"loop:filter:run:{int(time.time() * 1000)}",
-            model_preset=_loop_model_preset_ref(),
-        )
-        return _loop_parse_filter_verdict(resp.content if resp else "")
-
-    async def _on_loop_ask(loop: str, run_id: str, kind: str, text: str) -> None:
-        try:
-            spec = _load_loop(config.workspace_path, loop)
-        except Exception:
-            return
-        if not spec.operator_channel:
-            return
-        try:
-            await _deliver_to_channel(
-                OutboundMessage(channel=spec.operator_channel, chat_id=spec.operator_to or "direct", content=text),
+    async def _on_automation_help(spec, run_id: str, kind: str, text: str, proposal: str | None):
+        """Notify the automation's help destination, returning the channel's
+        SendReceipt so AutomationsRuntime can register a claim on its
+        thread_key (see durin.automations.runtime._park) — a plain
+        fire-and-forget publish (bus.publish_outbound) has no receipt to give
+        back, which is why this goes through the channel manager's
+        receipt-returning send instead. An escalation is never rendered as a
+        question — the wording says which one happened."""
+        if not spec.help.channel:
+            return None
+        if kind == "approval":
+            header = f"🔒 Aprobación pendiente — {spec.name}"
+            body = (
+                f"{header}\n{text}\n\n{proposal}\n\n"
+                "Respondé en este hilo: aprobar · rechazar · o escribí la corrección."
             )
-        except Exception:
-            logger.exception("loop operator notification (non-fatal) failed")
+        elif kind == "escalation":
+            body = f"⚠️ Escalada — {spec.name}\n{text}"
+        else:  # "question"
+            body = f"❓ Pregunta — {spec.name}\n{text}"
+        return await channels.send(
+            OutboundMessage(channel=spec.help.channel, chat_id=spec.help.to or "", content=body)
+        )
 
-    async def _on_counterpart_ask(loop: str, run_id: str, origin: dict, text: str) -> None:
-        """Deliver a waiting_info question back to the channel that triggered
+    async def _on_automation_counterpart_ask(automation: str, run_id: str, origin: dict, text: str) -> None:
+        """Deliver a counterpart-tagged ask back to the channel that triggered
         the run (e.g. the same email thread), so a reply into that thread
         wakes the run via the matcher's claim lookup."""
         if origin.get("channel") == "webhook":
@@ -1597,88 +1602,75 @@ def _run_gateway(
             # raise). The question stays visible in the run's Activity feed;
             # a counterpart resumes the run via a correlate-matched wake POST
             # instead of a channel reply.
-            logger.debug("loop counterpart ask: webhook origin has no reply channel; ask remains in Activity")
+            logger.debug(
+                "automation counterpart ask: webhook origin has no reply channel; ask remains in Activity"
+            )
             return
         try:
-            await bus.publish_outbound(_loop_channel_meta.build_reply(origin, text))
+            await bus.publish_outbound(_automations_channel_meta.build_reply(origin, text))
         except Exception:
-            logger.exception("loop counterpart delivery (non-fatal) failed")
+            logger.exception("automation counterpart delivery (non-fatal) failed")
 
-    async def _on_loop_outcome(outcome) -> None:
+    async def _on_automation_outcome(outcome) -> None:
         """Deliver a terminal run's outcome to whoever should hear about it.
 
-        The session that asked, else the loop's declared channel as the
-        backstop. An outcome with neither is logged rather than dropped in
-        silence — a loop that finishes into the void is the failure this
-        exists to prevent. An outcome is internal status and never reaches
-        the counterpart a channel-triggered run is corresponding with.
+        outcome.kind/channel/to arrive already routed by AutomationsRuntime
+        (durin.automations.outcome.route, applied inside the runtime's own
+        _deliver_outcome) — this reads them verbatim and never re-routes:
+        the runtime already persisted a delivery record against this exact
+        destination, so recomputing one here could disagree with it.
         """
-        from durin.loops.outcome import ACTIONABLE_STATUSES, route
-
-        try:
-            spec = _load_loop(config.workspace_path, outcome.loop)
-        except Exception:  # noqa: BLE001 — a deleted loop must not break delivery
-            logger.warning("loops: outcome for unknown loop '{}' dropped", outcome.loop)
-            return
-
-        dest = route(outcome, operator_channel=spec.operator_channel)
-        if dest is None:
-            if outcome.status in ACTIONABLE_STATUSES:
-                logger.warning(
-                    "loops: loop '{}' run {} ended '{}' with no origin and no "
-                    "operator_channel — nobody was told",
-                    outcome.loop, outcome.run_id, outcome.status,
-                )
-            return
-
-        if dest.kind == "session":
+        if outcome.kind == "session":
             from durin.bus.events import InboundMessage
 
-            # route() only returns kind="session" when origin["session_key"]
-            # is truthy, so origin is guaranteed a non-None dict here.
-            origin = dest.origin
+            # kind is "session" only when the runtime's own route() call
+            # found a truthy origin["session_key"], so origin is guaranteed a
+            # non-None dict with that key set here.
+            origin = outcome.origin
             await bus.publish_inbound(InboundMessage(
                 channel="system",
-                sender_id="loop_outcome",
+                sender_id="automation_outcome",
                 chat_id=f"{origin.get('channel') or 'websocket'}:{origin.get('chat_id') or ''}",
                 content=(
-                    f"[Loop '{outcome.loop}' finished]\n\n{outcome.summary}\n\n"
+                    f"[Automation '{outcome.automation}' finished]\n\n{outcome.summary}\n\n"
                     "Summarize the outcome for the user."
                 ),
                 session_key_override=origin["session_key"],
-                metadata={"injected_event": "loop_outcome", "loop": outcome.loop},
+                metadata={"injected_event": "automation_outcome", "automation": outcome.automation},
             ))
             return
 
-        await _deliver_to_channel(OutboundMessage(
-            channel=spec.operator_channel,
-            chat_id=spec.operator_to or "direct",
-            content=outcome.summary,
-        ))
+        if outcome.channel:
+            await _deliver_to_channel(OutboundMessage(
+                channel=outcome.channel, chat_id=outcome.to or "direct", content=outcome.summary,
+            ))
+        # else: no routed channel — either AutomationsRuntime.report_no_outcome's
+        # best-effort retraction path (which deliberately bypasses routing; see
+        # its docstring) or a help/delivery destination with no channel
+        # configured. Either way the runtime itself decided there is nowhere
+        # to send this, not this wiring layer.
 
     # Flips True the instant the gateway begins a graceful shutdown
-    # (_request_shutdown, below — SIGTERM/SIGINT/SIGHUP). LoopsRuntime reads
-    # it to tell a workflow cancelled BY that shutdown apart from one a user
-    # deliberately stopped via tasks(action='stop') — both surface as the
-    # same cancelled/aborted result.
+    # (_request_shutdown, below — SIGTERM/SIGINT/SIGHUP). AutomationsRuntime
+    # reads it to tell a workflow cancelled BY that shutdown apart from one a
+    # user deliberately stopped via tasks(action='stop') — both surface as
+    # the same cancelled/aborted result.
     _shutdown_requested = False
 
-    loops_runtime = LoopsRuntime(
+    automations_runtime = AutomationsRuntime(
         config.workspace_path,
-        workflow_exec=_loops_workflows_service.execute,
-        judge=_loop_judge,
-        keep_runs=config.loops.keep_runs,
-        check_timeout_s=config.loops.check_timeout_s,
-        on_operator_ask=_on_loop_ask,
-        on_counterpart_ask=_on_counterpart_ask,
-        queue_ttl_s=config.loops.queue_ttl_s,
-        on_outcome=_on_loop_outcome,
+        workflow_exec=_automations_workflows_service.execute,
+        keep_runs=config.automations.keep_runs,
+        on_help_ask=_on_automation_help,
+        on_counterpart_ask=_on_automation_counterpart_ask,
+        queue_ttl_s=config.automations.queue_ttl_s,
+        on_outcome=_on_automation_outcome,
         is_shutting_down=lambda: _shutdown_requested,
     )
-    agent.register_loops_tool(loops_runtime)
+    agent.register_automations_tool(automations_runtime)
 
-    async def _loops_orphan_sweep() -> None:
-        """Reconcile loop runs orphaned by a dead process, forever.
+    async def _automations_orphan_sweep() -> None:
+        """Reconcile automation runs orphaned by a dead process, forever.
 
         Runs on the gateway's loop rather than the file-sweep thread because
         finalizing an orphan means delivering its outcome and possibly firing
@@ -1686,29 +1678,27 @@ def _run_gateway(
         """
         while True:
             try:
-                await loops_runtime.sweep_orphans()
+                await automations_runtime.sweep_orphans()
             except Exception:  # noqa: BLE001 — the sweep must never die
-                logger.exception("loops: orphan sweep failed")
-            await asyncio.sleep(_LOOPS_SWEEP_PERIOD_S)
+                logger.exception("automations: orphan sweep failed")
+            await asyncio.sleep(_AUTOMATIONS_SWEEP_PERIOD_S)
 
     # Route inbound channel messages through the trigger matcher BEFORE they
-    # reach the normal agent turn: a claim wake or a fired/queued loop trigger
-    # consumes the message, everything else falls through unchanged.
-    _loops_matcher = TriggerMatcher(
+    # reach the normal agent turn: a claim wake or a fired/queued automation
+    # trigger consumes the message, everything else falls through unchanged.
+    _automations_matcher = TriggerMatcher(
         config.workspace_path,
-        runtime=loops_runtime,
-        semantic_judge=_loop_semantic_judge,
-        queue_ttl_s=config.loops.queue_ttl_s,
-        enqueue=lambda loop, ev: _loops_queue.push(config.workspace_path, loop, ev),
+        runtime=automations_runtime,
+        semantic_judge=_automations_semantic_judge,
+        queue_ttl_s=config.automations.queue_ttl_s,
+        enqueue=lambda name, ev: _automations_queue.push(config.workspace_path, name, ev),
     )
-    bus.add_inbound_interceptor(_loops_matcher.handle_inbound)
+    bus.add_inbound_interceptor(_automations_matcher.handle_inbound)
 
     # Webhook trigger ingress (POST /api/v1/hooks/{hook}, wired into the
     # unified gateway app below): shares the matcher's wake/fire/queue
-    # decision instead of duplicating it — see durin/loops/hooks.py.
-    from durin.loops.hooks import HookDispatcher
-
-    loops_hook_dispatcher = HookDispatcher(_loops_matcher)
+    # decision instead of duplicating it — see durin/automations/hooks.py.
+    automations_hook_dispatcher = HookDispatcher(_automations_matcher)
 
     def _webui_runtime_model_name() -> str | None:
         model = getattr(agent, "model", None)
@@ -1829,16 +1819,28 @@ def _run_gateway(
             f"[green]✓[/green] Cron: pruned orphaned system job(s): {', '.join(pruned)}"
         )
 
-    # Reconcile loop trigger cron jobs with the stored loop definitions.
-    # Best-effort: parse-time validation (LoopSpec._parse_trigger) makes a bad
-    # schedule unrepresentable going forward, but a legacy/hand-edited loop
-    # file could still fail here — one bad loop must not crash gateway boot.
-    from durin.loops.cron_sync import sync_all as _loops_sync_all
-
+    # Convert any pre-existing loops/ definitions (and their run history,
+    # claims, queue, and loop:* cron jobs) to their automations/ equivalents
+    # BEFORE reconciling cron — sync_all's own prune assumes the conversion,
+    # if any, already ran. Best-effort: this is filesystem/cron I/O on a
+    # workspace that may be mid-upgrade, and a migration failure must never
+    # fail gateway boot (a bad/legacy loop file is skipped internally too —
+    # see durin.automations.migrate's own per-file error handling).
     try:
-        _loops_sync_all(cron, config.workspace_path)
+        migrate_loops(config.workspace_path, cron)
     except Exception:
-        logger.exception("loops cron sync (non-fatal) failed")
+        logger.exception("loops-to-automations migration (non-fatal) failed")
+
+    # Reconcile automation cron jobs with the stored automation definitions,
+    # and prune every legacy loop:* job unconditionally (see
+    # durin.automations.cron_sync's module docstring). Best-effort: parse-time
+    # validation makes a bad schedule unrepresentable going forward, but a
+    # legacy/hand-edited automation file could still fail here — one bad
+    # automation must not crash gateway boot.
+    try:
+        sync_automation_cron_jobs(cron, config.workspace_path)
+    except Exception:
+        logger.exception("automations cron sync (non-fatal) failed")
 
     # Wire the post-compaction + session-close hooks so dream picks up
     # consolidated context while the signal is fresh. Background daemon
@@ -2062,11 +2064,11 @@ def _run_gateway(
             await cron.start()
 
             # Started here rather than at definition time: the coroutine is
-            # defined earlier (right after register_loops_tool), but
+            # defined earlier (right after register_automations_tool), but
             # asyncio.create_task needs a running loop, which only exists
             # once this coroutine itself is executing.
-            global _loops_sweep_task
-            _loops_sweep_task = asyncio.create_task(_loops_orphan_sweep())
+            global _automations_sweep_task
+            _automations_sweep_task = asyncio.create_task(_automations_orphan_sweep())
 
             # Unified uvicorn server: the gateway serves WS chat + /api/v1 + SPA
             # via a single Starlette app on the websocket channel's port.  The
@@ -2089,7 +2091,7 @@ def _run_gateway(
                     mcp_runtime=_McpRuntime(agent),
                     subagent_manager=agent.subagents,
                     channel_manager=channels,
-                    loops_runtime=loops_runtime,
+                    automations_runtime=automations_runtime,
                     tool_registry_resolver=lambda: agent.tools,
                     on_config_changed=agent.reload_app_config,
                     on_default_changed=agent.apply_default_model_live,
@@ -2111,7 +2113,7 @@ def _run_gateway(
                     auth=_unified_registry.get("auth"),
                     static_token=_static_token_u,
                     static_dist_path=_ws_channel._static_dist_path,
-                    hook_dispatcher=loops_hook_dispatcher,
+                    hook_dispatcher=automations_hook_dispatcher,
                     agent_loop=agent,
                     model_name=_model_name_u,
                     api_request_timeout=config.gateway.api_request_timeout,

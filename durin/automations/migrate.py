@@ -1,16 +1,14 @@
 """Boot-time converter: loops/ definitions, run history, claims, queue, and
 ``loop:*`` cron jobs become their automations/ equivalents.
 
-NOT WIRED YET: nothing calls ``migrate_loops`` until the gateway-cutover task
-rewires ``durin/cli/commands.py`` to run it at boot, before
-``durin.automations.cron_sync.sync_all`` — until then the gateway keeps
-running the still-live loops runtime exactly as today, untouched. This module
-is built and tested standalone, same footing as ``durin/automations/cron_sync.py``.
+Runs once at gateway boot, before ``durin.automations.cron_sync.sync_all``
+(see ``durin.cli.commands``) — wrapped in try/except there so a migration I/O
+failure never fails gateway startup.
 
-This is the one place in the automations package allowed to import from
-``durin.loops`` — ``durin.loops.spec.parse_loop``, read-only, to parse the
-on-disk loop definitions this converts away. It never imports ``durin.loops``
-beyond that: every converted definition is hand-assembled as a plain dict and
+Parsing a pre-existing on-disk loop definition uses
+``durin.automations._legacy_loop_spec.parse_loop`` — a frozen copy of the
+parser the (now-deleted) loops package used, kept alive only for this one
+read. Every converted definition is then hand-assembled as a plain dict and
 run through ``durin.automations.spec.parse_automation`` (full validation) and
 ``durin.automations.store.save_automation`` (chain-cycle validation, normal
 versioning) rather than built by copying an ``AutomationSpec`` together
@@ -35,14 +33,14 @@ from pathlib import Path
 
 from loguru import logger
 
+from durin.automations._legacy_loop_spec import GoalCheck, LoopSpec, LoopTrigger, parse_loop
 from durin.automations.run_log import runs_root as automations_runs_root
 from durin.automations.spec import parse_automation
 from durin.automations.store import automations_dir, save_automation
-from durin.loops.spec import GoalCheck, LoopSpec, LoopTrigger, parse_loop
 
-# Legacy loop cron job id prefix (durin.loops.cron_sync.loop_job_id's format:
-# f"loop:{loop_name}:{idx}"). Not imported from durin.loops.cron_sync — this
-# module only ever reads durin.loops.spec.parse_loop, per its docstring.
+# Legacy loop cron job id prefix (the deleted loops package's own cron_sync
+# used the format f"loop:{loop_name}:{idx}") — matched here as a plain string
+# so this module never needs to import anything from the loops package.
 _LOOP_CRON_PREFIX = "loop:"
 
 
@@ -137,7 +135,8 @@ def _convert_definitions(workspace: Path, loops_dir: Path, actions: list[str]) -
 
 
 def _move_runs(workspace: Path, actions: list[str]) -> None:
-    # Mirrors durin.loops.run_log.runs_root, not imported (see module docstring).
+    # Mirrors the deleted loops package's own run_log.runs_root, not imported
+    # (see module docstring).
     src = workspace / "loops-runs"
     if not src.is_dir():
         return

@@ -3,17 +3,14 @@
 Automations live as JSON at ``<workspace>/automations/<name>.json`` (see
 ``durin.automations.store``) and are validated by
 ``durin.automations.spec.parse_automation``. This is the HTTP surface the
-webui automations view will use to manage automations and drive manual fires /
-operator answers — built beside ``durin.service.loops.LoopsService`` (which
-stays live and unmodified) rather than replacing it: the gateway keeps
-dispatching loops until a later cutover task retires that package and this one
-takes over. A save or delete keeps the automation's schedule-trigger cron jobs
-in sync via ``durin.automations.cron_sync``.
+webui automations view uses to manage automations and drive manual fires /
+operator answers. A save or delete keeps the automation's schedule-trigger
+cron jobs in sync via ``durin.automations.cron_sync``.
 
 The runtime that actually executes an automation (``durin.automations.runtime.
-AutomationsRuntime``) is wired to this service later, at gateway cutover —
-until then ``fire``/``answer`` raise ``UnavailableError``, exactly like
-``LoopsService`` on a surface with no loops runtime.
+AutomationsRuntime``) is wired in by the gateway (``durin.cli.commands``) and
+passed here as ``runtime``; a surface with no runtime (e.g. spec-reading
+tooling) leaves it ``None`` and ``fire``/``answer`` raise ``UnavailableError``.
 """
 
 from __future__ import annotations

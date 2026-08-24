@@ -1,9 +1,7 @@
-"""Ported from tests/loops/test_cron_sync.py (durin.loops.cron_sync is the
-reference; durin/loops/ and tests/loops/ are left untouched by this task —
-a later gateway-wiring task owns their removal) plus new prune/protection
-cases: automation_trigger jobs are protected from the public
-remove_job/update_job API (unlike loop_trigger), so sync_all's removal
-paths must use the bypass door instead."""
+"""Ported from the (now-deleted) loops package's own cron_sync tests, plus
+new prune/protection cases: automation_trigger jobs are protected from the
+public remove_job/update_job API (unlike the legacy loop_trigger), so
+sync_all's removal paths must use the bypass door instead."""
 
 from pathlib import Path
 
