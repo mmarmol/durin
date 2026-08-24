@@ -1021,3 +1021,123 @@ async def test_achieved_on_help_only_automation_routes_to_help(tmp_path):
     assert received[0].channel == "slack" and received[0].to == "ops-room"
     record = rl.read_run(tmp_path, "a1", m["run_id"])
     assert record["delivery"]["result"] == "delivered"
+
+
+# ---------------------------------------------------------------------------
+# Fix round 2, finding 1: chain_depth (and source) must survive the
+# busy -> queue -> drain path, or CHAIN_HOP_CAP is silently defeated.
+# ---------------------------------------------------------------------------
+
+async def test_chain_depth_survives_the_busy_queue_drain_path_so_the_cap_still_bites(tmp_path, monkeypatch, caplog):
+    """a1 -> downstream (busy at the moment) -> tail, with CHAIN_HOP_CAP
+    patched to 1. The chain hop into downstream is depth 1 (still under the
+    cap, so it's attempted); downstream is busy, so it's queued. Once
+    downstream frees up and drains, it must resume at depth 1 (not reset to
+    0) so ITS OWN attempt to chain into "tail" is refused by the cap.
+
+    downstream's OWN busy-making run is resolved as a REJECTED approval
+    (not completed) specifically so that resolution's own _post_finish does
+    not independently chain into "tail" at depth 0 (rejected is not a
+    chainable outcome) — isolating the assertion to the drained fire alone,
+    which is the one this test is actually about.
+    """
+    import durin.automations.runtime as runtime_mod
+
+    monkeypatch.setattr(runtime_mod, "CHAIN_HOP_CAP", 1)
+
+    _save(tmp_path)  # a1
+    _save(tmp_path, name="downstream", workflow="w2",
+         triggers=(AutomationTrigger(source="chain", chain_automation="a1", chain_when="any"),))
+    _save(tmp_path, name="tail", workflow="w3",
+         triggers=(AutomationTrigger(source="chain", chain_automation="downstream", chain_when="any"),))
+
+    rt, calls = _mk_runtime(tmp_path, [
+        _wr("needs_input", out="approve?", ask_kind="approval"),  # 1: downstream's own first fire -> pauses (busy)
+        _wr("completed", out="upstream done"),                    # 2: a1 finishes -> chains into busy downstream (depth 1)
+        WorkflowResult(status="cancelled", final_output="approve?", run_id="wf1", rejected=True),  # 3: reject -> no chain
+        _wr("completed"),                                         # 4: downstream's drained chain re-fire -> completes
+    ])
+
+    d = await rt.fire("downstream", source="manual")
+    assert d["status"] == "paused"
+
+    m = await rt.fire("a1", source="manual")
+    assert m["status"] == "completed"
+    await _drain()
+    assert automation_queue.pending(tmp_path, "downstream") == 1
+
+    handler_id = loguru_logger.add(caplog.handler, format="{message}", level="WARNING")
+    try:
+        with caplog.at_level(logging.WARNING):
+            d2 = await rt.answer("downstream", d["run_id"], "n/a", action="reject")
+            assert d2["status"] == "rejected"  # not chainable — dispatches nothing on its own
+            await _drain()
+    finally:
+        loguru_logger.remove(handler_id)
+
+    # "tail" must never fire — the drained re-fire (the only completion left
+    # that could chain into it) carried chain_depth=1 through, so
+    # downstream's own _dispatch_chains hit the (patched) cap.
+    assert all(c["name"] != "w3" for c in calls["exec"])
+    assert any("refused" in r.getMessage() for r in caplog.records)
+
+
+async def test_drained_chain_fire_records_source_chain_in_cause_and_telemetry(tmp_path, _isolate_telemetry_dir):
+    import json
+
+    _save(tmp_path)
+    _save(tmp_path, name="downstream", workflow="w2",
+         triggers=(AutomationTrigger(source="chain", chain_automation="a1", chain_when="any"),))
+
+    rt, _ = _mk_runtime(tmp_path, [
+        _wr("needs_input", out="q", ask_kind="question"),
+        _wr("completed", out="upstream done"),
+        _wr("completed"),  # downstream's answer() resume
+        _wr("completed"),  # downstream's drained chain re-fire
+    ])
+
+    d = await rt.fire("downstream", source="manual")
+    m = await rt.fire("a1", source="manual")
+    assert m["status"] == "completed"
+    await _drain()
+
+    d2 = await rt.answer("downstream", d["run_id"], "answering")
+    assert d2["status"] == "completed"
+    await _drain()
+
+    runs = rl.list_runs(tmp_path, "downstream", limit=None)
+    drained_run = next(r for r in runs if r["run_id"] not in (d["run_id"], d2["run_id"]))
+    assert drained_run["cause"]["kind"] == "chain"
+
+    files = list(_isolate_telemetry_dir.glob("*.jsonl"))
+    events = [json.loads(line) for f in files for line in f.read_text(encoding="utf-8").strip().splitlines()]
+    downstream_fired = [e for e in events if e["type"] == "automations.fired"
+                        and e["data"].get("automation") == "downstream"]
+    assert any(e["data"].get("source") == "chain" for e in downstream_fired)
+
+
+async def test_chain_fire_busy_handler_logs_when_queue_push_itself_raises(tmp_path, monkeypatch, caplog):
+    """The residual of finding 1: queue.push inside the AutomationBusy handler
+    must be guarded — if it raises (lock/IO), the exception must be logged,
+    not left to escape _chain_fire and recreate the exact "Task exception
+    was never retrieved" mode finding 1 eliminated."""
+    import durin.automations.runtime as runtime_mod
+
+    _save(tmp_path)
+    _save(tmp_path, name="downstream", workflow="w2")  # concurrency defaults to "single"
+    rt, _ = _mk_runtime(tmp_path, [_wr("needs_input", out="q", ask_kind="question")])
+    await rt.fire("downstream", source="manual")  # leaves downstream busy
+
+    def _raise_push(*args, **kwargs):
+        raise OSError("simulated queue push failure")
+
+    monkeypatch.setattr(runtime_mod.queue, "push", _raise_push)
+
+    handler_id = loguru_logger.add(caplog.handler, format="{message}", level="ERROR")
+    try:
+        with caplog.at_level(logging.ERROR):
+            await rt._chain_fire("downstream", "task text", 1)  # hits AutomationBusy, then push raises
+    finally:
+        loguru_logger.remove(handler_id)
+
+    assert any("queue" in r.getMessage().lower() for r in caplog.records)

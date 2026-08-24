@@ -497,8 +497,16 @@ class AutomationsRuntime:
             if spec.enabled and not disabled_now and spec.concurrency == "single":
                 event = queue.pop_fresh(self._ws, spec.name, self._queue_ttl_s)
                 if event is not None:
+                    # source/chain_depth default to "channel"/0 for an
+                    # ordinary channel-queued event (which never carries
+                    # them) — only a chain-originated event queued by
+                    # _chain_fire's busy handler sets them, and they must
+                    # ride along so the resumed fire picks up the same chain
+                    # hop count instead of silently restarting at depth 0.
                     self._spawn(self._drain_fire(spec.name, task=event.get("content"),
-                                                  origin=event.get("origin")))
+                                                  origin=event.get("origin"),
+                                                  source=event.get("source") or "channel",
+                                                  chain_depth=event.get("chain_depth") or 0))
         except Exception:  # noqa: BLE001 — contained; see comment above
             logger.exception(
                 "automations: post-outcome housekeeping (prune/queue-drain) for '{}' run {} failed",
@@ -605,8 +613,17 @@ class AutomationsRuntime:
             # Losing the chain here would drop the whole downstream fire with
             # nothing to show for it; queuing it instead means the target's
             # own next _post_finish drains it once its active run frees the
-            # concurrency slot.
-            queue.push(self._ws, target_name, {"content": task, "origin": None})
+            # concurrency slot. The event carries its own source/chain_depth
+            # so _drain_fire's eventual re-fire resumes the SAME chain hop
+            # count instead of restarting at depth 0 — losing that would
+            # silently defeat CHAIN_HOP_CAP for any chain that happens to
+            # collide with a busy target along the way.
+            try:
+                queue.push(self._ws, target_name, {"content": task, "origin": None,
+                                                    "source": "chain", "chain_depth": chain_depth})
+            except Exception:  # noqa: BLE001 — the queue write itself must not go unlogged either
+                logger.exception("automations: queuing the busy chained fire for '{}' failed", target_name)
+                return
             logger.warning(
                 "automations: chained fire for '{}' lost the fire race (now busy); "
                 "queued for next available slot", target_name
@@ -632,19 +649,31 @@ class AutomationsRuntime:
             logger.exception("automations: counterpart notification for '{}' run {} failed",
                               spec.name, run_id)
 
-    async def _drain_fire(self, automation_name: str, task: str | None, origin: dict | None) -> None:
+    async def _drain_fire(self, automation_name: str, task: str | None, origin: dict | None,
+                            *, source: str = "channel", chain_depth: int = 0) -> None:
         """Fire a drained event, re-enqueueing and logging if the automation is busy.
 
         Called via create_task from _post_finish, so unhandled exceptions are
         logged by asyncio as task exceptions. On AutomationBusy, push the
         event BACK via queue.push and log a warning (mirrors how the matcher's
         own fire handles the race). Other exceptions are logged (run-level
-        failures are already finalized by fire itself).
+        failures are already finalized by fire itself). `source`/`chain_depth`
+        default to the ordinary channel-queued shape but ride through
+        unchanged for a chain-originated event, both into the resumed `fire`
+        call and into any re-queue below — losing either here would
+        mislabel the run's cause or silently reset its chain hop count.
         """
         try:
-            await self.fire(automation_name, source="channel", task=task, origin=origin)
+            await self.fire(automation_name, source=source, task=task, origin=origin,
+                             chain_depth=chain_depth)
         except AutomationBusy:
-            queue.push(self._ws, automation_name, {"content": task, "origin": origin})
+            try:
+                queue.push(self._ws, automation_name, {"content": task, "origin": origin,
+                                                        "source": source, "chain_depth": chain_depth})
+            except Exception:  # noqa: BLE001 — the queue write itself must not go unlogged either
+                logger.exception("automations: re-queuing the busy drained event for '{}' failed",
+                                  automation_name)
+                return
             logger.warning(
                 "automations: drained event for '{}' lost the fire race (now busy); "
                 "re-queued for next available slot", automation_name
