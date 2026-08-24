@@ -1521,11 +1521,16 @@
       "revise": "Revise",
       "reject": "Reject",
       "answerAndResume": "Answer & resume",
+      "stop": "Stop this run",
+      "stopConfirmTitle": "Stop this run?",
+      "stopConfirmBody": "Ends the run now without a reply — it will not resume.",
+      "alreadyResolved": "This run already moved on.",
       "confirmed": {
         "approve": "Approved.",
         "revise": "Correction sent.",
         "reject": "Rejected.",
-        "answer": "Answer sent — run resumed."
+        "answer": "Answer sent — run resumed.",
+        "stop": "Run stopped."
       }
     },
     "form": {
@@ -1628,7 +1633,12 @@
     },
     "detail": {
       "live": {
-        "title": "Running now"
+        "title": "Running now",
+        "stop": "Stop",
+        "stopping": "Stopping…",
+        "forceStop": "Force stop",
+        "stopConfirmTitle": "Stop run {{runId}}?",
+        "stopConfirmBody": "Asks the run to stop at its next workflow step. The step currently in progress finishes and is kept."
       },
       "history": {
         "title": "Runs",
@@ -1654,7 +1664,9 @@
       "filesLabel": "Files",
       "openRun": "View full execution →",
       "fireNow": "Run now",
-      "fireNowStarted": "Run {{runId}} started"
+      "fireNowStarted": "Run {{runId}} started",
+      "pause": "Pause",
+      "resume": "Resume"
     }
   },
   "skills": {

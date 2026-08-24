@@ -177,15 +177,57 @@ class AutomationsRuntime:
 
     async def answer(self, name: str, run_id: str, text: str, *,
                        action: str | None = None, by: str = "operator") -> dict:
+        """Answer a paused run and block until the resume finishes.
+
+        Kept for existing internal callers/tests that need the resume's
+        FINAL outcome rather than a running-record snapshot — composes the
+        same prologue `answer_nowait` uses with an inline (not backgrounded)
+        await of the continuation. Prefer `answer_nowait` for anything
+        HTTP- or chat-facing: the resume is a full workflow run and can take
+        minutes, which is fine to await internally but not behind an HTTP
+        request or a chat turn (see `answer_nowait`'s own docstring).
+        """
         token = _bind_automations_telemetry(name)
         try:
-            return await self._answer(name, run_id, text, action=action, by=by)
+            spec, record, resume_text = self._answer_prologue(name, run_id, text, action=action, by=by)
+            return await self._answer_continuation(spec, run_id, record, resume_text, chain_depth=0)
         finally:
             if token is not None:
                 reset_telemetry(token)
 
-    async def _answer(self, name: str, run_id: str, text: str, *,
-                        action: str | None, by: str) -> dict:
+    async def answer_nowait(self, name: str, run_id: str, text: str, *,
+                              action: str | None = None, by: str = "operator") -> dict:
+        """Answer a paused run without waiting for the resume to finish.
+
+        Runs the prologue (validation, ownership/claim, resolving the
+        answer into resume text, recording an approval verdict) inline and
+        synchronously, then backgrounds the actual resume — the same
+        potentially-minutes-long workflow run `fire` already backgrounds
+        (see `reserve_run_id`'s docstring) — and returns immediately with
+        the record re-read as `running`. The caller checks on the eventual
+        outcome the same way it would check on a `fire`: polling status, or
+        waiting for the outcome to arrive through the automation's normal
+        delivery/help routing.
+        """
+        token = _bind_automations_telemetry(name)
+        try:
+            spec, record, resume_text = self._answer_prologue(name, run_id, text, action=action, by=by)
+        finally:
+            if token is not None:
+                reset_telemetry(token)
+        self._spawn(self._answer_continuation_guarded(spec, run_id, record, resume_text, chain_depth=0))
+        return run_log.read_run(self._ws, name, run_id)
+
+    def _answer_prologue(self, name: str, run_id: str, text: str, *,
+                           action: str | None, by: str) -> tuple[AutomationSpec, dict, str]:
+        """Everything about answering a paused run that has to happen
+        synchronously, before the (possibly long) resume starts: validate
+        the run is actually waiting, re-stamp ownership, release the claim,
+        and resolve free text/an explicit action into the canonical resume
+        text. Returns ``(spec, the ORIGINAL pre-resume record, resume_text)``
+        — the continuation needs the original record only for its stable
+        ``workflow_run_id``, not anything this prologue mutates.
+        """
         spec = load_automation(self._ws, name)
         record = run_log.read_run(self._ws, name, run_id)
         if not record or record.get("status") != "paused":
@@ -223,19 +265,144 @@ class AutomationsRuntime:
             else:
                 resolved_action = parse_approval_reply(text) or "revise"
                 resume_text = text
+            # Recorded HERE, before the resume even starts, not after a
+            # successful one: the operator's decision is a fact regardless
+            # of how the resume turns out. Stamping it only on success would
+            # lose the record entirely if the resume then failed.
+            if resolved_action is not None:
+                run_log.record_approval(self._ws, name, run_id, action=resolved_action, by=by, at_ms=_now_ms())
 
+        return spec, record, resume_text
+
+    async def _answer_continuation(self, spec: AutomationSpec, run_id: str, record: dict,
+                                     resume_text: str, *, chain_depth: int) -> dict:
+        """The actual resume: everything after `_answer_prologue` returns.
+
+        Runs either inline (`answer`, still under the caller's own telemetry
+        binding) or backgrounded (`answer_nowait`, outside any caller
+        context) — `_bind_automations_telemetry` binds its own logger only
+        when nothing is already bound, so this call is a no-op in the
+        inline case and the one that matters in the backgrounded case.
+        """
+        token = _bind_automations_telemetry(spec.name)
         try:
-            result = await self._exec(spec.workflow, resume_text, resume_run_id=record["workflow_run_id"],
-                                       root_session_key=f"automation:{spec.name}")
-        except Exception as exc:  # noqa: BLE001 — any failure ends the run honestly
-            rec = run_log.finalize_run(self._ws, name, run_id, status="failed", detail=str(exc),
-                                        workflow_run_id=record["workflow_run_id"])
-            return await self._post_finish(spec, run_id, rec, None, chain_depth=0)
+            try:
+                result = await self._exec(spec.workflow, resume_text, resume_run_id=record["workflow_run_id"],
+                                           root_session_key=f"automation:{spec.name}")
+            except Exception as exc:  # noqa: BLE001 — any failure ends the run honestly
+                rec = run_log.finalize_run(self._ws, spec.name, run_id, status="failed", detail=str(exc),
+                                            workflow_run_id=record["workflow_run_id"])
+                return await self._post_finish(spec, run_id, rec, None, chain_depth=chain_depth)
 
-        if ask_kind == "approval" and resolved_action is not None:
-            run_log.record_approval(self._ws, name, run_id, action=resolved_action, by=by, at_ms=_now_ms())
+            return await self._handle_result(spec, run_id, result, chain_depth=chain_depth)
+        finally:
+            if token is not None:
+                reset_telemetry(token)
 
-        return await self._handle_result(spec, run_id, result, chain_depth=0)
+    async def _answer_continuation_guarded(self, spec: AutomationSpec, run_id: str, record: dict,
+                                             resume_text: str, *, chain_depth: int) -> None:
+        """Thin wrapper `answer_nowait` backgrounds instead of
+        `_answer_continuation` directly. `answer()` still awaits
+        `_answer_continuation` inline so its exceptions keep propagating to
+        its own caller (existing behavior, existing tests) — this wrapper
+        exists only for the backgrounded path.
+
+        `_answer_continuation`'s own guard covers `self._exec` failing; it
+        has none for `_handle_result`/`_post_finish` raising afterward
+        (classify, a disk write, delivery, chain dispatch). Backgrounded via
+        `_spawn`, an exception escaping there would otherwise only ever
+        surface as asyncio's own untraceable "Task exception was never
+        retrieved" warning at GC time — and the run would stay
+        `status="running"` forever: `find_orphans` explicitly skips a
+        `running` manifest owned by a still-live process, so no sweep would
+        ever reclaim it, and a `single`-concurrency automation would refuse
+        every later trigger as busy. Mirrors `_chain_fire`/`_drain_fire`'s
+        own top-level guard.
+        """
+        try:
+            await self._answer_continuation(spec, run_id, record, resume_text, chain_depth=chain_depth)
+        except Exception as exc:  # noqa: BLE001 — must not go unlogged or leave the run stuck running
+            logger.exception("automations: backgrounded answer continuation for '{}' run {} failed",
+                              spec.name, run_id)
+            try:
+                run_log.finalize_run(self._ws, spec.name, run_id, status="failed", detail=str(exc),
+                                      workflow_run_id=record["workflow_run_id"])
+            except Exception:  # noqa: BLE001 — the finalize attempt itself must not go unlogged either
+                logger.exception("automations: failed to finalize '{}' run {} after continuation failure",
+                                  spec.name, run_id)
+
+    async def stop(self, name: str, run_id: str, *, hard: bool = False) -> dict:
+        token = _bind_automations_telemetry(name)
+        try:
+            return await self._stop(name, run_id, hard=hard)
+        finally:
+            if token is not None:
+                reset_telemetry(token)
+
+    async def _stop(self, name: str, run_id: str, *, hard: bool) -> dict:
+        record = run_log.read_run(self._ws, name, run_id)
+        if record is None:
+            raise AutomationNotFound(f"run '{run_id}' of automation '{name}' not found")
+        status = record.get("status")
+
+        if status == "running":
+            # No local finalize here: the in-process fire task is still
+            # awaiting `self._exec` and sees the engine end on its own,
+            # flowing through the normal _handle_result path — which gives a
+            # non-shutdown "cancelled" result the exact same honest,
+            # delivery/chain/streak-silent "interrupted" finalize the paused
+            # branch below already gives (see _handle_result). An explicit
+            # hard=True escalates and can never be downgraded by a later
+            # graceful call (request_cancel's own contract) — a REPEAT call
+            # with hard left at its default is a no-op on an
+            # already-graceful request; only passing hard=True actually
+            # upgrades it.
+            from durin.workflow.cancellation import request_cancel
+
+            # `workflow_run_id` is None for the narrow window between
+            # start_run (writes "running" with it still unset) and the
+            # update_run that fills it in, just before `_exec` starts — a
+            # stop landing in exactly that window has nothing to cancel yet;
+            # registering a None key would be a no-op that never clears.
+            workflow_run_id = record.get("workflow_run_id")
+            if workflow_run_id:
+                request_cancel(workflow_run_id, hard=hard)
+            # Durable record of the request: the in-memory cancellation
+            # registry above is the live mechanism the engine actually
+            # polls, but it does not survive a crash. Stamping it here lets
+            # sweep_orphans (run at the next boot) recognize a run whose
+            # stop never got the chance to take effect and finalize it
+            # honestly instead of relaunching a replacement nobody asked for.
+            return run_log.update_run(self._ws, name, run_id, stop_requested_at=_now_ms())
+
+        if status == "paused":
+            # No workflow is in flight to cancel — finalize directly instead
+            # of waiting for a resume that is never coming.
+            rec = run_log.finalize_run(self._ws, name, run_id, status="interrupted",
+                                        detail="stopped by operator",
+                                        workflow_run_id=record.get("workflow_run_id"))
+            claims.release_run(self._ws, name, run_id)
+            # _post_finish is skipped below, but it is also the only place
+            # automations.run_finished is normally emitted — emit it here
+            # too, or a stopped run reads as started-and-never-finished in
+            # the telemetry stream.
+            emit_tool_event("automations.run_finished", {
+                "automation": name, "run_id": run_id, "status": "interrupted",
+                "final_route_label": rec.get("final_route_label"),
+            })
+            # Deliberately skips _post_finish: an operator stop is not an
+            # outcome to deliver, and must not dispatch chains. But queue
+            # draining is the one piece of _post_finish's housekeeping that
+            # still has to happen here too — see _drain_queue_if_single.
+            try:
+                spec = load_automation(self._ws, name)
+            except AutomationNotFound:
+                spec = None
+            if spec is not None:
+                self._drain_queue_if_single(spec)
+            return rec
+
+        raise ValueError("run is not active")
 
     async def sweep_orphans(self) -> list[str]:
         """Finalize runs whose process died, tell somebody, relaunch what never ran.
@@ -290,6 +457,16 @@ class AutomationsRuntime:
 
             if work_started:
                 detail = "interrupted by a restart with work already in flight"
+                new_run_id = None
+            elif rec.get("stop_requested_at"):
+                # An operator's stop request (see `stop`'s running branch)
+                # never got the chance to take effect before the crash — the
+                # in-memory cancellation registry it set does not survive a
+                # restart, but this durable stamp does. The operator's
+                # intent was to end this run, not to have it silently
+                # replaced by a fresh one nobody asked for.
+                detail = ("interrupted by a restart before the workflow started; "
+                          "not relaunched — an operator had already requested a stop")
                 new_run_id = None
             elif not spec.enabled:
                 # Paused while the gateway was down. Nothing ran, but firing a
@@ -430,6 +607,41 @@ class AutomationsRuntime:
                 "run_id": run_id, "automation": spec.name, "status": "running",
             }
 
+        if result.status == "cancelled" and not result.rejected:
+            # A non-shutdown cancellation. Verified end to end: the engine's
+            # own cancel_check is the ONLY thing that ever produces this
+            # status (durin/workflow/engine.py — every `status="cancelled"`
+            # WorkflowResult traces to self._cancel_check(), which reads
+            # durin.workflow.cancellation.is_cancelled, set only by
+            # request_cancel; a deliberate approval reject also carries
+            # "cancelled" but always with rejected=True, excluded above and
+            # handled by classify()'s own rejected branch instead — never
+            # reaches here). This is not a failure: an operator (or anything
+            # else holding this workflow_run_id) asked for it, and gets the
+            # exact same honest contract `stop`'s own paused branch already
+            # gives — no delivery under ANY policy (including
+            # `notify: "always"`, which should_deliver would otherwise grant
+            # unconditionally), no chain dispatch, streak-transparent
+            # (mirrors run_log.STREAK_TRANSPARENT's existing reasoning for
+            # "paused"/"rejected"/"interrupted": a deliberately-ended run is
+            # not evidence the automation itself is failing). Finalizes
+            # directly rather than through classify()/_post_finish:
+            # _post_finish is also what a crash-orphan's OWN "interrupted"
+            # goes through to DELIVER its notice (sweep_orphans does this
+            # deliberately) — routing this case through the same path would
+            # either wrongly silence that notice or wrongly deliver this one.
+            record = run_log.finalize_run(self._ws, spec.name, run_id, status="interrupted",
+                                           workflow_run_id=wf_run_id)
+            try:
+                run_log.prune_runs(self._ws, spec.name, self._keep_runs)
+                self._drain_queue_if_single(spec)
+            except Exception:  # noqa: BLE001 — contained, mirrors _post_finish's own housekeeping guard
+                logger.exception(
+                    "automations: post-outcome housekeeping (prune/queue-drain) for '{}' run {} failed",
+                    spec.name, run_id,
+                )
+            return record
+
         status = classify(result, spec)
         if status == "paused":
             return await self._park(spec, run_id, result)
@@ -460,6 +672,48 @@ class AutomationsRuntime:
         if receipt is not None and receipt.thread_key:
             claims.register(self._ws, key=receipt.thread_key, automation=spec.name, run_id=run_id)
         return record
+
+    def _drain_queue_if_single(self, spec: AutomationSpec) -> None:
+        """Fire the next queued event for a `single`-concurrency automation.
+
+        Shared by `_post_finish` (a run ending normally) and `stop` (an
+        operator ending a paused run directly): either way, whatever run
+        just ended held the automation's only concurrency slot, and this is
+        the only place a queued channel/webhook event ever gets drained —
+        skipping it would strand that event until some unrelated future
+        trigger happened to arrive. A `parallel` automation has no slot to
+        free (nothing was ever queued for it in the first place), and a
+        disabled one must not auto-refire something its owner just turned
+        off — both are the caller's decision, not this helper's, since
+        `stop` has no "just disabled" case of its own.
+        """
+        if not (spec.enabled and spec.concurrency == "single"):
+            return
+        event = queue.pop_fresh(self._ws, spec.name, self._queue_ttl_s)
+        if event is None:
+            return
+        # source is always present: matcher._queue_event stamps it from the
+        # triggering channel ("webhook" or "channel"), and a chain-originated
+        # event queued by _chain_fire's own busy handler sets it explicitly
+        # to "chain" — _drain_fire's own busy handler instead re-pushes
+        # whatever source rode in unchanged (it re-queues an already-drained
+        # event, it does not originate one), so the "channel" fallback here
+        # only guards an event queued before the stamp existed at all.
+        # chain_depth defaults to 0 for an ordinary channel-queued event
+        # (matcher._queue_event never sets it) — only a chain-originated
+        # event sets it explicitly, and it must ride along so the resumed
+        # fire picks up the same chain hop count instead of silently
+        # restarting at depth 0.
+        origin = event.get("origin")
+        emit_tool_event("automations.event_matched", {
+            "automation": spec.name,
+            "source_channel": (origin or {}).get("channel", ""),
+            "action": "drained",
+        })
+        self._spawn(self._drain_fire(spec.name, task=event.get("content"),
+                                      origin=origin,
+                                      source=event.get("source") or "channel",
+                                      chain_depth=event.get("chain_depth") or 0))
 
     async def _post_finish(self, spec: AutomationSpec, run_id: str, record: dict,
                              result: WorkflowResult | None, *, chain_depth: int) -> dict:
@@ -498,31 +752,14 @@ class AutomationsRuntime:
         # a run whose real outcome already went out as if it produced none.
         try:
             run_log.prune_runs(self._ws, spec.name, self._keep_runs)
-            # The run that just finished held the only concurrency slot a
-            # `single` automation allows; if a channel event piled up in the
-            # queue while it ran, fire it now instead of waiting for the next
-            # inbound message. Never when this run just disabled the
-            # automation (achieved or escalate_pause) — auto-refiring
-            # something that was just switched off would defeat the point.
-            if spec.enabled and not disabled_now and spec.concurrency == "single":
-                event = queue.pop_fresh(self._ws, spec.name, self._queue_ttl_s)
-                if event is not None:
-                    # source/chain_depth default to "channel"/0 for an
-                    # ordinary channel-queued event (which never carries
-                    # them) — only a chain-originated event queued by
-                    # _chain_fire's busy handler sets them, and they must
-                    # ride along so the resumed fire picks up the same chain
-                    # hop count instead of silently restarting at depth 0.
-                    origin = event.get("origin")
-                    emit_tool_event("automations.event_matched", {
-                        "automation": spec.name,
-                        "source_channel": (origin or {}).get("channel", ""),
-                        "action": "drained",
-                    })
-                    self._spawn(self._drain_fire(spec.name, task=event.get("content"),
-                                                  origin=origin,
-                                                  source=event.get("source") or "channel",
-                                                  chain_depth=event.get("chain_depth") or 0))
+            # Never when this run just disabled the automation (achieved or
+            # escalate_pause) — auto-refiring something that was just
+            # switched off would defeat the point. `stop`'s paused branch
+            # calls `_drain_queue_if_single` directly instead: it has no
+            # `disabled_now` concept of its own (an operator stop never
+            # disables the automation).
+            if not disabled_now:
+                self._drain_queue_if_single(spec)
         except Exception:  # noqa: BLE001 — contained; see comment above
             logger.exception(
                 "automations: post-outcome housekeeping (prune/queue-drain) for '{}' run {} failed",

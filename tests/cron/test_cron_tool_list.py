@@ -284,6 +284,25 @@ def test_list_includes_protected_dream_system_job_with_memory_purpose(tmp_path) 
     assert "cannot be removed" in result
 
 
+def test_list_annotates_automation_trigger_rows(tmp_path) -> None:
+    """A live failure: asked what automations exist, the agent used `cron
+    list` (where an automation's schedule trigger shows up as an
+    `automation:*` row) instead of the `automations` tool. The row must name
+    its owning automation and point the model at the right tool."""
+    tool = _make_tool(tmp_path)
+    tool._cron.register_system_job(CronJob(
+        id="automation:briefing:0",
+        name="automation briefing trigger 0",
+        schedule=CronSchedule(kind="cron", expr="0 7 * * *", tz="UTC"),
+        payload=CronPayload(kind="automation_trigger", automation="briefing", message="brief me"),
+    ))
+
+    result = tool._list_jobs()
+
+    assert "managed by automation 'briefing'" in result.lower()
+    assert "automations tool" in result.lower()
+
+
 def test_remove_protected_dream_job_returns_clear_feedback(tmp_path) -> None:
     tool = _make_tool(tmp_path)
     tool._cron.register_system_job(CronJob(
@@ -344,6 +363,15 @@ def test_add_job_can_disable_delivery(tmp_path) -> None:
     assert result.startswith("Created job")
     job = tool._cron.list_jobs()[0]
     assert job.payload.deliver is False
+
+
+def test_description_points_automation_management_at_the_automations_tool(tmp_path) -> None:
+    """Live failure: asked what automations exist, the agent used `cron list`
+    (where an automation's schedule trigger surfaces as an `automation:*`
+    row) instead of the `automations` tool. The description must say so."""
+    tool = _make_tool(tmp_path)
+    assert "automation:*" in tool.description
+    assert "automations` tool" in tool.description
 
 
 def test_cron_schema_advertises_action_specific_requirements(tmp_path) -> None:

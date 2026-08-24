@@ -10,7 +10,8 @@ cron jobs in sync via ``durin.automations.cron_sync``.
 The runtime that actually executes an automation (``durin.automations.runtime.
 AutomationsRuntime``) is wired in by the gateway (``durin.cli.commands``) and
 passed here as ``runtime``; a surface with no runtime (e.g. spec-reading
-tooling) leaves it ``None`` and ``fire``/``answer`` raise ``UnavailableError``.
+tooling) leaves it ``None`` and ``fire``/``answer``/``stop`` raise
+``UnavailableError``.
 """
 
 from __future__ import annotations
@@ -94,11 +95,21 @@ class AutomationAnswerCommand(Command):
     run_id: str
     text: str
     # An explicit action (webui buttons) bypasses durin.workflow.approval.parse_approval_reply's
-    # keyword parsing — see AutomationsRuntime._answer.
+    # keyword parsing — see AutomationsRuntime._answer_prologue.
     action: Literal["approve", "revise", "reject"] | None = None
 
 
 class AutomationAnswerResult(Result):
+    run: dict[str, Any]
+
+
+class AutomationStopCommand(Command):
+    name: str
+    run_id: str
+    hard: bool = False
+
+
+class AutomationStopResult(Result):
     run: dict[str, Any]
 
 
@@ -293,20 +304,39 @@ class AutomationsService:
         "POST", "/api/v1/automations/{name}/runs/{run_id}/answer",
         scope=Scope.AUTOMATIONS_WRITE.value,
         request_model=AutomationAnswerCommand, response_model=AutomationAnswerResult,
-        summary="Answer an automation run awaiting an operator or a counterpart reply.",
+        summary="Answer an automation run awaiting an operator or a counterpart reply; "
+                 "returns immediately (status `running`) without waiting for the resume to finish.",
     )
     async def answer(self, cmd: AutomationAnswerCommand, principal: Principal) -> AutomationAnswerResult:
         principal.require(Scope.AUTOMATIONS_WRITE)
         if self._runtime is None:
             raise UnavailableError("answering an automation run is not available on this surface")
         try:
-            record = await self._runtime.answer(
+            record = await self._runtime.answer_nowait(
                 cmd.name, cmd.run_id, cmd.text, action=cmd.action, by="operator")
         except AutomationNotFound as exc:
             raise NotFoundError(str(exc))
         except ValueError as exc:
             raise ValidationFailedError(str(exc))
         return AutomationAnswerResult(run=record)
+
+    @route(
+        "POST", "/api/v1/automations/{name}/runs/{run_id}/stop",
+        scope=Scope.AUTOMATIONS_WRITE.value,
+        request_model=AutomationStopCommand, response_model=AutomationStopResult,
+        summary="Stop an automation run: cancel it if running, finalize it if paused.",
+    )
+    async def stop(self, cmd: AutomationStopCommand, principal: Principal) -> AutomationStopResult:
+        principal.require(Scope.AUTOMATIONS_WRITE)
+        if self._runtime is None:
+            raise UnavailableError("stopping an automation run is not available on this surface")
+        try:
+            record = await self._runtime.stop(cmd.name, cmd.run_id, hard=cmd.hard)
+        except AutomationNotFound as exc:
+            raise NotFoundError(str(exc))
+        except ValueError as exc:
+            raise ValidationFailedError(str(exc))
+        return AutomationStopResult(run=record)
 
     @route(
         "GET", "/api/v1/automations/runs",

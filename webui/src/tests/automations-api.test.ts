@@ -11,6 +11,7 @@ import {
   listAutomationRuns,
   listAutomations,
   saveAutomation,
+  stopAutomationRun,
   type AutomationDef,
   type AutomationRun,
 } from "@/lib/api";
@@ -307,6 +308,50 @@ describe("automations API helpers", () => {
       vi.mocked(fetch).mockResolvedValueOnce(errorResponse(400));
 
       await expect(answerAutomationRun("tok", "digest", "run-1", "go ahead")).rejects.toBeInstanceOf(ApiError);
+    });
+  });
+
+  describe("stopAutomationRun", () => {
+    it("POSTs to /api/v1/automations/:name/runs/:runId/stop with hard and unwraps run", async () => {
+      const stopped = { ...MOCK_RUN, status: "interrupted" as const };
+      vi.mocked(fetch).mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ run: stopped }),
+      } as Response);
+
+      const result = await stopAutomationRun("tok", "digest", "run-1", true);
+
+      expect(fetch).toHaveBeenCalledWith(
+        "/api/v1/automations/digest/runs/run-1/stop",
+        expect.objectContaining({
+          method: "POST",
+          headers: expect.objectContaining({ Authorization: "Bearer tok" }),
+          body: JSON.stringify({ hard: true }),
+        }),
+      );
+      expect(result).toEqual(stopped);
+    });
+
+    it("defaults hard to false when omitted", async () => {
+      vi.mocked(fetch).mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ run: MOCK_RUN }),
+      } as Response);
+
+      await stopAutomationRun("tok", "digest", "run-1");
+
+      expect(fetch).toHaveBeenCalledWith(
+        "/api/v1/automations/digest/runs/run-1/stop",
+        expect.objectContaining({ body: JSON.stringify({ hard: false }) }),
+      );
+    });
+
+    it("throws ApiError on failure", async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(errorResponse(400));
+
+      await expect(stopAutomationRun("tok", "digest", "run-1")).rejects.toBeInstanceOf(ApiError);
     });
   });
 

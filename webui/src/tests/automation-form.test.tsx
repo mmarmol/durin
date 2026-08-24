@@ -384,6 +384,17 @@ describe("AutomationForm", () => {
     expect(screen.queryByRole("option", { name: "cobrar-fac-1042" })).not.toBeInTheDocument();
   });
 
+  it("shows the webhook ingress URL as absolute (origin + path), not relative — a caller pasting it into curl/Zapier/a CI hook needs the full address", async () => {
+    const WEBHOOK_DEF: AutomationDef = {
+      ...FULL_EXISTING,
+      triggers: [{ source: "webhook", hook: "release" }],
+    };
+    render(<AutomationForm token="tok" editAutomation={WEBHOOK_DEF} onDone={vi.fn()} onCancel={vi.fn()} />);
+    await screen.findByRole("option", { name: "cobrar-factura" });
+
+    expect(screen.getByDisplayValue(`${window.location.origin}/api/v1/hooks/release`)).toBeInTheDocument();
+  });
+
   it("fetches the hooks secret only when Show secret is clicked, and only once", async () => {
     const WEBHOOK_DEF: AutomationDef = {
       ...FULL_EXISTING,

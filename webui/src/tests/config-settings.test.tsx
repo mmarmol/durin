@@ -29,6 +29,17 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
+it("hides the legacy loops section from the editor while still showing its sibling sections", async () => {
+  vi.mocked(api.getConfig).mockResolvedValue({
+    config: { loops: { keep_runs: 5 }, automations: { keep_runs: 20 } },
+  } as never);
+
+  render(wrap(<ConfigSettings token="tok" />));
+
+  await screen.findByText("automations");
+  expect(screen.queryByText("loops")).not.toBeInTheDocument();
+});
+
 it("renders an array config value clipped (not overflowing) with a full-value tooltip", async () => {
   const arr = ["github:anthropics/", "github:openai/"];
   const json = JSON.stringify(arr);

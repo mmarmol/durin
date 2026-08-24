@@ -334,8 +334,8 @@ at the narrowest scope that needs it:
   run waiting on it, rewritten atomically under one `cross_process_lock` on
   the whole file (not sharded per key). Registering a claim on a key that
   already holds a different run's claim overwrites it and logs the clobber —
-  last write wins. `AutomationsRuntime._answer` releases a run's claim
-  *before* resuming it (release-before-resume): the claim is stale the
+  last write wins. `AutomationsRuntime._answer_prologue` releases a run's
+  claim *before* resuming it (release-before-resume): the claim is stale the
   instant the answer arrives, and releasing early means a fresh claim
   registered by a follow-up question inside that same resume is never wiped
   by a stale trailing release. At gateway boot, a best-effort sweep prunes

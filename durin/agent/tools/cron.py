@@ -140,7 +140,11 @@ class CronTool(Tool, ContextAware):
     @property
     def description(self) -> str:
         return (
-            "Schedule reminders and recurring tasks. Actions: add, list, remove. "
+            "Schedule one-off reminders and recurring agent tasks. Rows with id "
+            "`automation:*` are the schedule triggers of AUTOMATIONS, managed by the "
+            "`automations` tool — for anything about the user's automations (listing, "
+            "status, firing, pausing) use the `automations` tool, not this one. "
+            "Actions: add, list, remove. "
             f"If tz is omitted, cron expressions and naive ISO times default to {self._default_timezone}."
         )
 
@@ -309,6 +313,8 @@ class CronTool(Tool, ContextAware):
             if j.payload.kind == "system_event":
                 parts.append(f"  Purpose: {self._system_job_purpose(j)}")
                 parts.append("  Protected: visible for inspection, but cannot be removed.")
+            elif j.payload.kind == "automation_trigger":
+                parts.append(f"  Managed by automation '{j.payload.automation}' — use the automations tool.")
             parts.extend(self._format_state(j.state, j.schedule))
             lines.append("\n".join(parts))
         return "Scheduled jobs:\n" + "\n".join(lines)

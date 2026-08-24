@@ -99,6 +99,38 @@ def _seed_jobs(tmp_path: Path) -> Path:
                 "updatedAtMs": 1000000,
                 "deleteAfterRun": False,
             },
+            {
+                "id": "auto0001",
+                "name": "automation briefing trigger 0",
+                "enabled": True,
+                "schedule": {
+                    "kind": "cron",
+                    "expr": "0 7 * * *",
+                    "tz": "UTC",
+                    "atMs": None,
+                    "everyMs": None,
+                },
+                "payload": {
+                    "kind": "automation_trigger",
+                    "automation": "briefing",
+                    "message": "",
+                    "deliver": False,
+                    "channel": None,
+                    "to": None,
+                    "channelMeta": {},
+                    "sessionKey": None,
+                },
+                "state": {
+                    "nextRunAtMs": None,
+                    "lastRunAtMs": None,
+                    "lastStatus": None,
+                    "lastError": None,
+                    "runHistory": [],
+                },
+                "createdAtMs": 1000000,
+                "updatedAtMs": 1000000,
+                "deleteAfterRun": False,
+            },
         ],
     }
     jobs_path = cron_dir / "jobs.json"
@@ -117,10 +149,11 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 async def test_list_returns_all_jobs(workspace: Path) -> None:
     result = await CronService().list(CronListQuery(), Principal.local())
-    assert len(result.jobs) == 2
+    assert len(result.jobs) == 3
     ids = {j.id for j in result.jobs}
     assert "abc12345" in ids
     assert "sys00001" in ids
+    assert "auto0001" in ids
 
 
 async def test_list_job_shape(workspace: Path) -> None:
@@ -198,6 +231,30 @@ async def test_toggle_requires_write_scope(workspace: Path) -> None:
         )
 
 
+async def test_toggle_allows_system_job(workspace: Path) -> None:
+    """system_event jobs must stay toggleable — the cron settings panel's
+    enabled/disabled control renders (and depends on working) for every
+    non-automation row, system rows included (CronSettings.tsx; only edit
+    and remove are hidden there for a system job, never toggle). Only
+    automation_trigger is refused here."""
+    result = await CronService().toggle(
+        CronToggleCommand(id="sys00001", enabled=False), Principal.local()
+    )
+    assert result.job.id == "sys00001"
+    assert result.job.enabled is False
+
+
+async def test_toggle_rejects_automation_trigger_job(workspace: Path) -> None:
+    """An automation's schedule-trigger job desyncs from its automation spec
+    if toggled directly — the automation's own enabled state is the only
+    thing that should switch its trigger jobs on or off (cron_sync recreates
+    them from the spec on every save)."""
+    with pytest.raises(ForbiddenError):
+        await CronService().toggle(
+            CronToggleCommand(id="auto0001", enabled=False), Principal.local()
+        )
+
+
 async def test_run_raises_unavailable_when_no_scheduler(workspace: Path) -> None:
     with pytest.raises(UnavailableError):
         await CronService(cron_scheduler=None).run(
@@ -211,6 +268,33 @@ async def test_run_raises_not_found_for_unknown_job(workspace: Path) -> None:
     with pytest.raises(NotFoundError):
         await CronService(cron_scheduler=mock_scheduler).run(
             CronRunCommand(id="ghost"), Principal.local()
+        )
+
+
+async def test_run_allows_system_job(workspace: Path) -> None:
+    """system_event jobs must stay runnable — the Memory -> Dream view's own
+    "Run now" button (DreamView.tsx) calls this route for the memory_dream
+    job, a system_event job. Only automation_trigger is refused here."""
+    mock_scheduler = MagicMock()
+    mock_scheduler.get_job.return_value = SimpleNamespace(
+        id="sys00001", payload=SimpleNamespace(kind="system_event"),
+    )
+    mock_scheduler.is_executing.return_value = False
+    mock_scheduler.run_job = AsyncMock()
+    result = await CronService(cron_scheduler=mock_scheduler).run(
+        CronRunCommand(id="sys00001"), Principal.local()
+    )
+    assert result.started is True
+
+
+async def test_run_rejects_automation_trigger_job(workspace: Path) -> None:
+    mock_scheduler = MagicMock()
+    mock_scheduler.get_job.return_value = SimpleNamespace(
+        id="auto0001", payload=SimpleNamespace(kind="automation_trigger"),
+    )
+    with pytest.raises(ForbiddenError):
+        await CronService(cron_scheduler=mock_scheduler).run(
+            CronRunCommand(id="auto0001"), Principal.local()
         )
 
 
@@ -253,7 +337,7 @@ async def test_run_now_spawns_run_job(monkeypatch: pytest.MonkeyPatch) -> None:
 
     class FakeScheduler:
         def get_job(self, jid: str) -> SimpleNamespace:
-            return SimpleNamespace(id=jid)
+            return SimpleNamespace(id=jid, payload=SimpleNamespace(kind="agent_turn"))
 
         def is_executing(self, jid: str) -> bool:
             return False
@@ -273,7 +357,7 @@ async def test_run_now_skips_spawn_when_already_running(monkeypatch: pytest.Monk
 
     class FakeScheduler:
         def get_job(self, jid: str) -> SimpleNamespace:
-            return SimpleNamespace(id=jid)
+            return SimpleNamespace(id=jid, payload=SimpleNamespace(kind="agent_turn"))
 
         def is_executing(self, jid: str) -> bool:
             return True

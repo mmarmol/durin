@@ -136,8 +136,25 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Answer an automation run awaiting an operator or a counterpart reply. */
+        /** Answer an automation run awaiting an operator or a counterpart reply; returns immediately (status `running`) without waiting for the resume to finish. */
         post: operations["automations_answer"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/automations/{name}/runs/{run_id}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stop an automation run: cancel it if running, finalize it if paused. */
+        post: operations["automations_stop"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2720,6 +2737,25 @@ export interface components {
         AutomationSaveResult: {
             /** Name */
             name: string;
+        };
+        /** AutomationStopCommand */
+        AutomationStopCommand: {
+            /**
+             * Hard
+             * @default false
+             */
+            hard: boolean;
+            /** Name */
+            name: string;
+            /** Run Id */
+            run_id: string;
+        };
+        /** AutomationStopResult */
+        AutomationStopResult: {
+            /** Run */
+            run: {
+                [key: string]: unknown;
+            };
         };
         /**
          * AutomationsHooksSecretQuery
@@ -6492,6 +6528,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AutomationAnswerResult"];
+                };
+            };
+        };
+    };
+    automations_stop: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutomationStopCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomationStopResult"];
                 };
             };
         };

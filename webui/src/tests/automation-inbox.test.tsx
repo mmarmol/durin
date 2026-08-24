@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,6 +16,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
     listAllAutomationRuns: vi.fn(),
     listCronJobs: vi.fn(),
     answerAutomationRun: vi.fn(),
+    stopAutomationRun: vi.fn(),
   };
 });
 
@@ -199,6 +200,73 @@ describe("InboxView", () => {
     expect(onResolved).not.toHaveBeenCalled();
     // The card is still interactive — the button isn't stuck disabled after the failure.
     expect(screen.getByRole("button", { name: "Approve" })).toBeEnabled();
+  });
+
+  it("Stop this run asks for confirmation; confirming calls stopAutomationRun and reports resolution", async () => {
+    vi.mocked(api.stopAutomationRun).mockResolvedValue({ ...QUESTION, status: "interrupted" });
+    const onResolved = vi.fn();
+    const user = userEvent.setup();
+    render(wrap(<InboxView run={QUESTION} onResolved={onResolved} />));
+
+    await user.click(screen.getByRole("button", { name: /stop this run|detener esta corrida/i }));
+    expect(api.stopAutomationRun).not.toHaveBeenCalled();
+
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: /stop this run|detener esta corrida/i }));
+
+    await waitFor(() =>
+      expect(api.stopAutomationRun).toHaveBeenCalledWith("tok", "soporte-guard", "r-guard-q"),
+    );
+    expect(onResolved).toHaveBeenCalledTimes(1);
+    expect(onResolved).toHaveBeenCalledWith(expect.any(String));
+    // answerAutomationRun is a completely different call — stop must not go
+    // through the answer/approve/reject path at all.
+    expect(api.answerAutomationRun).not.toHaveBeenCalled();
+  });
+
+  it("cancelling the stop confirmation does not call stopAutomationRun, and the card stays usable", async () => {
+    const user = userEvent.setup();
+    render(wrap(<InboxView run={QUESTION} onResolved={() => {}} />));
+
+    await user.click(screen.getByRole("button", { name: /stop this run|detener esta corrida/i }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: /cancel|cancelar/i }));
+
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(api.stopAutomationRun).not.toHaveBeenCalled();
+    // reject/cancel paths unaffected: the ordinary answer flow still works.
+    expect(screen.getByRole("button", { name: /Answer & resume/i })).toBeInTheDocument();
+  });
+
+  it("a lost-race 422 from stop is treated as the run having moved on: resolves via onResolved, not an error banner", async () => {
+    vi.mocked(api.stopAutomationRun).mockRejectedValueOnce(
+      new api.ApiError(422, "HTTP 422", "run is not active"),
+    );
+    const onResolved = vi.fn();
+    const user = userEvent.setup();
+    render(wrap(<InboxView run={QUESTION} onResolved={onResolved} />));
+
+    await user.click(screen.getByRole("button", { name: /stop this run|detener esta corrida/i }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: /stop this run|detener esta corrida/i }));
+
+    await waitFor(() => expect(onResolved).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(/422/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/run is not active/)).not.toBeInTheDocument();
+  });
+
+  it("a lost-race 422 from answer is also treated as resolved, not an error banner (reject/approve paths unaffected by the check)", async () => {
+    vi.mocked(api.answerAutomationRun).mockRejectedValueOnce(
+      new api.ApiError(422, "HTTP 422", "run is not awaiting an answer"),
+    );
+    const onResolved = vi.fn();
+    const user = userEvent.setup();
+    render(wrap(<InboxView run={APPROVAL} onResolved={onResolved} />));
+
+    await user.click(screen.getByRole("button", { name: "Reject" }));
+
+    await waitFor(() => expect(onResolved).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(/422/)).not.toBeInTheDocument();
   });
 });
 

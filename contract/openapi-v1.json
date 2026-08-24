@@ -233,6 +233,44 @@
         "title": "AutomationSaveResult",
         "type": "object"
       },
+      "AutomationStopCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "hard": {
+            "default": false,
+            "title": "Hard",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "run_id"
+        ],
+        "title": "AutomationStopCommand",
+        "type": "object"
+      },
+      "AutomationStopResult": {
+        "properties": {
+          "run": {
+            "additionalProperties": true,
+            "title": "Run",
+            "type": "object"
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "title": "AutomationStopResult",
+        "type": "object"
+      },
       "AutomationsHooksSecretQuery": {
         "additionalProperties": false,
         "description": "No inputs \u2014 returns the shared webhook ingress secret.",
@@ -8095,7 +8133,36 @@
             "description": "Success"
           }
         },
-        "summary": "Answer an automation run awaiting an operator or a counterpart reply.",
+        "summary": "Answer an automation run awaiting an operator or a counterpart reply; returns immediately (status `running`) without waiting for the resume to finish.",
+        "x-required-scope": "automations:write"
+      }
+    },
+    "/api/v1/automations/{name}/runs/{run_id}/stop": {
+      "post": {
+        "operationId": "automations_stop",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutomationStopCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomationStopResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Stop an automation run: cancel it if running, finalize it if paused.",
         "x-required-scope": "automations:write"
       }
     },

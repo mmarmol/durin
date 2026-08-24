@@ -14,11 +14,16 @@ from durin.automations.store import save_automation
 
 
 @pytest.fixture(autouse=True)
-def _isolate_telemetry_dir(tmp_path, monkeypatch):
+def _per_test_telemetry_dir(tmp_path, monkeypatch):
     """Mirrors tests/automations/test_matcher.py's fixture of the same name:
     the matcher's `_emit` binds a session telemetry logger around every
     automations.event_matched call, which otherwise writes real JSONL files
-    to the developer's ~/.cache/durin/telemetry."""
+    to the developer's ~/.cache/durin/telemetry. Deliberately not named
+    `_isolate_telemetry_dir`: that collides with the session-scoped guard
+    of the same name in tests/conftest.py, and a fixture defined in a test
+    module shadows a same-named one from a parent conftest for every test
+    in that module — reusing the name would silently disable the
+    suite-wide guard for this entire file."""
     import durin.telemetry.logger as telemetry_logger
 
     telemetry_dir = tmp_path / "_telemetry"
@@ -40,7 +45,7 @@ class FakeRuntime:
             raise AutomationBusy(name)
         return {"status": "done"}
 
-    async def answer(self, name, run_id, answer):
+    async def answer_nowait(self, name, run_id, answer):
         self.answer_calls.append((name, run_id, answer))
         return {"status": "done"}
 
@@ -168,6 +173,7 @@ async def test_busy_single_concurrency_queues(tmp_path):
     automation_name, event = queued[0]
     assert automation_name == "l1"
     assert event["content"] == "new order #42"
+    assert event["source"] == "webhook"
 
 
 async def test_busy_no_queue_wired_is_no_match(tmp_path):

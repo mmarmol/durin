@@ -24,6 +24,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
     listWorkflows: vi.fn(),
     getWorkflowRunManifest: vi.fn(),
     fireAutomation: vi.fn(),
+    stopAutomationRun: vi.fn(),
+    saveAutomation: vi.fn(),
   };
 });
 
@@ -41,6 +43,8 @@ beforeEach(() => {
     runs: [],
   });
   vi.mocked(api.fireAutomation).mockResolvedValue({ run_id: "r-new" });
+  vi.mocked(api.stopAutomationRun).mockResolvedValue(run({ status: "failed" }));
+  vi.mocked(api.saveAutomation).mockResolvedValue(undefined);
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -309,14 +313,14 @@ describe("LiveRunCard", () => {
   it("renders the cause line", () => {
     const { client } = makeFakeClient();
     const r = run({ status: "running", workflow_run_id: null, cause: { kind: "channel", excerpt: "Ticket #23124" } });
-    render(wrap(<LiveRunCard run={r} workflow="slack-ticket-pipeline" />, client));
+    render(wrap(<LiveRunCard run={r} workflow="slack-ticket-pipeline" onStopped={() => {}} />, client));
     expect(screen.getByText(/💬 Ticket #23124/)).toBeInTheDocument();
   });
 
   it("reduces a live workflow_progress frame into done / running / pending node rows", async () => {
     const { client, emit } = makeFakeClient();
     const r = run({ status: "running", workflow_run_id: "wr-1" });
-    render(wrap(<LiveRunCard run={r} workflow="slack-ticket-pipeline" />, client));
+    render(wrap(<LiveRunCard run={r} workflow="slack-ticket-pipeline" onStopped={() => {}} />, client));
     // Flush the mount-time manifest poll (workflow_run_id is set, so it fires
     // regardless) before asserting, so its state update can't land outside
     // an act() boundary and flake a later test's console output.
@@ -343,7 +347,7 @@ describe("LiveRunCard", () => {
   it("ignores a frame for a different run's call_id", async () => {
     const { client, emit } = makeFakeClient();
     const r = run({ status: "running", workflow_run_id: "wr-1" });
-    render(wrap(<LiveRunCard run={r} workflow="slack-ticket-pipeline" />, client));
+    render(wrap(<LiveRunCard run={r} workflow="slack-ticket-pipeline" onStopped={() => {}} />, client));
     await act(async () => {});
 
     act(() => {
@@ -356,7 +360,7 @@ describe("LiveRunCard", () => {
   it("never subscribes or polls when workflow_run_id is null", () => {
     const { client } = makeFakeClient();
     const r = run({ status: "running", workflow_run_id: null });
-    render(wrap(<LiveRunCard run={r} workflow="slack-ticket-pipeline" />, client));
+    render(wrap(<LiveRunCard run={r} workflow="slack-ticket-pipeline" onStopped={() => {}} />, client));
     expect(client.onChat).not.toHaveBeenCalled();
     expect(api.getWorkflowRunManifest).not.toHaveBeenCalled();
   });
@@ -373,7 +377,7 @@ describe("LiveRunCard", () => {
     });
     const { client } = makeFakeClient();
     const r = run({ status: "running", workflow_run_id: "wr-1" });
-    render(wrap(<LiveRunCard run={r} workflow="slack-ticket-pipeline" />, client));
+    render(wrap(<LiveRunCard run={r} workflow="slack-ticket-pipeline" onStopped={() => {}} />, client));
 
     expect(await screen.findByText("resolver-contexto")).toBeInTheDocument();
     expect(screen.getByText("redactar-nota")).toBeInTheDocument();
@@ -391,7 +395,7 @@ describe("LiveRunCard", () => {
     });
     const { client } = makeFakeClient();
     const r = run({ status: "running", workflow_run_id: "wr-1" });
-    render(wrap(<LiveRunCard run={r} workflow="slack-ticket-pipeline" />, client));
+    render(wrap(<LiveRunCard run={r} workflow="slack-ticket-pipeline" onStopped={() => {}} />, client));
 
     // Elapsed is a live clock off Date.now() (unmocked here), so only the
     // static "typical 1:30" half is pinned exactly — the running node's own
@@ -410,10 +414,99 @@ describe("LiveRunCard", () => {
     });
     const { client } = makeFakeClient();
     const r = run({ status: "running", workflow_run_id: "wr-1" });
-    render(wrap(<LiveRunCard run={r} workflow="slack-ticket-pipeline" />, client));
+    render(wrap(<LiveRunCard run={r} workflow="slack-ticket-pipeline" onStopped={() => {}} />, client));
 
     await screen.findByText("brand-new-node");
     expect(screen.queryByText(/typical/)).not.toBeInTheDocument();
+  });
+
+  it("Detener asks for confirmation; confirming calls stopAutomationRun with the automation-level run id and notifies the parent", async () => {
+    const { client } = makeFakeClient();
+    const r = run({ run_id: "r7", automation: "soporte-guard", status: "running", workflow_run_id: null });
+    const onStopped = vi.fn();
+    const user = userEvent.setup();
+    render(wrap(<LiveRunCard run={r} workflow="slack-ticket-pipeline" onStopped={onStopped} />, client));
+
+    await user.click(screen.getByRole("button", { name: /^detener$|^stop$/i }));
+    expect(api.stopAutomationRun).not.toHaveBeenCalled();
+
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText(/r7/)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: /^detener$|^stop$/i }));
+
+    await waitFor(() => expect(api.stopAutomationRun).toHaveBeenCalledWith("tok", "soporte-guard", "r7"));
+    await waitFor(() => expect(onStopped).toHaveBeenCalled());
+  });
+
+  it("cancelling the stop confirmation does not call stopAutomationRun", async () => {
+    const { client } = makeFakeClient();
+    const r = run({ status: "running", workflow_run_id: null });
+    const user = userEvent.setup();
+    render(wrap(<LiveRunCard run={r} workflow="slack-ticket-pipeline" onStopped={() => {}} />, client));
+
+    await user.click(screen.getByRole("button", { name: /^detener$|^stop$/i }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: /cancel|cancelar/i }));
+
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(api.stopAutomationRun).not.toHaveBeenCalled();
+  });
+
+  it("renders a stopAutomationRun API error inline instead of throwing, and never calls onStopped", async () => {
+    vi.mocked(api.stopAutomationRun).mockRejectedValueOnce(new Error("run already finished"));
+    const { client } = makeFakeClient();
+    const r = run({ status: "running", workflow_run_id: null });
+    const onStopped = vi.fn();
+    const user = userEvent.setup();
+    render(wrap(<LiveRunCard run={r} workflow="slack-ticket-pipeline" onStopped={onStopped} />, client));
+
+    await user.click(screen.getByRole("button", { name: /^detener$|^stop$/i }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: /^detener$|^stop$/i }));
+
+    expect(await screen.findByText("run already finished")).toBeInTheDocument();
+    expect(onStopped).not.toHaveBeenCalled();
+  });
+
+  it("after a graceful stop, offers Force stop instead of re-enabling Stop, and it calls stopAutomationRun with hard=true", async () => {
+    const { client } = makeFakeClient();
+    const r = run({ run_id: "r7", automation: "soporte-guard", status: "running", workflow_run_id: null });
+    const user = userEvent.setup();
+    render(wrap(<LiveRunCard run={r} workflow="slack-ticket-pipeline" onStopped={() => {}} />, client));
+
+    await user.click(screen.getByRole("button", { name: /^detener$|^stop$/i }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: /^detener$|^stop$/i }));
+    await waitFor(() => expect(api.stopAutomationRun).toHaveBeenCalledTimes(1));
+
+    // The graceful Stop button is gone; only Force stop remains.
+    expect(screen.queryByRole("button", { name: /^detener$|^stop$/i })).not.toBeInTheDocument();
+    const forceButton = screen.getByRole("button", { name: /forzar detención|force stop/i });
+
+    await user.click(forceButton);
+
+    await waitFor(() =>
+      expect(api.stopAutomationRun).toHaveBeenNthCalledWith(2, "tok", "soporte-guard", "r7", true),
+    );
+  });
+
+  it("a lost-race 422 from stop is treated as the run having moved on: no error banner, still calls onStopped", async () => {
+    vi.mocked(api.stopAutomationRun).mockRejectedValueOnce(
+      new api.ApiError(422, "HTTP 422", "run is not active"),
+    );
+    const { client } = makeFakeClient();
+    const r = run({ status: "running", workflow_run_id: null });
+    const onStopped = vi.fn();
+    const user = userEvent.setup();
+    render(wrap(<LiveRunCard run={r} workflow="slack-ticket-pipeline" onStopped={onStopped} />, client));
+
+    await user.click(screen.getByRole("button", { name: /^detener$|^stop$/i }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: /^detener$|^stop$/i }));
+
+    await waitFor(() => expect(onStopped).toHaveBeenCalled());
+    expect(screen.queryByText(/422/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/run is not active/)).not.toBeInTheDocument();
   });
 });
 
@@ -437,7 +530,7 @@ describe("DetailView", () => {
     // simulating the run completing while its detail card is open.
     listSpy.mockResolvedValueOnce([runningSnapshot]).mockResolvedValue([finishedSnapshot]);
 
-    render(wrap(<DetailView automation={AUTOMATION} onBack={() => {}} onOpenWorkflowRun={() => {}} />, {}));
+    render(wrap(<DetailView automation={AUTOMATION} onBack={() => {}} onOpenWorkflowRun={() => {}} onAutomationSaved={async () => {}} />, {}));
     await act(async () => {});
 
     // Plain getBy, not findBy: findBy's own internal polling relies on real
@@ -464,7 +557,7 @@ describe("DetailView", () => {
     listSpy.mockClear();
     listSpy.mockResolvedValue([]);
     const user = userEvent.setup();
-    render(wrap(<DetailView automation={AUTOMATION} onBack={() => {}} onOpenWorkflowRun={() => {}} />, {}));
+    render(wrap(<DetailView automation={AUTOMATION} onBack={() => {}} onOpenWorkflowRun={() => {}} onAutomationSaved={async () => {}} />, {}));
 
     await screen.findByText(/no runs yet/i);
     const callsBefore = listSpy.mock.calls.length;
@@ -479,12 +572,89 @@ describe("DetailView", () => {
   it("renders a fireAutomation API error inline instead of throwing", async () => {
     vi.mocked(api.fireAutomation).mockRejectedValueOnce(new Error("automation is disabled"));
     const user = userEvent.setup();
-    render(wrap(<DetailView automation={AUTOMATION} onBack={() => {}} onOpenWorkflowRun={() => {}} />, {}));
+    render(wrap(<DetailView automation={AUTOMATION} onBack={() => {}} onOpenWorkflowRun={() => {}} onAutomationSaved={async () => {}} />, {}));
 
     await screen.findByText(/no runs yet/i);
     await user.click(screen.getByRole("button", { name: /run now|ejecutar ahora/i }));
 
     expect(await screen.findByText("automation is disabled")).toBeInTheDocument();
+  });
+
+  it("the pause/resume control shows Pause while active, flips enabled off on click, and calls onAutomationSaved", async () => {
+    const onAutomationSaved = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    render(
+      wrap(
+        <DetailView
+          automation={AUTOMATION}
+          onBack={() => {}}
+          onOpenWorkflowRun={() => {}}
+          onAutomationSaved={onAutomationSaved}
+        />,
+        {},
+      ),
+    );
+
+    await screen.findByText(/no runs yet/i);
+    await user.click(screen.getByRole("button", { name: /^pause$|^pausar$/i }));
+
+    await waitFor(() =>
+      expect(api.saveAutomation).toHaveBeenCalledWith(
+        "tok",
+        expect.objectContaining({ name: "soporte-guard", enabled: false }),
+      ),
+    );
+    await waitFor(() => expect(onAutomationSaved).toHaveBeenCalled());
+  });
+
+  it("shows Resume — not Pause — for an automation a life condition already disabled, and resuming re-arms it", async () => {
+    const achievedAndDisabled: api.AutomationSummary = { ...AUTOMATION, enabled: false, achieved: true };
+    const user = userEvent.setup();
+    render(
+      wrap(
+        <DetailView
+          automation={achievedAndDisabled}
+          onBack={() => {}}
+          onOpenWorkflowRun={() => {}}
+          onAutomationSaved={async () => {}}
+        />,
+        {},
+      ),
+    );
+
+    await screen.findByText(/no runs yet/i);
+    expect(screen.queryByRole("button", { name: /^pause$|^pausar$/i })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^resume$|^reactivar$/i }));
+
+    await waitFor(() =>
+      expect(api.saveAutomation).toHaveBeenCalledWith(
+        "tok",
+        expect.objectContaining({ name: "soporte-guard", enabled: true }),
+      ),
+    );
+  });
+
+  it("renders a saveAutomation API error inline instead of throwing, and never calls onAutomationSaved", async () => {
+    vi.mocked(api.saveAutomation).mockRejectedValueOnce(new Error("automation not found"));
+    const onAutomationSaved = vi.fn();
+    const user = userEvent.setup();
+    render(
+      wrap(
+        <DetailView
+          automation={AUTOMATION}
+          onBack={() => {}}
+          onOpenWorkflowRun={() => {}}
+          onAutomationSaved={onAutomationSaved}
+        />,
+        {},
+      ),
+    );
+
+    await screen.findByText(/no runs yet/i);
+    await user.click(screen.getByRole("button", { name: /^pause$|^pausar$/i }));
+
+    expect(await screen.findByText("automation not found")).toBeInTheDocument();
+    expect(onAutomationSaved).not.toHaveBeenCalled();
   });
 });
 
@@ -532,5 +702,23 @@ describe("AutomationsView → DetailView", () => {
     await user.click(await screen.findByRole("button", { name: /ver ejecución completa|view full execution/i }));
 
     expect(onOpenWorkflowRun).toHaveBeenCalledWith("slack-ticket-pipeline", "wr-9");
+  });
+
+  it("pausing from the detail view re-syncs `detail` with the refreshed list, flipping the control's label", async () => {
+    vi.mocked(api.listAutomations)
+      .mockResolvedValueOnce([AUTOMATION])
+      .mockResolvedValue([{ ...AUTOMATION, enabled: false, achieved: false }]);
+    vi.mocked(api.listAutomationRuns).mockResolvedValue([]);
+    const user = userEvent.setup();
+    render(wrap(<AutomationsView />, {}));
+
+    await user.click(await screen.findByTestId("automation-row-open"));
+    await user.click(await screen.findByRole("button", { name: /^pause$|^pausar$/i }));
+
+    await waitFor(() => expect(api.saveAutomation).toHaveBeenCalled());
+    // `detail` is separate state from `automations` in AutomationsView — this
+    // only passes if the refreshed list is re-synced back into it, not just
+    // fetched and dropped on the floor.
+    expect(await screen.findByRole("button", { name: /^resume$|^reactivar$/i })).toBeInTheDocument();
   });
 });

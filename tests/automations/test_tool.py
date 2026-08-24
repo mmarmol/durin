@@ -130,6 +130,10 @@ async def test_fire_delegates_to_runtime_and_returns_status_text(tmp_path):
 
 
 async def test_answer_resumes_run(tmp_path):
+    """The tool's answer action must not block the turn on the whole resume
+    (AutomationsRuntime.answer_nowait) — it reports the run resumed, and the
+    resume itself (the same workflow call a blocking answer would make)
+    completes in the background afterward."""
     save_automation(tmp_path, parse_automation({"name": "a1", "workflow": "w1"}))
     rt = _runtime(tmp_path, [
         _wr("needs_input", out="need more info", ask_kind="question"),
@@ -142,7 +146,14 @@ async def test_answer_resumes_run(tmp_path):
     run_id = rl.list_runs(tmp_path, "a1", limit=1)[0]["run_id"]
 
     out = await tool.execute(action="answer", name="a1", run_id=run_id, answer="here's the info")
-    assert "completed" in out
+    assert "resumed in the background" in out
+    assert "do NOT poll" in out
+
+    # answer_nowait backgrounds the resume on the RUNTIME's own _bg_tasks,
+    # not tool._fires (that set is _fire's own backgrounding) — wait for it
+    # directly rather than sleep(0), same reasoning as above.
+    await asyncio.gather(*rt._bg_tasks)
+    assert rl.read_run(tmp_path, "a1", run_id)["status"] == "completed"
 
 
 async def test_answer_forwards_resolution_and_by_agent(tmp_path):
@@ -166,10 +177,18 @@ async def test_answer_forwards_resolution_and_by_agent(tmp_path):
         answer="whatever, ignored by an explicit resolution", resolution="approve",
     )
 
-    assert "completed" in out
+    assert "resumed in the background" in out
+    # Recorded in the prologue, before the resume even starts — already on
+    # the run record even though the resume itself is still backgrounded.
     record = rl.read_run(tmp_path, "a1", run_id)
     assert record["approval"]["action"] == "approve"
     assert record["approval"]["by"] == "agent"
+
+    # answer_nowait backgrounds the resume on the RUNTIME's own _bg_tasks,
+    # not tool._fires (that set is _fire's own backgrounding) — wait for it
+    # directly rather than sleep(0), same reasoning as above.
+    await asyncio.gather(*rt._bg_tasks)
+    assert rl.read_run(tmp_path, "a1", run_id)["status"] == "completed"
 
 
 async def test_pause_syncs_cron_jobs_off(tmp_path):
@@ -395,3 +414,13 @@ async def test_a_chat_fire_that_loses_the_race_is_retracted_to_the_session(tmp_p
         "kind": "session", "session_key": "websocket:abc",
         "channel": "websocket", "chat_id": "abc",
     }
+
+
+def test_description_directs_the_model_here_over_cron_list(tmp_path) -> None:
+    """Live failure: asked what automations exist, the agent used `cron list`
+    instead of this tool. The description must say this tool is the source
+    of truth and that automation schedule triggers also surface (read-only)
+    in `cron list`, so the model doesn't reach for the wrong one."""
+    tool = AutomationsTool.create(_ctx(tmp_path))
+    assert "single source of truth" in tool.description
+    assert "cron list" in tool.description

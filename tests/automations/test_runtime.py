@@ -10,21 +10,32 @@ from durin.automations import queue as automation_queue
 from durin.automations import run_log as rl
 from durin.automations.chains import CHAIN_HOP_CAP
 from durin.automations.runtime import AutomationBusy, AutomationsRuntime
-from durin.automations.spec import AutomationSpec, AutomationTrigger, Delivery, Help, Life
+from durin.automations.spec import (
+    AutomationNotFound,
+    AutomationSpec,
+    AutomationTrigger,
+    Delivery,
+    Help,
+    Life,
+)
 from durin.automations.store import load_automation, save_automation
 from durin.bus.events import SendReceipt
 from durin.workflow.result import WorkflowResult
 
 
 @pytest.fixture(autouse=True)
-def _isolate_telemetry_dir(tmp_path, monkeypatch):
+def _per_test_telemetry_dir(tmp_path, monkeypatch):
     """AutomationsRuntime binds a session telemetry logger around
     fire/try_fire/answer (durin/automations/runtime.py) since those
-    entrypoints run outside an agent turn's bound ContextVar. The suite-wide
-    conftest fixture already keeps every test off the real
-    ~/.cache/durin/telemetry, but it is session-scoped (one shared directory
-    for the whole run) — a test asserting on JSONL content here needs its OWN
-    fresh, single-file directory instead."""
+    entrypoints run outside an agent turn's bound ContextVar. A test in this
+    file asserting on JSONL content needs its OWN fresh, single-file
+    directory rather than the suite-wide session-scoped one in
+    tests/conftest.py (which is shared across the whole run, so several
+    tests' events would land in the same file) — hence a second,
+    differently-named guard here rather than reusing that fixture's name:
+    a fixture defined in a test module shadows a same-named one from a
+    parent conftest for every test in that module, which would silently
+    disable the outer, suite-wide guard for this entire file."""
     import durin.telemetry.logger as telemetry_logger
 
     telemetry_dir = tmp_path / "_telemetry"
@@ -607,6 +618,334 @@ async def test_answer_raises_when_run_is_not_paused(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# answer_nowait
+# ---------------------------------------------------------------------------
+
+async def test_answer_nowait_returns_running_record_before_the_resume_finishes(tmp_path):
+    """The whole point: an HTTP caller or a chat turn must not be held open
+    for the length of the resume. answer_nowait returns as soon as its
+    synchronous prologue is done, with the record re-read as `running` —
+    the resume itself (the same workflow call a blocking answer() would
+    have made) only completes once the backgrounded continuation gets a
+    turn on the event loop."""
+    _save(tmp_path)
+    rt, calls = _mk_runtime(tmp_path, [
+        _wr("needs_input", out="which env?", ask_kind="question"),
+        _wr("completed"),
+    ])
+    m = await rt.fire("a1", source="manual")
+    assert m["status"] == "paused"
+
+    result = await rt.answer_nowait("a1", m["run_id"], "prod")
+    assert result["status"] == "running"
+    assert len(calls["exec"]) == 1   # the resume call hasn't happened yet
+
+    await _drain()
+
+    assert calls["exec"][1]["task"] == "prod"
+    assert rl.read_run(tmp_path, "a1", m["run_id"])["status"] == "completed"
+
+
+async def test_answer_nowait_records_approval_even_when_the_resume_then_fails(tmp_path):
+    """Regression: the approval verdict used to be stamped only after a
+    successful resume, so a resume that then failed lost the record of what
+    the operator actually decided. It is now recorded in the synchronous
+    prologue, before the resume is even attempted — it must survive the
+    resume failing."""
+    _save(tmp_path)
+
+    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None,
+                            work_key=None, root_session_key=None):
+        if resume_run_id is None:
+            return _wr("needs_input", out="proceed?", ask_kind="approval")
+        raise RuntimeError("boom")
+
+    ids = iter([f"nowait-fail-{i}" for i in range(10)])
+    rt = AutomationsRuntime(tmp_path, workflow_exec=workflow_exec, keep_runs=20,
+                            run_id_factory=lambda: next(ids))
+    m = await rt.fire("a1", source="manual")
+    assert m["status"] == "paused"
+
+    result = await rt.answer_nowait("a1", m["run_id"], "whatever", action="approve")
+    assert result["approval"] == {"action": "approve", "by": "operator", "at_ms": result["approval"]["at_ms"]}
+
+    await _drain()
+
+    final = rl.read_run(tmp_path, "a1", m["run_id"])
+    assert final["status"] == "failed"
+    assert final["approval"]["action"] == "approve"   # survived the failure
+
+
+async def test_answer_nowait_raises_when_run_is_not_paused(tmp_path):
+    _save(tmp_path)
+    rt, _ = _mk_runtime(tmp_path, [_wr("completed")])
+    m = await rt.fire("a1", source="manual")
+    assert m["status"] == "completed"
+    with pytest.raises(ValueError):
+        await rt.answer_nowait("a1", m["run_id"], "too late")
+
+
+async def test_answer_nowait_continuation_failure_finalizes_failed_and_logs(tmp_path, caplog, monkeypatch):
+    """A continuation failure AFTER `_exec` succeeds (classify/finalize/
+    post_finish raising) must not leave the run stuck `running` forever —
+    `find_orphans` explicitly skips a `running` manifest owned by a
+    still-live process, so nothing else would ever reclaim it — and must
+    not surface only as asyncio's own untraceable "Task exception was never
+    retrieved" warning."""
+    import durin.automations.runtime as runtime_module
+
+    _save(tmp_path)
+    rt, _ = _mk_runtime(tmp_path, [
+        _wr("needs_input", out="q", ask_kind="question"),
+        _wr("completed"),
+    ])
+    m = await rt.fire("a1", source="manual")
+    assert m["status"] == "paused"
+
+    def _poisoned_classify(result, spec):
+        raise RuntimeError("boom: poisoned classify")
+
+    monkeypatch.setattr(runtime_module, "classify", _poisoned_classify)
+
+    handler_id = loguru_logger.add(caplog.handler, format="{message}", level="ERROR")
+    try:
+        with caplog.at_level(logging.ERROR):
+            result = await rt.answer_nowait("a1", m["run_id"], "go ahead")
+            assert result["status"] == "running"   # unchanged: prologue only
+            await _drain()
+    finally:
+        loguru_logger.remove(handler_id)
+
+    # The task completed (was caught internally, not left dangling) —
+    # nothing pending means nothing for asyncio to complain about at GC.
+    assert rt._bg_tasks == set()
+
+    final = rl.read_run(tmp_path, "a1", m["run_id"])
+    assert final["status"] == "failed"
+    assert "boom: poisoned classify" in (final.get("detail") or "")
+    assert any("backgrounded answer continuation" in r.getMessage() for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Stop
+# ---------------------------------------------------------------------------
+
+async def test_stop_running_run_requests_cancel_and_stamps_the_request(tmp_path):
+    from durin.workflow.cancellation import clear, is_cancelled, is_hard_cancelled
+
+    _save(tmp_path)
+    started = asyncio.Event()
+    released = asyncio.Event()
+
+    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None,
+                             work_key=None, root_session_key=None):
+        started.set()
+        await released.wait()
+        return _wr("completed", run_id=run_id)
+
+    ids = iter([f"stop-run-{i}" for i in range(10)])
+    rt = AutomationsRuntime(tmp_path, workflow_exec=workflow_exec, keep_runs=20,
+                            run_id_factory=lambda: next(ids))
+    fire_task = asyncio.create_task(rt.fire("a1", source="manual"))
+    try:
+        await started.wait()
+        stopped = await rt.stop("a1", "stop-run-0")
+
+        assert stopped["status"] == "running"
+        # Durable record of the request (finding 7): the in-memory
+        # cancellation registry below is the live mechanism, but it does
+        # not survive a crash — sweep_orphans relies on this stamp instead.
+        assert stopped["stop_requested_at"] is not None
+        wf_run_id = stopped["workflow_run_id"]
+        assert is_cancelled(wf_run_id)
+        assert not is_hard_cancelled(wf_run_id)
+    finally:
+        released.set()
+        await fire_task
+        clear("stop-run-1")
+
+
+async def test_stop_running_run_hard_upgrades_and_never_downgrades(tmp_path):
+    from durin.workflow.cancellation import clear, is_hard_cancelled
+
+    _save(tmp_path)
+    started = asyncio.Event()
+    released = asyncio.Event()
+
+    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None,
+                             work_key=None, root_session_key=None):
+        started.set()
+        await released.wait()
+        return _wr("completed", run_id=run_id)
+
+    ids = iter([f"stop-hard-{i}" for i in range(10)])
+    rt = AutomationsRuntime(tmp_path, workflow_exec=workflow_exec, keep_runs=20,
+                            run_id_factory=lambda: next(ids))
+    fire_task = asyncio.create_task(rt.fire("a1", source="manual"))
+    try:
+        await started.wait()
+        first = await rt.stop("a1", "stop-hard-0")
+        assert not is_hard_cancelled(first["workflow_run_id"])
+
+        second = await rt.stop("a1", "stop-hard-0", hard=True)
+        assert is_hard_cancelled(second["workflow_run_id"])
+    finally:
+        released.set()
+        await fire_task
+        clear("stop-hard-1")
+
+
+async def test_cancelled_result_finalizes_interrupted_not_failed_and_delivers_nothing(tmp_path):
+    """Design ruling: a non-shutdown cancelled result (what the engine
+    produces once it honors a `stop`'s request_cancel) must get the exact
+    same honest contract the paused branch already gives an operator stop —
+    `interrupted`, no delivery under ANY policy (notify: "always" included,
+    which would otherwise deliver unconditionally), streak-transparent —
+    not classify()'s ordinary "cancelled falls through to failed" catch-all.
+    Also queues a channel event to prove housekeeping (queue drain) still
+    runs even though delivery/streak do not. No chain trigger involved here
+    on purpose — see test_cancelled_result_dispatches_no_chain below for
+    why that needs its own, unconfounded test."""
+    delivered = []
+
+    async def on_outcome(outcome):
+        delivered.append(outcome)
+
+    _save(tmp_path, delivery=Delivery(channel="email", to="ops@x.com", notify="always"),
+          life=Life(intent="x", achieved_when="any_completed", max_attempts=3, on_stuck="notify"))
+    origin = {"channel": "email", "thread": "t1"}
+    automation_queue.push(tmp_path, "a1", {"content": "queued while running", "origin": origin,
+                                            "source": "channel", "chain_depth": 0})
+
+    rt, calls = _mk_runtime(tmp_path, [
+        _wr("cancelled", out="", run_id="wf1"),
+        _wr("completed"),   # consumed by the queue drain's own re-fire
+    ], on_outcome=on_outcome)
+
+    m = await rt.fire("a1", source="manual")
+    assert m["status"] == "interrupted"
+    assert delivered == []   # no delivery even under notify: "always"
+
+    await _drain()
+
+    final = rl.read_run(tmp_path, "a1", m["run_id"])
+    assert final["status"] == "interrupted"
+    assert final["delivery"] is None   # _post_finish (where a delivery record is written) never ran
+    assert rl.consecutive_unachieved(tmp_path, "a1") == 0   # streak-transparent
+    drained_calls = [c for c in calls["exec"] if c["task"] == "queued while running"]
+    assert len(drained_calls) == 1   # queue drain still runs
+
+
+async def test_cancelled_result_dispatches_no_chain(tmp_path):
+    """A cancelled run's own outcome must not chain-dispatch downstream.
+    Kept separate from the queue-drain assertions above on purpose: a
+    drained re-fire that itself completes normally WOULD legitimately
+    chain-dispatch on its own merits (a correct, unrelated behavior), which
+    combining the two into one test could too easily be mistaken for the
+    cancelled run's own silence."""
+    _save(tmp_path)
+    _save(tmp_path, name="downstream", workflow="w2",
+         triggers=(AutomationTrigger(source="chain", chain_automation="a1", chain_when="any"),))
+
+    rt, calls = _mk_runtime(tmp_path, [_wr("cancelled", out="", run_id="wf1")])
+
+    m = await rt.fire("a1", source="manual")
+    assert m["status"] == "interrupted"
+
+    await _drain()
+
+    downstream_calls = [c for c in calls["exec"] if c["name"] == "w2"]
+    assert downstream_calls == []
+
+
+async def test_stop_paused_run_finalizes_interrupted_and_releases_claim(tmp_path, _per_test_telemetry_dir):
+    import json
+
+    _save(tmp_path)
+    rt, _ = _mk_runtime(tmp_path, [
+        _wr("needs_input", out="[TO:counterpart] please confirm", ask_kind="question"),
+        _wr("completed"),
+    ])
+    m = await rt.fire("a1", source="channel", origin={"thread": "thread-xyz"})
+    assert m["status"] == "paused"
+    assert claims.lookup(tmp_path, "thread-xyz") is not None
+
+    stopped = await rt.stop("a1", m["run_id"])
+
+    assert stopped["status"] == "interrupted"
+    assert stopped["detail"] == "stopped by operator"
+
+    # _post_finish is skipped for a paused-run stop (no delivery, no
+    # chains), but automations.run_finished must still land — otherwise
+    # the telemetry stream shows this run as started-and-never-finished.
+    files = list(_per_test_telemetry_dir.glob("*.jsonl"))
+    events = [json.loads(line) for f in files for line in f.read_text(encoding="utf-8").strip().splitlines()]
+    finished = [e for e in events if e["type"] == "automations.run_finished"
+                and e["data"].get("run_id") == m["run_id"]]
+    assert len(finished) == 1
+    assert finished[0]["data"]["status"] == "interrupted"
+    assert finished[0]["data"]["automation"] == "a1"
+    assert stopped["workflow_run_id"] == m["workflow_run_id"]
+    assert claims.lookup(tmp_path, "thread-xyz") is None
+
+
+async def test_stop_paused_run_drains_a_queued_event_for_single_concurrency(tmp_path):
+    """A paused run holds the only concurrency slot a `single` automation
+    allows. Stopping it directly (no resume coming) must not strand a
+    channel event that queued up while it waited — queue-drain-on-finish is
+    the only place a queued event ever fires, so `stop` has to trigger it
+    the same way `_post_finish` would have."""
+    _save(tmp_path, concurrency="single")
+    rt, calls = _mk_runtime(tmp_path, [
+        _wr("needs_input", out="please confirm", ask_kind="question"),
+        _wr("completed"),
+    ])
+    m = await rt.fire("a1", source="manual")
+    assert m["status"] == "paused"
+    automation_queue.push(tmp_path, "a1", {"content": "queued while paused", "origin": None,
+                                            "source": "channel", "chain_depth": 0})
+
+    await rt.stop("a1", m["run_id"])
+    await _drain()
+
+    drained_calls = [c for c in calls["exec"] if c["task"] == "queued while paused"]
+    assert len(drained_calls) == 1
+
+
+async def test_stop_paused_run_no_drain_for_parallel_concurrency(tmp_path):
+    _save(tmp_path, concurrency="parallel")
+    rt, calls = _mk_runtime(tmp_path, [
+        _wr("needs_input", out="please confirm", ask_kind="question"),
+    ])
+    m = await rt.fire("a1", source="manual")
+    assert m["status"] == "paused"
+    automation_queue.push(tmp_path, "a1", {"content": "should stay queued", "origin": None,
+                                            "source": "channel", "chain_depth": 0})
+
+    await rt.stop("a1", m["run_id"])
+    await _drain()
+
+    assert automation_queue.pending(tmp_path, "a1") == 1
+    assert all(c["task"] != "should stay queued" for c in calls["exec"])
+
+
+async def test_stop_missing_run_raises_automation_not_found(tmp_path):
+    _save(tmp_path)
+    rt, _ = _mk_runtime(tmp_path, [])
+    with pytest.raises(AutomationNotFound):
+        await rt.stop("a1", "ghost-run")
+
+
+async def test_stop_terminal_run_raises_value_error(tmp_path):
+    _save(tmp_path)
+    rt, _ = _mk_runtime(tmp_path, [_wr("completed")])
+    m = await rt.fire("a1", source="manual")
+    assert m["status"] == "completed"
+    with pytest.raises(ValueError):
+        await rt.stop("a1", m["run_id"])
+
+
+# ---------------------------------------------------------------------------
 # Chains
 # ---------------------------------------------------------------------------
 
@@ -692,7 +1031,13 @@ async def test_shutdown_predicate_leaves_manifest_running(tmp_path):
     assert outcomes == []
 
 
-async def test_cancelled_outside_shutdown_still_finalizes_failed(tmp_path):
+async def test_cancelled_outside_shutdown_still_finalizes_interrupted(tmp_path):
+    """A cancelled result reached outside a shutdown window must not be left
+    `running` the way the shutdown carve-out (above) deliberately leaves
+    one — and, per the design ruling in test_cancelled_result_finalizes_
+    interrupted_not_failed_and_delivers_nothing below, it finalizes
+    `interrupted`, not `failed`: an operator (or anything else) asking for
+    a cancellation is not a failure."""
     outcomes = []
 
     async def on_outcome(outcome):
@@ -702,8 +1047,9 @@ async def test_cancelled_outside_shutdown_still_finalizes_failed(tmp_path):
     rt, _ = _mk_runtime(tmp_path, [_wr("cancelled")], on_outcome=on_outcome)
     m = await rt.fire("a1", source="manual")
 
-    assert m["status"] == "failed"
+    assert m["status"] == "interrupted"
     assert m["finished_at"] is not None
+    assert outcomes == []  # delivery-silent, same as an operator stop
 
 
 async def test_shutdown_does_not_swallow_a_genuine_approval_rejection(tmp_path):
@@ -795,6 +1141,28 @@ async def test_sweep_skips_an_orphan_whose_automation_was_deleted(tmp_path):
     assert rl.read_run(tmp_path, "ghost", "dead")["status"] == "running"
 
 
+async def test_sweep_does_not_relaunch_a_run_with_a_pending_stop_request(tmp_path):
+    """A stop landing just before a crash, in the window between
+    `update_run` setting `workflow_run_id` and the engine writing its own
+    workflow manifest, leaves an orphan with no work started — ordinarily
+    the exact shape sweep_orphans relaunches. stop_requested_at (finding 7)
+    marks the operator's intent: honor it as "this run is over", not "this
+    cause is still unserved"."""
+    rt, calls = _mk_runtime(tmp_path, [])
+    _save(tmp_path)
+    rl.start_run(tmp_path, "a1", "dead", cause={"kind": "cron", "excerpt": "t", "trigger_index": None})
+    rl.update_run(tmp_path, "a1", "dead", workflow_run_id="wf-never-started",
+                  owner={"pid": 999999, "started": "long ago"}, stop_requested_at=123456)
+
+    handled = await rt.sweep_orphans()
+
+    assert handled == ["dead"]
+    assert calls["exec"] == []   # no relaunch
+    final = rl.read_run(tmp_path, "a1", "dead")
+    assert final["status"] == "interrupted"
+    assert "stop" in final["detail"].lower()
+
+
 async def test_relaunch_that_loses_the_fire_race_is_retracted(tmp_path):
     outcomes = []
 
@@ -838,7 +1206,7 @@ async def test_post_finish_drains_next_fresh_queued_event(tmp_path):
     assert automation_queue.pending(tmp_path, "a1") == 0
 
 
-async def test_post_finish_drain_emits_event_matched_drained(tmp_path, _isolate_telemetry_dir):
+async def test_post_finish_drain_emits_event_matched_drained(tmp_path, _per_test_telemetry_dir):
     """The "drained" action is emitted right where the queue drain finds a
     fresh event, before the re-fire is scheduled — not from the matcher,
     which never sees a drained event at all."""
@@ -852,7 +1220,7 @@ async def test_post_finish_drain_emits_event_matched_drained(tmp_path, _isolate_
     await rt.fire("a1", source="manual")
     await _drain()
 
-    files = list(_isolate_telemetry_dir.glob("*.jsonl"))
+    files = list(_per_test_telemetry_dir.glob("*.jsonl"))
     events = [json.loads(line) for f in files for line in f.read_text(encoding="utf-8").strip().splitlines()]
     matched = [e for e in events if e["type"] == "automations.event_matched"]
     assert len(matched) == 1
@@ -949,12 +1317,12 @@ async def test_chain_fire_exception_is_logged_not_lost(tmp_path, caplog):
 # bind-around-the-call mechanism throughout.
 # ---------------------------------------------------------------------------
 
-async def test_fire_emits_telemetry_when_unbound(tmp_path, _isolate_telemetry_dir):
+async def test_fire_emits_telemetry_when_unbound(tmp_path, _per_test_telemetry_dir):
     import json
 
     from durin.telemetry.logger import current_telemetry
 
-    telemetry_dir = _isolate_telemetry_dir
+    telemetry_dir = _per_test_telemetry_dir
     _save(tmp_path, delivery=Delivery(channel="email", to="ops@x.com"))
     rt, _ = _mk_runtime(tmp_path, [_wr("completed")])
 
@@ -978,10 +1346,10 @@ async def test_fire_emits_telemetry_when_unbound(tmp_path, _isolate_telemetry_di
     assert fired["data"]["skipped"] is False
 
 
-async def test_fire_reuses_already_bound_telemetry(tmp_path, _isolate_telemetry_dir):
+async def test_fire_reuses_already_bound_telemetry(tmp_path, _per_test_telemetry_dir):
     from durin.telemetry.logger import bind_telemetry, reset_telemetry
 
-    telemetry_dir = _isolate_telemetry_dir
+    telemetry_dir = _per_test_telemetry_dir
     _save(tmp_path)
     rt, _ = _mk_runtime(tmp_path, [_wr("completed")])
 
@@ -998,7 +1366,7 @@ async def test_fire_reuses_already_bound_telemetry(tmp_path, _isolate_telemetry_
     assert not telemetry_dir.exists() or list(telemetry_dir.glob("*.jsonl")) == []
 
 
-async def test_try_fire_busy_skip_emits_fired_with_skipped_true(tmp_path, _isolate_telemetry_dir):
+async def test_try_fire_busy_skip_emits_fired_with_skipped_true(tmp_path, _per_test_telemetry_dir):
     import json
 
     _save(tmp_path)
@@ -1006,7 +1374,7 @@ async def test_try_fire_busy_skip_emits_fired_with_skipped_true(tmp_path, _isola
     await rt.fire("a1", source="manual")  # leaves an active paused run
     assert await rt.try_fire("a1", source="cron") is None
 
-    files = list(_isolate_telemetry_dir.glob("*.jsonl"))
+    files = list(_per_test_telemetry_dir.glob("*.jsonl"))
     events = [json.loads(line) for f in files for line in f.read_text(encoding="utf-8").strip().splitlines()]
     skipped = [e for e in events if e["type"] == "automations.fired" and e["data"].get("skipped") is True]
     assert len(skipped) == 1
@@ -1014,7 +1382,38 @@ async def test_try_fire_busy_skip_emits_fired_with_skipped_true(tmp_path, _isola
     assert skipped[0]["data"]["source"] == "cron"
 
 
-async def test_try_fire_disabled_skip_emits_no_telemetry(tmp_path, _isolate_telemetry_dir):
+async def test_answer_nowait_continuation_binds_its_own_telemetry(tmp_path, _per_test_telemetry_dir):
+    """_answer_continuation runs as a separate backgrounded task, outside
+    answer_nowait's own bind-around-the-prologue scope (already unbound and
+    returned by the time the caller sees the running record) — it must bind
+    its own telemetry logger, or every event the resume produces would
+    silently no-op instead of landing on disk."""
+    import json
+
+    from durin.telemetry.logger import current_telemetry
+
+    _save(tmp_path, delivery=Delivery(channel="email", to="ops@x.com"))
+    rt, _ = _mk_runtime(tmp_path, [
+        _wr("needs_input", out="q", ask_kind="question"),
+        _wr("completed"),
+    ])
+    m = await rt.fire("a1", source="manual")
+
+    assert current_telemetry() is None
+    result = await rt.answer_nowait("a1", m["run_id"], "go ahead")
+    assert result["status"] == "running"
+    assert current_telemetry() is None
+
+    await _drain()
+
+    files = list(_per_test_telemetry_dir.glob("*.jsonl"))
+    events = [json.loads(line) for f in files for line in f.read_text(encoding="utf-8").strip().splitlines()]
+    event_types = [e["type"] for e in events]
+    assert event_types.count("automations.run_finished") == 1
+    assert event_types.count("automations.delivered") == 1
+
+
+async def test_try_fire_disabled_skip_emits_no_telemetry(tmp_path, _per_test_telemetry_dir):
     """A disabled skip is silent — only the busy skip carries a signal, since
     disabled is a deliberate, already-visible configuration state rather than
     a race worth flagging."""
@@ -1024,12 +1423,12 @@ async def test_try_fire_disabled_skip_emits_no_telemetry(tmp_path, _isolate_tele
     rt, _ = _mk_runtime(tmp_path, [])
     assert await rt.try_fire("a1", source="cron") is None
 
-    files = list(_isolate_telemetry_dir.glob("*.jsonl"))
+    files = list(_per_test_telemetry_dir.glob("*.jsonl"))
     events = [json.loads(line) for f in files for line in f.read_text(encoding="utf-8").strip().splitlines()]
     assert events == []
 
 
-async def test_stuck_escalation_emits_automations_escalated(tmp_path, _isolate_telemetry_dir):
+async def test_stuck_escalation_emits_automations_escalated(tmp_path, _per_test_telemetry_dir):
     import json
 
     _save(tmp_path, life=Life(intent="x", max_attempts=1, on_stuck="notify"))
@@ -1037,7 +1436,7 @@ async def test_stuck_escalation_emits_automations_escalated(tmp_path, _isolate_t
     m = await rt.fire("a1", source="cron")
     assert m["status"] == "failed"
 
-    files = list(_isolate_telemetry_dir.glob("*.jsonl"))
+    files = list(_per_test_telemetry_dir.glob("*.jsonl"))
     events = [json.loads(line) for f in files for line in f.read_text(encoding="utf-8").strip().splitlines()]
     escalated = [e for e in events if e["type"] == "automations.escalated"]
     assert len(escalated) == 1
@@ -1185,7 +1584,7 @@ async def test_chain_depth_survives_the_busy_queue_drain_path_so_the_cap_still_b
     assert any("refused" in r.getMessage() for r in caplog.records)
 
 
-async def test_drained_chain_fire_records_source_chain_in_cause_and_telemetry(tmp_path, _isolate_telemetry_dir):
+async def test_drained_chain_fire_records_source_chain_in_cause_and_telemetry(tmp_path, _per_test_telemetry_dir):
     import json
 
     _save(tmp_path)
@@ -1212,7 +1611,7 @@ async def test_drained_chain_fire_records_source_chain_in_cause_and_telemetry(tm
     drained_run = next(r for r in runs if r["run_id"] not in (d["run_id"], d2["run_id"]))
     assert drained_run["cause"]["kind"] == "chain"
 
-    files = list(_isolate_telemetry_dir.glob("*.jsonl"))
+    files = list(_per_test_telemetry_dir.glob("*.jsonl"))
     events = [json.loads(line) for f in files for line in f.read_text(encoding="utf-8").strip().splitlines()]
     downstream_fired = [e for e in events if e["type"] == "automations.fired"
                         and e["data"].get("automation") == "downstream"]

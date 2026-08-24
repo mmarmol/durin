@@ -1,15 +1,38 @@
 import { useEffect, useState } from "react";
-import { Check, Loader2, X } from "lucide-react";
+import { Check, Loader2, Square, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { causeIcon } from "@/components/automations/RunHistory";
-import { getWorkflowRunManifest, type AutomationRun, type WorkflowRunNode, type WorkflowRunResult } from "@/lib/api";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
+import {
+  ApiError,
+  getWorkflowRunManifest,
+  stopAutomationRun,
+  type AutomationRun,
+  type WorkflowRunNode,
+  type WorkflowRunResult,
+} from "@/lib/api";
 import { relativeTime } from "@/lib/format";
 import { formatElapsed, useTicker } from "@/lib/work-format";
 import { toWorkNodes } from "@/hooks/useWorkState";
 import type { InboundEvent, WorkNode } from "@/lib/types";
 import { useClient } from "@/providers/ClientProvider";
 import { cn } from "@/lib/utils";
+
+function errMsg(e: unknown): string {
+  if (e instanceof ApiError) return e.detail ? `HTTP ${e.status}: ${e.detail}` : `HTTP ${e.status}`;
+  return (e as Error).message;
+}
 
 /** One row per node_id, taking that node's most recent recorded pass — a
  *  manifest's `runs` is one entry per PASS (a loop node visited 3 times has 3
@@ -101,20 +124,91 @@ function LiveNodeRow({ node, now, typicalS }: { node: WorkNode; now: number; typ
  *  node-by-node progress — mockup screen 3. Live source is the `runs:feed`
  *  websocket key every service-path run publishes onto (A5); the manifest
  *  poll is both the fallback while no live frame has arrived yet and the
- *  terminal source of truth once the run finishes. No "Detener" control:
- *  neither `durin/service/workflows.py` nor `durin/service/tasks.py` expose a
- *  cancel Command for an API-launched run (only the internal
- *  `durin.workflow.cancellation` flags the engine itself checks), and
- *  RunsView.tsx — the executions screen's own live-run card — renders no
- *  stop button either. Inventing an endpoint here was out of scope; the gap
- *  is disclosed rather than silently worked around. */
-export function LiveRunCard({ run, workflow }: { run: AutomationRun; workflow: string }) {
+ *  terminal source of truth once the run finishes. The header's "Detener"
+ *  control calls `POST .../runs/{run_id}/stop`: for a `running` run this is
+ *  a REQUEST, not instant — it asks the run to stop at its next workflow
+ *  step (the in-flight step finishes and is kept) and the run finalizes on
+ *  its own once the engine unwinds, `interrupted`, never delivered as an
+ *  outcome; for a `paused` one — should this card ever be handed one —
+ *  there is no workflow in flight, so the backend finalizes it directly.
+ *  Once a graceful stop is accepted, the button is replaced by a "Forzar
+ *  detención" follow-up (`hard=true`, interrupts a work node's turn
+ *  mid-flight rather than waiting for the next node boundary) held until
+ *  the run actually leaves `running`; a stop or force-stop that finds the
+ *  run already gone (422) is treated as good news — the same refresh a
+ *  successful one triggers, not an error. Either way the card itself does
+ *  nothing beyond calling the endpoint and asking its parent to refresh
+ *  once the request is accepted; it does not wait for the run to actually
+ *  finish unwinding. */
+export function LiveRunCard({
+  run,
+  workflow,
+  onStopped,
+}: {
+  run: AutomationRun;
+  workflow: string;
+  // Called once the stop request is accepted — DetailView's own runs
+  // refresh (the same one onFireNow uses), so this run drops out of
+  // "running now" as soon as the next poll or live frame reports it.
+  onStopped: () => void;
+}) {
   const { t } = useTranslation();
   const { client, token } = useClient();
   const [liveNodes, setLiveNodes] = useState<WorkNode[] | null>(null);
   const [manifest, setManifest] = useState<WorkflowRunResult | null>(null);
+  const [confirmingStop, setConfirmingStop] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  // Set once a graceful stop is accepted and held until this card unmounts
+  // (the run leaves `running` on a later refresh) — a graceful stop is a
+  // REQUEST, not instant, so re-enabling the same button would invite a
+  // confusing repeat click that's actually a no-op (request_cancel only
+  // escalates on an explicit hard=true; a second graceful call changes
+  // nothing). While set, the only action offered is the one thing a repeat
+  // click should actually do: force it.
+  const [stopRequested, setStopRequested] = useState(false);
+  const [stopError, setStopError] = useState<string | null>(null);
 
   const runId = run.workflow_run_id;
+
+  // A stop or force-stop that 422s ("run is not active") means the run
+  // already moved on — finished, or was already stopped by something else
+  // — between the last refresh and this click. The right response is the
+  // same refresh a successful stop triggers, not an error banner for news
+  // that is actually good.
+  const isLostRace = (e: unknown) => e instanceof ApiError && e.status === 422;
+
+  // The automation's own run id (run.run_id) — distinct from `runId` above,
+  // which is the underlying *workflow* engine's run id used for the
+  // manifest/live-progress lookups. The stop route is keyed by the former.
+  const handleStop = async () => {
+    setConfirmingStop(false);
+    setStopping(true);
+    setStopError(null);
+    try {
+      await stopAutomationRun(token, run.automation, run.run_id);
+      setStopRequested(true);
+      onStopped();
+    } catch (e) {
+      if (isLostRace(e)) onStopped();
+      else setStopError(errMsg(e));
+    } finally {
+      setStopping(false);
+    }
+  };
+
+  const handleForceStop = async () => {
+    setStopping(true);
+    setStopError(null);
+    try {
+      await stopAutomationRun(token, run.automation, run.run_id, true);
+      onStopped();
+    } catch (e) {
+      if (isLostRace(e)) onStopped();
+      else setStopError(errMsg(e));
+    } finally {
+      setStopping(false);
+    }
+  };
 
   // Live subscription: the reserved global "runs:feed" key every service-path
   // run's progress publishes onto (durin/service/workflows.py's
@@ -177,8 +271,45 @@ export function LiveRunCard({ run, workflow }: { run: AutomationRun; workflow: s
 
   return (
     <div className="rounded-lg border border-border" data-testid="live-run-card">
-      <div className="border-b border-border px-3.5 py-2.5 text-[13px] font-semibold">
-        {t("automations.detail.live.title")}
+      <div className="flex items-center justify-between gap-2 border-b border-border px-3.5 py-2.5 text-[13px] font-semibold">
+        <span>{t("automations.detail.live.title")}</span>
+        <div className="flex items-center gap-2">
+          {stopError && <span className="text-[11px] font-normal text-destructive">{stopError}</span>}
+          {stopRequested ? (
+            <>
+              <span className="text-[11px] text-muted-foreground">{t("automations.detail.live.stopping")}</span>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={stopping}
+                onClick={() => void handleForceStop()}
+                className="gap-1.5 text-destructive hover:text-destructive"
+              >
+                {stopping ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+                ) : (
+                  <Square className="h-3.5 w-3.5" aria-hidden />
+                )}
+                {t("automations.detail.live.forceStop")}
+              </Button>
+            </>
+          ) : (
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={stopping}
+              onClick={() => setConfirmingStop(true)}
+              className="gap-1.5 text-destructive hover:text-destructive"
+            >
+              {stopping ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+              ) : (
+                <Square className="h-3.5 w-3.5" aria-hidden />
+              )}
+              {t("automations.detail.live.stop")}
+            </Button>
+          )}
+        </div>
       </div>
       <div className="flex items-start gap-2 px-3.5 py-2 text-[12.5px]">
         <span className="shrink-0 text-muted-foreground">{t("automations.detail.causeLabel")}</span>
@@ -194,6 +325,25 @@ export function LiveRunCard({ run, workflow }: { run: AutomationRun; workflow: s
           ))}
         </div>
       )}
+      <AlertDialog open={confirmingStop} onOpenChange={(o) => (!o ? setConfirmingStop(false) : undefined)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("automations.detail.live.stopConfirmTitle", { runId: run.run_id })}</AlertDialogTitle>
+            <AlertDialogDescription>{t("automations.detail.live.stopConfirmBody")}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setConfirmingStop(false)}>
+              {t("automations.form.cancel")}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => void handleStop()}
+            >
+              {t("automations.detail.live.stop")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

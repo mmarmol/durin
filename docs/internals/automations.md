@@ -273,21 +273,78 @@ target that is busy (`AutomationBusy`) is queued rather than dropped, carrying i
 `chain_depth` forward so the eventual drained fire resumes the same hop count instead
 of silently restarting at zero.
 
-**Answering (`answer` / `_answer`)** resumes a `paused` run. It re-stamps the run's
-`owner` to the resuming process (a parked run is routinely answered by a different,
-possibly-restarted process than the one that fired it) and releases the claim
-*before* resuming — if the resumed workflow immediately asks another tagged
-question, `_park` registers a fresh claim, so releasing first never races a
-just-registered one. For an `ask_kind == "approval"` pause, an explicit `action`
-(the agent tool's `resolution` parameter, the webui Automations inbox's
-Approve/Revise/Reject, or any other caller of the HTTP answer route passing
-one) bypasses free-text parsing and synthesizes the canonical resume text
-(`"approve"`/`"reject"`); with no
-explicit action, `durin.workflow.approval.parse_approval_reply` interprets the reply
-text, defaulting to `"revise"` when it doesn't parse as approve/reject — the same
-one algorithm a direct workflow resume uses, so there is exactly one place free text
-becomes an approval verdict. The resumed result re-enters `_handle_result` exactly
-like a fresh fire's result — same classification, same delivery/life/chain handling.
+**Answering (`answer_nowait` / `answer` / `_answer_prologue` / `_answer_continuation`)**
+resumes a `paused` run. The work splits into a synchronous prologue and a
+backgrounded continuation, because a resume is a full workflow run — the same
+minutes-long call a fresh fire makes — and neither an HTTP request nor a chat turn
+should block for it:
+
+- **`_answer_prologue`** (always runs synchronously, inline) validates the run is
+  actually `paused`, re-stamps the run's `owner` to the resuming process (a parked
+  run is routinely answered by a different, possibly-restarted process than the one
+  that fired it — leaving the old owner would make the crash sweep read a live
+  `running` run as an orphan), and releases the claim *before* resuming — if the
+  resumed workflow immediately asks another tagged question, `_park` registers a
+  fresh claim, so releasing first never races a just-registered one. For an
+  `ask_kind == "approval"` pause, an explicit `action` (the agent tool's `resolution`
+  parameter, the webui Automations inbox's Approve/Revise/Reject, or any other caller
+  of the HTTP answer route passing one) bypasses free-text parsing and synthesizes the
+  canonical resume text (`"approve"`/`"reject"`); with no explicit action,
+  `durin.workflow.approval.parse_approval_reply` interprets the reply text, defaulting
+  to `"revise"` when it doesn't parse as approve/reject — the same one algorithm a
+  direct workflow resume uses, so there is exactly one place free text becomes an
+  approval verdict. The resolved verdict is recorded here too, before the resume is
+  even attempted — the operator's decision is a fact regardless of how the resume
+  turns out, and recording it only on a successful resume would lose it entirely if
+  the resume then failed.
+- **`_answer_continuation`** (the `_exec` call, its failure-finalize, and
+  `_handle_result`) re-enters `_handle_result` exactly like a fresh fire's result —
+  same classification, same delivery/life/chain handling. `answer_nowait` backgrounds
+  it via `_spawn` (the same strong-reference mechanism `fire`'s callers rely on to
+  background a run — see `reserve_run_id`) and returns immediately with the run
+  re-read as `running`; `answer` (kept for internal callers that need the resume's
+  final outcome, e.g. tests) instead composes the same prologue with an inline await
+  of the continuation. Because the continuation can run outside any caller's own
+  telemetry binding, it binds its own — a no-op when one is already bound (the inline
+  `answer` case), the only source of telemetry for the backgrounded case.
+
+**Stopping (`stop`)** ends a `running` or `paused` run on operator request; any other
+status is refused (`ValueError`, mapped to `422` by the service). The two active
+statuses end differently because only one of them has a workflow actually in flight:
+
+- **`running`** — registers the run's `workflow_run_id` with
+  `durin.workflow.cancellation.request_cancel` (the same process-global registry the
+  `tasks` chat tool signals a workflow stop through), stamps `stop_requested_at` on the
+  run record durably (the in-memory registry above does not survive a crash — see
+  §4d), and returns the record. Only an explicit `hard=true` escalates, and it can
+  never be downgraded by a later graceful call — `request_cancel`'s own contract. A
+  *repeat* call with `hard` left at its default is a no-op on an already-graceful
+  request; the webui dashboard's own Stop button only ever issues a graceful stop, and
+  offers a separate "Force stop" follow-up (§6) that passes `hard=true`. The in-process
+  fire task is still awaiting the engine; when the engine ends, `_handle_result`
+  recognizes a non-shutdown, non-rejected `cancelled` result (the engine's own
+  cooperative cancel-flag check is the only thing that ever produces that status — see
+  `durin/workflow/engine.py`) and finalizes the run directly as `interrupted` — no
+  delivery under any policy (including `notify: "always"`), no chain dispatch, and
+  streak-transparent, exactly the honest contract the `paused` branch below already
+  gives an operator stop. This bypasses `classify`/`_post_finish` on purpose: that path
+  is also what a crash-orphaned run's own `interrupted` finalize goes through to
+  *deliver* a notice about the crash (§4d, deliberately) — an operator's own stop must
+  not inherit that.
+- **`paused`** — no workflow is in flight to cancel, so `stop` finalizes the run
+  directly as `interrupted` (`detail: "stopped by operator"`) and releases its claim.
+  It deliberately skips `_post_finish`: an operator stop is not an outcome to deliver,
+  and must not dispatch chains. It does still drain one fresh queued event for a
+  `single`-concurrency automation exactly as `_post_finish` would have — that is the
+  only place a queued channel/webhook event ever gets drained, so skipping it here too
+  would strand the queued event until some unrelated future trigger happened to arrive.
+
+A stop's durable `stop_requested_at` stamp also guards the orphan sweep (§4d): a stop
+that lands but the gateway crashes before the engine unwinds leaves a `running`
+manifest with no workflow manifest yet — ordinarily the signal to relaunch a fresh run
+for the same cause. The sweep checks the stamp first and finalizes `interrupted`
+without relaunching instead, honoring the operator's intent rather than replacing the
+run they just asked to end.
 
 ### 4c. Matcher and webhook ingress (`durin/automations/matcher.py`, `hooks.py`)
 
@@ -331,9 +388,12 @@ busy → schedule a background fire task (a synchronous `_pending_fires` set clo
 the race between two messages arriving back-to-back for the same single-concurrency
 automation, since the busy check and the actual fire are not atomic across an
 `asyncio.create_task` boundary); busy and a queue is wired → push the event onto
-`durin.automations.queue`, drained by `_post_finish` once the active run ends; busy
-with no queue wired → log a warning and let the message pass through as a normal
-turn instead (the message is not silently eaten).
+`durin.automations.queue`, stamped with the same channel-to-`source` collapse a
+fresh fire would have used (`"webhook"` or `"channel"`) so a later drain's run
+history shows the trigger's real origin instead of a generic default, drained by
+`_post_finish` once the active run ends; busy with no queue wired → log a warning
+and let the message pass through as a normal turn instead (the message is not
+silently eaten).
 
 **`durin.automations.hooks.HookDispatcher`** gives `POST /api/v1/hooks/{hook}` the
 identical wake/fire/queue decision instead of reimplementing it: it builds a
@@ -474,7 +534,7 @@ one bad file never aborts the boot.
 | Symbol | File | Role |
 |---|---|---|
 | `AutomationSpec`, `AutomationTrigger`, `Delivery`, `Help`, `Life` | `durin/automations/spec.py` | The definition schema; `parse_automation`/`automation_to_dict` are the sole parse/serialize entrances, enforcing per-source field ownership |
-| `AutomationsRuntime` | `durin/automations/runtime.py` | The dispatcher: `fire`/`try_fire`/`answer`, run→classify→park-or-finalize→deliver→life→chains, `sweep_orphans`, `report_no_outcome` |
+| `AutomationsRuntime` | `durin/automations/runtime.py` | The dispatcher: `fire`/`try_fire`/`answer`/`answer_nowait`/`stop`, run→classify→park-or-finalize→deliver→life→chains, `sweep_orphans`, `report_no_outcome` |
 | `classify`, `is_achieved`, `should_deliver` | `durin/automations/classify.py` | Pure functions: workflow result → automation status; delivery-policy decision |
 | `AutomationOutcome`, `Destination`, `build_outcome`, `route` | `durin/automations/outcome.py` | What a finished run reports, and the destination-precedence decision (session > delivery > help backstop > silenced) |
 | `TriggerMatcher` | `durin/automations/matcher.py` | Inbound bus interceptor: claim wake, trigger match, fire/queue/pass-through decision |
@@ -555,14 +615,15 @@ the same gap that once let workflow edits land unvalidated and unversioned.
 | `delete` | `DELETE /api/v1/automations/{name}` | write |
 | `fire` | `POST /api/v1/automations/{name}/fire` | write |
 | `answer` | `POST /api/v1/automations/{name}/runs/{run_id}/answer` | write |
+| `stop` | `POST /api/v1/automations/{name}/runs/{run_id}/stop` | write |
 | `runs_feed` | `GET /api/v1/automations/runs` | read |
 | `runs_list` | `GET /api/v1/automations/{name}/runs` | read |
 | `hooks_secret` | `GET /api/v1/automations/hooks-secret` | write |
 
 `list` additionally folds in each automation's live counts (`active_runs`, `paused`,
 `pending_events` from the queue) and life state (`attempts`, `achieved`, `stuck`).
-`fire`/`answer` need a live `AutomationsRuntime` wired onto the service (the gateway
-does this; a runtime-less surface, e.g. spec-reading tooling, answers `503`). See
+`fire`/`answer`/`stop` need a live `AutomationsRuntime` wired onto the service (the
+gateway does this; a runtime-less surface, e.g. spec-reading tooling, answers `503`). See
 `docs/internals/api.md` for the general service/route/scope machinery and the
 generated OpenAPI contract (`contract/openapi-v1.json`) for exact request/response
 field shapes.
@@ -585,7 +646,10 @@ answers `202` with the result body. The shared secret is fetched via
 `automations` (`durin/agent/tools/automations.py`; `_scopes = {"core"}` — a
 standing-state creator, gated like `cron`) exposes `list`/`status`/`fire`/`answer`/
 `enable`/`pause`/`create` to chat. `fire` backgrounds the actual run and never blocks
-the calling turn on its outcome: it returns the run id immediately. When the calling
+the calling turn on its outcome: it returns the run id immediately. `answer` calls
+`AutomationsRuntime.answer_nowait` for the same reason — a resume is a full workflow
+run, same as a fresh fire — and its reply says so, pointing at `action="status"` for
+a check rather than promising the outcome landed. When the calling
 context has a `session_key`, `set_context` stamps the tool's origin as
 `{"kind": "session", "session_key": ..., ...}`, so the eventual outcome arrives back
 as an injected follow-up message in the same conversation — the session-origin

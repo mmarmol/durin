@@ -498,6 +498,40 @@ describe("AutomationsView", () => {
     expect(listSpy.mock.calls.length).toBeGreaterThan(1);
     vi.useRealTimers();
   });
+
+  it("polls every 4s instead of 30s while any run is running or paused (finding 14: answered/stopped runs settle visibly fast)", async () => {
+    vi.useFakeTimers();
+    const runsSpy = vi.mocked(api.listAllAutomationRuns);
+    runsSpy.mockClear();
+    runsSpy.mockResolvedValue([run({ status: "running" })]);
+    vi.mocked(api.listAutomations).mockResolvedValue(ALL_AUTOMATIONS);
+
+    render(wrap(<AutomationsView />));
+    await act(async () => {});
+
+    await vi.advanceTimersByTimeAsync(4_000);
+
+    expect(runsSpy.mock.calls.length).toBeGreaterThan(1);
+    vi.useRealTimers();
+  });
+
+  it("falls back to the plain 30s cadence once nothing is running or paused", async () => {
+    vi.useFakeTimers();
+    const runsSpy = vi.mocked(api.listAllAutomationRuns);
+    runsSpy.mockClear();
+    runsSpy.mockResolvedValue([run({ status: "completed" })]);
+    vi.mocked(api.listAutomations).mockResolvedValue(ALL_AUTOMATIONS);
+
+    render(wrap(<AutomationsView />));
+    await act(async () => {});
+
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(runsSpy.mock.calls.length).toBe(1);   // no acceleration — still just the mount fetch
+
+    await vi.advanceTimersByTimeAsync(26_000);   // 30s total
+    expect(runsSpy.mock.calls.length).toBeGreaterThan(1);
+    vi.useRealTimers();
+  });
 });
 
 // -- AutomationsView initialDetailName ---------------------------------------

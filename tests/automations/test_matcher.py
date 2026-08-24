@@ -12,12 +12,17 @@ from durin.automations.store import save_automation
 
 
 @pytest.fixture(autouse=True)
-def _isolate_telemetry_dir(tmp_path, monkeypatch):
+def _per_test_telemetry_dir(tmp_path, monkeypatch):
     """TriggerMatcher._emit binds a session telemetry logger around the
     synchronous automations.event_matched emit (mirrors AutomationsRuntime's
     own binding in durin/automations/runtime.py) since there is no bound
     logger outside an agent turn. Without this, tests would write real JSONL
-    files to the developer's ~/.cache/durin/telemetry."""
+    files to the developer's ~/.cache/durin/telemetry. Deliberately NOT
+    named `_isolate_telemetry_dir`: that name collides with the
+    session-scoped guard of the same name in tests/conftest.py, and a
+    fixture defined in a test module shadows a same-named one from a parent
+    conftest for every test in that module — reusing the name would
+    silently disable the suite-wide guard for this entire file."""
     import durin.telemetry.logger as telemetry_logger
 
     telemetry_dir = tmp_path / "_telemetry"
@@ -86,7 +91,7 @@ class FakeRuntime:
             raise AutomationBusy(name)
         return {"status": "done"}
 
-    async def answer(self, name, run_id, answer):
+    async def answer_nowait(self, name, run_id, answer):
         self.answer_calls.append((name, run_id, answer))
         return {"status": "done"}
 
@@ -318,6 +323,7 @@ async def test_single_busy_queues_when_enqueue_wired(tmp_path):
     assert automation_name == "l1"
     assert event["content"] == "hello there"
     assert event["origin"]["thread"] == "digest-1"
+    assert event["source"] == "channel"
 
 
 async def test_single_busy_without_enqueue_passes_through(tmp_path):
@@ -395,7 +401,7 @@ async def test_claim_wake_default_when_spec_missing(tmp_path):
     With no spec to check a match policy against, the matcher defaults to
     honoring the claim and attempts the wake — mirroring current behavior
     rather than silently dropping a message a human might be counting on. If
-    the wake itself then fails (runtime.answer needs the same spec and
+    the wake itself then fails (runtime.answer_nowait needs the same spec and
     raises AutomationNotFound), the matcher must not leave the claim stuck:
     it releases it so a later message on that thread isn't captured by a
     dead claim forever."""
@@ -403,7 +409,7 @@ async def test_claim_wake_default_when_spec_missing(tmp_path):
     claims.register(tmp_path, key="digest-1", automation="ghost", run_id="run1")
 
     class MissingSpecRuntime(FakeRuntime):
-        async def answer(self, name, run_id, answer):
+        async def answer_nowait(self, name, run_id, answer):
             self.answer_calls.append((name, run_id, answer))
             from durin.automations.spec import AutomationNotFound
             raise AutomationNotFound(f"automation '{name}' not found")
@@ -531,6 +537,7 @@ async def test_automationbusy_fallback_enqueues(tmp_path):
     automation_name, event = queued[0]
     assert automation_name == "l1"
     assert event["content"] == "hello there"
+    assert event["source"] == "channel"
 
 
 async def test_fired_telemetry_emitted_after_successful_fire(tmp_path):
@@ -734,3 +741,55 @@ async def test_unsupported_channel_is_passthrough(tmp_path):
 
     assert consumed is False
     assert rt.fire_calls == []
+
+
+async def test_counterpart_wake_answer_failure_after_exec_finalizes_failed(tmp_path, monkeypatch):
+    """Same invariant fix-round finding 1 established for answer_nowait's
+    HTTP/chat callers (a post-_exec failure must not leave the run stuck
+    `running` forever — find_orphans skips a `running` manifest owned by a
+    still-live process, so nothing else would ever reclaim it), verified on
+    the matcher's OWN wake path. _answer now calls answer_nowait too, so
+    its guarded continuation — not matcher._answer's own except-handler —
+    owns a post-_exec failure. A real AutomationsRuntime is needed here
+    (not this file's FakeRuntime double) since the point is exercising that
+    continuation's real behavior; matcher._answer's except-handler (log +
+    release the claim) is still exercised, unaffected, by
+    test_claim_wake_default_when_spec_missing above — a genuine PROLOGUE
+    failure (AutomationNotFound for a missing spec)."""
+    import durin.automations.runtime as runtime_module
+    from durin.automations.runtime import AutomationsRuntime
+    from durin.workflow.result import WorkflowResult
+
+    _save(tmp_path)
+
+    results = [
+        WorkflowResult(status="needs_input", final_output="[TO:counterpart] confirm?",
+                       ask_kind="question", run_id="wf1"),
+        WorkflowResult(status="completed", final_output="done", run_id="wf1"),
+    ]
+
+    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None,
+                             work_key=None, root_session_key=None):
+        return results.pop(0)
+
+    ids = iter([f"wake-fail-{i}" for i in range(10)])
+    rt = AutomationsRuntime(tmp_path, workflow_exec=workflow_exec, keep_runs=20,
+                            run_id_factory=lambda: next(ids))
+    m = await rt.fire("l1", source="channel", origin={"thread": "digest-1"})
+    assert m["status"] == "paused"
+    assert claims.lookup(tmp_path, "digest-1") is not None
+
+    def _poisoned_classify(result, spec):
+        raise RuntimeError("boom: poisoned classify")
+
+    monkeypatch.setattr(runtime_module, "classify", _poisoned_classify)
+
+    matcher = TriggerMatcher(tmp_path, runtime=rt)
+    consumed = await matcher.handle_inbound(_email_msg(content="yes, confirmed"))
+    assert consumed is True
+    await _drain()
+    await _drain()   # two backgrounded hops: matcher's own task, then answer_nowait's
+
+    final = rl.read_run(tmp_path, "l1", m["run_id"])
+    assert final["status"] == "failed"
+    assert claims.lookup(tmp_path, "digest-1") is None
