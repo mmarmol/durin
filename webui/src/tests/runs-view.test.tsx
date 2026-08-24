@@ -623,6 +623,47 @@ describe("RunsView", () => {
     expect(screen.getByText(/b-step/)).toBeInTheDocument();
     expect(screen.queryByText(/a-step/)).not.toBeInTheDocument();
   });
+
+  it("honors initialSelection: selects the matching run and loads its manifest without a click", async () => {
+    vi.mocked(api.listAllWorkflowRuns).mockResolvedValue([
+      { workflow: "digest", run_id: "run-done", status: "completed", started_at: 2000, finished_at: 2100, task: "summarize the week", needs_input_node: null },
+      { workflow: "onboarding", run_id: "run-waiting", status: "needs_input", started_at: 1000, finished_at: null, task: "set up the account", needs_input_node: "ask" },
+    ]);
+    // needs_input (not completed) deliberately: RunDetail renders a
+    // needs_input manifest's final_output as plain text, never through its
+    // lazy-loaded MarkdownText path (see RunDetail.tsx's needs_input banner
+    // vs. its completed-with-output branch) — this proves initialSelection's
+    // own selection/fetch wiring without depending on an unrelated lazy
+    // Suspense boundary this test has no reason to exercise.
+    vi.mocked(api.getWorkflowRunManifest).mockResolvedValue({
+      status: "needs_input",
+      final_output: "Which environment — staging or prod?",
+      needs_input_node: "ask",
+      run_id: "run-waiting",
+      runs: [],
+    });
+
+    render(wrap(<RunsView initialSelection={{ workflow: "onboarding", runId: "run-waiting" }} />));
+
+    expect(await screen.findByText(/Which environment — staging or prod\?/)).toBeInTheDocument();
+    expect(api.getWorkflowRunManifest).toHaveBeenCalledWith("tok", "onboarding", "run-waiting");
+  });
+
+  it("does nothing (no crash, no selection) when initialSelection names a run outside the fetched feed", async () => {
+    // vi.restoreAllMocks() in afterEach does not reset a vi.mock()-factory
+    // vi.fn()'s call history (see the other call-count assertions in this
+    // file) — clear explicitly so an earlier test's calls can't leak in and
+    // make a real "no fetch happened" regression look like it's passing.
+    const manifestSpy = vi.mocked(api.getWorkflowRunManifest);
+    manifestSpy.mockClear();
+    vi.mocked(api.listAllWorkflowRuns).mockResolvedValue([COMPLETED]);
+
+    render(wrap(<RunsView initialSelection={{ workflow: "ghost", runId: "nowhere" }} />));
+
+    await screen.findByText("summarize the week"); // the feed still renders normally
+    expect(screen.getByText(/Select a run/i)).toBeInTheDocument();
+    expect(manifestSpy).not.toHaveBeenCalled();
+  });
 });
 
 describe("RunDetail", () => {
@@ -685,9 +726,19 @@ describe("RunDetail", () => {
       run_id: "r4",
       runs: [],
     });
-    // The markdown body (or its plain-text fallback while the renderer lazy-loads)
-    // carries the output text.
-    expect(await screen.findByText(/All good\./)).toBeInTheDocument();
+    // Root-caused a real, reproduced flake here (not a guess): findByText's own
+    // resolution is not itself flaky, but chaining .toBeInTheDocument() on its
+    // result adds a second, LATER check of that same element reference. When
+    // MarkdownText's lazy import is still settling (its Suspense fallback
+    // renders this exact text as plain text first — see MarkdownText.tsx), the
+    // fallback element findByText resolved to can be swapped out for the real
+    // rendered markdown between the await and the follow-up check, so the
+    // now-detached reference correctly reads as "not in the document" even
+    // though equivalent text is still on screen via the new element. Asserting
+    // through findByText's own resolution (which every other findByText in
+    // this file already does bare, without a chained .toBeInTheDocument())
+    // closes that gap instead of widening a timeout that was never the cause.
+    await screen.findByText(/All good\./);
     expect(screen.getByRole("button", { name: /copy final output/i })).toBeInTheDocument();
   });
 });

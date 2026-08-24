@@ -31,11 +31,13 @@ export function ListView({
   runs,
   cronJobs,
   onEdit,
+  onOpenDetail,
 }: {
   automations: AutomationSummary[];
   runs: AutomationRun[];
   cronJobs: CronJobRow[];
   onEdit: (def: AutomationDef) => void;
+  onOpenDetail: (def: AutomationSummary) => void;
 }) {
   const { t } = useTranslation();
   return (
@@ -59,7 +61,12 @@ export function ListView({
                 data-testid="automation-row"
                 className="flex items-center gap-3 border-t border-border px-3.5 py-2.5 first:border-t-0"
               >
-                <div className="min-w-0 flex-1">
+                <button
+                  type="button"
+                  data-testid="automation-row-open"
+                  onClick={() => onOpenDetail(def)}
+                  className="min-w-0 flex-1 text-left"
+                >
                   <div className="truncate text-[13.5px] font-medium">{def.name}</div>
                   <div className="mt-0.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[12px] text-muted-foreground">
                     <TriggerChips triggers={def.triggers} />
@@ -69,7 +76,7 @@ export function ListView({
                     </span>
                     {nextMs != null && <span>{t("automations.list.nextFire", { when: fmtDateTime(nextMs) })}</span>}
                   </div>
-                </div>
+                </button>
                 {!def.achieved && <RunDots runs={ownRuns} />}
                 {def.active_runs > 0 && (
                   <span className="shrink-0 rounded-full bg-accent/15 px-2 py-0.5 text-[10.5px] font-medium text-accent">

@@ -221,7 +221,17 @@ function TaskText({ text }: { text: string }) {
   );
 }
 
-export function RunsView() {
+export function RunsView({
+  initialSelection,
+}: {
+  // A deep link from another screen (the automations detail view's "Ver
+  // ejecución completa →"): the run to select and load as soon as the feed
+  // has loaded. Consumed once — a later prop change (e.g. the caller re-uses
+  // the same App.tsx state for a second drill-in while this component stays
+  // mounted) does not re-trigger it, since RunsView normally only mounts
+  // fresh per navigation anyway (see App.tsx's conditional view render).
+  initialSelection?: { workflow: string; runId: string } | null;
+}) {
   const { token } = useClient();
   const { t } = useTranslation();
   const [runs, setRuns] = useState<WorkflowGlobalRun[]>([]);
@@ -382,6 +392,25 @@ export function RunsView() {
     },
     [token],
   );
+
+  // Consume a deep-linked initialSelection exactly once: find the matching
+  // entry in the just-loaded feed and open it, the same way a row click
+  // would. Guarded on `loading` so it waits for the mount fetch to land
+  // instead of searching an empty array, and on the ref so a later re-render
+  // (e.g. a poll tick updating `runs`) never re-triggers it. A run outside
+  // the feed's default fetch window (not among the most recent global runs)
+  // is silently not found — there is no "fetch one run summary by id"
+  // endpoint to fall back to, and `WorkflowRunResult` (the manifest) does not
+  // carry the started_at/task fields a WorkflowGlobalRun needs to render.
+  const initialSelectionConsumed = useRef(false);
+  useEffect(() => {
+    if (initialSelectionConsumed.current || !initialSelection || loading) return;
+    initialSelectionConsumed.current = true;
+    const entry = runs.find(
+      (r) => r.run_id === initialSelection.runId && r.workflow === initialSelection.workflow,
+    );
+    if (entry) void onSelectEntry(entry);
+  }, [initialSelection, loading, runs, onSelectEntry]);
 
   // Row click: open the run's detail, or close it when it's already the open one
   // (toggling back to the empty pane / the list on small screens).

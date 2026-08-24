@@ -3,6 +3,7 @@ import { Loader2, Plus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { AutomationForm } from "@/components/automations/AutomationForm";
+import { DetailView } from "@/components/automations/DetailView";
 import { ListView } from "@/components/automations/ListView";
 import { NeedsYouTray } from "@/components/automations/NeedsYouTray";
 import { Button } from "@/components/ui/button";
@@ -23,7 +24,15 @@ function errMsg(e: unknown): string {
   return (e as Error).message;
 }
 
-export function AutomationsView() {
+export function AutomationsView({
+  onOpenWorkflowRun,
+}: {
+  // Drills into the executions screen for a run this automation launched
+  // (RunDetailCard's "Ver ejecución completa →"). Optional so the many
+  // existing list/editor tests that never reach the detail view don't need
+  // to stub it — App.tsx always supplies a real one in production.
+  onOpenWorkflowRun?: (workflow: string, runId: string) => void;
+}) {
   const { token } = useClient();
   const { t } = useTranslation();
   const [automations, setAutomations] = useState<AutomationSummary[]>([]);
@@ -38,6 +47,10 @@ export function AutomationsView() {
   // so ListView's onEdit can hand it straight in without a getAutomation
   // round-trip.
   const [editing, setEditing] = useState<AutomationDef | null | undefined>(undefined);
+  // The automation whose DetailView is open, or null for the list. Checked
+  // after `editing` so the two destinations stay mutually exclusive without
+  // folding into one combined union.
+  const [detail, setDetail] = useState<AutomationSummary | null>(null);
 
   // Reusable for both the initial mount and a post-save/delete reload from
   // the editor — the editor's own onDone calls this directly, so a save
@@ -94,6 +107,16 @@ export function AutomationsView() {
     );
   }
 
+  if (detail) {
+    return (
+      <DetailView
+        automation={detail}
+        onBack={() => setDetail(null)}
+        onOpenWorkflowRun={onOpenWorkflowRun ?? (() => {})}
+      />
+    );
+  }
+
   return (
     <div className="flex h-full w-full flex-col overflow-hidden">
       <div className="min-h-0 flex-1 overflow-y-auto">
@@ -124,7 +147,13 @@ export function AutomationsView() {
                 selectedRunId={selectedRunId}
                 onSelect={(run) => setSelectedRunId(run.run_id)}
               />
-              <ListView automations={automations} runs={runs} cronJobs={cronJobs} onEdit={setEditing} />
+              <ListView
+                automations={automations}
+                runs={runs}
+                cronJobs={cronJobs}
+                onEdit={setEditing}
+                onOpenDetail={setDetail}
+              />
             </>
           )}
         </div>

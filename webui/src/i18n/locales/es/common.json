@@ -1485,6 +1485,34 @@
       "onStuckNotify": "solo avisar",
       "onStuckKeep": "seguir intentando",
       "singleCaseHint": "Una automatización con objetivo es de caso único: para otro caso se crea otra (el agente lo hace desde el chat)."
+    },
+    "detail": {
+      "live": {
+        "title": "Corriendo ahora"
+      },
+      "history": {
+        "title": "Corridas",
+        "empty": "Todavía no hay corridas",
+        "selectPrompt": "Elegí una corrida para ver su detalle"
+      },
+      "runLabel": "Corrida",
+      "causeLabel": "Causa",
+      "outcomeLabel": "Desenlace",
+      "deliveryLabel": "Entrega",
+      "deliveryResult": {
+        "delivered": "entregado",
+        "failed": "falló",
+        "silenced": "silenciada por política"
+      },
+      "approvalLabel": "Aprobación",
+      "approvalAction": {
+        "approve": "aprobada por {{by}}",
+        "revise": "corregida por {{by}}",
+        "reject": "rechazada por {{by}}"
+      },
+      "resultLabel": "Resultado",
+      "filesLabel": "Archivos",
+      "openRun": "Ver ejecución completa →"
     }
   },
   "skills": {

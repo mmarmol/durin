@@ -321,6 +321,12 @@ function Shell({
   const { sessions, loading, refresh, createChat, deleteChat, renameChat } = useSessions();
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [view, setView] = useState<ShellView>("chat");
+  // A deep link into the Workflows section's runs pane, set by the
+  // automations detail view's "Ver ejecución completa →" (onOpenWorkflowRun
+  // below). Cleared by the plain Workflows nav (onOpenWorkflows) so a later
+  // ordinary visit to the section does not re-force the runs pane onto a
+  // stale run.
+  const [openWorkflowRun, setOpenWorkflowRun] = useState<{ workflow: string; runId: string } | null>(null);
   const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
   const [desktopSidebarOpen, setDesktopSidebarOpen] =
     useState<boolean>(readSidebarOpen);
@@ -477,10 +483,24 @@ function Shell({
   const onOpenWorkflows = useCallback(() => {
     setView("workflows");
     setMobileSidebarOpen(false);
+    // A plain nav click, not a drill-in: forget any earlier deep link so
+    // WorkflowsView opens on its normal editor pane instead of re-forcing
+    // the runs pane onto whatever run was last opened that way.
+    setOpenWorkflowRun(null);
   }, []);
 
   const onOpenAutomations = useCallback(() => {
     setView("automations");
+    setMobileSidebarOpen(false);
+  }, []);
+
+  // The automations detail view's drill-in into the executions screen: opens
+  // Workflows on its runs pane with this run selected (WorkflowsView reads
+  // openWorkflowRun to decide the initial pane; RunsView does the actual
+  // selecting once its feed has loaded — see its initialSelection prop).
+  const onOpenWorkflowRun = useCallback((workflow: string, runId: string) => {
+    setOpenWorkflowRun({ workflow, runId });
+    setView("workflows");
     setMobileSidebarOpen(false);
   }, []);
 
@@ -762,12 +782,12 @@ function Shell({
         )}
         {view === "workflows" && (
           <div className="absolute inset-0 flex flex-col">
-            <WorkflowsView />
+            <WorkflowsView initialSelection={openWorkflowRun} />
           </div>
         )}
         {view === "automations" && (
           <div className="absolute inset-0 flex flex-col">
-            <AutomationsView />
+            <AutomationsView onOpenWorkflowRun={onOpenWorkflowRun} />
           </div>
         )}
         {view === "dream" && (

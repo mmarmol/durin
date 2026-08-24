@@ -1750,6 +1750,34 @@
       "onStuckNotify": "just notify",
       "onStuckKeep": "keep trying",
       "singleCaseHint": "A goal-driven automation is single-case: for another case, create another one (the agent can do this from chat)."
+    },
+    "detail": {
+      "live": {
+        "title": "Running now"
+      },
+      "history": {
+        "title": "Runs",
+        "empty": "No runs yet",
+        "selectPrompt": "Select a run to see its detail"
+      },
+      "runLabel": "Run",
+      "causeLabel": "Cause",
+      "outcomeLabel": "Outcome",
+      "deliveryLabel": "Delivery",
+      "deliveryResult": {
+        "delivered": "delivered",
+        "failed": "failed",
+        "silenced": "silenced by policy"
+      },
+      "approvalLabel": "Approval",
+      "approvalAction": {
+        "approve": "approved by {{by}}",
+        "revise": "revised by {{by}}",
+        "reject": "rejected by {{by}}"
+      },
+      "resultLabel": "Result",
+      "filesLabel": "Files",
+      "openRun": "View full execution →"
     }
   },
   "skills": {
