@@ -106,10 +106,13 @@ automation's existing `automation:`-prefixed jobs and calls
 `register_system_job`/`remove_system_job` to reconcile; this runs on every
 automation save and delete, and `sync_all` re-runs it for every stored
 automation at gateway boot. A disabled automation, or a trigger whose
-`source` is not `schedule`, contributes no job. Automation trigger jobs are
-not `system_event` jobs, so they are not protected from the public
-`remove_job`/`update_job` API the way a `system_event` job is — the cron sync
-uses the same `register_system_job`/`remove_system_job` bypass door instead.
+`source` is not `schedule`, contributes no job. Like a `system_event` job, an
+`automation_trigger` job IS protected from the public `remove_job`/
+`update_job` API — both refuse any job whose `payload.kind` is
+`system_event` or `automation_trigger` — since it is owned by the
+automation, not directly user-editable; `cron_sync` writes and prunes it
+through the same `register_system_job`/`remove_system_job` bypass door
+`register_system_job` itself relies on for system jobs.
 
 When an `automation_trigger` job fires, the gateway's `on_job` callback
 dispatches straight to the automations runtime's `try_fire` instead of

@@ -322,7 +322,7 @@ Slack additionally treats an app's post (the `bot_message` subtype, or a
 `bot_id` alongside a real user id) as an event rather than an address to
 durin: `group_policy` is skipped for it, because that policy governs joining a
 conversation and a mention-only room would otherwise hide every notification
-from loop triggers. What contains these is authorization — an app must be
+from automation triggers. What contains these is authorization — an app must be
 approved like any other sender — plus `trigger_only`, which keeps an
 unmatched post from reaching the agent. Slack posts them without the working
 reaction, without thread context, and with the attachment's `footer` and

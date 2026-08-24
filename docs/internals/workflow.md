@@ -893,8 +893,8 @@ being published on the message bus. The WebSocket channel propagates them as
 *agent-launched* run's frames reach a client: they publish onto the calling
 session's own `chat_id`, because there IS one — the same reason the finished
 result can be injected back via `session_key_override` (above). A
-**service-path** run has no calling chat — today, a loop trigger; potentially
-a raw HTTP launch or an automation tomorrow. `WorkflowsService.__init__`
+**service-path** run has no calling chat — today, an automation trigger;
+potentially a raw HTTP launch tomorrow. `WorkflowsService.__init__`
 (`durin/service/workflows.py`) instead accepts an optional `progress_publish`
 callback; when set, `execute()` wires it into the engine's `progress_emit` and
 every running-node frame is republished onto one fixed key instead of a

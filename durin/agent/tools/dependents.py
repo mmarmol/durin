@@ -28,7 +28,7 @@ _PARAMETERS = tool_parameters_schema(
     required=["kind", "name"],
     description=(
         "List what depends on a skill, a workflow script, or a workflow — the "
-        "workflow nodes that name it and the loops or automations that run it. "
+        "workflow nodes that name it and the automations that run it. "
         "Check before rewriting, merging or retiring something: a workflow "
         "references a skill by name, so changing one changes what that workflow "
         "does, and removing one leaves the reference dangling."

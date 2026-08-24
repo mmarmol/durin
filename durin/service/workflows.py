@@ -44,8 +44,8 @@ _MAX_SCRIPT_CONTENT_BYTES = 256 * 1024
 
 # The websocket "chat" key the runs pane's live feed subscribes to. An
 # agent-launched run publishes its progress on the calling session's own
-# chat_id (see run_workflow.py); a service-path run — a loop trigger today, an
-# automation or a raw HTTP launch tomorrow — has no calling chat to attach to,
+# chat_id (see run_workflow.py); a service-path run — an automation trigger
+# today, a raw HTTP launch tomorrow — has no calling chat to attach to,
 # so every such run publishes onto this one fixed key instead.
 RUNS_FEED_CHAT_ID = "runs:feed"
 
