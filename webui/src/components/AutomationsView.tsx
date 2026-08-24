@@ -84,6 +84,21 @@ export function AutomationsView({
     void refresh();
   }, [refresh]);
 
+  // Self-refresh every 30s — the same cadence App.tsx's sidebar badges already
+  // poll the same two feeds at, so a user sitting on this section sees runs
+  // and life-state changes (a schedule tick, an operator answering elsewhere)
+  // without needing to navigate away and back. Skipped entirely while the
+  // editor is open (`editing !== undefined`): a background refresh doesn't
+  // touch `editing` itself, but re-fetching mid-edit is pure risk for no
+  // benefit here, so the interval just doesn't run rather than needing to
+  // reconcile with in-progress form state. Re-armed the moment the editor
+  // closes.
+  useEffect(() => {
+    if (editing !== undefined) return;
+    const id = setInterval(() => void refresh(), 30_000);
+    return () => clearInterval(id);
+  }, [editing, refresh]);
+
   // Consume a deep-linked initialDetailName exactly once: find the matching
   // definition in the just-loaded list and open its DetailView, the same way
   // a row click would. Guarded on `loading` so it waits for the mount fetch
@@ -209,7 +224,7 @@ export function AutomationsView({
                   {resolutionNotice}
                 </div>
               )}
-              {selectedRun && <InboxView run={selectedRun} onResolved={onResolved} />}
+              {selectedRun && <InboxView key={selectedRun.run_id} run={selectedRun} onResolved={onResolved} />}
               <ListView
                 automations={automations}
                 runs={runs}

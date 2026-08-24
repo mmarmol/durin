@@ -299,6 +299,50 @@ describe("AutomationForm", () => {
     expect(def.triggers).toEqual(AT_DEF.triggers);
   });
 
+  it("round-trips open-vocabulary channel filter pairs unchanged (F7)", async () => {
+    // chat/bot_id are not in NAMED_FILTER_KEYS (from/subject/sender/text
+    // contains) — Slack's own vocabulary comes back out through otherFilters,
+    // the open key->value escape hatch, not a dedicated input.
+    const SLACK_DEF: AutomationDef = {
+      ...FULL_EXISTING,
+      triggers: [{
+        source: "channel", channel: "slack",
+        filters: { chat: "C0GUARD", bot_id: "B0X" },
+        match: "wake_or_new",
+      }],
+    };
+    render(<AutomationForm token="tok" editAutomation={SLACK_DEF} onDone={vi.fn()} onCancel={vi.fn()} />);
+    await screen.findByRole("option", { name: "cobrar-factura" });
+
+    fireEvent.click(screen.getByRole("button", { name: /save & enable/i }));
+
+    await waitFor(() => expect(saveAutomation).toHaveBeenCalledTimes(1));
+    const [, def] = vi.mocked(saveAutomation).mock.calls[0];
+    expect(def.triggers).toEqual(SLACK_DEF.triggers);
+    expect(def.triggers[0].filters).toEqual({ chat: "C0GUARD", bot_id: "B0X" });
+  });
+
+  it("adds an open-vocabulary filter pair through the UI and includes it in the saved payload (F7)", async () => {
+    const SLACK_DEF: AutomationDef = {
+      ...FULL_EXISTING,
+      triggers: [{ source: "channel", channel: "slack", filters: { chat: "C0GUARD" }, match: "wake_or_new" }],
+    };
+    render(<AutomationForm token="tok" editAutomation={SLACK_DEF} onDone={vi.fn()} onCancel={vi.fn()} />);
+    await screen.findByRole("option", { name: "cobrar-factura" });
+
+    fireEvent.click(screen.getByRole("button", { name: /add filter/i }));
+    const keyInputs = screen.getAllByLabelText(/^filter key$/i);
+    fireEvent.change(keyInputs[keyInputs.length - 1], { target: { value: "bot_id" } });
+    const valueInputs = screen.getAllByLabelText(/^filter value$/i);
+    fireEvent.change(valueInputs[valueInputs.length - 1], { target: { value: "B0X" } });
+
+    fireEvent.click(screen.getByRole("button", { name: /save & enable/i }));
+
+    await waitFor(() => expect(saveAutomation).toHaveBeenCalledTimes(1));
+    const [, def] = vi.mocked(saveAutomation).mock.calls[0];
+    expect(def.triggers[0].filters).toEqual({ chat: "C0GUARD", bot_id: "B0X" });
+  });
+
   it("shows the silent-labels editor only when notify is 'only when notable'", async () => {
     render(<AutomationForm token="tok" editAutomation={null} onDone={vi.fn()} onCancel={vi.fn()} />);
     await screen.findByRole("option", { name: "cobrar-factura" });
@@ -353,6 +397,24 @@ describe("AutomationForm", () => {
 
     await screen.findByText("whsec_abc123");
     expect(getAutomationsHooksSecret).toHaveBeenCalledTimes(1);
+  });
+
+  it("recovers from a failed secret fetch instead of spinning forever: Show secret returns and the error surfaces (F4)", async () => {
+    const WEBHOOK_DEF: AutomationDef = {
+      ...FULL_EXISTING,
+      triggers: [{ source: "webhook", hook: "release" }],
+    };
+    vi.mocked(getAutomationsHooksSecret).mockRejectedValueOnce(new ApiError(500, "HTTP 500"));
+    render(<AutomationForm token="tok" editAutomation={WEBHOOK_DEF} onDone={vi.fn()} onCancel={vi.fn()} />);
+    await screen.findByRole("option", { name: "cobrar-factura" });
+
+    fireEvent.click(screen.getByRole("button", { name: /show secret/i }));
+
+    expect(await screen.findByText(/HTTP 500/)).toBeInTheDocument();
+    // The row falls back to the "Show secret" button — not stuck as a
+    // permanent spinner with revealedSecretRows still marking it revealed
+    // but hooksSecret forever null.
+    expect(screen.getByRole("button", { name: /show secret/i })).toBeInTheDocument();
   });
 
   it("renders a saveAutomation validation error inline at the top of the form, never a native alert", async () => {

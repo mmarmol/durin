@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,6 +15,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
     ...actual,
     listAutomations: vi.fn(),
     listAllAutomationRuns: vi.fn(),
+    listAutomationRuns: vi.fn(),
     listCronJobs: vi.fn(),
     listWorkflows: vi.fn(),
     saveAutomation: vi.fn(),
@@ -30,11 +31,15 @@ vi.mock("@/lib/api", async (importOriginal) => {
 // banner instead of rendering anything the test expects. The editor form
 // (opened via New automation / Editar) additionally fetches listWorkflows
 // and listAutomations again for its own selects — stub those too whenever a
-// test drives the form, not just the list.
+// test drives the form, not just the list. DetailView (opened via a row click
+// or initialDetailName) fetches listAutomationRuns independently — stubbed
+// here too (default empty) so a test that reaches DetailView never leaks a
+// real network call; a test asserting on its run history overrides this.
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(api.listAutomations).mockResolvedValue([]);
   vi.mocked(api.listAllAutomationRuns).mockResolvedValue([]);
+  vi.mocked(api.listAutomationRuns).mockResolvedValue([]);
   vi.mocked(api.listCronJobs).mockResolvedValue([]);
   vi.mocked(api.listWorkflows).mockResolvedValue([]);
   vi.mocked(api.saveAutomation).mockResolvedValue(undefined);
@@ -471,6 +476,28 @@ describe("AutomationsView", () => {
     // Back on the list view proper — the editor's own "Name" field is gone.
     expect(screen.queryByLabelText(/^name/i)).not.toBeInTheDocument();
   });
+
+  it("self-refreshes on a 30s interval, matching the sidebar badges' own cadence (F3)", async () => {
+    vi.useFakeTimers();
+    // vi.restoreAllMocks() in afterEach only restores vi.spyOn spies, not the
+    // vi.fn() mocks vi.mock()'s factory returns — clear this mock's call
+    // history explicitly so counts from earlier tests in this file can't leak
+    // in and make a broken poll implementation look like it's working (same
+    // precaution runs-view.test.tsx's own interval tests take).
+    const listSpy = vi.mocked(api.listAutomations);
+    listSpy.mockClear();
+    listSpy.mockResolvedValue(ALL_AUTOMATIONS);
+
+    render(wrap(<AutomationsView />));
+    // Flush the mount effect's own fetch before advancing the fake clock —
+    // otherwise there's nothing for advanceTimersByTimeAsync to settle yet.
+    await act(async () => {});
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(listSpy.mock.calls.length).toBeGreaterThan(1);
+    vi.useRealTimers();
+  });
 });
 
 // -- AutomationsView initialDetailName ---------------------------------------
@@ -478,12 +505,18 @@ describe("AutomationsView", () => {
 describe("AutomationsView initialDetailName", () => {
   it("preselects the named automation's DetailView once the list has loaded (C6's 'Abrir automatización' deep link)", async () => {
     vi.mocked(api.listAutomations).mockResolvedValue(ALL_AUTOMATIONS);
+    vi.mocked(api.listAutomationRuns).mockResolvedValue([RUN_FAC_FAILED_1, RUN_FAC_FAILED_2]);
     render(wrap(<AutomationsView initialDetailName="cobrar-fac-1042" />));
 
     await screen.findByRole("button", { name: "Back" });
     expect(screen.getByText("cobrar-fac-1042")).toBeInTheDocument();
     // Left the list: its own "New automation" button is gone.
     expect(screen.queryByRole("button", { name: /new automation/i })).not.toBeInTheDocument();
+    // Strengthened per F5: DetailView's own run history actually rendered
+    // from the stubbed fetch, not just the header — the original assertions
+    // above would pass even if listAutomationRuns leaked a real (rejecting)
+    // network call, since DetailView degrades to an empty history on error.
+    expect(await screen.findAllByTestId("run-history-row")).toHaveLength(2);
   });
 
   it("does nothing (no crash, list renders normally) when initialDetailName names an automation outside the loaded set", async () => {
@@ -534,5 +567,21 @@ describe("NeedsYouTray", () => {
 
     await user.click(reviewButton);
     expect(row).toHaveAttribute("data-selected", "true");
+  });
+
+  it("does not leak a draft comment from one selected run into the next (F2)", async () => {
+    vi.mocked(api.listAutomations).mockResolvedValue(ALL_AUTOMATIONS);
+    vi.mocked(api.listAllAutomationRuns).mockResolvedValue(ALL_RUNS);
+    const user = userEvent.setup();
+    render(wrap(<AutomationsView />));
+
+    await user.click(await screen.findByRole("button", { name: "Review" }));
+    const approvalTextarea = await screen.findByPlaceholderText(/what to fix/i);
+    await user.type(approvalTextarea, "fix the subject line");
+    expect(approvalTextarea).toHaveValue("fix the subject line");
+
+    await user.click(screen.getByRole("button", { name: "Answer" }));
+    const questionTextarea = await screen.findByPlaceholderText(/your answer/i);
+    expect(questionTextarea).toHaveValue("");
   });
 });

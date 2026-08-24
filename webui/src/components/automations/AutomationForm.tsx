@@ -462,9 +462,19 @@ export function AutomationForm({
     try {
       const res = await getAutomationsHooksSecret(token);
       setHooksSecret(res.secret);
-    } catch {
-      // leave hooksSecret null — the row shows nothing further to click; the
-      // "Show secret" affordance already reflects nothing was revealed.
+    } catch (e) {
+      // Undo the optimistic reveal: with hooksSecret still null and rowId
+      // still in revealedSecretRows, the row would otherwise render its
+      // Loader2 spinner forever with no secret ever coming and no button
+      // left to retry. Falling back to the "Show secret" button lets the
+      // user try again, and the shared inline error banner (same path
+      // handleSubmit/handleDelete use) says why it failed.
+      setRevealedSecretRows((prev) => {
+        const next = new Set(prev);
+        next.delete(rowId);
+        return next;
+      });
+      setError(errMsg(e));
     } finally {
       setSecretLoading(false);
     }
