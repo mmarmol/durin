@@ -705,7 +705,10 @@ describe("RunsView", () => {
     // on the same resolved reference is a real, not just theoretical, TOCTOU
     // gap under load — every other findByText in this file already does it
     // this way).
-    await screen.findByText(/Which environment — staging or prod\?/);
+    // 5s upper bound (default 1s): the assertion stays event-driven — the
+    // wait ends the moment the text lands — but a loaded CI runner has
+    // tripped the 1s default on exactly this initial-selection fetch chain.
+    await screen.findByText(/Which environment — staging or prod\?/, undefined, { timeout: 5000 });
     expect(api.getWorkflowRunManifest).toHaveBeenCalledWith("tok", "onboarding", "run-waiting");
   });
 
