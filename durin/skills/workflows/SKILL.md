@@ -205,10 +205,11 @@ The skill carries the **trigger and the knowledge** (when and why to run it); th
 workflow carries the **orchestration** (the fan-out, the gates). Reach for this only when
 the skill's real mechanism is a multi-step graph — not for a prose-only skill.
 
-A workflow is also the **body of a loop**: when the same graph should fire on standing
-triggers (matching messages, webhooks, a schedule) and each run must verify a goal, park
-for replies, and wake on new information, wrap it in a loop instead of re-running it by
-hand — read the `loops` skill.
+A workflow is also the **body of an automation**: when the same graph should fire on
+standing triggers (a schedule, matching messages, webhooks, another automation's outcome)
+and each run should deliver its result — optionally pursuing a verifiable life condition
+until achieved — wrap it in an automation instead of re-running it by hand — read the
+`automations` skill.
 
 ## Example — `research-to-answer` (a coverage workflow)
 
