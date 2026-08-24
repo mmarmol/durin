@@ -45,7 +45,7 @@ class _FsTool(Tool, ContextAware):
         self._post_edit_config = post_edit_config
         # Whether _resolve_write() refuses writes under the registry dirs that
         # own their own validated, versioned write door (skills/, workflows/,
-        # loops/ — see _resolve_write). On by default so every LLM-facing
+        # loops/, automations/ — see _resolve_write). On by default so every LLM-facing
         # instance (main loop, subagents, execute_code — all built via
         # `create(ctx)`) is protected. Callers that hand-build a tool over an
         # isolated, non-live workspace (e.g. a throwaway staging copy that is
@@ -118,13 +118,15 @@ class _FsTool(Tool, ContextAware):
         - `workflows/` → `workflow_write` / `workflow_edit`, and
           `workflow_script_write` for `workflows/scripts/`
         - `loops/` → the loop tools
+        - `automations/` → the automations tool (`create`/`enable`/`pause`), or the
+          webui's automations editor
 
         Without this the guarantee is only an instruction in a skill, and a
         generic write lands unvalidated and unversioned — which is how workflow
         edits went missing from history.
         """
         denied = (
-            [self._workspace / d for d in ("skills", "workflows", "loops")]
+            [self._workspace / d for d in ("skills", "workflows", "loops", "automations")]
             if self._guard_registry_dirs and self._workspace is not None
             else None
         )

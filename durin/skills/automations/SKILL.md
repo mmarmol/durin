@@ -181,7 +181,7 @@ flow to) before defining one on their behalf.
 it, structurally, from the workflow's own result: `any_completed` (any successful run
 counts) or `label:<LABEL>` (only a run whose workflow routed to that exact final label
 counts). There is no judge call here — the workflow graph itself must produce the label
-`life` checks, via its own routing/cases or a script-check node (see the `workflows`
+`life` checks, via its own routing/cases or a script node (see the `workflows`
 skill). `max_attempts` plus `on_stuck` (`escalate_pause` disables and notifies,
 `notify` just notifies, `keep` does neither) bound how many consecutive unachieved runs are
 tolerated before something is said.
@@ -200,7 +200,7 @@ result" definition can legitimately serve an ongoing, non-case-shaped purpose.
 An automation's `workflow` field only names a workflow by reference — the automation layer
 never inspects or scores the run's content itself. Whatever counts as "done", "the right
 answer", or "worth escalating" has to be decided *inside* the workflow graph: a routing
-node's cases, a script-check node's exit code, an approval gate. `life.achieved_when:
+node's cases, a script node's exit code, an approval gate. `life.achieved_when:
 "label:<LABEL>"` only reads a label the workflow's own routing already produced — write the
 verification once, in the workflow, and both a manual `run_workflow` call and every
 automation wrapping that workflow inherit it for free.
