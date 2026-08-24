@@ -102,6 +102,16 @@ class AutomationAnswerResult(Result):
     run: dict[str, Any]
 
 
+class AutomationStopCommand(Command):
+    name: str
+    run_id: str
+    hard: bool = False
+
+
+class AutomationStopResult(Result):
+    run: dict[str, Any]
+
+
 class AutomationRunsQuery(Query):
     name: str
     limit: int = 50
@@ -307,6 +317,24 @@ class AutomationsService:
         except ValueError as exc:
             raise ValidationFailedError(str(exc))
         return AutomationAnswerResult(run=record)
+
+    @route(
+        "POST", "/api/v1/automations/{name}/runs/{run_id}/stop",
+        scope=Scope.AUTOMATIONS_WRITE.value,
+        request_model=AutomationStopCommand, response_model=AutomationStopResult,
+        summary="Stop an automation run: cancel it if running, finalize it if paused.",
+    )
+    async def stop(self, cmd: AutomationStopCommand, principal: Principal) -> AutomationStopResult:
+        principal.require(Scope.AUTOMATIONS_WRITE)
+        if self._runtime is None:
+            raise UnavailableError("stopping an automation run is not available on this surface")
+        try:
+            record = await self._runtime.stop(cmd.name, cmd.run_id, hard=cmd.hard)
+        except AutomationNotFound as exc:
+            raise NotFoundError(str(exc))
+        except ValueError as exc:
+            raise ValidationFailedError(str(exc))
+        return AutomationStopResult(run=record)
 
     @route(
         "GET", "/api/v1/automations/runs",

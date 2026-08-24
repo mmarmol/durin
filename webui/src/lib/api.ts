@@ -1053,6 +1053,21 @@ export async function answerAutomationRun(
   return body.run;
 }
 
+export async function stopAutomationRun(
+  token: string,
+  name: string,
+  runId: string,
+  hard: boolean = false,
+  base: string = "",
+): Promise<AutomationRun> {
+  const body = await post<{ run: AutomationRun }>(
+    `${base}/api/v1/automations/${encodeURIComponent(name)}/runs/${encodeURIComponent(runId)}/stop`,
+    token,
+    { hard },
+  );
+  return body.run;
+}
+
 export async function listAutomationRuns(
   token: string,
   name: string,

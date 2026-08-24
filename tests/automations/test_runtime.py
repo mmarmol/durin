@@ -10,7 +10,14 @@ from durin.automations import queue as automation_queue
 from durin.automations import run_log as rl
 from durin.automations.chains import CHAIN_HOP_CAP
 from durin.automations.runtime import AutomationBusy, AutomationsRuntime
-from durin.automations.spec import AutomationSpec, AutomationTrigger, Delivery, Help, Life
+from durin.automations.spec import (
+    AutomationNotFound,
+    AutomationSpec,
+    AutomationTrigger,
+    Delivery,
+    Help,
+    Life,
+)
 from durin.automations.store import load_automation, save_automation
 from durin.bus.events import SendReceipt
 from durin.workflow.result import WorkflowResult
@@ -604,6 +611,145 @@ async def test_answer_raises_when_run_is_not_paused(tmp_path):
     assert m["status"] == "completed"
     with pytest.raises(ValueError):
         await rt.answer("a1", m["run_id"], "too late")
+
+
+# ---------------------------------------------------------------------------
+# Stop
+# ---------------------------------------------------------------------------
+
+async def test_stop_running_run_requests_cancel_and_leaves_record_unchanged(tmp_path):
+    from durin.workflow.cancellation import clear, is_cancelled, is_hard_cancelled
+
+    _save(tmp_path)
+    started = asyncio.Event()
+    released = asyncio.Event()
+
+    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None,
+                             work_key=None, root_session_key=None):
+        started.set()
+        await released.wait()
+        return _wr("completed", run_id=run_id)
+
+    ids = iter([f"stop-run-{i}" for i in range(10)])
+    rt = AutomationsRuntime(tmp_path, workflow_exec=workflow_exec, keep_runs=20,
+                            run_id_factory=lambda: next(ids))
+    fire_task = asyncio.create_task(rt.fire("a1", source="manual"))
+    try:
+        await started.wait()
+        stopped = await rt.stop("a1", "stop-run-0")
+
+        assert stopped["status"] == "running"
+        wf_run_id = stopped["workflow_run_id"]
+        assert is_cancelled(wf_run_id)
+        assert not is_hard_cancelled(wf_run_id)
+    finally:
+        released.set()
+        await fire_task
+        clear("stop-run-1")
+
+
+async def test_stop_running_run_hard_upgrades_and_never_downgrades(tmp_path):
+    from durin.workflow.cancellation import clear, is_hard_cancelled
+
+    _save(tmp_path)
+    started = asyncio.Event()
+    released = asyncio.Event()
+
+    async def workflow_exec(name, task, *, resume_run_id=None, run_id=None,
+                             work_key=None, root_session_key=None):
+        started.set()
+        await released.wait()
+        return _wr("completed", run_id=run_id)
+
+    ids = iter([f"stop-hard-{i}" for i in range(10)])
+    rt = AutomationsRuntime(tmp_path, workflow_exec=workflow_exec, keep_runs=20,
+                            run_id_factory=lambda: next(ids))
+    fire_task = asyncio.create_task(rt.fire("a1", source="manual"))
+    try:
+        await started.wait()
+        first = await rt.stop("a1", "stop-hard-0")
+        assert not is_hard_cancelled(first["workflow_run_id"])
+
+        second = await rt.stop("a1", "stop-hard-0", hard=True)
+        assert is_hard_cancelled(second["workflow_run_id"])
+    finally:
+        released.set()
+        await fire_task
+        clear("stop-hard-1")
+
+
+async def test_stop_paused_run_finalizes_interrupted_and_releases_claim(tmp_path):
+    _save(tmp_path)
+    rt, _ = _mk_runtime(tmp_path, [
+        _wr("needs_input", out="[TO:counterpart] please confirm", ask_kind="question"),
+        _wr("completed"),
+    ])
+    m = await rt.fire("a1", source="channel", origin={"thread": "thread-xyz"})
+    assert m["status"] == "paused"
+    assert claims.lookup(tmp_path, "thread-xyz") is not None
+
+    stopped = await rt.stop("a1", m["run_id"])
+
+    assert stopped["status"] == "interrupted"
+    assert stopped["detail"] == "stopped by operator"
+    assert stopped["workflow_run_id"] == m["workflow_run_id"]
+    assert claims.lookup(tmp_path, "thread-xyz") is None
+
+
+async def test_stop_paused_run_drains_a_queued_event_for_single_concurrency(tmp_path):
+    """A paused run holds the only concurrency slot a `single` automation
+    allows. Stopping it directly (no resume coming) must not strand a
+    channel event that queued up while it waited — queue-drain-on-finish is
+    the only place a queued event ever fires, so `stop` has to trigger it
+    the same way `_post_finish` would have."""
+    _save(tmp_path, concurrency="single")
+    rt, calls = _mk_runtime(tmp_path, [
+        _wr("needs_input", out="please confirm", ask_kind="question"),
+        _wr("completed"),
+    ])
+    m = await rt.fire("a1", source="manual")
+    assert m["status"] == "paused"
+    automation_queue.push(tmp_path, "a1", {"content": "queued while paused", "origin": None,
+                                            "source": "channel", "chain_depth": 0})
+
+    await rt.stop("a1", m["run_id"])
+    await _drain()
+
+    drained_calls = [c for c in calls["exec"] if c["task"] == "queued while paused"]
+    assert len(drained_calls) == 1
+
+
+async def test_stop_paused_run_no_drain_for_parallel_concurrency(tmp_path):
+    _save(tmp_path, concurrency="parallel")
+    rt, calls = _mk_runtime(tmp_path, [
+        _wr("needs_input", out="please confirm", ask_kind="question"),
+    ])
+    m = await rt.fire("a1", source="manual")
+    assert m["status"] == "paused"
+    automation_queue.push(tmp_path, "a1", {"content": "should stay queued", "origin": None,
+                                            "source": "channel", "chain_depth": 0})
+
+    await rt.stop("a1", m["run_id"])
+    await _drain()
+
+    assert automation_queue.pending(tmp_path, "a1") == 1
+    assert all(c["task"] != "should stay queued" for c in calls["exec"])
+
+
+async def test_stop_missing_run_raises_automation_not_found(tmp_path):
+    _save(tmp_path)
+    rt, _ = _mk_runtime(tmp_path, [])
+    with pytest.raises(AutomationNotFound):
+        await rt.stop("a1", "ghost-run")
+
+
+async def test_stop_terminal_run_raises_value_error(tmp_path):
+    _save(tmp_path)
+    rt, _ = _mk_runtime(tmp_path, [_wr("completed")])
+    m = await rt.fire("a1", source="manual")
+    assert m["status"] == "completed"
+    with pytest.raises(ValueError):
+        await rt.stop("a1", m["run_id"])
 
 
 # ---------------------------------------------------------------------------

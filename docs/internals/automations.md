@@ -289,6 +289,29 @@ one algorithm a direct workflow resume uses, so there is exactly one place free 
 becomes an approval verdict. The resumed result re-enters `_handle_result` exactly
 like a fresh fire's result — same classification, same delivery/life/chain handling.
 
+**Stopping (`stop`)** ends a `running` or `paused` run on operator request; any other
+status is refused (`ValueError`, mapped to `400` by the service). The two active
+statuses end differently because only one of them has a workflow actually in flight:
+
+- **`running`** — registers the run's `workflow_run_id` with
+  `durin.workflow.cancellation.request_cancel` (the same process-global registry the
+  `tasks` chat tool signals a workflow stop through) and returns the run record
+  unchanged. The in-process fire task is still awaiting the engine; when the engine
+  ends, the normal `_handle_result` → `classify` path finalizes the run itself, same as
+  any other outcome. `classify` has no distinct "stopped" bucket — a cancelled,
+  non-rejected result falls into its catch-all and finalizes `failed`, the same status
+  a workflow-level exception would produce, not `interrupted` (that status is reserved
+  for a run killed by a process crash, §4d). A repeat stop call escalates to
+  `hard` — interrupting a work node's turn mid-flight, not just stopping at the next
+  node boundary — since `request_cancel` upgrades and never downgrades.
+- **`paused`** — no workflow is in flight to cancel, so `stop` finalizes the run
+  directly as `interrupted` (`detail: "stopped by operator"`) and releases its claim.
+  It deliberately skips `_post_finish`: an operator stop is not an outcome to deliver,
+  and must not dispatch chains. It does still drain one fresh queued event for a
+  `single`-concurrency automation exactly as `_post_finish` would have — that is the
+  only place a queued channel/webhook event ever gets drained, so skipping it here too
+  would strand the queued event until some unrelated future trigger happened to arrive.
+
 ### 4c. Matcher and webhook ingress (`durin/automations/matcher.py`, `hooks.py`)
 
 `TriggerMatcher.handle_inbound` is registered as a bus inbound interceptor
@@ -477,7 +500,7 @@ one bad file never aborts the boot.
 | Symbol | File | Role |
 |---|---|---|
 | `AutomationSpec`, `AutomationTrigger`, `Delivery`, `Help`, `Life` | `durin/automations/spec.py` | The definition schema; `parse_automation`/`automation_to_dict` are the sole parse/serialize entrances, enforcing per-source field ownership |
-| `AutomationsRuntime` | `durin/automations/runtime.py` | The dispatcher: `fire`/`try_fire`/`answer`, run→classify→park-or-finalize→deliver→life→chains, `sweep_orphans`, `report_no_outcome` |
+| `AutomationsRuntime` | `durin/automations/runtime.py` | The dispatcher: `fire`/`try_fire`/`answer`/`stop`, run→classify→park-or-finalize→deliver→life→chains, `sweep_orphans`, `report_no_outcome` |
 | `classify`, `is_achieved`, `should_deliver` | `durin/automations/classify.py` | Pure functions: workflow result → automation status; delivery-policy decision |
 | `AutomationOutcome`, `Destination`, `build_outcome`, `route` | `durin/automations/outcome.py` | What a finished run reports, and the destination-precedence decision (session > delivery > help backstop > silenced) |
 | `TriggerMatcher` | `durin/automations/matcher.py` | Inbound bus interceptor: claim wake, trigger match, fire/queue/pass-through decision |
@@ -558,6 +581,7 @@ the same gap that once let workflow edits land unvalidated and unversioned.
 | `delete` | `DELETE /api/v1/automations/{name}` | write |
 | `fire` | `POST /api/v1/automations/{name}/fire` | write |
 | `answer` | `POST /api/v1/automations/{name}/runs/{run_id}/answer` | write |
+| `stop` | `POST /api/v1/automations/{name}/runs/{run_id}/stop` | write |
 | `runs_feed` | `GET /api/v1/automations/runs` | read |
 | `runs_list` | `GET /api/v1/automations/{name}/runs` | read |
 | `hooks_secret` | `GET /api/v1/automations/hooks-secret` | write |

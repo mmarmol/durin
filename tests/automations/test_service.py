@@ -26,6 +26,7 @@ from durin.service.automations import (
     AutomationsListQuery,
     AutomationsRunsQuery,
     AutomationsService,
+    AutomationStopCommand,
 )
 from durin.service.principal import Principal, Scope
 from durin.service.types import (
@@ -344,6 +345,47 @@ async def test_answer_missing_automation_raises_not_found(tmp_path):
         await svc.answer(AutomationAnswerCommand(name="ghost", run_id="r1", text="yes"), p)
 
 
+@pytest.mark.asyncio
+async def test_stop_paused_run_finalizes_interrupted(tmp_path):
+    rt, _ = _runtime(tmp_path, [
+        _wr("needs_input", out="which env?", needs_input_node="gate"),
+    ])
+    svc, p = _svc(tmp_path, runtime=rt), Principal.local()
+    await svc.save(AutomationSaveCommand(name="a1", definition=_VALID), p)
+    fired = await svc.fire(AutomationFireCommand(name="a1"), p)
+    run_id = fired.run["run_id"]
+
+    result = await svc.stop(AutomationStopCommand(name="a1", run_id=run_id), p)
+    assert result.run["status"] == "interrupted"
+    assert result.run["detail"] == "stopped by operator"
+
+
+@pytest.mark.asyncio
+async def test_stop_of_a_terminal_run_raises_validation_error(tmp_path):
+    rt, _ = _runtime(tmp_path, [_wr("completed")])
+    svc, p = _svc(tmp_path, runtime=rt), Principal.local()
+    await svc.save(AutomationSaveCommand(name="a1", definition=_VALID), p)
+    fired = await svc.fire(AutomationFireCommand(name="a1"), p)   # already terminal
+
+    with pytest.raises(ValidationFailedError):
+        await svc.stop(AutomationStopCommand(name="a1", run_id=fired.run["run_id"]), p)
+
+
+@pytest.mark.asyncio
+async def test_stop_without_a_runtime_is_unavailable(tmp_path):
+    svc, p = _svc(tmp_path), Principal.local()
+    with pytest.raises(UnavailableError):
+        await svc.stop(AutomationStopCommand(name="a1", run_id="r1"), p)
+
+
+@pytest.mark.asyncio
+async def test_stop_missing_run_raises_not_found(tmp_path):
+    rt, _ = _runtime(tmp_path, [])
+    svc, p = _svc(tmp_path, runtime=rt), Principal.local()
+    with pytest.raises(NotFoundError):
+        await svc.stop(AutomationStopCommand(name="a1", run_id="ghost-run"), p)
+
+
 # --- list: live counts + life state ------------------------------------------
 
 
@@ -594,3 +636,69 @@ def test_answer_route_accepts_an_explicit_action_over_http(tmp_path):
     )
     assert resp.status_code == 200
     assert resp.json()["run"]["status"] == "completed"
+
+
+def test_stop_route_finalizes_a_paused_run_over_http(tmp_path):
+    """End-to-end: POST .../stop on a paused run finalizes it `interrupted`
+    with no delivery, mirroring the answer route's request/response shape."""
+    import asyncio
+
+    from durin.api.asgi import build_api_app
+    from durin.security.api_tokens import ApiTokenStore
+    from durin.service.auth import AuthService
+    from durin.service.registry import ServiceRegistry
+
+    cron = _cron(tmp_path)
+    rt, _ = _runtime(tmp_path, [
+        _wr("needs_input", out="proceed?", needs_input_node="gate"),
+    ])
+    svc = AutomationsService(workspace=tmp_path, cron_service=cron, runtime=rt)
+    asyncio.run(svc.save(AutomationSaveCommand(name="a1", definition=_VALID), Principal.local()))
+    record = asyncio.run(rt.fire("a1", source="manual"))
+
+    store = ApiTokenStore(path=tmp_path / "tokens.json")
+    auth = AuthService(store=store)
+    registry = ServiceRegistry()
+    registry.register("automations", svc)
+    registry.register("auth", auth)
+    app = build_api_app(registry, auth=auth, static_token="test-token")
+    client = TestClient(app, raise_server_exceptions=False)
+    headers = {"Authorization": "Bearer test-token"}
+
+    resp = client.post(
+        f"/api/v1/automations/a1/runs/{record['run_id']}/stop",
+        json={},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["run"]["status"] == "interrupted"
+    assert resp.json()["run"]["detail"] == "stopped by operator"
+
+
+def test_stop_route_of_an_unknown_run_is_404_over_http(tmp_path):
+    import asyncio
+
+    from durin.api.asgi import build_api_app
+    from durin.security.api_tokens import ApiTokenStore
+    from durin.service.auth import AuthService
+    from durin.service.registry import ServiceRegistry
+
+    cron = _cron(tmp_path)
+    rt, _ = _runtime(tmp_path, [])
+    svc = AutomationsService(workspace=tmp_path, cron_service=cron, runtime=rt)
+    asyncio.run(svc.save(AutomationSaveCommand(name="a1", definition=_VALID), Principal.local()))
+
+    store = ApiTokenStore(path=tmp_path / "tokens.json")
+    auth = AuthService(store=store)
+    registry = ServiceRegistry()
+    registry.register("automations", svc)
+    registry.register("auth", auth)
+    app = build_api_app(registry, auth=auth, static_token="test-token")
+    client = TestClient(app, raise_server_exceptions=False)
+
+    resp = client.post(
+        "/api/v1/automations/a1/runs/ghost-run/stop",
+        json={},
+        headers={"Authorization": "Bearer test-token"},
+    )
+    assert resp.status_code == 404

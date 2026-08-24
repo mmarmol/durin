@@ -237,6 +237,56 @@ class AutomationsRuntime:
 
         return await self._handle_result(spec, run_id, result, chain_depth=0)
 
+    async def stop(self, name: str, run_id: str, *, hard: bool = False) -> dict:
+        token = _bind_automations_telemetry(name)
+        try:
+            return await self._stop(name, run_id, hard=hard)
+        finally:
+            if token is not None:
+                reset_telemetry(token)
+
+    async def _stop(self, name: str, run_id: str, *, hard: bool) -> dict:
+        record = run_log.read_run(self._ws, name, run_id)
+        if record is None:
+            raise AutomationNotFound(f"run '{run_id}' of automation '{name}' not found")
+        status = record.get("status")
+
+        if status == "running":
+            # No local finalize here: the in-process fire task is still
+            # awaiting `self._exec` and sees the engine end on its own,
+            # flowing through the normal _handle_result -> classify path —
+            # the SAME path a shutdown-cancelled or naturally-cancelled run
+            # takes. classify() has no distinct "interrupted" bucket for a
+            # deliberate stop: a cancelled, non-rejected result falls into
+            # its catch-all and finalizes "failed", not "interrupted". A
+            # repeat call naturally escalates to hard (request_cancel never
+            # downgrades an already-hard request).
+            from durin.workflow.cancellation import request_cancel
+
+            request_cancel(record["workflow_run_id"], hard=hard)
+            return record
+
+        if status == "paused":
+            # No workflow is in flight to cancel — finalize directly instead
+            # of waiting for a resume that is never coming.
+            rec = run_log.finalize_run(self._ws, name, run_id, status="interrupted",
+                                        detail="stopped by operator",
+                                        workflow_run_id=record["workflow_run_id"])
+            claims.release_run(self._ws, name, run_id)
+            # Deliberately skips _post_finish: an operator stop is not an
+            # outcome to deliver, and must not dispatch chains. But queue
+            # draining is the one piece of _post_finish's housekeeping that
+            # still has to happen here too — see _drain_queue_if_single.
+            try:
+                spec = load_automation(self._ws, name)
+            except AutomationNotFound:
+                spec = None
+            if spec is not None:
+                self._drain_queue_if_single(spec)
+            return rec
+
+        raise ValueError("run is not active")
+
     async def sweep_orphans(self) -> list[str]:
         """Finalize runs whose process died, tell somebody, relaunch what never ran.
 
@@ -461,6 +511,46 @@ class AutomationsRuntime:
             claims.register(self._ws, key=receipt.thread_key, automation=spec.name, run_id=run_id)
         return record
 
+    def _drain_queue_if_single(self, spec: AutomationSpec) -> None:
+        """Fire the next queued event for a `single`-concurrency automation.
+
+        Shared by `_post_finish` (a run ending normally) and `stop` (an
+        operator ending a paused run directly): either way, whatever run
+        just ended held the automation's only concurrency slot, and this is
+        the only place a queued channel/webhook event ever gets drained —
+        skipping it would strand that event until some unrelated future
+        trigger happened to arrive. A `parallel` automation has no slot to
+        free (nothing was ever queued for it in the first place), and a
+        disabled one must not auto-refire something its owner just turned
+        off — both are the caller's decision, not this helper's, since
+        `stop` has no "just disabled" case of its own.
+        """
+        if not (spec.enabled and spec.concurrency == "single"):
+            return
+        event = queue.pop_fresh(self._ws, spec.name, self._queue_ttl_s)
+        if event is None:
+            return
+        # source is always present: matcher._queue_event stamps it from the
+        # triggering channel ("webhook" or "channel"), and a chain-originated
+        # event queued by _chain_fire's or _drain_fire's own busy handler
+        # sets it explicitly to "chain" — the "channel" fallback here only
+        # guards an event queued before that stamp existed. chain_depth
+        # defaults to 0 for an ordinary channel-queued event
+        # (matcher._queue_event never sets it) — only a chain-originated
+        # event sets it explicitly, and it must ride along so the resumed
+        # fire picks up the same chain hop count instead of silently
+        # restarting at depth 0.
+        origin = event.get("origin")
+        emit_tool_event("automations.event_matched", {
+            "automation": spec.name,
+            "source_channel": (origin or {}).get("channel", ""),
+            "action": "drained",
+        })
+        self._spawn(self._drain_fire(spec.name, task=event.get("content"),
+                                      origin=origin,
+                                      source=event.get("source") or "channel",
+                                      chain_depth=event.get("chain_depth") or 0))
+
     async def _post_finish(self, spec: AutomationSpec, run_id: str, record: dict,
                              result: WorkflowResult | None, *, chain_depth: int) -> dict:
         status = record["status"]
@@ -498,36 +588,14 @@ class AutomationsRuntime:
         # a run whose real outcome already went out as if it produced none.
         try:
             run_log.prune_runs(self._ws, spec.name, self._keep_runs)
-            # The run that just finished held the only concurrency slot a
-            # `single` automation allows; if a channel event piled up in the
-            # queue while it ran, fire it now instead of waiting for the next
-            # inbound message. Never when this run just disabled the
-            # automation (achieved or escalate_pause) — auto-refiring
-            # something that was just switched off would defeat the point.
-            if spec.enabled and not disabled_now and spec.concurrency == "single":
-                event = queue.pop_fresh(self._ws, spec.name, self._queue_ttl_s)
-                if event is not None:
-                    # source is always present: matcher._queue_event stamps
-                    # it from the triggering channel ("webhook" or
-                    # "channel"), and a chain-originated event queued by
-                    # _chain_fire's or _drain_fire's own busy handler sets it
-                    # explicitly to "chain" — the "channel" fallback here
-                    # only guards an event queued before that stamp existed.
-                    # chain_depth defaults to 0 for an ordinary channel-queued
-                    # event (matcher._queue_event never sets it) — only a
-                    # chain-originated event sets it explicitly, and it must
-                    # ride along so the resumed fire picks up the same chain
-                    # hop count instead of silently restarting at depth 0.
-                    origin = event.get("origin")
-                    emit_tool_event("automations.event_matched", {
-                        "automation": spec.name,
-                        "source_channel": (origin or {}).get("channel", ""),
-                        "action": "drained",
-                    })
-                    self._spawn(self._drain_fire(spec.name, task=event.get("content"),
-                                                  origin=origin,
-                                                  source=event.get("source") or "channel",
-                                                  chain_depth=event.get("chain_depth") or 0))
+            # Never when this run just disabled the automation (achieved or
+            # escalate_pause) — auto-refiring something that was just
+            # switched off would defeat the point. `stop`'s paused branch
+            # calls `_drain_queue_if_single` directly instead: it has no
+            # `disabled_now` concept of its own (an operator stop never
+            # disables the automation).
+            if not disabled_now:
+                self._drain_queue_if_single(spec)
         except Exception:  # noqa: BLE001 — contained; see comment above
             logger.exception(
                 "automations: post-outcome housekeeping (prune/queue-drain) for '{}' run {} failed",
