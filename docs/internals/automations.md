@@ -331,9 +331,12 @@ busy → schedule a background fire task (a synchronous `_pending_fires` set clo
 the race between two messages arriving back-to-back for the same single-concurrency
 automation, since the busy check and the actual fire are not atomic across an
 `asyncio.create_task` boundary); busy and a queue is wired → push the event onto
-`durin.automations.queue`, drained by `_post_finish` once the active run ends; busy
-with no queue wired → log a warning and let the message pass through as a normal
-turn instead (the message is not silently eaten).
+`durin.automations.queue`, stamped with the same channel-to-`source` collapse a
+fresh fire would have used (`"webhook"` or `"channel"`) so a later drain's run
+history shows the trigger's real origin instead of a generic default, drained by
+`_post_finish` once the active run ends; busy with no queue wired → log a warning
+and let the message pass through as a normal turn instead (the message is not
+silently eaten).
 
 **`durin.automations.hooks.HookDispatcher`** gives `POST /api/v1/hooks/{hook}` the
 identical wake/fire/queue decision instead of reimplementing it: it builds a

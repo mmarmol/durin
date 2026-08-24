@@ -318,6 +318,7 @@ async def test_single_busy_queues_when_enqueue_wired(tmp_path):
     assert automation_name == "l1"
     assert event["content"] == "hello there"
     assert event["origin"]["thread"] == "digest-1"
+    assert event["source"] == "channel"
 
 
 async def test_single_busy_without_enqueue_passes_through(tmp_path):
@@ -531,6 +532,7 @@ async def test_automationbusy_fallback_enqueues(tmp_path):
     automation_name, event = queued[0]
     assert automation_name == "l1"
     assert event["content"] == "hello there"
+    assert event["source"] == "channel"
 
 
 async def test_fired_telemetry_emitted_after_successful_fire(tmp_path):

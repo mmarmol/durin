@@ -305,7 +305,13 @@ class TriggerMatcher:
 
     def _queue_event(self, content: str, origin: dict) -> dict:
         now = time.time()
-        return {"content": content, "origin": origin, "received_at": now, "expires_at": now + self._queue_ttl_s}
+        # Same channel-to-source collapse `_fire` applies when it fires
+        # straight away — a queued event must resolve to the same cause.kind
+        # a fresh fire would have used, so a drained run's history reads
+        # "webhook" for a webhook-triggered queue, not the generic "channel".
+        source = "webhook" if origin.get("channel") == "webhook" else "channel"
+        return {"content": content, "origin": origin, "received_at": now,
+                "expires_at": now + self._queue_ttl_s, "source": source}
 
     async def _fire(self, name: str, channel: str, content: str, origin: dict) -> None:
         try:

@@ -507,10 +507,15 @@ class AutomationsRuntime:
             if spec.enabled and not disabled_now and spec.concurrency == "single":
                 event = queue.pop_fresh(self._ws, spec.name, self._queue_ttl_s)
                 if event is not None:
-                    # source/chain_depth default to "channel"/0 for an
-                    # ordinary channel-queued event (which never carries
-                    # them) — only a chain-originated event queued by
-                    # _chain_fire's busy handler sets them, and they must
+                    # source is always present: matcher._queue_event stamps
+                    # it from the triggering channel ("webhook" or
+                    # "channel"), and a chain-originated event queued by
+                    # _chain_fire's or _drain_fire's own busy handler sets it
+                    # explicitly to "chain" — the "channel" fallback here
+                    # only guards an event queued before that stamp existed.
+                    # chain_depth defaults to 0 for an ordinary channel-queued
+                    # event (matcher._queue_event never sets it) — only a
+                    # chain-originated event sets it explicitly, and it must
                     # ride along so the resumed fire picks up the same chain
                     # hop count instead of silently restarting at depth 0.
                     origin = event.get("origin")

@@ -168,6 +168,7 @@ async def test_busy_single_concurrency_queues(tmp_path):
     automation_name, event = queued[0]
     assert automation_name == "l1"
     assert event["content"] == "new order #42"
+    assert event["source"] == "webhook"
 
 
 async def test_busy_no_queue_wired_is_no_match(tmp_path):
