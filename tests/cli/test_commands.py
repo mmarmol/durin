@@ -1512,6 +1512,100 @@ def test_gateway_cron_job_passes_none_on_progress_for_bus_callback(
     bus.publish_outbound.assert_not_awaited()
 
 
+def test_gateway_automation_trigger_cron_job_is_ignored_not_dispatched_as_an_agent_turn(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """An automation_trigger job is registered TODAY by AutomationsService.save
+    (via sync_automation_jobs, wired live in durin/service/wiring.py) the moment
+    a schedule trigger is saved through PUT /api/v1/automations/{name} — but
+    nothing wires the automations runtime into the gateway yet. Without a
+    short-circuit beside loop_trigger's, _execute_job (durin/cron/service.py)
+    has no kind filter of its own and this would fall through to the generic
+    agent-turn dispatch below: a real, tool-enabled agent turn on an unrelated
+    free-form prompt, reachable in production today. It must be a no-op instead,
+    exactly like loop_trigger's own short-circuit just above it."""
+    config_file = tmp_path / "instance" / "config.json"
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text("{}")
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path / "config-workspace")
+    bus = MagicMock()
+    bus.publish_outbound = AsyncMock()
+    seen: dict[str, object] = {"process_direct_called": False}
+
+    monkeypatch.setattr("durin.config.loader.set_config_path", lambda _path: None)
+    monkeypatch.setattr("durin.config.loader.load_config", lambda _path=None: config)
+    monkeypatch.setattr("durin.cli.commands.sync_workspace_templates", lambda _path: None)
+    monkeypatch.setattr("durin.providers.factory.make_provider", lambda _config: _fake_provider())
+    monkeypatch.setattr(
+        "durin.providers.factory.build_provider_snapshot",
+        lambda _config: _test_provider_snapshot(object(), _config),
+    )
+    monkeypatch.setattr(
+        "durin.providers.factory.load_provider_snapshot",
+        lambda _config_path=None: _test_provider_snapshot(object(), config),
+    )
+    monkeypatch.setattr("durin.bus.queue.MessageBus", lambda: bus)
+    monkeypatch.setattr("durin.session.manager.SessionManager", lambda _workspace: object())
+
+    class _FakeCron:
+        def __init__(self, _store_path: Path, **_kwargs) -> None:
+            self.on_job = None
+            seen["cron"] = self
+
+    class _FakeAgentLoop:
+        @classmethod
+        def from_config(cls, config, bus=None, **extra):
+            return cls(**extra)
+        def __init__(self, *args, **kwargs) -> None:
+            self.model = "test-model"
+            self.provider = object()
+            self.tools = {}
+
+        def build_concurrency_snapshot(self):
+            return {"lanes": {}, "queued": 0, "work": []}
+
+        def register_loops_tool(self, runtime) -> None:
+            return None
+
+        async def process_direct(self, *_args, **_kwargs):
+            seen["process_direct_called"] = True
+            return OutboundMessage(channel="telegram", chat_id="user-1", content="Done.")
+
+        async def close_mcp(self) -> None:
+            return None
+
+        async def run(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+    class _StopAfterCronSetup:
+        def __init__(self, *_args, **_kwargs) -> None:
+            raise _StopGatewayError("stop")
+
+    monkeypatch.setattr("durin.cron.service.CronService", _FakeCron)
+    monkeypatch.setattr("durin.cli.commands.AgentLoop", _FakeAgentLoop)
+    monkeypatch.setattr("durin.channels.manager.ChannelManager", _StopAfterCronSetup)
+
+    result = runner.invoke(app, ["gateway", "--config", str(config_file)])
+    assert isinstance(result.exception, _StopGatewayError)
+
+    cron = seen["cron"]
+    job = CronJob(
+        id="automation:a1:0",
+        name="automation a1 trigger 0",
+        payload=CronPayload(kind="automation_trigger", automation="a1", message="run the digest"),
+    )
+    response = asyncio.run(cron.on_job(job))
+
+    assert response is None
+    assert seen["process_direct_called"] is False
+    bus.publish_outbound.assert_not_awaited()
+
+
 def test_gateway_workspace_override_does_not_migrate_legacy_cron(
     monkeypatch, tmp_path: Path
 ) -> None:

@@ -1419,6 +1419,19 @@ def _run_gateway(
             await loops_runtime.try_fire(job.payload.loop, source="cron")
             return None
 
+        # An automation's schedule trigger registers this same job kind today
+        # (AutomationsService.save -> sync_automation_jobs), but nothing wires
+        # it to the automations runtime yet. Falling through to the generic
+        # agent turn below would run an unrelated free-form prompt instead of
+        # firing the automation, so ignore it here until the automations
+        # runtime dispatch replaces this guard when the gateway wires it.
+        if job.payload.kind == "automation_trigger":
+            logger.info(
+                "automation_trigger cron job {} ticked before the automations dispatch is wired; ignoring",
+                job.id,
+            )
+            return None
+
         from durin.cron.prompting import build_cron_turn_prompt
         from durin.utils.evaluator import evaluate_response
 
