@@ -34,7 +34,12 @@ export function DetailView({
   const [runs, setRuns] = useState<AutomationRun[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [selectedRun, setSelectedRun] = useState<AutomationRun | null>(null);
+  // The id, not the run object itself: a running selection must keep
+  // reflecting the live `runs` array as it refreshes (every 4s while
+  // anything is running — see below), not freeze at whatever snapshot was
+  // selected. Deriving the object from `runs` on every render, rather than
+  // storing it, is what makes that update-in-place happen for free.
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -66,6 +71,10 @@ export function DetailView({
   }, [anyRunning, refresh]);
 
   const runningRuns = useMemo(() => runs.filter((r) => r.status === "running"), [runs]);
+  const selectedRun = useMemo(
+    () => (selectedRunId ? (runs.find((r) => r.run_id === selectedRunId) ?? null) : null),
+    [runs, selectedRunId],
+  );
 
   return (
     <div className="flex h-full w-full flex-col overflow-hidden">
@@ -116,8 +125,8 @@ export function DetailView({
                 >
                   <RunHistory
                     runs={runs}
-                    selectedRunId={selectedRun?.run_id ?? null}
-                    onSelect={setSelectedRun}
+                    selectedRunId={selectedRunId}
+                    onSelect={(run) => setSelectedRunId(run.run_id)}
                   />
                 </div>
                 <div

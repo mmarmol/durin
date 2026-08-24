@@ -65,8 +65,18 @@ function nodeElapsed(node: WorkNode, now: number): string | null {
   return null;
 }
 
-function LiveNodeRow({ node, now }: { node: WorkNode; now: number }) {
+function LiveNodeRow({ node, now, typicalS }: { node: WorkNode; now: number; typicalS?: number }) {
+  const { t } = useTranslation();
   const elapsed = nodeElapsed(node, now);
+  // The mockup's own format for the running node only ("0m 48s / típico
+  // 1m 30s") — done/pending rows keep the plain elapsed/nothing they already
+  // had. Reuses workflows.nodeTypical ("typical"/"típico"), the same word
+  // RunNodeRow already uses for the identical concept in the manifest's own
+  // per-pass history table, rather than a second translation for one word.
+  const display =
+    elapsed != null && node.status === "running" && typicalS != null
+      ? `${elapsed} / ${t("workflows.nodeTypical")} ${formatElapsed(0, typicalS * 1000)}`
+      : elapsed;
   return (
     <div className="flex items-center gap-2 border-t border-border/60 px-3 py-1.5 text-[12px] first:border-t-0">
       <NodeStatusIcon status={node.status} />
@@ -80,8 +90,8 @@ function LiveNodeRow({ node, now }: { node: WorkNode; now: number }) {
       >
         {node.label ?? node.id}
       </span>
-      {elapsed != null && (
-        <span className="shrink-0 tabular-nums text-[11px] text-muted-foreground">{elapsed}</span>
+      {display != null && (
+        <span className="shrink-0 tabular-nums text-[11px] text-muted-foreground">{display}</span>
       )}
     </div>
   );
@@ -180,7 +190,7 @@ export function LiveRunCard({ run, workflow }: { run: AutomationRun; workflow: s
       {nodes != null && nodes.length > 0 && (
         <div className="flex flex-col">
           {nodes.map((node) => (
-            <LiveNodeRow key={node.id} node={node} now={now} />
+            <LiveNodeRow key={node.id} node={node} now={now} typicalS={manifest?.typical_s?.[node.id]} />
           ))}
         </div>
       )}

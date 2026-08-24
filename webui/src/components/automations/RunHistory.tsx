@@ -5,13 +5,20 @@ import { relativeTime } from "@/lib/format";
 import { formatElapsed } from "@/lib/work-format";
 import { cn } from "@/lib/utils";
 
-// durin/automations/runtime.py's `fire(..., source=...)` call sites are the
-// only place a run's cause.kind is ever set: "cron" (schedule trigger),
-// "channel", "webhook", "chain", "manual" (the dashboard's "run now"), and
-// "chat" (the agent tool, fired from a conversation). An unmapped kind
-// renders with no icon rather than a guessed one.
+// Every fire(source=...) call site is where a run's cause.kind is set —
+// verified against the actual call sites, not the field's plausible-looking
+// name: "schedule" (durin/cli/commands.py's cron-tick dispatch — NOT "cron";
+// AutomationsRuntime's own retry path falls back to the literal "cron" only
+// for a pre-existing orphaned run whose manifest predates cause tracking, a
+// legacy case this map does not special-case), "channel" (an ordinary
+// inbound channel message), "webhook" (durin/automations/matcher.py's _fire,
+// for a HookDispatcher-origin fire — distinguished from "channel" by that
+// function passing its real channel through, not the literal "channel"
+// string, for exactly this reason), "chain", "manual" (the dashboard's "run
+// now"), and "chat" (the agent tool, fired from a conversation). An unmapped
+// kind renders with no icon rather than a guessed one.
 const CAUSE_ICONS: Record<string, string> = {
-  cron: "⏰",
+  schedule: "⏰",
   channel: "💬",
   webhook: "🪝",
   chain: "⛓",

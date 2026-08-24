@@ -1,9 +1,10 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AutomationsView } from "@/components/AutomationsView";
+import { DetailView } from "@/components/automations/DetailView";
 import { LiveRunCard } from "@/components/automations/LiveRunCard";
 import { outcomeChipCls, RunHistory } from "@/components/automations/RunHistory";
 import { RunDetailCard } from "@/components/automations/RunDetailCard";
@@ -106,6 +107,29 @@ describe("RunHistory", () => {
 
     expect(await screen.findByText("completed")).toBeInTheDocument();
     expect(screen.getByText(/💬 Ticket #23124 · 6:12/)).toBeInTheDocument();
+  });
+
+  it("renders the correct icon for every cause.kind the backend actually produces", () => {
+    // Locks the full vocabulary against durin/cli/commands.py's cron-tick
+    // dispatch (source="schedule", not "cron" — a schedule-triggered run
+    // rendered no icon at all before this test existed) and
+    // durin/automations/matcher.py's _fire (source="webhook" for a
+    // HookDispatcher-origin fire, now distinguished from an ordinary
+    // "channel" fire instead of collapsing into it).
+    const rows = [
+      run({ run_id: "sched", cause: { kind: "schedule", excerpt: "cron tick" } }),
+      run({ run_id: "hook", cause: { kind: "webhook", excerpt: "release payload" } }),
+      run({ run_id: "chain", cause: { kind: "chain", excerpt: "upstream finished" } }),
+      run({ run_id: "man", cause: { kind: "manual", excerpt: "run now" } }),
+      run({ run_id: "cht", cause: { kind: "chat", excerpt: "asked in chat" } }),
+    ];
+    render(wrap(<RunHistory runs={rows} selectedRunId={null} onSelect={() => {}} />));
+
+    expect(screen.getByText(/⏰ cron tick/)).toBeInTheDocument();
+    expect(screen.getByText(/🪝 release payload/)).toBeInTheDocument();
+    expect(screen.getByText(/⛓ upstream finished/)).toBeInTheDocument();
+    expect(screen.getByText(/⚙ run now/)).toBeInTheDocument();
+    expect(screen.getByText(/💬 asked in chat/)).toBeInTheDocument();
   });
 
   it("renders a delivered run's delivery line", () => {
@@ -217,7 +241,11 @@ describe("RunDetailCard", () => {
     const r = run({ workflow_run_id: "wr-1" });
     render(wrap(<RunDetailCard run={r} automation={AUTOMATION} onOpenWorkflowRun={() => {}} />));
 
-    expect(await screen.findByText(/Root cause: expired cert/)).toBeInTheDocument();
+    // Bare findByText, no chained .toBeInTheDocument(): final_output renders
+    // through MarkdownText's lazy Suspense boundary (see runs-view.test.tsx's
+    // "renders the final output as markdown" fix note for the exact TOCTOU
+    // mechanism a chained check on the same resolved reference risks here).
+    await screen.findByText(/Root cause: expired cert/);
     expect(api.getWorkflowRunManifest).toHaveBeenCalledWith("tok", "slack-ticket-pipeline", "wr-1");
     expect(screen.getByText("evidencia.md")).toBeInTheDocument();
     expect(screen.getByText("pipeline-complete.json")).toBeInTheDocument();
@@ -348,6 +376,85 @@ describe("LiveRunCard", () => {
     expect(await screen.findByText("resolver-contexto")).toBeInTheDocument();
     expect(screen.getByText("redactar-nota")).toBeInTheDocument();
     expect(api.getWorkflowRunManifest).toHaveBeenCalledWith("tok", "slack-ticket-pipeline", "wr-1");
+  });
+
+  it("shows the running node's elapsed-vs-typical comparison when the manifest has one for it", async () => {
+    vi.mocked(api.getWorkflowRunManifest).mockResolvedValue({
+      status: "running",
+      final_output: "",
+      run_id: "wr-1",
+      runs: [],
+      active_node: { node_id: "redactar-nota", label: "redactar-nota", started_at: Date.now() / 1000 },
+      typical_s: { "redactar-nota": 90 },
+    });
+    const { client } = makeFakeClient();
+    const r = run({ status: "running", workflow_run_id: "wr-1" });
+    render(wrap(<LiveRunCard run={r} workflow="slack-ticket-pipeline" />, client));
+
+    // Elapsed is a live clock off Date.now() (unmocked here), so only the
+    // static "typical 1:30" half is pinned exactly — the running node's own
+    // mockup format is "{elapsed} / typical {typical}".
+    expect(await screen.findByText(/\/ typical 1:30/)).toBeInTheDocument();
+  });
+
+  it("omits the typical comparison for a node the manifest has no typical_s entry for", async () => {
+    vi.mocked(api.getWorkflowRunManifest).mockResolvedValue({
+      status: "running",
+      final_output: "",
+      run_id: "wr-1",
+      runs: [],
+      active_node: { node_id: "brand-new-node", label: "brand-new-node", started_at: Date.now() / 1000 },
+      // No typical_s at all — a workflow with no completed-run history yet.
+    });
+    const { client } = makeFakeClient();
+    const r = run({ status: "running", workflow_run_id: "wr-1" });
+    render(wrap(<LiveRunCard run={r} workflow="slack-ticket-pipeline" />, client));
+
+    await screen.findByText("brand-new-node");
+    expect(screen.queryByText(/typical/)).not.toBeInTheDocument();
+  });
+});
+
+// -- DetailView --------------------------------------------------------------
+
+describe("DetailView", () => {
+  it("derives the selected run from the live runs array, so a poll refresh updates the detail card in place instead of freezing a stale snapshot", async () => {
+    vi.useFakeTimers();
+    const listSpy = vi.mocked(api.listAutomationRuns);
+    listSpy.mockClear();
+    const runningSnapshot = run({
+      run_id: "r1", status: "running", cause: { kind: "manual", excerpt: "run now" }, delivery: null,
+    });
+    const finishedSnapshot = run({
+      run_id: "r1", status: "completed", cause: { kind: "manual", excerpt: "run now" },
+      finished_at: 2_000,
+      delivery: { channel: "#guard-support", to: "", result: "delivered", at_ms: 2_000 },
+    });
+    // First fetch (mount) returns the running snapshot; every fetch after
+    // (the anyRunning poll, 4s later) returns the same run_id now finished —
+    // simulating the run completing while its detail card is open.
+    listSpy.mockResolvedValueOnce([runningSnapshot]).mockResolvedValue([finishedSnapshot]);
+
+    render(wrap(<DetailView automation={AUTOMATION} onBack={() => {}} onOpenWorkflowRun={() => {}} />, {}));
+    await act(async () => {});
+
+    // Plain getBy, not findBy: findBy's own internal polling relies on real
+    // timers, which fake timers would stall — the mount fetch above is
+    // already flushed by this point (RunsView's own poll tests use the same
+    // pattern for the same reason).
+    fireEvent.click(screen.getByTestId("run-history-row"));
+    await act(async () => {});
+    expect(within(screen.getByTestId("run-detail-card")).getByText("running")).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4_000);
+    });
+
+    // Same run_id, same selection — but the object backing it is the fresh
+    // one, not the one captured when the row was clicked.
+    expect(within(screen.getByTestId("run-detail-card")).getByText("completed")).toBeInTheDocument();
+    expect(within(screen.getByTestId("run-detail-card")).getByText(/→ #guard-support/)).toBeInTheDocument();
+    vi.useRealTimers();
   });
 });
 

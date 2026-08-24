@@ -645,7 +645,13 @@ describe("RunsView", () => {
 
     render(wrap(<RunsView initialSelection={{ workflow: "onboarding", runId: "run-waiting" }} />));
 
-    expect(await screen.findByText(/Which environment — staging or prod\?/)).toBeInTheDocument();
+    // Bare findByText, no chained .toBeInTheDocument(): its own resolution
+    // already is the assertion (see the "renders the final output as
+    // markdown" test's fix note below for why chaining a second, later check
+    // on the same resolved reference is a real, not just theoretical, TOCTOU
+    // gap under load — every other findByText in this file already does it
+    // this way).
+    await screen.findByText(/Which environment — staging or prod\?/);
     expect(api.getWorkflowRunManifest).toHaveBeenCalledWith("tok", "onboarding", "run-waiting");
   });
 

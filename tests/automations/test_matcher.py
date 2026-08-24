@@ -4,6 +4,7 @@ import pytest
 
 from durin.automations import claims
 from durin.automations import run_log as rl
+from durin.automations.channel_meta import InboundFacts
 from durin.automations.matcher import TriggerMatcher
 from durin.automations.runtime import AutomationBusy
 from durin.automations.spec import parse_automation
@@ -159,6 +160,34 @@ async def test_structural_match_fires_with_origin(tmp_path):
         "channel": "email", "sender": "alice@example.com", "chat_id": "alice@example.com",
         "thread": "digest-1", "subject": "Re: quarterly report", "reply": {"thread": "digest-1"},
     }
+
+
+async def test_hook_dispatched_fire_records_cause_kind_webhook(tmp_path):
+    """HookDispatcher (durin/automations/hooks.py) never goes through
+    handle_inbound — channel_meta.extract has no "webhook" branch, so a
+    webhook fire is only reachable by calling _dispatch_match directly with a
+    synthetic channel="webhook" message, exactly as HookDispatcher.dispatch
+    does (see matcher.py's own module docstring and hooks.py:92). This is the
+    regression test for the fix: before it, _fire hardcoded source="channel"
+    regardless of what channel it was actually handed, so a webhook-triggered
+    run's cause.kind was indistinguishable from an ordinary channel one."""
+    spec = parse_automation({
+        "name": "l1", "workflow": "w1",
+        "triggers": [{"source": "webhook", "hook": "release"}],
+    })
+    rt = FakeRuntime()
+    matcher = TriggerMatcher(tmp_path, runtime=rt)
+    facts = InboundFacts(sender="release", text="v1.2.3 shipped", title="release", thread_key=None, reply={})
+    msg = FakeMsg(channel="webhook", chat_id="release", content="v1.2.3 shipped")
+
+    action = matcher._dispatch_match(spec, facts, None, msg)
+    await _drain()
+
+    assert action == "fired"
+    assert len(rt.fire_calls) == 1
+    name, source, task, origin = rt.fire_calls[0]
+    assert name == "l1" and source == "webhook" and task == "v1.2.3 shipped"
+    assert origin["channel"] == "webhook"
 
 
 async def test_filters_reject_when_sender_does_not_match(tmp_path):
