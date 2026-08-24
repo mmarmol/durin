@@ -143,7 +143,7 @@ folder — not a new one.
 ## Managing automations today
 
 The web dashboard's Automations section lists every definition — its triggers,
-what it runs, its delivery routing, and its life condition — with a "Needs you"
+what it runs, and its life condition — with a "Needs you"
 tray for pending approvals and questions, and an editor for creating one or
 changing an existing one's triggers, workflow, delivery, help routing, and life
 condition visually, the same way the Workflows pane already lets you build a flow
