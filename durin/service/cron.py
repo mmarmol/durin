@@ -121,6 +121,13 @@ def _fresh_cron_scheduler():
     return CronScheduler(path)
 
 
+def _is_protected_job(job: Any) -> bool:
+    """Mirror ``CronService.remove_job``/``update_job``'s own protection check
+    (``durin/cron/service.py``): a ``system_event`` or ``automation_trigger``
+    job is owned by its subsystem, not by the cron API's caller."""
+    return job.payload.kind in ("system_event", "automation_trigger")
+
+
 _VALID_SCHEDULE_KINDS = {"cron", "every", "at"}
 
 
@@ -338,7 +345,10 @@ class CronService:
 
         Raises ``UnavailableError`` when the live scheduler is absent,
         ``ValidationFailedError`` when ``id`` is empty,
-        ``NotFoundError`` when the job does not exist.
+        ``NotFoundError`` when the job does not exist,
+        ``ForbiddenError`` when the job is a system or automation-trigger job
+        (owned by its subsystem — force-running it from this API desyncs it
+        from whatever schedule that subsystem thinks it's on).
         Returns ``CronRunResult(started=False, reason="already_running")`` when
         the job is already in flight.  On success, spawns
         ``run_job(force=True)`` as a background task (overlap-guarded by
@@ -351,8 +361,11 @@ class CronService:
             raise UnavailableError("scheduler not available")
         if not cmd.id:
             raise ValidationFailedError("id is required")
-        if self._cron_scheduler.get_job(cmd.id) is None:
+        job = self._cron_scheduler.get_job(cmd.id)
+        if job is None:
             raise NotFoundError("no such job", details={"id": cmd.id})
+        if _is_protected_job(job):
+            raise ForbiddenError("system job; cannot run", details={"id": cmd.id})
         if self._cron_scheduler.is_executing(cmd.id):
             return CronRunResult(started=False, reason="already_running")
         asyncio.create_task(self._cron_scheduler.run_job(cmd.id, force=True))
@@ -369,6 +382,11 @@ class CronService:
     async def toggle(self, cmd: CronToggleCommand, principal: Principal) -> CronToggleResult:
         principal.require(Scope.CRON_WRITE)
         cron = _fresh_cron_scheduler()
+        existing = cron.get_job(cmd.id)
+        if existing is None:
+            raise NotFoundError("no such job", details={"id": cmd.id})
+        if _is_protected_job(existing):
+            raise ForbiddenError("system job; cannot toggle", details={"id": cmd.id})
         job = cron.enable_job(cmd.id, enabled=cmd.enabled)
         if job is None:
             raise NotFoundError("no such job", details={"id": cmd.id})

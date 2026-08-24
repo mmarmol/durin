@@ -114,6 +114,17 @@ automation, not directly user-editable; `cron_sync` writes and prunes it
 through the same `register_system_job`/`remove_system_job` bypass door
 `register_system_job` itself relies on for system jobs.
 
+The HTTP service (`durin/service/cron.py`) additionally refuses `toggle` and
+`run` for the same two protected kinds — resolving the job first
+(`get_job`) and checking `payload.kind` before calling into the scheduler —
+so an automation's schedule-trigger job can't be force-run or flipped
+enabled/disabled out of band with the automation spec that owns it (its
+`enabled` state lives there; `cron_sync` recreates the job from the spec on
+every save). This is a service-layer guard only: the scheduler's own
+`enable_job`/`run_job` methods stay unguarded, since internal callers like
+`cron_sync` legitimately mutate protected jobs directly through the
+`register_system_job`/`remove_system_job` door above.
+
 When an `automation_trigger` job fires, the gateway's `on_job` callback
 dispatches straight to the automations runtime's `try_fire` instead of
 building an `agent_turn` prompt: the automations runtime classifies the
@@ -194,8 +205,8 @@ The HTTP API (in `durin/service/cron.py`) provides:
 | `POST` | `/api/v1/cron` | Create a new `agent_turn` job |
 | `PATCH` | `/api/v1/cron` | Update a non-system job |
 | `DELETE` | `/api/v1/cron` | Remove a non-system job by id |
-| `POST` | `/api/v1/cron/run` | Manually trigger a job immediately (non-blocking spawn) |
-| `POST` | `/api/v1/cron/toggle` | Enable or disable a job without removing it |
+| `POST` | `/api/v1/cron/run` | Manually trigger a non-system, non-automation job immediately (non-blocking spawn) |
+| `POST` | `/api/v1/cron/toggle` | Enable or disable a non-system, non-automation job without removing it |
 
 All write routes require `CRON_WRITE` scope; the list route requires `CRON_READ`.
 
@@ -203,7 +214,7 @@ All write routes require `CRON_WRITE` scope; the list route requires `CRON_READ`
 
 The webui exposes a dedicated cron panel in Settings (the **Cron** section), showing each job's schedule label, mode, the persona or model it runs as, last/next run times, status badge, and run history. The panel provides a form to create new jobs, toggle, edit, remove, and manually trigger a run. System jobs are shown for inspection but their remove and edit actions are disabled.
 
-Automation-owned (`automation_trigger`) rows go further: no toggle, run, edit, or remove action at all. Edit and remove are refused by the backend for this `payload.kind` (`update_job`/`remove_job` both check it — see "Automation trigger jobs" above); toggle and run carry no such guard (`enable_job`/`run_job` apply to any job id) and are withheld here as UI policy, not backend enforcement — managing and firing an automation's schedule belong to that automation's own view, not this one. The row is marked with a badge and a short note instead, and links out to that automation's own detail view — where editing and manual firing actually live. A show/hide pill above the list can filter these rows out entirely when they clutter the operator's own jobs; it only renders when at least one exists, and defaults to showing them, since the point of listing them here at all is that Cron stays the system's complete schedule agenda, not just the user-editable slice of it.
+Automation-owned (`automation_trigger`) rows go further: no toggle, run, edit, or remove action at all. All four are refused by the backend for this `payload.kind` — edit and remove at the scheduler layer (`update_job`/`remove_job`), toggle and run at the service layer (`CronService.toggle`/`.run` in `durin/service/cron.py` — see "Automation trigger jobs" above) — so hiding the buttons here is UI convenience, not the only thing standing in the way: managing and firing an automation's schedule belong to that automation's own view, not this one. The row is marked with a badge and a short note instead, and links out to that automation's own detail view — where editing and manual firing actually live. A show/hide pill above the list can filter these rows out entirely when they clutter the operator's own jobs; it only renders when at least one exists, and defaults to showing them, since the point of listing them here at all is that Cron stays the system's complete schedule agenda, not just the user-editable slice of it.
 
 ## 7. Rationale
 
