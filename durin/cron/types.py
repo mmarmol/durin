@@ -21,7 +21,7 @@ class CronSchedule:
 @dataclass
 class CronPayload:
     """What to do when the job runs."""
-    kind: Literal["system_event", "agent_turn", "loop_trigger"] = "agent_turn"
+    kind: Literal["system_event", "agent_turn", "loop_trigger", "automation_trigger"] = "agent_turn"
     mode: Literal["reminder", "task"] = "reminder"
     message: str = ""
     model: str | None = None
@@ -33,6 +33,7 @@ class CronPayload:
     channel_meta: dict = field(default_factory=dict)  # channel-specific routing (e.g. Slack thread_ts)
     session_key: str | None = None  # original session key for correct session recording
     loop: str | None = None  # loop name, set when kind == "loop_trigger"
+    automation: str | None = None  # automation name, set when kind == "automation_trigger"
 
 
 @dataclass

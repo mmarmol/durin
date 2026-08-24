@@ -301,6 +301,44 @@ def test_remove_job_refuses_system_jobs(tmp_path) -> None:
     assert service.get_job("dream") is not None
 
 
+def test_remove_job_refuses_automation_jobs(tmp_path) -> None:
+    service = CronService(tmp_path / "cron" / "jobs.json")
+    service.register_system_job(CronJob(
+        id="automation:briefing:0",
+        name="automation briefing trigger 0",
+        schedule=CronSchedule(kind="cron", expr="0 7 * * *", tz="UTC"),
+        payload=CronPayload(kind="automation_trigger", automation="briefing"),
+    ))
+
+    result = service.remove_job("automation:briefing:0")
+
+    assert result == "protected"
+    assert service.get_job("automation:briefing:0") is not None
+
+
+def test_remove_system_job_bypasses_protection(tmp_path) -> None:
+    """The sync-only bypass door: unlike remove_job, remove_system_job
+    removes a protected job (system_event or automation_trigger) — used by
+    durin.automations.cron_sync to prune its own stale jobs."""
+    service = CronService(tmp_path / "cron" / "jobs.json")
+    service.register_system_job(CronJob(
+        id="automation:briefing:0",
+        name="automation briefing trigger 0",
+        schedule=CronSchedule(kind="cron", expr="0 7 * * *", tz="UTC"),
+        payload=CronPayload(kind="automation_trigger", automation="briefing"),
+    ))
+
+    result = service.remove_system_job("automation:briefing:0")
+
+    assert result == "removed"
+    assert service.get_job("automation:briefing:0") is None
+
+
+def test_remove_system_job_not_found(tmp_path) -> None:
+    service = CronService(tmp_path / "cron" / "jobs.json")
+    assert service.remove_system_job("ghost") == "not_found"
+
+
 @pytest.mark.asyncio
 async def test_start_server_not_jobs(tmp_path):
     store_path = tmp_path / "cron" / "jobs.json"
@@ -552,6 +590,19 @@ def test_update_job_rejects_system_job(tmp_path) -> None:
     result = service.update_job("dream", name="hacked")
     assert result == "protected"
     assert service.get_job("dream").name == "dream"
+
+
+def test_update_job_rejects_automation_job(tmp_path) -> None:
+    service = CronService(tmp_path / "cron" / "jobs.json")
+    service.register_system_job(CronJob(
+        id="automation:briefing:0",
+        name="automation briefing trigger 0",
+        schedule=CronSchedule(kind="cron", expr="0 7 * * *", tz="UTC"),
+        payload=CronPayload(kind="automation_trigger", automation="briefing"),
+    ))
+    result = service.update_job("automation:briefing:0", name="hacked")
+    assert result == "protected"
+    assert service.get_job("automation:briefing:0").name == "automation briefing trigger 0"
 
 
 def test_update_job_validates_schedule(tmp_path) -> None:

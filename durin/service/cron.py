@@ -77,6 +77,7 @@ def _job_to_dict(job: Any, *, cron_scheduler: Any | None = None) -> dict[str, An
         "model": job.payload.model,
         "persona": job.payload.persona,
         "channel": job.payload.channel or "",
+        "automation": job.payload.automation,
         "state": {
             "next_run_at_ms": job.state.next_run_at_ms,
             "last_run_at_ms": job.state.last_run_at_ms,
@@ -195,6 +196,7 @@ class CronJobItem(Result):
     model: str | None = None
     persona: str | None = None
     channel: str
+    automation: str | None = None
     state: CronJobStateResult
     run_history: list[CronRunRecordResult] = []
     created_at_ms: int

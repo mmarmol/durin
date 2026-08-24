@@ -582,6 +582,18 @@
       },
       "CronJobItem": {
         "properties": {
+          "automation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Automation"
+          },
           "channel": {
             "title": "Channel",
             "type": "string"

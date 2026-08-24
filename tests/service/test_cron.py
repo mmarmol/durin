@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from durin.cron.types import CronJob, CronPayload, CronSchedule
 from durin.service.cron import (
     CronAddCommand,
     CronListQuery,
@@ -18,6 +19,7 @@ from durin.service.cron import (
     CronService,
     CronToggleCommand,
     CronUpdateCommand,
+    _job_to_dict,
 )
 from durin.service.principal import Principal, Scope
 from durin.service.types import (
@@ -437,3 +439,34 @@ async def test_update_user_job(workspace: Path) -> None:
     assert res.job.id == "abc12345"
     assert res.job.name == "renamed"
     assert res.job.message == "updated msg"
+
+
+def test_job_to_dict_carries_automation_field() -> None:
+    """The view must expose payload.automation so the webui can render
+    automation-owned cron rows as read-only (is_system stays False for
+    these — only system_event jobs are "system" in that sense)."""
+    job = CronJob(
+        id="automation:briefing:0",
+        name="automation briefing trigger 0",
+        schedule=CronSchedule(kind="cron", expr="0 7 * * *", tz="UTC"),
+        payload=CronPayload(kind="automation_trigger", automation="briefing", message="brief me"),
+    )
+
+    d = _job_to_dict(job)
+
+    assert d["automation"] == "briefing"
+    assert d["is_system"] is False
+    assert d["message"] == "brief me"
+
+
+def test_job_to_dict_automation_field_defaults_none() -> None:
+    job = CronJob(
+        id="abc12345",
+        name="test job",
+        schedule=CronSchedule(kind="every", every_ms=3600000),
+        payload=CronPayload(kind="agent_turn", message="hello"),
+    )
+
+    d = _job_to_dict(job)
+
+    assert d["automation"] is None
