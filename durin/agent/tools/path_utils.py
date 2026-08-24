@@ -19,7 +19,6 @@ _REGISTRY_DOORS = {
     "skills": "author the skill under skill-drafts/<name>/ and run skill_publish",
     "workflows": ("use workflow_write / workflow_edit, or workflow_script_write "
                   "for workflows/scripts/"),
-    "loops": "use the loops tool — action='create' replaces an existing definition",
     "automations": ("use the automations tool — action='create' replaces an existing "
                      "definition, action='enable'/'pause' toggles it — or the webui's "
                      "automations editor"),

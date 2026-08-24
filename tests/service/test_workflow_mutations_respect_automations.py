@@ -1,10 +1,8 @@
 """Renaming or deleting a workflow must not break the automations that run it.
 
-Mirrors tests/service/test_workflow_mutations_respect_loops.py (kept unchanged,
-loops untouched until cutover): `rename` now also repoints `workflow` in every
-automation that names the renamed workflow (`WorkflowsService._repoint_automations`),
-and `delete` refuses while an automation still depends on it, via the same
-`durin.registry_graph.dependents_of` reverse graph loops already used.
+`rename` repoints `workflow` in every automation that names the renamed
+workflow (`WorkflowsService._repoint_automations`), and `delete` refuses while
+an automation still depends on it, via `durin.registry_graph.dependents_of`.
 """
 
 import pytest
@@ -73,25 +71,6 @@ async def test_rename_leaves_unrelated_automations_alone(tmp_path):
     await svc.rename(WorkflowRenameCommand(name="stage1", target="context"), Principal.local())
 
     assert load_automation(tmp_path, "nightly").workflow == "other"
-
-
-@pytest.mark.asyncio
-async def test_rename_repoints_both_a_loop_and_an_automation_on_the_same_workflow(tmp_path):
-    """The two dependent kinds coexist until the loops cutover — a rename must
-    not repoint one at the expense of the other."""
-    from durin.loops.spec import parse_loop
-    from durin.loops.store import load_loop, save_loop
-
-    svc = _svc(tmp_path)
-    await _save(svc, "stage1")
-    _automation(tmp_path, "nightly-automation", "stage1")
-    save_loop(tmp_path, parse_loop({"name": "nightly-loop", "workflow": "stage1",
-                                     "goal": {"intent": "x"}}), actor="user", reason="fixture")
-
-    await svc.rename(WorkflowRenameCommand(name="stage1", target="context"), Principal.local())
-
-    assert load_automation(tmp_path, "nightly-automation").workflow == "context"
-    assert load_loop(tmp_path, "nightly-loop").workflow == "context"
 
 
 @pytest.mark.asyncio

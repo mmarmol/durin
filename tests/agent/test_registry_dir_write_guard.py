@@ -1,9 +1,9 @@
 """Generic write tools may not touch the registries that own a versioned door.
 
-`skills/` was already guarded. `workflows/` and `loops/` were not, so the only
-thing keeping an agent from rewriting a workflow definition or the script a
-script node executes — unvalidated, unlocked and unversioned — was an instruction
-in a skill. The dream holds those same generic tools over the whole workspace.
+`skills/` was already guarded. `workflows/` was not, so the only thing keeping
+an agent from rewriting a workflow definition or the script a script node
+executes — unvalidated, unlocked and unversioned — was an instruction in a
+skill. The dream holds those same generic tools over the whole workspace.
 """
 
 import pytest
@@ -21,7 +21,6 @@ def _write_tool(tmp_path):
     "skills/some-skill/SKILL.md",
     "workflows/ticket-pipeline.json",
     "workflows/scripts/run-investigation.py",
-    "loops/nightly.json",
     "automations/chase-invoice-4471.json",
 ])
 async def test_generic_write_is_refused_in_guarded_registries(tmp_path, relpath):
@@ -65,7 +64,7 @@ async def test_edit_is_refused_too(tmp_path):
     wf.write_text('{"name": "wf"}')
     tool = EditFileTool(workspace=tmp_path, allowed_dir=tmp_path, file_states=FileStates())
 
-    out = await tool.execute(path=str(wf), old_string='"wf"', new_string='"hacked"')
+    out = await tool.execute(path=str(wf), old_text='"wf"', new_text='"hacked"')
 
     assert "Error" in out
     assert "hacked" not in wf.read_text()

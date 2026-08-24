@@ -24,10 +24,8 @@ registry.  Each class's dep handling:
 - ``OAuthService``     — no deps.
 - ``AuthService``      — ``store=None`` → creates a default ``ApiTokenStore`` (safe to do).
 - ``TasksService``     — ``workspace=Path("/")`` (stored, never touched), ``subagent_manager=None``.
-- ``LoopsService``     — ``workspace=Path("/")``, ``cron_service=None``, ``runtime=None``,
+- ``AutomationsService`` — ``workspace=Path("/")``, ``cron_service=None``, ``runtime=None``,
   ``hooks_secret=None`` (stored, never called here).
-- ``AutomationsService`` — same shape as ``LoopsService`` (stored, never called here);
-  the service built beside loops until cutover retires the loops package.
 - ``DiscordService``       — no deps.
 - ``TelegramService``      — no deps.
 - ``SlackService``         — no deps (slack_sdk imported lazily per call).
@@ -50,7 +48,6 @@ from durin.service.commands import CommandsService
 from durin.service.config import ConfigService
 from durin.service.cron import CronService
 from durin.service.health import HealthService
-from durin.service.loops import LoopsService
 from durin.service.mcp import McpService
 from durin.service.memory import MemoryService
 from durin.service.modes import ModesService
@@ -81,7 +78,6 @@ SERVICE_CLASSES: list[type] = [
     AuthService,
     TasksService,
     WorkflowsService,
-    LoopsService,
     AutomationsService,
     DiscordService,
     TelegramService,
@@ -116,7 +112,6 @@ def build_catalog_registry() -> ServiceRegistry:
     registry.register("auth", AuthService(store=None))
     registry.register("tasks", TasksService(workspace=Path("/")))
     registry.register("workflows", WorkflowsService(workspace=Path("/")))
-    registry.register("loops", LoopsService(workspace=Path("/")))
     registry.register("automations", AutomationsService(workspace=Path("/")))
     registry.register("telegram", TelegramService())
     registry.register("discord", DiscordService())

@@ -117,7 +117,6 @@ class _FsTool(Tool, ContextAware):
         - `skills/` → `skill-drafts/<name>/` + `skill_publish`
         - `workflows/` → `workflow_write` / `workflow_edit`, and
           `workflow_script_write` for `workflows/scripts/`
-        - `loops/` → the loop tools
         - `automations/` → the automations tool (`create`/`enable`/`pause`), or the
           webui's automations editor
 
@@ -126,7 +125,7 @@ class _FsTool(Tool, ContextAware):
         edits went missing from history.
         """
         denied = (
-            [self._workspace / d for d in ("skills", "workflows", "loops", "automations")]
+            [self._workspace / d for d in ("skills", "workflows", "automations")]
             if self._guard_registry_dirs and self._workspace is not None
             else None
         )

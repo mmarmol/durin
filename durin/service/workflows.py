@@ -305,41 +305,15 @@ class WorkflowsService:
         # inside the versioned dir.
         return version_lock_target(self._dir())
 
-    def _repoint_loops(self, old: str, new: str) -> None:
-        """Follow a rename into the loops that run this workflow.
-
-        Sub-flow callers are repointed inline above because they live in the same
-        directory and the same commit; a loop lives in its own directory with its
-        own version store, so it needs its own save — which is what `save_loop`
-        gives it, commit included. Without this a rename left every loop running
-        the workflow pointing at a name that no longer resolves.
-
-        Best-effort: the rename itself already landed, and a loop that cannot be
-        rewritten must not turn a successful rename into an error.
-        """
-        from dataclasses import replace as _replace
-
-        from durin.loops.store import load_loop, save_loop
-        from durin.registry_graph import dependents_of
-
-        for dep in dependents_of(self._workspace, workflow=old):
-            if dep.kind != "loop":
-                continue
-            try:
-                spec = load_loop(self._workspace, dep.name)
-                save_loop(self._workspace, _replace(spec, workflow=new), actor="user",
-                          reason=f"workflow {old} was renamed to {new}")
-            except Exception:  # noqa: BLE001
-                logger.exception("could not repoint loop {} after renaming {}", dep.name, old)
-
     def _repoint_automations(self, old: str, new: str) -> None:
         """Follow a rename into the automations that run this workflow.
 
-        Mirrors `_repoint_loops` exactly, for the automations package built
-        beside loops until cutover: an automation lives in its own directory
-        with its own version store, so it needs its own save — `save_automation`,
-        commit included. Without this a rename left every automation running the
-        workflow pointing at a name that no longer resolves.
+        Sub-flow callers are repointed inline above because they live in the
+        same directory and the same commit; an automation lives in its own
+        directory with its own version store, so it needs its own save —
+        `save_automation`, commit included. Without this a rename left every
+        automation running the workflow pointing at a name that no longer
+        resolves.
 
         Best-effort: the rename itself already landed, and an automation that
         cannot be rewritten must not turn a successful rename into an error.
@@ -537,9 +511,9 @@ class WorkflowsService:
         path = self._dir() / f"{cmd.name}.json"
         if not path.is_file():
             raise NotFoundError(f"workflow {cmd.name!r} not found")
-        # A sub-flow node and a loop both name a workflow by name, so deleting one
-        # they point at breaks them silently. Refuse and say who — the caller can
-        # retarget or remove the dependent first.
+        # A sub-flow node and an automation both name a workflow by name, so
+        # deleting one they point at breaks them silently. Refuse and say who
+        # — the caller can retarget or remove the dependent first.
         from durin.registry_graph import dependents_of, describe
 
         deps = dependents_of(self._workspace, workflow=cmd.name)
@@ -638,7 +612,6 @@ class WorkflowsService:
             f"workflow({cmd.name}): rename to {target}",
             "renamed in the workflow editor (definition, removal and caller references)",
         )
-        self._repoint_loops(cmd.name, target)
         self._repoint_automations(cmd.name, target)
         # Carry the run history (manifests, recommendations, dream cursor) to the new
         # name. Best-effort: a failure here never undoes the definition rename.

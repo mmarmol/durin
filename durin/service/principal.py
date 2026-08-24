@@ -53,10 +53,6 @@ class Scope(str, Enum):
     MCP_WRITE = "mcp:write"
     WORKFLOWS_READ = "workflows:read"
     WORKFLOWS_WRITE = "workflows:write"
-    LOOPS_READ = "loops:read"
-    LOOPS_WRITE = "loops:write"
-    # AutomationsService's own scopes — LOOPS_* stay alongside them until the
-    # cutover task retires the loops package and its routes.
     AUTOMATIONS_READ = "automations:read"
     AUTOMATIONS_WRITE = "automations:write"
     SYSTEM_READ = "system:read"
