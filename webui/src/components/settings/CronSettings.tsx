@@ -500,8 +500,8 @@ export function CronSettings({
         ) : null}
 
         {/* Show/hide pill for automation-owned rows — the established
-            segmented-pill idiom (LoopsView's pane switcher), applied to a
-            single toggle. Hidden entirely when there's nothing to filter. */}
+            segmented-pill idiom, applied to a single toggle. Hidden
+            entirely when there's nothing to filter. */}
         {automationJobCount > 0 ? (
           <div className="mb-3 flex h-7 w-fit rounded-full bg-muted p-0.5">
             <button

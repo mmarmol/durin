@@ -6,12 +6,11 @@ import { cn } from "@/lib/utils";
 
 const MAX_DOTS = 5;
 
-// achieved/completed read as the same "it worked" tone as loops' own
-// OutcomeStrip; rejected/interrupted are not failures (a human or an
-// operator ended them on purpose) so they get the warn tone rather than
-// destructive; paused shares running's accent (something is actively
-// holding a slot) but without the pulse, which is reserved for "ticking
-// right now".
+// achieved/completed read with the "it worked" tone; rejected/interrupted
+// are not failures (a human or an operator ended them on purpose) so they
+// get the warn tone rather than destructive; paused shares running's accent
+// (something is actively holding a slot) but without the pulse, which is
+// reserved for "ticking right now".
 function toneFor(status: AutomationRun["status"]): string {
   if (status === "achieved" || status === "completed") return "bg-primary";
   if (status === "failed") return "bg-destructive";

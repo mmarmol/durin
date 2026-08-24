@@ -68,19 +68,6 @@ describe("webui i18n", () => {
     }
   });
 
-  it("keeps every loop run status label localized for every registered locale", () => {
-    const STATUS_KEYS = [
-      "running", "needs_operator", "waiting_info", "done", "no_goal",
-      "escalated", "error", "interrupted", "attention",
-    ];
-    for (const resource of Object.values(resources)) {
-      const status = resource.common.loops.activity.status;
-      for (const key of STATUS_KEYS) {
-        expect(status[key as keyof typeof status]).toBeTruthy();
-      }
-    }
-  });
-
   it("keeps settings navigation localized for every registered locale", () => {
     for (const resource of Object.values(resources)) {
       const common = resource.common;

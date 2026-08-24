@@ -352,10 +352,10 @@ function PillGroup<T extends string>({
 /** Create/edit form for an automation definition — disparadores (triggers),
  *  qué corre (workflow), entrega (delivery), ayuda (help) and vida (life),
  *  in the mockup's reading order. Trigger editors (schedule/channel/webhook
- *  rows, filters, semantic, correlate, the hook secret reveal) port the same
- *  UX LoopForm already established for loops, adapted to AutomationDef's
- *  shape (a "schedule" source instead of "cron", a per-trigger task, and the
- *  new chain trigger). */
+ *  rows, filters, semantic, correlate, the hook secret reveal) reuse the
+ *  established trigger-editing UX, adapted to AutomationDef's shape (a
+ *  "schedule" source instead of "cron", a per-trigger task, and the new
+ *  chain trigger). */
 export function AutomationForm({
   token,
   editAutomation,
