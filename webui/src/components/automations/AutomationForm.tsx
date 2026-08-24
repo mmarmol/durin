@@ -877,7 +877,7 @@ export function AutomationForm({
                       <input
                         id={`automation-trigger-hook-url-${i}`}
                         className={cn(inputClass, "font-mono")}
-                        value={`/api/v1/hooks/${row.hook}`}
+                        value={`${window.location.origin}/api/v1/hooks/${row.hook}`}
                         readOnly
                       />
                     </div>
