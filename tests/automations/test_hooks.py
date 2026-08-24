@@ -45,7 +45,7 @@ class FakeRuntime:
             raise AutomationBusy(name)
         return {"status": "done"}
 
-    async def answer(self, name, run_id, answer):
+    async def answer_nowait(self, name, run_id, answer):
         self.answer_calls.append((name, run_id, answer))
         return {"status": "done"}
 

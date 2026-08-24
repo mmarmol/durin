@@ -314,15 +314,23 @@ statuses end differently because only one of them has a workflow actually in fli
 
 - **`running`** — registers the run's `workflow_run_id` with
   `durin.workflow.cancellation.request_cancel` (the same process-global registry the
-  `tasks` chat tool signals a workflow stop through) and returns the run record
-  unchanged. The in-process fire task is still awaiting the engine; when the engine
-  ends, the normal `_handle_result` → `classify` path finalizes the run itself, same as
-  any other outcome. `classify` has no distinct "stopped" bucket — a cancelled,
-  non-rejected result falls into its catch-all and finalizes `failed`, the same status
-  a workflow-level exception would produce, not `interrupted` (that status is reserved
-  for a run killed by a process crash, §4d). A repeat stop call escalates to
-  `hard` — interrupting a work node's turn mid-flight, not just stopping at the next
-  node boundary — since `request_cancel` upgrades and never downgrades.
+  `tasks` chat tool signals a workflow stop through), stamps `stop_requested_at` on the
+  run record durably (the in-memory registry above does not survive a crash — see
+  §4d), and returns the record. Only an explicit `hard=true` escalates, and it can
+  never be downgraded by a later graceful call — `request_cancel`'s own contract. A
+  *repeat* call with `hard` left at its default is a no-op on an already-graceful
+  request; the webui dashboard's own Stop button only ever issues a graceful stop, and
+  offers a separate "Force stop" follow-up (§6) that passes `hard=true`. The in-process
+  fire task is still awaiting the engine; when the engine ends, `_handle_result`
+  recognizes a non-shutdown, non-rejected `cancelled` result (the engine's own
+  cooperative cancel-flag check is the only thing that ever produces that status — see
+  `durin/workflow/engine.py`) and finalizes the run directly as `interrupted` — no
+  delivery under any policy (including `notify: "always"`), no chain dispatch, and
+  streak-transparent, exactly the honest contract the `paused` branch below already
+  gives an operator stop. This bypasses `classify`/`_post_finish` on purpose: that path
+  is also what a crash-orphaned run's own `interrupted` finalize goes through to
+  *deliver* a notice about the crash (§4d, deliberately) — an operator's own stop must
+  not inherit that.
 - **`paused`** — no workflow is in flight to cancel, so `stop` finalizes the run
   directly as `interrupted` (`detail: "stopped by operator"`) and releases its claim.
   It deliberately skips `_post_finish`: an operator stop is not an outcome to deliver,
@@ -330,6 +338,13 @@ statuses end differently because only one of them has a workflow actually in fli
   `single`-concurrency automation exactly as `_post_finish` would have — that is the
   only place a queued channel/webhook event ever gets drained, so skipping it here too
   would strand the queued event until some unrelated future trigger happened to arrive.
+
+A stop's durable `stop_requested_at` stamp also guards the orphan sweep (§4d): a stop
+that lands but the gateway crashes before the engine unwinds leaves a `running`
+manifest with no workflow manifest yet — ordinarily the signal to relaunch a fresh run
+for the same cause. The sweep checks the stamp first and finalizes `interrupted`
+without relaunching instead, honoring the operator's intent rather than replacing the
+run they just asked to end.
 
 ### 4c. Matcher and webhook ingress (`durin/automations/matcher.py`, `hooks.py`)
 
@@ -607,8 +622,8 @@ the same gap that once let workflow edits land unvalidated and unversioned.
 
 `list` additionally folds in each automation's live counts (`active_runs`, `paused`,
 `pending_events` from the queue) and life state (`attempts`, `achieved`, `stuck`).
-`fire`/`answer` need a live `AutomationsRuntime` wired onto the service (the gateway
-does this; a runtime-less surface, e.g. spec-reading tooling, answers `503`). See
+`fire`/`answer`/`stop` need a live `AutomationsRuntime` wired onto the service (the
+gateway does this; a runtime-less surface, e.g. spec-reading tooling, answers `503`). See
 `docs/internals/api.md` for the general service/route/scope machinery and the
 generated OpenAPI contract (`contract/openapi-v1.json`) for exact request/response
 field shapes.

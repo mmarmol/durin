@@ -730,7 +730,7 @@ async def test_answer_nowait_continuation_failure_finalizes_failed_and_logs(tmp_
 # Stop
 # ---------------------------------------------------------------------------
 
-async def test_stop_running_run_requests_cancel_and_leaves_record_unchanged(tmp_path):
+async def test_stop_running_run_requests_cancel_and_stamps_the_request(tmp_path):
     from durin.workflow.cancellation import clear, is_cancelled, is_hard_cancelled
 
     _save(tmp_path)
@@ -752,6 +752,10 @@ async def test_stop_running_run_requests_cancel_and_leaves_record_unchanged(tmp_
         stopped = await rt.stop("a1", "stop-run-0")
 
         assert stopped["status"] == "running"
+        # Durable record of the request (finding 7): the in-memory
+        # cancellation registry below is the live mechanism, but it does
+        # not survive a crash — sweep_orphans relies on this stamp instead.
+        assert stopped["stop_requested_at"] is not None
         wf_run_id = stopped["workflow_run_id"]
         assert is_cancelled(wf_run_id)
         assert not is_hard_cancelled(wf_run_id)
@@ -789,6 +793,69 @@ async def test_stop_running_run_hard_upgrades_and_never_downgrades(tmp_path):
         released.set()
         await fire_task
         clear("stop-hard-1")
+
+
+async def test_cancelled_result_finalizes_interrupted_not_failed_and_delivers_nothing(tmp_path):
+    """Design ruling: a non-shutdown cancelled result (what the engine
+    produces once it honors a `stop`'s request_cancel) must get the exact
+    same honest contract the paused branch already gives an operator stop —
+    `interrupted`, no delivery under ANY policy (notify: "always" included,
+    which would otherwise deliver unconditionally), streak-transparent —
+    not classify()'s ordinary "cancelled falls through to failed" catch-all.
+    Also queues a channel event to prove housekeeping (queue drain) still
+    runs even though delivery/streak do not. No chain trigger involved here
+    on purpose — see test_cancelled_result_dispatches_no_chain below for
+    why that needs its own, unconfounded test."""
+    delivered = []
+
+    async def on_outcome(outcome):
+        delivered.append(outcome)
+
+    _save(tmp_path, delivery=Delivery(channel="email", to="ops@x.com", notify="always"),
+          life=Life(intent="x", achieved_when="any_completed", max_attempts=3, on_stuck="notify"))
+    origin = {"channel": "email", "thread": "t1"}
+    automation_queue.push(tmp_path, "a1", {"content": "queued while running", "origin": origin,
+                                            "source": "channel", "chain_depth": 0})
+
+    rt, calls = _mk_runtime(tmp_path, [
+        _wr("cancelled", out="", run_id="wf1"),
+        _wr("completed"),   # consumed by the queue drain's own re-fire
+    ], on_outcome=on_outcome)
+
+    m = await rt.fire("a1", source="manual")
+    assert m["status"] == "interrupted"
+    assert delivered == []   # no delivery even under notify: "always"
+
+    await _drain()
+
+    final = rl.read_run(tmp_path, "a1", m["run_id"])
+    assert final["status"] == "interrupted"
+    assert final["delivery"] is None   # _post_finish (where a delivery record is written) never ran
+    assert rl.consecutive_unachieved(tmp_path, "a1") == 0   # streak-transparent
+    drained_calls = [c for c in calls["exec"] if c["task"] == "queued while running"]
+    assert len(drained_calls) == 1   # queue drain still runs
+
+
+async def test_cancelled_result_dispatches_no_chain(tmp_path):
+    """A cancelled run's own outcome must not chain-dispatch downstream.
+    Kept separate from the queue-drain assertions above on purpose: a
+    drained re-fire that itself completes normally WOULD legitimately
+    chain-dispatch on its own merits (a correct, unrelated behavior), which
+    combining the two into one test could too easily be mistaken for the
+    cancelled run's own silence."""
+    _save(tmp_path)
+    _save(tmp_path, name="downstream", workflow="w2",
+         triggers=(AutomationTrigger(source="chain", chain_automation="a1", chain_when="any"),))
+
+    rt, calls = _mk_runtime(tmp_path, [_wr("cancelled", out="", run_id="wf1")])
+
+    m = await rt.fire("a1", source="manual")
+    assert m["status"] == "interrupted"
+
+    await _drain()
+
+    downstream_calls = [c for c in calls["exec"] if c["name"] == "w2"]
+    assert downstream_calls == []
 
 
 async def test_stop_paused_run_finalizes_interrupted_and_releases_claim(tmp_path, _per_test_telemetry_dir):
@@ -964,7 +1031,13 @@ async def test_shutdown_predicate_leaves_manifest_running(tmp_path):
     assert outcomes == []
 
 
-async def test_cancelled_outside_shutdown_still_finalizes_failed(tmp_path):
+async def test_cancelled_outside_shutdown_still_finalizes_interrupted(tmp_path):
+    """A cancelled result reached outside a shutdown window must not be left
+    `running` the way the shutdown carve-out (above) deliberately leaves
+    one — and, per the design ruling in test_cancelled_result_finalizes_
+    interrupted_not_failed_and_delivers_nothing below, it finalizes
+    `interrupted`, not `failed`: an operator (or anything else) asking for
+    a cancellation is not a failure."""
     outcomes = []
 
     async def on_outcome(outcome):
@@ -974,8 +1047,9 @@ async def test_cancelled_outside_shutdown_still_finalizes_failed(tmp_path):
     rt, _ = _mk_runtime(tmp_path, [_wr("cancelled")], on_outcome=on_outcome)
     m = await rt.fire("a1", source="manual")
 
-    assert m["status"] == "failed"
+    assert m["status"] == "interrupted"
     assert m["finished_at"] is not None
+    assert outcomes == []  # delivery-silent, same as an operator stop
 
 
 async def test_shutdown_does_not_swallow_a_genuine_approval_rejection(tmp_path):
@@ -1065,6 +1139,28 @@ async def test_sweep_skips_an_orphan_whose_automation_was_deleted(tmp_path):
 
     assert handled == []
     assert rl.read_run(tmp_path, "ghost", "dead")["status"] == "running"
+
+
+async def test_sweep_does_not_relaunch_a_run_with_a_pending_stop_request(tmp_path):
+    """A stop landing just before a crash, in the window between
+    `update_run` setting `workflow_run_id` and the engine writing its own
+    workflow manifest, leaves an orphan with no work started — ordinarily
+    the exact shape sweep_orphans relaunches. stop_requested_at (finding 7)
+    marks the operator's intent: honor it as "this run is over", not "this
+    cause is still unserved"."""
+    rt, calls = _mk_runtime(tmp_path, [])
+    _save(tmp_path)
+    rl.start_run(tmp_path, "a1", "dead", cause={"kind": "cron", "excerpt": "t", "trigger_index": None})
+    rl.update_run(tmp_path, "a1", "dead", workflow_run_id="wf-never-started",
+                  owner={"pid": 999999, "started": "long ago"}, stop_requested_at=123456)
+
+    handled = await rt.sweep_orphans()
+
+    assert handled == ["dead"]
+    assert calls["exec"] == []   # no relaunch
+    final = rl.read_run(tmp_path, "a1", "dead")
+    assert final["status"] == "interrupted"
+    assert "stop" in final["detail"].lower()
 
 
 async def test_relaunch_that_loses_the_fire_race_is_retracted(tmp_path):

@@ -115,12 +115,18 @@ through the same `register_system_job`/`remove_system_job` bypass door
 `register_system_job` itself relies on for system jobs.
 
 The HTTP service (`durin/service/cron.py`) additionally refuses `toggle` and
-`run` for the same two protected kinds — resolving the job first
+`run` for `automation_trigger` jobs specifically — resolving the job first
 (`get_job`) and checking `payload.kind` before calling into the scheduler —
 so an automation's schedule-trigger job can't be force-run or flipped
 enabled/disabled out of band with the automation spec that owns it (its
 `enabled` state lives there; `cron_sync` recreates the job from the spec on
-every save). This is a service-layer guard only: the scheduler's own
+every save). Deliberately narrower than `remove_job`/`update_job`'s own
+guard above: a `system_event` job stays runnable and toggleable through
+this route — neither operation edits or deletes the job, so there is
+nothing to desync, and two shipped webui affordances depend on it working
+(the Memory→Dream view's "Run now" button, and the cron settings panel's
+Run/enable controls on every non-`automation_trigger` row, system rows
+included). This is a service-layer guard only: the scheduler's own
 `enable_job`/`run_job` methods stay unguarded, since internal callers like
 `cron_sync` legitimately mutate protected jobs directly through the
 `register_system_job`/`remove_system_job` door above.
@@ -205,8 +211,8 @@ The HTTP API (in `durin/service/cron.py`) provides:
 | `POST` | `/api/v1/cron` | Create a new `agent_turn` job |
 | `PATCH` | `/api/v1/cron` | Update a non-system job |
 | `DELETE` | `/api/v1/cron` | Remove a non-system job by id |
-| `POST` | `/api/v1/cron/run` | Manually trigger a non-system, non-automation job immediately (non-blocking spawn) |
-| `POST` | `/api/v1/cron/toggle` | Enable or disable a non-system, non-automation job without removing it |
+| `POST` | `/api/v1/cron/run` | Manually trigger a non-automation-trigger job immediately (non-blocking spawn) |
+| `POST` | `/api/v1/cron/toggle` | Enable or disable a non-automation-trigger job without removing it |
 
 All write routes require `CRON_WRITE` scope; the list route requires `CRON_READ`.
 

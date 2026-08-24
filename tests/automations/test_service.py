@@ -298,8 +298,12 @@ async def test_answer_returns_running_immediately_then_resumes_in_the_background
     assert result.run["status"] == "running"
     assert len(calls["exec"]) == 1   # the resume hasn't run yet
 
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
+    # Wait for the backgrounded continuation directly rather than sleep(0):
+    # sleep(0) only works because this file's fake workflow_exec never
+    # actually suspends — gather is correct regardless of how many awaits
+    # the resume path takes internally (mirrors test_tool.py's own fix for
+    # the identical pattern).
+    await asyncio.gather(*rt._bg_tasks)
 
     # AutomationsRuntime mints and persists its own workflow_run_id at fire time
     # (run_id_factory's SECOND draw, "ar1" — the first, "ar0", is the automation's
@@ -333,8 +337,9 @@ async def test_answer_with_explicit_action_bypasses_keyword_parsing(tmp_path):
     assert result.run["approval"]["action"] == "approve"
     assert result.run["approval"]["by"] == "operator"
 
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
+    # Wait for the backgrounded continuation directly rather than sleep(0) —
+    # see the identical comment above.
+    await asyncio.gather(*rt._bg_tasks)
     assert calls["exec"][1][1] == "approve"   # not "whatever, ignored"
 
 

@@ -348,13 +348,15 @@ class AutomationsRuntime:
         if status == "running":
             # No local finalize here: the in-process fire task is still
             # awaiting `self._exec` and sees the engine end on its own,
-            # flowing through the normal _handle_result -> classify path —
-            # the SAME path a shutdown-cancelled or naturally-cancelled run
-            # takes. classify() has no distinct "interrupted" bucket for a
-            # deliberate stop: a cancelled, non-rejected result falls into
-            # its catch-all and finalizes "failed", not "interrupted". A
-            # repeat call naturally escalates to hard (request_cancel never
-            # downgrades an already-hard request).
+            # flowing through the normal _handle_result path — which gives a
+            # non-shutdown "cancelled" result the exact same honest,
+            # delivery/chain/streak-silent "interrupted" finalize the paused
+            # branch below already gives (see _handle_result). An explicit
+            # hard=True escalates and can never be downgraded by a later
+            # graceful call (request_cancel's own contract) — a REPEAT call
+            # with hard left at its default is a no-op on an
+            # already-graceful request; only passing hard=True actually
+            # upgrades it.
             from durin.workflow.cancellation import request_cancel
 
             # `workflow_run_id` is None for the narrow window between
@@ -365,14 +367,20 @@ class AutomationsRuntime:
             workflow_run_id = record.get("workflow_run_id")
             if workflow_run_id:
                 request_cancel(workflow_run_id, hard=hard)
-            return record
+            # Durable record of the request: the in-memory cancellation
+            # registry above is the live mechanism the engine actually
+            # polls, but it does not survive a crash. Stamping it here lets
+            # sweep_orphans (run at the next boot) recognize a run whose
+            # stop never got the chance to take effect and finalize it
+            # honestly instead of relaunching a replacement nobody asked for.
+            return run_log.update_run(self._ws, name, run_id, stop_requested_at=_now_ms())
 
         if status == "paused":
             # No workflow is in flight to cancel — finalize directly instead
             # of waiting for a resume that is never coming.
             rec = run_log.finalize_run(self._ws, name, run_id, status="interrupted",
                                         detail="stopped by operator",
-                                        workflow_run_id=record["workflow_run_id"])
+                                        workflow_run_id=record.get("workflow_run_id"))
             claims.release_run(self._ws, name, run_id)
             # _post_finish is skipped below, but it is also the only place
             # automations.run_finished is normally emitted — emit it here
@@ -449,6 +457,16 @@ class AutomationsRuntime:
 
             if work_started:
                 detail = "interrupted by a restart with work already in flight"
+                new_run_id = None
+            elif rec.get("stop_requested_at"):
+                # An operator's stop request (see `stop`'s running branch)
+                # never got the chance to take effect before the crash — the
+                # in-memory cancellation registry it set does not survive a
+                # restart, but this durable stamp does. The operator's
+                # intent was to end this run, not to have it silently
+                # replaced by a fresh one nobody asked for.
+                detail = ("interrupted by a restart before the workflow started; "
+                          "not relaunched — an operator had already requested a stop")
                 new_run_id = None
             elif not spec.enabled:
                 # Paused while the gateway was down. Nothing ran, but firing a
@@ -588,6 +606,41 @@ class AutomationsRuntime:
             return run_log.read_run(self._ws, spec.name, run_id) or {
                 "run_id": run_id, "automation": spec.name, "status": "running",
             }
+
+        if result.status == "cancelled" and not result.rejected:
+            # A non-shutdown cancellation. Verified end to end: the engine's
+            # own cancel_check is the ONLY thing that ever produces this
+            # status (durin/workflow/engine.py — every `status="cancelled"`
+            # WorkflowResult traces to self._cancel_check(), which reads
+            # durin.workflow.cancellation.is_cancelled, set only by
+            # request_cancel; a deliberate approval reject also carries
+            # "cancelled" but always with rejected=True, excluded above and
+            # handled by classify()'s own rejected branch instead — never
+            # reaches here). This is not a failure: an operator (or anything
+            # else holding this workflow_run_id) asked for it, and gets the
+            # exact same honest contract `stop`'s own paused branch already
+            # gives — no delivery under ANY policy (including
+            # `notify: "always"`, which should_deliver would otherwise grant
+            # unconditionally), no chain dispatch, streak-transparent
+            # (mirrors run_log.STREAK_TRANSPARENT's existing reasoning for
+            # "paused"/"rejected"/"interrupted": a deliberately-ended run is
+            # not evidence the automation itself is failing). Finalizes
+            # directly rather than through classify()/_post_finish:
+            # _post_finish is also what a crash-orphan's OWN "interrupted"
+            # goes through to DELIVER its notice (sweep_orphans does this
+            # deliberately) — routing this case through the same path would
+            # either wrongly silence that notice or wrongly deliver this one.
+            record = run_log.finalize_run(self._ws, spec.name, run_id, status="interrupted",
+                                           workflow_run_id=wf_run_id)
+            try:
+                run_log.prune_runs(self._ws, spec.name, self._keep_runs)
+                self._drain_queue_if_single(spec)
+            except Exception:  # noqa: BLE001 — contained, mirrors _post_finish's own housekeeping guard
+                logger.exception(
+                    "automations: post-outcome housekeeping (prune/queue-drain) for '{}' run {} failed",
+                    spec.name, run_id,
+                )
+            return record
 
         status = classify(result, spec)
         if status == "paused":

@@ -16,14 +16,23 @@ chain fire, an `answer_nowait` continuation) can still be running after the
 test function that started it has already returned and torn down its own
 function-scoped fixtures — a function-scoped guard here would already have
 reverted by the time such a task's own telemetry write actually happens.
-Named distinctly from ``_isolate_telemetry_dir`` on purpose: three modules in
-this directory (``test_runtime.py``, ``test_matcher.py``, ``test_hooks.py``)
-define their OWN autouse fixture of that exact name for their own reasons
-(reading back a single test's JSONL events from a known directory), and a
-fixture defined in a test module shadows a same-named one from a parent
-conftest for every test collected in that module — reusing the name here
-would make this belt invisible to those three files, which is exactly where
-the highest telemetry volume in this directory comes from.
+Named distinctly from ``_isolate_telemetry_dir`` (the ``tests/conftest.py``
+fixture this one layers on top of) on purpose: a fixture defined in a test
+module shadows a same-named one from a parent conftest for every test
+collected in that module, so reusing that exact name for this file's own
+fixture would make it invisible everywhere `pytest` resolves this
+conftest's own name over the parent's. Three modules in this directory
+(``test_runtime.py``, ``test_matcher.py``, ``test_hooks.py``) separately
+define their OWN function-scoped, autouse fixture — named
+``_per_test_telemetry_dir``, not ``_isolate_telemetry_dir`` — for a
+different reason: those tests read back a single test's own JSONL events,
+which needs a fresh, single-file directory per test rather than the one
+shared directory this session-scoped fixture (or the suite-wide one in
+``tests/conftest.py``) hands out for the whole run. The two layers coexist
+without conflict — different names, different scopes, both applying to
+those three files' tests at once — this one is the belt that still holds
+even where a test's own per-test fixture, or a leftover background task
+outliving it, would not be enough on its own.
 """
 
 from __future__ import annotations

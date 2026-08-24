@@ -231,11 +231,17 @@ async def test_toggle_requires_write_scope(workspace: Path) -> None:
         )
 
 
-async def test_toggle_rejects_system_job(workspace: Path) -> None:
-    with pytest.raises(ForbiddenError):
-        await CronService().toggle(
-            CronToggleCommand(id="sys00001", enabled=False), Principal.local()
-        )
+async def test_toggle_allows_system_job(workspace: Path) -> None:
+    """system_event jobs must stay toggleable — the cron settings panel's
+    enabled/disabled control renders (and depends on working) for every
+    non-automation row, system rows included (CronSettings.tsx; only edit
+    and remove are hidden there for a system job, never toggle). Only
+    automation_trigger is refused here."""
+    result = await CronService().toggle(
+        CronToggleCommand(id="sys00001", enabled=False), Principal.local()
+    )
+    assert result.job.id == "sys00001"
+    assert result.job.enabled is False
 
 
 async def test_toggle_rejects_automation_trigger_job(workspace: Path) -> None:
@@ -265,15 +271,20 @@ async def test_run_raises_not_found_for_unknown_job(workspace: Path) -> None:
         )
 
 
-async def test_run_rejects_system_job(workspace: Path) -> None:
+async def test_run_allows_system_job(workspace: Path) -> None:
+    """system_event jobs must stay runnable — the Memory -> Dream view's own
+    "Run now" button (DreamView.tsx) calls this route for the memory_dream
+    job, a system_event job. Only automation_trigger is refused here."""
     mock_scheduler = MagicMock()
     mock_scheduler.get_job.return_value = SimpleNamespace(
         id="sys00001", payload=SimpleNamespace(kind="system_event"),
     )
-    with pytest.raises(ForbiddenError):
-        await CronService(cron_scheduler=mock_scheduler).run(
-            CronRunCommand(id="sys00001"), Principal.local()
-        )
+    mock_scheduler.is_executing.return_value = False
+    mock_scheduler.run_job = AsyncMock()
+    result = await CronService(cron_scheduler=mock_scheduler).run(
+        CronRunCommand(id="sys00001"), Principal.local()
+    )
+    assert result.started is True
 
 
 async def test_run_rejects_automation_trigger_job(workspace: Path) -> None:

@@ -347,14 +347,18 @@ class TriggerMatcher:
 
     async def _answer(self, automation_name: str, run_id: str, content: str, key: str) -> None:
         try:
-            await self._runtime.answer(automation_name, run_id, content)
+            await self._runtime.answer_nowait(automation_name, run_id, content)
         except Exception:
-            # runtime.answer() releases the claim itself once it gets far
-            # enough (release-before-resume), but a failure before that
-            # point — e.g. the automation spec was deleted between the wake
-            # decision and this task running — leaves it stuck otherwise.
-            # release() is idempotent, so this is a no-op in the common case
-            # where the claim is already gone.
+            # answer_nowait's own prologue releases the claim itself once it
+            # gets far enough (release-before-resume), but a failure before
+            # that point — e.g. the automation spec was deleted between the
+            # wake decision and this task running — leaves it stuck
+            # otherwise. release() is idempotent, so this is a no-op in the
+            # common case where the claim is already gone. A failure AFTER
+            # the prologue (the resume itself) never reaches here: it is
+            # backgrounded and owned by answer_nowait's own guarded
+            # continuation, which finalizes the run failed on its own — see
+            # AutomationsRuntime._answer_continuation_guarded.
             logger.exception("automations: answer('{}', '{}') failed; releasing claim", automation_name, run_id)
             claims.release(self._ws, key)
 

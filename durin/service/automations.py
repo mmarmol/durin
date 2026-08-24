@@ -10,7 +10,8 @@ cron jobs in sync via ``durin.automations.cron_sync``.
 The runtime that actually executes an automation (``durin.automations.runtime.
 AutomationsRuntime``) is wired in by the gateway (``durin.cli.commands``) and
 passed here as ``runtime``; a surface with no runtime (e.g. spec-reading
-tooling) leaves it ``None`` and ``fire``/``answer`` raise ``UnavailableError``.
+tooling) leaves it ``None`` and ``fire``/``answer``/``stop`` raise
+``UnavailableError``.
 """
 
 from __future__ import annotations
