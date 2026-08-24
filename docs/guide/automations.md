@@ -153,10 +153,13 @@ immediately. The section also has an editor for creating a definition or
 changing an existing one's triggers, workflow, delivery, help routing, and
 life condition visually, the same way the Workflows pane already lets you
 build a flow graph visually. Clicking a definition opens its detail: a
-"Run now" button to fire a manual run on demand, live, node-by-node
-progress for any run currently in flight, and a run history where each entry
-shows its cause, outcome, and delivery record (or approval record, for a run a
-human resolved) — with a link into the Workflows pane's own run detail for the
+"Run now" button to fire a manual run on demand, a pause/resume control that
+flips whether the automation is currently enabled (it works just as well on
+one a life condition already disabled — resuming it re-arms its triggers),
+live node-by-node progress for any run currently in flight with a stop
+control to cancel it early, and a run history where each entry shows its
+cause, outcome, and delivery record (or approval record, for a run a human
+resolved) — with a link into the Workflows pane's own run detail for the
 full execution trace (nodes, sessions, artifacts). Beyond the dashboard, an
 automation can also be defined and driven through:
 

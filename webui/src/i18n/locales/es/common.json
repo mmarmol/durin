@@ -1362,7 +1362,10 @@
     },
     "detail": {
       "live": {
-        "title": "Corriendo ahora"
+        "title": "Corriendo ahora",
+        "stop": "Detener",
+        "stopConfirmTitle": "¿Detener la corrida {{runId}}?",
+        "stopConfirmBody": "La corrida se detiene al instante; el trabajo en curso se pierde."
       },
       "history": {
         "title": "Corridas",
@@ -1388,7 +1391,9 @@
       "filesLabel": "Archivos",
       "openRun": "Ver ejecución completa →",
       "fireNow": "Ejecutar ahora",
-      "fireNowStarted": "Corrida {{runId}} iniciada"
+      "fireNowStarted": "Corrida {{runId}} iniciada",
+      "pause": "Pausar",
+      "resume": "Reactivar"
     }
   },
   "skills": {

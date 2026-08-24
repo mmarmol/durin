@@ -114,6 +114,20 @@ export function AutomationsView({
     if (match) setDetail(match);
   }, [initialDetailName, loading, automations]);
 
+  // Keep `detail` pointed at the live copy of whatever automation its
+  // DetailView has open: `automations` and `detail` are separate state, so
+  // without this a save made from inside DetailView (pause/resume) — or
+  // simply the next 30s poll below — would refresh the list while
+  // DetailView's own `automation` prop stayed frozen at whatever snapshot
+  // was open when the user clicked in. A name missing from the fresh list
+  // (deleted concurrently) leaves `detail` as-is rather than clearing it out
+  // from under the user.
+  useEffect(() => {
+    if (!detail) return;
+    const fresh = automations.find((a) => a.name === detail.name);
+    if (fresh && fresh !== detail) setDetail(fresh);
+  }, [automations, detail]);
+
   // The run NeedsYouTray's Revisar/Responder selected, if it is still
   // paused — filtered on status (not just id) so InboxView disappears the
   // moment a refresh reports it resolved, with no separate "clear the
@@ -185,6 +199,7 @@ export function AutomationsView({
         automation={detail}
         onBack={() => setDetail(null)}
         onOpenWorkflowRun={onOpenWorkflowRun ?? (() => {})}
+        onAutomationSaved={refresh}
       />
     );
   }

@@ -8,7 +8,14 @@ import { RunDetailCard } from "@/components/automations/RunDetailCard";
 import { RunHistory } from "@/components/automations/RunHistory";
 import { TriggerChips } from "@/components/automations/TriggerChips";
 import { Button } from "@/components/ui/button";
-import { ApiError, fireAutomation, listAutomationRuns, type AutomationRun, type AutomationSummary } from "@/lib/api";
+import {
+  ApiError,
+  fireAutomation,
+  listAutomationRuns,
+  saveAutomation,
+  type AutomationRun,
+  type AutomationSummary,
+} from "@/lib/api";
 import { useClient } from "@/providers/ClientProvider";
 import { cn } from "@/lib/utils";
 
@@ -25,10 +32,20 @@ export function DetailView({
   automation,
   onBack,
   onOpenWorkflowRun,
+  onAutomationSaved,
 }: {
   automation: AutomationSummary;
   onBack: () => void;
   onOpenWorkflowRun: (workflow: string, runId: string) => void;
+  // Called after the pause/resume toggle saves — AutomationsView's own
+  // top-level refresh (automations + runs + cron jobs), the same one a
+  // save from the editor triggers. AutomationSummary is a superset of
+  // AutomationDef (automation_to_dict's fields plus live counts/life
+  // state), so `automation` here already holds the full definition; only
+  // the recomputed life state (`achieved` in particular, which flips with
+  // `enabled`) needs a fresh fetch, and only the parent holds the list to
+  // refetch it from.
+  onAutomationSaved: () => Promise<void>;
 }) {
   const { token } = useClient();
   const { t } = useTranslation();
@@ -110,6 +127,30 @@ export function DetailView({
     }
   }, [token, automation.name, refresh, t]);
 
+  // Pause/resume: flips `enabled` on the automation's own current
+  // definition and saves it wholesale (PUT has no partial-update form).
+  // `automation` already IS the full AutomationDef (see the prop comment
+  // above), so no separate fetch is needed before flipping it. Resuming an
+  // automation the life condition already disabled is deliberately allowed
+  // here too — re-arming its triggers is a legitimate operator choice, not
+  // something this control second-guesses.
+  const [pausing, setPausing] = useState(false);
+  const [pauseError, setPauseError] = useState<string | null>(null);
+
+  const onTogglePause = useCallback(async () => {
+    setPausing(true);
+    setPauseError(null);
+    try {
+      const next = { ...automation, enabled: !automation.enabled };
+      await saveAutomation(token, next);
+      await onAutomationSaved();
+    } catch (e) {
+      setPauseError(errMsg(e));
+    } finally {
+      setPausing(false);
+    }
+  }, [token, automation, onAutomationSaved]);
+
   return (
     <div className="flex h-full w-full flex-col overflow-hidden">
       <div className="flex items-center gap-2 border-b px-3 py-2">
@@ -124,6 +165,14 @@ export function DetailView({
         <div className="ml-auto flex items-center gap-2">
           {fireNotice && <span className="text-[11px] text-muted-foreground">{fireNotice}</span>}
           {fireError && <span className="text-[11px] text-destructive">{fireError}</span>}
+          {pauseError && <span className="text-[11px] text-destructive">{pauseError}</span>}
+          <Button size="sm" variant="outline" disabled={pausing} onClick={() => void onTogglePause()}>
+            {pausing ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              t(automation.enabled ? "automations.detail.pause" : "automations.detail.resume")
+            )}
+          </Button>
           <Button size="sm" variant="outline" disabled={firing} onClick={() => void onFireNow()}>
             {firing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : t("automations.detail.fireNow")}
           </Button>
@@ -153,7 +202,7 @@ export function DetailView({
               {runningRuns.length > 0 && (
                 <div className="flex flex-col gap-3">
                   {runningRuns.map((run) => (
-                    <LiveRunCard key={run.run_id} run={run} workflow={automation.workflow} />
+                    <LiveRunCard key={run.run_id} run={run} workflow={automation.workflow} onStopped={refresh} />
                   ))}
                 </div>
               )}

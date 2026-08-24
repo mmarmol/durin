@@ -1628,7 +1628,10 @@
     },
     "detail": {
       "live": {
-        "title": "Running now"
+        "title": "Running now",
+        "stop": "Stop",
+        "stopConfirmTitle": "Stop run {{runId}}?",
+        "stopConfirmBody": "The run stops right away; any work still in progress is lost."
       },
       "history": {
         "title": "Runs",
@@ -1654,7 +1657,9 @@
       "filesLabel": "Files",
       "openRun": "View full execution →",
       "fireNow": "Run now",
-      "fireNowStarted": "Run {{runId}} started"
+      "fireNowStarted": "Run {{runId}} started",
+      "pause": "Pause",
+      "resume": "Resume"
     }
   },
   "skills": {
