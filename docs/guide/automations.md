@@ -172,8 +172,8 @@ automation can also be defined and driven through:
   goes through the same validation (and the same chain-cycle check) any other
   surface would use.
 - **The HTTP API directly** — `GET`/`PUT`/`DELETE /api/v1/automations/{name}`,
-  `.../fire`, `.../runs/{run_id}/answer`, and `.../runs` for a script or an external
-  integration. There's no partial-update route: `PUT` always replaces the named
+  `.../fire`, `.../runs/{run_id}/answer`, `.../runs/{run_id}/stop`, and `.../runs`
+  for a script or an external integration. There's no partial-update route: `PUT` always replaces the named
   automation's definition wholesale (versioned as an edit, so the previous
   definition stays recoverable).
 
