@@ -95,29 +95,45 @@ System jobs (those with `payload.kind == "system_event"`) are protected: `remove
 
 The canonical system job is `memory_dream`, registered at gateway start when `memory.dream.enabled` is true. Its execution path in the gateway runs the dream consolidation passes (the sequence in the `memory_dream` handler in `durin/cli/commands.py`), a workflow-improve pass and skill curation, and then the session reaper (`reap_expired_run_sessions`) that deletes per-run sessions older than `cron.run_session_retention_hours`.
 
-### Loop trigger jobs
+### Automation trigger jobs
 
-The [loops](loops.md) subsystem materializes each loop's `cron`-source
+The automations subsystem materializes each automation's `schedule`-source
 triggers as ordinary cron jobs, one per trigger, with `payload.kind ==
-"loop_trigger"` and a deterministic id (`loop:<loop-name>:<trigger-index>`).
-`sync_loop_jobs` (`durin/loops/cron_sync.py`) diffs the wanted set against the
-loop's existing `loop:`-prefixed jobs and calls `register_system_job`/
-`remove_job` to reconcile; this runs on every loop save and delete, and
-`sync_all` re-runs it for every stored loop at gateway boot, additionally
-pruning any `loop:` job whose loop no longer exists. A disabled loop, or a
-trigger whose `source` is not `cron`, contributes no job. Loop trigger jobs are
-not `system_event` jobs, so they are not protected from `remove_job`/
-`update_job` — the cron sync (not an operator edit) is the only thing expected
-to add or remove them.
+"automation_trigger"` and a deterministic id
+(`automation:<automation-name>:<trigger-index>`). `sync_automation_jobs`
+(`durin/automations/cron_sync.py`) diffs the wanted set against the
+automation's existing `automation:`-prefixed jobs and calls
+`register_system_job`/`remove_system_job` to reconcile; this runs on every
+automation save and delete, and `sync_all` re-runs it for every stored
+automation at gateway boot. A disabled automation, or a trigger whose
+`source` is not `schedule`, contributes no job. Automation trigger jobs are
+not `system_event` jobs, so they are not protected from the public
+`remove_job`/`update_job` API the way a `system_event` job is — the cron sync
+uses the same `register_system_job`/`remove_system_job` bypass door instead.
 
-When a `loop_trigger` job fires, the gateway's `on_job` callback dispatches
-straight to the loops runtime instead of building an `agent_turn` prompt: the
-loop runtime owns its own prompt, judge, and run bookkeeping. See
-[loops](loops.md) for what happens after that call.
+When an `automation_trigger` job fires, the gateway's `on_job` callback
+dispatches straight to the automations runtime's `try_fire` instead of
+building an `agent_turn` prompt: the automations runtime classifies the
+workflow's own result and owns its own run bookkeeping (see
+`durin/automations/runtime.py`).
+
+**Legacy `loop_trigger` jobs.** The loops subsystem this section used to
+describe is gone, but `CronPayload` still parses `payload.kind ==
+"loop_trigger"` and its `loop` field (`durin/cron/types.py`) so an
+unmigrated, hand-edited, or pre-cutover persisted store still loads without
+crashing. `sync_all` unconditionally prunes every surviving `loop:*` job at
+gateway boot regardless of whether a same-named loop or automation still
+exists, and the boot migration (`durin.automations.migrate.migrate_loops`,
+run just before `sync_all`) prunes them too on the same occasion — deliberate
+belt-and-suspenders, not a conflict, since both removals are idempotent. A
+`loop_trigger` job that still manages to tick before either prune runs is a
+no-op: the gateway's `on_job` callback logs and skips it rather than falling
+through to the generic `agent_turn` dispatch below (an unrelated free-form
+prompt with no handler for it).
 
 ### Session retention
 
-Every `agent_turn` execution creates a session keyed `cron:{id}:run:{timestamp_ms}`. These accumulate over time. The `memory_dream` cron pass runs `reap_expired_run_sessions` (in `durin/cron/reaper.py`) at the end of its execution, scanning for expired per-run session keys — cron runs (`cron:{id}:run:{ms}`) plus loops' judge and filter runs — and deleting those older than `config.cron.run_session_retention_hours` (default 48 hours).
+Every `agent_turn` execution creates a session keyed `cron:{id}:run:{timestamp_ms}`. These accumulate over time. The `memory_dream` cron pass runs `reap_expired_run_sessions` (in `durin/cron/reaper.py`) at the end of its execution, scanning for expired per-run session keys — cron runs (`cron:{id}:run:{ms}`) plus automations' trigger-filter judge runs (`automation:filter:run:{ms}`), plus, for a workspace not yet past the loops cutover, any surviving legacy `loop:judge:run:{ms}` / `loop:filter:run:{ms}` keys — and deleting those older than `config.cron.run_session_retention_hours` (default 48 hours).
 
 ## 5. Key types and entry points
 

@@ -280,11 +280,11 @@ interceptors are skipped. A falsy return lets the message fall through to the
 next interceptor, and eventually to the normal inbound queue, unconsumed. An
 interceptor may be sync or async. An exception raised by an interceptor is
 caught and logged; the message is never dropped on that error, it simply
-continues past the interceptor as if it had returned falsy. The [loops](loops.md)
-subsystem's `TriggerMatcher.handle_inbound` is the only consumer: it wakes a
-claim-waiting loop run or fires a newly
-matched loop trigger, consuming the message so it never reaches the agent as a
-normal turn.
+continues past the interceptor as if it had returned falsy. The automations
+subsystem's `TriggerMatcher.handle_inbound` (`durin/automations/matcher.py`)
+is the only consumer: it wakes a claim-waiting automation run or fires a
+newly matched automation trigger, consuming the message so it never reaches
+the agent as a normal turn.
 
 **Trigger-only messages.** `InboundMessage.trigger_only` marks a message that
 may fire loop triggers but must never become a conversation — an app posting
@@ -465,8 +465,8 @@ against `BaseChannel.send_delta`).
 `send` returns a `SendReceipt` (`durin/bus/events.py`, frozen, single field
 `thread_key: str | None`) identifying the thread the send landed in, so a
 caller can later register a claim that a reply into that thread should wake.
-`thread_key` follows the same per-channel vocabulary the inbound loop matcher
-keys claims on (see "Per-channel thread-key semantics" in `loops.md`):
+`thread_key` follows the same per-channel vocabulary the inbound automations
+matcher keys claims on (`durin/automations/channel_meta.py`'s `InboundFacts.thread_key`):
 
 - **Slack** — `slack:<chat_id>:<ts>`: the existing `thread_ts` when the send
   replies into one, else the ts of whatever message now carries the first

@@ -140,7 +140,8 @@ behaviour, tool iteration limits, and per-model capability overrides.
 | `aux_models.vision` | `null` | Aux model for vision inputs (`preset` or `model`+`provider`) |
 | `aux_models.audio` | `null` | Aux model for audio inputs |
 | `aux_models.memory` | `null` | Highest-priority model for memory dream passes; overrides `dream.model_override` and the bundled default |
-| `aux_models.loops` | `null` | Model for [loops'](../internals/loops.md) goal-judge and semantic trigger-filter calls; unset rides the agent's own live model instead of falling back to a separate default preset |
+| `aux_models.automations` | `null` | Model for automations' semantic trigger-filter calls; unset rides the agent's own live model instead of falling back to a separate default preset |
+| `aux_models.loops` | `null` | LEGACY — populates `aux_models.automations` above when set and `automations` isn't; the loops subsystem itself no longer exists |
 
 **`model_presets`** — named sets of model + generation parameters for quick switching.
 Each entry under `model_presets` is a `ModelPresetConfig`:
@@ -715,15 +716,24 @@ Workflow-engine lifecycle: node-visit caps and run-folder retention.
 
 ---
 
-### `loops`
+### `automations`
 
-Loops subsystem lifecycle.
+Automations subsystem lifecycle.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `keep_runs` | `20` | Finalized loop-run manifests kept per loop (`needs_operator` runs are never pruned) |
-| `check_timeout_s` | `60` | Timeout in seconds for a single script goal check |
+| `keep_runs` | `20` | Finalized automation-run manifests kept per automation (`needs_operator` runs are never pruned) |
 | `queue_ttl_s` | `3600` | How long a queued channel event stays fresh before the drain hook drops it unfired |
+
+---
+
+### `loops` (legacy)
+
+The loops subsystem itself no longer exists. `keep_runs`/`queue_ttl_s` set
+here populate the matching `automations.*` key above when `automations`
+doesn't set it explicitly (with a deprecation log); `check_timeout_s` has no
+automations equivalent and is never migrated. Set `automations.*` directly
+instead.
 
 ---
 

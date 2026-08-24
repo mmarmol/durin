@@ -443,7 +443,7 @@ stored scopes. `principal.require(Scope.X)` raises `ForbiddenError` if the
 principal lacks the scope (or `ADMIN`). The scope catalog is declared in the
 `Scope` enum and covers paired read/write scopes for every service domain:
 settings, secrets, skills, cron, sessions, config, memory, MCP, workflows,
-loops, and system.
+automations, and system.
 
 `AuthService` (`durin/service/auth.py`) owns token lifecycle routes; it calls
 `principal.require(Scope.SYSTEM_WRITE)` before issuing or revoking tokens, so

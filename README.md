@@ -34,19 +34,14 @@ gets done.
   <img src="https://raw.githubusercontent.com/mmarmol/durin/main/docs/assets/mockup-workflow.svg" alt="A durin workflow: nodes, a router, parallel branches, a human checkpoint, and a loop-back" width="860">
 </p>
 
-### Loops that chase a goal, not a clock
+### Automations that fire on their own
 
-A workflow runs once; a **loop** runs one *over and over until a goal is actually
-met*. You give it a plain-language goal — plus optional **checks** (a shell command
-that must exit `0`, or an assertion an LLM judge grades) — and durin takes it from
-there: it fires on a **trigger** (a schedule, an inbound message, a webhook, or you
-just asking), runs the workflow, checks the result against the goal, and either
-closes out or tries again next time. And when it keeps missing after a few
-attempts, it doesn't spin forever — it **stops and asks you**.
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/mmarmol/durin/main/docs/assets/mockup-loops.svg" alt="durin's Loops panel: goal-seeking loops with status, checks, and an escalation that pauses to ask you" width="860">
-</p>
+A workflow runs once when you ask; an **automation** runs it again on its own —
+on a schedule, an inbound message, a webhook, or another automation finishing.
+durin classifies the result, decides whether it's worth telling you about, and
+chains into the next automation when one is configured. When a run needs a
+decision only you can make — an approval, a question — it pauses and asks,
+either you or the counterpart you're corresponding with, instead of guessing.
 
 ### A memory that's actually yours
 
@@ -133,7 +128,6 @@ commands, see the [CLI reference](https://github.com/mmarmol/durin/blob/main/doc
 - [Channels](https://github.com/mmarmol/durin/blob/main/docs/guide/channels.md) — Telegram, Slack, Discord, email, and more
 - [Documents & your knowledge](https://github.com/mmarmol/durin/blob/main/docs/guide/documents.md)
 - [Workflows](https://github.com/mmarmol/durin/blob/main/docs/guide/workflows.md)
-- [Loops](https://github.com/mmarmol/durin/blob/main/docs/guide/loops.md) — workflows that repeat until a goal is met
 - [How it works (internals)](https://github.com/mmarmol/durin/blob/main/docs/internals/README.md)
 
 ## License

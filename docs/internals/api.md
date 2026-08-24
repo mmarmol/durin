@@ -207,8 +207,9 @@ External services calling in as webhook callers are not webui/CLI principals,
 so there is no `Principal` to resolve on this route. A missing, non-ASCII, or
 mismatched secret returns 401 before the request body is even parsed. On a
 surface with no `hook_dispatcher` wired the route reports 503 rather than 404,
-the same "not available here" shape the loops runtime's other routes use. See
-[loops.md](loops.md) for what the dispatcher does with a matched request.
+the same "not available here" shape the automations runtime's other routes
+use. See `durin/automations/hooks.py` for what the dispatcher does with a
+matched request.
 
 ### OpenAI-compatible `/v1` surface
 
@@ -320,7 +321,7 @@ URL signing (`get_or_create_media_secret()`), stored base64-encoded in the same
 | `BoundRoute` | `durin/service/registry.py` | `RouteSpec` + `service_name` + handler callable; iterated by the ASGI adapter and the generator |
 | `route` | `durin/service/registry.py` | Decorator that attaches a `RouteSpec` under `__route_spec__` and returns the method unchanged |
 | `Principal` | `durin/service/principal.py` | Frozen dataclass: `subject`, `scopes: frozenset[str]`, `kind`; `Principal.local()` → `{ADMIN}`, `Principal.remote(subject, scopes)` → token-derived |
-| `Scope` | `durin/service/principal.py` | String enum of permission values: `admin` plus `<domain>:<read\|write>` pairs (settings, secrets, skills, cron, sessions, config, memory, mcp, workflows, loops, system) |
+| `Scope` | `durin/service/principal.py` | String enum of permission values: `admin` plus `<domain>:<read\|write>` pairs (settings, secrets, skills, cron, sessions, config, memory, mcp, workflows, automations, system) |
 | `ServiceModel` / `Command` / `Query` / `Result` | `durin/service/types.py` | Pydantic DTO bases: camelCase wire aliases via `to_camel`; `Command`/`Query` forbid extra fields, `Result` allows them |
 | `DomainError` + subclasses | `durin/service/types.py` | Transport-agnostic error hierarchy: `UnauthenticatedError` (401), `ForbiddenError` (403), `NotFoundError` (404), `ConflictError` (409), `ValidationFailedError` (422), `TooManyRequestsError` (429), `UnavailableError` (503) |
 | `build_service_registry` | `durin/service/wiring.py` | Factory for the functional registry: wires all services to real `config`, `session_manager`, `cron_service`, `bus`, optional `mcp_runtime` |
@@ -357,7 +358,7 @@ The route table is the authoritative source; the current operation set spans
 secrets, cron, sessions, settings, config, skills, memory, MCP servers, health,
 commands, agent modes (`/api/v1/modes`), OAuth flows, auth tokens,
 personas/souls (`/api/v1/souls`, `/api/v1/personas`), workflows
-(`/api/v1/workflows`), loops (`/api/v1/loops`), and background tasks
+(`/api/v1/workflows`), automations (`/api/v1/automations`), and background tasks
 (`/api/v1/tasks`). Verbs in use: GET, POST, DELETE, and PATCH (used by
 `McpService.update` and `CronService` for partial updates).
 
@@ -376,15 +377,15 @@ the authoritative field definitions.
 `WorkflowsService.launch`) starts a workflow run detached: it answers 202 with
 `{run_id}` immediately, before the engine has run a single node, and never
 waits for the run to finish. It reaches the engine through the same
-`WorkflowsService.execute` the loops runtime fires through
-(`workflow_exec=_loops_workflows_service.execute` in `durin/cli/commands.py`)
+`WorkflowsService.execute` the automations runtime fires through
+(`workflow_exec=_automations_workflows_service.execute` in `durin/cli/commands.py`)
 — `launch` just wraps that call in `asyncio.create_task` instead of awaiting
 it, pre-generating the run id the way `run_workflow`'s agent-tool
 `background=true` branch does (a separate implementation, since an agent turn
 also streams progress and injects the result back into the chat — neither
 applies to a bare API launch). A caller polls the existing read routes below
 for status: this registry instance carries no `progress_publish` wiring (see
-`workflow.md`'s service-path progress section), so unlike a loop-triggered run
+`workflow.md`'s service-path progress section), so unlike an automation-triggered run
 — which does publish live per-node progress onto the `runs:feed` WebSocket
 key — a run launched here pushes nothing to poll for in between. There is no
 caller session to key the run to (unlike an agent
@@ -410,9 +411,10 @@ human reply continues the same session instead of opening a second one beside
 it. The transcript is written directly rather than published as an inbound
 event — an inbound would run a turn and durin would answer its own post.
 
-This carries the workflow's own prose, not loop status: where an *outcome*
-goes is decided by `durin.loops.outcome.route`, which deliberately refuses to
-report internal status to the external party a channel origin identifies.
+This carries the workflow's own prose, not automation status: where an
+*outcome* goes is decided by `durin.automations.outcome.route`, which
+deliberately refuses to report internal status to the external party a
+channel origin identifies.
 `channels:write` is its own scope because speaking outward as durin, to a
 counterpart, is a different power from editing a session file.
 
@@ -447,7 +449,7 @@ Every error response is RFC 9457 `application/problem+json` with
 | `GET /webui/bootstrap` | Mints an admin-scoped token; gated by peer IP or `token_issue_secret` header |
 | `GET /api/v1/mcp/oauth/callback` | OAuth provider redirect for gateway-driven MCP sign-in; gated by a single-use state token, not a bearer token |
 | `GET /api/media/{sig}/{payload}` | HMAC-signed media fetch; signature verified against the per-process media secret |
-| `POST /api/v1/hooks/{hook}` | Webhook trigger ingress for [loops](loops.md); gated by `X-Durin-Hook-Secret`, not a bearer token |
+| `POST /api/v1/hooks/{hook}` | Webhook trigger ingress for automations; gated by `X-Durin-Hook-Secret`, not a bearer token |
 | `POST /v1/chat/completions` | OpenAI-compatible chat; bearer token with the `chat:write` scope (see below) |
 | `GET /v1/models` | Reports the configured model id; same `chat:write` gate |
 | WebSocket at `channel._expected_path()` | Chat endpoint; auth via query-param token before `accept()`; backed by `StarletteConnectionAdapter` |
