@@ -61,7 +61,9 @@ _PARAMETERS = tool_parameters_schema(
     description=(
         "Manage automations — durin's standing triggers (a schedule, a channel message, "
         "a webhook, or another automation's outcome) that fire a workflow and deliver its "
-        "result. list/status inspect definitions and runs; fire manually starts a run; "
+        "result. This tool is the single source of truth for automations; their schedule "
+        "triggers also appear in `cron list` as read-only `automation:*` system jobs — "
+        "never manage them there. list/status inspect definitions and runs; fire manually starts a run; "
         "answer replies to a run paused for an operator or counterpart reply; "
         "enable/pause toggle a definition's triggers; create defines a new automation "
         "from a JSON definition (same validation as the webui) — sending 'create' again "

@@ -395,3 +395,13 @@ async def test_a_chat_fire_that_loses_the_race_is_retracted_to_the_session(tmp_p
         "kind": "session", "session_key": "websocket:abc",
         "channel": "websocket", "chat_id": "abc",
     }
+
+
+def test_description_directs_the_model_here_over_cron_list(tmp_path) -> None:
+    """Live failure: asked what automations exist, the agent used `cron list`
+    instead of this tool. The description must say this tool is the source
+    of truth and that automation schedule triggers also surface (read-only)
+    in `cron list`, so the model doesn't reach for the wrong one."""
+    tool = AutomationsTool.create(_ctx(tmp_path))
+    assert "single source of truth" in tool.description
+    assert "cron list" in tool.description
