@@ -1059,7 +1059,14 @@ removed by the active filters) stays top-level with a "sub of" marker instead.
 A tray of stranded `needs_input` runs sits on top — compact entries showing
 what each run is waiting on; selecting one opens its detail, where the
 questions and the resume form live. The sidebar's Workflows button carries a
-badge with the stranded-run count so it stays visible from any view. The
+badge with the stranded-run count so it stays visible from any view. Both the
+tray and the badge (`strandedRuns` in `RunsView.tsx`) exclude a run whose
+`origin` names an automation (`automation:<name>`) — the same underlying pause
+an `AutomationRun`'s `status: "paused"` reflects, owned instead by the
+Automations section's own inbox; when at least one such run exists, a footer
+link under the tray opens that section. This keeps a single paused run from
+demanding attention in two vocabularies (plain resume vs. approve/reject) at
+once. The
 detail pane opens with the run's identity (status, workflow, copyable run id,
 the task input clamped behind a click-to-expand), walks the node trace, then
 lists the run's own sub-runs as rows that navigate to the child's detail — and

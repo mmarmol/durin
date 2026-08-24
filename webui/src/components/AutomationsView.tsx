@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, Plus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { AutomationForm } from "@/components/automations/AutomationForm";
 import { DetailView } from "@/components/automations/DetailView";
+import { InboxView } from "@/components/automations/InboxView";
 import { ListView } from "@/components/automations/ListView";
 import { NeedsYouTray } from "@/components/automations/NeedsYouTray";
 import { Button } from "@/components/ui/button";
@@ -77,6 +78,41 @@ export function AutomationsView({
     void refresh();
   }, [refresh]);
 
+  // The run NeedsYouTray's Revisar/Responder selected, if it is still
+  // paused — filtered on status (not just id) so InboxView disappears the
+  // moment a refresh reports it resolved, with no separate "clear the
+  // selection" step required on the happy path (onResolved below still
+  // clears it explicitly, for tidy state rather than correctness).
+  const selectedRun = useMemo(
+    () => runs.find((r) => r.run_id === selectedRunId && r.status === "paused") ?? null,
+    [runs, selectedRunId],
+  );
+
+  // A transient confirmation line shown once InboxView resolves a run —
+  // cleared automatically after a few seconds. Lives here rather than in
+  // InboxView itself because resolving is exactly what makes InboxView
+  // unmount (selectedRun above goes null on the next refresh), so nothing
+  // survives inside that card to show a message once the action succeeds.
+  const [resolutionNotice, setResolutionNotice] = useState<string | null>(null);
+  const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
+    };
+  }, []);
+
+  const onResolved = useCallback(
+    (message: string) => {
+      setResolutionNotice(message);
+      setSelectedRunId(null);
+      void refresh();
+      if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
+      noticeTimerRef.current = setTimeout(() => setResolutionNotice(null), 4000);
+    },
+    [refresh],
+  );
+
   if (editing !== undefined) {
     return (
       <div className="flex h-full w-full flex-col overflow-hidden">
@@ -147,6 +183,12 @@ export function AutomationsView({
                 selectedRunId={selectedRunId}
                 onSelect={(run) => setSelectedRunId(run.run_id)}
               />
+              {resolutionNotice && (
+                <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-[12.5px] text-emerald-700 dark:text-emerald-400">
+                  {resolutionNotice}
+                </div>
+              )}
+              {selectedRun && <InboxView run={selectedRun} onResolved={onResolved} />}
               <ListView
                 automations={automations}
                 runs={runs}

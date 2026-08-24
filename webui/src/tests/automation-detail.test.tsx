@@ -23,6 +23,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
     listCronJobs: vi.fn(),
     listWorkflows: vi.fn(),
     getWorkflowRunManifest: vi.fn(),
+    fireAutomation: vi.fn(),
   };
 });
 
@@ -39,6 +40,7 @@ beforeEach(() => {
     run_id: "wr-1",
     runs: [],
   });
+  vi.mocked(api.fireAutomation).mockResolvedValue({ run_id: "r-new" });
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -455,6 +457,34 @@ describe("DetailView", () => {
     expect(within(screen.getByTestId("run-detail-card")).getByText("completed")).toBeInTheDocument();
     expect(within(screen.getByTestId("run-detail-card")).getByText(/→ #guard-support/)).toBeInTheDocument();
     vi.useRealTimers();
+  });
+
+  it("Ejecutar ahora fires the automation and refreshes the run list", async () => {
+    const listSpy = vi.mocked(api.listAutomationRuns);
+    listSpy.mockClear();
+    listSpy.mockResolvedValue([]);
+    const user = userEvent.setup();
+    render(wrap(<DetailView automation={AUTOMATION} onBack={() => {}} onOpenWorkflowRun={() => {}} />, {}));
+
+    await screen.findByText(/no runs yet/i);
+    const callsBefore = listSpy.mock.calls.length;
+
+    await user.click(screen.getByRole("button", { name: /run now|ejecutar ahora/i }));
+
+    await waitFor(() => expect(api.fireAutomation).toHaveBeenCalledWith("tok", "soporte-guard"));
+    await waitFor(() => expect(listSpy.mock.calls.length).toBeGreaterThan(callsBefore));
+    expect(await screen.findByText(/r-new/)).toBeInTheDocument();
+  });
+
+  it("renders a fireAutomation API error inline instead of throwing", async () => {
+    vi.mocked(api.fireAutomation).mockRejectedValueOnce(new Error("automation is disabled"));
+    const user = userEvent.setup();
+    render(wrap(<DetailView automation={AUTOMATION} onBack={() => {}} onOpenWorkflowRun={() => {}} />, {}));
+
+    await screen.findByText(/no runs yet/i);
+    await user.click(screen.getByRole("button", { name: /run now|ejecutar ahora/i }));
+
+    expect(await screen.findByText("automation is disabled")).toBeInTheDocument();
   });
 });
 

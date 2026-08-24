@@ -380,7 +380,10 @@ run feed, with any run stranded on `needs_input` surfaced in a tray up top —
 questions and a resume form included — so you can find and answer a paused run
 without knowing which session or workflow started it. A badge on the sidebar's
 **Workflows** button shows the count of stranded runs even while you're
-elsewhere in the app.
+elsewhere in the app. A run an [automation](automations.md) paused is excluded
+from this tray and badge — it belongs to the Automations section's own "Needs
+you" inbox instead, so the same paused run never asks for attention in two
+places at once; when one exists, a small link under the tray takes you there.
 
 Each workflow also has a self-improvement mode (`manual` by default): a
 background pass looks at recurring trouble (a node that keeps looping, a

@@ -1388,6 +1388,20 @@
       "review": "Revisar",
       "answer": "Responder"
     },
+    "inbox": {
+      "reviseCommentPlaceholder": "Qué corregir… (tu comentario vuelve al paso que redactó)",
+      "answerPlaceholder": "Tu respuesta…",
+      "approve": "Aprobar",
+      "revise": "Corregir",
+      "reject": "Rechazar",
+      "answerAndResume": "Responder y reanudar",
+      "confirmed": {
+        "approve": "Aprobado.",
+        "revise": "Corrección enviada.",
+        "reject": "Rechazado.",
+        "answer": "Respuesta enviada — corrida reanudada."
+      }
+    },
     "form": {
       "back": "Volver",
       "newTitle": "Nueva automatización",
@@ -1512,7 +1526,9 @@
       },
       "resultLabel": "Resultado",
       "filesLabel": "Archivos",
-      "openRun": "Ver ejecución completa →"
+      "openRun": "Ver ejecución completa →",
+      "fireNow": "Ejecutar ahora",
+      "fireNowStarted": "Corrida {{runId}} iniciada"
     }
   },
   "skills": {
@@ -2561,7 +2577,8 @@
     "selectHint": "Aquí verás su traza de nodos, tiempos, sub-ejecuciones y salida final.",
     "subRuns": "sub-ejecuciones",
     "partOf": "parte de {{workflow}}",
-    "backToList": "volver a ejecuciones"
+    "backToList": "volver a ejecuciones",
+    "openAutomationsInbox": "ver bandeja de automatizaciones"
   },
   "tasks": {
     "status": {

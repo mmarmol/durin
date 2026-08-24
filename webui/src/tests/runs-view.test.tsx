@@ -76,6 +76,21 @@ const LEGACY_NEEDS_INPUT: api.WorkflowGlobalRun = {
   needs_input_node: null,
 };
 
+// A needs_input run that belongs to an automation (origin set by
+// AutomationsRuntime) — genuinely resumable (has a needs_input_node), but
+// owned by the Automations section's own "Te necesita" inbox instead of this
+// tab's tray. See strandedRuns' own two-inboxes comment.
+const NEEDS_INPUT_AUTOMATION: api.WorkflowGlobalRun = {
+  workflow: "cobrar-factura",
+  run_id: "run-automation-paused",
+  status: "needs_input",
+  started_at: 1500,
+  finished_at: null,
+  task: "reclamar la factura FAC-1042",
+  needs_input_node: "enviar-recordatorio",
+  origin: "automation:cobrar-fac-1042",
+};
+
 // A parent pipeline and the two sub-runs it spawned. The feed delivers them
 // newest-first — children ABOVE their parent, the exact interleaving the
 // grouped tree exists to undo.
@@ -120,6 +135,18 @@ describe("strandedRuns", () => {
 
   it("excludes needs_input entries with no needs_input_node (not resumable)", () => {
     expect(strandedRuns([NEEDS_INPUT, LEGACY_NEEDS_INPUT]).map((r) => r.run_id)).toEqual([
+      "run-waiting",
+    ]);
+  });
+
+  it("excludes a resumable needs_input entry whose origin belongs to an automation", () => {
+    expect(strandedRuns([NEEDS_INPUT, NEEDS_INPUT_AUTOMATION]).map((r) => r.run_id)).toEqual([
+      "run-waiting",
+    ]);
+  });
+
+  it("does not exclude a run with no origin at all (an ordinary interactive session)", () => {
+    expect(strandedRuns([{ ...NEEDS_INPUT, origin: null }]).map((r) => r.run_id)).toEqual([
       "run-waiting",
     ]);
   });
@@ -321,6 +348,33 @@ describe("RunsView", () => {
     // Tray (built from strandedRuns) surfaces only the resumable one: exactly
     // one entry carries the tray's "paused …" affordance.
     expect(screen.getAllByText(/paused .*ago/i)).toHaveLength(1);
+  });
+
+  it("shows the automations-inbox footer link only when an automation-origin paused run exists, and fires the callback", async () => {
+    vi.mocked(api.listAllWorkflowRuns).mockResolvedValue([NEEDS_INPUT_AUTOMATION]);
+    const onOpenAutomations = vi.fn();
+    const user = userEvent.setup();
+    render(wrap(<RunsView onOpenAutomations={onOpenAutomations} />));
+
+    const link = await screen.findByRole("button", { name: /view automations inbox/i });
+    await user.click(link);
+    expect(onOpenAutomations).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides the automations-inbox footer link when no automation-origin paused run exists", async () => {
+    vi.mocked(api.listAllWorkflowRuns).mockResolvedValue([NEEDS_INPUT, COMPLETED]);
+    render(wrap(<RunsView />));
+
+    await screen.findByText("summarize the week");
+    expect(screen.queryByRole("button", { name: /view automations inbox/i })).not.toBeInTheDocument();
+  });
+
+  it("shows both the ordinary tray and the automations-inbox link together when both kinds of paused run exist", async () => {
+    vi.mocked(api.listAllWorkflowRuns).mockResolvedValue([NEEDS_INPUT, NEEDS_INPUT_AUTOMATION]);
+    render(wrap(<RunsView />));
+
+    await screen.findByText(/Which environment — staging or prod\?/);
+    expect(screen.getByRole("button", { name: /view automations inbox/i })).toBeInTheDocument();
   });
 
   it("polls while a run is still running", async () => {

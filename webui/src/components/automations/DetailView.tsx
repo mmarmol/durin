@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -7,7 +7,8 @@ import { LiveRunCard } from "@/components/automations/LiveRunCard";
 import { RunDetailCard } from "@/components/automations/RunDetailCard";
 import { RunHistory } from "@/components/automations/RunHistory";
 import { TriggerChips } from "@/components/automations/TriggerChips";
-import { ApiError, listAutomationRuns, type AutomationRun, type AutomationSummary } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import { ApiError, fireAutomation, listAutomationRuns, type AutomationRun, type AutomationSummary } from "@/lib/api";
 import { useClient } from "@/providers/ClientProvider";
 import { cn } from "@/lib/utils";
 
@@ -76,6 +77,39 @@ export function DetailView({
     [runs, selectedRunId],
   );
 
+  // "Ejecutar ahora" (mockup screen 3's header button): fires a fresh manual
+  // run of this automation, then refreshes so it shows up under "running
+  // now" right away. fireNotice is transient (cleared after a few seconds,
+  // same idiom as AutomationsView's own post-resolution confirmation line);
+  // fireError sticks around until the next attempt, like the fetch error
+  // above.
+  const [firing, setFiring] = useState(false);
+  const [fireNotice, setFireNotice] = useState<string | null>(null);
+  const [fireError, setFireError] = useState<string | null>(null);
+  const fireNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (fireNoticeTimerRef.current) clearTimeout(fireNoticeTimerRef.current);
+    };
+  }, []);
+
+  const onFireNow = useCallback(async () => {
+    setFiring(true);
+    setFireError(null);
+    try {
+      const { run_id } = await fireAutomation(token, automation.name);
+      setFireNotice(t("automations.detail.fireNowStarted", { runId: run_id }));
+      if (fireNoticeTimerRef.current) clearTimeout(fireNoticeTimerRef.current);
+      fireNoticeTimerRef.current = setTimeout(() => setFireNotice(null), 4000);
+      await refresh();
+    } catch (e) {
+      setFireError(errMsg(e));
+    } finally {
+      setFiring(false);
+    }
+  }, [token, automation.name, refresh, t]);
+
   return (
     <div className="flex h-full w-full flex-col overflow-hidden">
       <div className="flex items-center gap-2 border-b px-3 py-2">
@@ -87,6 +121,13 @@ export function DetailView({
           {t("automations.form.back")}
         </button>
         <span className="text-xs font-medium text-foreground/80">{automation.name}</span>
+        <div className="ml-auto flex items-center gap-2">
+          {fireNotice && <span className="text-[11px] text-muted-foreground">{fireNotice}</span>}
+          {fireError && <span className="text-[11px] text-destructive">{fireError}</span>}
+          <Button size="sm" variant="outline" disabled={firing} onClick={() => void onFireNow()}>
+            {firing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : t("automations.detail.fireNow")}
+          </Button>
+        </div>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto flex w-full max-w-5xl flex-col gap-3 px-4 py-4">

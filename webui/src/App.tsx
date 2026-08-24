@@ -782,7 +782,7 @@ function Shell({
         )}
         {view === "workflows" && (
           <div className="absolute inset-0 flex flex-col">
-            <WorkflowsView initialSelection={openWorkflowRun} />
+            <WorkflowsView initialSelection={openWorkflowRun} onOpenAutomations={onOpenAutomations} />
           </div>
         )}
         {view === "automations" && (

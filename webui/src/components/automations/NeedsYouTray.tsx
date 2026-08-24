@@ -18,9 +18,11 @@ function capText(text: string, max: number): string {
  *  fire-and-forget message sent from `_on_stuck` on an already-finished
  *  run, never a pause, so it can never show up here as either kind.
  *
- *  Clicking Review/Answer only sets the selection for now — the actual
- *  answer controls (the full inbox) land in a later task; this renders the
- *  selected row highlighted so that task has something to build on. */
+ *  Clicking Review/Answer only sets the selection — this component just
+ *  tracks and highlights it (`data-selected`). The caller (AutomationsView)
+ *  is what turns a selection into something actionable: it renders
+ *  InboxView for the selected run right below this tray, the full
+ *  approve/correct/reject or answer card. */
 export function NeedsYouTray({
   runs,
   selectedRunId,

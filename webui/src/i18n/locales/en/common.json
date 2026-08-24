@@ -1443,7 +1443,8 @@
     "selectHint": "Its node trace, timings, sub-runs and final output show up here.",
     "subRuns": "sub-runs",
     "partOf": "part of {{workflow}}",
-    "backToList": "back to runs"
+    "backToList": "back to runs",
+    "openAutomationsInbox": "View automations inbox"
   },
   "loops": {
     "title": "Loops",
@@ -1653,6 +1654,20 @@
       "review": "Review",
       "answer": "Answer"
     },
+    "inbox": {
+      "reviseCommentPlaceholder": "What to fix… (your comment goes back to the step that drafted it)",
+      "answerPlaceholder": "Your answer…",
+      "approve": "Approve",
+      "revise": "Revise",
+      "reject": "Reject",
+      "answerAndResume": "Answer & resume",
+      "confirmed": {
+        "approve": "Approved.",
+        "revise": "Correction sent.",
+        "reject": "Rejected.",
+        "answer": "Answer sent — run resumed."
+      }
+    },
     "form": {
       "back": "Back",
       "newTitle": "New automation",
@@ -1777,7 +1792,9 @@
       },
       "resultLabel": "Result",
       "filesLabel": "Files",
-      "openRun": "View full execution →"
+      "openRun": "View full execution →",
+      "fireNow": "Run now",
+      "fireNowStarted": "Run {{runId}} started"
     }
   },
   "skills": {
