@@ -5,6 +5,87 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.9.0 — 2026-08-26
+
+### Highlights
+
+- **Automations replace Loops.** Standing work got rebuilt from the ground up:
+  an **automation** binds triggers — a schedule, a matching channel message, a
+  webhook, or another automation finishing — to a workflow, then routes the
+  outcome (delivery channel + how chatty to be) separately from its help lane
+  (where approvals and questions land). An automation can carry a **life
+  condition** — *"until invoice 4471 is paid"* — count its attempts, escalate
+  when stuck, and switch its own triggers off the day the goal is reached.
+  Existing loop definitions, runs, and queues **migrate automatically on first
+  start**; the loops API, tool, and UI are gone. (#554, #555, #556, #557)
+
+- **Workflows can pause for a real approval.** A node marked `approval: true`
+  parks the run with a typed proposal; "approve", "reject", or free text
+  ("make it shorter") resolve it — from the dashboard's inbox, chat, or a
+  channel reply, with bilingual keywords. Send-with-receipt makes channel
+  replies land back in the right thread (Slack status takeover, email
+  thread-root digests). (#551)
+
+- **You can see it, and you can stop it.** The new Automations section shows
+  every definition, the live run with per-node progress, and a full history
+  with each run's cause, delivery record, and approval verdict. A running run
+  takes a graceful **Stop** (the current step finishes; a second click force
+  stops); an operator stop is deliberately invisible — it never notifies, never
+  chains, and never counts against the life condition. Answering a paused run
+  no longer blocks until the workflow finishes — it returns immediately and
+  resumes in the background. (#557, #558)
+
+### Changes
+
+**Automations**
+
+- Trigger bindings: schedule / channel (filters + optional semantic match +
+  `correlate` patterns) / webhook (`POST /api/v1/hooks/{hook}`) / chain, OR-ed
+  per automation; chain cycles are rejected at save. (#554)
+- Delivery vs help routing with `notify: always | failures_only | when_notable
+  | never` (+ `silent_labels`); counterpart-tagged questions answer in the
+  originating thread; a run fired from chat always reports back to that chat.
+  (#554)
+- Life conditions: `achieved_when` (`any_completed` or `label:<L>`),
+  `max_attempts`, `on_stuck` (`notify` / `escalate_pause`); achieved
+  automations disable themselves and remove their cron triggers. (#554, #556)
+- HTTP stop for runs (graceful/`hard`), with the stop intent stamped on the
+  record so a restart never relaunches an operator-stopped run; cancelled runs
+  finalize `interrupted` — no delivery under any policy, no chains,
+  streak-transparent. (#557, #559)
+- Non-blocking answer on both the API and the `automations` chat tool; a
+  failed background resume finalizes the run instead of stranding it. (#557)
+- Boot migration converts loop definitions/runs/claims/queues; `automation:*`
+  cron jobs are protected from toggle/run/remove; queued busy events keep
+  their webhook cause. (#554, #557)
+- The `cron` and `automations` tools now cross-reference each other, and
+  `cron list` labels automation-owned rows — the agent picks the right tool
+  for "what automations do I have?". (#557)
+
+**Workflows**
+
+- Approval pause (`approval: true` + `ask_kind`), terminal route labels
+  (`final_route_label`), send receipts per channel, and service-path progress
+  frames on the `runs:feed` websocket. (#551)
+
+**WebUI**
+
+- Automations section: definitions list with a "needs you" tray, five-group
+  editor (triggers incl. webhook URL + secret reveal, delivery, help, life),
+  detail view with live run card, stop/force-stop, one-click pause/resume,
+  run history with cause/delivery/approval records, and drill-in to the
+  workflow run. Inbox actions: approve / revise / reject. (#555, #557)
+- The whole section ships in all nine languages; the legacy `loops` config
+  section is hidden from the settings editor; the detail view stays live while
+  runs are in flight. (#557, #558)
+- Cron settings show automation triggers as read-only rows with an "open
+  automation" link. (#555)
+
+**Docs**
+
+- The README's automations section carries its own mockup again, replacing the
+  retired loops one; guide and internals docs follow the new subsystem. (#560)
+
 ## 0.8.2 — 2026-08-22
 
 ### Highlights
