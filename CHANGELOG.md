@@ -5,6 +5,22 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.9.1 — 2026-08-26
+
+### Highlights
+
+- **The loops migration no longer gives a standing pipeline an off switch.**
+  A migrated multi-case loop — one with a `correlate` pattern and/or parallel
+  concurrency, serving many tickets/cases at once — was getting a life
+  condition with `achieved_when: "any_completed"`, which disables the whole
+  automation after its first completed run: the pipeline would have switched
+  itself off, silently, the first time it succeeded. Found by running a real
+  ticket through a freshly migrated pipeline. Multi-case loops now migrate
+  with no life at all (plus a warning naming the reason); single-case loops —
+  the shape a life actually models — keep the mapping. If you migrated before
+  this release and your automation carries a `correlate` trigger or parallel
+  concurrency, remove its `life` block. (#563)
+
 ## 0.9.0 — 2026-08-26
 
 ### Highlights
