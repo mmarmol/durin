@@ -104,12 +104,11 @@ def test_guard_support_tickets_shaped_loop_converts_with_documented_mapping(tmp_
 
     assert spec.delivery == Delivery(channel="slack", to="#support-ops", notify="failures_only")
     assert spec.help == Help(channel="slack", to="#support-ops")
-    assert spec.life == Life(
-        intent="every open support ticket gets a same-day human reply",
-        achieved_when="any_completed",
-        max_attempts=5,
-        on_stuck="notify",
-    )
+    # Multi-case loop (correlate pattern + parallel concurrency): the goal is
+    # NOT mapped to a life — achieved_when "any_completed" would disable the
+    # whole automation after its first completed run, killing the standing
+    # pipeline the moment it first succeeds. Proven live on the mxhero box.
+    assert spec.life is None
 
     # goal checks are dropped with a logged warning naming the check and
     # stating the exit-0-labeler equivalent — never a "binary gate" fix.
@@ -119,9 +118,48 @@ def test_guard_support_tickets_shaped_loop_converts_with_documented_mapping(tmp_
     assert any("ACHIEVED" in w and "NOT_ACHIEVED" in w for w in warnings)
     assert any("support-ticket-guard" in w for w in warnings)
     assert not any("binary gate" in w for w in warnings)
+    # ...and the skipped life gets its own warning naming the reason.
+    assert any("goal not migrated to a life condition" in w for w in warnings)
+    assert any("first completed run" in w for w in warnings)
 
     assert any("guard-support-tickets" in a and "migrated" in a for a in actions)
     assert any("exit-0 labeler" in a for a in actions)
+    assert any("goal not migrated to a life condition" in a for a in actions)
+
+
+def test_single_case_loop_keeps_its_goal_as_a_life(tmp_path):
+    """No correlate, single concurrency: the loop chased ONE nameable case,
+    which is exactly what an automation life models — the mapping stays."""
+    data = _guard_support_tickets_dict()
+    data["name"] = "chase-invoice-4471"
+    data["concurrency"] = "single"
+    del data["triggers"][0]["correlate"]
+    _save_loop(tmp_path, data)
+
+    migrate_loops(tmp_path)
+
+    spec = load_automation(tmp_path, "chase-invoice-4471")
+    assert spec.life == Life(
+        intent="every open support ticket gets a same-day human reply",
+        achieved_when="any_completed",
+        max_attempts=5,
+        on_stuck="notify",
+    )
+
+
+def test_parallel_only_loop_also_drops_the_life(tmp_path):
+    """Parallel concurrency alone is a multi-case signal: several cases in
+    flight at once must not share one automation-wide off switch."""
+    data = _guard_support_tickets_dict()
+    data["name"] = "parallel-no-correlate"
+    del data["triggers"][0]["correlate"]
+    _save_loop(tmp_path, data)
+
+    migrate_loops(tmp_path)
+
+    spec = load_automation(tmp_path, "parallel-no-correlate")
+    assert spec.concurrency == "parallel"
+    assert spec.life is None
 
 
 def test_cron_trigger_synthesizes_schedule_task_and_logs(tmp_path):

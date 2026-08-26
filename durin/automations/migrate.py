@@ -82,10 +82,45 @@ def _warn_dropped_check(loop_spec: LoopSpec, i: int, check: GoalCheck, actions: 
     actions.append(note)
 
 
+def _is_multicase(loop_spec: LoopSpec) -> bool:
+    """Whether this loop serves many independent cases at once.
+
+    A loop's goal was judged per RUN: each ticket/case run checked its own
+    completion and the loop stayed armed for the next one. An automation's
+    life belongs to the AUTOMATION: `achieved_when: "any_completed"` disables
+    every trigger after the first completed run. Mapping a multi-case loop's
+    goal onto a life therefore kills the standing pipeline the moment it
+    first succeeds — silently, since disabling is the life feature working
+    as designed. The multi-case signals are a `correlate` pattern on any
+    trigger (each captured id is its own case) or parallel concurrency
+    (several cases in flight at once).
+    """
+    return loop_spec.concurrency == "parallel" or any(
+        t.correlate is not None for t in loop_spec.triggers
+    )
+
+
 def _convert_loop(loop_spec: LoopSpec, actions: list[str]) -> dict:
     for i, check in enumerate(loop_spec.checks):
         _warn_dropped_check(loop_spec, i, check, actions)
-    return {
+    life: dict | None = {
+        "intent": loop_spec.goal_intent,
+        "achieved_when": "any_completed",
+        "max_attempts": loop_spec.stuck_after,
+        "on_stuck": "notify",
+    }
+    if _is_multicase(loop_spec):
+        note = (
+            f"loop '{loop_spec.name}' goal not migrated to a life condition — the loop "
+            "serves many cases (correlate pattern and/or parallel concurrency), and a "
+            'life with achieved_when "any_completed" would disable the automation after '
+            "its first completed run; the automation stays standing with no life. Add a "
+            "life back only for a single-case automation"
+        )
+        logger.warning("migrate: {}", note)
+        actions.append(note)
+        life = None
+    converted = {
         "name": loop_spec.name,
         "workflow": loop_spec.workflow,
         "enabled": loop_spec.enabled,
@@ -94,12 +129,7 @@ def _convert_loop(loop_spec: LoopSpec, actions: list[str]) -> dict:
             _convert_trigger(t, loop_name=loop_spec.name, workflow=loop_spec.workflow, actions=actions)
             for t in loop_spec.triggers
         ],
-        "life": {
-            "intent": loop_spec.goal_intent,
-            "achieved_when": "any_completed",
-            "max_attempts": loop_spec.stuck_after,
-            "on_stuck": "notify",
-        },
+        "life": life,
         "delivery": {
             "channel": loop_spec.operator_channel,
             "to": loop_spec.operator_to,
@@ -110,6 +140,9 @@ def _convert_loop(loop_spec: LoopSpec, actions: list[str]) -> dict:
             "to": loop_spec.operator_to,
         },
     }
+    if life is None:
+        del converted["life"]
+    return converted
 
 
 def _convert_definitions(workspace: Path, loops_dir: Path, actions: list[str]) -> None:
