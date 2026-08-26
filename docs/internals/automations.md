@@ -508,13 +508,17 @@ workflow's own `final_route_label` — so every check is **dropped**, with a war
 naming the loop and the check, instructing that the verification move into the
 referenced workflow as a final exit-0 labeler `cases` node. This is an exit-0
 labeler, not a migration failure: the loop still converts, minus enforcement the
-new object structurally cannot express the old way. `goal.intent` maps straight to
-`life.intent`, with `achieved_when` always fixed to `"any_completed"` and `on_stuck`
-to `"notify"` (loops had no per-label achievement concept, nor a stuck-mode choice);
-`stuck_after`/`operator_channel`/`operator_to` map to `life.max_attempts` and both
-`delivery`/`help`'s `channel`/`to` (delivery's own `notify` is fixed to
-`"failures_only"` for a migrated definition, loops having had no separate
-delivery-policy knob).
+new object structurally cannot express the old way. `goal.intent` maps to
+`life.intent` — with `achieved_when` fixed to `"any_completed"` and `on_stuck` to
+`"notify"` (loops had no per-label achievement concept, nor a stuck-mode choice) —
+**only for a single-case loop**. A multi-case loop (any trigger carrying a
+`correlate` pattern, or `concurrency: "parallel"`) gets **no life at all**, with a
+warning: a loop's goal was judged per run while a life belongs to the automation,
+so `"any_completed"` would disable a standing pipeline the moment its first run
+completes. `stuck_after`/`operator_channel`/`operator_to` map to
+`life.max_attempts` and both `delivery`/`help`'s `channel`/`to` (delivery's own
+`notify` is fixed to `"failures_only"` for a migrated definition, loops having had
+no separate delivery-policy knob).
 
 Alongside definitions, the migration relocates `loops-runs/` →
 `automations-runs/` (`run_log.runs_root`), `loops/claims.json` →
