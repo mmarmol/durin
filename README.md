@@ -42,6 +42,12 @@ durin classifies the result, decides whether it's worth telling you about, and
 chains into the next automation when one is configured. When a run needs a
 decision only you can make — an approval, a question — it pauses and asks,
 either you or the counterpart you're corresponding with, instead of guessing.
+An automation can even carry a goal — *"until invoice 4471 is paid"* — and
+switch itself off the day it's reached.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/mmarmol/durin/main/docs/assets/mockup-automations.svg" alt="durin's Automations: standing triggers that fire workflows, deliver results, pause for approvals, and switch off when their goal is achieved" width="860">
+</p>
 
 ### A memory that's actually yours
 

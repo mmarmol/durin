@@ -1,0 +1,78 @@
+<svg width="1160" height="560" viewBox="0 0 1160 560" xmlns="http://www.w3.org/2000/svg" font-family="system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif" role="img" aria-label="durin Automations mockup: standing triggers that fire workflows, deliver results, pause for approvals, and switch off when their goal is achieved">
+<rect x="0.5" y="0.5" width="1159" height="559" rx="14" fill="#fafbfc" stroke="#e3e5e8"/>
+<!-- header -->
+<text x="30" y="38" font-size="15" font-weight="600" fill="#151719">Automations</text>
+<text x="138" y="38" font-size="13" fill="#6c7175">4 definitions · <tspan fill="#b07d1e">1 needs you</tspan></text>
+<rect x="972" y="17" width="148" height="28" rx="9" fill="#2b9fd4"/>
+<text x="1046" y="35" font-size="12" font-weight="500" text-anchor="middle" fill="#ffffff">+ New automation</text>
+<!-- header divider -->
+<line x1="16" y1="58" x2="1144" y2="58" stroke="#eceef0"/>
+
+<!-- card 1: running, schedule -> workflow -> delivery -->
+<rect x="40" y="76" width="1080" height="104" rx="11" fill="#ffffff" stroke="#e3e5e8"/>
+<text x="60" y="104" font-size="13.5" font-weight="600" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#151719">morning-digest</text>
+<rect x="196" y="91" width="64" height="19" rx="5" fill="none" stroke="#2ba5d4" stroke-opacity="0.55"/>
+<text x="228" y="104" font-size="11" text-anchor="middle" fill="#2ba5d4">running</text>
+<text x="274" y="104" font-size="12" fill="#9aa0a6">fired 07:00 · today</text>
+<circle cx="1034" cy="99" r="5" fill="#3a9d5d"/>
+<circle cx="1052" cy="99" r="5" fill="#3a9d5d"/>
+<circle cx="1070" cy="99" r="5" fill="#3a9d5d"/>
+<circle cx="1088" cy="99" r="5" fill="none" stroke="#2ba5d4"/>
+<!-- trigger -> workflow -> delivery chips -->
+<rect x="60" y="118" width="150" height="20" rx="6" fill="#f2f4f6"/>
+<text x="135" y="132" font-size="11" text-anchor="middle" fill="#6c7175">schedule · daily 07:00</text>
+<path d="M216,128 h14 m-5,-4 l5,4 l-5,4" fill="none" stroke="#9aa0a6" stroke-width="1.3"/>
+<rect x="238" y="118" width="142" height="20" rx="6" fill="#f2f4f6"/>
+<text x="309" y="132" font-size="11" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#151719">inbox-digest</text>
+<path d="M386,128 h14 m-5,-4 l5,4 l-5,4" fill="none" stroke="#9aa0a6" stroke-width="1.3"/>
+<rect x="408" y="118" width="196" height="20" rx="6" fill="#f2f4f6"/>
+<text x="506" y="132" font-size="11" text-anchor="middle" fill="#6c7175">telegram · when notable</text>
+<text x="60" y="164" font-size="11.5" fill="#9aa0a6">live — step 3 of 4 · summarize threads · a silent "nothing new" never pings you</text>
+
+<!-- card 2: needs you (paused approval), amber -->
+<rect x="40" y="196" width="1080" height="104" rx="11" fill="#fffaf3" stroke="#eaddc6"/>
+<text x="60" y="224" font-size="13.5" font-weight="600" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#151719">chase-invoice-4471</text>
+<rect x="238" y="211" width="78" height="19" rx="5" fill="none" stroke="#b07d1e" stroke-opacity="0.6"/>
+<text x="277" y="224" font-size="11" text-anchor="middle" fill="#b07d1e">needs you</text>
+<text x="330" y="224" font-size="12" fill="#9aa0a6">paused 12m ago</text>
+<text x="1090" y="221" font-size="11" text-anchor="end" fill="#9aa0a6">until: invoice paid · attempt 4 of 10</text>
+<rect x="60" y="238" width="168" height="20" rx="6" fill="#f2f4f6"/>
+<text x="144" y="252" font-size="11" text-anchor="middle" fill="#6c7175">email · matches INV-4471</text>
+<rect x="236" y="238" width="158" height="20" rx="6" fill="#f2f4f6"/>
+<text x="315" y="252" font-size="11" text-anchor="middle" fill="#6c7175">schedule · Mon–Fri 09:00</text>
+<text x="60" y="284" font-size="12" fill="#b07d1e">approval — "Send this reminder to billing@acme?"</text>
+<rect x="446" y="270" width="72" height="20" rx="6" fill="#2b9fd4"/>
+<text x="482" y="284" font-size="11" text-anchor="middle" fill="#ffffff">Approve</text>
+<rect x="526" y="270" width="60" height="20" rx="6" fill="#ffffff" stroke="#e3e5e8"/>
+<text x="556" y="284" font-size="11" text-anchor="middle" fill="#151719">Revise</text>
+<rect x="594" y="270" width="60" height="20" rx="6" fill="#ffffff" stroke="#e3e5e8"/>
+<text x="624" y="284" font-size="11" text-anchor="middle" fill="#151719">Reject</text>
+
+<!-- card 3: achieved, auto-disabled -->
+<rect x="40" y="316" width="1080" height="104" rx="11" fill="#ffffff" stroke="#e3e5e8"/>
+<text x="60" y="344" font-size="13.5" font-weight="600" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#151719">onboard-acme</text>
+<rect x="196" y="331" width="70" height="19" rx="5" fill="none" stroke="#3a9d5d" stroke-opacity="0.55"/>
+<text x="231" y="344" font-size="11" text-anchor="middle" fill="#3a9d5d">achieved</text>
+<text x="278" y="344" font-size="12" fill="#9aa0a6">yesterday</text>
+<circle cx="1052" cy="339" r="5" fill="#3a9d5d"/>
+<circle cx="1070" cy="339" r="5" fill="#3a9d5d"/>
+<circle cx="1088" cy="339" r="5" fill="#3a9d5d"/>
+<text x="60" y="372" font-size="12.5" fill="#6c7175">Goal reached — contract signed. Triggers switched themselves off.</text>
+<rect x="60" y="384" width="176" height="20" rx="6" fill="#f2f4f6"/>
+<text x="148" y="398" font-size="11" text-anchor="middle" fill="#6c7175">then → welcome-pack</text>
+<text x="252" y="398" font-size="11.5" fill="#9aa0a6">chained the next automation on its way out</text>
+
+<!-- card 4: webhook + chain, delivered -->
+<rect x="40" y="436" width="1080" height="104" rx="11" fill="#ffffff" stroke="#e3e5e8"/>
+<text x="60" y="464" font-size="13.5" font-weight="600" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#151719">guard-support</text>
+<rect x="182" y="451" width="76" height="19" rx="5" fill="none" stroke="#3a9d5d" stroke-opacity="0.55"/>
+<text x="220" y="464" font-size="11" text-anchor="middle" fill="#3a9d5d">completed</text>
+<text x="272" y="464" font-size="12" fill="#9aa0a6">2m ago</text>
+<circle cx="1070" cy="459" r="5" fill="#3a9d5d"/>
+<circle cx="1088" cy="459" r="5" fill="#3a9d5d"/>
+<rect x="60" y="478" width="170" height="20" rx="6" fill="#f2f4f6"/>
+<text x="145" y="492" font-size="11" text-anchor="middle" fill="#6c7175">webhook · /hooks/tickets</text>
+<rect x="238" y="478" width="120" height="20" rx="6" fill="#f2f4f6"/>
+<text x="298" y="492" font-size="11" text-anchor="middle" fill="#6c7175">chain ← triage</text>
+<text x="60" y="524" font-size="11.5" fill="#9aa0a6">last run — ticket #23124 answered · delivered → slack #support</text>
+</svg>
