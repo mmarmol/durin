@@ -9,6 +9,7 @@ durin/cli/commands.py:_consume_outbound.
 from __future__ import annotations
 
 import asyncio
+import time as _time
 from types import SimpleNamespace
 from typing import Any
 
@@ -69,7 +70,13 @@ async def test_stream_delta_appends_to_open_assistant_bubble(tmp_path) -> None:
         await _inject(bus, "lo, ", _stream_delta=True)
         await _inject(bus, "world", _stream_delta=True)
         await _inject(bus, "", _stream_end=True)
-        await pilot.pause()
+        # Wait for the CONDITION, not a fixed number of event-loop turns: a
+        # single pause() has drained only part of the four bus messages on a
+        # loaded runner (the deltas landed, the stream_end had not yet), so
+        # the cursor assert raced. Bounded so a real regression still fails.
+        deadline = _time.monotonic() + 5.0
+        while app._current_assistant_bubble is not None and _time.monotonic() < deadline:
+            await pilot.pause()
         # Stream end clears the cursor; deltas accumulated in the bubble.
         bubbles = list(chat.query(MessageBubble))
         assert bubbles[-1]._role == "assistant"
