@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-24T07:34:02+00:00",
+  "generated_at": "2026-08-31T14:10:15+00:00",
   "providers": {
     "nvidia": [
       {
@@ -44,16 +44,6 @@
         "supports_function_calling": false
       },
       {
-        "id": "baai/bge-m3",
-        "max_input_tokens": 8192,
-        "max_output_tokens": 1024,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": false,
-        "supports_function_calling": false
-      },
-      {
         "id": "bigcode/starcoder2-15b",
         "max_input_tokens": null,
         "max_output_tokens": null,
@@ -85,6 +75,16 @@
       },
       {
         "id": "deepseek-ai/deepseek-v4-flash-0731",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 384000,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "deepseek-ai/deepseek-v4-pro-0813",
         "max_input_tokens": 1000000,
         "max_output_tokens": 384000,
         "supports_vision": false,
@@ -234,26 +234,6 @@
         "supports_function_calling": false
       },
       {
-        "id": "meta/llama-3.1-70b-instruct",
-        "max_input_tokens": 128000,
-        "max_output_tokens": 4096,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": false,
-        "supports_function_calling": true
-      },
-      {
-        "id": "meta/llama-3.1-8b-instruct",
-        "max_input_tokens": 16000,
-        "max_output_tokens": 4096,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": false,
-        "supports_function_calling": true
-      },
-      {
         "id": "meta/llama-3.2-11b-vision-instruct",
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
@@ -264,40 +244,10 @@
         "supports_function_calling": true
       },
       {
-        "id": "meta/llama-3.2-1b-instruct",
-        "max_input_tokens": 128000,
-        "max_output_tokens": 4096,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": false,
-        "supports_function_calling": true
-      },
-      {
-        "id": "meta/llama-3.2-3b-instruct",
-        "max_input_tokens": 32768,
-        "max_output_tokens": 32000,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": false,
-        "supports_function_calling": false
-      },
-      {
         "id": "meta/llama-3.2-90b-vision-instruct",
         "max_input_tokens": 128000,
         "max_output_tokens": 8192,
         "supports_vision": true,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": false,
-        "supports_function_calling": true
-      },
-      {
-        "id": "meta/llama-3.3-70b-instruct",
-        "max_input_tokens": 128000,
-        "max_output_tokens": 4096,
-        "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
         "supports_reasoning": false,
@@ -544,26 +494,6 @@
         "supports_function_calling": true
       },
       {
-        "id": "nvidia/llama-3.1-nemotron-nano-8b-v1",
-        "max_input_tokens": 131072,
-        "max_output_tokens": 16384,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": true,
-        "supports_function_calling": true
-      },
-      {
-        "id": "nvidia/llama-3.1-nemotron-nano-vl-8b-v1",
-        "max_input_tokens": 32768,
-        "max_output_tokens": 16384,
-        "supports_vision": true,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": true,
-        "supports_function_calling": true
-      },
-      {
         "id": "nvidia/llama-3.1-nemotron-safety-guard-8b-v3",
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
@@ -604,36 +534,6 @@
         "supports_function_calling": false
       },
       {
-        "id": "nvidia/llama-3.3-nemotron-super-49b-v1",
-        "max_input_tokens": 131072,
-        "max_output_tokens": 65536,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": true,
-        "supports_function_calling": true
-      },
-      {
-        "id": "nvidia/llama-3.3-nemotron-super-49b-v1.5",
-        "max_input_tokens": 131072,
-        "max_output_tokens": 65536,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": true,
-        "supports_function_calling": true
-      },
-      {
-        "id": "nvidia/llama-nemotron-embed-1b-v2",
-        "max_input_tokens": null,
-        "max_output_tokens": null,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": false,
-        "supports_function_calling": false
-      },
-      {
         "id": "nvidia/llama-nemotron-embed-vl-1b-v2",
         "max_input_tokens": 32768,
         "max_output_tokens": 2048,
@@ -655,16 +555,6 @@
       },
       {
         "id": "nvidia/mistral-nemo-minitron-8b-8k-instruct",
-        "max_input_tokens": null,
-        "max_output_tokens": null,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": false,
-        "supports_function_calling": false
-      },
-      {
-        "id": "nvidia/nemoretriever-parse",
         "max_input_tokens": null,
         "max_output_tokens": null,
         "supports_vision": false,
@@ -764,26 +654,6 @@
         "supports_function_calling": false
       },
       {
-        "id": "nvidia/nemotron-mini-4b-instruct",
-        "max_input_tokens": 128000,
-        "max_output_tokens": 8192,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": false,
-        "supports_function_calling": true
-      },
-      {
-        "id": "nvidia/nemotron-nano-12b-v2-vl",
-        "max_input_tokens": 128000,
-        "max_output_tokens": 128000,
-        "supports_vision": true,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": true,
-        "supports_function_calling": true
-      },
-      {
         "id": "nvidia/nemotron-nano-3-30b-a3b",
         "max_input_tokens": null,
         "max_output_tokens": null,
@@ -814,36 +684,6 @@
         "supports_function_calling": false
       },
       {
-        "id": "nvidia/nv-embed-v1",
-        "max_input_tokens": 32768,
-        "max_output_tokens": 2048,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": false,
-        "supports_function_calling": false
-      },
-      {
-        "id": "nvidia/nv-embedcode-7b-v1",
-        "max_input_tokens": 32768,
-        "max_output_tokens": 2048,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": false,
-        "supports_function_calling": false
-      },
-      {
-        "id": "nvidia/nv-embedqa-e5-v5",
-        "max_input_tokens": null,
-        "max_output_tokens": null,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": false,
-        "supports_function_calling": false
-      },
-      {
         "id": "nvidia/nv-embedqa-mistral-7b-v2",
         "max_input_tokens": null,
         "max_output_tokens": null,
@@ -862,16 +702,6 @@
         "supports_pdf_input": false,
         "supports_reasoning": false,
         "supports_function_calling": false
-      },
-      {
-        "id": "nvidia/nvidia-nemotron-nano-9b-v2",
-        "max_input_tokens": 131072,
-        "max_output_tokens": 131072,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": true,
-        "supports_function_calling": true
       },
       {
         "id": "nvidia/riva-translate-4b-instruct",
@@ -954,26 +784,6 @@
         "supports_function_calling": false
       },
       {
-        "id": "stepfun-ai/step-3.7-flash",
-        "max_input_tokens": 256000,
-        "max_output_tokens": 16384,
-        "supports_vision": true,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": true,
-        "supports_function_calling": true
-      },
-      {
-        "id": "thinkingmachines/inkling",
-        "max_input_tokens": 1048576,
-        "max_output_tokens": 16384,
-        "supports_vision": true,
-        "supports_audio_input": true,
-        "supports_pdf_input": false,
-        "supports_reasoning": true,
-        "supports_function_calling": true
-      },
-      {
         "id": "writer/palmyra-creative-122b",
         "max_input_tokens": null,
         "max_output_tokens": null,
@@ -1025,26 +835,6 @@
       }
     ],
     "deepseek": [
-      {
-        "id": "deepseek-chat",
-        "max_input_tokens": 1000000,
-        "max_output_tokens": 384000,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": false,
-        "supports_function_calling": true
-      },
-      {
-        "id": "deepseek-reasoner",
-        "max_input_tokens": 1000000,
-        "max_output_tokens": 384000,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": true,
-        "supports_function_calling": true
-      },
       {
         "id": "deepseek-v4-flash",
         "max_input_tokens": 1000000,
@@ -1472,7 +1262,7 @@
       {
         "id": "MiniMaxAI/MiniMax-M2",
         "max_input_tokens": 204800,
-        "max_output_tokens": 128000,
+        "max_output_tokens": 131072,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -1512,7 +1302,7 @@
       {
         "id": "MiniMaxAI/MiniMax-M3",
         "max_input_tokens": 524288,
-        "max_output_tokens": 128000,
+        "max_output_tokens": 512000,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -1744,6 +1534,16 @@
         "max_input_tokens": 262144,
         "max_output_tokens": 131072,
         "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "Qwen/Qwen3.8-27B",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 32768,
+        "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
         "supports_reasoning": true,
@@ -2158,6 +1958,26 @@
         "supports_pdf_input": false,
         "supports_reasoning": true,
         "supports_function_calling": true
+      },
+      {
+        "id": "zai-org/GLM-5.3",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "zai-org/GLM-5.3-Flash",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
       }
     ],
     "longcat": [
@@ -2206,21 +2026,11 @@
       {
         "id": "aion-labs/aion-rp-llama-3.1-8b",
         "max_input_tokens": 32768,
-        "max_output_tokens": 32768,
+        "max_output_tokens": 29491,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
         "supports_reasoning": false,
-        "supports_function_calling": false
-      },
-      {
-        "id": "allenai/olmo-3-32b-think",
-        "max_input_tokens": 65536,
-        "max_output_tokens": 65536,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": true,
         "supports_function_calling": false
       },
       {
@@ -2456,21 +2266,11 @@
       {
         "id": "arcee-ai/trinity-large-thinking",
         "max_input_tokens": 262144,
-        "max_output_tokens": 262144,
+        "max_output_tokens": 80000,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
         "supports_reasoning": true,
-        "supports_function_calling": true
-      },
-      {
-        "id": "arcee-ai/virtuoso-large",
-        "max_input_tokens": 131072,
-        "max_output_tokens": 64000,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": false,
         "supports_function_calling": true
       },
       {
@@ -2506,7 +2306,7 @@
       {
         "id": "bytedance-seed/seed-2-1-turbo",
         "max_input_tokens": 262144,
-        "max_output_tokens": 262144,
+        "max_output_tokens": 235929,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -2626,7 +2426,7 @@
       {
         "id": "deepseek/deepseek-chat-v3-0324",
         "max_input_tokens": 163840,
-        "max_output_tokens": 163840,
+        "max_output_tokens": 147456,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -2636,7 +2436,7 @@
       {
         "id": "deepseek/deepseek-chat-v3.1",
         "max_input_tokens": 163840,
-        "max_output_tokens": 161000,
+        "max_output_tokens": 144900,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -2666,7 +2466,7 @@
       {
         "id": "deepseek/deepseek-r1-distill-llama-70b",
         "max_input_tokens": 8192,
-        "max_output_tokens": 8192,
+        "max_output_tokens": 7372,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -2686,7 +2486,7 @@
       {
         "id": "deepseek/deepseek-v3.2",
         "max_input_tokens": 163840,
-        "max_output_tokens": 163840,
+        "max_output_tokens": 65536,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -2716,7 +2516,7 @@
       {
         "id": "deepseek/deepseek-v4-flash-0731",
         "max_input_tokens": 1310720,
-        "max_output_tokens": 131072,
+        "max_output_tokens": 943718,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -2756,7 +2556,7 @@
       {
         "id": "dots-studio/dots-3-note-preview:free",
         "max_input_tokens": 512000,
-        "max_output_tokens": 512000,
+        "max_output_tokens": 460800,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -2866,7 +2666,7 @@
       {
         "id": "google/gemini-3.1-flash-image-preview",
         "max_input_tokens": 65536,
-        "max_output_tokens": 65536,
+        "max_output_tokens": 58982,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -2886,7 +2686,7 @@
       {
         "id": "google/gemini-3.1-flash-lite-image",
         "max_input_tokens": 65536,
-        "max_output_tokens": 65536,
+        "max_output_tokens": 58982,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -2985,8 +2785,8 @@
       },
       {
         "id": "google/gemma-3-27b-it",
-        "max_input_tokens": 262144,
-        "max_output_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 117964,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -2998,16 +2798,6 @@
         "max_input_tokens": 131072,
         "max_output_tokens": 16384,
         "supports_vision": true,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": false,
-        "supports_function_calling": false
-      },
-      {
-        "id": "google/gemma-3n-e4b-it",
-        "max_input_tokens": 32768,
-        "max_output_tokens": 32768,
-        "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
         "supports_reasoning": false,
@@ -3036,7 +2826,7 @@
       {
         "id": "google/gemma-4-31b-it",
         "max_input_tokens": 262144,
-        "max_output_tokens": 262144,
+        "max_output_tokens": 16384,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -3076,7 +2866,7 @@
       {
         "id": "gryphe/mythomax-l2-13b",
         "max_input_tokens": 8192,
-        "max_output_tokens": 4096,
+        "max_output_tokens": 3686,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -3086,7 +2876,7 @@
       {
         "id": "ibm-granite/granite-4.0-h-micro",
         "max_input_tokens": 131000,
-        "max_output_tokens": 131000,
+        "max_output_tokens": 117900,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -3096,7 +2886,7 @@
       {
         "id": "ibm-granite/granite-4.1-8b",
         "max_input_tokens": 131072,
-        "max_output_tokens": 131072,
+        "max_output_tokens": 117964,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -3114,26 +2904,6 @@
         "supports_function_calling": true
       },
       {
-        "id": "inclusionai/ling-2.6-1t",
-        "max_input_tokens": 262144,
-        "max_output_tokens": 32768,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": false,
-        "supports_function_calling": true
-      },
-      {
-        "id": "inclusionai/ling-2.6-flash",
-        "max_input_tokens": 262144,
-        "max_output_tokens": 32768,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": false,
-        "supports_function_calling": true
-      },
-      {
         "id": "inclusionai/ling-3.0-flash",
         "max_input_tokens": 262144,
         "max_output_tokens": 32768,
@@ -3144,9 +2914,9 @@
         "supports_function_calling": true
       },
       {
-        "id": "inclusionai/ring-2.6-1t",
+        "id": "inclusionai/ling-3.0-flash-fin:free",
         "max_input_tokens": 262144,
-        "max_output_tokens": 65536,
+        "max_output_tokens": 32768,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -3166,7 +2936,7 @@
       {
         "id": "kwaipilot/kat-coder-pro-v2",
         "max_input_tokens": 262144,
-        "max_output_tokens": 80000,
+        "max_output_tokens": 144000,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -3175,7 +2945,7 @@
       },
       {
         "id": "kwaipilot/kat-coder-pro-v2.5",
-        "max_input_tokens": 256000,
+        "max_input_tokens": 262144,
         "max_output_tokens": 80000,
         "supports_vision": false,
         "supports_audio_input": false,
@@ -3226,7 +2996,7 @@
       {
         "id": "meta-llama/llama-3.1-8b-instruct",
         "max_input_tokens": 131072,
-        "max_output_tokens": 131072,
+        "max_output_tokens": 117964,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -3236,7 +3006,7 @@
       {
         "id": "meta-llama/llama-3.2-1b-instruct",
         "max_input_tokens": 60000,
-        "max_output_tokens": 60000,
+        "max_output_tokens": 54000,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -3246,7 +3016,7 @@
       {
         "id": "meta-llama/llama-3.2-3b-instruct",
         "max_input_tokens": 131072,
-        "max_output_tokens": 131072,
+        "max_output_tokens": 117964,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -3256,7 +3026,7 @@
       {
         "id": "meta-llama/llama-3.3-70b-instruct",
         "max_input_tokens": 131072,
-        "max_output_tokens": 16384,
+        "max_output_tokens": 115200,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -3266,7 +3036,7 @@
       {
         "id": "meta-llama/llama-4-maverick",
         "max_input_tokens": 1048576,
-        "max_output_tokens": 16384,
+        "max_output_tokens": 115200,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -3276,7 +3046,7 @@
       {
         "id": "meta-llama/llama-4-scout",
         "max_input_tokens": 1310720,
-        "max_output_tokens": 16384,
+        "max_output_tokens": 8192,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -3285,7 +3055,7 @@
       },
       {
         "id": "meta-llama/llama-guard-4-12b",
-        "max_input_tokens": 1048576,
+        "max_input_tokens": 163840,
         "max_output_tokens": 16384,
         "supports_vision": true,
         "supports_audio_input": false,
@@ -3296,7 +3066,7 @@
       {
         "id": "meta/muse-glimmer-30b",
         "max_input_tokens": 131072,
-        "max_output_tokens": 131072,
+        "max_output_tokens": 16384,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -3306,7 +3076,7 @@
       {
         "id": "meta/muse-spark-1.1",
         "max_input_tokens": 1048576,
-        "max_output_tokens": 1048576,
+        "max_output_tokens": 943718,
         "supports_vision": true,
         "supports_audio_input": true,
         "supports_pdf_input": true,
@@ -3316,7 +3086,7 @@
       {
         "id": "meta/muse-spark-1.2",
         "max_input_tokens": 1048576,
-        "max_output_tokens": 1048576,
+        "max_output_tokens": 943718,
         "supports_vision": true,
         "supports_audio_input": true,
         "supports_pdf_input": true,
@@ -3326,7 +3096,7 @@
       {
         "id": "meta/muse-spark-1.2-contributor",
         "max_input_tokens": 1048576,
-        "max_output_tokens": 1048576,
+        "max_output_tokens": 943718,
         "supports_vision": true,
         "supports_audio_input": true,
         "supports_pdf_input": true,
@@ -3336,7 +3106,7 @@
       {
         "id": "microsoft/phi-4",
         "max_input_tokens": 16384,
-        "max_output_tokens": 16384,
+        "max_output_tokens": 14745,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -3356,7 +3126,7 @@
       {
         "id": "minimax/minimax-01",
         "max_input_tokens": 1000192,
-        "max_output_tokens": 1000192,
+        "max_output_tokens": 900172,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -3424,6 +3194,16 @@
         "supports_function_calling": true
       },
       {
+        "id": "minimax/minimax-m2.7:free",
+        "max_input_tokens": 196608,
+        "max_output_tokens": 176947,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
         "id": "minimax/minimax-m3",
         "max_input_tokens": 1048576,
         "max_output_tokens": 512000,
@@ -3434,9 +3214,29 @@
         "supports_function_calling": true
       },
       {
+        "id": "minimax/minimax-m3:free",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 943718,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
         "id": "mistralai/codestral-2508",
         "max_input_tokens": 256000,
-        "max_output_tokens": 256000,
+        "max_output_tokens": 204800,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": false,
+        "supports_function_calling": true
+      },
+      {
+        "id": "mistralai/devstral-2512",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 209715,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": true,
@@ -3446,7 +3246,7 @@
       {
         "id": "mistralai/ministral-14b-2512",
         "max_input_tokens": 262144,
-        "max_output_tokens": 262144,
+        "max_output_tokens": 209715,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -3456,7 +3256,7 @@
       {
         "id": "mistralai/ministral-3b-2512",
         "max_input_tokens": 131072,
-        "max_output_tokens": 131072,
+        "max_output_tokens": 104857,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -3464,19 +3264,9 @@
         "supports_function_calling": true
       },
       {
-        "id": "mistralai/ministral-8b",
-        "max_input_tokens": 128000,
-        "max_output_tokens": 128000,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": false,
-        "supports_function_calling": false
-      },
-      {
         "id": "mistralai/ministral-8b-2512",
         "max_input_tokens": 262144,
-        "max_output_tokens": 262144,
+        "max_output_tokens": 209715,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -3486,7 +3276,7 @@
       {
         "id": "mistralai/mistral-large",
         "max_input_tokens": 128000,
-        "max_output_tokens": 128000,
+        "max_output_tokens": 102400,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": true,
@@ -3496,7 +3286,7 @@
       {
         "id": "mistralai/mistral-large-2407",
         "max_input_tokens": 131072,
-        "max_output_tokens": 131072,
+        "max_output_tokens": 104857,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": true,
@@ -3506,7 +3296,7 @@
       {
         "id": "mistralai/mistral-large-2512",
         "max_input_tokens": 262144,
-        "max_output_tokens": 262144,
+        "max_output_tokens": 209715,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": true,
@@ -3516,7 +3306,7 @@
       {
         "id": "mistralai/mistral-medium-3",
         "max_input_tokens": 131072,
-        "max_output_tokens": 131072,
+        "max_output_tokens": 104857,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": true,
@@ -3526,7 +3316,7 @@
       {
         "id": "mistralai/mistral-medium-3-5",
         "max_input_tokens": 262144,
-        "max_output_tokens": 262144,
+        "max_output_tokens": 209715,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": true,
@@ -3536,7 +3326,7 @@
       {
         "id": "mistralai/mistral-medium-3.1",
         "max_input_tokens": 131072,
-        "max_output_tokens": 262144,
+        "max_output_tokens": 104857,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": true,
@@ -3556,7 +3346,7 @@
       {
         "id": "mistralai/mistral-saba",
         "max_input_tokens": 32768,
-        "max_output_tokens": 32768,
+        "max_output_tokens": 26214,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": true,
@@ -3576,7 +3366,7 @@
       {
         "id": "mistralai/mistral-small-2603",
         "max_input_tokens": 262144,
-        "max_output_tokens": 262144,
+        "max_output_tokens": 209715,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -3586,7 +3376,7 @@
       {
         "id": "mistralai/mistral-small-3.1-24b-instruct",
         "max_input_tokens": 128000,
-        "max_output_tokens": 128000,
+        "max_output_tokens": 102400,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -3606,7 +3396,7 @@
       {
         "id": "mistralai/mixtral-8x22b-instruct",
         "max_input_tokens": 65536,
-        "max_output_tokens": 65536,
+        "max_output_tokens": 52428,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": true,
@@ -3615,8 +3405,8 @@
       },
       {
         "id": "mistralai/voxtral-small-24b-2507",
-        "max_input_tokens": 32000,
-        "max_output_tokens": 32000,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 26214,
         "supports_vision": false,
         "supports_audio_input": true,
         "supports_pdf_input": true,
@@ -3656,7 +3446,7 @@
       {
         "id": "moonshotai/kimi-k2.5",
         "max_input_tokens": 262144,
-        "max_output_tokens": 262144,
+        "max_output_tokens": 235929,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -3666,7 +3456,7 @@
       {
         "id": "moonshotai/kimi-k2.6",
         "max_input_tokens": 262144,
-        "max_output_tokens": 262144,
+        "max_output_tokens": 235929,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -3676,7 +3466,7 @@
       {
         "id": "moonshotai/kimi-k2.7-code",
         "max_input_tokens": 262144,
-        "max_output_tokens": 262144,
+        "max_output_tokens": 235929,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -3686,7 +3476,7 @@
       {
         "id": "moonshotai/kimi-k3",
         "max_input_tokens": 1048576,
-        "max_output_tokens": 1048576,
+        "max_output_tokens": 943718,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -3716,7 +3506,7 @@
       {
         "id": "nex-agi/nex-n2-mini",
         "max_input_tokens": 262144,
-        "max_output_tokens": 262144,
+        "max_output_tokens": 235929,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -3726,7 +3516,7 @@
       {
         "id": "nex-agi/nex-n2-pro",
         "max_input_tokens": 262144,
-        "max_output_tokens": 262144,
+        "max_output_tokens": 235929,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -3756,7 +3546,7 @@
       {
         "id": "nousresearch/hermes-4-405b",
         "max_input_tokens": 131072,
-        "max_output_tokens": 131072,
+        "max_output_tokens": 117964,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -3766,7 +3556,7 @@
       {
         "id": "nousresearch/hermes-4-70b",
         "max_input_tokens": 131072,
-        "max_output_tokens": 131072,
+        "max_output_tokens": 117964,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -3776,17 +3566,7 @@
       {
         "id": "nvidia/nemotron-3-nano-30b-a3b",
         "max_input_tokens": 262144,
-        "max_output_tokens": 262144,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": true,
-        "supports_function_calling": true
-      },
-      {
-        "id": "nvidia/nemotron-3-nano-30b-a3b:free",
-        "max_input_tokens": 256000,
-        "max_output_tokens": 256000,
+        "max_output_tokens": 228000,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -3816,7 +3596,7 @@
       {
         "id": "nvidia/nemotron-3-super-120b-a12b:free",
         "max_input_tokens": 262144,
-        "max_output_tokens": 262144,
+        "max_output_tokens": 235929,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -3825,7 +3605,7 @@
       },
       {
         "id": "nvidia/nemotron-3-ultra-550b-a55b",
-        "max_input_tokens": 512288,
+        "max_input_tokens": 262144,
         "max_output_tokens": 16384,
         "supports_vision": false,
         "supports_audio_input": false,
@@ -3874,26 +3654,6 @@
         "supports_function_calling": true
       },
       {
-        "id": "nvidia/nemotron-nano-12b-v2-vl:free",
-        "max_input_tokens": 128000,
-        "max_output_tokens": 128000,
-        "supports_vision": true,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": true,
-        "supports_function_calling": true
-      },
-      {
-        "id": "nvidia/nemotron-nano-9b-v2:free",
-        "max_input_tokens": 128000,
-        "max_output_tokens": 128000,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": true,
-        "supports_function_calling": true
-      },
-      {
         "id": "openai/gpt-3.5-turbo",
         "max_input_tokens": 16385,
         "max_output_tokens": 4096,
@@ -3906,7 +3666,7 @@
       {
         "id": "openai/gpt-3.5-turbo-0613",
         "max_input_tokens": 4095,
-        "max_output_tokens": 4096,
+        "max_output_tokens": 3685,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -3926,7 +3686,7 @@
       {
         "id": "openai/gpt-3.5-turbo-instruct",
         "max_input_tokens": 4095,
-        "max_output_tokens": 4096,
+        "max_output_tokens": 3685,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -4366,7 +4126,7 @@
       {
         "id": "openai/gpt-oss-120b",
         "max_input_tokens": 131072,
-        "max_output_tokens": 131072,
+        "max_output_tokens": 117964,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -4376,7 +4136,7 @@
       {
         "id": "openai/gpt-oss-20b",
         "max_input_tokens": 131072,
-        "max_output_tokens": 131072,
+        "max_output_tokens": 117964,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -4536,7 +4296,7 @@
       {
         "id": "perplexity/sonar",
         "max_input_tokens": 127072,
-        "max_output_tokens": 127072,
+        "max_output_tokens": 114364,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -4546,7 +4306,7 @@
       {
         "id": "perplexity/sonar-deep-research",
         "max_input_tokens": 128000,
-        "max_output_tokens": 128000,
+        "max_output_tokens": 115200,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -4576,7 +4336,7 @@
       {
         "id": "perplexity/sonar-reasoning-pro",
         "max_input_tokens": 128000,
-        "max_output_tokens": 128000,
+        "max_output_tokens": 115200,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -4636,7 +4396,7 @@
       {
         "id": "qwen/qwen-2.5-7b-instruct",
         "max_input_tokens": 32768,
-        "max_output_tokens": 32768,
+        "max_output_tokens": 29491,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -4646,7 +4406,7 @@
       {
         "id": "qwen/qwen-2.5-coder-32b-instruct",
         "max_input_tokens": 32768,
-        "max_output_tokens": 32768,
+        "max_output_tokens": 29491,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -4674,19 +4434,9 @@
         "supports_function_calling": true
       },
       {
-        "id": "qwen/qwen-plus-2025-07-28:thinking",
-        "max_input_tokens": 1000000,
-        "max_output_tokens": 32768,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": true,
-        "supports_function_calling": true
-      },
-      {
         "id": "qwen/qwen2.5-vl-72b-instruct",
         "max_input_tokens": 128000,
-        "max_output_tokens": 128000,
+        "max_output_tokens": 28800,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -4716,7 +4466,7 @@
       {
         "id": "qwen/qwen3-235b-a22b-2507",
         "max_input_tokens": 262144,
-        "max_output_tokens": 16384,
+        "max_output_tokens": 235929,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -4725,8 +4475,8 @@
       },
       {
         "id": "qwen/qwen3-235b-a22b-thinking-2507",
-        "max_input_tokens": 262144,
-        "max_output_tokens": 32768,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 117964,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -4796,7 +4546,7 @@
       {
         "id": "qwen/qwen3-coder-30b-a3b-instruct",
         "max_input_tokens": 262144,
-        "max_output_tokens": 262144,
+        "max_output_tokens": 235929,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -4816,7 +4566,7 @@
       {
         "id": "qwen/qwen3-coder-next",
         "max_input_tokens": 262144,
-        "max_output_tokens": 262144,
+        "max_output_tokens": 235929,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -4856,7 +4606,7 @@
       {
         "id": "qwen/qwen3-next-80b-a3b-instruct",
         "max_input_tokens": 262144,
-        "max_output_tokens": 262144,
+        "max_output_tokens": 16384,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -4896,7 +4646,7 @@
       {
         "id": "qwen/qwen3-vl-30b-a3b-instruct",
         "max_input_tokens": 262144,
-        "max_output_tokens": 32768,
+        "max_output_tokens": 16384,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -4946,7 +4696,7 @@
       {
         "id": "qwen/qwen3.5-122b-a10b",
         "max_input_tokens": 262144,
-        "max_output_tokens": 262144,
+        "max_output_tokens": 81920,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -4966,7 +4716,7 @@
       {
         "id": "qwen/qwen3.5-35b-a3b",
         "max_input_tokens": 262144,
-        "max_output_tokens": 262144,
+        "max_output_tokens": 235929,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -4976,7 +4726,7 @@
       {
         "id": "qwen/qwen3.5-397b-a17b",
         "max_input_tokens": 262144,
-        "max_output_tokens": 262144,
+        "max_output_tokens": 65536,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -4986,7 +4736,7 @@
       {
         "id": "qwen/qwen3.5-9b",
         "max_input_tokens": 262144,
-        "max_output_tokens": 262144,
+        "max_output_tokens": 235929,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -5026,7 +4776,7 @@
       {
         "id": "qwen/qwen3.6-27b",
         "max_input_tokens": 262144,
-        "max_output_tokens": 81920,
+        "max_output_tokens": 235929,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -5036,7 +4786,7 @@
       {
         "id": "qwen/qwen3.6-35b-a3b",
         "max_input_tokens": 262144,
-        "max_output_tokens": 262144,
+        "max_output_tokens": 235929,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -5106,7 +4856,7 @@
       {
         "id": "qwen/qwen3.8-2.4t-a95b",
         "max_input_tokens": 1048576,
-        "max_output_tokens": 131072,
+        "max_output_tokens": 262144,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -5115,6 +4865,16 @@
       },
       {
         "id": "qwen/qwen3.8-27b",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 131072,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "qwen/qwen3.8-flash",
         "max_input_tokens": 1000000,
         "max_output_tokens": 131072,
         "supports_vision": true,
@@ -5136,7 +4896,7 @@
       {
         "id": "rekaai/reka-edge",
         "max_input_tokens": 16384,
-        "max_output_tokens": 16384,
+        "max_output_tokens": 14745,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -5146,7 +4906,7 @@
       {
         "id": "rekaai/reka-flash-3",
         "max_input_tokens": 65536,
-        "max_output_tokens": 65536,
+        "max_output_tokens": 58982,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -5196,7 +4956,7 @@
       {
         "id": "sao10k/l3-lunaris-8b",
         "max_input_tokens": 8192,
-        "max_output_tokens": 16384,
+        "max_output_tokens": 7372,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -5224,16 +4984,6 @@
         "supports_function_calling": false
       },
       {
-        "id": "stealth/ox-alpha",
-        "max_input_tokens": 1048576,
-        "max_output_tokens": 131072,
-        "supports_vision": true,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": true,
-        "supports_function_calling": true
-      },
-      {
         "id": "stepfun/step-3.5-flash",
         "max_input_tokens": 262144,
         "max_output_tokens": 65536,
@@ -5246,7 +4996,7 @@
       {
         "id": "stepfun/step-3.7-flash",
         "max_input_tokens": 262144,
-        "max_output_tokens": 256000,
+        "max_output_tokens": 230400,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -5256,7 +5006,7 @@
       {
         "id": "tencent/hunyuan-a13b-instruct",
         "max_input_tokens": 131072,
-        "max_output_tokens": 131072,
+        "max_output_tokens": 117964,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -5306,7 +5056,17 @@
       {
         "id": "tencent/hy3-preview",
         "max_input_tokens": 262144,
-        "max_output_tokens": 262144,
+        "max_output_tokens": 235929,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "tencent/hy4-preview",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 64000,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -5316,17 +5076,7 @@
       {
         "id": "thedrummer/cydonia-24b-v4.1",
         "max_input_tokens": 131072,
-        "max_output_tokens": 131072,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": false,
-        "supports_function_calling": false
-      },
-      {
-        "id": "thedrummer/rocinante-12b",
-        "max_input_tokens": 65536,
-        "max_output_tokens": 65536,
+        "max_output_tokens": 117964,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -5336,7 +5086,7 @@
       {
         "id": "thedrummer/skyfall-36b-v2",
         "max_input_tokens": 32768,
-        "max_output_tokens": 32768,
+        "max_output_tokens": 29491,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -5346,7 +5096,7 @@
       {
         "id": "thedrummer/unslopnemo-12b",
         "max_input_tokens": 1024000,
-        "max_output_tokens": 32768,
+        "max_output_tokens": 26214,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -5356,7 +5106,7 @@
       {
         "id": "thinkingmachines/inkling",
         "max_input_tokens": 1048576,
-        "max_output_tokens": 262144,
+        "max_output_tokens": 471859,
         "supports_vision": true,
         "supports_audio_input": true,
         "supports_pdf_input": false,
@@ -5375,7 +5125,7 @@
       },
       {
         "id": "thinkingmachines/inkling-small:free",
-        "max_input_tokens": 262144,
+        "max_input_tokens": 1048576,
         "max_output_tokens": 262144,
         "supports_vision": true,
         "supports_audio_input": true,
@@ -5385,7 +5135,7 @@
       },
       {
         "id": "thinkingmachines/inkling:free",
-        "max_input_tokens": 262144,
+        "max_input_tokens": 1048576,
         "max_output_tokens": 262144,
         "supports_vision": true,
         "supports_audio_input": true,
@@ -5406,7 +5156,7 @@
       {
         "id": "upstage/solar-pro-3",
         "max_input_tokens": 131072,
-        "max_output_tokens": 131072,
+        "max_output_tokens": 117964,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -5436,7 +5186,7 @@
       {
         "id": "x-ai/grok-4.20",
         "max_input_tokens": 2000000,
-        "max_output_tokens": 2000000,
+        "max_output_tokens": 1800000,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": true,
@@ -5446,7 +5196,7 @@
       {
         "id": "x-ai/grok-4.20-multi-agent",
         "max_input_tokens": 2000000,
-        "max_output_tokens": 2000000,
+        "max_output_tokens": 1800000,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": true,
@@ -5456,7 +5206,7 @@
       {
         "id": "x-ai/grok-4.3",
         "max_input_tokens": 1000000,
-        "max_output_tokens": 1000000,
+        "max_output_tokens": 900000,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": true,
@@ -5466,7 +5216,7 @@
       {
         "id": "x-ai/grok-4.5",
         "max_input_tokens": 500000,
-        "max_output_tokens": 500000,
+        "max_output_tokens": 450000,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": true,
@@ -5476,7 +5226,7 @@
       {
         "id": "x-ai/grok-4.6",
         "max_input_tokens": 500000,
-        "max_output_tokens": 500000,
+        "max_output_tokens": 450000,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": true,
@@ -5486,7 +5236,7 @@
       {
         "id": "x-ai/grok-build-0.1",
         "max_input_tokens": 256000,
-        "max_output_tokens": 256000,
+        "max_output_tokens": 230400,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": true,
@@ -5546,7 +5296,7 @@
       {
         "id": "z-ai/glm-4.6",
         "max_input_tokens": 204800,
-        "max_output_tokens": 131072,
+        "max_output_tokens": 16384,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -5616,7 +5366,7 @@
       {
         "id": "z-ai/glm-5.2",
         "max_input_tokens": 1048576,
-        "max_output_tokens": 131072,
+        "max_output_tokens": 262144,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -5626,7 +5376,7 @@
       {
         "id": "z-ai/glm-5.2:free",
         "max_input_tokens": 256000,
-        "max_output_tokens": 256000,
+        "max_output_tokens": 230400,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -5635,9 +5385,19 @@
       },
       {
         "id": "z-ai/glm-5.3",
-        "max_input_tokens": 1048576,
+        "max_input_tokens": 1310720,
         "max_output_tokens": 131072,
         "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "z-ai/glm-5.3-flash",
+        "max_input_tokens": 1310720,
+        "max_output_tokens": 131072,
+        "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
         "supports_reasoning": true,
@@ -5696,7 +5456,7 @@
       {
         "id": "~deepseek/deepseek-v4-flash-latest",
         "max_input_tokens": 1310720,
-        "max_output_tokens": 1048576,
+        "max_output_tokens": 393216,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -5726,7 +5486,7 @@
       {
         "id": "~moonshotai/kimi-latest",
         "max_input_tokens": 1048576,
-        "max_output_tokens": 974842,
+        "max_output_tokens": 943718,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -5756,7 +5516,7 @@
       {
         "id": "~x-ai/grok-latest",
         "max_input_tokens": 500000,
-        "max_output_tokens": 1000000,
+        "max_output_tokens": 450000,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": true,
@@ -5765,7 +5525,7 @@
       },
       {
         "id": "~z-ai/glm-latest",
-        "max_input_tokens": 1048576,
+        "max_input_tokens": 1310720,
         "max_output_tokens": 131072,
         "supports_vision": false,
         "supports_audio_input": false,
@@ -7908,6 +7668,26 @@
         "supports_pdf_input": false,
         "supports_reasoning": true,
         "supports_function_calling": true
+      },
+      {
+        "id": "glm-5.3-flash",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 131072,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "glm-5.3-highspeed",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 131072,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
       }
     ],
     "dashscope": [
@@ -8432,6 +8212,16 @@
         "supports_function_calling": true
       },
       {
+        "id": "qwen3.8-flash",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 131072,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
         "id": "qwen3.8-max",
         "max_input_tokens": 1000000,
         "max_output_tokens": 131072,
@@ -8445,6 +8235,158 @@
         "id": "qwq-plus",
         "max_input_tokens": 131072,
         "max_output_tokens": 8192,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      }
+    ],
+    "volcengine": [
+      {
+        "id": "deepseek-v4-flash-ga-260731",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 384000,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "deepseek-v4-pro-ga-260813",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 384000,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "doubao-seed-1-6-251015",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 64000,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "doubao-seed-1-6-flash-250828",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 32000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "doubao-seed-1-6-vision-250815",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 32000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "doubao-seed-1-8-251228",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 64000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "doubao-seed-2-0-code-preview-260215",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 131072,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "doubao-seed-2-0-lite-260428",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 131072,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "doubao-seed-2-0-mini-260428",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 131072,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "doubao-seed-2-0-pro-260215",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 128000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "doubao-seed-2-1-pro-260628",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 256000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "doubao-seed-2-1-turbo-260628",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 256000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "doubao-seed-character-260628",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 256000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "doubao-seed-evolving",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 256000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "glm-5-2-260617",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 131072,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -8570,6 +8512,26 @@
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "glm-5.3",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 131072,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "glm-5.3-flash",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 131072,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
         "supports_reasoning": true,
         "supports_function_calling": true
       },
@@ -10300,6 +10262,16 @@
         "supports_pdf_input": false,
         "supports_reasoning": false,
         "supports_function_calling": true
+      },
+      {
+        "id": "zai-glm-5-2",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 131072,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
       }
     ],
     "aihubmix": [
@@ -11491,8 +11463,8 @@
     "minimax": [
       {
         "id": "MiniMax-M2",
-        "max_input_tokens": 196608,
-        "max_output_tokens": 128000,
+        "max_input_tokens": 204800,
+        "max_output_tokens": 131072,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -11551,8 +11523,8 @@
       },
       {
         "id": "MiniMax-M3",
-        "max_input_tokens": 1000000,
-        "max_output_tokens": 128000,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 512000,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
