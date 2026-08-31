@@ -5,6 +5,21 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.9.2 — 2026-08-31
+
+### Highlights
+
+- **Opening a migrated automation no longer crashes the dashboard.** The
+  loops migration moves old run records into place without converting them,
+  and the new Automations detail view assumed the new schema — so on a
+  migrated workspace, the first click into an automation's history
+  white-screened the entire app. Legacy records are now normalized when read
+  (never rewritten on disk): they get a proper cause, the old status
+  vocabulary maps onto the new one, and a loops-era record stuck at
+  `running` finally becomes visible to the orphan sweep. The section also
+  gained an error boundary, so any future bad row degrades to an in-place
+  notice with a retry instead of a blank page. (#566)
+
 ## 0.9.1 — 2026-08-26
 
 ### Highlights
