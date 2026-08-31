@@ -76,10 +76,10 @@ export function RunDetailCard({
         <dt className={dtCls}>{t("automations.detail.causeLabel")}</dt>
         <dd className={ddCls}>
           <div className="text-[11.5px] text-muted-foreground">
-            {causeIcon(run.cause.kind)} · {fmtDateTime(run.started_at * 1000)}
+            {causeIcon(run.cause?.kind)} · {fmtDateTime(run.started_at * 1000)}
           </div>
           <div className="mt-1 rounded-md border-l-2 border-accent bg-muted/50 px-2.5 py-1.5 text-[12.5px]">
-            {run.cause.excerpt}
+            {run.cause?.excerpt ?? "—"}
           </div>
         </dd>
 

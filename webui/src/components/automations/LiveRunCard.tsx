@@ -314,7 +314,7 @@ export function LiveRunCard({
       <div className="flex items-start gap-2 px-3.5 py-2 text-[12.5px]">
         <span className="shrink-0 text-muted-foreground">{t("automations.detail.causeLabel")}</span>
         <span className="min-w-0 flex-1">
-          {causeIcon(run.cause.kind)} {run.cause.excerpt}{" "}
+          {causeIcon(run.cause?.kind)} {run.cause?.excerpt ?? "—"}{" "}
           <span className="text-[11px] text-muted-foreground">· {relativeTime(run.started_at * 1000)}</span>
         </span>
       </div>

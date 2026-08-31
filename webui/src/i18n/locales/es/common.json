@@ -1401,6 +1401,10 @@
       "fireNowStarted": "Corrida {{runId}} iniciada",
       "pause": "Pausar",
       "resume": "Reactivar"
+    },
+    "boundary": {
+      "title": "Esta sección encontró un error",
+      "retry": "Reintentar"
     }
   },
   "skills": {

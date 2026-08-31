@@ -487,6 +487,16 @@ wrapped so an I/O failure never fails startup. It is idempotent on the presence 
 `<workspace>/loops/`: nothing to migrate (never had one, or already migrated) is a
 silent no-op returning `[]`.
 
+Run records are the one thing the migration moves **without converting**: the
+runs directory is renamed into place verbatim. `run_log` therefore normalizes
+legacy records at read time — `loop` becomes `automation`, a `cause` is
+synthesized from the old `source`/`task` pair, and the loops status
+vocabulary maps onto the automations one (`done`/`no_goal` → `completed`,
+`error` → `failed`, the operator-parked states → `interrupted`, since the
+system that could resume them no longer exists). Disk is never rewritten, so
+records restored from old backups normalize the same way, and the orphan
+sweep sees legacy `running` records it previously skipped.
+
 A pre-existing `loops/*.json` is parsed by
 `durin.automations._legacy_loop_spec.parse_loop` — a frozen copy of the deleted
 loops package's own parser, kept alive for this one read only and never extended.

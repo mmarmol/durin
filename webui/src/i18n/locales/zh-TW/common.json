@@ -1589,6 +1589,10 @@
       "fireNowStarted": "執行 {{runId}} 已開始",
       "pause": "暫停",
       "resume": "繼續"
+    },
+    "boundary": {
+      "title": "此區塊發生錯誤",
+      "retry": "重試"
     }
   },
   "skills": {

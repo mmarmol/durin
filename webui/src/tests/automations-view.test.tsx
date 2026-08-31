@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -617,5 +617,35 @@ describe("NeedsYouTray", () => {
     await user.click(screen.getByRole("button", { name: "Answer" }));
     const questionTextarea = await screen.findByPlaceholderText(/your answer/i);
     expect(questionTextarea).toHaveValue("");
+  });
+});
+
+describe("SectionBoundary", () => {
+  it("contains a render error to an in-section notice with a working retry", async () => {
+    const { SectionBoundary } = await import("@/components/automations/SectionBoundary");
+    let shouldThrow = true;
+    function Bomb() {
+      if (shouldThrow) throw new Error("row exploded");
+      return <div>alive again</div>;
+    }
+    // React logs caught boundary errors loudly; keep the test output clean.
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      render(
+        wrap(
+          <SectionBoundary>
+            <Bomb />
+          </SectionBoundary>,
+        ),
+      );
+      expect(screen.getByText(/section hit an error/i)).toBeInTheDocument();
+      expect(screen.getByText(/row exploded/)).toBeInTheDocument();
+
+      shouldThrow = false;
+      fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+      expect(screen.getByText("alive again")).toBeInTheDocument();
+    } finally {
+      quiet.mockRestore();
+    }
   });
 });
