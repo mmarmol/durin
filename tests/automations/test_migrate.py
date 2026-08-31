@@ -200,16 +200,26 @@ def test_runs_dir_moved_and_old_status_vocabulary_tolerated(tmp_path):
     new_run_file = tmp_path / "automations-runs" / "guard-support-tickets" / "r1.json"
     assert new_run_file.exists()
     assert not old_runs_dir.exists()
+    # On DISK the record stays verbatim — the migration never rewrites runs.
     assert json.loads(new_run_file.read_text(encoding="utf-8")) == record
 
-    # The point of the move: automations' run_log reads must not choke on a
-    # status vocabulary it doesn't know about.
-    assert run_log.read_run(tmp_path, "guard-support-tickets", "r1") == record
+    # READS normalize it to the automations schema (the raw passthrough this
+    # test used to pin is what white-screened the webui on migrated records):
+    # `loop` becomes `automation`, the old status maps to the new vocabulary,
+    # and a cause is synthesized so every consumer sees one shape.
+    got = run_log.read_run(tmp_path, "guard-support-tickets", "r1")
+    assert got["automation"] == "guard-support-tickets"
+    assert got["status"] == "completed"   # no_goal -> completed
+    assert got["cause"]["kind"] == "channel"
     listed = run_log.list_runs(tmp_path, "guard-support-tickets")
-    assert listed == [record]
-    assert run_log.list_all_runs(tmp_path) == [record]
+    assert [m["run_id"] for m in listed] == ["r1"]
+    assert listed[0]["status"] == "completed"
+    assert [m["automation"] for m in run_log.list_all_runs(tmp_path)] == ["guard-support-tickets"]
     assert run_log.active_runs(tmp_path, "guard-support-tickets") == []
-    assert run_log.consecutive_unachieved(tmp_path, "guard-support-tickets") == 0
+    # A normalized legacy completed run counts toward the unachieved streak
+    # exactly like a modern one would (it was an unachieved outcome in loops
+    # too) — the old raw "no_goal" was merely invisible to the counter.
+    assert run_log.consecutive_unachieved(tmp_path, "guard-support-tickets") == 1
 
 
 def test_claims_moved(tmp_path):

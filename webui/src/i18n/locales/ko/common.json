@@ -1589,6 +1589,10 @@
       "fireNowStarted": "실행 {{runId}}을(를) 시작했습니다",
       "pause": "일시 정지",
       "resume": "재개"
+    },
+    "boundary": {
+      "title": "이 섹션에서 오류가 발생했습니다",
+      "retry": "다시 시도"
     }
   },
   "skills": {

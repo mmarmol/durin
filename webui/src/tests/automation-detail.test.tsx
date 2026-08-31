@@ -101,6 +101,20 @@ const AUTOMATION: api.AutomationSummary = {
 // -- RunHistory ---------------------------------------------------------
 
 describe("RunHistory", () => {
+  it("survives a run with no cause at all (armor for malformed rows)", () => {
+    // The backend normalizes legacy loops-era records on read, so a missing
+    // cause should never reach the UI — but when one does (a future gap, a
+    // stale cache), it must degrade to a dash, not white-screen the app:
+    // exactly what happened on the mxhero box the first time a user opened
+    // a migrated automation's detail.
+    const legacy = run({ run_id: "old1", status: "completed", finished_at: 1_100 });
+    delete legacy.cause;
+    render(wrap(<RunHistory runs={[legacy]} selectedRunId={null} onSelect={() => {}} />));
+
+    expect(screen.getByTestId("run-history-row")).toBeInTheDocument();
+    expect(screen.getByText("completed")).toBeInTheDocument();
+  });
+
   it("shows the outcome chip, cause excerpt and duration for a finished run", async () => {
     const finished = run({
       run_id: "r1",

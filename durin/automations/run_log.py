@@ -99,12 +99,54 @@ def record_approval(ws, automation: str, run_id: str, *, action: str, by: str, a
     return _write(ws, automation, run_id, record)
 
 
+# The boot migration renames the loops-era runs directory into place without
+# converting the records inside it, so a workspace routinely holds run files
+# in the OLD loops schema: `loop` instead of `automation`, a bare
+# `source`/`task` pair instead of a `cause`, the old status vocabulary, and
+# none of the newer fields. Normalizing at READ time — never rewriting disk —
+# keeps every consumer (the API, the webui, the orphan sweep) on one schema,
+# and also covers records restored from old backups.
+_LEGACY_STATUS = {
+    # done/no_goal both ENDED on their own terms (no_goal = ran, judged
+    # nothing left to pursue) — completed. error was an honest failure.
+    # needs_operator/waiting_info/escalated were parked on a system that no
+    # longer exists to resume them; calling them "paused" would surface dead
+    # runs as answerable in the inbox, so they finalize as interrupted.
+    "done": "completed",
+    "no_goal": "completed",
+    "error": "failed",
+    "needs_operator": "interrupted",
+    "waiting_info": "interrupted",
+    "escalated": "interrupted",
+}
+
+
+def _normalize_legacy(record: dict) -> dict:
+    # `loop` is the one unambiguous marker of the old schema — the loops-era
+    # writer always stamped it, and no modern writer ever does. Records
+    # without it (including degenerate modern stubs) pass through untouched.
+    if "loop" not in record:
+        return record
+    if "automation" not in record:
+        record["automation"] = record["loop"]
+    if "cause" not in record:
+        record["cause"] = {
+            "kind": record.get("source") or "channel",
+            "excerpt": (record.get("task") or "")[:300],
+            "trigger_index": None,
+        }
+    record["status"] = _LEGACY_STATUS.get(record.get("status"), record.get("status"))
+    for field in ("delivery", "approval", "final_route_label"):
+        record.setdefault(field, None)
+    return record
+
+
 def read_run(ws, automation: str, run_id: str) -> dict | None:
     p = _path(ws, automation, run_id)
     if not p.exists():
         return None
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        return _normalize_legacy(json.loads(p.read_text(encoding="utf-8")))
     except Exception:
         return None
 
@@ -113,7 +155,7 @@ def _load_dir(d: Path) -> list[dict]:
     out = []
     for p in d.glob("*.json"):
         try:
-            out.append(json.loads(p.read_text(encoding="utf-8")))
+            out.append(_normalize_legacy(json.loads(p.read_text(encoding="utf-8"))))
         except Exception:
             continue
     out.sort(key=lambda m: (m.get("started_at") or 0, m.get("run_id") or ""), reverse=True)
@@ -201,7 +243,7 @@ def find_orphans(ws, now: float | None = None, max_age_s: float = 6 * 3600) -> l
             continue
         for p in automation_dir.glob("*.json"):
             try:
-                rec = json.loads(p.read_text(encoding="utf-8"))
+                rec = _normalize_legacy(json.loads(p.read_text(encoding="utf-8")))
             except Exception:
                 continue
             if rec.get("status") != "running":

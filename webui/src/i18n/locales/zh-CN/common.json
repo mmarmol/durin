@@ -1589,6 +1589,10 @@
       "fireNowStarted": "运行 {{runId}} 已开始",
       "pause": "暂停",
       "resume": "恢复"
+    },
+    "boundary": {
+      "title": "此部分遇到错误",
+      "retry": "重试"
     }
   },
   "skills": {

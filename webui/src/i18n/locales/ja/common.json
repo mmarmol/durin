@@ -1589,6 +1589,10 @@
       "fireNowStarted": "実行 {{runId}} を開始しました",
       "pause": "一時停止",
       "resume": "再開"
+    },
+    "boundary": {
+      "title": "このセクションでエラーが発生しました",
+      "retry": "再試行"
     }
   },
   "skills": {

@@ -959,7 +959,10 @@ export interface AutomationRun {
   automation: string;
   run_id: string;
   status: "running" | "paused" | "achieved" | "completed" | "failed" | "rejected" | "interrupted";
-  cause: { kind: string; excerpt: string; trigger_index?: number | null };
+  // Optional as armor: the backend normalizes legacy loops-era records on
+  // read (synthesizing a cause), but the UI must survive a row without one
+  // rather than white-screen the whole section.
+  cause?: { kind: string; excerpt: string; trigger_index?: number | null };
   origin?: AutomationRunOrigin | null;
   ask?: string;
   ask_kind?: "approval" | "question";

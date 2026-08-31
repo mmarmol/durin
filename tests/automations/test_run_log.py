@@ -1,4 +1,5 @@
 # tests/automations/test_run_log.py
+import json
 import time as _time
 
 import pytest
@@ -325,3 +326,95 @@ def test_sort_is_deterministic_on_started_at_ties(tmp_path):
     order2 = [m["run_id"] for m in rl.list_runs(tmp_path, "a")]
 
     assert order1 == order2 == sorted(run_ids, reverse=True)
+
+
+# -- Legacy loops-era records (moved verbatim by the migration) ---------------
+
+def _legacy_loop_record(run_id="94dbad702479", status="done"):
+    """A FAITHFUL copy of a real migrated record (mxhero box, loops schema):
+    `loop` instead of `automation`, `source`/`task` instead of `cause`, the
+    old status vocabulary, no delivery/approval/final_route_label, plus
+    loops-only extras (checks/goal_reached). The migration renames the runs
+    directory without converting records, so every reader must tolerate
+    this shape."""
+    return {
+        "schema": 1,
+        "run_id": run_id,
+        "loop": "guard-support-tickets",
+        "status": status,
+        "source": "channel",
+        "task": "[shared] Ticket #23114 | Status: new — This ticket needs attention",
+        "origin": {"channel": "slack", "sender": "U1", "chat_id": "C1",
+                    "thread": "custom:guard-support-tickets:23114", "subject": None,
+                    "reply": {"thread_ts": "1785827069.985459", "channel": "C1"}},
+        "workflow_run_id": "24813a48d77b",
+        "ask": None,
+        "detail": None,
+        "checks": [{"kind": "script", "required": True,
+                     "ref": "test -f pipeline-complete.json", "passed": True, "detail": "exit 0"}],
+        "goal_reached": True,
+        "work_started": None,
+        "started_at": 1785827071.24,
+        "finished_at": 1785828389.57,
+        "owner": {"pid": 75246, "started": "Sat Aug  1 06:05:11 2026"},
+        "ts": 1785828389.57,
+    }
+
+
+def _write_raw(tmp_path, automation, record):
+    d = tmp_path / "automations-runs" / automation
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{record['run_id']}.json").write_text(json.dumps(record), encoding="utf-8")
+
+
+def test_legacy_record_normalizes_on_read(tmp_path):
+    _write_raw(tmp_path, "guard-support-tickets", _legacy_loop_record())
+
+    got = rl.read_run(tmp_path, "guard-support-tickets", "94dbad702479")
+    assert got is not None
+    assert got["automation"] == "guard-support-tickets"
+    assert got["status"] == "completed"                      # done -> completed
+    assert got["cause"]["kind"] == "channel"                # synthesized from source/task
+    assert "Ticket #23114" in got["cause"]["excerpt"]
+    assert got["delivery"] is None
+    assert got["approval"] is None
+    assert got["final_route_label"] is None
+
+    listed = rl.list_runs(tmp_path, "guard-support-tickets")
+    assert listed and listed[0]["cause"]["kind"] == "channel"
+    everything = rl.list_all_runs(tmp_path)
+    assert everything and everything[0]["automation"] == "guard-support-tickets"
+
+
+def test_legacy_status_vocabulary_maps_honestly(tmp_path):
+    cases = {
+        "done": "completed", "no_goal": "completed", "error": "failed",
+        "needs_operator": "interrupted", "waiting_info": "interrupted",
+        "escalated": "interrupted", "running": "running",
+    }
+    for i, (old, expected) in enumerate(cases.items()):
+        _write_raw(tmp_path, "a", _legacy_loop_record(run_id=f"lr{i}", status=old))
+        got = rl.read_run(tmp_path, "a", f"lr{i}")
+        assert got["status"] == expected, (old, got["status"])
+
+
+def test_legacy_running_orphan_is_sweepable(tmp_path):
+    """The box carried a loops-era record stuck at status running for weeks:
+    find_orphans reads `automation`, legacy records only had `loop`, so the
+    sweep never saw it. Normalization must make it visible."""
+    rec = _legacy_loop_record(run_id="stuck1", status="running")
+    rec["owner"] = {"pid": 999999999, "started": "Sat Aug  1 06:05:11 2026"}
+    _write_raw(tmp_path, "guard-support-tickets", rec)
+
+    orphans = rl.find_orphans(tmp_path)
+    assert any(o["run_id"] == "stuck1" and o["automation"] == "guard-support-tickets"
+               for o in orphans)
+
+
+def test_modern_records_pass_through_unchanged(tmp_path):
+    rl.start_run(tmp_path, "a", "r1", cause=_cause())
+    rl.finalize_run(tmp_path, "a", "r1", status="completed")
+    got = rl.read_run(tmp_path, "a", "r1")
+    assert got["automation"] == "a"
+    assert "loop" not in got
+    assert got["cause"] == _cause()

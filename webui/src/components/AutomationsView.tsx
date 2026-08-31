@@ -7,6 +7,7 @@ import { DetailView } from "@/components/automations/DetailView";
 import { InboxView } from "@/components/automations/InboxView";
 import { ListView } from "@/components/automations/ListView";
 import { NeedsYouTray } from "@/components/automations/NeedsYouTray";
+import { SectionBoundary } from "@/components/automations/SectionBoundary";
 import { Button } from "@/components/ui/button";
 import {
   ApiError,
@@ -25,10 +26,7 @@ function errMsg(e: unknown): string {
   return (e as Error).message;
 }
 
-export function AutomationsView({
-  onOpenWorkflowRun,
-  initialDetailName,
-}: {
+type AutomationsViewProps = {
   // Drills into the executions screen for a run this automation launched
   // (RunDetailCard's "Ver ejecución completa →"). Optional so the many
   // existing list/editor tests that never reach the detail view don't need
@@ -39,7 +37,21 @@ export function AutomationsView({
   // has loaded. Consumed once — see RunsView's initialSelection for the
   // same pattern (and the same "outside the loaded set" no-op behavior).
   initialDetailName?: string | null;
-}) {
+};
+
+/** The exported view wraps the real one in SectionBoundary so a render
+ *  error anywhere in the section (a malformed run record, a future bug)
+ *  degrades to an in-section notice with a retry instead of blanking the
+ *  whole app — there is no global boundary above this. */
+export function AutomationsView(props: AutomationsViewProps) {
+  return (
+    <SectionBoundary>
+      <AutomationsViewInner {...props} />
+    </SectionBoundary>
+  );
+}
+
+function AutomationsViewInner({ onOpenWorkflowRun, initialDetailName }: AutomationsViewProps) {
   const { token } = useClient();
   const { t } = useTranslation();
   const [automations, setAutomations] = useState<AutomationSummary[]>([]);

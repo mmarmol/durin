@@ -1667,6 +1667,10 @@
       "fireNowStarted": "Run {{runId}} started",
       "pause": "Pause",
       "resume": "Resume"
+    },
+    "boundary": {
+      "title": "This section hit an error",
+      "retry": "Try again"
     }
   },
   "skills": {

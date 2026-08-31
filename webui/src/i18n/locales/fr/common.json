@@ -1589,6 +1589,10 @@
       "fireNowStarted": "Exécution {{runId}} démarrée",
       "pause": "Mettre en pause",
       "resume": "Reprendre"
+    },
+    "boundary": {
+      "title": "Cette section a rencontré une erreur",
+      "retry": "Réessayer"
     }
   },
   "skills": {

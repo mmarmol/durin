@@ -29,8 +29,11 @@ const CAUSE_ICONS: Record<string, string> = {
 /** The glyph the mockup uses for a run's trigger kind, shared by LiveRunCard's
  *  cause line and this file's own cause excerpt — reused rather than
  *  reimplemented per component, since both read the exact same field. */
-export function causeIcon(kind: string): string {
-  return CAUSE_ICONS[kind] ?? "";
+// `kind` is optional armor, not an expected state: the backend normalizes
+// legacy loops-era records on read, but a render must never white-screen the
+// whole app over one malformed row.
+export function causeIcon(kind: string | undefined): string {
+  return (kind && CAUSE_ICONS[kind]) || "";
 }
 
 // Mirrors NeedsYouTray's own capText (webui/src/components/automations/NeedsYouTray.tsx)
@@ -67,8 +70,8 @@ function HistoryRow({
   onSelect: (run: AutomationRun) => void;
 }) {
   const { t } = useTranslation();
-  const icon = causeIcon(run.cause.kind);
-  const excerpt = capText(run.cause.excerpt, EXCERPT_CAP);
+  const icon = causeIcon(run.cause?.kind);
+  const excerpt = capText(run.cause?.excerpt ?? "", EXCERPT_CAP);
   const durationS =
     run.finished_at != null && run.started_at != null ? run.finished_at - run.started_at : null;
   // The compact delivery line, or null when there is nothing to show —
