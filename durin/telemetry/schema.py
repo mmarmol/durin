@@ -350,6 +350,8 @@ class TurnMemoryUsageEvent(TypedDict):
     search_calls: int          # memory_search invocations this turn
     drill_calls: int           # memory_drill invocations this turn
     tool_calls_total: int      # all tool calls this turn (denominator)
+    pinned_chars: NotRequired[int]   # rendered size of the pinned memory block
+    hot_chars: NotRequired[int]      # rendered size of the hot layer
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
 

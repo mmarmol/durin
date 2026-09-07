@@ -43,6 +43,8 @@ def test_rollup_counts_memory_recall_tools(monkeypatch):
     emit_memory_usage_rollup(
         "websocket:c1",
         ["memory_search", "read_file", "memory_search", "memory_drill"],
+        pinned_chars=1200,
+        hot_chars=800,
     )
 
     assert rec.events == [
@@ -53,6 +55,8 @@ def test_rollup_counts_memory_recall_tools(monkeypatch):
                 "search_calls": 2,
                 "drill_calls": 1,
                 "tool_calls_total": 4,
+                "pinned_chars": 1200,
+                "hot_chars": 800,
             },
         )
     ]
@@ -110,3 +114,5 @@ async def test_rollup_reaches_the_session_logger_from_a_real_turn(
     assert rows[0]["drill_calls"] == 0
     assert rows[0]["tool_calls_total"] == 0
     assert rows[0]["session_key"].startswith("websocket:")
+    assert isinstance(rows[0]["pinned_chars"], int)
+    assert isinstance(rows[0]["hot_chars"], int)
