@@ -705,12 +705,15 @@ describe("RunsView", () => {
     // on the same resolved reference is a real, not just theoretical, TOCTOU
     // gap under load — every other findByText in this file already does it
     // this way).
-    // 5s upper bound (default 1s): the assertion stays event-driven — the
+    // 10s upper bound (default 1s): the assertion stays event-driven — the
     // wait ends the moment the text lands — but a loaded CI runner has
     // tripped the 1s default on exactly this initial-selection fetch chain.
-    await screen.findByText(/Which environment — staging or prod\?/, undefined, { timeout: 5000 });
+    // The test's own vitest timeout (last argument) must exceed this bound:
+    // with both at the default 5s, the runner's per-test clock fired first
+    // and reported a bare "Test timed out" instead of letting the wait run.
+    await screen.findByText(/Which environment — staging or prod\?/, undefined, { timeout: 10_000 });
     expect(api.getWorkflowRunManifest).toHaveBeenCalledWith("tok", "onboarding", "run-waiting");
-  });
+  }, 15_000);
 
   it("does nothing (no crash, no selection) when initialSelection names a run outside the fetched feed", async () => {
     // vi.restoreAllMocks() in afterEach does not reset a vi.mock()-factory
