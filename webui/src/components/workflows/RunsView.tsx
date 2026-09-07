@@ -401,6 +401,13 @@ export function RunsView({
   const onSelectEntry = useCallback(
     async (entry: WorkflowGlobalRun) => {
       setSelected(entry);
+      // The ref normally tracks `selected` on render, but the fetch below can
+      // resolve before React re-renders with this selection (a cached or
+      // instant reply, or a call made from an effect outside a click). Point
+      // it at the new entry now, or the guards below would compare against
+      // the previous selection, drop the reply, and leave the detail stuck
+      // on its loading state.
+      selectedRef.current = entry;
       setManifest(null);
       setManifestLoading(true);
       setError(null);
