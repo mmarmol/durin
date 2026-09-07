@@ -347,3 +347,22 @@ def test_v2_canonical_block_exact_snapshot(tmp_path: Path) -> None:
         "=== END CANONICAL ==="
     )
     assert block == expected
+
+
+def test_canonical_block_skips_excluded_refs(tmp_path: Path) -> None:
+    """Pages already rendered in the pinned block must not eat canonical
+    slots: the budget goes to the next most-recent pages instead."""
+    _write_v1_page(tmp_path, slug="pinned", name="Pinned", updated_at="2026-05-22T10:00:00")
+    _write_v1_page(tmp_path, slug="second", name="Second", updated_at="2026-05-21T10:00:00")
+    _write_v1_page(tmp_path, slug="third", name="Third", updated_at="2026-05-20T10:00:00")
+
+    layer = read_hot_layer(tmp_path, exclude=frozenset({"person:pinned"}))
+
+    rendered = "\n".join(layer.canonical_blocks)
+    assert "=== CANONICAL: person:pinned" not in rendered
+    assert rendered.index("person:second") < rendered.index("person:third")
+
+
+def test_canonical_block_default_excludes_nothing(tmp_path: Path) -> None:
+    _write_v1_page(tmp_path, slug="only", name="Only")
+    assert "=== CANONICAL: person:only" in "\n".join(read_hot_layer(tmp_path).canonical_blocks)

@@ -105,15 +105,22 @@ class HotLayer(NamedTuple):
         return "\n\n".join(parts)
 
 
-def read_hot_layer(workspace: Path) -> HotLayer:
+def read_hot_layer(
+    workspace: Path, *, exclude: frozenset[str] = frozenset(),
+) -> HotLayer:
     """Assemble the hot layer for a workspace.
+
+    ``exclude`` holds entity refs (``<type>:<slug>``) already rendered
+    elsewhere in the prompt — the pinned block's principal and always_on
+    pages — so the canonical budget goes to pages the model would not
+    otherwise see.
 
     Each section is wrapped in its own try/except: any failure emits
     ``memory.hot_layer.failure`` telemetry and degrades the
     section to empty so the prompt still builds.
     """
     try:
-        canonicals = _read_canonical_blocks(workspace)
+        canonicals = _read_canonical_blocks(workspace, exclude)
     except Exception as exc:  # pragma: no cover - defensive
         _emit_failure("canonical_blocks", exc)
         canonicals = []
@@ -167,11 +174,13 @@ def _emit_failure(component: str, exc: BaseException) -> None:
 
 def _read_canonical_blocks(
     workspace: Path,
+    exclude: frozenset[str] = frozenset(),
 ) -> list[str]:
     """Render top N entity pages as ``=== CANONICAL ===`` blocks.
 
     Pages under ``archive/`` are skipped (absorbed records, surfaced only via
-    ``durin memory expand``).
+    ``durin memory expand``), and so are refs in ``exclude`` — pages the
+    pinned block already renders in full.
 
     Per-page parse failures degrade silently with a telemetry event;
     the rest of the walk continues so one bad page can't break the
@@ -188,6 +197,8 @@ def _read_canonical_blocks(
             continue
         slug = page_path.stem
         ref = f"{page.type}:{slug}"
+        if ref in exclude:
+            continue
         # Sort key: prefer updated_at, fall back to mtime so freshly
         # written pages surface even pre-frontmatter updated_at adoption.
         updated = _resolve_updated_at(page, page_path)

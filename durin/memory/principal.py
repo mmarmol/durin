@@ -39,6 +39,8 @@ __all__ = [
     "ensure_owner",
     "mark_always_on",
     "list_always_on",
+    "pinned_refs",
+    "resolve_pinned_refs",
     "build_library_awareness",
     "build_pinned_context",
 ]
@@ -102,6 +104,30 @@ def list_always_on(workspace: Path) -> list[str]:
         if page and page.attributes.get("always_on"):
             out.append(f"{md.parent.name}:{md.stem}")
     return out
+
+
+def pinned_refs(workspace: Path, principal_ref: str) -> frozenset[str]:
+    """Every entity ref rendered in the pinned block: the principal's page
+    plus the always_on guidance. Readers that show entity pages elsewhere
+    in the prompt (the hot layer's canonical block) or in tool output (the
+    search dedup) use this set to avoid rendering the same page twice."""
+    return frozenset({principal_ref, *list_always_on(workspace)})
+
+
+def resolve_pinned_refs(workspace: Path) -> frozenset[str]:
+    """``pinned_refs`` with the principal resolved the way the prompt build
+    resolves it: the configured ``memory.owner``, else anonymous. Never
+    raises — a workspace without a config file (tests, ad-hoc tools) just
+    resolves to anonymous, and any failure degrades to an empty set."""
+    try:
+        try:
+            from durin.config.loader import load_config
+            owner = getattr(load_config().memory, "owner", None)
+        except Exception:  # noqa: BLE001 — no config file is a normal state
+            owner = None
+        return pinned_refs(workspace, resolve_principal(None, owner=owner))
+    except Exception:  # noqa: BLE001 — never break a caller over a pinned lookup
+        return frozenset()
 
 
 def _load(workspace: Path, ref: str) -> EntityPage | None:

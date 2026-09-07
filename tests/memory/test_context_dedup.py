@@ -255,3 +255,46 @@ def test_create_enables_dedup_for_core_scope_and_missing_scope(tmp_path):
     assert MemorySearchTool.create(
         _tool_ctx(tmp_path, None)
     )._context_dedup is True
+
+
+def test_pinned_ref_hit_is_deduped_even_when_hot_layer_is_empty(monkeypatch, tmp_path):
+    """A pinned page is fully visible in the prompt's pinned block, which
+    the hot-layer prefix map does not cover — the caller passes the pinned
+    refs and the hit collapses to a pointer line."""
+    monkeypatch.setattr(
+        "durin.memory.context_dedup.read_hot_layer", lambda _ws: _hot_layer(),
+    )
+    hit = SectionedHit(
+        uri="memory/entity_page/practice:spanish",
+        type="entity",
+        path="memory/entities/practice/spanish.md",
+        score=1.0,
+        summary="Always respond in Spanish.",
+    )
+
+    kept, redundant = split_in_context(
+        tmp_path, [hit], pinned_refs=frozenset({"practice:spanish"}),
+    )
+
+    assert kept == []
+    assert redundant == [hit]
+
+
+def test_non_pinned_hit_passes_when_hot_layer_is_empty(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "durin.memory.context_dedup.read_hot_layer", lambda _ws: _hot_layer(),
+    )
+    hit = SectionedHit(
+        uri="memory/entity_page/person:ana",
+        type="entity",
+        path="memory/entities/person/ana.md",
+        score=1.0,
+        summary="Ana runs the bakery.",
+    )
+
+    kept, redundant = split_in_context(
+        tmp_path, [hit], pinned_refs=frozenset({"practice:spanish"}),
+    )
+
+    assert kept == [hit]
+    assert redundant == []

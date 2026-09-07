@@ -163,3 +163,36 @@ def test_library_awareness_prefers_curated_topic_index(tmp_path):
     block = build_library_awareness(tmp_path)
     assert "Covers: Clean Theme." in block
     assert "Granular thing" not in block   # curated index wins over the heuristic
+
+
+def test_pinned_refs_is_principal_plus_always_on(tmp_path):
+    from durin.memory.principal import pinned_refs
+
+    ensure_owner(tmp_path, "person:marcelo", name="Marcelo")
+    write_entity(tmp_path, "practice:spanish",
+                 [FieldPatch(kind="body_append", value="Always respond in Spanish.",
+                             author="agent", source_ref="s", at=NOW)],
+                 create=True, name="Always Spanish")
+    write_entity(tmp_path, "practice:tdd",
+                 [FieldPatch(kind="body_append", value="Tests first.",
+                             author="agent", source_ref="s", at=NOW)],
+                 create=True, name="TDD")
+    mark_always_on(tmp_path, "practice:spanish")
+
+    assert pinned_refs(tmp_path, "person:marcelo") == frozenset(
+        {"person:marcelo", "practice:spanish"}
+    )
+
+
+def test_resolve_pinned_refs_never_raises_without_config(tmp_path):
+    from durin.memory.principal import resolve_pinned_refs
+
+    write_entity(tmp_path, "practice:spanish",
+                 [FieldPatch(kind="body_append", value="Always respond in Spanish.",
+                             author="agent", source_ref="s", at=NOW)],
+                 create=True, name="Always Spanish")
+    mark_always_on(tmp_path, "practice:spanish")
+
+    refs = resolve_pinned_refs(tmp_path)
+    assert "practice:spanish" in refs
+    assert "person:anonymous" in refs      # no owner configured in the test home

@@ -106,14 +106,17 @@ def _hit_key(hit: SectionedHit) -> str | None:
 
 
 def split_in_context(
-    workspace: Path, hits: list[SectionedHit],
+    workspace: Path, hits: list[SectionedHit], *,
+    pinned_refs: frozenset[str] = frozenset(),
 ) -> tuple[list[SectionedHit], list[SectionedHit]]:
     """Partition ``hits`` into ``(kept, already_in_context)``.
 
-    A hit lands in ``already_in_context`` only when the hot-layer block
-    for its ref exists AND fully contains the hit's rendered body.
-    Order is preserved in both lists. Any failure reading the hot layer
-    degrades to "keep everything" — dedup must never cost a result.
+    A hit lands in ``already_in_context`` when the hot-layer block for its
+    ref exists AND fully contains the hit's rendered body, or when its ref
+    is in ``pinned_refs`` — the pinned block renders those pages whole, so
+    any hit on them is already visible. Order is preserved in both lists.
+    Any failure reading the hot layer degrades to "keep everything" —
+    dedup must never cost a result.
     """
     if not hits:
         return hits, []
@@ -121,12 +124,15 @@ def split_in_context(
         prefix = prefix_map(read_hot_layer(workspace))
     except Exception:  # noqa: BLE001 - degrade to no-dedup
         return hits, []
-    if not prefix:
+    if not prefix and not pinned_refs:
         return hits, []
     kept: list[SectionedHit] = []
     redundant: list[SectionedHit] = []
     for hit in hits:
         key = _hit_key(hit)
+        if key and key in pinned_refs:
+            redundant.append(hit)
+            continue
         block = prefix.get(key) if key else None
         rendered = (hit.summary or hit.body or hit.snippet or "").strip()
         if block and rendered and _norm(rendered) in block:

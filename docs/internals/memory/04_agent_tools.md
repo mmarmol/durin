@@ -118,9 +118,11 @@ to avoid doubling the token cost.
 `memory/archive/` with no vector or FTS involvement — a recovery surface only.
 
 A context-dedup step (`durin/memory/context_dedup.py`) collapses hits whose
-content is already present in the system-prompt hot layer into pointer lines,
-preventing redundant injection. This is enabled on the agent path, disabled for
-subagents (which have no hot layer in their prompt).
+content is already present in the system prompt — contained in a hot-layer
+block, or a page the pinned block renders whole (the principal's page and the
+`always_on` guidance) — into pointer lines, preventing redundant injection.
+This is enabled on the agent path, disabled for subagents (which have neither
+block in their prompt).
 
 **Parameters:**
 

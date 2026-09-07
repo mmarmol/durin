@@ -142,3 +142,27 @@ def test_canonical_block_omits_sources_when_no_derived_from() -> None:
         "topic:uroperitoneum", page, consolidated_ts="2026-07-05",
     )
     assert "Sources:" not in block
+
+
+def test_context_builder_renders_a_pinned_page_once(tmp_path: Path) -> None:
+    """An always_on page is rendered in the pinned block and must NOT be
+    repeated as a canonical block a few lines below."""
+    from datetime import datetime, timezone
+
+    from durin.agent.context import ContextBuilder
+    from durin.memory.field_patch import FieldPatch
+    from durin.memory.memory_writer import write_entity
+    from durin.memory.principal import mark_always_on
+
+    now = datetime.now(timezone.utc)
+    write_entity(tmp_path, "practice:spanish",
+                 [FieldPatch(kind="body_append", value="Always respond in Spanish.",
+                             author="agent", source_ref="s", at=now)],
+                 create=True, name="Always Spanish")
+    mark_always_on(tmp_path, "practice:spanish")
+
+    stable = ContextBuilder(workspace=tmp_path)._build_stable_layer(channel=None)
+
+    assert stable.count("Always respond in Spanish.") == 1
+    assert "## Always-on guidance" in stable
+    assert "=== CANONICAL: practice:spanish" not in stable

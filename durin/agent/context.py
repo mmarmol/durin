@@ -242,7 +242,7 @@ class ContextBuilder:
         # Pinned memory: who the user is + always_on feedback
         # (stance/practice). Always injected, independent of retrieval — this
         # is what re-feeds the agent its authored knowledge.
-        pinned = self._build_pinned_memory(channel=channel)
+        pinned, pinned_refs = self._build_pinned_memory(channel=channel)
         if pinned:
             breakdown["memory_pinned"] = pinned
             parts.append(pinned)
@@ -255,11 +255,12 @@ class ContextBuilder:
             breakdown["rich_output"] = rich_output
             parts.append(rich_output)
 
-        # Memory hot layer (Phase 1.9). Always-loaded snapshot of identity +
-        # top headlines + known entities. Lives at the END of the stable
+        # Memory hot layer. Always-loaded snapshot of identity + canonical
+        # pages + headlines + known types. Lives at the END of the stable
         # tier so the earlier (more stable) parts stay cache-hot when the
-        # hot layer rotates daily under dream.
-        hot = read_hot_layer(self.workspace).render()
+        # hot layer rotates daily under dream. Pages the pinned block above
+        # already renders are excluded so they are not fed twice.
+        hot = read_hot_layer(self.workspace, exclude=pinned_refs).render()
         if hot:
             breakdown["memory_hot"] = hot
             parts.append(hot)
@@ -267,17 +268,19 @@ class ContextBuilder:
         self._last_layer_breakdown["stable"] = breakdown
         return "\n\n---\n\n".join(parts)
 
-    def _build_pinned_memory(self, *, channel: str | None) -> str:
-        """The pinned memory layer: the principal's entity + always_on feedback.
+    def _build_pinned_memory(self, *, channel: str | None) -> tuple[str, frozenset[str]]:
+        """The pinned memory layer: the principal's entity + always_on feedback,
+        and the set of entity refs it rendered (so the hot layer skips them).
 
-        Always injected, independent of retrieval. The
-        principal is resolved channel → owner (config) → person:anonymous; the
-        owner config is optional (defaults to anonymous until set). Never raises
-        — a failure degrades to no pinned block so the prompt still builds.
+        Always injected, independent of retrieval. The principal is resolved
+        channel → owner (config) → person:anonymous; the owner config is
+        optional (defaults to anonymous until set). Never raises — a failure
+        degrades to no pinned block so the prompt still builds.
         """
         try:
             from durin.memory.principal import (
                 build_pinned_context,
+                pinned_refs,
                 resolve_principal,
             )
             owner = None
@@ -287,9 +290,9 @@ class ContextBuilder:
             except Exception:  # noqa: BLE001 — test workspaces without a config
                 owner = None
             principal = resolve_principal(channel, owner=owner)
-            return build_pinned_context(self.workspace, principal)
+            return build_pinned_context(self.workspace, principal), pinned_refs(self.workspace, principal)
         except Exception:  # noqa: BLE001 — never break the prompt build
-            return ""
+            return "", frozenset()
 
     def _hot_tier_include(self, always_skills: list[str]) -> set[str] | None:
         """The working-set name filter for the skills_catalog block, or None
