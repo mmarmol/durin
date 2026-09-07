@@ -13,7 +13,7 @@ def test_empty_workspace_yields_empty_hot_layer(tmp_path: Path) -> None:
     layer = read_hot_layer(tmp_path)
     assert layer.identity == ""
     assert layer.headlines == []
-    assert layer.entities == []
+    assert layer.types == []
     assert layer.render() == ""
 
 
@@ -72,14 +72,7 @@ def test_identity_md_excluded_from_headlines(tmp_path: Path) -> None:
     assert "identity headline" not in layer.headlines
 
 
-def test_entities_aggregated_dedup_and_sorted(tmp_path: Path) -> None:
-    store_memory(tmp_path, content="x", entities=["topic:zoo", "topic:alpha"])
-    store_memory(tmp_path, content="y", entities=["topic:alpha", "topic:beta"])
-    layer = read_hot_layer(tmp_path)
-    assert layer.entities == ["topic:alpha", "topic:beta", "topic:zoo"]
-
-
-def test_render_produces_three_sections(tmp_path: Path) -> None:
+def test_render_produces_identity_and_key_points(tmp_path: Path) -> None:
     stable_dir = tmp_path / "memory" / "stable"
     stable_dir.mkdir(parents=True)
     (stable_dir / "IDENTITY.md").write_text(
@@ -90,7 +83,7 @@ def test_render_produces_three_sections(tmp_path: Path) -> None:
     rendered = read_hot_layer(tmp_path).render()
     assert "## Memory: Identity" in rendered
     assert "## Memory: Key Points" in rendered
-    assert "## Memory: Known Entities" in rendered
+    assert "Known Entities" not in rendered
 
 
 def test_headlines_budget_truncates_at_limit(tmp_path: Path) -> None:
@@ -123,7 +116,7 @@ def test_context_builder_omits_hot_layer_when_empty(tmp_path: Path) -> None:
     stable = builder._build_stable_layer(channel=None)
     assert "## Memory: Key Points" not in stable
     assert "## Memory: Identity" not in stable
-    assert "## Memory: Known Entities" not in stable
+    assert "## Memory: Known types" not in stable
 
 
 def test_canonical_block_renders_sources_from_derived_from() -> None:

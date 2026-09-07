@@ -34,7 +34,6 @@ def _hot_layer(
         canonical_blocks=canonical or [],
         fragment_blocks=fragments or [],
         headlines=[],
-        entities=[],
     )
 
 
