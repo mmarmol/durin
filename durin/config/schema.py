@@ -262,8 +262,7 @@ class MemoryDreamConfig(Base):
     - **cron**: daily schedule (predictable).
     - **post_compaction**: dream after a session is compacted — the context
       is already in memory so the cost is amortised.
-    - **on_session_close**: dream when a session ends (``/quit`` or idle
-      timeout).
+    - **on_session_close**: dream when a session is closed with ``/new``.
     """
 
     enabled: bool = Field(default=True, description="Master switch; false disables the cron + reactive triggers (manual `durin memory dream` still works)")
@@ -272,7 +271,7 @@ class MemoryDreamConfig(Base):
 
     post_compaction: bool = Field(default=True, description="Run a dream pass after a session is compacted (the context is already in memory, so the cost is amortised)")
 
-    on_session_close: bool = Field(default=True, description="Run a dream pass when a session ends (/quit or idle timeout)")
+    on_session_close: bool = Field(default=True, description="Run a dream pass when a session is closed with /new")
 
     # ON by default: the failure mode is additive (a low-signal page,
     # overridable + git-revertable), far milder than a destructive merge.

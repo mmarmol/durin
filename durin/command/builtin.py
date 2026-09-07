@@ -459,6 +459,32 @@ async def cmd_retry(ctx: CommandContext) -> OutboundMessage | None:
     return None
 
 
+async def _archive_closed_session(loop, key: str, snapshot: list[dict], last_active) -> None:
+    """Summarize the messages a ``/new`` just cleared and persist the summary
+    where compaction summaries live (``memory/session_summary/<key>.md``), so
+    it is indexed and replayable instead of stopping at the legacy history
+    file. Best-effort: a failure is logged and the new session is unaffected.
+    The session object is deliberately NOT touched here — the next turn on
+    this key may already be writing it."""
+    import logging
+
+    from durin.memory.session_summary_store import append_session_summary_block
+
+    log = logging.getLogger(__name__)
+    try:
+        result = await loop.consolidator.archive(snapshot)
+    except Exception:  # noqa: BLE001 — fire-and-forget; the session is already cleared
+        log.exception("/new archive failed for %s", key)
+        return
+    summary = result[0] if isinstance(result, tuple) else None
+    if not isinstance(summary, str) or not summary.strip() or summary == "(nothing)":
+        return
+    try:
+        append_session_summary_block(loop.workspace, key, summary, last_active=last_active)
+    except Exception:  # noqa: BLE001
+        log.exception("/new summary persist failed for %s", key)
+
+
 async def cmd_new(ctx: CommandContext) -> OutboundMessage:
     """Stop active task and start a fresh session."""
     loop = ctx.loop
@@ -469,7 +495,9 @@ async def cmd_new(ctx: CommandContext) -> OutboundMessage:
     loop.sessions.save(session)
     loop.sessions.invalidate(session.key)
     if snapshot:
-        loop._schedule_background(loop.consolidator.archive(snapshot))
+        loop._schedule_background(
+            _archive_closed_session(loop, ctx.key, snapshot, session.updated_at)
+        )
     # Session-close trigger fires once per /new
     # regardless of whether the snapshot above triggered compaction.
     # Independent config knob (memory.dream.on_session_close).

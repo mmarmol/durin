@@ -618,3 +618,31 @@ class TestNewCommandArchival:
         assert not archived.is_set()
         await loop.close_mcp()
         assert archived.is_set()
+
+    @pytest.mark.asyncio
+    async def test_new_persists_its_summary_to_the_session_summary_store(self, tmp_path: Path) -> None:
+        """The summary /new produces must land where compaction summaries
+        live (indexed, replayable), not only in the legacy history file."""
+        from durin.bus.events import InboundMessage
+        from durin.memory.session_summary_store import get_session_summary
+
+        loop = self._make_loop(tmp_path)
+        session = loop.sessions.get_or_create("cli:test")
+        session.add_message("user", "I prefer terse answers")
+        session.add_message("assistant", "Noted.")
+        loop.sessions.save(session)
+
+        async def _fake_archive(_messages):
+            return "- user prefers terse answers", {"entities": ["person:marcelo"], "topics": []}
+
+        loop.consolidator.archive = _fake_archive  # type: ignore[method-assign]
+
+        response = await loop._process_message(
+            InboundMessage(channel="cli", sender_id="user", chat_id="test", content="/new")
+        )
+        assert response is not None
+        await loop.close_mcp()  # drains the background archive task
+
+        text, _last_active = get_session_summary(tmp_path, "cli:test")
+        assert text is not None
+        assert "user prefers terse answers" in text
