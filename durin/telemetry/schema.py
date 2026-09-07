@@ -1263,7 +1263,7 @@ class MemoryHotLayerFailureEvent(TypedDict):
     """Hot-layer assembly failed for one component.
 
     The hot layer renders five sections (identity / canonical / fragments /
-    headlines / entities). If any section's disk read or parse raises,
+    headlines / types). If any section's disk read or parse raises,
     the renderer logs this event and degrades that section to empty so
     the agent prompt still builds. The whole layer never fails hard.
 
@@ -1275,7 +1275,7 @@ class MemoryHotLayerFailureEvent(TypedDict):
     """
 
     component: str  # "canonical_blocks" | "fragment_blocks" | "identity" |
-                    # "headlines" | "entities" | "canonical_blocks:<file>"
+                    # "headlines" | "types" | "canonical_blocks:<file>"
     error: str
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
