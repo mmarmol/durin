@@ -198,8 +198,8 @@ export function Sidebar(props: SidebarProps) {
         />
       </div>
       {/* Below the sessions list: entry into the entity-centric memory
-          Obsidian-style graph view. Click takes the main pane (sessions
-          stay listed in this sidebar so the user can swap back). */}
+          browser. Click takes the main pane (sessions stay listed in this
+          sidebar so the user can swap back). */}
       {props.onOpenMemoryGraph ? (
         <>
           <Separator className="bg-sidebar-border/50" />

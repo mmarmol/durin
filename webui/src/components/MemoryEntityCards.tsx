@@ -20,7 +20,7 @@ export interface EntityBrowseViewProps {
 }
 
 /** Cards presentation of the Entities tab: the reading-oriented inventory.
- *  Same node set and filters as the graph canvas; each card opens the same
+ *  Same node set and filters as the table; each card opens the same
  *  detail panel. */
 export function MemoryEntityCards({
   nodes,
@@ -38,7 +38,9 @@ export function MemoryEntityCards({
   if (entities.length === 0) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        {t("memoryGraph.noEntitiesMatch")}
+        {query.trim()
+          ? t("memoryGraph.noEntitiesMatchSearch")
+          : t("memoryGraph.noEntitiesHidden")}
       </div>
     );
   }

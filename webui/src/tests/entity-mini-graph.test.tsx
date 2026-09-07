@@ -53,7 +53,6 @@ function setup(overrides: Partial<React.ComponentProps<typeof EntityMiniGraph>> 
     entityRef: "person:x",
     entityName: "X",
     onNavigate: vi.fn(),
-    onViewInGraph: vi.fn(),
     ...overrides,
   };
   const result = render(<EntityMiniGraph {...props} />);
@@ -81,16 +80,6 @@ describe("EntityMiniGraph", () => {
     await user.click(bob);
 
     expect(props.onNavigate).toHaveBeenCalledWith("person:bob", "Bob");
-  });
-
-  it("the view-in-graph button calls onViewInGraph", async () => {
-    api.fetchMemorySubgraph.mockReset().mockResolvedValue(SUBGRAPH);
-    const { props } = setup();
-    const user = userEvent.setup();
-
-    await user.click(screen.getByRole("button", { name: /view in graph/i }));
-
-    expect(props.onViewInGraph).toHaveBeenCalledTimes(1);
   });
 
   it("shows an empty state when there are no neighbours", async () => {

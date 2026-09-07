@@ -3679,23 +3679,6 @@
         "title": "MemoryGraphQuery",
         "type": "object"
       },
-      "MemoryOverviewQuery": {
-        "additionalProperties": false,
-        "description": "Clustered overview of the entity graph.\n\n``group_by`` chooses how non-hub nodes are grouped into bubbles:\n\"community\" (default) by semantic clustering, \"type\" by the entity's own\ntype field. See ``durin.memory.graph_overview.assemble_overview``.",
-        "properties": {
-          "group_by": {
-            "default": "community",
-            "enum": [
-              "community",
-              "type"
-            ],
-            "title": "Group By",
-            "type": "string"
-          }
-        },
-        "title": "MemoryOverviewQuery",
-        "type": "object"
-      },
       "MemoryResult": {
         "description": "Carries a raw graph-api payload dict (escape hatch).",
         "properties": {
@@ -3756,17 +3739,8 @@
       },
       "MemorySubgraphQuery": {
         "additionalProperties": false,
-        "description": "Ego- or cluster-scoped neighborhood around a ref.\n\n``group_by`` only matters for ``scope=\"cluster\"``: it must match the\ngrouping mode the overview built ``ref`` under (see\n``MemoryOverviewQuery``), since the two modes partition the graph\ndifferently and a bubble ref only resolves under its own mode.",
+        "description": "Ego neighbourhood around a ref: the node plus everything within\n``hops`` edges (server-clamped to 1\u20133).",
         "properties": {
-          "group_by": {
-            "default": "community",
-            "enum": [
-              "community",
-              "type"
-            ],
-            "title": "Group By",
-            "type": "string"
-          },
           "hops": {
             "default": 1,
             "title": "Hops",
@@ -3774,15 +3748,6 @@
           },
           "ref": {
             "title": "Ref",
-            "type": "string"
-          },
-          "scope": {
-            "default": "ego",
-            "enum": [
-              "ego",
-              "cluster"
-            ],
-            "title": "Scope",
             "type": "string"
           }
         },
@@ -10203,36 +10168,7 @@
             "description": "Success"
           }
         },
-        "summary": "Entity-centric memory as nodes + edges (graph view)",
-        "x-required-scope": "memory:read"
-      }
-    },
-    "/api/v1/memory/graph/overview": {
-      "get": {
-        "operationId": "memory_graph_overview",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MemoryOverviewQuery"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MemoryResult"
-                }
-              }
-            },
-            "description": "Success"
-          }
-        },
-        "summary": "Clustered overview: bubbles + semantic hubs + aggregated edges",
+        "summary": "Entity-centric memory as nodes + edges (entity browser)",
         "x-required-scope": "memory:read"
       }
     },

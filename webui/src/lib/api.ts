@@ -2070,7 +2070,7 @@ export async function fetchLogs(
 }
 
 // ---------------------------------------------------------------------------
-// Memory graph (Obsidian-style view)
+// Memory graph (entity browser)
 // ---------------------------------------------------------------------------
 
 export interface MemoryGraphNode {
@@ -2106,36 +2106,6 @@ export interface MemoryGraphPayload {
   };
 }
 
-export interface MemoryOverviewBubble {
-  id: string;
-  name: string;
-  count: number;
-  types: string[];
-  top: { id: string; name: string; type: string; weight: number }[];
-}
-
-export interface MemoryOverviewPayload {
-  mode: "clustered" | "flat";
-  bubbles: MemoryOverviewBubble[];
-  hubs: MemoryGraphNode[];
-  loose: MemoryGraphNode[];
-  edges: MemoryGraphEdge[];
-  stats: {
-    entity_count: number;
-    reference_count: number;
-    bubble_count: number;
-    loose_count: number;
-    phantom_count: number;
-    session_count: number;
-  };
-}
-
-export interface MemoryClusterPayload extends Omit<MemoryGraphPayload, "stats"> {
-  focus: string;
-  total_members: number;
-  stats: MemoryGraphPayload["stats"] & { session_count: number };
-}
-
 export async function fetchMemoryGraph(
   token: string,
   base: string = "",
@@ -2144,9 +2114,9 @@ export async function fetchMemoryGraph(
   return res.data;
 }
 
-/** Ego-graph (focus mode): a node + its N-hop neighbourhood, uncapped, so
- *  any node — including one dropped by the global cap or reached via search —
- *  can be centred with just its relations around it. */
+/** Ego-graph: a node + its N-hop neighbourhood, uncapped, so any entity —
+ *  including one the capped list payload dropped — resolves with just its
+ *  relations around it. Backs the detail panel's Related ring. */
 export async function fetchMemorySubgraph(
   token: string,
   ref: string,
@@ -2160,46 +2130,6 @@ export async function fetchMemorySubgraph(
     token,
   );
   return res.data;
-}
-
-/** `groupBy` selects how the overview partitions non-hub nodes into bubbles:
- *  "community" (default, semantic clustering) or "type" (the entity's own
- *  type field). Sent as `groupBy` — the pydantic alias generator camelCases
- *  every `Query` field for the wire (see `beforeTs`/`windowHours` elsewhere
- *  in this file), even though the field is named `group_by` server-side. */
-export async function fetchMemoryGraphOverview(
-  token: string,
-  base: string = "",
-  groupBy?: "community" | "type",
-): Promise<MemoryOverviewPayload> {
-  const params = new URLSearchParams();
-  if (groupBy) params.set("groupBy", groupBy);
-  const qs = params.toString();
-  const res = await request<{ data: MemoryOverviewPayload }>(
-    `${base}/api/v1/memory/graph/overview${qs ? `?${qs}` : ""}`,
-    token,
-  );
-  return res.data;
-}
-
-/** `groupBy` must match the mode the overview built `ref` under (a bubble id
- *  only resolves under its own grouping) — see `fetchMemoryGraphOverview`. */
-export async function fetchClusterSubgraph(
-  token: string,
-  ref: string,
-  base: string = "",
-  groupBy?: "community" | "type",
-): Promise<MemoryClusterPayload | null> {
-  const params = new URLSearchParams({ ref, scope: "cluster" });
-  if (groupBy) params.set("groupBy", groupBy);
-  const res = await fetchWithReauth(
-    `${base}/api/v1/memory/subgraph?${params}`,
-    token,
-  );
-  if (res.status === 404) return null;
-  if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status}`);
-  const body = (await res.json()) as { data: MemoryClusterPayload };
-  return body.data;
 }
 
 export interface MemoryEntityDetail {

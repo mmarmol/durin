@@ -1214,25 +1214,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Entity-centric memory as nodes + edges (graph view) */
+        /** Entity-centric memory as nodes + edges (entity browser) */
         get: operations["memory_graph"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/memory/graph/overview": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Clustered overview: bubbles + semantic hubs + aggregated edges */
-        get: operations["memory_graph_overview"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4324,22 +4307,6 @@ export interface components {
          */
         MemoryGraphQuery: Record<string, never>;
         /**
-         * MemoryOverviewQuery
-         * @description Clustered overview of the entity graph.
-         *
-         *     ``group_by`` chooses how non-hub nodes are grouped into bubbles:
-         *     "community" (default) by semantic clustering, "type" by the entity's own
-         *     type field. See ``durin.memory.graph_overview.assemble_overview``.
-         */
-        MemoryOverviewQuery: {
-            /**
-             * Group By
-             * @default community
-             * @enum {string}
-             */
-            group_by: "community" | "type";
-        };
-        /**
          * MemoryResult
          * @description Carries a raw graph-api payload dict (escape hatch).
          */
@@ -4376,20 +4343,10 @@ export interface components {
         };
         /**
          * MemorySubgraphQuery
-         * @description Ego- or cluster-scoped neighborhood around a ref.
-         *
-         *     ``group_by`` only matters for ``scope="cluster"``: it must match the
-         *     grouping mode the overview built ``ref`` under (see
-         *     ``MemoryOverviewQuery``), since the two modes partition the graph
-         *     differently and a bubble ref only resolves under its own mode.
+         * @description Ego neighbourhood around a ref: the node plus everything within
+         *     ``hops`` edges (server-clamped to 1–3).
          */
         MemorySubgraphQuery: {
-            /**
-             * Group By
-             * @default community
-             * @enum {string}
-             */
-            group_by: "community" | "type";
             /**
              * Hops
              * @default 1
@@ -4397,12 +4354,6 @@ export interface components {
             hops: number;
             /** Ref */
             ref: string;
-            /**
-             * Scope
-             * @default ego
-             * @enum {string}
-             */
-            scope: "ego" | "cluster";
         };
         /** ModeDeleteCommand */
         ModeDeleteCommand: {
@@ -8246,30 +8197,6 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["MemoryGraphQuery"];
-            };
-        };
-        responses: {
-            /** @description Success */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MemoryResult"];
-                };
-            };
-        };
-    };
-    memory_graph_overview: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["MemoryOverviewQuery"];
             };
         };
         responses: {

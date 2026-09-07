@@ -16,12 +16,7 @@ interface MemoryTypeFilterProps {
   tail?: TypeLegendItem[];
   /** Phantom node count; when > 0 a `phantom` pseudo-type row is offered. */
   phantomCount: number;
-  /** Zero-edge node count; when > 0 a `disconnected` pseudo-type row is
-   *  offered, labeled via i18n (unlike phantom, "disconnected" isn't a
-   *  real type name, so it has no literal string of its own to display). */
-  disconnectedCount?: number;
-  /** Currently hidden types (may include the `phantom`/`disconnected`
-   *  pseudo-types). */
+  /** Currently hidden types (may include the `phantom` pseudo-type). */
   hidden: Set<string>;
   onToggle: (type: string) => void;
   onShowAll: () => void;
@@ -38,7 +33,6 @@ export function MemoryTypeFilter({
   types,
   tail = [],
   phantomCount,
-  disconnectedCount = 0,
   hidden,
   onToggle,
   onShowAll,
@@ -60,12 +54,10 @@ export function MemoryTypeFilter({
     function onKey(e: KeyboardEvent) {
       if (e.key !== "Escape") return;
       setOpen(false);
-      // Consume the keypress: MemoryGraphView also listens for Escape
-      // (to back out of a graph drill) on `window`, which — in the bubble
-      // phase — fires AFTER this `document` listener. Marking it prevented
-      // here lets that later handler check `e.defaultPrevented` and skip
-      // its own action, so one Escape press closes only the top-most layer
-      // (this popover) instead of also exiting the drill underneath it.
+      // Consume the keypress so an outer Escape handler (window-level
+      // listeners fire after this document-level one) can see
+      // `e.defaultPrevented` and leave its own layer alone — one press
+      // closes only this popover.
       e.preventDefault();
     }
     document.addEventListener("mousedown", onDoc);
@@ -77,12 +69,10 @@ export function MemoryTypeFilter({
   }, [open]);
 
   const hasPhantom = phantomCount > 0;
-  const hasDisconnected = disconnectedCount > 0;
   const visibleCount =
     types.filter((tl) => !hidden.has(tl.type)).length +
     tail.filter((tl) => !hidden.has(tl.type)).length +
-    (hasPhantom && !hidden.has("phantom") ? 1 : 0) +
-    (hasDisconnected && !hidden.has("disconnected") ? 1 : 0);
+    (hasPhantom && !hidden.has("phantom") ? 1 : 0);
 
   const needle = query.trim().toLowerCase();
   const filtered = useMemo(
@@ -90,11 +80,8 @@ export function MemoryTypeFilter({
     [types, needle],
   );
   const showPhantomRow = hasPhantom && (!needle || "phantom".includes(needle));
-  const disconnectedLabel = t("memoryGraph.typeDisconnected");
-  const showDisconnectedRow =
-    hasDisconnected && (!needle || disconnectedLabel.toLowerCase().includes(needle));
 
-  if (types.length === 0 && tail.length === 0 && !hasPhantom && !hasDisconnected) return null;
+  if (types.length === 0 && tail.length === 0 && !hasPhantom) return null;
 
   function row(
     type: string,
@@ -224,7 +211,7 @@ export function MemoryTypeFilter({
             />
           </div>
           <div className="max-h-56 overflow-y-auto">
-            {filtered.length === 0 && !showPhantomRow && !showDisconnectedRow && tail.length === 0 ? (
+            {filtered.length === 0 && !showPhantomRow && tail.length === 0 ? (
               <div className="px-1.5 py-2 text-center text-muted-foreground">
                 {t("memoryGraph.noMatches")}
               </div>
@@ -235,9 +222,6 @@ export function MemoryTypeFilter({
                     summary row, not an individually-searchable type. */}
                 {tail.length > 0 ? tailRow() : null}
                 {showPhantomRow ? row("phantom", null, phantomCount) : null}
-                {showDisconnectedRow
-                  ? row("disconnected", null, disconnectedCount, disconnectedLabel)
-                  : null}
               </>
             )}
           </div>

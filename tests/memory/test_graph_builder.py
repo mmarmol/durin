@@ -1,4 +1,4 @@
-"""Unit tests for the memory graph builder used by the webui graph view."""
+"""Unit tests for the memory graph builder used by the webui memory browser."""
 
 from __future__ import annotations
 
@@ -7,17 +7,20 @@ from pathlib import Path
 
 import pytest
 
+from durin.memory import graph
 from durin.memory.aliases_cache import _clear_all
 from durin.memory.entity_page import EntityPage
-from durin.memory.graph import build_memory_graph
+from durin.memory.graph import build_memory_graph, get_full_graph_cached
 from durin.memory.store import store_memory
 
 
 @pytest.fixture(autouse=True)
 def _reset_cache() -> None:
     _clear_all()
+    graph._clear_graph_cache()
     yield
     _clear_all()
+    graph._clear_graph_cache()
 
 
 def _write_page(ws: Path, type_: str, slug: str, **kwargs) -> Path:
@@ -639,3 +642,45 @@ def test_page_provenance_nonsession_refs_ignored(tmp_path: Path) -> None:
         e for e in g["edges"]
         if e["source"].startswith("session:") or e["target"].startswith("session:")
     )
+
+
+# ---------------------------------------------------------------------------
+# Uncapped-graph cache (backs the ego-subgraph endpoint)
+# ---------------------------------------------------------------------------
+
+
+def test_cached_payload_rebuilds_only_on_tree_change(tmp_path: Path, monkeypatch) -> None:
+    _write_page(tmp_path, "person", "alice")
+    _store(tmp_path, "alice did a thing", ["person:alice"])
+    calls = {"n": 0}
+    real = graph.build_memory_graph
+
+    def counting(*a, **kw):
+        calls["n"] += 1
+        return real(*a, **kw)
+
+    monkeypatch.setattr(graph, "build_memory_graph", counting)
+    first = get_full_graph_cached(tmp_path)
+    again = get_full_graph_cached(tmp_path)
+    assert calls["n"] == 1
+    assert again is first
+
+    _write_page(tmp_path, "person", "bob")
+    changed = get_full_graph_cached(tmp_path)
+    assert calls["n"] == 2
+    assert {n["id"] for n in changed["nodes"]} >= {"person:alice", "person:bob"}
+
+
+def test_refreshing_existing_workspace_does_not_evict_others(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(graph, "_CACHE_MAX", 2)
+    ws_a = tmp_path / "a"
+    ws_b = tmp_path / "b"
+    for ws, slug in ((ws_a, "alice"), (ws_b, "bob")):
+        ws.mkdir()
+        _write_page(ws, "person", slug)
+    get_full_graph_cached(ws_a)
+    get_full_graph_cached(ws_b)
+    _write_page(ws_b, "person", "carol")
+    get_full_graph_cached(ws_b)
+    assert ws_a.resolve() in graph._cache
+    assert len(graph._cache) == 2

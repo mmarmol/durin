@@ -9,11 +9,9 @@ interface EntityMiniGraphProps {
   entityRef: string;
   entityName: string;
   onNavigate: (ref: string, name: string) => void;
-  onViewInGraph: () => void;
 }
 
-// A compact preview, not the full canvas — a tighter cap than any limit the
-// interactive graph applies elsewhere.
+// A compact preview: only the heaviest neighbours make the ring.
 const MAX_NEIGHBORS = 12;
 const VIEW_SIZE = 200;
 const CENTER = VIEW_SIZE / 2;
@@ -21,14 +19,13 @@ const RING_RADIUS = 66;
 
 /** Ego-graph preview for the entity detail panel's Info tab ("Related"): the
  *  selected entity's direct (1-hop) neighbours laid out on a ring, so the
- *  user can jump to a related entity — or open the full interactive graph —
- *  without leaving the list/cards presentation the panel was opened from. */
+ *  user can jump to a related entity without leaving the list/cards
+ *  presentation the panel was opened from. */
 export function EntityMiniGraph({
   token,
   entityRef,
   entityName,
   onNavigate,
-  onViewInGraph,
 }: EntityMiniGraphProps) {
   const { t } = useTranslation();
   const [neighbors, setNeighbors] = useState<MemoryGraphNode[] | null>(null);
@@ -91,13 +88,6 @@ export function EntityMiniGraph({
       <div className="mb-1.5 flex items-center gap-1.5">
         <span className="text-[11px] font-semibold">{t("memoryGraph.relatedTitle")}</span>
         <span className="text-[10px] text-muted-foreground">{t("memoryGraph.relatedOneHop")}</span>
-        <button
-          type="button"
-          onClick={onViewInGraph}
-          className="ml-auto rounded border border-border/40 px-1.5 py-0.5 text-[10px] text-primary hover:bg-muted"
-        >
-          {t("memoryGraph.viewInGraph")}
-        </button>
       </div>
       {loading ? (
         <div className="h-28 w-full animate-pulse rounded-md bg-muted/50" />
@@ -123,9 +113,8 @@ export function EntityMiniGraph({
             />
           ))}
           {/* Center dot stands for the panel's own entity — colored by the
-              type its ref prefix names, the same `<type>:<slug>` convention
-              handleOpenEntity/isolateNode already parse elsewhere. Its name
-              isn't repeated here: the panel header right above already
+              type its ref prefix names (the `<type>:<slug>` convention). Its
+              name isn't repeated here: the panel header right above already
               shows it. */}
           <circle
             cx={CENTER}

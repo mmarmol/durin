@@ -25,12 +25,11 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from durin.service.principal import Principal, Scope
 from durin.service.registry import route
 from durin.service.types import Command, Query, Result
-
 
 # ---------------------------------------------------------------------------
 # Telemetry directory resolver (injectable for tests via monkeypatch)
@@ -131,30 +130,12 @@ class MemoryGraphQuery(Query):
     """No inputs — returns the full entity graph."""
 
 
-class MemoryOverviewQuery(Query):
-    """Clustered overview of the entity graph.
-
-    ``group_by`` chooses how non-hub nodes are grouped into bubbles:
-    "community" (default) by semantic clustering, "type" by the entity's own
-    type field. See ``durin.memory.graph_overview.assemble_overview``.
-    """
-
-    group_by: Literal["community", "type"] = "community"
-
-
 class MemorySubgraphQuery(Query):
-    """Ego- or cluster-scoped neighborhood around a ref.
-
-    ``group_by`` only matters for ``scope="cluster"``: it must match the
-    grouping mode the overview built ``ref`` under (see
-    ``MemoryOverviewQuery``), since the two modes partition the graph
-    differently and a bubble ref only resolves under its own mode.
-    """
+    """Ego neighbourhood around a ref: the node plus everything within
+    ``hops`` edges (server-clamped to 1–3)."""
 
     ref: str
     hops: int = 1
-    scope: Literal["ego", "cluster"] = "ego"
-    group_by: Literal["community", "type"] = "community"
 
 
 class MemoryEntityQuery(Query):
@@ -367,7 +348,7 @@ class MemoryService:
         scope=Scope.MEMORY_READ.value,
         request_model=MemoryGraphQuery,
         response_model=MemoryResult,
-        summary="Entity-centric memory as nodes + edges (graph view)",
+        summary="Entity-centric memory as nodes + edges (entity browser)",
     )
     async def graph(
         self, query: MemoryGraphQuery, principal: Principal
@@ -378,27 +359,6 @@ class MemoryService:
         ws = self._workspace_resolver()
         payload = build_memory_graph(ws)
         return MemoryResult(data=payload)
-
-    @route(
-        "GET",
-        "/api/v1/memory/graph/overview",
-        scope=Scope.MEMORY_READ.value,
-        request_model=MemoryOverviewQuery,
-        response_model=MemoryResult,
-        summary="Clustered overview: bubbles + semantic hubs + aggregated edges",
-    )
-    async def graph_overview(
-        self, query: MemoryOverviewQuery, principal: Principal
-    ) -> MemoryResult:
-        principal.require(Scope.MEMORY_READ)
-        import asyncio
-
-        from durin.memory.graph_overview import build_overview
-
-        ws = self._workspace_resolver()
-        payload = await asyncio.to_thread(build_overview, ws, query.group_by)
-        data = {k: v for k, v in payload.items() if k != "members"}
-        return MemoryResult(data=data)
 
     @route(
         "GET",
@@ -414,24 +374,9 @@ class MemoryService:
         principal.require(Scope.MEMORY_READ)
         import asyncio
 
-        from durin.memory.graph import build_entity_subgraph
-        from durin.memory.graph_overview import (
-            build_cluster_subgraph,
-            get_full_graph_cached,
-        )
-        from durin.service.types import NotFoundError
+        from durin.memory.graph import build_entity_subgraph, get_full_graph_cached
 
         ws = self._workspace_resolver()
-        if query.scope == "cluster":
-            try:
-                payload = await asyncio.to_thread(
-                    build_cluster_subgraph, ws, query.ref, group_by=query.group_by
-                )
-            except KeyError:
-                raise NotFoundError(
-                    f"no current cluster is keyed by {query.ref!r}"
-                ) from None
-            return MemoryResult(data=payload)
 
         def _ego() -> dict[str, Any]:
             full = get_full_graph_cached(ws)
