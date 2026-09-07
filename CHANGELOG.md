@@ -5,6 +5,55 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.9.3 — 2026-09-07
+
+### Highlights
+
+- **The memory graph canvas is gone.** After real use, the force-directed
+  graph in the Memory section added nothing over the table and cards, so it
+  was removed. Entities now offers **Table** and **Cards**, the type filter,
+  and the detail panel with its **Related** ring — the entity's direct
+  neighbours, which is the neighbourhood view that actually gets used. The
+  graph-only semantic-search results panel goes with it; the search box keeps
+  filtering the table and cards by name, alias and summary. A stored "graph"
+  view preference falls back to Table. (#571)
+
+- **One message at a time in the Memory pane.** While loading, or on an empty
+  workspace, the pane used to show two contradictory explanations at once —
+  "Loading…" or "No entity pages yet" stacked over the table's own "No
+  entities match the current search or filters". The pane now has exclusive
+  states (error, loading, empty workspace, or the list), and inside the list
+  the empty text says why: nothing matched the search, or the type filter is
+  hiding everything — the first-run state of a workspace whose entities are
+  all still unconsolidated, since phantoms are hidden by default. (#571)
+
+### Changes
+
+**Memory**
+
+- `GET /api/v1/memory/graph/overview` and the `cluster` scope of
+  `GET /api/v1/memory/subgraph` are removed, along with the server-side
+  clustering behind them. `/subgraph` keeps serving the ego neighbourhood the
+  Related ring reads, cached by a signature of the memory tree. (#571)
+- The type filter lists only types the browser can show — session and
+  reference scaffolding never get a row — and the canvas-only "no
+  connections" pseudo-type is gone. (#571)
+
+**Workflows**
+
+- A deep-linked run detail (opened from an automation or a chat card) no
+  longer sticks on "Loading…" when the run's manifest arrives before the view
+  has re-rendered with the selection. (#571)
+
+**Docs**
+
+- The README's memory illustration shows the entity table and its detail
+  panel instead of the retired graph. (#571)
+
+**Dependencies**
+
+- pypdf 6.16.1. (#570)
+
 ## 0.9.2 — 2026-08-31
 
 ### Highlights
