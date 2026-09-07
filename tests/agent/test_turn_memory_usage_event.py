@@ -116,3 +116,44 @@ async def test_rollup_reaches_the_session_logger_from_a_real_turn(
     assert rows[0]["session_key"].startswith("websocket:")
     assert isinstance(rows[0]["pinned_chars"], int)
     assert isinstance(rows[0]["hot_chars"], int)
+
+
+@pytest.mark.asyncio
+async def test_rollup_reports_non_zero_surface_sizes_when_memory_is_pinned(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """With an always_on page on disk the prompt carries a pinned block and a
+    hot layer (the Known types line at least), so both sizes must be real
+    counts, not the (0, 0) fallback."""
+    from datetime import datetime, timezone
+
+    from durin.memory.field_patch import FieldPatch
+    from durin.memory.memory_writer import write_entity
+    from durin.memory.principal import mark_always_on
+
+    now = datetime.now(timezone.utc)
+    write_entity(tmp_path, "practice:spanish",
+                 [FieldPatch(kind="body_append", value="Always respond in Spanish.",
+                             author="agent", source_ref="s", at=now)],
+                 create=True, name="Always Spanish")
+    mark_always_on(tmp_path, "practice:spanish")
+
+    rec = _capture(monkeypatch)
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    loop = AgentLoop(
+        bus=MessageBus(), provider=provider, workspace=tmp_path, model="test-model",
+    )
+    loop.provider.chat_with_retry = AsyncMock(
+        return_value=LLMResponse(content="Hola.", tool_calls=[]),
+    )
+    loop.tools.get_definitions = MagicMock(return_value=[])
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content="hola"),
+    )
+
+    rows = [d for t, d in rec.events if t == "turn.memory_usage"]
+    assert len(rows) == 1
+    assert rows[0]["pinned_chars"] > 0
+    assert rows[0]["hot_chars"] > 0
