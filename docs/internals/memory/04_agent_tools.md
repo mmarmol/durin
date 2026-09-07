@@ -571,116 +571,6 @@ future re-enable starts from a correct implementation.
 
 ---
 
-### Graph overview (clustered)
-
-The webui's Entities graph canvas (see "Webui surfaces" below) opens on a
-two-layer view of the entity graph: a clustered **overview** first, then a
-**neighborhood** — a cluster's members, or a single node's ego-subgraph — on
-drill-in. `GET /api/v1/memory/graph/overview` serves the overview (the
-response strips the server-internal bubble-membership map before it reaches
-the client); `GET /api/v1/memory/subgraph?scope=ego|cluster` serves either
-neighborhood kind, keyed the same way the overview keys its bubbles.
-
-**Clustering topology is semantic-only.** `assemble_overview`
-(`durin/memory/graph_overview.py`) decides which entities group into the
-same bubble purely from entity↔entity co-mention edges and typed relations
-between consolidated pages. Session and phantom nodes never enter that
-computation: a session edges into everything it touched, and with few
-sessions a session-driven community would degenerate into "whatever that
-one session touched" rather than a real topic cluster. Sessions remain in
-the underlying payload as provenance and phantom entities as unconsolidated
-mentions — both are drawable, just not structural.
-
-**Hub ranking and node sizing run on an importance score, not a raw
-mention count.** Real workspaces carry no episodic/stable/corpus entries,
-so the legacy per-entry mention count is zero everywhere and cannot drive
-anything. The score instead combines each entity's relation/derived-from
-degree — the dream's deliberate structure — with a log-damped count of the
-distinct sessions whose evidence touched it, so high-churn operational
-entities (support tickets, test runs) don't drown the semantic structure
-as session volume grows. Session evidence only ever contributes this
-per-entity scalar on top of a node already placed by semantic structure —
-it never becomes an edge, so it can't pull unrelated entities into the
-same cluster or bridge communities together. The overview's emitted
-`weight` field on hub, loose, and bubble-preview nodes carries this score
-(rounded) rather than the legacy count; the client already treats `weight`
-as an opaque magnitude for radius and label-priority, so nothing there
-changes.
-
-**Hubs are outliers, not a fixed top-N.** A node qualifies as a hub only
-when its score is at least twice the median score among non-reference
-entities, with a small absolute floor on top so a near-zero median can't
-qualify everything — and the qualifying set is then capped at a fixed hub
-budget. A uniform or young workspace — where nothing stands out —
-therefore surfaces zero hubs. Hubs are extracted before clustering because
-a true mega-connector would otherwise bridge every community into one
-blob; reference nodes hold real content but are consultation material, not
-connectors, so they are never hub-eligible.
-
-**The remainder clusters by deterministic label propagation — the default
-grouping.** Every source of nondeterminism in the textbook algorithm is
-pinned — nodes iterate in sorted-id order, each starting labeled with its
-own id, and neighbor-label ties break lexicographically — so the same
-input always yields the same partition. A community that reaches the
-bubble-size threshold collapses into a bubble identified by its
-representative ref, the highest-scoring member. Communities under the
-threshold stay as loose nodes, display-capped by score; anything the caps
-drop — overflow bubbles and overflow loose nodes alike — folds into one
-`__others__` bubble, itself drillable like any other. When no community
-reaches the threshold at all, the payload reports mode `"flat"` and the
-client falls back to the plain graph; the (bounded) hubs list still
-populates in flat mode, since hub extraction runs before the clustering
-attempt.
-
-**Grouping is a caller choice: `group_by`.** The paragraph above describes
-`group_by="community"` (the default). `group_by="type"` skips label
-propagation entirely and partitions the same remaining nodes by their own
-`type` field instead: a type's bubble is keyed `"type:<typename>"` and
-named `<typename>`, and the bubble-size threshold, display caps, and
-`__others__` overflow all apply exactly as they do for a community. Hub
-extraction never depends on this choice — it runs first, against the full
-semantic node set, so the hubs list is identical either way. `GET
-/api/v1/memory/graph/overview` takes `group_by` as a query parameter; the
-`cluster` scope of `GET /api/v1/memory/subgraph` also takes it, and it must
-match the mode the ref's overview was built under, since a bubble id from
-one mode is not a bubble id in the other.
-
-**Two-level cache, one tree signature.** Both the uncapped graph payload
-(`get_full_graph_cached`) and the derived overview (`build_overview`) are
-cached keyed by a cheap stat-walk signature over everything the graph is
-built from (entity pages, the episodic/stable/corpus classes, references,
-sessions — mtime and size per file, no reads); the overview cache keys
-additionally on `group_by`, so the two grouping modes never share or
-evict each other's slot. A write anywhere in that tree invalidates both
-caches on the next call; eviction only happens on growth past the cache's
-capacity, so refreshing a key already cached never evicts a different
-workspace. `build_cluster_subgraph` fetches one
-(signature, payload) snapshot and reuses it for both a bubble's member list
-and the node lookup, rather than two independent stat-walks that a
-concurrent write could land between and desync. It rides along
-scaffolding — phantom entities and session nodes one edge from a kept
-member — non-transitively: that check runs only against the capped member
-set, so a scaffolding node can never itself pull in a second one. A ref
-that no longer keys a current bubble (the tree changed shape since the
-overview was built) raises `KeyError`, which the service maps to a 404; the
-client falls back to the overview and refreshes it.
-
-**Member display cap.** `build_cluster_subgraph` returns a
-neighborhood payload with a display-capped member list (sorted by
-descending importance score, deterministic tie-break by id) and a separate
-`total_members` count that always reports the true pre-cap member count —
-this true count backs the client's "and N more" affordance when the
-display budget is exhausted. The returned stats flag indicates when
-truncation occurred.
-
-The `ego` branch of the subgraph route feeds the existing (pre-clustering)
-ego-subgraph builder from `get_full_graph_cached`'s payload instead of
-re-walking the disk; the `cluster` branch calls `build_cluster_subgraph`.
-All three functions are synchronous and disk-heavy — the service runs them
-via `asyncio.to_thread` rather than blocking the event loop.
-
----
-
 ## Key types and entry points
 
 | Symbol | File | Role |
@@ -733,43 +623,27 @@ The web dashboard exposes three memory controls under **Settings → Memory**:
 - **Dream controls** — `memory.dream.enabled`, cron schedule,
   `memory.dream.post_compaction`, `memory.dream.on_session_close`.
 - **Read-only memory browser** — one page, two content-domain tabs:
-  **Entities** and **Documents**. The Entities tab offers three presentations
-  of the same node set (the Obsidian-Bases view model) behind a toolbar
-  switcher: a **graph** canvas (nodes = entity pages, edges = relations,
-  co-mentions, `derived_from` document links, and session→entity links
-  harvested from entity-page `provenance` events; capped payload — see
-  "Graph overview" above for the clustered layer the canvas actually opens
-  on), a
-  **cards** grid (reading-oriented: type,
-  name, body excerpt, mention/recency/source counts), and a sortable
-  **table** (audit-oriented: same fields as columns). Search, the
-  type-filter chips, and the sort control are toolbar state shared by all
-  three views; in graph view the search drives the semantic results panel +
-  node highlighting, while cards/table filter their grid live from the
-  payload (name / alias / excerpt substring, no backend round-trip). The
-  graph canvas follows Obsidian's gesture contract: **hover** transiently
-  highlights the node and its direct connections (plus the body-preview
-  popover), **click** opens the detail panel without altering the graph,
-  and the panel's **isolate** button swaps the canvas for the node's
-  ego-subgraph (uncapped, served by the subgraph endpoint) with a 1–3
-  depth control and a "back to full" exit — isolation is also entered
-  automatically for search hits and document entities the global node cap
-  dropped. The canvas has a camera: by default it auto-frames the visible
-  nodes (smoothed, zoom-in clamped) so filtering or isolating re-frames
-  the survivors; wheel-zoom and background-drag panning (Obsidian's manual
-  controls) take over on use, and a floating fit button re-engages
-  auto-framing. Cards
-  and table exclude session and reference scaffolding nodes; selecting an
-  entity in any view opens the same detail panel. To power the cards/table
-  rows, `build_memory_graph` enriches each node with `summary` (plain-text
-  body excerpt), `updated_at`, and `sources` (count of `derived_from`
-  links); non-page nodes carry null/0 defaults. The **Documents** tab is
-  the Library shelf: a searchable list of ingested reference documents,
-  each opening to a reading view (the full document rendered as markdown,
-  headed by its distilled abstract + outline when the dream has run), a
-  **Fragments** tab previewing the structure-aware chunks as indexed for
-  retrieval, and an **Entities** tab with the entities seeded from it
-  (`derived_from`, clickable back into the graph).
+  **Entities** and **Documents**. The Entities tab offers two presentations
+  of the same entity set behind a toolbar switcher: a **cards** grid
+  (reading-oriented: type, name, body excerpt, mention/recency/source
+  counts) and a sortable **table** (audit-oriented: same fields as
+  columns). Search, the type filter, and the sort control are toolbar state
+  shared by both; search filters the grid live from the payload (name /
+  alias / excerpt substring, no backend round-trip). Both presentations
+  exclude session and reference scaffolding nodes; selecting an entity in
+  either opens the same detail panel, whose Info tab carries a **Related**
+  ring — the entity's 1-hop neighbourhood, served uncapped by the subgraph
+  endpoint, so an entity the capped list payload dropped still resolves
+  with its relations around it. To power the rows, `build_memory_graph`
+  enriches each node with `summary` (plain-text body excerpt),
+  `updated_at`, and `sources` (count of `derived_from` links); non-page
+  nodes carry null/0 defaults. The **Documents** tab is the Library shelf:
+  a searchable list of ingested reference documents, each opening to a
+  reading view (the full document rendered as markdown, headed by its
+  distilled abstract + outline when the dream has run), a **Fragments**
+  tab previewing the structure-aware chunks as indexed for retrieval, and
+  an **Entities** tab with the entities seeded from it (`derived_from`,
+  clickable into the entity's detail panel).
 
 Settings not exposed in the UI (advanced) are config-file-only.
 
@@ -804,10 +678,9 @@ agent tools and never accept mutations.
 | `search_memory_api(query, …)` | `durin/memory/graph_api.py` | Webui equivalent of `memory_search` (paginated; different return shape). |
 | `list_reference_documents()` | `durin/memory/graph_api.py` | The Library shelf: ingested reference documents (title, source, ingest time, chunk count, `distilled`). |
 | `get_reference_detail(slug)` | `durin/memory/graph_api.py` | One document's full raw body + distilled outline + entities seeded from it + a bounded chunk preview. |
-| Graph canvas data | `durin/memory/graph.py::build_memory_graph` | Builds `{nodes, edges}` for the entity canvas. Caps at 500 nodes / 2 000 edges. |
-| `build_overview(workspace, group_by="community")` | `durin/memory/graph_overview.py` | Clustered overview: semantic hubs + community-or-type bubbles + loose nodes, cached at two levels (the overview level keyed by `(workspace, group_by)`) off a stat-walk tree signature. Falls back to flat mode when nothing clusters. |
-| `build_cluster_subgraph(workspace, ref, group_by="community")` | `durin/memory/graph_overview.py` | Members-of-bubble neighborhood for a drilled-in cluster, keyed by the bubble's representative ref (or the `__others__` bucket, or `type:<typename>` under `group_by="type"`). Raises on a stale ref so the caller can 404 and fall back to the overview. |
-| `get_full_graph_cached(workspace)` | `durin/memory/graph_overview.py` | The uncapped graph payload backing both the overview and the ego-subgraph branch of the subgraph route, rebuilt only when the tree signature changes. |
+| Entity list data | `durin/memory/graph.py::build_memory_graph` | Builds `{nodes, edges}` for the Entities table/cards. Caps at 500 nodes / 2 000 edges. |
+| `build_entity_subgraph(workspace, ref, hops)` | `durin/memory/graph.py` | Ego-graph: the node plus its N-hop neighbourhood (server-clamped to 1–3), walked over the uncapped payload — backs the detail panel's Related ring via `GET /api/v1/memory/subgraph`. |
+| `get_full_graph_cached(workspace)` | `durin/memory/graph.py` | The uncapped graph payload behind the ego-subgraph route, rebuilt only when a stat-walk signature over the memory tree (entity pages, entry classes, references, sessions) changes; the service runs it via `asyncio.to_thread`. |
 
 ---
 

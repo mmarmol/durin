@@ -705,12 +705,17 @@ describe("RunsView", () => {
     // on the same resolved reference is a real, not just theoretical, TOCTOU
     // gap under load — every other findByText in this file already does it
     // this way).
-    // 5s upper bound (default 1s): the assertion stays event-driven — the
-    // wait ends the moment the text lands — but a loaded CI runner has
-    // tripped the 1s default on exactly this initial-selection fetch chain.
-    await screen.findByText(/Which environment — staging or prod\?/, undefined, { timeout: 5000 });
+    // This path used to hang on "Loading…" whenever the manifest mock
+    // resolved before React re-rendered with the new selection (always, in
+    // isolation): onSelectEntry's guard compared against a stale selectedRef
+    // and dropped the reply. Run this test on its own (-t) when touching that
+    // guard — the full file only passed by accident of earlier tests' state.
+    // 10s upper bound (default 1s) for a loaded CI runner; the test's own
+    // vitest timeout (last argument) stays above it so the runner's per-test
+    // clock can't fire first with a bare "Test timed out".
+    await screen.findByText(/Which environment — staging or prod\?/, undefined, { timeout: 10_000 });
     expect(api.getWorkflowRunManifest).toHaveBeenCalledWith("tok", "onboarding", "run-waiting");
-  });
+  }, 15_000);
 
   it("does nothing (no crash, no selection) when initialSelection names a run outside the fetched feed", async () => {
     // vi.restoreAllMocks() in afterEach does not reset a vi.mock()-factory

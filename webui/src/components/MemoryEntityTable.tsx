@@ -73,7 +73,9 @@ export function MemoryEntityTable({
   if (entities.length === 0) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        {t("memoryGraph.noEntitiesMatch")}
+        {query.trim()
+          ? t("memoryGraph.noEntitiesMatchSearch")
+          : t("memoryGraph.noEntitiesHidden")}
       </div>
     );
   }

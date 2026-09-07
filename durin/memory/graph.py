@@ -1,8 +1,9 @@
-"""Entity-centric memory graph builder for the webui Obsidian-style view.
+"""Entity-centric memory graph builder for the webui memory browser.
 
-Produces a JSON-serialisable ``{"nodes": [...], "edges": [...]}`` shape
-the frontend force-directed canvas renders. Read-only over the on-disk
-state — no LLM call, no mutation.
+Produces a JSON-serialisable ``{"nodes": [...], "edges": [...]}`` shape:
+the node list backs the Entities table/cards presentations, and the
+edges back the per-entity "Related" neighbourhood (``build_entity_subgraph``).
+Read-only over the on-disk state — no LLM call, no mutation.
 
 **Node kinds**:
 
@@ -41,12 +42,14 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 from collections import defaultdict
 from itertools import chain, combinations
 from pathlib import Path
 from typing import Any
 
 from durin.memory.entity_page import EntityPage
+from durin.memory.paths import walk_class
 from durin.memory.storage import load_entry
 from durin.session.manager import is_workflow_session_file
 
@@ -465,10 +468,10 @@ def build_entity_subgraph(
 ) -> dict[str, Any]:
     """Ego-graph for one node: ``ref`` + everything within ``hops`` edges.
 
-    Powers the webui's "focus" mode (Obsidian's local graph). The whole
-    point is that it is NOT subject to the global node cap — a node the
-    overview dropped (or that the user reached via search) is always
-    present here, centred, with just its neighbourhood around it.
+    Powers the webui detail panel's "Related" ring. The whole point is
+    that it is NOT subject to the global node cap — an entity the capped
+    list payload dropped is always present here, centred, with just its
+    neighbourhood around it.
 
     Built by walking the full graph uncapped and keeping the BFS closure
     of ``ref`` out to ``hops``. If ``ref`` has no drawn edges (e.g. an
@@ -733,3 +736,75 @@ def _read_session_meta_entities(meta_path: Path) -> list[str]:
     if not isinstance(entities, list):
         return []
     return [str(e) for e in entities if isinstance(e, str) and ":" in e]
+
+
+# ---------------------------------------------------------------------------
+# Uncapped-graph cache
+# ---------------------------------------------------------------------------
+
+_UNCAPPED_NODES = 100_000
+_UNCAPPED_EDGES = 400_000
+_CACHE_MAX = 4
+_ENTRY_CLASSES = ("episodic", "stable", "corpus")
+
+_cache: dict[Path, tuple[int, dict[str, Any]]] = {}
+_lock = threading.Lock()
+
+
+def _tree_signature(workspace: Path) -> int:
+    """Cheap stat-walk over everything the graph is built from.
+
+    A stat per file (no reads, no parsing): any write bumps mtime_ns/size
+    and misses the cache. Sessions are included because the full payload
+    carries session nodes/edges.
+    """
+    items: list[tuple[str, int, int]] = []
+    for class_name in ("entities", *_ENTRY_CLASSES):
+        for p in walk_class(workspace, class_name):
+            st = p.stat()
+            items.append((str(p), st.st_mtime_ns, st.st_size))
+    for extra_dir in (
+        workspace / "memory" / "references",
+        workspace / "sessions",
+    ):
+        if extra_dir.is_dir():
+            for p in sorted(extra_dir.iterdir()):
+                if p.is_file():
+                    st = p.stat()
+                    items.append((str(p), st.st_mtime_ns, st.st_size))
+    return hash(tuple(sorted(items)))
+
+
+def get_full_graph_cached(workspace: Path) -> dict[str, Any]:
+    """Uncapped graph payload, rebuilt only when the memory tree changed.
+
+    Backs the ego-subgraph endpoint so opening one entity's neighbourhood
+    doesn't re-walk the whole tree on every call. Refreshing a workspace
+    already in the cache never evicts another one — eviction (oldest
+    first) only makes room for a workspace the cache hasn't seen.
+    Synchronous and disk-heavy — event-loop callers hop through
+    ``asyncio.to_thread``.
+    """
+    ws = workspace.resolve()
+    sig = _tree_signature(ws)
+    with _lock:
+        hit = _cache.get(ws)
+        if hit is not None and hit[0] == sig:
+            return hit[1]
+    payload = build_memory_graph(
+        ws,
+        max_nodes=_UNCAPPED_NODES,
+        max_edges=_UNCAPPED_EDGES,
+        include_sessions=True,
+    )
+    with _lock:
+        if ws not in _cache and len(_cache) >= _CACHE_MAX:
+            del _cache[next(iter(_cache))]
+        _cache[ws] = (sig, payload)
+    return payload
+
+
+def _clear_graph_cache() -> None:
+    """Reset the uncapped-graph cache. Test isolation only."""
+    with _lock:
+        _cache.clear()

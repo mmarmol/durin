@@ -1,8 +1,8 @@
 import type { MemoryGraphNode } from "@/lib/api";
 
-// Shared visual + browse logic for the memory Entities views (graph canvas,
-// cards grid, table). Lives outside MemoryGraphView so the three
-// presentations style and filter nodes identically.
+// Shared visual + browse logic for the memory Entities views (cards grid,
+// table) and the detail panel's Related ring. Lives outside MemoryGraphView
+// so every presentation styles and filters nodes identically.
 
 export const TYPE_PALETTE: Record<string, string> = {
   person: "#7C3AED",
@@ -69,9 +69,9 @@ export interface BrowseOptions {
   sortKey: EntitySortKey;
 }
 
-// Node kinds that are graph scaffolding, not consultable entities: sessions
-// have their own detail surface reached via the graph, and references live in
-// the Documents tab. Neither belongs in the cards/table inventory.
+// Node kinds that are scaffolding, not consultable entities: sessions have
+// their own detail surface reached from an entity's provenance, and
+// references live in the Documents tab. Neither belongs in the inventory.
 const NON_ENTITY_TYPES = new Set(["session", "reference"]);
 
 function matchesQuery(node: MemoryGraphNode, q: string): boolean {
@@ -82,9 +82,9 @@ function matchesQuery(node: MemoryGraphNode, q: string): boolean {
   return false;
 }
 
-/** Filter + sort the graph payload's nodes for the cards/table views.
- *  Applies the same type/phantom toggles as the graph canvas, plus the
- *  live query filter (name, aliases, summary substring). */
+/** Filter + sort the graph payload's nodes for the cards/table views:
+ *  the type/phantom toggles plus the live query filter (name, aliases,
+ *  summary substring). */
 export function browseEntities(
   nodes: MemoryGraphNode[],
   { hiddenTypes, query, sortKey }: BrowseOptions,

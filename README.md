@@ -60,7 +60,7 @@ source of truth; the search indexes are derived and rebuildable. (Benchmarked at
 LoCoMo ≈ 0.79.)
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/mmarmol/durin/main/docs/assets/mockup-memory.svg" alt="durin's memory as a typed entity graph with labelled relations" width="860">
+  <img src="https://raw.githubusercontent.com/mmarmol/durin/main/docs/assets/mockup-memory.svg" alt="durin's memory browser: a table of typed entities with a detail panel and its related entities" width="860">
 </p>
 
 ### A skills ecosystem with guardrails

@@ -7,7 +7,7 @@ import {
   type MemoryGraphPayload,
 } from "@/lib/api";
 
-/** Loads the entity-centric memory graph for the Obsidian-style view.
+/** Loads the entity-centric memory graph behind the Entities table/cards.
  *
  * Refresh is manual via `refresh()` — the graph builder walks disk on
  * every call, so we don't auto-poll. The caller decides when to refetch
