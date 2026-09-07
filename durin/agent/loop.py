@@ -91,22 +91,29 @@ def _truncate_tool_output(content: str, max_chars: int, tool_name: str | None) -
     return truncate_text_fn(content, max_chars, direction=direction)
 
 
-def emit_memory_usage_rollup(tools_used: list[str]) -> None:
+def emit_memory_usage_rollup(session_key: str, tools_used: list[str]) -> None:
     """Emit the per-turn ``turn.memory_usage`` rollup at save time.
 
     Emitted on EVERY turn, including turns with zero tool calls —
     silent-miss analysis needs the rows where ``search_calls == 0``.
-    """
-    from durin.agent.tools._telemetry import emit_tool_event
 
-    emit_tool_event(
-        "turn.memory_usage",
-        {
-            "search_calls": tools_used.count("memory_search"),
-            "drill_calls": tools_used.count("memory_drill"),
-            "tool_calls_total": len(tools_used),
-        },
-    )
+    The per-run telemetry binding is torn down inside ``_run_agent_loop``
+    before the save state runs, so the session logger is fetched directly
+    rather than through the contextvar (same reason ``turn.latency`` does).
+    Never raises: telemetry must not break the turn.
+    """
+    from durin.telemetry.logger import get_session_logger
+
+    with suppress(Exception):
+        get_session_logger(session_key).log(
+            "turn.memory_usage",
+            {
+                "session_key": session_key,
+                "search_calls": tools_used.count("memory_search"),
+                "drill_calls": tools_used.count("memory_drill"),
+                "tool_calls_total": len(tools_used),
+            },
+        )
 
 
 if TYPE_CHECKING:
@@ -2973,7 +2980,7 @@ class AgentLoop:
             ctx.session.metadata.setdefault("skill_calls", []).extend(_skill_calls)
             emit_skill_used(_skill_calls)
 
-        emit_memory_usage_rollup(ctx.tools_used)
+        emit_memory_usage_rollup(ctx.session_key, ctx.tools_used)
 
         ctx.turn_latency_ms = max(0, int((time.time() - ctx.turn_wall_started_at) * 1000))
         self._save_turn(
