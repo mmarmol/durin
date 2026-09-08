@@ -744,7 +744,8 @@ class MemoryPrefetchConfig(Base):
     follow-ups. Skipped for slash commands, messages shorter than
     ``min_query_chars`` (a length rule, so it holds in every language),
     sessions that are workflow nodes, subagents, cron or automation runs,
-    and when the search exceeds ``timeout_s``. Each turn's outcome is one
+    and when the search exceeds ``timeout_s`` — after which it is skipped
+    outright for ``backoff_s``. Each turn's outcome is one
     ``memory.prefetch`` telemetry row.
     """
 
@@ -753,6 +754,7 @@ class MemoryPrefetchConfig(Base):
     max_chars: int = Field(default=2500, ge=200, description="Cap on the recalled hits text, in characters, before fencing; longer output is cut with a note (the fence adds a short fixed framing)")
     min_query_chars: int = Field(default=20, ge=1, description="Messages shorter than this are not searched")
     timeout_s: float = Field(default=5.0, gt=0, description="Seconds the search may take before the turn proceeds without it")
+    backoff_s: float = Field(default=60.0, ge=0, description="After a timeout or error, skip the prefetch for this many seconds; 0 disables the backoff")
 
 
 class MemoryConfig(Base):

@@ -58,6 +58,47 @@ def test_pinned_page_collapses_to_a_pointer_line(tmp_path: Path) -> None:
     assert "=== CANONICAL: memory/entity_page/practice:" not in out["sectioned_rendered"]
 
 
+def test_a_hit_the_turns_prefetch_already_showed_collapses_to_a_pointer(
+    tmp_path: Path,
+) -> None:
+    """The automatic per-turn prefetch fences its hits into the user message.
+    A search the model makes in the same turn must not render them again: the
+    loop hands the tool the turn's refs and they dedup like a whole-rendered
+    pinned page.
+
+    The entry is untagged on purpose — an entry that tags no entity never
+    surfaces as a hot-layer fragment, so nothing but the turn's refs can
+    collapse this hit.
+    """
+    entries = tmp_path / "memory" / "episodic"
+    entries.mkdir(parents=True)
+    (entries / "bakery.md").write_text(
+        "---\nid: bakery\nheadline: Ana opened a bakery\n"
+        "summary: Ana opened a bakery on Main St in March.\nentities: []\n---\n\n"
+        "Ana opened a bakery on Main St in March.\n",
+        encoding="utf-8",
+    )
+
+    tool = MemorySearchTool(workspace=tmp_path, context_dedup=True)
+    plain = asyncio.run(tool.execute(query="bakery", scope="dreamed", level="warm"))
+    # Premise: with no refs handed over, the hit renders whole.
+    assert "=== FRAGMENT: memory/episodic/bakery " in plain["sectioned_rendered"]
+    assert "already_in_context" not in plain
+
+    tool.set_turn_prefetch_refs({"memory/episodic/bakery"})
+    out = asyncio.run(tool.execute(query="bakery", scope="dreamed", level="warm"))
+
+    assert out["already_in_context"] == ["memory/episodic/bakery"]
+    assert "## Matches shown in your Memory sections" in out["sectioned_rendered"]
+    assert "=== FRAGMENT: memory/episodic/bakery " not in out["sectioned_rendered"]
+
+    # The refs belong to one turn only: cleared, the hit renders whole again.
+    tool.clear_turn_prefetch_refs()
+    again = asyncio.run(tool.execute(query="bakery", scope="dreamed", level="warm"))
+    assert "already_in_context" not in again
+    assert "=== FRAGMENT: memory/episodic/bakery " in again["sectioned_rendered"]
+
+
 def test_principal_page_hit_survives_past_the_body_cap(tmp_path: Path) -> None:
     """Unlike the always_on pins, the principal's page is rendered body-capped,
     so a hit on it can match text the prompt never showed. It must be judged by

@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 from loguru import logger
 
 from durin.agent import model_presets as preset_helpers
+from durin.agent.approval import AUTONOMOUS_SESSION_PREFIXES
 from durin.agent.aux_bridges import build_aux_providers
 from durin.agent.context import ContextBuilder
 from durin.agent.hook import AgentHook, CompositeHook
@@ -131,6 +132,7 @@ def emit_memory_usage_rollup(
 if TYPE_CHECKING:
     from durin.config.schema import (
         ChannelsConfig,
+        MemoryPrefetchConfig,
         ToolsConfig,
     )
     from durin.cron.service import CronService
@@ -580,6 +582,11 @@ class AgentLoop:
         # ``None`` until the first event of that kind fires.
         self._last_context_composition: dict[str, Any] | None = None
         self._last_cache_usage: dict[str, Any] | None = None
+        # Monotonic deadline until which the automatic memory prefetch is
+        # skipped after a timeout or an error. A timed-out search is
+        # abandoned, not cancelled, so retrying it every turn strands one
+        # worker thread per turn.
+        self._prefetch_backoff_until: float = 0.0
         self._active_tasks: dict[str, list[asyncio.Task]] = {}  # session_key -> tasks
         self._background_tasks: list[asyncio.Task] = []
         self._session_locks: dict[str, asyncio.Lock] = {}
@@ -2841,7 +2848,7 @@ class AgentLoop:
             return "shortcut"
         return "dispatch"
 
-    def _prefetch_config(self):
+    def _prefetch_config(self) -> "MemoryPrefetchConfig":
         """Configured prefetch settings, or the defaults when the loop has no
         app config (tests, ad-hoc runners)."""
         from durin.config.schema import MemoryPrefetchConfig
@@ -2870,16 +2877,22 @@ class AgentLoop:
         reason: str | None = None
         if not cfg.enabled:
             reason = "disabled"
+        elif time.monotonic() < self._prefetch_backoff_until:
+            reason = "backoff"
         elif not text or text.startswith("/"):
             reason = "command_or_empty"
         elif len(text) < cfg.min_query_chars:
             reason = "short"
-        elif (ctx.session is not None and ctx.session.metadata.get("origin_type")) or (
-            ctx.session_key.split(":", 1)[0] in ("cron", "automation")
+        elif (ctx.session is not None and ctx.session.metadata.get("origin_type")) or any(
+            ctx.session_key.startswith(p) for p in AUTONOMOUS_SESSION_PREFIXES
         ):
             # origin_type: workflow nodes and subagents have their own prompts.
-            # channel prefix: cron and automation runs carry no origin_type
-            # marker but are just as non-interactive.
+            # session kind: the runtime's own list of contexts with nobody
+            # attached (cron, automation, dream…). Checking that explicit list
+            # fails OPEN — a kind on neither list, like `bench:`, keeps being
+            # prefetched, as do the interactive channels — because a wasted
+            # search costs a few hundred milliseconds while a missing one
+            # costs the recall this whole path exists for.
             reason = "non_interactive"
         elif not fts_index_path(self.workspace).exists():
             reason = "no_index"
@@ -2908,7 +2921,16 @@ class AgentLoop:
             if token is not None:
                 reset_telemetry(token)
         duration_ms = int((time.perf_counter() - t0) * 1000)
+        if reason is None and isinstance(response, dict) and "error" in response:
+            # The tool answered with its own refusal shape; that is a failure,
+            # not an empty result, and it will fail the same way next turn.
+            logger.warning(
+                "memory prefetch refused for {}: {}", ctx.session_key, response.get("error"),
+            )
+            reason = "error"
         if reason is not None:
+            if reason in ("timeout", "error") and cfg.backoff_s > 0:
+                self._prefetch_backoff_until = time.monotonic() + cfg.backoff_s
             self._emit_prefetch(ctx.session_key, hits=0, chars=0, duration_ms=duration_ms, skipped=reason)
             return ""
 
@@ -2924,6 +2946,16 @@ class AgentLoop:
         ctx.prefetch_refs = re.findall(
             r"^=== (?:SKILL|CANONICAL|FRAGMENT|SESSION|INGESTED): (\S+)", rendered, re.M,
         )
+        # Hand the refs to the tool so the model's own search this turn
+        # collapses what the block already showed into pointer lines instead
+        # of rendering it a second time. Reduced to the key shape the dedup
+        # matches hits on, not the rendered display uri. Taken back in
+        # _state_save so they never outlive the turn.
+        setter = getattr(tool, "set_turn_prefetch_refs", None)
+        if callable(setter):
+            from durin.memory.context_dedup import dedup_key
+            with suppress(Exception):
+                setter({dedup_key(r) for r in ctx.prefetch_refs})
         self._emit_prefetch(ctx.session_key, hits=total, chars=len(block), duration_ms=duration_ms)
         return block
 
@@ -3105,6 +3137,14 @@ class AgentLoop:
         if _skill_calls:
             ctx.session.metadata.setdefault("skill_calls", []).extend(_skill_calls)
             emit_skill_used(_skill_calls)
+
+        # The turn's prefetch refs die with the turn: the next message gets
+        # its own block, and a stale set would silently collapse hits the
+        # model never saw.
+        _clear_refs = getattr(self.tools.get("memory_search"), "clear_turn_prefetch_refs", None)
+        if callable(_clear_refs):
+            with suppress(Exception):
+                _clear_refs()
 
         _pinned_chars, _hot_chars = self._memory_surface_chars()
         emit_memory_usage_rollup(

@@ -407,8 +407,9 @@ background file watching, and health checks. See
 | `prefetch.max_chars` | `2500` | Cap on the recalled hits text, in characters, before fencing; longer output is cut with a note (the fence adds a short fixed framing) |
 | `prefetch.min_query_chars` | `20` | Messages shorter than this are not searched |
 | `prefetch.timeout_s` | `5.0` | Seconds the search may take before the turn proceeds without it |
+| `prefetch.backoff_s` | `60.0` | After a timeout or error, skip the prefetch for this many seconds; `0` disables the backoff |
 
-Slash commands, workflow nodes, subagents, cron and automation runs are never prefetched.
+Slash commands, workflow nodes, subagents, and every session kind the runtime treats as autonomous (cron, automation, dream, workflow, sub-agent runs) are never prefetched.
 
 **`memory.file_watcher`** — background filesystem watcher:
 

@@ -36,6 +36,7 @@ from durin.memory.hot_layer import HotLayer, read_hot_layer
 from durin.memory.sectioned_output import SectionedHit
 
 __all__ = [
+    "dedup_key",
     "prefix_map",
     "render_in_context_section",
     "split_in_context",
@@ -95,6 +96,23 @@ def prefix_map(hot: HotLayer) -> dict[str, str]:
                 key = key[: -len(".md")]
             out[key] = _norm(parsed[1])
     return out
+
+
+def dedup_key(ref: str) -> str:
+    """Reduce a rendered marker's ref to the key `whole_refs` is matched on.
+
+    The block markers print display uris — ``memory/entity_page/<type>:<slug>``
+    for a canonical page, the entry path with its ``.md`` suffix for a
+    fragment — while the dedup matches hits by the shape ``_hit_key`` below
+    produces. A caller holding refs parsed out of rendered output (the
+    per-turn prefetch) passes them through here first. Refs of other kinds
+    are returned unchanged; they simply never match.
+    """
+    if ref.startswith("memory/entity_page/"):
+        ref = ref[len("memory/entity_page/"):]
+    if ref.endswith(".md"):
+        ref = ref[: -len(".md")]
+    return ref
 
 
 def _hit_key(hit: SectionedHit) -> str | None:

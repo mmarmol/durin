@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from durin.agent.approval import AUTONOMOUS_SESSION_PREFIXES
 from durin.agent.context import ContextBuilder, build_memory_context_block
 from durin.agent.loop import AgentLoop
 from durin.bus.events import InboundMessage
@@ -45,6 +46,19 @@ class _RaisingSearch:
 
     async def execute(self, **kwargs):
         raise RuntimeError("search backend unavailable")
+
+
+class _ErrorDictSearch:
+    """The tool's own refusal shape: a dict with an ``error`` key."""
+
+    name = "memory_search"
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def execute(self, **kwargs):
+        self.calls.append(dict(kwargs))
+        return {"error": "query is required"}
 
 
 class _Rec:
@@ -107,6 +121,25 @@ def test_build_messages_places_block_after_text_before_runtime_context(tmp_path:
     assert "Ana runs the bakery" in content
 
 
+def test_build_messages_places_block_after_text_on_the_list_content_path(tmp_path: Path) -> None:
+    """With media attached the user content is a list of blocks, not a string.
+    The fence keeps its place: attachments, the user's text, the block, then
+    the runtime context."""
+    builder = ContextBuilder(workspace=tmp_path)
+    png = tmp_path / "shot.png"
+    png.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16)
+
+    msgs = builder.build_messages(history=[], current_message="what is this?", channel="cli",
+                                  chat_id="c", media=[str(png)],
+                                  memory_prefetch=build_memory_context_block(_RENDERED))
+
+    content = msgs[-1]["content"]
+    assert [b["type"] for b in content] == ["image_url", "text", "text", "text"]
+    assert content[1]["text"] == "what is this?"
+    assert "<memory-context>" in content[2]["text"] and "Ana runs the bakery" in content[2]["text"]
+    assert ContextBuilder._RUNTIME_CONTEXT_TAG in content[3]["text"]
+
+
 @pytest.mark.asyncio
 async def test_prefetch_runs_a_warm_search_and_fences_the_hits(tmp_path: Path, monkeypatch) -> None:
     fake = _FakeSearch(total=1)
@@ -164,10 +197,20 @@ async def test_prefetch_skips_non_interactive_sessions_and_disabled_config(tmp_p
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("session_key", ["cron:job1:run:1", "automation:job1:run:1"])
-async def test_prefetch_skips_cron_and_automation_session_keys(
-    tmp_path: Path, monkeypatch, session_key: str
+@pytest.mark.parametrize("session_key,prefetched", [
+    ("cron:job1:run:1", False),
+    ("automation:job1:run:1", False),
+    # Not on either of the runtime's lists: the gate fails open, so a bench
+    # run is prefetched like an interactive channel.
+    ("bench:locomo:1", True),
+])
+async def test_prefetch_gate_follows_the_runtime_autonomous_session_kinds(
+    tmp_path: Path, monkeypatch, session_key: str, prefetched: bool
 ) -> None:
+    # cron and automation are the runtime's own autonomous kinds; the gate
+    # reads that list rather than keeping its own copy.
+    assert "cron:" in AUTONOMOUS_SESSION_PREFIXES
+    assert "automation:" in AUTONOMOUS_SESSION_PREFIXES
     fake = _FakeSearch()
     loop, captured, rec = _make_loop(tmp_path, monkeypatch, fake=fake)
 
@@ -176,8 +219,13 @@ async def test_prefetch_skips_cron_and_automation_session_keys(
         session_key=session_key,
     )
 
-    assert fake.calls == []
-    assert [d for t, d in rec.events if t == "memory.prefetch"][-1]["skipped"] == "non_interactive"
+    row = [d for t, d in rec.events if t == "memory.prefetch"][-1]
+    if prefetched:
+        assert fake.calls == [{"query": QUESTION, "limit": 3, "level": "warm"}]
+        assert "skipped" not in row
+    else:
+        assert fake.calls == []
+        assert row["skipped"] == "non_interactive"
 
 
 @pytest.mark.asyncio
@@ -226,6 +274,89 @@ async def test_prefetch_gate_no_tool(tmp_path: Path, monkeypatch) -> None:
     await loop._process_message(InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION))
 
     assert [d for t, d in rec.events if t == "memory.prefetch"][-1]["skipped"] == "no_tool"
+
+
+@pytest.mark.asyncio
+async def test_timeout_backs_the_prefetch_off_for_the_next_turns(tmp_path: Path, monkeypatch) -> None:
+    """``asyncio.wait_for`` abandons the search thread, so a search that times
+    out every turn would strand a default-executor worker per turn. After a
+    timeout the prefetch stops trying until the backoff window passes."""
+    slow = _FakeSearch(total=1, delay=0.5)
+    loop, captured, rec = _make_loop(tmp_path, monkeypatch, fake=slow)
+    loop.app_config = SimpleNamespace(
+        memory=SimpleNamespace(prefetch=MemoryPrefetchConfig(timeout_s=0.05, backoff_s=60.0))
+    )
+
+    await loop._process_message(InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION))
+    assert [d for t, d in rec.events if t == "memory.prefetch"][-1]["skipped"] == "timeout"
+    assert len(slow.calls) == 1
+
+    await loop._process_message(InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION))
+    assert [d for t, d in rec.events if t == "memory.prefetch"][-1]["skipped"] == "backoff"
+    assert len(slow.calls) == 1          # the search was not attempted again
+
+
+@pytest.mark.asyncio
+async def test_backoff_zero_keeps_searching_every_turn(tmp_path: Path, monkeypatch) -> None:
+    slow = _FakeSearch(total=1, delay=0.5)
+    loop, captured, rec = _make_loop(tmp_path, monkeypatch, fake=slow)
+    loop.app_config = SimpleNamespace(
+        memory=SimpleNamespace(prefetch=MemoryPrefetchConfig(timeout_s=0.05, backoff_s=0))
+    )
+
+    for _ in range(2):
+        await loop._process_message(
+            InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION)
+        )
+
+    assert len(slow.calls) == 2
+    assert [d["skipped"] for _t, d in rec.events if _t == "memory.prefetch"] == ["timeout", "timeout"]
+
+
+@pytest.mark.asyncio
+async def test_error_response_is_not_a_no_hits_turn(tmp_path: Path, monkeypatch) -> None:
+    """A tool that answers with an error dict failed; recording it as
+    ``no_hits`` would hide the failure and keep re-running it every turn."""
+    broken = _ErrorDictSearch()
+    loop, captured, rec = _make_loop(tmp_path, monkeypatch, fake=broken)
+
+    await loop._process_message(InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION))
+    assert [d for t, d in rec.events if t == "memory.prefetch"][-1]["skipped"] == "error"
+
+    await loop._process_message(InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION))
+    assert [d for t, d in rec.events if t == "memory.prefetch"][-1]["skipped"] == "backoff"
+    assert len(broken.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_prefetch_hands_its_refs_to_the_search_tool_for_the_turn(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The model's own search in the same turn must not re-render what the
+    prefetch already fenced into the message; the loop hands the tool the
+    turn's refs and takes them back at save time."""
+    seen: list[frozenset[str]] = []
+    # The markers as the real tool renders them: canonical hits carry the
+    # display uri, fragments the entry path with its suffix.
+    rendered = (
+        "=== CANONICAL: memory/entity_page/person:ana (consolidated 2026-01-01) ===\n"
+        "Ana runs the bakery on Main St.\n=== END CANONICAL ===\n\n"
+        "=== FRAGMENT: memory/episodic/2026-01-01-bakery.md (ts 2026-01-01) ===\n"
+        "Ana opened the bakery in March.\n=== END FRAGMENT ==="
+    )
+    fake = _FakeSearch(total=2, rendered=rendered)
+    fake.set_turn_prefetch_refs = lambda refs: seen.append(frozenset(refs))
+    fake.clear_turn_prefetch_refs = lambda: seen.append(frozenset())
+    loop, captured, rec = _make_loop(tmp_path, monkeypatch, fake=fake)
+
+    await loop._process_message(InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION))
+
+    # Reduced to the key shape the dedup matches hits on — not the rendered
+    # display uris.
+    assert seen == [
+        frozenset({"person:ana", "memory/episodic/2026-01-01-bakery"}),
+        frozenset(),
+    ]
 
 
 @pytest.mark.asyncio

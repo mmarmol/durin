@@ -704,8 +704,10 @@ class MemoryRecallEvent(TypedDict):
 class MemoryPrefetchEvent(TypedDict):
     """Outcome of the automatic memory search that runs before the model
     sees a user message. One row per user turn. ``skipped`` names why no
-    block was injected (disabled / command_or_empty / short / non_interactive /
-    no_index / no_tool / timeout / error / no_hits); absent when hits landed."""
+    block was injected (disabled / backoff / command_or_empty / short /
+    non_interactive / no_index / no_tool / timeout / error / no_hits);
+    absent when hits landed. ``backoff`` is the window after a timeout or an
+    error during which the search is not attempted again."""
 
     session_key: str
     hits: int

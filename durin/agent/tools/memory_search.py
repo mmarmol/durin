@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Iterable, Optional
 
 from durin.agent.tools._telemetry import emit_tool_event
 from durin.agent.tools.base import Tool, tool_parameters
@@ -205,6 +205,11 @@ class MemorySearchTool(Tool):
         # constructions — graph_api / webui search, subagents, ad-hoc
         # scripts — face callers with no hot layer and must see every hit.
         self._context_dedup = context_dedup
+        # Refs the turn's automatic prefetch already fenced into the user
+        # message. Set by the agent loop after its own search and cleared at
+        # save time, so a search the model makes in the same turn does not
+        # render the same hit twice. Empty for every other caller.
+        self._turn_prefetch_refs: frozenset[str] = frozenset()
         # Alias index is shared process-wide via durin.memory.aliases_cache,
         # so the refine pass and EntityAbsorption see updates as soon as we
         # (or they) call refresh_for / remove on it. No per-instance state
@@ -220,6 +225,14 @@ class MemorySearchTool(Tool):
             logger.warning(
                 "memory_search: ensure_index_fresh failed: %s", exc,
             )
+
+    def set_turn_prefetch_refs(self, refs: Iterable[str]) -> None:
+        """Record the refs this turn's automatic prefetch already showed."""
+        self._turn_prefetch_refs = frozenset(refs)
+
+    def clear_turn_prefetch_refs(self) -> None:
+        """Forget them — they are only valid for the turn that set them."""
+        self._turn_prefetch_refs = frozenset()
 
     @property
     def name(self) -> str:
@@ -706,8 +719,11 @@ class MemorySearchTool(Tool):
         # per ref — a hit carrying body beyond the prefix excerpt passes
         # through whole. The principal's page is pinned but rendered with its
         # body capped, so it is excluded from the whole-rendered set and its
-        # hits go through containment like any other page. Disabled for
-        # subagents (their prompt has no hot layer; see __init__).
+        # hits go through containment like any other page. A hit the turn's
+        # automatic prefetch already fenced into the user message counts as
+        # rendered whole too — the block carries the same sectioned output
+        # this call would print. Disabled for subagents (their prompt has no
+        # hot layer; see __init__).
         in_context_hits: list[SectionedHit] = []
         if self._context_dedup:
             from durin.memory.context_dedup import split_in_context
@@ -719,7 +735,8 @@ class MemorySearchTool(Tool):
             principal = resolve_owner_principal(self._workspace)
             capped_hits, in_context_hits = split_in_context(
                 self._workspace, capped_hits,
-                pinned_refs=refs, whole_refs=refs - {principal},
+                pinned_refs=refs,
+                whole_refs=(refs - {principal}) | self._turn_prefetch_refs,
             )
 
         kept_uris = {h.uri for h in capped_hits}

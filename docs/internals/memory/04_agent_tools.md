@@ -126,9 +126,10 @@ to avoid doubling the token cost.
 `memory/archive/` with no vector or FTS involvement — a recovery surface only.
 
 A context-dedup step (`durin/memory/context_dedup.py`) collapses hits whose
-content is already present in the system prompt — contained in a hot-layer
-block, or one of the always-on guidance pages the pinned block renders whole —
-into pointer lines, preventing redundant injection. The principal's own page is
+content is already present in the turn's prompt — contained in a hot-layer
+block, one of the always-on guidance pages the pinned block renders whole, or a
+hit the turn's automatic prefetch already fenced into the user message — into
+pointer lines, preventing redundant injection. The principal's own page is
 rendered with its body capped, so its hits are judged by containment and
 normally pass. This is enabled on the agent path, disabled for subagents (which
 have neither block in their prompt).
