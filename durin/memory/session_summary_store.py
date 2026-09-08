@@ -36,6 +36,7 @@ from typing import Optional, Tuple
 from durin.memory.paths import memory_class_dir
 from durin.memory.schema import MemoryEntry
 from durin.memory.storage import load_entry, save_entry
+from durin.utils.file_lock import cross_process_lock
 
 logger = logging.getLogger(__name__)
 
@@ -221,36 +222,42 @@ def append_session_summary_block(
     carried forward in a bounded synthetic head block — general facts
     wash out at the cap horizon (long-horizon recall is the memory
     system's job), discovered paths do not.
+
+    The read-rebuild-rewrite runs under the summary file's own
+    ``cross_process_lock``: the compactor (gateway process) and the nightly
+    session-summary pass (dream worker subprocess) both append here, and
+    interleaved rounds would drop one side's block.
     """
     block = (block or "").strip()
     if not block or block == "(nothing)":
         return None
-    existing, _ = get_session_summary(workspace, session_key)
-    blocks = [
-        b.strip() for b in (existing.split(_SUMMARY_BLOCK_SEP) if existing else [])
-        if b.strip()
-    ]
-    carried: list[str] = []
-    if blocks and blocks[0].startswith(_EVICTED_PATHS_PREFIX):
-        _salvage_paths(blocks.pop(0), carried)
-    if blocks and blocks[-1] == block:
-        blocks_changed = False  # degraded-LLM duplicate round: skip re-append
-    else:
-        blocks.append(block)
-        blocks_changed = True
-    while len(blocks) > 1 and (
-        sum(len(b) for b in blocks)
-        + len(_SUMMARY_BLOCK_SEP) * (len(blocks) - 1)
-    ) > max_chars:
-        _salvage_paths(blocks.pop(0), carried)
-    if carried:
-        blocks.insert(0, _build_carried_line(carried))
-    if not blocks_changed and not carried:
-        return None
-    return write_session_summary(
-        workspace, session_key, _SUMMARY_BLOCK_SEP.join(blocks),
-        last_active=last_active, headline_source=block,
-    )
+    with cross_process_lock(session_summary_path(workspace, session_key)):
+        existing, _ = get_session_summary(workspace, session_key)
+        blocks = [
+            b.strip() for b in (existing.split(_SUMMARY_BLOCK_SEP) if existing else [])
+            if b.strip()
+        ]
+        carried: list[str] = []
+        if blocks and blocks[0].startswith(_EVICTED_PATHS_PREFIX):
+            _salvage_paths(blocks.pop(0), carried)
+        if blocks and blocks[-1] == block:
+            blocks_changed = False  # degraded-LLM duplicate round: skip re-append
+        else:
+            blocks.append(block)
+            blocks_changed = True
+        while len(blocks) > 1 and (
+            sum(len(b) for b in blocks)
+            + len(_SUMMARY_BLOCK_SEP) * (len(blocks) - 1)
+        ) > max_chars:
+            _salvage_paths(blocks.pop(0), carried)
+        if carried:
+            blocks.insert(0, _build_carried_line(carried))
+        if not blocks_changed and not carried:
+            return None
+        return write_session_summary(
+            workspace, session_key, _SUMMARY_BLOCK_SEP.join(blocks),
+            last_active=last_active, headline_source=block,
+        )
 
 
 def get_session_summary(

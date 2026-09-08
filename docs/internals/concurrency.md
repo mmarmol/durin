@@ -461,6 +461,7 @@ without a restart (see [loop](loop.md)).
 | `CronService._lock` / `_tick_lock` | `durin/cron/service.py` | Two independent `FileLock` instances: store read-modify-write serialization, and non-blocking at-most-once tick guard. |
 | `git_worktree_lock_path` | `durin/memory/memory_writer.py` | Canonical `.git-worktree` lock target shared by writers and the indexer/vector prune paths. |
 | `_root_write_lock` (RLock dict) | `durin/memory/memory_writer.py` | In-process per-repo `threading.RLock`; outermost memory lock around the whole read-apply-CAS-reset section. |
+| `append_session_summary_block` | `durin/memory/session_summary_store.py` | `cross_process_lock` over `memory/session_summary/<sanitized key>.md` for the read-rebuild-rewrite of that file's blocks; serializes the compactor (gateway) against the nightly session-summary pass (dream worker). |
 | `sqlite_util.connect` / `execute_write` | `durin/utils/sqlite_util.py` | WAL + `busy_timeout` connection and `BEGIN IMMEDIATE` + retry write wrapper, shared by the derived FTS5 index and the job registry (`jobs.db`). |
 | `automations.store.save_automation` / `.delete_automation` | `durin/automations/store.py` | Per-automation-name `cross_process_lock` around the atomic full-file rewrite of an automation definition. |
 | `automations.claims` (`register`/`release`/`release_run`/`prune`) | `durin/automations/claims.py` | Single `cross_process_lock` over the whole `claims.json` file; last-claim-on-a-key wins. |
