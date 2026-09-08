@@ -45,6 +45,7 @@ def test_rollup_counts_memory_recall_tools(monkeypatch):
         ["memory_search", "read_file", "memory_search", "memory_drill"],
         pinned_chars=1200,
         hot_chars=800,
+        prefetch_hits=2,
     )
 
     assert rec.events == [
@@ -57,6 +58,7 @@ def test_rollup_counts_memory_recall_tools(monkeypatch):
                 "tool_calls_total": 4,
                 "pinned_chars": 1200,
                 "hot_chars": 800,
+                "prefetch_hits": 2,
             },
         )
     ]

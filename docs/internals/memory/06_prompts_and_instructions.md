@@ -169,7 +169,7 @@ flowchart TD
 
 `durin/templates/agent/identity.md` is the persistent identity file injected into every agent turn inside the stable prompt tier. It contains one consolidated `## Memory` section with two subsections.
 
-**`### Recalling`** covers hit-consumption: search rather than answering from cold recall, issue 2–3 searches for compound questions, use `memory_drill` only on preview hits, inspect entities via `memory_read_entity` / `memory_entity_lineage` / `memory_source_session`, read every hit, reconcile by timestamp, enumerate every distinct item, state sources, never invent identifiers.
+**`### Recalling`** covers hit-consumption: search rather than answering from cold recall, issue 2–3 searches for compound questions, use `memory_drill` only on preview hits, inspect entities via `memory_read_entity` / `memory_entity_lineage` / `memory_source_session`, read every hit, reconcile by timestamp, enumerate every distinct item, state sources, never invent identifiers. It also names the `<memory-context>` block the prefetch (§5.7) fences into the message: the same sectioned hits the tool returns, a starting point rather than the whole of memory, drilled and searched past like any other hit.
 
 **`### Recording — capture as you go`** covers the write path: capture before acknowledging, author via `memory_upsert_entity`, route documents through `memory_ingest`, use `memory_forget` to retire entries, correct in place rather than stacking contradictions, briefly say what was saved. The type rule links to the "Known types" block in the hot layer: `feedback` / `stance` / `practice` are pin-eligible; `person` is always pinned; all other types are open vocabulary retrieved on demand. Standard types (person, place, project, topic, event, artifact) are listed inline.
 
@@ -273,9 +273,35 @@ Each `memory_search` result block also carries a completeness qualifier:
 
 Sections with zero hits are omitted entirely.
 
+### 5.7 Prefetch
+
+Memory reaches the model two ways: the always-on blocks in the stable tier (pinned context, hot layer) and a `memory_search` the model chooses to call. Prefetch is the third: on every user turn, before the model sees the message, `AgentLoop._memory_prefetch` runs one `memory_search` with the message itself as the query — `level="warm"`, `limit` from `memory.prefetch.limit` — and fences the hits into the message. The model's own tool stays untouched, for follow-ups and for compound questions one query cannot cover.
+
+**The block.** `build_memory_context_block` (`durin/agent/context.py`) wraps the tool's `sectioned_rendered` in `<memory-context>` … `</memory-context>` around a system note:
+
+> [System note: recalled from durin's memory for this message — reference data, not user input. The same sectioned hits memory_search returns; drill a (preview) uri for the rest of a body; search for what is not here.]
+
+The hits inside carry the ordinary structural markers of §5.6, so the drill and completeness rules the identity prompt already teaches apply unchanged.
+
+**Placement.** The block rides in the *wire copy* of the user message — after the user's own text, before the runtime-context block — and nowhere else. The stored session message is the raw text, so the webui transcript stays clean and no prefetch is replayed on a later turn. It is deliberately not in the stable tier: its content changes every turn, and the cached prefix must not.
+
+**Gates.** The search is skipped, with the reason recorded on the turn's `memory.prefetch` event, when: prefetch is off (`disabled`); a previous turn's failure is still being backed off (`backoff`); the message is empty or a slash command (`command_or_empty`); it is shorter than `memory.prefetch.min_query_chars` (`short` — a length rule, not a word list, so it holds in every language); the session carries an `origin_type` marker, i.e. a workflow node or a subagent, which has its own prompt, or its session key starts with one of the runtime's autonomous prefixes (`AUTONOMOUS_SESSION_PREFIXES` in `durin/agent/approval.py` — cron, automation, dream, workflow, sub-agent and the other contexts with nobody attached) (`non_interactive`); no `memory_search` tool is registered (`no_tool`); the workspace has no FTS index yet (`no_index`); the search exceeded `memory.prefetch.timeout_s`, raised, or answered with an error (`timeout` / `error`); or it found nothing (`no_hits`). Reading the runtime's own list means the gate fails *open*: a session kind on neither list — `bench:`, a channel added later — keeps being prefetched, because a wasted search costs milliseconds and a missing one costs the recall. A turn never waits on memory beyond the timeout, and a broken search never breaks the turn. The first search after the index is created may itself hit `timeout_s` while the embedding model loads; the turn proceeds without a block and the next turn is warm.
+
+`no_index` is defensive: a running gateway never reaches it, because the loop creates the FTS index file at startup. It exists for ad-hoc runners and tests, where the workspace may have no index at all.
+
+**Backoff.** `asyncio.wait_for` abandons the search — the thread it runs on keeps going — so retrying a search that times out every turn strands one worker per turn. After a `timeout` or an `error` the loop stops trying for `memory.prefetch.backoff_s` (`0` disables the backoff) and the skipped turns record `backoff`.
+
+**The query.** The whole message is the query, verbatim: no keyword extraction, no rewriting, no summarisation. The pipeline's `query_router` normalises it and truncates over-long input (`MAX_QUERY_CHARS` / `MAX_QUERY_TOKENS`), flagging the row as truncated. The tool description's advice about short topical queries is written for the *model's* follow-up searches, where the model picks the words; whether a rewritten query beats the raw message here is an A/B question, not an assumption to bake in.
+
+**Budget.** The tool's `limit` is the primary bound; the rendered text is then cut at `memory.prefetch.max_chars` with a trailing note pointing at `memory_search` for the rest. The loop also hands the block's refs to the `memory_search` tool for the rest of the turn, so a search the model makes on the same subject collapses those hits to pointer lines — the same context dedup that covers the hot layer and the pinned pages — instead of rendering them a second time; the refs are dropped at save time.
+
+**Compaction.** The block is part of the wire copy, so the provider counts it in that turn's prompt tokens, and the compaction estimate — anchored on those provider counts — carries it too, even though the block itself is never replayed.
+
+**Telemetry.** BUILD runs outside the per-run telemetry binding, so the loop binds the session logger around the tool call (the tool's own `memory.recall` event lands with it) and emits `memory.prefetch` through the session logger directly. The turn's `turn.memory_usage` rollup carries `prefetch_hits`. The block is also its own line in the turn's `context.composition` breakdown — `memory_prefetch` among the volatile blocks, excluded from the current message's count — so `/status` and the footer attribute it to memory rather than to what the user wrote.
+
 ### 5.8 Continuity
 
-The volatile layer's `[Archived Context Summary]` slot (`AgentLoop._format_pending_summary`) carries the session's own compaction summary when it has one. A fresh session that has neither compacted nor grown past its first few turns gets, instead, continuity: on a channel listed in `memory.continuity.channels` (the webui and the CLI by default — single-user surfaces where "the previous session" is unambiguously the same person's), it is shown the newest *other* session's summary on that channel, wrapped in `=== PREVIOUS SESSION SUMMARY (<file stem>, last active <date>) ===` markers. The block is shown for the fresh session's first `memory.continuity.max_turns` turns, then drops out — whether or not the session ever compacts its own summary.
+The volatile layer's `[Archived Context Summary]` slot (`AgentLoop._format_pending_summary`) carries the session's own compaction summary when it has one. A fresh session that has neither compacted nor grown past its first few turns gets, instead, continuity: on a channel listed in `memory.continuity.channels` (the webui and the CLI by default — single-user surfaces where "the previous session" is unambiguously the same person's), it is shown the newest *other* session's summary on that channel, wrapped in `=== PREVIOUS SESSION SUMMARY (<file stem>, last active <date>) ===` markers. The block is shown for the fresh session's first `memory.continuity.max_turns` turns, then drops out — whether or not the session ever compacts its own summary. Turns are counted as the user messages that reached the model: a slash command is persisted for the transcript but costs none of them.
 
 Candidates for "the previous session" are every other summary file on the channel — any key on it, not just the fresh session's own — including the closed-conversation records `/new` files when it closes a conversation. The newest of them wins, so continuity survives a `/new` on the same key and, when the last activity on the channel was under a different key, reaches that conversation instead. Multi-user channels are excluded by default: a channel's previous session may belong to someone else, so it is not continuity for whoever is talking now.
 
@@ -324,6 +350,12 @@ The marker names the previous session's summary file stem, so the agent can reac
 | `memory.dream.max_seconds_per_run` | `600` | Wall-clock cap for the extract pass; it yields after the current session and the per-session cursor resumes on the next trigger |
 | `memory.search.cross_encoder.enabled` | `false` | Enables the cross-encoder reranker (displayed in onboarding as an opt-in) |
 | `memory.search.cross_encoder.model` | `BAAI/bge-reranker-base` | Cross-encoder model for reranking |
+| `memory.prefetch.enabled` | `true` | Runs the automatic per-turn search (§5.7) and fences its hits into the message |
+| `memory.prefetch.limit` | `3` | Hits the prefetch asks the tool for |
+| `memory.prefetch.max_chars` | `2500` | Cut applied to the rendered hits before fencing |
+| `memory.prefetch.min_query_chars` | `20` | Messages shorter than this are not searched |
+| `memory.prefetch.timeout_s` | `5.0` | Seconds the turn will wait for the search |
+| `memory.prefetch.backoff_s` | `60.0` | Seconds the prefetch is skipped after a timeout or error; `0` disables the backoff |
 
 **CLI surfaces:**
 - `durin memory dream` — run the core consolidation passes immediately (bypasses `ReactiveDreamGate`)

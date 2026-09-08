@@ -43,7 +43,7 @@ __all__ = [
 # actually minted (``cron_dream`` has no colon; ``cron:`` does).
 AUTONOMOUS_SESSION_PREFIXES: tuple[str, ...] = (
     "cron:", "cron_dream", "system:", "workflow:", "reactive_dream",
-    "dream_supervisor", "gateway", "loop:", "subagent:",
+    "dream_supervisor", "gateway", "loop:", "subagent:", "automation:",
 )
 
 # Chat-bearing prefixes: a person is on the other end of these. Anything not

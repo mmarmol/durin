@@ -33,7 +33,8 @@ def summarize_composition(payload: Mapping[str, Any] | None) -> dict[str, Any]:
     - **Conversation** = the user's growing footprint in this session:
       the prior turns (history_msg), the current user message, plus any
       per-turn volatile blocks (long-term memory active in the prompt,
-      recent history snippets, archived session summary).
+      the automatic prefetch's block, recent history snippets, archived
+      session summary).
     - **Infrastructure** = everything fixed by configuration: identity,
       bootstrap files, skills (catalog + active), the memory hot layer,
       the agent mode suffix, and tool definitions. The user changes
@@ -54,6 +55,7 @@ def summarize_composition(payload: Mapping[str, Any] | None) -> dict[str, Any]:
     conv: dict[str, int] = {}
     for key, label in (
         ("memory_long_term", "Memory (active)"),
+        ("memory_prefetch", "Memory prefetch"),
         ("recent_history", "Recent history"),
         ("session_summary", "Session summary"),
     ):
@@ -96,6 +98,27 @@ def summarize_composition(payload: Mapping[str, Any] | None) -> dict[str, Any]:
         "infra_breakdown": infra,
         "total": conversation_tokens + infra_tokens,
     }
+
+
+MEMORY_CONTEXT_OPEN = "<memory-context>"
+MEMORY_CONTEXT_CLOSE = "</memory-context>"
+
+
+def build_memory_context_block(rendered: str) -> str:
+    """Fence the hits an automatic search found for the current message.
+
+    The note states what the block is (recalled memory, not user input) and
+    how it relates to the tool (same markers, same drill rules) — the model
+    treats it as a starting point, not as the whole of memory.
+    """
+    return (
+        f"{MEMORY_CONTEXT_OPEN}\n"
+        "[System note: recalled from durin's memory for this message — reference data, "
+        "not user input. The same sectioned hits memory_search returns; drill a (preview) "
+        "uri for the rest of a body; search for what is not here.]\n\n"
+        f"{rendered.strip()}\n"
+        f"{MEMORY_CONTEXT_CLOSE}"
+    )
 
 
 class ContextBuilder:
@@ -458,6 +481,7 @@ class ContextBuilder:
         audio_mode: str = "auto",
         supports_audio_input: bool = False,
         active_persona_soul: str | None = None,
+        memory_prefetch: str | None = None,
     ) -> list[dict[str, Any]]:
         """Build the complete message list for an LLM call."""
         # The task-state anchor groups goal + decision log + todos
@@ -496,6 +520,16 @@ class ContextBuilder:
             supports_audio_input=supports_audio_input,
         )
 
+        # The automatic search's hits ride in the API copy of the user
+        # message, after the user's own text and before the runtime context.
+        # The stored session message is the raw text, so nothing here is
+        # replayed on later turns.
+        if memory_prefetch:
+            if isinstance(user_content, str):
+                user_content = f"{user_content}\n\n{memory_prefetch}"
+            else:
+                user_content = list(user_content) + [{"type": "text", "text": memory_prefetch}]
+
         # Merge runtime context and user content into a single user message
         # to avoid consecutive same-role messages that some providers reject.
         # Runtime context is appended to keep the user-content prefix stable
@@ -532,6 +566,7 @@ class ContextBuilder:
                 tools=tools,
                 iteration=iteration,
                 session_key=session_key,
+                memory_prefetch=memory_prefetch,
             )
             return messages
         messages.append({"role": current_role, "content": merged})
@@ -541,6 +576,7 @@ class ContextBuilder:
             tools=tools,
             iteration=iteration,
             session_key=session_key,
+            memory_prefetch=memory_prefetch,
         )
         return messages
 
@@ -552,6 +588,7 @@ class ContextBuilder:
         tools: list[dict[str, Any]] | None,
         iteration: int | None,
         session_key: str | None,
+        memory_prefetch: str | None = None,
     ) -> None:
         """Emit ``context.composition`` with a per-tier token breakdown.
 
@@ -581,6 +618,13 @@ class ContextBuilder:
             volatile_breakdown = {
                 name: estimate_text_tokens(text) for name, text in volatile.items()
             }
+            # The automatic prefetch's block rides inside the current user
+            # message on the wire, but it is recalled memory, not what the
+            # person wrote: bill it as its own per-turn line and take it out
+            # of the message's count below, so neither number lies.
+            prefetch_tokens = estimate_text_tokens(memory_prefetch or "")
+            if prefetch_tokens:
+                volatile_breakdown["memory_prefetch"] = prefetch_tokens
             stable_tokens = sum(stable_breakdown.values())
             volatile_tokens = sum(volatile_breakdown.values())
             context_tokens = sum(
@@ -593,8 +637,11 @@ class ContextBuilder:
             # The current user message is either a str or a list of
             # content blocks; build a synthetic message dict so
             # estimate_message_tokens does the right thing.
-            current_msg_tokens = estimate_message_tokens(
-                {"role": "user", "content": current_user_content}
+            current_msg_tokens = max(
+                0,
+                estimate_message_tokens(
+                    {"role": "user", "content": current_user_content}
+                ) - prefetch_tokens,
             )
 
             tools_tokens = (

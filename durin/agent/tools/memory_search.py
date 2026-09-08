@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 import time
+from contextvars import ContextVar, Token
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Iterable, Optional
 
 from durin.agent.tools._telemetry import emit_tool_event
 from durin.agent.tools.base import Tool, tool_parameters
@@ -47,6 +48,31 @@ def _skill_uri_to_path(uri: str) -> str:
 
 
 _ENTITY_EXCERPT_CHARS = 600   # same per-page body cap the hot layer uses
+
+# Refs the turn's automatic prefetch already fenced into the user message.
+# Task-scoped (contextvars), not an attribute on the tool instance: one
+# MemorySearchTool is shared by the whole AgentLoop, whose concurrency model
+# serializes turns within a session but runs different sessions concurrently
+# (see AgentLoop._dispatch) — an instance attribute would let a session B
+# search that lands while session A's refs are still bound inherit them and
+# collapse a hit B's own turn never showed into a pointer line. The agent
+# loop binds this in _memory_prefetch, in the same asyncio task that later
+# drives the tool loop, and resets it once the turn ends; every other caller
+# (subagents, webui/graph_api search, ad-hoc scripts) sees the default.
+_turn_prefetch_refs: ContextVar[frozenset[str]] = ContextVar(
+    "durin_turn_prefetch_refs", default=frozenset(),
+)
+
+
+def bind_turn_prefetch_refs(refs: Iterable[str]) -> Token[frozenset[str]]:
+    """Bind the refs this turn's automatic prefetch already showed, for the
+    current async task."""
+    return _turn_prefetch_refs.set(frozenset(refs))
+
+
+def reset_turn_prefetch_refs(token: Token[frozenset[str]]) -> None:
+    """Forget them — they are only valid for the turn that bound them."""
+    _turn_prefetch_refs.reset(token)
 
 
 def _entity_composition(page: "EntityPage", *, excerpt_chars: int | None) -> str:
@@ -706,8 +732,11 @@ class MemorySearchTool(Tool):
         # per ref — a hit carrying body beyond the prefix excerpt passes
         # through whole. The principal's page is pinned but rendered with its
         # body capped, so it is excluded from the whole-rendered set and its
-        # hits go through containment like any other page. Disabled for
-        # subagents (their prompt has no hot layer; see __init__).
+        # hits go through containment like any other page. A hit the turn's
+        # automatic prefetch already fenced into the user message counts as
+        # rendered whole too — the block carries the same sectioned output
+        # this call would print. Disabled for subagents (their prompt has no
+        # hot layer; see __init__).
         in_context_hits: list[SectionedHit] = []
         if self._context_dedup:
             from durin.memory.context_dedup import split_in_context
@@ -719,7 +748,8 @@ class MemorySearchTool(Tool):
             principal = resolve_owner_principal(self._workspace)
             capped_hits, in_context_hits = split_in_context(
                 self._workspace, capped_hits,
-                pinned_refs=refs, whole_refs=refs - {principal},
+                pinned_refs=refs,
+                whole_refs=(refs - {principal}) | _turn_prefetch_refs.get(),
             )
 
         kept_uris = {h.uri for h in capped_hits}

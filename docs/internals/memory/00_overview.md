@@ -38,7 +38,11 @@ truth; the indices are a speed layer on top.
 search run in parallel; (3) Reciprocal Rank Fusion merges the two result lists; (4)
 entity-aware rerank boosts hits matching query entities, and an optional cross-encoder
 reranks the top-50 to a final top-10. Every stage is deterministic. The LLM receives
-the structured, sectioned results and does the reasoning.
+the structured, sectioned results and does the reasoning. Two callers drive that
+pipeline: the model, when it calls `memory_search`, and the agent loop itself, which
+runs the same search once per user turn with the message as the query and fences the
+hits into that turn's copy of the message — memory reaches the turn whether or not the
+model thinks to ask. Determinism is what makes an automatic search affordable per turn.
 
 **Cold-path dream consolidation.** The extract pass reads every session with unprocessed
 turns (tracked by a per-session cursor in `session.meta.json`) and discovers or enriches

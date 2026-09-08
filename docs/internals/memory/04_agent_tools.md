@@ -19,6 +19,14 @@ These are the **only** memory-related tools the agent can invoke. Everything
 beyond this boundary — index internals, RRF coefficients, cross-encoder weights,
 LanceDB schema — is invisible to the LLM.
 
+`memory_search` is not only invoked by the model: the agent loop runs the same
+tool once per user turn with the message itself as the query and fences the hits
+into the wire copy of that message, so a turn reaches memory whether or not the
+model thinks to ask (the prefetch — see `06_prompts_and_instructions.md` §5.7).
+The tool below is unchanged by this and remains the surface for follow-ups,
+for a rephrasing the message alone would not produce, and for the compound
+questions that need two or three queries.
+
 ---
 
 ## Mental model
@@ -118,9 +126,10 @@ to avoid doubling the token cost.
 `memory/archive/` with no vector or FTS involvement — a recovery surface only.
 
 A context-dedup step (`durin/memory/context_dedup.py`) collapses hits whose
-content is already present in the system prompt — contained in a hot-layer
-block, or one of the always-on guidance pages the pinned block renders whole —
-into pointer lines, preventing redundant injection. The principal's own page is
+content is already present in the turn's prompt — contained in a hot-layer
+block, one of the always-on guidance pages the pinned block renders whole, or a
+hit the turn's automatic prefetch already fenced into the user message — into
+pointer lines, preventing redundant injection. The principal's own page is
 rendered with its body capped, so its hits are judged by containment and
 normally pass. This is enabled on the agent path, disabled for subagents (which
 have neither block in their prompt).

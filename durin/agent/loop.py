@@ -7,6 +7,7 @@ import dataclasses
 import os
 import time
 from contextlib import suppress
+from contextvars import Token
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from functools import partial
@@ -16,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 from loguru import logger
 
 from durin.agent import model_presets as preset_helpers
+from durin.agent.approval import AUTONOMOUS_SESSION_PREFIXES
 from durin.agent.aux_bridges import build_aux_providers
 from durin.agent.context import ContextBuilder
 from durin.agent.hook import AgentHook, CompositeHook
@@ -93,7 +95,7 @@ def _truncate_tool_output(content: str, max_chars: int, tool_name: str | None) -
 
 def emit_memory_usage_rollup(
     session_key: str, tools_used: list[str], *,
-    pinned_chars: int = 0, hot_chars: int = 0,
+    pinned_chars: int = 0, hot_chars: int = 0, prefetch_hits: int = 0,
 ) -> None:
     """Emit the per-turn ``turn.memory_usage`` rollup at save time.
 
@@ -102,6 +104,9 @@ def emit_memory_usage_rollup(
     ``pinned_chars`` / ``hot_chars`` are the sizes of the two eager memory
     blocks in this turn's last prompt build, so the cost of the always-on
     surface is tracked per turn instead of probed by hand.
+    ``prefetch_hits`` is how many hits the automatic per-turn search fenced
+    into the message, so a turn that reached memory without the model asking
+    is distinguishable from one that never reached it at all.
 
     The per-run telemetry binding is torn down inside ``_run_agent_loop``
     before the save state runs, so the session logger is fetched directly
@@ -120,6 +125,7 @@ def emit_memory_usage_rollup(
                 "tool_calls_total": len(tools_used),
                 "pinned_chars": int(pinned_chars),
                 "hot_chars": int(hot_chars),
+                "prefetch_hits": int(prefetch_hits),
             },
         )
 
@@ -127,6 +133,7 @@ def emit_memory_usage_rollup(
 if TYPE_CHECKING:
     from durin.config.schema import (
         ChannelsConfig,
+        MemoryPrefetchConfig,
         ToolsConfig,
     )
     from durin.cron.service import CronService
@@ -321,6 +328,20 @@ class TurnContext:
 
     history: list[dict[str, Any]] = field(default_factory=list)
     initial_messages: list[dict[str, Any]] = field(default_factory=list)
+
+    # Hits of the automatic search this turn ran with the user message,
+    # fenced for the wire copy of that message only (never stored). Resolved
+    # once in BUILD so the overflow-retry rebuild reuses the same block.
+    memory_prefetch: str = ""
+    prefetch_hits: int = 0
+    prefetch_refs: list[str] = field(default_factory=list)
+    # Token from binding this turn's prefetch refs into the ContextVar
+    # memory_search reads for its own-search dedup (see _memory_prefetch).
+    # None until a prefetch lands hits; reset (and set back to None) in
+    # _state_save, or in _process_message's finally if the turn never gets
+    # there — exactly one of the two runs the reset, guarded by this being
+    # non-None.
+    prefetch_refs_token: Token[frozenset[str]] | None = None
 
     final_content: str | None = None
     tools_used: list[str] = field(default_factory=list)
@@ -569,6 +590,11 @@ class AgentLoop:
         # ``None`` until the first event of that kind fires.
         self._last_context_composition: dict[str, Any] | None = None
         self._last_cache_usage: dict[str, Any] | None = None
+        # Monotonic deadline until which the automatic memory prefetch is
+        # skipped after a timeout or an error. A timed-out search is
+        # abandoned, not cancelled, so retrying it every turn strands one
+        # worker thread per turn.
+        self._prefetch_backoff_until: float = 0.0
         self._active_tasks: dict[str, list[asyncio.Task]] = {}  # session_key -> tasks
         self._background_tasks: list[asyncio.Task] = []
         self._session_locks: dict[str, asyncio.Lock] = {}
@@ -1678,6 +1704,7 @@ class AgentLoop:
         history: list[dict[str, Any]],
         pending_summary: str | None,
         active_persona_soul: str | None = None,
+        memory_prefetch: str | None = None,
     ) -> list[dict[str, Any]]:
         """Build the initial message list for the LLM turn."""
         audio_mode, supports_audio = self._audio_build_args()
@@ -1696,6 +1723,7 @@ class AgentLoop:
             audio_mode=audio_mode,
             supports_audio_input=supports_audio,
             active_persona_soul=active_persona_soul,
+            memory_prefetch=memory_prefetch,
         )
 
     async def _dispatch_command_inline(
@@ -2645,52 +2673,64 @@ class AgentLoop:
             persona_override=persona,
         )
 
-        while ctx.state is not TurnState.DONE:
-            handler_name = f"_state_{ctx.state.name.lower()}"
-            handler = getattr(self, handler_name, None)
-            if handler is None:
-                raise RuntimeError(f"Missing state handler for {ctx.state}")
+        try:
+            while ctx.state is not TurnState.DONE:
+                handler_name = f"_state_{ctx.state.name.lower()}"
+                handler = getattr(self, handler_name, None)
+                if handler is None:
+                    raise RuntimeError(f"Missing state handler for {ctx.state}")
 
-            t0 = time.perf_counter()
-            try:
-                event = await handler(ctx)
-            except Exception:
+                t0 = time.perf_counter()
+                try:
+                    event = await handler(ctx)
+                except Exception:
+                    duration = (time.perf_counter() - t0) * 1000
+                    ctx.trace.append(
+                        StateTraceEntry(
+                            state=ctx.state,
+                            started_at=t0,
+                            duration_ms=duration,
+                            event="",
+                            error="exception",
+                        )
+                    )
+                    raise
+
                 duration = (time.perf_counter() - t0) * 1000
                 ctx.trace.append(
                     StateTraceEntry(
                         state=ctx.state,
                         started_at=t0,
                         duration_ms=duration,
-                        event="",
-                        error="exception",
+                        event=event,
                     )
                 )
-                raise
-
-            duration = (time.perf_counter() - t0) * 1000
-            ctx.trace.append(
-                StateTraceEntry(
-                    state=ctx.state,
-                    started_at=t0,
-                    duration_ms=duration,
-                    event=event,
+                logger.debug(
+                    "[turn {}] State {} took {:.1f}ms -> event {}",
+                    ctx.turn_id,
+                    ctx.state.name,
+                    duration,
+                    event,
                 )
-            )
-            logger.debug(
-                "[turn {}] State {} took {:.1f}ms -> event {}",
-                ctx.turn_id,
-                ctx.state.name,
-                duration,
-                event,
-            )
 
-            next_state = self._TRANSITIONS.get((ctx.state, event))
-            if next_state is None:
-                raise RuntimeError(
-                    f"[turn {ctx.turn_id}] No transition from {ctx.state} "
-                    f"on event {event!r}"
-                )
-            ctx.state = next_state
+                next_state = self._TRANSITIONS.get((ctx.state, event))
+                if next_state is None:
+                    raise RuntimeError(
+                        f"[turn {ctx.turn_id}] No transition from {ctx.state} "
+                        f"on event {event!r}"
+                    )
+                ctx.state = next_state
+        finally:
+            # _state_save resets this in the common path (turn reaches SAVE).
+            # A turn that raises before then — or transitions straight to
+            # DONE without ever binding it (COMMAND's "shortcut" event) —
+            # must still release the ContextVar binding, or it would only be
+            # freed when this task itself is garbage collected. Guarded so
+            # _state_save's own reset is never doubled.
+            if ctx.prefetch_refs_token is not None:
+                from durin.agent.tools.memory_search import reset_turn_prefetch_refs
+                reset_turn_prefetch_refs(ctx.prefetch_refs_token)
+                ctx.prefetch_refs_token = None
 
         logger.debug(
             "[turn {}] Turn completed after {} states",
@@ -2828,6 +2868,121 @@ class AgentLoop:
             return "shortcut"
         return "dispatch"
 
+    def _prefetch_config(self) -> "MemoryPrefetchConfig":
+        """Configured prefetch settings, or the defaults when the loop has no
+        app config (tests, ad-hoc runners)."""
+        from durin.config.schema import MemoryPrefetchConfig
+        cfg = getattr(getattr(self.app_config, "memory", None), "prefetch", None)
+        return cfg if cfg is not None else MemoryPrefetchConfig()
+
+    def _emit_prefetch(self, session_key: str, **data: Any) -> None:
+        """``memory.prefetch`` goes straight to the session logger: BUILD runs
+        outside the per-run telemetry binding."""
+        from durin.telemetry.logger import get_session_logger
+        with suppress(Exception):
+            get_session_logger(session_key).log("memory.prefetch", {"session_key": session_key, **data})
+
+    async def _memory_prefetch(self, ctx: TurnContext) -> str:
+        """One warm memory_search with the user message, fenced for the wire
+        copy of the message. Returns "" (and records why) whenever the search
+        should not or could not run — the turn never waits on memory."""
+        import re
+
+        from durin.agent.context import build_memory_context_block
+        from durin.memory.fts_index import fts_index_path
+        from durin.telemetry.logger import bind_telemetry, get_session_logger, reset_telemetry
+
+        cfg = self._prefetch_config()
+        text = ctx.msg.content.strip() if isinstance(ctx.msg.content, str) else ""
+        reason: str | None = None
+        if not cfg.enabled:
+            reason = "disabled"
+        elif time.monotonic() < self._prefetch_backoff_until:
+            reason = "backoff"
+        elif not text or text.startswith("/"):
+            reason = "command_or_empty"
+        elif len(text) < cfg.min_query_chars:
+            reason = "short"
+        elif (ctx.session is not None and ctx.session.metadata.get("origin_type")) or any(
+            ctx.session_key.startswith(p) for p in AUTONOMOUS_SESSION_PREFIXES
+        ):
+            # origin_type: workflow nodes and subagents have their own prompts.
+            # session kind: the runtime's own list of contexts with nobody
+            # attached (cron, automation, dream…). Checking that explicit list
+            # fails OPEN — a kind on neither list, like `bench:`, keeps being
+            # prefetched, as do the interactive channels — because a wasted
+            # search costs a few hundred milliseconds while a missing one
+            # costs the recall this whole path exists for.
+            reason = "non_interactive"
+        elif not fts_index_path(self.workspace).exists():
+            reason = "no_index"
+        tool = self.tools.get("memory_search") if self.tools else None
+        if reason is None and tool is None:
+            reason = "no_tool"
+        if reason is not None:
+            self._emit_prefetch(ctx.session_key, hits=0, chars=0, duration_ms=0, skipped=reason)
+            return ""
+
+        t0 = time.perf_counter()
+        token = None
+        response: Any = None
+        try:
+            token = bind_telemetry(get_session_logger(ctx.session_key))
+            response = await asyncio.wait_for(
+                tool.execute(query=text, limit=cfg.limit, level="warm"),
+                timeout=cfg.timeout_s,
+            )
+        except asyncio.TimeoutError:
+            reason = "timeout"
+        except Exception:  # noqa: BLE001 — a broken search or logger must not break the turn
+            logger.exception("memory prefetch failed for {}", ctx.session_key)
+            reason = "error"
+        finally:
+            if token is not None:
+                reset_telemetry(token)
+        duration_ms = int((time.perf_counter() - t0) * 1000)
+        if reason is None and isinstance(response, dict) and "error" in response:
+            # The tool answered with its own refusal shape; that is a failure,
+            # not an empty result, and it will fail the same way next turn.
+            logger.warning(
+                "memory prefetch refused for {}: {}", ctx.session_key, response.get("error"),
+            )
+            reason = "error"
+        if reason is not None:
+            if reason in ("timeout", "error") and cfg.backoff_s > 0:
+                self._prefetch_backoff_until = time.monotonic() + cfg.backoff_s
+            self._emit_prefetch(ctx.session_key, hits=0, chars=0, duration_ms=duration_ms, skipped=reason)
+            return ""
+
+        total = int((response or {}).get("total") or 0) if isinstance(response, dict) else 0
+        rendered = str((response or {}).get("sectioned_rendered") or "") if isinstance(response, dict) else ""
+        if total == 0 or not rendered.strip():
+            self._emit_prefetch(ctx.session_key, hits=0, chars=0, duration_ms=duration_ms, skipped="no_hits")
+            return ""
+        if len(rendered) > cfg.max_chars:
+            rendered = rendered[:cfg.max_chars].rstrip() + "\n… (truncated; memory_search for the rest)"
+        block = build_memory_context_block(rendered)
+        ctx.prefetch_hits = total
+        ctx.prefetch_refs = re.findall(
+            r"^=== (?:SKILL|CANONICAL|FRAGMENT|SESSION|INGESTED): (\S+)", rendered, re.M,
+        )
+        # Bind the refs into the ContextVar memory_search reads for its
+        # dedup, in THIS asyncio task — the same one _state_run later drives
+        # the tool loop in — so the model's own search this turn collapses
+        # what the block already showed into pointer lines instead of
+        # rendering it a second time, and a concurrent turn on a different
+        # session (its own task) never sees them. Reduced to the key shape
+        # the dedup matches hits on, not the rendered display uri. Reset in
+        # _state_save so they never outlive the turn.
+        with suppress(Exception):
+            from durin.agent.tools.memory_search import bind_turn_prefetch_refs
+            from durin.memory.context_dedup import dedup_key
+            ctx.prefetch_refs_token = bind_turn_prefetch_refs(
+                {dedup_key(r) for r in ctx.prefetch_refs}
+            )
+        self._emit_prefetch(ctx.session_key, hits=total, chars=len(block), duration_ms=duration_ms)
+        return block
+
     async def _state_build(self, ctx: TurnContext) -> str:
         await self.consolidator.maybe_consolidate_by_tokens(
             ctx.session,
@@ -2859,9 +3014,11 @@ class AgentLoop:
             ctx.session, ctx.persona_override,
             channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
         )
+        ctx.memory_prefetch = await self._memory_prefetch(ctx)
         ctx.initial_messages = self._build_initial_messages(
             ctx.msg, ctx.session, ctx.history, ctx.pending_summary,
             active_persona_soul=ctx.active_persona_soul,
+            memory_prefetch=ctx.memory_prefetch or None,
         )
         ctx.user_persisted_early = self._persist_user_message_early(
             ctx.msg, ctx.session
@@ -2949,6 +3106,7 @@ class AgentLoop:
                 ctx.initial_messages = self._build_initial_messages(
                     ctx.msg, ctx.session, ctx.history, ctx.pending_summary,
                     active_persona_soul=ctx.active_persona_soul,
+                    memory_prefetch=ctx.memory_prefetch or None,
                 )
                 continue
             break
@@ -3004,10 +3162,22 @@ class AgentLoop:
             ctx.session.metadata.setdefault("skill_calls", []).extend(_skill_calls)
             emit_skill_used(_skill_calls)
 
+        # The turn's prefetch refs die with the turn: the next message gets
+        # its own block, and a stale binding would silently collapse hits
+        # the model never saw. None here means either no prefetch landed
+        # this turn, or _process_message's finally already reset it on an
+        # early exit (an exception earlier in this same turn) — either way
+        # there is nothing left to release.
+        if ctx.prefetch_refs_token is not None:
+            from durin.agent.tools.memory_search import reset_turn_prefetch_refs
+            reset_turn_prefetch_refs(ctx.prefetch_refs_token)
+            ctx.prefetch_refs_token = None
+
         _pinned_chars, _hot_chars = self._memory_surface_chars()
         emit_memory_usage_rollup(
             ctx.session_key, ctx.tools_used,
             pinned_chars=_pinned_chars, hot_chars=_hot_chars,
+            prefetch_hits=ctx.prefetch_hits,
         )
 
         ctx.turn_latency_ms = max(0, int((time.time() - ctx.turn_wall_started_at) * 1000))
@@ -3330,12 +3500,18 @@ class AgentLoop:
         turns only (until the session has its own summary or grows past
         ``max_turns``). Never raises — continuity is a convenience."""
         cfg = self._continuity_config()
-        # Count user messages, not messages: an agentic turn also persists the
-        # assistant's tool-call message and every tool result, so a message
-        # bound would end continuity mid-turn. The current user message is not
-        # yet persisted at this point, so this is the number of turns already
+        # Count conversation turns, not messages: an agentic turn also persists
+        # the assistant's tool-call message and every tool result, so a message
+        # bound would end continuity mid-turn. Slash commands are excluded too
+        # (they carry ``_command``): they are persisted for the transcript but
+        # never reached the model, so they cost the user none of the turns the
+        # previous summary is shown for. The current user message is not yet
+        # persisted at this point, so this is the number of turns already
         # completed.
-        turns_done = sum(1 for m in session.messages if m.get("role") == "user")
+        turns_done = sum(
+            1 for m in session.messages
+            if m.get("role") == "user" and not m.get("_command")
+        )
         if (
             not cfg.enabled
             or session.last_consolidated

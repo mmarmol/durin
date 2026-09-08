@@ -735,6 +735,28 @@ class MemoryContinuityConfig(Base):
     max_turns: int = Field(default=3, ge=1, description="Turns of the fresh session that carry the previous summary before it drops out")
 
 
+class MemoryPrefetchConfig(Base):
+    """Automatic memory search per user turn.
+
+    Before the model sees a message, one warm ``memory_search`` runs with
+    the message as the query and its hits are fenced into the wire copy of
+    the user message as reference data. The explicit tool stays for
+    follow-ups. Skipped for slash commands, messages shorter than
+    ``min_query_chars`` (a length rule, so it holds in every language),
+    sessions the runtime treats as autonomous (workflow nodes, subagents,
+    cron and automation runs), and when the search exceeds ``timeout_s`` —
+    after which it is skipped outright for ``backoff_s``. Each turn's outcome
+    is one ``memory.prefetch`` telemetry row.
+    """
+
+    enabled: bool = Field(default=True, description="Run one warm memory_search with the user message before the model sees it and fence the hits into the message")
+    limit: int = Field(default=3, ge=1, le=10, description="Hits requested from the search (warm level: headline + summary each)")
+    max_chars: int = Field(default=2500, ge=200, description="Cap on the recalled hits text, in characters, before fencing; longer output is cut with a note (the fence adds a short fixed framing)")
+    min_query_chars: int = Field(default=20, ge=1, description="Messages shorter than this are not searched")
+    timeout_s: float = Field(default=5.0, gt=0, description="Seconds the search may take before the turn proceeds without it")
+    backoff_s: float = Field(default=60.0, ge=0, description="After a timeout or error, skip the prefetch for this many seconds; 0 disables the backoff")
+
+
 class MemoryConfig(Base):
     """Memory subsystem configuration root.
 
@@ -770,6 +792,7 @@ class MemoryConfig(Base):
         description="Size of the always-on Library awareness catalog in the pinned block",
     )
     continuity: MemoryContinuityConfig = Field(default_factory=MemoryContinuityConfig, description="Previous-session summary for fresh sessions on single-user channels")
+    prefetch: MemoryPrefetchConfig = Field(default_factory=MemoryPrefetchConfig, description="Automatic memory search per user turn")
     file_watcher: MemoryFileWatcherConfig = Field(
         default_factory=MemoryFileWatcherConfig,
         description="Background filesystem watcher that re-indexes manually edited memory/*.md files",
