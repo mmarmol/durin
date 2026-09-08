@@ -133,6 +133,39 @@ def _neutralise_fence_markers(text: str) -> str:
     return text.replace(MEMORY_CONTEXT_OPEN, "[memory-context]").replace(MEMORY_CONTEXT_CLOSE, "[/memory-context]")
 
 
+def _neutralise_history_fence_markers(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Wire copy of ``history`` with the reserved fence neutralised in user text.
+
+    The stored session message is the user's raw text (by design — see
+    ``build_messages``), so a fence typed on an earlier turn is replayed
+    verbatim as history on every later turn; the one-turn guard on the
+    current message alone does not cover that replay. Returns new message
+    dicts (and new content lists for the multimodal path) — the objects
+    ``session.get_history()`` returned are read, never mutated in place, so
+    the stored session keeps the user's literal text.
+    """
+    out: list[dict[str, Any]] = []
+    for message in history:
+        content = message.get("content")
+        if message.get("role") != "user":
+            out.append(message)
+        elif isinstance(content, str):
+            out.append({**message, "content": _neutralise_fence_markers(content)})
+        elif isinstance(content, list):
+            out.append({
+                **message,
+                "content": [
+                    {**block, "text": _neutralise_fence_markers(block["text"])}
+                    if isinstance(block, dict) and block.get("type") == "text"
+                    else block
+                    for block in content
+                ],
+            })
+        else:
+            out.append(message)
+    return out
+
+
 class ContextBuilder:
     """Builds the context (system prompt + messages) for the agent."""
 
@@ -555,6 +588,12 @@ class ContextBuilder:
                 else block
                 for block in user_content
             ]
+
+        # The same fence is neutralised again in `history`: a message stored
+        # raw on an earlier turn is spliced into `messages` verbatim below,
+        # so without this the guard above only holds for the turn a fence
+        # arrives on, not for its replay on every turn after.
+        history = _neutralise_history_fence_markers(history)
 
         # The automatic search's hits ride in the API copy of the user
         # message, after the user's own text and before the runtime context.
