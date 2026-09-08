@@ -182,7 +182,17 @@ class ToolCallBubble(Vertical):
             with Horizontal(id="tc-plan-actions"):
                 yield Static("✓ Approve", id="tc-plan-approve", classes="tc-option")
                 yield Static("✎ Refine", id="tc-plan-refine", classes="tc-option")
-        # Populate body from the start args; result/error replace it later.
+
+    def on_mount(self) -> None:
+        """Render the body once mounted, from the start args (result/error
+        replace it later via `update_from_event`).
+
+        `#tc-body` isn't queryable from inside `compose()` — Textual
+        attaches a widget's yielded children only after `compose()`
+        returns, so calling `_update_body` there would hit the `query_one`
+        lookup failure `_rerender_body_with_truncation` swallows and
+        silently no-op. Mounting is complete by the time this runs.
+        """
         self._update_body(self._render_running_body())
 
     def on_click(self, event) -> None:  # noqa: ANN001 — Textual Click event
@@ -401,6 +411,11 @@ class ToolCallBubble(Vertical):
         if self._name == "exec":
             a = self._args if isinstance(self._args, dict) else {}
             return _exec_renderable(str(a.get("command") or ""), output=None)
+        if self._name == "memory_prefetch":
+            # The `start` frame carries only the query — no hit count yet —
+            # so the running body announces the search instead of echoing
+            # an argument that would overstate what's known so far.
+            return Text("🧠 recalling memory…", style="dim")
         if self._name == "ask_user_question":
             a = self._args if isinstance(self._args, dict) else {}
             return _ask_user_renderable(str(a.get("question") or ""))

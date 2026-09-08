@@ -2074,6 +2074,7 @@
       "entityUpdated": "{{ref}}",
       "entityUpdatedDefault": "エンティティ更新",
       "memoryForgot": "削除 {{uri}}",
+      "memoriesRecalling": "記憶を想起中…",
       "memoriesRecalled_other": "{{count}} 件の記憶を想起",
       "skillImport": "インポート {{source}}"
     }

@@ -580,6 +580,22 @@ class DurinApp(App[None]):
 
         call_id = str(event.get("call_id") or "")
         phase = str(event.get("phase") or "")
+        name = str(event.get("name") or "")
+
+        # An empty recall is not worth a permanent block in the transcript:
+        # drop the bubble the `start` frame mounted (if any) instead of
+        # finalising it into a 0-result block.
+        if name == "memory_prefetch" and phase == "end":
+            arguments = event.get("arguments")
+            hits = arguments.get("hits") if isinstance(arguments, dict) else None
+            if hits == 0:
+                bubble = self._tool_bubbles.pop(call_id, None)
+                if bubble is not None:
+                    try:
+                        bubble.remove()
+                    except Exception:  # noqa: BLE001
+                        pass
+                return
 
         if phase == "start" or call_id not in self._tool_bubbles:
             try:

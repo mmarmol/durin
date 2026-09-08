@@ -329,13 +329,15 @@ panel.
 
 **Tool chips.** The thread's trace row also carries non-clickable chips for tool
 events that have nothing to open. The automatic per-turn memory recall is one of
-them: when it finds hits, the loop announces it as a synthetic `memory_prefetch`
-tool event, and the thread renders that as a `🧠 N memories recalled` chip in the
-same row as the other chips, on the turn it served. The event carries the
-recalled refs in its result. Chip labels are localised through the
-`message.chips` catalog block (one entry per chipped tool, in each locale's
-`common.json`), not hard-coded — only the emoji prefix and the raw argument
-values (channel names, action verbs, ids) stay unlocalized.
+them: the loop announces a synthetic `memory_prefetch` tool event before running
+the search and again once it completes, both under the same `call_id`. The chip
+reads `🧠 recalling memory…` while the search is in flight, becomes a `🧠 N
+memories recalled` chip once it ends, and disappears entirely when the search
+found nothing — an empty recall is not worth a permanent line in the transcript.
+The end event carries the recalled refs in its result. Chip labels are localised
+through the `message.chips` catalog block (one entry per chipped tool, in each
+locale's `common.json`), not hard-coded — only the emoji prefix and the raw
+argument values (channel names, action verbs, ids) stay unlocalized.
 
 **Work strip.** The panel's collapsed representation: a slim status line docked
 directly above the composer, rendered only while the panel is closed and there

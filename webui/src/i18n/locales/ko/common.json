@@ -2074,6 +2074,7 @@
       "entityUpdated": "{{ref}}",
       "entityUpdatedDefault": "엔터티 수정됨",
       "memoryForgot": "잊음 {{uri}}",
+      "memoriesRecalling": "기억 회상 중…",
       "memoriesRecalled_other": "기억 {{count}}건 회상",
       "skillImport": "가져오기 {{source}}"
     }

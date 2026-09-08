@@ -1895,6 +1895,7 @@
       "entityUpdated": "{{ref}}",
       "entityUpdatedDefault": "entidad actualizada",
       "memoryForgot": "olvidar {{uri}}",
+      "memoriesRecalling": "recordando…",
       "memoriesRecalled_one": "{{count}} recuerdo recuperado",
       "memoriesRecalled_other": "{{count}} recuerdos recuperados",
       "skillImport": "importar {{source}}"

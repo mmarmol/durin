@@ -190,7 +190,7 @@ describe("ToolChipRow", () => {
     expect(screen.getByText(/3 recuerdos recuperados/)).toBeInTheDocument();
   });
 
-  it("falls back to a placeholder count when hits isn't known yet (no raw catalog key leaks)", () => {
+  it("shows a recalling label while the search is still running", () => {
     render(
       <ToolChipRow
         events={[
@@ -198,7 +198,23 @@ describe("ToolChipRow", () => {
         ]}
       />,
     );
-    expect(screen.getByText(/🧠 \? memories recalled/)).toBeInTheDocument();
+    expect(screen.getByText(/🧠 recalling memory…/)).toBeInTheDocument();
+  });
+
+  it("renders no chip when the recall found nothing", () => {
+    const { container } = render(
+      <ToolChipRow
+        events={[
+          {
+            phase: "end",
+            call_id: "memory_prefetch:t1",
+            name: "memory_prefetch",
+            arguments: { query: "Ana", hits: 0 },
+          },
+        ]}
+      />,
+    );
+    expect(container).toBeEmptyDOMElement();
   });
 });
 

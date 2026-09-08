@@ -2065,7 +2065,7 @@
       "message": "{{channel}}",
       "messageDefault": "tin nhắn",
       "sleep": "{{reason}}",
-      "sleepDefault": "chờ {{seconds}}s",
+      "sleepDefault": "chờ {{seconds}} giây",
       "goalCompleted": "mục tiêu hoàn tất",
       "longTask": "{{summary}}",
       "longTaskDefault": "tác vụ dài",
@@ -2074,6 +2074,7 @@
       "entityUpdated": "{{ref}}",
       "entityUpdatedDefault": "thực thể đã cập nhật",
       "memoryForgot": "quên {{uri}}",
+      "memoriesRecalling": "đang truy xuất ký ức…",
       "memoriesRecalled_other": "{{count}} ký ức đã truy xuất",
       "skillImport": "nhập {{source}}"
     }

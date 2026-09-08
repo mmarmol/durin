@@ -228,3 +228,61 @@ async def test_memory_prefetch_frame_keeps_the_working_indicator(tmp_path) -> No
         ])
         await pilot.pause()
         assert app._working_indicator is None
+
+
+@pytest.mark.asyncio
+async def test_memory_prefetch_start_frame_mounts_a_running_bubble(tmp_path) -> None:
+    """The recall's `start` frame precedes the search just like its `end`
+    frame — it must not drop the "thinking…" spinner either, and it mounts a
+    bubble whose running body reads "recalling memory…" (there is no hit
+    count yet, so echoing the query back would overpromise)."""
+    from durin.cli.tui.widgets import ToolCallBubble
+
+    bus = MessageBus()
+    app = DurinApp(agent_loop=_fake_agent_loop(bus, tmp_path))
+    async with app.run_test() as pilot:
+        app._show_working_indicator()
+        assert app._working_indicator is not None
+
+        await _inject(bus, "", _progress=True, _tool_hint=True, _tool_events=[
+            {"version": 1, "phase": "start", "call_id": "memory_prefetch:t2",
+             "name": "memory_prefetch",
+             "arguments": {"query": "how does the retry loop work"}},
+        ])
+        await pilot.pause()
+        assert app._working_indicator is not None
+
+        chat = app.query_one(ChatView)
+        bubbles = list(chat.query(ToolCallBubble))
+        assert len(bubbles) == 1
+        assert bubbles[0].has_class("running")
+        from tests.cli.tui.test_tool_call_bubble import _body_plain
+        assert "recalling memory…" in _body_plain(bubbles[0])
+
+
+@pytest.mark.asyncio
+async def test_memory_prefetch_empty_recall_leaves_no_bubble(tmp_path) -> None:
+    """An empty recall (`hits: 0`) is not worth a permanent block in the
+    transcript: the `end` frame removes the bubble the `start` frame mounted
+    instead of finalising it into a 0-result block."""
+    from durin.cli.tui.widgets import ToolCallBubble
+
+    bus = MessageBus()
+    app = DurinApp(agent_loop=_fake_agent_loop(bus, tmp_path))
+    async with app.run_test() as pilot:
+        chat = app.query_one(ChatView)
+        await _inject(bus, "", _tool_hint=True, _tool_events=[
+            {"version": 1, "phase": "start", "call_id": "memory_prefetch:t3",
+             "name": "memory_prefetch", "arguments": {"query": "no matches here"}},
+        ])
+        await pilot.pause()
+        assert len(list(chat.query(ToolCallBubble))) == 1
+
+        await _inject(bus, "", _tool_hint=True, _tool_events=[
+            {"version": 1, "phase": "end", "call_id": "memory_prefetch:t3",
+             "name": "memory_prefetch",
+             "arguments": {"query": "no matches here", "hits": 0},
+             "result": {"refs": []}},
+        ])
+        await pilot.pause()
+        assert list(chat.query(ToolCallBubble)) == []

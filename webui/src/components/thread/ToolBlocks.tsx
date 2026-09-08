@@ -200,21 +200,29 @@ function PlanBlock({
   );
 }
 
-/** Compact one-line confirmations (display class "chip"). */
+/**
+ * Compact one-line confirmations (display class "chip"). `chipLabel` can
+ * return "" for an event with nothing worth showing (e.g. a memory recall
+ * that found nothing) — those are dropped rather than rendered as an empty
+ * chip, and the row itself disappears once none are left.
+ */
 export function ToolChipRow({ events }: { events: ToolProgressEvent[] }) {
   const { t } = useTranslation();
-  if (events.length === 0) return null;
+  const chips = events
+    .map((event, i) => ({ key: event.call_id ?? i, label: chipLabel(event, t) }))
+    .filter((chip) => chip.label);
+  if (chips.length === 0) return null;
   return (
     <div className="flex flex-wrap gap-1.5 px-2">
-      {events.map((event, i) => (
+      {chips.map((chip) => (
         <span
-          key={event.call_id ?? i}
+          key={chip.key}
           className={cn(
             "inline-flex items-center gap-1 rounded-full border border-border/60",
             "bg-muted/30 px-2.5 py-0.5 text-[11.5px] text-muted-foreground",
           )}
         >
-          {chipLabel(event, t)}
+          {chip.label}
         </span>
       ))}
     </div>
@@ -256,13 +264,16 @@ function chipLabel(event: ToolProgressEvent, t: (key: string, options?: Record<s
     case "memory_forget":
       return `🧠 ${t("message.chips.memoryForgot", { uri: s("uri") })}`.trim();
     case "memory_prefetch": {
-      // i18next's plural selector requires a real number for `count`; a
-      // non-numeric placeholder ("?", before the hit count is known) is
-      // interpolated through the `_other` form directly, bypassing selection.
+      // "start" precedes the search, before the hit count is known — show
+      // a running label rather than a placeholder count. "end" always
+      // carries a numeric `hits` (may be 0); a miss earns no chip at all,
+      // so an empty search doesn't leave a permanent line in the thread.
+      if (event.phase !== "end") {
+        return `🧠 ${t("message.chips.memoriesRecalling")}`;
+      }
       const hits = a.hits;
-      return typeof hits === "number"
-        ? `🧠 ${t("message.chips.memoriesRecalled", { count: hits })}`
-        : `🧠 ${t("message.chips.memoriesRecalled_other", { count: "?" })}`;
+      const count = typeof hits === "number" ? hits : 0;
+      return count === 0 ? "" : `🧠 ${t("message.chips.memoriesRecalled", { count })}`;
     }
     case "skill_import":
       return `🧩 ${t("message.chips.skillImport", { source: s("source").slice(0, 40) })}`.trim();

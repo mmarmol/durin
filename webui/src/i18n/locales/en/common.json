@@ -2161,6 +2161,7 @@
       "entityUpdated": "{{ref}}",
       "entityUpdatedDefault": "entity updated",
       "memoryForgot": "forgot {{uri}}",
+      "memoriesRecalling": "recalling memory…",
       "memoriesRecalled_one": "{{count}} memory recalled",
       "memoriesRecalled_other": "{{count}} memories recalled",
       "skillImport": "import {{source}}"

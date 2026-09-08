@@ -117,6 +117,25 @@ async def test_edit_file_body_contains_diff_lines() -> None:
 
 
 @pytest.mark.asyncio
+async def test_memory_prefetch_running_body_reads_recalling_memory() -> None:
+    """The recall's running body reads "recalling memory…" — there is no
+    hit count yet while the search is in flight, so echoing the query
+    argument back would overstate what's known so far."""
+    app = DurinApp(agent_loop=None)
+    async with app.run_test() as pilot:
+        chat = app.query_one(ChatView)
+        bubble = ToolCallBubble({
+            "version": 1, "phase": "start", "call_id": "memory_prefetch:t1",
+            "name": "memory_prefetch",
+            "arguments": {"query": "how does the retry loop work"},
+        })
+        chat.mount(bubble)
+        await pilot.pause()
+        body = _body_plain(bubble)
+        assert "recalling memory…" in body
+
+
+@pytest.mark.asyncio
 async def test_exec_body_shows_command_then_output_when_expanded() -> None:
     """exec body shows `$ command` line, then output (no IN/OUT labels)."""
     app = DurinApp(agent_loop=None)

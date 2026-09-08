@@ -2074,6 +2074,7 @@
       "entityUpdated": "{{ref}}",
       "entityUpdatedDefault": "实体已更新",
       "memoryForgot": "忘记 {{uri}}",
+      "memoriesRecalling": "正在找回记忆…",
       "memoriesRecalled_other": "找回 {{count}} 条记忆",
       "skillImport": "导入 {{source}}"
     }

@@ -2074,6 +2074,7 @@
       "entityUpdated": "{{ref}}",
       "entityUpdatedDefault": "entité mise à jour",
       "memoryForgot": "oublier {{uri}}",
+      "memoriesRecalling": "rappel de mémoire…",
       "memoriesRecalled_one": "{{count}} souvenir récupéré",
       "memoriesRecalled_other": "{{count}} souvenirs récupérés",
       "skillImport": "importer {{source}}"

@@ -2065,7 +2065,7 @@
       "message": "{{channel}}",
       "messageDefault": "pesan",
       "sleep": "{{reason}}",
-      "sleepDefault": "tidur {{seconds}}d",
+      "sleepDefault": "tidur {{seconds}} dtk",
       "goalCompleted": "tujuan selesai",
       "longTask": "{{summary}}",
       "longTaskDefault": "tugas panjang",
@@ -2074,6 +2074,7 @@
       "entityUpdated": "{{ref}}",
       "entityUpdatedDefault": "entitas diperbarui",
       "memoryForgot": "lupakan {{uri}}",
+      "memoriesRecalling": "mengingat memori…",
       "memoriesRecalled_other": "{{count}} memori diambil",
       "skillImport": "impor {{source}}"
     }
