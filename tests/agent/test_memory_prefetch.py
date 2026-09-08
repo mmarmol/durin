@@ -895,3 +895,37 @@ async def test_gates_are_evaluated_once_per_turn(tmp_path: Path, monkeypatch) ->
     row = [d for t, d in rec.events if t == "memory.prefetch"][-1]
     assert "skipped" not in row
     assert row["hits"] == end_hits
+
+
+@pytest.mark.asyncio
+async def test_overflow_rebuild_keeps_the_prefetch_block(tmp_path: Path, monkeypatch) -> None:
+    """Iteration-0 overflow recovery (``AgentLoop._state_run``): when the
+    first ``_run_agent_loop`` attempt aborts with
+    ``mid_turn_precheck_overflow`` before any tool ran, ``_state_run`` forces
+    a consolidation and rebuilds ``ctx.initial_messages`` for one retry. The
+    rebuild passes ``memory_prefetch=ctx.memory_prefetch or None`` — the same
+    block BUILD computed once (see ``TurnContext.memory_prefetch``'s
+    docstring) — rather than recomputing it. This pins that invariant against
+    a real prefetch search: the retried call's messages must still carry the
+    block, and the search behind it must not run a second time.
+    """
+    fake = _FakeSearch(total=1)
+    loop, _captured, _rec = _make_loop(tmp_path, monkeypatch, fake=fake)
+    loop._run_agent_loop = AsyncMock(side_effect=[
+        ("Error: prompt overflow before LLM call.", [], [], "mid_turn_precheck_overflow", False, []),
+        ("Done.", [], [{"role": "assistant", "content": "Done."}], "completed", False, []),
+    ])
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION)
+    )
+
+    calls = [c.args[0] for c in loop._run_agent_loop.await_args_list]
+    assert len(calls) == 2, "must retry once after the forced consolidation"
+    second_call_content = _user_content([calls[1]])
+    assert second_call_content.count("<memory-context>") == 1
+    assert second_call_content.count("</memory-context>") == 1
+    assert "Ana runs the bakery" in second_call_content
+    assert fake.calls == [{"query": QUESTION, "limit": 3, "level": "warm"}], (
+        "the prefetch search must not re-run on the rebuild"
+    )
