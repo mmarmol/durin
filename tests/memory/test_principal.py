@@ -196,3 +196,22 @@ def test_resolve_pinned_refs_never_raises_without_config(tmp_path):
     refs = resolve_pinned_refs(tmp_path)
     assert "practice:spanish" in refs
     assert "person:anonymous" in refs      # no owner configured in the test home
+
+
+def test_pinned_block_carries_aliases_relations_and_sources(tmp_path):
+    ensure_owner(tmp_path, "person:marcelo", name="Marcelo")
+    write_entity(tmp_path, "person:marcelo", [
+        FieldPatch(kind="body_append", value="Architect of durin.",
+                   author="agent", source_ref="s", at=NOW),
+        FieldPatch(kind="alias", value="marce", author="agent", source_ref="s", at=NOW),
+        FieldPatch(kind="relation", value={"to": "project:durin", "type": "maintainer"},
+                   author="agent", source_ref="s", at=NOW),
+        FieldPatch(kind="derived_from", value="reference:durin-handbook",
+                   author="dream", source_ref="s", at=NOW),
+    ])
+
+    ctx = build_pinned_context(tmp_path, "person:marcelo")
+
+    assert "Aliases: marce." in ctx
+    assert "maintainer project:durin" in ctx
+    assert "Sources: reference:durin-handbook." in ctx

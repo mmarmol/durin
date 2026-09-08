@@ -17,6 +17,11 @@ from pathlib import Path
 
 from durin.memory.entity_page import EntityPage
 from durin.memory.field_patch import FieldPatch
+from durin.memory.hot_layer import (
+    _render_identifiers_line,
+    _render_relations_line,
+    _render_sources_line,
+)
 from durin.memory.memory_writer import write_entity
 
 # Cap on the Library awareness catalog pinned every turn. One short line per
@@ -136,13 +141,34 @@ def _load(workspace: Path, ref: str) -> EntityPage | None:
 
 
 def _render_pinned_block(page: EntityPage) -> str:
+    """Format one entity page for the always-injected pinned block.
+
+    Renders a superset of what the hot layer's canonical block carries —
+    aliases, attributes, relations, legacy identifiers, sources, body — so a
+    page that is pinned can be excluded from the canonical block without
+    losing anything, and the same exclusion in the search dedup is sound.
+    The shared line renderers come from ``hot_layer`` so the two surfaces
+    cannot drift apart. ``always_on`` is dropped from the attributes: it is
+    the flag that put the page here, not knowledge about it.
+    """
     lines = [f"### {page.name} ({page.type})"]
+    if page.aliases:
+        lines.append("Aliases: " + ", ".join(page.aliases[:5]) + ".")
     if page.attributes:
         attrs = ", ".join(
             f"{k}: {v}" for k, v in page.attributes.items() if k != "always_on"
         )
         if attrs:
             lines.append(attrs)
+    for line in (
+        _render_relations_line(page.relations),
+        # Legacy v1 emergent field: still rendered so workspaces that have not
+        # migrated to v2 attributes keep their identifiers visible.
+        _render_identifiers_line(page.extra.get("identifiers") if page.extra else None),
+        _render_sources_line(page.derived_from),
+    ):
+        if line:
+            lines.append(line)
     if page.body:
         body = "\n".join(
             ln for ln in page.body.splitlines() if not ln.strip().startswith("<!--")

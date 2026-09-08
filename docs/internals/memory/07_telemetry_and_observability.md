@@ -165,7 +165,7 @@ These fire during the refine pass and via the manual `durin memory` commands:
 
 ### Hot-layer failure
 
-- **`memory.hot_layer.failure`** — the hot-layer renderer failed to assemble one context block (read error, parse error). `component` identifies which section degraded (`canonical_blocks`, `fragment_blocks`, `identity`, `headlines`, `entities`, or `canonical_blocks:<file>` for per-page parse failures). The whole layer never fails hard; the degraded section renders empty.
+- **`memory.hot_layer.failure`** — the hot-layer renderer failed to assemble one context block (read error, parse error). `component` identifies which section degraded (`canonical_blocks`, `fragment_blocks`, `identity`, `headlines`, `types`, or `canonical_blocks:<file>` for per-page parse failures). The whole layer never fails hard; the degraded section renders empty.
 
 ### Health events
 
