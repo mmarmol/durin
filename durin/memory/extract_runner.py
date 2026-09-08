@@ -149,6 +149,10 @@ def run_extract_for_session(
     _meta, msgs = load_session(jsonl_path)
     cursor = get_extract_cursor(jsonl_path)
     total = len(msgs)
+    if cursor > total:
+        # The file shrank since the cursor was written (/new emptied it or the
+        # file cap trimmed it): what is there now is a new conversation.
+        cursor = 0
     if total <= cursor:
         return {"session": jsonl_path.stem, "skipped": "no_new_turns", "cursor": cursor}
 

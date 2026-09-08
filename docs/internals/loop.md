@@ -102,8 +102,9 @@ The dotted edge is a note, not a transition: a shortcut command still writes the
 turn to the session — it just does it inline in `_state_command` rather than
 through the `SAVE` state. `/new` is the one exception: it clears the session and
 the key's archived-context summary, and files the closed conversation as its own
-indexed record (`<key>:closed:<timestamp>` in the session-summary store —
-searchable, never replayed), so the next conversation on the key starts clean.
+indexed record (`<sanitized key, first 40 chars>_closed_<timestamp>` in the
+session-summary store — searchable, never replayed), so the next conversation on
+the key starts clean.
 
 ### 3.2 Concurrency topology
 
@@ -605,7 +606,10 @@ Two metadata splits matter:
   a span it advances `last_consolidated` and appends the span's summary as a
   new block onto the session-summary projection (bounded; oldest blocks
   evicted as the cap is hit, their discovered-path trailers salvaged into a
-  synthetic head block rather than lost) — it never mutates
+  synthetic head block rather than lost). Only the part of the span the
+  nightly session-summary pass has not already summarized is sent to the LLM;
+  a span it fully covered advances the cursor with no call and no new block.
+  Compaction never mutates
   `session.messages`. `get_history` always returns `messages[last_consolidated:]`,
   so the model sees the unconsolidated tail and the raw transcript stays intact
   for recovery. See [memory/01_data_and_entities.md](memory/01_data_and_entities.md)

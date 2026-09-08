@@ -273,6 +273,14 @@ Each `memory_search` result block also carries a completeness qualifier:
 
 Sections with zero hits are omitted entirely.
 
+### 5.8 Continuity
+
+The volatile layer's `[Archived Context Summary]` slot (`AgentLoop._format_pending_summary`) carries the session's own compaction summary when it has one. A fresh session that has neither compacted nor grown past its first few turns gets, instead, continuity: on a channel listed in `memory.continuity.channels` (the webui and the CLI by default — single-user surfaces where "the previous session" is unambiguously the same person's), it is shown the newest *other* session's summary on that channel, wrapped in `=== PREVIOUS SESSION SUMMARY (<file stem>, last active <date>) ===` markers. The block is shown for the fresh session's first `memory.continuity.max_turns` turns, then drops out — whether or not the session ever compacts its own summary.
+
+Candidates for "the previous session" are every other summary file on the channel — any key on it, not just the fresh session's own — including the closed-conversation records `/new` files when it closes a conversation. The newest of them wins, so continuity survives a `/new` on the same key and, when the last activity on the channel was under a different key, reaches that conversation instead. Multi-user channels are excluded by default: a channel's previous session may belong to someone else, so it is not continuity for whoever is talking now.
+
+The marker names the previous session's summary file stem, so the agent can reach that conversation directly with `memory_search` — the previous session's turns and its summary are both indexed there.
+
 ---
 
 ## 6. Key types and entry points

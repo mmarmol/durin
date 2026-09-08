@@ -356,6 +356,19 @@ class MemoryDreamConfig(Base):
         description="Wall-clock cap in seconds per extract pass; the pass yields after the current session when crossed; 0 = run to completion",
     )
 
+    session_summaries_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("sessionSummariesEnabled", "session_summaries_enabled"),
+        description="Nightly pass that writes a session summary for conversations that went idle without compacting or /new, so every conversation leaves a searchable record",
+    )
+
+    session_summary_idle_hours: int = Field(
+        default=6,
+        ge=1,
+        validation_alias=AliasChoices("sessionSummaryIdleHours", "session_summary_idle_hours"),
+        description="A conversation must have been idle this many hours before the nightly pass summarizes it; a live session is left to the compactor",
+    )
+
     max_rss_mb: int = Field(
         default=0,
         ge=0,
@@ -706,6 +719,22 @@ class MemoryLibraryConfig(Base):
     awareness_abstracts: bool = Field(default=False, description="Append each listed document's distilled abstract to its line (roughly doubles the catalog)")
 
 
+class MemoryContinuityConfig(Base):
+    """Carry the previous session's summary into a fresh session.
+
+    On single-user surfaces (the webui and the CLI) a new chat is the same
+    person continuing; the most recent other session's summary on that
+    channel is shown in the archived-context slot for the first
+    ``max_turns`` turns, then drops out. Multi-user channels are off by
+    default because their previous session may belong to someone else.
+    """
+
+    enabled: bool = Field(default=True, description="Show the previous session's summary at the start of a fresh session on the listed channels")
+    channels: list[str] = Field(default_factory=lambda: ["websocket", "cli"], description="Channels whose sessions belong to one person; a fresh session there inherits the newest other session's summary")
+    max_chars: int = Field(default=2000, ge=200, description="Tail of the previous summary shown, in characters")
+    max_turns: int = Field(default=3, ge=1, description="Turns of the fresh session that carry the previous summary before it drops out")
+
+
 class MemoryConfig(Base):
     """Memory subsystem configuration root.
 
@@ -740,6 +769,7 @@ class MemoryConfig(Base):
         default_factory=MemoryLibraryConfig,
         description="Size of the always-on Library awareness catalog in the pinned block",
     )
+    continuity: MemoryContinuityConfig = Field(default_factory=MemoryContinuityConfig, description="Previous-session summary for fresh sessions on single-user channels")
     file_watcher: MemoryFileWatcherConfig = Field(
         default_factory=MemoryFileWatcherConfig,
         description="Background filesystem watcher that re-indexes manually edited memory/*.md files",

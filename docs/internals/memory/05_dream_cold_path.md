@@ -45,9 +45,10 @@ does not gate recall of either. See `design_rationale.md` for why fragments stay
 raw.
 
 **2. Sequential passes, three trigger paths.** Dream runs passes in a fixed
-order — **extract → derived_from → distill → seed-entities → curate-topics →
-skill-extract → refine → consolidate-relations → always_on** — each reading
-sessions, reference documents, or entity pages and applying structured updates.
+order — **extract → derived_from → session_summary → distill → seed-entities →
+curate-topics → skill-extract → refine → consolidate-relations → always_on** —
+each reading sessions, reference documents, or entity pages and applying
+structured updates.
 They are reached three ways: the **daily cron** runs the full sequence (and then
 a workflow-improve pass and skill curation); the two **reactive hooks**
 (post-compaction / session-close) run the extract pass only, throttled; the
@@ -114,12 +115,13 @@ flowchart TD
         direction TB
         EX["1. extract: sessions to entity attributes (Stage 1 agent-upserted refs, Stage 2 discovered entities)"]
         DF["2. derived_from: link entities to ingested reference docs"]
-        DOC["3. documents: distill outlines, seed entities, curate the topic map"]
-        SK["4. skill-extract: agentic sub-agent mines reusable procedures"]
-        RF["5. refine: alias-overlap candidates to judge_pair to auto-merge (gated by auto_absorb.enabled)"]
-        REL["6. relations: canonicalise the edge vocabulary"]
-        AO["7. always_on: rank feedback entities, fit token budget, flip flags"]
-        EX --> DF --> DOC --> SK --> RF --> REL --> AO
+        SS["3. session_summary: idle conversations to session records"]
+        DOC["4. documents: distill outlines, seed entities, curate the topic map"]
+        SK["5. skill-extract: agentic sub-agent mines reusable procedures"]
+        RF["6. refine: alias-overlap candidates to judge_pair to auto-merge (gated by auto_absorb.enabled)"]
+        REL["7. relations: canonicalise the edge vocabulary"]
+        AO["8. always_on: rank feedback entities, fit token budget, flip flags"]
+        EX --> DF --> SS --> DOC --> SK --> RF --> REL --> AO
     end
 
     CRON --> EX
@@ -158,7 +160,10 @@ skill_signals)` iterates every `sessions/*.jsonl` and calls
 1. Load the session jsonl into `(metadata, messages)`; `messages[i]` is turn
    `i + 1`.
 2. Read the **per-session cursor** via `get_extract_cursor`. If the total turn
-   count is at or below the cursor, skip — no new turns.
+   count is at or below the cursor, skip — no new turns. A cursor *past* the
+   end of the file is the exception: the file shrank (`/new` emptied it, or the
+   file cap trimmed it) without resetting the cursor, so the turns there now
+   are a new conversation and the cursor restarts at zero.
 3. Render the new turns (`messages[cursor:]`) as text.
 4. **Stage 1 (extract).** `entity_refs_in_messages` scans the new turns'
    `tool_calls` for `memory_upsert_entity` and collects each call's `ref`. For
@@ -306,6 +311,51 @@ heuristic (which stays as the cold-start fallback until the first curation).
 Idempotent: skipped when the set of distilled documents is unchanged (signature =
 each document's slug + chunk_count). Gated by `memory.dream.curate_topics_enabled`
 (default on).
+
+### Pass 2e — session summaries: idle conversations to session records
+
+`run_session_summary_pass` (`durin/memory/session_summary_dream.py`) executes
+between Pass 2 (derived_from) and Pass 2b (distill) — earlier in the run than
+its section number suggests. It operates on `sessions/*.jsonl`, not on
+entities or references, so it has no ordering dependency on Pass 2b/2c/2d; it
+is documented here, after the whole derived_from/document family, so that
+family's narrative reads as one block.
+
+Only conversations qualify: sessions are skipped by file stem (`workflow_`,
+`subagent_`, `cron_`, `automation_`, `bench_`) or when the line-0 metadata
+carries an `origin_type` marker (a workflow-node session keyed like a normal
+conversation). A conversation qualifies once it has been idle at least
+`memory.dream.session_summary_idle_hours` (default 6 hours) — a still-live
+session is left to the compactor, which already summarizes it on compaction.
+The span to summarize starts after the greater of this pass's own cursor and
+the compactor's `last_consolidated`, so a session that compacted recently is
+not re-summarized from turn zero, and the pass requires at least four new
+user/assistant messages before it spends an LLM call. When that start lands
+past the end of the file — the file shrank without the cursor resetting,
+because `/new` emptied it or the file cap trimmed it — what is there now is a
+new conversation, and the span falls back to `last_consolidated`.
+
+The exclusion runs both ways, since the two writers advance different cursors
+over the same message list. The pass never re-summarizes a span the compactor
+already archived, because its start respects `last_consolidated`. And when an
+idle-then-summarized session resumes and compacts, `Consolidator._unsummarized`
+trims the head of the compaction chunk that this pass's `summary_cursor`
+already covers — an entirely covered chunk means no LLM call and no block
+appended.
+
+The span is rendered as one line per message (timestamp + role + content)
+and run through the **same archive prompt the compactor uses**
+(`agent/consolidator_archive.md`), so both paths produce the same shape of
+bullet summary plus trailing entity/topic tags. The result is appended to
+`memory/session_summary/<key>.md` via `append_session_summary_block` — the
+same bounded, block-based store the compactor writes (oldest blocks evicted
+past the size cap, their path trailers carried forward into a synthetic head
+block). The cursor is a top-level `summary_cursor` key in the session's
+`.meta.json`, written under the same `cross_process_lock` the extract cursor
+uses, so `SessionManager.save()` — which only ever replaces the `derived`
+block — cannot erase it. Best-effort per session: one bad session logs a
+warning and is skipped, never aborting the pass. Gated by
+`memory.dream.session_summaries_enabled` (default on).
 
 ### Pass 3 — skill-extract: sessions to reusable procedures
 
@@ -521,7 +571,8 @@ next hook, or the daily cron. **The daily cron is never throttled** — it does 
 go through the gate. Cross-process exclusion (gateway worker vs manual CLI
 dream) is the worker-held `.dream.lock`, not the gate.
 
-The per-session cursor is the **only** cursor in the dream system. It is an
+The extract cursor is one of the dream system's two per-session cursors (Pass
+2e keeps its own `summary_cursor` in the same sidecar). It is an
 integer stored as a **top-level `extract_cursor` key** in the session's
 `<stem>.meta.json` sidecar — deliberately *outside* the `derived` block, because
 `SessionManager.save()` rebuilds the `derived` block and would otherwise erase

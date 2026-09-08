@@ -129,13 +129,14 @@ for how the bridge handles are built).
 The `subagent` scope is the *background-safe* set: files (notebooks
 included), exec, search, web, memory search and memory writes,
 `convert_to_markdown`, a bounded `sleep`, and the vision/audio bridges.
-Tools stay core-only when they are interactive (`ask_user_question`, plan
-mode, todos), session-bound (`message`, `session_search`), orchestrating
-(`spawn` and its lifecycle tools, `run_workflow` — both would recurse from
-a background worker), standing-state creators (`cron`, `automations`),
-destructive (`memory_forget`), or self-modifying (`skill_edit`,
-`skill_import`). Those classes declare `_scopes = {"core"}` explicitly,
-with the reason in a comment, rather than relying on the base default.
+Tools stay core-only when they are interactive (`ask_user_question`, plan mode,
+todos), session-bound (`message`, `session_search` — the latter searches the
+live session, or any earlier session by key (`session_key`), read-only),
+orchestrating (`spawn` and its lifecycle tools, `run_workflow` — both would
+recurse from a background worker), standing-state creators (`cron`,
+`automations`), destructive (`memory_forget`), or self-modifying (`skill_edit`,
+`skill_import`). Those classes declare `_scopes = {"core"}` explicitly, with
+the reason in a comment, rather than relying on the base default.
 
 External tools can be registered via `entry_points(group="durin.tools")` in a
 package's `pyproject.toml`; the loader discovers these after built-ins.
@@ -333,7 +334,7 @@ controls which MCP tools are registered.
 | Shell | `exec`, `process` |
 | Web | `web_search`, `web_fetch` |
 | Memory | `memory_search`, `memory_store`, `memory_forget`, `memory_ingest`, `memory_drill`, `memory_upsert_entity`, `memory_read_entity`, `memory_entity_lineage`, `memory_source_session` |
-| Session & planning | `session_search`, `todo_write`, `enter_plan_mode`, `exit_plan_mode`, `note_decision` |
+| Session & planning | `session_search` (searches the live session, or any earlier session by key (`session_key`), read-only), `todo_write`, `enter_plan_mode`, `exit_plan_mode`, `note_decision` |
 | Agent control | `ask_user_question`, `long_task`, `complete_goal`, `sleep`, `message` |
 | Background work | `spawn`, `run_workflow`, `list_workflows`, `workflow_write`, `workflow_edit`, `tasks` (list / status / stop, over sub-agents + workflow runs + [jobs](jobs.md), scoped to this session), `workflow_runs` (read-only `search` (date-filterable via `since`/`until`) / `show` / `cost` (per-run token table, including child sub-workflow runs) over every past workflow run recorded in the workspace — across every session, not just this one — so a question about prior work can be answered by reading a manifest and its artifact files instead of re-running the workflow; when answering from a prior run, state the run's date and flag a producer model/version that differs from the current configuration, and prefer re-running when the user asked for a fresh investigation), `subagent_monitor`, `subagent_output` |
 | Skills | `skills_list`, `skill_view`, `skill_search`, `skill_import`, `skill_write`, `skill_edit`, `skill_audit`, `skill_observe`, `skill_acquire_seed`, `skill_install_deps` |

@@ -788,13 +788,17 @@ class MemoryDreamStartEvent(TypedDict):
 
 
 class MemoryDreamEndEvent(TypedDict):
-    """A dream pass completed. Emitted by the new extract / refine passes.
+    """A dream pass completed.
 
-    ``kind`` is ``"extract"`` or ``"refine"``; ``duration_ms`` is always
-    present. The extract pass sets ``entities_consolidated`` /
-    ``entities_failed`` / ``sessions`` / ``yielded`` (``yielded=True`` when the
-    ``max_seconds_per_run`` cap was hit and the cursor will resume next time);
-    the refine pass sets ``merged`` / ``kept`` / ``candidates``.
+    ``kind`` names the pass — today ``"extract"``, ``"refine"``,
+    ``"derived_from"`` and ``"session_summary"``; ``duration_ms`` is always
+    present, the rest are per-pass. The extract pass sets
+    ``entities_consolidated`` / ``entities_failed`` / ``sessions`` /
+    ``yielded`` (``yielded=True`` when the ``max_seconds_per_run`` cap was hit
+    and the cursor will resume next time); the refine pass sets ``merged`` /
+    ``kept`` / ``candidates``; the derived_from and session-summary passes set
+    ``sessions`` / ``yielded``, and the session-summary pass adds ``written`` /
+    ``skipped``.
     """
 
     kind: str
@@ -806,6 +810,8 @@ class MemoryDreamEndEvent(TypedDict):
     merged: NotRequired[int]
     kept: NotRequired[int]
     candidates: NotRequired[int]
+    written: NotRequired[int]
+    skipped: NotRequired[int]
 
 
 class MemoryAbsorbJudgedEvent(TypedDict):

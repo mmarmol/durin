@@ -131,7 +131,7 @@ have neither block in their prompt).
 |---|---|---|
 | `query` | required | Natural-language or exact-identifier query. Short topical phrase preferred. |
 | `scope` | `all` | `all` = dreamed + undreamed sessions, **excluding ingested documents**; `dreamed` = structured memory; `undreamed` = raw sessions; `library` = ingested reference documents (the Library — kept out of default recall); `archive` = on-demand recovery walk. |
-| `level` | `warm` | `warm` = headline + summary; `cold` = full body (high token cost). |
+| `level` | `warm` | `warm` = headline + summary (for an entity page: its name, attributes and a body excerpt); `cold` = full body (high token cost). |
 | `keywords` | — | Literal string for exact-match boost (email, UUID, path). Biases RRF toward lexical. |
 | `limit` | 10 | Final result count. Clamped to [1, 50] defensively even with schema bounds declared. |
 | `kinds` | `all` | `all` = everything; `skill` = skill procedures only; `fact` = everything except skills. |

@@ -109,3 +109,25 @@ def test_carried_line_drops_whole_entries_not_mid_path(tmp_path: Path) -> None:
     # newest evicted path survives.
     assert "segment_000" not in tail
     assert "segment_027" in tail
+
+
+def test_append_holds_the_file_lock(tmp_path: Path, monkeypatch) -> None:
+    """The read-rebuild-rewrite has two cross-process writers — the compactor
+    in the gateway and the nightly pass in the dream worker — so it runs under
+    the summary file's lock or one of them loses a block."""
+    import contextlib
+
+    import durin.memory.session_summary_store as store
+
+    entered: list[Path] = []
+
+    @contextlib.contextmanager
+    def _recording_lock(target, **kwargs):
+        entered.append(target)
+        yield
+
+    monkeypatch.setattr(store, "cross_process_lock", _recording_lock)
+
+    store.append_session_summary_block(tmp_path, KEY, "- span one fact")
+
+    assert entered == [session_summary_path(tmp_path, KEY)]

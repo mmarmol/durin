@@ -262,6 +262,19 @@ def _make_snippet(text: str, start: int, end: int, width: int) -> str:
             maximum=_MAX_SNIPPET_CHARS,
             nullable=True,
         ),
+        session_key=StringSchema(
+            description=(
+                "Search a DIFFERENT session by its key instead of this "
+                "conversation (e.g. websocket:<id>, slack:<chat>:<thread>). "
+                "A PREVIOUS SESSION SUMMARY block and a memory_search SESSION "
+                "hit name a summary FILE STEM, not a key: `websocket_<id>` is "
+                "the session `websocket:<id>`. A stem ending in "
+                "`_closed_<timestamp>` is a closed conversation's summary, not "
+                "a live session — read it with memory_search instead. "
+                "Read-only. Omit to search here."
+            ),
+            nullable=True,
+        ),
         required=["query"],
     )
 )
@@ -295,15 +308,14 @@ class SessionSearchTool(Tool, ContextAware):
     def description(self) -> str:
         return (
             "Search this conversation's prior messages for a keyword or "
-            "regex. Use when you need to recall a specific value, file "
-            "path, error, or decision from earlier in the session and "
-            "re-reading the full history would be wasteful. Covers the "
-            "live history AND older history trimmed from the transcript "
-            "into the session archive, so matches may predate anything "
-            "still visible. Returns matches with their message index "
-            "(or [archived <time>] for archived ones), role, and a short "
-            "surrounding snippet. Searches only this session — for "
-            "cross-session lookups, use memory tools instead."
+            "regex, or an earlier session when `session_key` is given (read-only). "
+            "Use when you need to recall a specific value, file path, error, "
+            "or decision from earlier in the session and re-reading the full "
+            "history would be wasteful. Covers the live history AND older "
+            "history trimmed from the transcript into the session archive, so "
+            "matches may predate anything still visible. Returns matches with "
+            "their message index (or [archived <time>] for archived ones), role, "
+            "and a short surrounding snippet."
         )
 
     def _session(self) -> Any | None:
@@ -322,6 +334,7 @@ class SessionSearchTool(Tool, ContextAware):
         role: str | None = None,
         max_results: int | None = None,
         snippet_chars: int | None = None,
+        session_key: str | None = None,
         **kwargs: Any,
     ) -> str:
         if not query or not str(query).strip():
@@ -339,9 +352,20 @@ class SessionSearchTool(Tool, ContextAware):
         width = snippet_chars if snippet_chars is not None else _DEFAULT_SNIPPET_CHARS
         width = max(_MIN_SNIPPET_CHARS, min(int(width), _MAX_SNIPPET_CHARS))
 
-        session = self._session()
-        if session is None or not getattr(session, "messages", None):
-            return "No prior messages in this session to search."
+        current_key = self._request_ctx.session_key if self._request_ctx else None
+        other = bool(session_key) and session_key != current_key
+        if other:
+            data = self._sessions.read_session_file(str(session_key))
+            if data is None:
+                return f"No session found for key {session_key!r}."
+            messages = list(data.get("messages") or [])
+            scan_key = str(session_key)
+        else:
+            session = self._session()
+            if session is None or not getattr(session, "messages", None):
+                return "No prior messages in this session to search."
+            messages = session.messages
+            scan_key = current_key
 
         # Compile the pattern. Keyword mode uses re.escape; both modes
         # honor case_sensitive. Invalid regex surfaces as a clear tool
@@ -354,7 +378,7 @@ class SessionSearchTool(Tool, ContextAware):
             return f"Error: invalid regex pattern: {exc}"
 
         matches: list[dict[str, Any]] = []
-        for idx, msg in enumerate(session.messages):
+        for idx, msg in enumerate(messages):
             if not isinstance(msg, dict):
                 continue
             entry = _match_message(msg, pattern, role, width)
@@ -369,9 +393,8 @@ class SessionSearchTool(Tool, ContextAware):
         archived: list[dict[str, Any]] = []
         archive_scanned = 0
         archive_complete = True
-        key = self._request_ctx.session_key if self._request_ctx else None
-        if key and len(matches) < cap:
-            paths = self._sessions.archive_paths(key)
+        if scan_key and len(matches) < cap:
+            paths = self._sessions.archive_paths(scan_key)
             if paths:
                 archived, archive_scanned, archive_complete = await asyncio.to_thread(
                     _scan_archive,
@@ -386,13 +409,15 @@ class SessionSearchTool(Tool, ContextAware):
         combined = archived + matches  # archive is strictly older → first
         total = len(combined)
         if total == 0:
-            out = f"No matches for {query_str!r} in {len(session.messages)} messages."
+            out = f"No matches for {query_str!r} in {len(messages)} messages."
             if archive_scanned:
                 out += (
                     f" Archive: {archive_scanned} segment(s) scanned, no matches"
                     + ("" if archive_complete else " (partial scan)")
                     + "."
                 )
+            if other:
+                out = f"Session {session_key}:\n" + out
             return out
 
         # Keep the last `cap` matches — chronological tail is usually the
@@ -401,7 +426,7 @@ class SessionSearchTool(Tool, ContextAware):
 
         header = (
             f"{total} match{'es' if total != 1 else ''} for {query_str!r} "
-            f"across {len(session.messages)} messages"
+            f"across {len(messages)} messages"
         )
         if archived or archive_scanned:
             header += (
@@ -432,4 +457,6 @@ class SessionSearchTool(Tool, ContextAware):
                 + "\n… (output truncated; narrow your query or "
                 "lower `snippet_chars` for more results.)"
             )
+        if other:
+            out = f"Session {session_key}:\n" + out
         return out

@@ -807,11 +807,28 @@ class Consolidator:
             len(chunk),
             replay_max_messages,
         )
-        summary, tags = await self.archive(chunk)
+        summary, tags = await self.archive(self._unsummarized(session, chunk))
         self._merge_session_tags(session, tags)
         session.last_consolidated = end_idx
         self.sessions.save(session)
         return summary
+
+    def _unsummarized(self, session: Session, chunk: list[dict]) -> list[dict]:
+        """Drop the head of *chunk* the nightly session-summary pass already
+        summarized. Its cursor is an index into ``session.messages`` — the
+        same list ``last_consolidated`` indexes — so the overlap is the
+        difference. An empty result means the whole chunk is already
+        summarized: no LLM call, nothing appended."""
+        try:
+            from durin.memory.session_summary_dream import get_summary_cursor
+            path = self.sessions.sessions_dir / f"{self.sessions.safe_key(session.key)}.jsonl"
+            cursor = get_summary_cursor(path)
+        except Exception:  # noqa: BLE001 — a missing sidecar means nothing was summarized
+            return chunk
+        already = cursor - session.last_consolidated
+        if already <= 0:
+            return chunk
+        return chunk[already:] if already < len(chunk) else []
 
     @staticmethod
     def _merge_session_tags(
@@ -1393,7 +1410,7 @@ class Consolidator:
                     source,
                     len(chunk),
                 )
-                summary, tags = await self.archive(chunk)
+                summary, tags = await self.archive(self._unsummarized(session, chunk))
                 # Advance the cursor either way: on success the chunk was
                 # summarized; on failure archive() already raw-archived it as
                 # a breadcrumb. Re-archiving the same chunk on the next call

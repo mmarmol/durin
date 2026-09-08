@@ -152,7 +152,7 @@ The CE nudges the existing RRF order; it does not replace it. The default model 
 
 `apply_per_source_cap` drops corpus hits beyond 3 per `ingest_id` (configurable via `memory.search.sectioning.max_per_source`) to prevent a single chunked document from monopolizing the top-K. Other classes pass through uncapped.
 
-`SectionedHit` rows are grouped into five sections by type, rendered in order: skill → canonical → fragment → session → ingested. Empty sections are omitted. Each block carries structural markers (`=== CANONICAL: <uri> ===` … `=== END CANONICAL ===`) and a completeness qualifier when body length is known.
+`SectionedHit` rows are grouped into five sections by type, rendered in order: skill → canonical → fragment → session → ingested. Empty sections are omitted. Each block carries structural markers (`=== CANONICAL: <uri> ===` … `=== END CANONICAL ===`) and a completeness qualifier when body length is known. Canonical hits render the page's name, attributes and a bounded body excerpt at warm level; the completeness qualifier compares the rendered text with the full composition.
 
 The pipeline returns `SearchPipelineResult` with the capped `hits`, source counts, and degradation information.
 

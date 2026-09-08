@@ -478,7 +478,7 @@ async def _archive_closed_session(
     import logging
     from datetime import datetime
 
-    from durin.memory.session_summary_store import write_session_summary
+    from durin.memory.session_summary_store import closed_record_key, write_session_summary
 
     log = logging.getLogger(__name__)
     summary: str | None = None
@@ -494,7 +494,7 @@ async def _archive_closed_session(
     if not parts:
         return
     when = last_active if isinstance(last_active, datetime) else datetime.now()
-    closed_key = f"{key}:closed:{when.strftime('%Y%m%dT%H%M%S')}"
+    closed_key = closed_record_key(key, when)
     try:
         write_session_summary(
             loop.workspace, closed_key, "\n\n---\n\n".join(parts), last_active=last_active,
