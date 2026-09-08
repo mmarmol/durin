@@ -181,7 +181,7 @@ The pipeline returns `SearchPipelineResult` with the capped `hits`, source count
 | `RankedCandidate` | `durin/memory/entity_ranker.py` | Dataclass: `record`, `base_score`, `adjusted_score`, `signals`. |
 | `CrossEncoderReranker` | `durin/memory/cross_encoder.py` | Wraps `sentence_transformers.CrossEncoder` with lazy load, batching, retry-after-failure, and graceful degradation. `score(query, docs) -> list[float] | None`. |
 | `DEFAULT_MODEL` | `durin/memory/cross_encoder.py` | `"BAAI/bge-reranker-base"` — MIT, ~100M params, multilingual. |
-| `SectionedHit` | `durin/memory/sectioned_output.py` | Frozen dataclass: `uri`, `type`, `path`, `score`, `ts`, `snippet`, `summary`, `body`, `body_length`, `ingest_id`. Consumed by renderer. |
+| `SectionedHit` | `durin/memory/sectioned_output.py` | Frozen dataclass: `uri`, `type`, `path`, `score`, `ts`, `snippet`, `summary`, `body`, `body_length`, `ingest_id`, `entities`, `derived_from`. Consumed by renderer. |
 | `apply_per_source_cap` | `durin/memory/sectioned_output.py` | Drops ingested-document hits (corpus and reference chunks) beyond `max_per_source` (default 3) per source document. Other types pass through. |
 | `render_sectioned` | `durin/memory/sectioned_output.py` | Groups hits by section type and renders structural markers for LLM consumption. Optional `max_chars` bounds the total size — hits past the budget render as headline pointers instead of full blocks. |
 
