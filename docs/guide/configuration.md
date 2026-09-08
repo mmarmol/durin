@@ -425,7 +425,7 @@ What it costs: one render per session instead of one per turn, and a copy of bot
 | `eager_surface.freeze` | `true` | Keep the pinned block and the hot layer byte-identical for the life of a session; a fresh render happens at session boundaries (`/new`, compaction) and after `refresh_after_min` |
 | `eager_surface.refresh_after_min` | `0` | Minutes after which a frozen surface is re-rendered at the next build; `0` keeps it until a session boundary |
 
-How to see it: `/status` names the turn a frozen block was actually taken on — the "Memory pinned" and "Memory hot layer" rows in its composition breakdown both get a "(frozen at turn N)" suffix whenever the last turn's build reused a stored surface instead of rendering it live; the CLI footer's `infra:` chip carries the same note. A freeze is also recorded in telemetry as one `memory.eager_surface` event per fresh render, naming why it rendered (`first_build`, `new`, `compaction`, or `refresh_window`).
+How to see it: `/status` names the turn a frozen block was actually taken on — the "Memory pinned" and "Memory hot layer" rows in its composition breakdown both get a "(frozen at turn N)" suffix whenever the last turn's build reused a stored surface instead of rendering it live; the CLI footer's `infra:` chip carries the same note. A freeze is also recorded in telemetry as one `memory.eager_surface` event per fresh render, naming why it rendered (`first_build`, `new`, `compaction`, `refresh_window`, or `corrupt`).
 
 **`memory.file_watcher`** — background filesystem watcher:
 
