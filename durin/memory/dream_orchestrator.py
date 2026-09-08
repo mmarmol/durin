@@ -157,6 +157,10 @@ def run_full_dream(
                 else {"sessions": 0, "written": 0, "skipped": 0, "duration_ms": 0}
             )
             _emit_rss(progress, "session_summary")
+            logger.info(
+                "memory_dream: session_summary(sessions={} written={} skipped={} {}ms)",
+                ss.get("sessions", 0), ss.get("written", 0),
+                ss.get("skipped", 0), ss.get("duration_ms", 0))
             # Distil ingested reference documents into outline sidecars — the
             # "know the book" index. Independent of entity merges, so it slots
             # right after the source-link pass.

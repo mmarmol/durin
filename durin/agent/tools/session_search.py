@@ -265,9 +265,13 @@ def _make_snippet(text: str, start: int, end: int, width: int) -> str:
         session_key=StringSchema(
             description=(
                 "Search a DIFFERENT session by its key instead of this "
-                "conversation — the key a PREVIOUS SESSION SUMMARY block or a "
-                "memory_search SESSION hit names (e.g. websocket:<id>, "
-                "slack:<chat>:<thread>). Read-only. Omit to search here."
+                "conversation (e.g. websocket:<id>, slack:<chat>:<thread>). "
+                "A PREVIOUS SESSION SUMMARY block and a memory_search SESSION "
+                "hit name a summary FILE STEM, not a key: `websocket_<id>` is "
+                "the session `websocket:<id>`. A stem ending in "
+                "`_closed_<timestamp>` is a closed conversation's summary, not "
+                "a live session — read it with memory_search instead. "
+                "Read-only. Omit to search here."
             ),
             nullable=True,
         ),

@@ -102,8 +102,9 @@ The dotted edge is a note, not a transition: a shortcut command still writes the
 turn to the session — it just does it inline in `_state_command` rather than
 through the `SAVE` state. `/new` is the one exception: it clears the session and
 the key's archived-context summary, and files the closed conversation as its own
-indexed record (`<key>:closed:<timestamp>` in the session-summary store —
-searchable, never replayed), so the next conversation on the key starts clean.
+indexed record (`<sanitized key, first 40 chars>_closed_<timestamp>` in the
+session-summary store — searchable, never replayed), so the next conversation on
+the key starts clean.
 
 ### 3.2 Concurrency topology
 

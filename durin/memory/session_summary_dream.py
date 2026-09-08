@@ -88,12 +88,17 @@ def _emit(event: str, **data: Any) -> None:
 
 def _format_turns(messages: list[dict]) -> str:
     """The compactor's transcript shape: one line per message with a
-    timestamp prefix, so the archive prompt sees the same input either way."""
+    timestamp prefix and the turn's tool names, so the archive prompt sees
+    the same input either way."""
     lines = []
     for m in messages:
         if not m.get("content"):
             continue
-        lines.append(f"[{str(m.get('timestamp', '?'))[:16]}] {str(m.get('role', '?')).upper()}: {m['content']}")
+        tools = f" [tools: {', '.join(m['tools_used'])}]" if m.get("tools_used") else ""
+        lines.append(
+            f"[{str(m.get('timestamp', '?'))[:16]}] "
+            f"{str(m.get('role', '?')).upper()}{tools}: {m['content']}"
+        )
     return "\n".join(lines)
 
 
@@ -110,7 +115,10 @@ def _skip_reason(meta: dict, jsonl_path: Path, *, idle_hours: int, now: datetime
     if updated is None:
         return "no_timestamp"
     if updated.tzinfo is not None:
-        updated = updated.replace(tzinfo=None)
+        # ``now`` is naive local time, so convert before dropping the offset —
+        # a bare replace() would read a UTC stamp as local and shift the
+        # idle window by the machine's offset.
+        updated = updated.astimezone().replace(tzinfo=None)
     if now - updated < timedelta(hours=idle_hours):
         return "active"
     return None
@@ -139,6 +147,10 @@ def summarize_session(
         return {"session": key, "skipped": reason}
 
     start = max(get_summary_cursor(jsonl_path), int(meta.get("last_consolidated") or 0))
+    if start > len(msgs):
+        # The file shrank since the cursor was written (/new emptied it or the
+        # file cap trimmed it): what is there now is a new conversation.
+        start = int(meta.get("last_consolidated") or 0)
     span = [
         m for m in msgs[start:]
         if m.get("role") in ("user", "assistant") and m.get("content") and not m.get("_command")
@@ -158,9 +170,16 @@ def summarize_session(
     if not summary or summary.strip() == "(nothing)":
         set_summary_cursor(jsonl_path, total)
         return {"session": key, "skipped": "nothing", "cursor": total}
-    append_session_summary_block(workspace, key, summary, last_active=meta.get("updated_at"))
+    # The store declines a block it already holds as the newest one (a
+    # degraded-LLM repeat), so "written" is what it reports, not what we asked.
+    path = append_session_summary_block(
+        workspace, key, summary, last_active=meta.get("updated_at"),
+    )
     set_summary_cursor(jsonl_path, total)
-    return {"session": key, "written": True, "cursor": total, "new_messages": len(span)}
+    return {
+        "session": key, "written": path is not None,
+        "cursor": total, "new_messages": len(span),
+    }
 
 
 def run_session_summary_pass(

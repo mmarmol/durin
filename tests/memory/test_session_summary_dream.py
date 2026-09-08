@@ -97,3 +97,28 @@ def test_pass_counts_and_yields_on_max_seconds(tmp_path: Path) -> None:
     _write_session(tmp_path, "websocket:c")
     out = run_session_summary_pass(tmp_path, llm_invoke=_invoke, max_seconds=1e-9)
     assert out["yielded"] is True
+
+
+def test_cursor_past_the_end_restarts_the_conversation(tmp_path: Path) -> None:
+    """A cursor past the end of the file means the file was rewritten.
+
+    `/new` empties the session file and the file cap trims it; neither resets
+    the cursor. Whatever is in the file now is a new conversation, so the pass
+    must summarize it instead of waiting for it to outgrow the stale index.
+    """
+    path = _write_session(tmp_path, "websocket:abc", n_pairs=5)
+    assert summarize_session(tmp_path, path, llm_invoke=_invoke)["written"] is True
+    assert get_summary_cursor(path) == 10
+
+    # Same key, same file: /new emptied it and two fresh turns landed.
+    _write_session(tmp_path, "websocket:abc", n_pairs=2)
+
+    def _invoke_fresh(prompt: str, *, model=None) -> _Resp:
+        return _Resp("- the fresh conversation\n---\nentities: []\ntopics: []")
+
+    second = summarize_session(tmp_path, path, llm_invoke=_invoke_fresh)
+
+    assert second["written"] is True
+    assert get_summary_cursor(path) == 4
+    text, _ = get_session_summary(tmp_path, "websocket:abc")
+    assert "the fresh conversation" in text

@@ -160,7 +160,10 @@ skill_signals)` iterates every `sessions/*.jsonl` and calls
 1. Load the session jsonl into `(metadata, messages)`; `messages[i]` is turn
    `i + 1`.
 2. Read the **per-session cursor** via `get_extract_cursor`. If the total turn
-   count is at or below the cursor, skip — no new turns.
+   count is at or below the cursor, skip — no new turns. A cursor *past* the
+   end of the file is the exception: the file shrank (`/new` emptied it, or the
+   file cap trimmed it) without resetting the cursor, so the turns there now
+   are a new conversation and the cursor restarts at zero.
 3. Render the new turns (`messages[cursor:]`) as text.
 4. **Stage 1 (extract).** `entity_refs_in_messages` scans the new turns'
    `tool_calls` for `memory_upsert_entity` and collects each call's `ref`. For
@@ -327,7 +330,10 @@ session is left to the compactor, which already summarizes it on compaction.
 The span to summarize starts after the greater of this pass's own cursor and
 the compactor's `last_consolidated`, so a session that compacted recently is
 not re-summarized from turn zero, and the pass requires at least four new
-user/assistant messages before it spends an LLM call.
+user/assistant messages before it spends an LLM call. When that start lands
+past the end of the file — the file shrank without the cursor resetting,
+because `/new` emptied it or the file cap trimmed it — what is there now is a
+new conversation, and the span falls back to `last_consolidated`.
 
 The span is rendered as one line per message (timestamp + role + content)
 and run through the **same archive prompt the compactor uses**
@@ -557,7 +563,8 @@ next hook, or the daily cron. **The daily cron is never throttled** — it does 
 go through the gate. Cross-process exclusion (gateway worker vs manual CLI
 dream) is the worker-held `.dream.lock`, not the gate.
 
-The per-session cursor is the **only** cursor in the dream system. It is an
+The extract cursor is one of the dream system's two per-session cursors (Pass
+2e keeps its own `summary_cursor` in the same sidecar). It is an
 integer stored as a **top-level `extract_cursor` key** in the session's
 `<stem>.meta.json` sidecar — deliberately *outside* the `derived` block, because
 `SessionManager.save()` rebuilds the `derived` block and would otherwise erase

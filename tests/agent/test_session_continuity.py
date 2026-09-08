@@ -117,3 +117,30 @@ async def test_previous_summary_appears_only_for_first_max_turns_turns(tmp_path:
     await loop._process_message(InboundMessage(channel="websocket", sender_id="u", chat_id="new", content="q3"))
     system_3 = captured[2][0]["content"]
     assert "PREVIOUS SESSION SUMMARY" not in system_3
+
+
+@pytest.mark.asyncio
+async def test_closed_record_feeds_the_fresh_session(tmp_path: Path) -> None:
+    """`/new` files the conversation it closes as its own record; the fresh
+    session on the same key then picks that record as its previous session."""
+    loop = _make_loop(tmp_path)
+    session = loop.sessions.get_or_create("cli:test")
+    session.add_message("user", "I prefer terse answers")
+    session.add_message("assistant", "Noted.")
+    loop.sessions.save(session)
+
+    async def _fake_archive(_messages):
+        return "- user prefers terse answers", {"entities": [], "topics": []}
+
+    loop.consolidator.archive = _fake_archive  # type: ignore[method-assign]
+
+    await loop._process_message(
+        InboundMessage(channel="cli", sender_id="u", chat_id="test", content="/new")
+    )
+    await loop.close_mcp()  # drains the background closed-record write
+
+    block = loop._format_pending_summary(loop.sessions.get_or_create("cli:test"))
+
+    assert block is not None
+    assert "PREVIOUS SESSION SUMMARY" in block
+    assert "user prefers terse answers" in block

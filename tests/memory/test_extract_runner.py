@@ -126,3 +126,27 @@ def test_extract_text_numbers_turns(tmp_path, monkeypatch):
                                skill_signals=False, discover=True)
     assert "[turn-1] USER: hi" in captured["text"]
     assert "[turn-2] ASSISTANT: yo" in captured["text"]
+
+
+def test_cursor_past_the_end_restarts_the_conversation(tmp_path):
+    """A cursor past the end of the file means the file was rewritten.
+
+    `/new` empties the session file and the file cap trims it; neither resets
+    the cursor. The turns in the file now are a new conversation, so the
+    extract pass must process them instead of skipping until the file
+    outgrows the stale index.
+    """
+    p = _write_session(tmp_path, "s1", [
+        {"role": "user", "content": "fresh question"},
+        {"role": "assistant", "content": "fresh answer"},
+        {"role": "user", "content": "second question"},
+        {"role": "assistant", "content": "second answer"},
+    ])
+    set_extract_cursor(p, 10)
+
+    out = run_extract_for_session(tmp_path, p, llm_invoke=_stub("[]"))
+
+    assert out.get("skipped") != "no_new_turns"
+    assert out["new_turns"] == 4
+    assert out["cursor"] == 4
+    assert get_extract_cursor(p) == 4
