@@ -2057,7 +2057,26 @@
       "openPanel": "作業パネルを開く"
     },
     "queuedChip": "キュー済み — 現在の作業が終わり次第読み込みます",
-    "steerChip": "誘導"
+    "steerChip": "誘導",
+    "chips": {
+      "spawn": "生成 {{name}}",
+      "tasks": "タスク {{action}}{{id}}",
+      "cron": "cron {{action}} {{name}}",
+      "message": "{{channel}}",
+      "messageDefault": "メッセージ",
+      "sleep": "{{reason}}",
+      "sleepDefault": "{{seconds}}秒スリープ",
+      "goalCompleted": "目標完了",
+      "longTask": "{{summary}}",
+      "longTaskDefault": "長時間タスク",
+      "planMode": "プランモード",
+      "memorySaved": "メモリ保存",
+      "entityUpdated": "{{ref}}",
+      "entityUpdatedDefault": "エンティティ更新",
+      "memoryForgot": "削除 {{uri}}",
+      "memoriesRecalled_other": "{{count}} 件の記憶を想起",
+      "skillImport": "インポート {{source}}"
+    }
   },
   "lightbox": {
     "title": "画像プレビュー",

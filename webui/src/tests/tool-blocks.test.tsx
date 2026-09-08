@@ -6,6 +6,7 @@ import {
   ThreadActionsProvider,
   type ThreadActions,
 } from "@/components/thread/ThreadActionsContext";
+import i18n from "@/i18n";
 import type { ToolProgressEvent } from "@/lib/types";
 
 function actions(overrides: Partial<ThreadActions> = {}): ThreadActions {
@@ -164,6 +165,40 @@ describe("ToolChipRow", () => {
       />,
     );
     expect(screen.getByText(/🧠 3 memories recalled/)).toBeInTheDocument();
+  });
+
+  it("uses the singular form for a single recalled memory", () => {
+    render(
+      <ToolChipRow
+        events={[
+          { phase: "end", call_id: "memory_prefetch:t1", name: "memory_prefetch", arguments: { query: "Ana", hits: 1 } },
+        ]}
+      />,
+    );
+    expect(screen.getByText(/🧠 1 memory recalled/)).toBeInTheDocument();
+  });
+
+  it("chip labels come from the catalog", async () => {
+    await i18n.changeLanguage("es");
+    render(
+      <ToolChipRow
+        events={[
+          { name: "memory_prefetch", phase: "end", call_id: "c1", arguments: { query: "q", hits: 3 } },
+        ]}
+      />,
+    );
+    expect(screen.getByText(/3 recuerdos recuperados/)).toBeInTheDocument();
+  });
+
+  it("falls back to a placeholder count when hits isn't known yet (no raw catalog key leaks)", () => {
+    render(
+      <ToolChipRow
+        events={[
+          { phase: "start", call_id: "memory_prefetch:t1", name: "memory_prefetch", arguments: { query: "Ana" } },
+        ]}
+      />,
+    );
+    expect(screen.getByText(/🧠 \? memories recalled/)).toBeInTheDocument();
   });
 });
 

@@ -202,6 +202,7 @@ function PlanBlock({
 
 /** Compact one-line confirmations (display class "chip"). */
 export function ToolChipRow({ events }: { events: ToolProgressEvent[] }) {
+  const { t } = useTranslation();
   if (events.length === 0) return null;
   return (
     <div className="flex flex-wrap gap-1.5 px-2">
@@ -213,49 +214,58 @@ export function ToolChipRow({ events }: { events: ToolProgressEvent[] }) {
             "bg-muted/30 px-2.5 py-0.5 text-[11.5px] text-muted-foreground",
           )}
         >
-          {chipLabel(event)}
+          {chipLabel(event, t)}
         </span>
       ))}
     </div>
   );
 }
 
-function chipLabel(event: ToolProgressEvent): string {
+function chipLabel(event: ToolProgressEvent, t: (key: string, options?: Record<string, unknown>) => string): string {
   const a = args(event);
   const s = (key: string) => (typeof a[key] === "string" ? (a[key] as string) : "");
   switch (event.name) {
     case "spawn":
-      return `🤖 spawn ${s("name") || s("task").slice(0, 40)}`.trim();
+      return `🤖 ${t("message.chips.spawn", { name: s("name") || s("task").slice(0, 40) })}`.trim();
     case "tasks": {
       const action = s("action") || "list";
       const id = s("id");
       const icon = action === "stop" ? "🛑" : "📋";
-      return `${icon} tasks ${action}${id ? ` ${id.slice(0, 12)}` : ""}`.trim();
+      return `${icon} ${t("message.chips.tasks", { action, id: id ? ` ${id.slice(0, 12)}` : "" })}`.trim();
     }
     case "cron":
-      return `⏰ cron ${s("action")} ${s("name")}`.trim();
+      return `⏰ ${t("message.chips.cron", { action: s("action"), name: s("name") })}`.trim();
     case "message":
-      return `📤 ${s("channel") || "message"}`;
+      return `📤 ${s("channel") ? t("message.chips.message", { channel: s("channel") }) : t("message.chips.messageDefault")}`;
     case "sleep":
-      return `⏳ ${s("reason") || `sleep ${a.seconds ?? ""}s`}`.trim();
+      return `⏳ ${s("reason") ? t("message.chips.sleep", { reason: s("reason") }) : t("message.chips.sleepDefault", { seconds: a.seconds ?? "" })}`.trim();
     case "complete_goal":
-      return "🏁 goal completed";
-    case "long_task":
-      return `🎯 ${s("ui_summary") || s("goal").slice(0, 40) || "long task"}`.trim();
+      return `🏁 ${t("message.chips.goalCompleted")}`;
+    case "long_task": {
+      const summary = s("ui_summary") || s("goal").slice(0, 40);
+      return `🎯 ${summary ? t("message.chips.longTask", { summary }) : t("message.chips.longTaskDefault")}`.trim();
+    }
     case "enter_plan_mode":
-      return "📐 plan mode";
+      return `📐 ${t("message.chips.planMode")}`;
     case "memory_store":
-      return "🧠 memory saved";
-    case "memory_upsert_entity":
-      return `🧠 ${s("ref") || "entity updated"}`;
+      return `🧠 ${t("message.chips.memorySaved")}`;
+    case "memory_upsert_entity": {
+      const ref = s("ref");
+      return `🧠 ${ref ? t("message.chips.entityUpdated", { ref }) : t("message.chips.entityUpdatedDefault")}`;
+    }
     case "memory_forget":
-      return `🧠 forgot ${s("uri")}`.trim();
+      return `🧠 ${t("message.chips.memoryForgot", { uri: s("uri") })}`.trim();
     case "memory_prefetch": {
-      const hits = typeof a.hits === "number" ? a.hits : "?";
-      return `🧠 ${hits} memories recalled`;
+      // i18next's plural selector requires a real number for `count`; a
+      // non-numeric placeholder ("?", before the hit count is known) is
+      // interpolated through the `_other` form directly, bypassing selection.
+      const hits = a.hits;
+      return typeof hits === "number"
+        ? `🧠 ${t("message.chips.memoriesRecalled", { count: hits })}`
+        : `🧠 ${t("message.chips.memoriesRecalled_other", { count: "?" })}`;
     }
     case "skill_import":
-      return `🧩 import ${s("source").slice(0, 40)}`.trim();
+      return `🧩 ${t("message.chips.skillImport", { source: s("source").slice(0, 40) })}`.trim();
     default:
       return event.name ?? "tool";
   }

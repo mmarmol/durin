@@ -2057,7 +2057,26 @@
       "openPanel": "작업 패널 열기"
     },
     "queuedChip": "대기 중 — 현재 작업이 끝나면 처리됩니다",
-    "steerChip": "조정"
+    "steerChip": "조정",
+    "chips": {
+      "spawn": "생성 {{name}}",
+      "tasks": "작업 {{action}}{{id}}",
+      "cron": "cron {{action}} {{name}}",
+      "message": "{{channel}}",
+      "messageDefault": "메시지",
+      "sleep": "{{reason}}",
+      "sleepDefault": "{{seconds}}초 대기",
+      "goalCompleted": "목표 완료",
+      "longTask": "{{summary}}",
+      "longTaskDefault": "장기 작업",
+      "planMode": "계획 모드",
+      "memorySaved": "메모리 저장됨",
+      "entityUpdated": "{{ref}}",
+      "entityUpdatedDefault": "엔터티 수정됨",
+      "memoryForgot": "잊음 {{uri}}",
+      "memoriesRecalled_other": "기억 {{count}}건 회상",
+      "skillImport": "가져오기 {{source}}"
+    }
   },
   "lightbox": {
     "title": "이미지 미리보기",

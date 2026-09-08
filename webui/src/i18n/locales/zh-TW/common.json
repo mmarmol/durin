@@ -2057,7 +2057,26 @@
       "openPanel": "開啟工作面板"
     },
     "queuedChip": "已排入佇列——目前工作完成後即會處理",
-    "steerChip": "引導"
+    "steerChip": "引導",
+    "chips": {
+      "spawn": "衍生 {{name}}",
+      "tasks": "任務 {{action}}{{id}}",
+      "cron": "cron {{action}} {{name}}",
+      "message": "{{channel}}",
+      "messageDefault": "訊息",
+      "sleep": "{{reason}}",
+      "sleepDefault": "休眠 {{seconds}} 秒",
+      "goalCompleted": "目標已完成",
+      "longTask": "{{summary}}",
+      "longTaskDefault": "長任務",
+      "planMode": "計畫模式",
+      "memorySaved": "記憶已儲存",
+      "entityUpdated": "{{ref}}",
+      "entityUpdatedDefault": "實體已更新",
+      "memoryForgot": "忘記 {{uri}}",
+      "memoriesRecalled_other": "找回 {{count}} 條記憶",
+      "skillImport": "匯入 {{source}}"
+    }
   },
   "lightbox": {
     "title": "圖片預覽",
