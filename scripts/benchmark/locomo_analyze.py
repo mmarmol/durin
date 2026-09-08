@@ -66,6 +66,12 @@ class _Telemetry:
             if e.get("type") == "memory.recall.vector"
         ]
 
+    def prefetch_hits(self) -> int:
+        return sum(
+            int((e.get("data") or {}).get("hits") or 0)
+            for e in self.events if e.get("type") == "memory.prefetch"
+        )
+
     def cache_usage_summary(self) -> dict[str, Any]:
         events = [e.get("data") or {} for e in self.events if e.get("type") == "cache.usage"]
         if not events:
@@ -197,7 +203,7 @@ def _classify_failure(
     if overlap >= 3 or judge_conf < 60:
         return "judge_error_possible"
 
-    if not memory_calls:
+    if not memory_calls and tel.prefetch_hits() == 0:
         # Open-domain might legitimately answer from world knowledge.
         # Treat no_retrieval as a category-specific signal only for
         # categories that REQUIRE memory.

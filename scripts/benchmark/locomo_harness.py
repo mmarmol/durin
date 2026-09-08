@@ -103,6 +103,7 @@ async def run_qa(
     timeout_s: float = DEFAULT_PER_QA_TIMEOUT_S,
     enable_memory: bool = True,
     cross_encoder: bool = True,
+    prefetch: bool = True,
     log_path: Path | None = None,
 ) -> QATrace:
     """Run one QA end-to-end and return its trace.
@@ -170,7 +171,7 @@ async def run_qa(
         await asyncio.wait_for(
             _ask_agent(qa, workspace_root, model, max_iterations, trace,
                        enable_memory=enable_memory, timeout_s=timeout_s,
-                       cross_encoder=cross_encoder),
+                       cross_encoder=cross_encoder, prefetch=prefetch),
             timeout=timeout_s,
         )
     except asyncio.TimeoutError:
@@ -562,6 +563,7 @@ async def _ask_agent(
     enable_memory: bool = True,
     timeout_s: float = DEFAULT_PER_QA_TIMEOUT_S,
     cross_encoder: bool = True,
+    prefetch: bool = True,
 ) -> None:
     """Drive durin's agent loop to answer the question.
 
@@ -595,6 +597,7 @@ async def _ask_agent(
     # semantic similarity instead of literal substring match.
     if enable_memory:
         cfg.memory.enabled = True
+        cfg.memory.prefetch.enabled = prefetch
         # Audit H7 (2026-05-29): activate the cross-encoder reranker
         # for benchmark runs. The default is OFF (model is ~300MB +
         # 300-1500ms latency per query) so production stays opt-in,

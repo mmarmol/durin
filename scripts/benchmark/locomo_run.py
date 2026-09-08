@@ -20,6 +20,13 @@ Behaviour:
 - Runs ``locomo_analyze.analyze_run`` at the end to categorise
   failures + generate per-failure markdown + write summary.json.
 
+Prefetch: the bench runs with the automatic per-turn memory search on
+by default, matching production — a question can be answered from the
+prefetched hits without an explicit ``memory_search`` tool call.
+``--no-prefetch`` turns it off for an A/B baseline. ``locomo_analyze``
+counts prefetch hits as retrieval, so a prefetch-answered QA doesn't
+misclassify as ``no_retrieval``.
+
 Cost model: ~2 LLM calls per QA (agent answer + judge). With glm-5.1
 on a z.ai coding plan subscription that's zero marginal cost. For a
 25-QA stratified run: ~50 calls total, ~30–40 min wall-clock.
@@ -269,6 +276,7 @@ async def _main_async(args: argparse.Namespace) -> int:
             timeout_s=args.timeout_s,
             enable_memory=not args.no_memory,
             cross_encoder=not args.no_cross_encoder,
+            prefetch=not args.no_prefetch,
         )
         verdict_dict: dict[str, Any] = {
             "score": 0.0, "confidence": 0, "reasoning": "",
@@ -496,6 +504,10 @@ def main() -> int:
              "forensics (2026-06-10) found the reranker pushing gold "
              "hits out of the pre-CE top-10 in half the inspected "
              "ranking-class fails; this flag enables the A/B.",
+    )
+    parser.add_argument(
+        "--no-prefetch", action="store_true",
+        help="Disable the automatic per-turn memory search (A/B against the default)",
     )
     parser.add_argument(
         "--allow-undersupplied", action="store_true",
