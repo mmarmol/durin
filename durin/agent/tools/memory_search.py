@@ -107,9 +107,9 @@ _PARAMETERS = tool_parameters_schema(
     ),
     level=StringSchema(
         "How much content to return per result. 'warm' (default) returns "
-        "headlines + summaries; 'cold' returns full bodies, except raw "
-        "session-turn hits — their backing file is a rendered transcript, "
-        "so they show their indexed excerpt at either level.",
+        "headlines + summaries; 'cold' returns full bodies. Exception: "
+        "raw session turns keep their indexed excerpt at either level; "
+        "their backing file is a transcript.",
         enum=["warm", "cold"],
     ),
     keywords=StringSchema(
@@ -637,6 +637,7 @@ class MemorySearchTool(Tool):
             return await asyncio.to_thread(
                 self._run_archive_scope, query,
                 limit=limit, max_chars=warm_max_chars,
+                warm_excerpt_chars=warm_excerpt_chars,
             )
 
         # Delegate the whole search to `run_search_pipeline` — query
@@ -954,6 +955,7 @@ class MemorySearchTool(Tool):
 
     def _run_archive_scope(
         self, query: str, *, limit: int, max_chars: int,
+        warm_excerpt_chars: int,
     ) -> dict[str, Any]:
         """On-demand walk of `memory/archive/**` for `scope='archive'` queries.
 
@@ -966,7 +968,13 @@ class MemorySearchTool(Tool):
         agent renders it the same way (`results`, `total`, `strategy`).
         Always rendered at (the effective) warm level, so `max_chars` —
         the caller's `warm_max_chars` — bounds this rendering exactly like
-        the main path's warm-level `render_sectioned` call.
+        the main path's warm-level `render_sectioned` call. Each hit's
+        body is cut to `warm_excerpt_chars` before rendering, the same
+        way the main path's warm-level `_sectioned_to_result` cuts its
+        summary — otherwise `max_chars` would bound a set of raw file
+        dumps rather than blocks comparable in size to every other
+        section, and one large archived entry could burn most of the
+        budget on its own excerpt.
         """
         import re
 
@@ -1077,7 +1085,10 @@ class MemorySearchTool(Tool):
                 score=0.0,
                 ts=r.valid_from,
                 snippet=r.snippet,
-                body=r.body,
+                # Cut like the main path's warm-level summary cut (see the
+                # docstring above) — an archived file's raw body is
+                # otherwise unbounded and would dominate `max_chars` alone.
+                body=r.body[:warm_excerpt_chars],
                 summary=r.summary,
                 entities=tuple(r.entities),
                 ingest_id=None,
@@ -1217,6 +1228,11 @@ class MemorySearchTool(Tool):
         # carry no summary, so this still falls back to the snippet.
         carried_body = getattr(hit, "body", "") or ""
         summary = hit.summary or hit.snippet or ""
+        # The warm-level cut, kept around regardless of `level` — the cold
+        # branch below clears `summary` so `_enrich_body` can fill `body`
+        # from disk, but restores this if that enrich comes back empty
+        # (see the `not result.body` check at the end of this method).
+        warm_summary = summary[:warm_excerpt_chars]
         if level == "cold":
             body = carried_body
             # Clear summary so `_render_block`'s `summary > body >
@@ -1227,7 +1243,7 @@ class MemorySearchTool(Tool):
             summary = ""
         else:
             body = ""
-            summary = summary[:warm_excerpt_chars]
+            summary = warm_summary
         if class_name == "entity_page":
             # The vector index stores an entity's summary as its name +
             # aliases only (`VectorIndex.upsert_entity_page`) — replace it
@@ -1258,4 +1274,15 @@ class MemorySearchTool(Tool):
         )
         if level == "cold" and not result.body:
             result = self._enrich_body(result)
+            if not result.body:
+                # `_enrich_body` couldn't produce a body either — e.g. a
+                # raw session turn's uri (`sessions/<key>.md`) is a
+                # rendered transcript with no frontmatter, so `load_entry`
+                # raises and the result comes back unchanged. Put the
+                # warm summary back rather than leaving `summary` cleared,
+                # which would fall through to the 160-char `snippet` —
+                # smaller than what warm rendered for the same hit. Cold
+                # must never render less than warm.
+                import dataclasses
+                result = dataclasses.replace(result, summary=warm_summary)
         return result

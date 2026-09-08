@@ -139,17 +139,21 @@ to `memory.search.warm_excerpt_chars` characters (default 600); the
 completeness qualifier on its marker (`preview N/M` vs `complete`) reports how
 much of the full content that is. A second budget,
 `memory.search.warm_max_chars` characters (default 8000), governs which blocks
-render in full: once the next hit's full block would cross it, that hit and
-every hit after it — in this section and any section still to come, a one-way
-ratchet rather than a per-hit re-check — render as a one-line headline pointer
-instead (`- <headline> (<uri>; drill for the body)`), grouped under their own
-section like a full block would be. Section headers and pointer lines sit
-outside this budget — they always print — so it bounds the full blocks, not a
-hard ceiling on the total rendered size. `level=cold` means full bodies for
-every class except raw session-turn hits: their backing file
-(`sessions/<key>.md`) is a rendered transcript, not the frontmatter+body shape
-the disk read expects, so cold still returns only the short snippet for
-those.
+render in full: once a hit's full block would cross it, that hit and every hit
+after it — in this section and any section still to come, a one-way ratchet
+rather than a per-hit re-check — render as a one-line headline pointer instead
+(`- <headline> (<uri>; drill for the body)`), grouped under their own section
+like a full block would be. The one exception is the very first block of the
+whole rendering (the highest-ranked hit overall): it always renders whole even
+when it alone exceeds the budget, so a rendering never comes back with zero
+content — the ratchet only starts from the second block on. Section headers
+and pointer lines sit outside this budget — they always print — so it bounds
+the full blocks, not a hard ceiling on the total rendered size. `level=cold`
+means full bodies for every class. Exception: raw session turns keep their
+indexed excerpt at either level; their backing file (`sessions/<key>.md`) is a
+transcript, not the frontmatter+body shape the disk read expects, so
+`_enrich_body` cannot fill `body` and the warm summary is kept instead of
+falling through to the short snippet.
 
 Callers that construct `MemorySearchTool` directly, without an `app_config`
 (the webui / `graph_api.search_memory_api`, `tier2_judge`), still get the
@@ -163,7 +167,7 @@ defaults on any load failure.
 |---|---|---|
 | `query` | required | Natural-language or exact-identifier query. Short topical phrase preferred. |
 | `scope` | `all` | `all` = dreamed + undreamed sessions, **excluding ingested documents**; `dreamed` = structured memory; `undreamed` = raw sessions; `library` = ingested reference documents (the Library — kept out of default recall); `archive` = on-demand recovery walk. |
-| `level` | `warm` | `warm` = headline + a bounded summary excerpt (for an entity page: its name, attributes and a body excerpt, cut the same way); `cold` = full body (high token cost), except raw session-turn hits, which show their indexed excerpt at either level because their backing file is a rendered transcript. |
+| `level` | `warm` | `warm` = headline + a bounded summary excerpt (for an entity page: its name, attributes and a body excerpt, cut the same way); `cold` = full body (high token cost). Exception: raw session turns keep their indexed excerpt at either level; their backing file is a transcript. |
 | `keywords` | — | Literal string for exact-match boost (email, UUID, path). Biases RRF toward lexical. |
 | `limit` | 10 | Final result count. Clamped to [1, 50] defensively even with schema bounds declared. |
 | `kinds` | `all` | `all` = everything; `skill` = skill procedures only; `fact` = everything except skills. |

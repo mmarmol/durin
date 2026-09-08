@@ -240,3 +240,96 @@ def test_scope_archive_applies_warm_max_chars_and_emits_rendered_chars(
 
     payload = [p for t, p in events if t == "memory.recall"][0]
     assert payload["rendered_chars"] == len(tight)
+
+
+def test_scope_archive_a_hit_over_budget_never_forces_pointers_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Group A final review, Important 1: a hit whose block alone exceeds
+    `warm_max_chars` used to trip `render_sectioned`'s one-way ratchet
+    before the first block ever rendered, degrading every hit — including
+    small ones that would have fit on their own — to a pointer line, with
+    `total` still reporting both. The top-ranked (first) hit must now
+    render whole; the rendering must never be pointers-only. A tiny
+    `warm_max_chars` isolates the floor guarantee itself, decoupled from
+    the separate per-hit excerpt cut covered by
+    `test_scope_archive_cuts_per_hit_bodies_to_warm_excerpt_chars`.
+    `level='cold'` is passed because the archive path renders at (the
+    effective) warm level regardless of the caller's `level` — this
+    reproduces the review's probe exactly."""
+    from durin.config.schema import Config
+
+    arch_dir = tmp_path / "memory" / "archive" / "episodic"
+    arch_dir.mkdir(parents=True)
+    (arch_dir / "incident.md").write_text(
+        "---\nheadline: 'the incident report'\n---\n"
+        "the incident report.\n",
+        encoding="utf-8",
+    )
+    (arch_dir / "note.md").write_text(
+        "---\nheadline: 'a short note'\n---\n"
+        "a short note about the incident\n",
+        encoding="utf-8",
+    )
+
+    cfg = Config()
+    cfg.memory.search.warm_max_chars = 1
+    monkeypatch.setattr(
+        "durin.config.loader.load_config", lambda *a, **k: cfg,
+    )
+
+    from durin.agent.tools.memory_search import MemorySearchTool
+    tool = MemorySearchTool(workspace=tmp_path)
+    out = asyncio.run(
+        tool.execute(query="incident", scope="archive", level="cold"),
+    )
+
+    assert out["total"] == 2
+    rendered = out["sectioned_rendered"]
+    # Not pointers-only: the top-ranked hit (glob-sorted first: incident
+    # before note) rendered its full block despite the 1-char budget.
+    assert "=== FRAGMENT:" in rendered
+    assert "the incident report." in rendered
+    # The ratchet still applies from the second block on.
+    assert "drill for the body" in rendered
+
+
+def test_scope_archive_cuts_per_hit_bodies_to_warm_excerpt_chars(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The archive path used to carry each hit's raw file body straight
+    into `SectionedHit`, unbounded — so the `max_chars` budget bounded
+    raw file dumps rather than a set of comparable blocks the way the
+    main path's `warm_excerpt_chars` cut does. A single large archived
+    entry with no frontmatter `summary` must render an excerpt no longer
+    than `warm_excerpt_chars`, not the whole file."""
+    from durin.config.schema import Config
+
+    arch_dir = tmp_path / "memory" / "archive" / "episodic"
+    arch_dir.mkdir(parents=True)
+    (arch_dir / "huge.md").write_text(
+        "---\nheadline: 'a huge archived entry'\n---\n"
+        + ("filler content about the incident. " * 500) + "\n",
+        encoding="utf-8",
+    )
+
+    cfg = Config()
+    cfg.memory.search.warm_excerpt_chars = 300
+    cfg.memory.search.warm_max_chars = 100_000
+    monkeypatch.setattr(
+        "durin.config.loader.load_config", lambda *a, **k: cfg,
+    )
+
+    from durin.agent.tools.memory_search import MemorySearchTool
+    tool = MemorySearchTool(workspace=tmp_path)
+    out = asyncio.run(
+        tool.execute(query="incident", scope="archive"),
+    )
+
+    assert out["total"] == 1
+    rendered = out["sectioned_rendered"]
+    assert "drill for the body" not in rendered
+    # The rendered block must be far shorter than the raw file (~18000
+    # chars of filler) — bounded to roughly warm_excerpt_chars, not a
+    # raw file dump.
+    assert len(rendered) < 1000

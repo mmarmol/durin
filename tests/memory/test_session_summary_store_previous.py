@@ -60,6 +60,39 @@ def test_channels_with_a_shared_sanitized_prefix_never_cross(tmp_path: Path) -> 
     assert found_other[0] == "cli_test_s1"
 
 
+def test_glob_never_opens_files_outside_the_channel_prefix(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """Important 3: the candidate glob must narrow to the sanitized channel
+    prefix BEFORE any file is opened — a summary on an unrelated channel
+    (a sanitized stem that does not start with the prefix) must never
+    reach `load_entry`, not just be filtered out after being parsed. This
+    is what keeps continuity off the O(every summary file) cost the
+    review found on the prompt-build path."""
+    write_session_summary(tmp_path, "cli:old", "- cli stuff", last_active=date(2026, 9, 1))
+    write_session_summary(tmp_path, "slack:c1", "- slack stuff", last_active=date(2026, 9, 5))
+    write_session_summary(tmp_path, "websocket:w1", "- ws stuff", last_active=date(2026, 9, 5))
+
+    import durin.memory.session_summary_store as store_mod
+
+    opened: list[Path] = []
+    real_load_entry = store_mod.load_entry
+
+    def _counting_load_entry(path: Path):
+        opened.append(path)
+        return real_load_entry(path)
+
+    monkeypatch.setattr(store_mod, "load_entry", _counting_load_entry)
+
+    found = find_previous_session_summary(
+        tmp_path, "cli:new", channels={"cli", "slack", "websocket"},
+    )
+
+    assert found is not None
+    assert found[0] == "cli_old"
+    assert {p.stem for p in opened} == {"cli_old"}
+
+
 def test_closed_record_of_another_key_on_the_channel_qualifies(tmp_path: Path) -> None:
     """`_archive_closed_session` writes the closed conversation under
     `closed_record_key` (a different file id than the original key), but

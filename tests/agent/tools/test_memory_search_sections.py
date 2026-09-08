@@ -73,3 +73,47 @@ def test_raw_session_turn_hit_renders_in_the_session_section(
     assert "=== SESSION:" in rendered
     assert "## Fragment" not in rendered
     assert "=== FRAGMENT:" not in rendered
+
+
+def test_raw_session_turn_cold_level_never_shows_less_than_warm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Important 2: a raw session turn's uri (`sessions/<key>.md`) addresses
+    a rendered transcript with no YAML frontmatter — the real file on disk
+    reproduces that shape here, so `_enrich_body`'s `load_entry` raises
+    `FrontmatterError` and the result comes back unchanged, leaving `body`
+    empty. Before the fix, `summary` was cleared unconditionally for cold,
+    so the block fell through to the 160-char `snippet` — smaller than what
+    warm rendered for the exact same hit. Cold must render at least the
+    warm excerpt."""
+    (tmp_path / "sessions").mkdir()
+    (tmp_path / "sessions" / "cli_test.md").write_text(
+        "## Turn 1\n\nUser: what's the ranking pipeline change?\n"
+        "Assistant: widened the recall window.\n",
+        encoding="utf-8",
+    )
+    summary = (
+        "Marcelo reviewed the ranking pipeline and decided to widen the "
+        "recall window for lexical matches before merging the change to "
+        "the search pipeline configuration and its documentation."
+    )
+    assert len(summary) > 160
+    hit = SectionedHit(
+        uri="sessions/cli_test.md", type="session",
+        path="sessions/cli_test.md", score=1.0, ts="2026-05-20",
+        snippet=summary[:160], summary=summary,
+    )
+
+    _stub_pipeline(monkeypatch, [hit])
+    tool = MemorySearchTool(workspace=tmp_path)
+    warm = asyncio.run(
+        tool.execute(query="ranking", level="warm"),
+    )["sectioned_rendered"]
+
+    _stub_pipeline(monkeypatch, [hit])
+    cold = asyncio.run(
+        tool.execute(query="ranking", level="cold"),
+    )["sectioned_rendered"]
+
+    assert summary in warm
+    assert summary in cold

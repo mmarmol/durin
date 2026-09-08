@@ -331,15 +331,54 @@ class TestMaxCharsBudget:
         assert "- e2 (e2; drill for the body)" in out
 
     def test_never_truncates_a_single_oversized_block(self) -> None:
-        """A block that alone would blow the budget renders as a pointer,
-        never a partial/cut slice of its body."""
-        huge = _h("e1", "episodic", snippet="short headline",
-                   summary="s" * 3000)
+        """A block that alone would blow the budget is never partially
+        cut — it is either rendered whole (the floor guarantee, first
+        block only) or replaced entirely by a pointer (every later
+        block), never a partial/cut slice of its body."""
+        first = _h("e1", "episodic", snippet="first headline",
+                    summary="a" * 3000)
+        second = _h("e2", "episodic", snippet="second headline",
+                     summary="b" * 3000, score=0.9)
 
-        out = render_sectioned([huge], max_chars=50)
+        out = render_sectioned([first, second], max_chars=50)
 
-        assert ("s" * 3000) not in out
-        assert "- short headline (e1; drill for the body)" in out
+        assert ("a" * 3000) in out
+        assert ("b" * 3000) not in out
+        assert "- second headline (e2; drill for the body)" in out
+
+    def test_floor_renders_the_first_block_whole_even_over_budget(self) -> None:
+        """The highest-ranked block always renders whole, even alone it
+        exceeds `max_chars` — a rendering never carries zero content.
+        The budget applies from the second block on."""
+        huge = _h("e1", "episodic", snippet="huge first", summary="s" * 3000)
+        small = _h("e2", "episodic", snippet="small second", score=0.9)
+
+        out = render_sectioned([huge, small], max_chars=50)
+
+        assert ("s" * 3000) in out
+        assert "- small second (e2; drill for the body)" in out
+        assert out.count("=== FRAGMENT:") == 1
+
+    def test_floor_applies_across_sections_to_the_very_first_hit_only(self) -> None:
+        """The floor is a property of the whole rendering, not per
+        section: only the first hit overall (canonical, since it sorts
+        first in `_SECTION_ORDER`) gets the exemption. A later section's
+        oversized hit still degrades to a pointer."""
+        huge_canonical = _h(
+            "person:m", "entity", snippet="marcelo", summary="c" * 3000,
+        )
+        huge_fragment = _h(
+            "e1", "episodic", snippet="a fragment", summary="f" * 3000,
+            score=0.9,
+        )
+
+        out = render_sectioned(
+            [huge_canonical, huge_fragment], max_chars=50,
+        )
+
+        assert ("c" * 3000) in out
+        assert ("f" * 3000) not in out
+        assert "- a fragment (e1; drill for the body)" in out
 
     def test_budget_ratchet_carries_across_sections(self) -> None:
         """Once the budget trips in one section, hits in a LATER section

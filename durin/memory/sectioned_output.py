@@ -201,6 +201,13 @@ def render_sectioned(
     print, so ``max_chars`` bounds the full blocks rather than capping
     the total rendering length. ``None`` (the default) renders every
     hit as a full block, unbounded — the pre-budget behaviour.
+
+    The very first block of the whole rendering (the highest-ranked hit
+    overall — canonical sorts first) always renders whole, even when it
+    alone exceeds ``max_chars``: a rendering must never carry zero
+    content. The ratchet still starts immediately after it, so a second
+    block that would otherwise have fit on its own still degrades to a
+    pointer once the first one blew the budget.
     """
     by_section: dict[str, list[SectionedHit]] = {
         s: [] for s in _SECTION_ORDER
@@ -214,6 +221,7 @@ def render_sectioned(
     parts: list[str] = []
     running_length = 0
     over_budget = False
+    rendered_first_block = False
 
     def _append(part: str) -> None:
         nonlocal running_length
@@ -229,8 +237,12 @@ def render_sectioned(
             if not over_budget:
                 block = _render_block(section, hit)
                 projected = running_length + (2 if parts else 0) + len(block)
-                if max_chars is None or projected <= max_chars:
+                fits = max_chars is None or projected <= max_chars
+                if fits or not rendered_first_block:
                     _append(block)
+                    rendered_first_block = True
+                    if not fits:
+                        over_budget = True
                     continue
                 over_budget = True
             _append(_headline_pointer(hit))

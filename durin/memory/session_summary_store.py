@@ -404,19 +404,25 @@ def find_previous_session_summary(
     summary on ``session_key``'s channel, or ``None``.
 
     Only channels in ``channels`` qualify — those are the single-user
-    surfaces where "the previous session" is the same person's. A
-    candidate's channel is read from its own ``source_refs`` (the
-    ``session:<key>`` ref ``write_session_summary``/
-    ``append_session_summary_block`` write when given ``source_key``) and
-    matched exactly against ``channel`` — not a sanitized-filename prefix,
-    which would conflate e.g. channel ``cli`` with channel ``cli_test``
-    (``sanitize_session_key("cli_test:...")`` starts with the same ``cli_``
-    a prefix glob for ``cli`` would use). An entry with no ``session:`` ref
-    — written before this ref existed, or by any path that skipped
-    ``source_key`` — falls back to that sanitized-prefix test on the file
-    stem instead of being excluded outright. Recency is the entry's
-    ``valid_from`` (the session's last-active date), file mtime as
-    tiebreak.
+    surfaces where "the previous session" is the same person's. Candidates
+    are narrowed with the sanitized-filename prefix glob
+    (``sanitize_session_key(channel + ":")``) before any file is opened —
+    every summary ever written for this channel, closed records included,
+    sanitises to a stem starting with that prefix (both writers pass
+    ``source_key`` at ``session_summary_path(workspace, <key or closed
+    key>)``, and ``closed_record_key`` keeps the sanitized-and-cut prefix),
+    so the glob is a safe superset and never the filter doing the real
+    work. The actual discriminator is each candidate's own ``source_refs``
+    (the ``session:<key>`` ref ``write_session_summary``/
+    ``append_session_summary_block`` write when given ``source_key``),
+    matched exactly against ``channel`` — this is what keeps e.g. channel
+    ``cli`` from picking up channel ``cli_test``'s summary even though
+    both sanitize to a stem sharing the ``cli_`` prefix. An entry with no
+    ``session:`` ref — written before this ref existed, or by any path
+    that skipped ``source_key`` — falls back to that same sanitized-prefix
+    test on the file stem instead of being excluded outright. Recency is
+    the entry's ``valid_from`` (the session's last-active date), file
+    mtime as tiebreak.
     """
     channel = session_key.split(":", 1)[0]
     if channel not in channels:
@@ -427,7 +433,7 @@ def find_previous_session_summary(
     if not directory.is_dir():
         return None
     best: Optional[Tuple[Tuple[date, float], str, str, Optional[date]]] = None
-    for md in directory.glob("*.md"):
+    for md in directory.glob(f"{prefix}*.md"):
         if md.stem == own_stem:
             continue
         try:
