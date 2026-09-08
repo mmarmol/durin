@@ -169,7 +169,7 @@ Every write goes to **both** tables. The `FTSIndex.upsert` method deletes the pr
 
 ### Session-turn FTS indexing
 
-Raw session turns receive one FTS row per turn, not per session file. The URI shape is `sessions/<key>.md#turn-N`, matching the grep source's anchored URI so RRF fusion can accumulate both sources for the same turn. The turn header (role + timestamp) is included in the indexed text. Sessions are intentionally not vector-indexed because the embedding cost would be paid for each new conversation turn; the session summary (`memory/session_summary/<key>.md`) covers the semantic layer for compacted sessions.
+Raw session turns receive one FTS row per turn, not per session file. The URI shape is `sessions/<key>.md#turn-N`, matching the grep source's anchored URI so RRF fusion can accumulate both sources for the same turn. The turn header (role + timestamp) is included in the indexed text. Sessions are intentionally not vector-indexed because the embedding cost would be paid for each new conversation turn; the session summary (`memory/session_summary/<key>.md`) covers the semantic layer for every conversation, whether compacted, closed with `/new`, or summarized by the nightly idle pass.
 
 The indexer's third pass in `rebuild_fts_index` walks `sessions/*.md` and yields per-turn payloads via `_session_turn_payloads`. The reactive path — `reindex_session_file` — is called by `SessionManager.save` after regenerating the rendered session file, inserting only turns whose URIs are not yet in `fts_meta`.
 
@@ -194,7 +194,7 @@ The indexer's third pass in `rebuild_fts_index` walks `sessions/*.md` and yields
 | `FTSIndex` | `durin/memory/fts_index.py` | SQLite FTS5 wrapper. Write: `upsert` (both tables + `fts_meta`), `delete_by_uri`, `delete_by_uris`; `clear`. Read: `search` (unicode61), `search_trigram` (trigram); `uris_with_prefix` (for incremental session indexing). |
 | `fts_index_path` | `durin/memory/fts_index.py` | Returns the canonical `<workspace>/.durin/index/fts.sqlite` path. |
 | `EmbeddingProvider` | `durin/memory/embedding.py` | Abstract base: `embed`, `embed_passages`, `embed_query`. Semantic surface for storage vs. retrieval contexts. |
-| `FastembedProvider` | `durin/memory/embedding.py` | ONNX embedding via fastembed. Validates model at construction. Applies E5 prefix in `embed_passages` / `embed_query` when `_is_e5_family` is true. With `isolation=process` (default), `embed()` runs in a recyclable `ProcessPoolExecutor` worker so the ONNX CPU arena — which never returns memory to the OS — is reclaimed when the worker recycles; falls back to `inline` (in-process, model held for process lifetime) for the rest of the process if the pool cannot start or breaks. |
+| `FastembedProvider` | `durin/memory/embedding.py` | ONNX embedding via fastembed. Validates model at construction. Applies E5 prefix in `embed_passages` / `embed_query` when `_is_e5_family` is true. With `isolation=process`, `embed()` runs in a recyclable `ProcessPoolExecutor` worker so the ONNX CPU arena — which never returns memory to the OS — is reclaimed when the worker recycles; falls back to `inline` (in-process, model held for process lifetime) for the rest of the process if the pool cannot start or breaks. |
 | `embedding_worker` | `durin/memory/embedding_worker.py` | Child-process side of `isolation=process`: `init_worker` loads the model once per worker, `embed_batch` embeds, `worker_pid` is a test/diagnostic hook. Module-level functions so they're picklable by the `spawn` start method. |
 | `provider_from_config` | `durin/memory/embedding.py` | Factory: builds `FastembedProvider` from `memory.embedding.*` config (`model`, `batch_size`, `isolation`, `worker_recycle_batches`). The production call-site pattern — direct `FastembedProvider(...)` construction is reserved for tests and benchmark scripts. |
 | `IndexMeta` | `durin/memory/index_meta.py` | Frozen dataclass: `schema_version`, `embedding_model_id`, `last_full_rebuild`, `previous_models`. Persisted atomically to `<workspace>/.durin/index/meta.json`. |
@@ -218,7 +218,7 @@ The indexer's third pass in `rebuild_fts_index` walks `sessions/*.md` and yields
 |---|---|---|
 | `memory.embedding.model` | `intfloat/multilingual-e5-small` | Embedding model for all vector writes. Changing the model triggers a full vector rebuild on next startup (detected by `ensure_index_fresh` via `meta.json`). |
 | `memory.embedding.batch_size` | `32` | Texts per ONNX run inside one embed call; bounds peak activation memory (the fastembed library default of 256 ratchets the arena to gigabytes). |
-| `memory.embedding.isolation` | `process` | `process` runs embeds in a recyclable worker subprocess so ONNX arena growth is reclaimed with the child; `inline` keeps them in the gateway process. Falls back to `inline` for the rest of the process if the worker pool fails to start. |
+| `memory.embedding.isolation` | `service` | `service` routes embeds to the gateway-supervised standing embedding server — one warm model shared by every durin process, falling back to `process` when none is reachable; `process` runs them in a recyclable worker subprocess so the ONNX arena is reclaimed with the child; `inline` keeps them in the calling process. |
 | `memory.embedding.worker_recycle_batches` | `64` | With `isolation: process`, recycle the worker after this many embed calls, bounding the arena high-water mark. |
 | `memory.index_skills` | `true` | Includes `skills/<slug>/SKILL.md` in both FTS and vector index walks. When disabled, existing skill rows are pruned by the next drift-repair pass. |
 | `memory.file_watcher.enabled` | `true` | Starts the file watcher daemon that reactively re-indexes edited `.md` files under `memory/`. |
@@ -236,11 +236,11 @@ The schema version `CURRENT_SCHEMA_VERSION` is a code constant, not a config key
 
 ### API surfaces
 
-The indexer has no direct API endpoint. Indexing is an internal side effect of memory write operations (`POST /memory/store`, `POST /memory/upsert_entity`). The search pipeline that reads the indexes is exposed via `POST /memory/search`.
+The indexer has no API endpoint of its own; indexing is an internal side effect of the memory write paths. The search pipeline that reads the indexes is exposed as `GET /api/v1/memory/search`.
 
 ### Webui
 
-The webui's Memory view shows index health and a row count sourced from `fts_meta`. A "Reindex" action triggers `durin memory reindex` via the API.
+The webui's Memory view browses entities (as a table or as cards, with a Related ring on an entity's detail) and the Library shelf of ingested documents, and its Memory settings expose the search knobs. Rebuilding the indexes is a CLI operation (`durin memory reindex`) — there is no reindex endpoint.
 
 ---
 

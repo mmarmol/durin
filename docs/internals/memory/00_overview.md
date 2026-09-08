@@ -35,10 +35,11 @@ truth; the indices are a speed layer on top.
 
 **Layered search with no LLM in the hot path.** A query passes through four stages:
 (1) query analysis routes to the right lexical table; (2) vector search and lexical
-search run in parallel; (3) Reciprocal Rank Fusion merges the two result lists; (4)
-entity-aware rerank boosts hits matching query entities, and an optional cross-encoder
-reranks the top-50 to a final top-10. Every stage is deterministic. The LLM receives
-the structured, sectioned results and does the reasoning. Two callers drive that
+search each retrieve their own ranked list; (3) Reciprocal Rank Fusion merges the two
+result lists; (4) entity-aware rerank boosts hits matching query entities, and an
+optional cross-encoder blends its score into the order of the top candidates
+without dropping any of them. Every stage is deterministic. The LLM receives the
+structured, sectioned results and does the reasoning. Two callers drive that
 pipeline: the model, when it calls `memory_search`, and the agent loop itself, which
 runs the same search once per user turn with the message as the query and fences the
 hits into that turn's copy of the message — memory reaches the turn whether or not the
@@ -70,7 +71,7 @@ flowchart TD
 
     subgraph INDICES["Derived indices — reconstructible"]
         direction TB
-        LANCE["LanceDB — memory_entries table\nVector 384-dim E5 embeddings\n(entity, episodic, stable, corpus, session_summary, skill)"]
+        LANCE["LanceDB — memory_entries table\nVector 384-dim E5 embeddings\n(entity, episodic, stable, corpus, session_summary,\nskill, reference chunks)"]
         FTS["FTS5 SQLite — fts.sqlite\nmemory_fts (porter unicode61)\nmemory_fts_trigram (CJK)\n+ fts_meta bookkeeping\nPer-turn session rows"]
     end
 
@@ -80,8 +81,8 @@ flowchart TD
         LEX["Lexical search\nRoute: UNICODE61 / TRIGRAM / LIKE\nFTS5 top-50"]
         RRF["RRF fusion\nw_vector=1.0 · w_lexical=0.7\ngrep-verify · session prior ×0.85"]
         ERERANK["Entity-aware rerank\nBoost hits matching query entities"]
-        CE["Cross-encoder rerank\ntop-50 → top-10\n(opt-in, ~100M-param model)"]
-        SECTION["Sectioning\nCANONICAL · FRAGMENT · SESSION · INGESTED\nper-source cap for corpus"]
+        CE["Cross-encoder rerank\nBlends into the top-50 order\n(opt-in, ~100M-param model)"]
+        SECTION["Sectioning\nSKILL · CANONICAL · FRAGMENT · SESSION · INGESTED\nper-source cap for ingested documents"]
     end
 
     subgraph WRITE["Write pipeline — cold path"]
@@ -217,14 +218,16 @@ automatic rebuild on startup.
 
 5. **Cross-encoder rerank** (opt-in, `cross_encoder.py`): a ~100M-param
    sentence-transformer model (`BAAI/bge-reranker-base` by default) rescores the
-   top-50 and keeps top-10. Disabled by default because the model download must not
-   happen implicitly in CI environments; the onboarding wizard recommends enabling it
-   for production deployments.
+   top-50 and blends its score into their order; it drops nothing — the downstream
+   sectioning, per-source cap and `limit` do the trimming. Disabled by default
+   because the model download must not happen implicitly in CI environments; the
+   onboarding wizard recommends enabling it for production deployments.
 
-6. **Sectioning** (`sectioned_output.py`): group results into four sections —
-   CANONICAL (entity pages), FRAGMENT (episodic + stable + corpus), SESSION (session
-   turns + summaries), INGESTED (source artifact chunks). A per-source cap (default 3)
-   prevents a single long ingested document from monopolizing the top-K.
+6. **Sectioning** (`sectioned_output.py`): group results into SKILL (matching
+   procedures), CANONICAL (entity pages), FRAGMENT (episodic + stable), SESSION
+   (session turns + summaries) and INGESTED (corpus and reference chunks). A
+   per-source cap (default 3) prevents a single long ingested document from
+   monopolizing the top-K.
 
 ### Write pipeline
 
@@ -334,9 +337,21 @@ For deeper coverage of individual subsystems, see the sibling docs:
 | `memory.embedding.provider` | `fastembed` | Embedding backend (currently only `fastembed`; future HTTP providers planned). |
 | `memory.search.cross_encoder.enabled` | `false` | Enable the cross-encoder rerank step (downloads ~100 MB model on first use). |
 | `memory.search.cross_encoder.model` | `BAAI/bge-reranker-base` | Sentence-transformer model for reranking. |
-| `memory.search.sectioning.max_per_source` | `3` | Maximum corpus hits per `ingest_id` in the sectioned output. |
+| `memory.search.sectioning.max_per_source` | `3` | Maximum ingested-document hits (corpus and reference chunks) per source document in the sectioned output. |
 | `memory.library.awareness_max_docs` | `20` | Documents listed one per line in the always-on Library catalog; 0 keeps only the header, the count and the `Covers:` subject map. |
 | `memory.library.awareness_abstracts` | `false` | Append each listed document's distilled abstract to its catalog line. |
+| `memory.prefetch.enabled` | `true` | Run one warm `memory_search` with the user message before the model sees it and fence the hits into that turn's copy of the message. |
+| `memory.prefetch.limit` | `3` | Hits requested from that search (warm level: headline + summary each). |
+| `memory.prefetch.max_chars` | `2500` | Cap on the recalled hits text, in characters, before fencing; longer output is cut with a note. |
+| `memory.prefetch.min_query_chars` | `20` | Messages shorter than this are not searched. |
+| `memory.prefetch.timeout_s` | `5.0` | Seconds the search may take before the turn proceeds without it. |
+| `memory.prefetch.backoff_s` | `60.0` | After a timeout or error, skip the prefetch for this many seconds; 0 disables the backoff. |
+| `memory.continuity.enabled` | `true` | Show the previous session's summary at the start of a fresh session on the listed channels. |
+| `memory.continuity.channels` | `["websocket", "cli"]` | Channels whose sessions belong to one person; a fresh session there inherits the newest other session's summary. |
+| `memory.continuity.max_chars` | `2000` | Tail of the previous summary shown, in characters. |
+| `memory.continuity.max_turns` | `3` | Turns of the fresh session that carry the previous summary before it drops out. |
+| `memory.artifact_recall.enabled` | `true` | Append memory notes about a file to `read_file` results, and the entities distilled from a reference to its drill. |
+| `memory.artifact_recall.max_notes` | `3` | Notes appended to one `read_file` result. |
 | `memory.file_watcher.enabled` | `true` | Reactive re-indexing when `.md` files under `memory/` are modified outside the agent (vim, git merge). |
 | `memory.health_check.enabled` | `true` | Periodic consistency probe between the markdown source and the derived indices. |
 | `memory.health_check.interval_seconds` | `900` | How often the health check probe runs. |
@@ -344,6 +359,8 @@ For deeper coverage of individual subsystems, see the sibling docs:
 | `memory.dream.cron` | `0 3 * * *` | Schedule for the daily dream consolidation run. |
 | `memory.dream.post_compaction` | `true` | Run extract pass after a session is compacted. |
 | `memory.dream.on_session_close` | `true` | Run extract pass when a session closes. |
+| `memory.dream.session_summaries_enabled` | `true` | Nightly pass that summarizes conversations that went idle without compacting or `/new`, so every conversation leaves a searchable record. |
+| `memory.dream.session_summary_idle_hours` | `6` | Hours a conversation must have been idle before the nightly pass summarizes it; a live session is left to the compactor. |
 | `memory.dream.discover_enabled` | `true` | Enable Stage 2 mention-based entity discovery in the extract pass. |
 | `memory.dream.skill_signals_enabled` | `true` | Detect skill corrections and gaps in session turns during extract (feeds daily curation). |
 | `memory.dream.min_seconds_between_runs` | `300` | Throttle window for reactive triggers; 0 disables. |
@@ -353,17 +370,15 @@ For deeper coverage of individual subsystems, see the sibling docs:
 | `memory.dream.auto_absorb.confidence_threshold` | `95` | LLM judge confidence floor (0–100) for auto-merge. |
 | `memory.dream.auto_absorb.semantic_distance_threshold` | `0.30` | L2² distance below which an embedding-near entity becomes a dedup candidate (refine + discovery); the judge decides the merge, so a looser value trades judge calls for better duplicate recall. |
 
-### Principal resolution keys
+### Principal resolution
 
-| Key | Default | Effect |
-|---|---|---|
-| `principal_channel_map` | `{}` | Map of `channel_id → person:<name>` for resolving the interacting person entity per channel. |
-| `principal_owner` | `null` | Fallback owner entity ref when the channel map has no entry. |
+The principal is resolved from `memory.owner`; when it is unset the workspace
+resolves to `person:anonymous`. `resolve_principal` also accepts a per-channel
+map, but no configuration surface populates it today.
 
 ### CLI surfaces
 
 ```
-durin memory search <query>         run a search (same pipeline as memory_search tool)
 durin memory dream [entity] [--dry-run]   run the dream consolidation manually
 durin memory reindex                rebuild all indices from markdown
 durin memory absorb-suggest         show alias-overlap candidates for manual review
@@ -371,6 +386,8 @@ durin memory absorb <ref> <into>    manually merge two entity pages
 durin memory history <entity-ref>   show git history for an entity page
 durin memory revert <sha>           revert an entity write via git revert
 durin memory stats                  show index sizes and entry counts
+durin memory expand <entity-ref>    drill down: sources, related entities, archived absorptions
+durin memory forget <uri>           archive one entry and drop its index rows
 ```
 
 ### Agent tools
@@ -387,8 +404,8 @@ inspection tools (see [04_agent_tools.md](04_agent_tools.md) for signatures):
   inspect an entity's full page, git history, and source conversation turns
 
 `memory_store` exists in the codebase but is disabled at load time; raw
-fragments are produced by `/remember` and session-close summaries, not by the
-agent.
+fragments come from `/remember` and from the session summaries the compactor,
+`/new` and the nightly idle pass write, not from the agent.
 
 ---
 

@@ -89,7 +89,7 @@ flowchart TD
     In([InboundMessage]) --> Restore["RESTORE<br/>extract media/docs,<br/>recover interrupted turn"]
     Restore -->|ok| Compact["COMPACT<br/>read pending summary"]
     Compact -->|ok| Command["COMMAND<br/>router.dispatch"]
-    Command -->|dispatch| Build["BUILD<br/>history + context + prompt"]
+    Command -->|dispatch| Build["BUILD<br/>history + memory prefetch<br/>+ context + prompt"]
     Command -->|shortcut| Done([DONE])
     Build -->|ok| Run["RUN<br/>AgentRunner: LLM + tools"]
     Run -->|ok| Save["SAVE<br/>append turn to .jsonl,<br/>schedule consolidation"]
@@ -252,9 +252,18 @@ The handlers, in order:
   → `BUILD`.
 - **`_state_build`** — runs `maybe_consolidate_by_tokens` (compacting before
   building so the prompt fits), sets the per-tool request context, slices
-  history (`session.get_history`), and assembles the LLM message list via
+  history (`session.get_history`), then runs one automatic warm `memory_search`
+  with the user's message and fences the hits into the wire copy of that message
+  as reference data, and finally assembles the LLM message list via
   `context.build_messages`. It also persists the user message early so an
   interrupted run is recoverable.
+
+  The search is bounded and best-effort: skipped for slash commands, for
+  messages under the configured minimum length, for sessions the runtime treats
+  as autonomous, and when there is no index or no `memory_search` tool; a
+  timeout or error is swallowed and suppresses the prefetch for a cooldown
+  window, so the turn never waits on memory. Every outcome, hit or skip with its
+  reason, is one `memory.prefetch` row.
 - **`_state_run`** — calls `_run_agent_loop`, which delegates to
   `AgentRunner.run`. The result tuple
   `(final_content, tools_used, all_messages, stop_reason, had_injections, tool_events)`
@@ -272,7 +281,10 @@ The handlers, in order:
   `maybe_consolidate_by_tokens`. A tool result too large for the persisted
   transcript is spilled to a recoverable file *before* it is truncated, so the
   truncated text left in the transcript carries a pointer back to the full
-  output (`read_file` recovers it) instead of losing it.
+  output (`read_file` recovers it) instead of losing it. It also closes out the
+  turn's memory bookkeeping: the prefetch's dedup binding is released here (a
+  turn that never reached SAVE releases it in the state loop's `finally`
+  instead), and a `turn.memory_usage` rollup is emitted for every turn.
 - **`_state_respond`** — assembles the `OutboundMessage` (`_assemble_outbound`),
   suppressing it when the turn already streamed its answer through the
   `message` tool.
@@ -687,11 +699,13 @@ Once the state machine returns, `_dispatch` publishes the outbound message,
 serializes any pending interactive payloads for channels that cannot render
 structured tool output, and for websocket clients emits a `_turn_end` signal
 (carrying turn latency and goal state) and, for the webui, schedules background
-title generation. It also emits a `turn.latency` breakdown — total wall-clock
-split into `llm_ms` (model round-trips, accumulated in the runner and handed off
-via `_pending_llm_ms`), `tools_ms`, and `local_ms` (everything else), plus the
-per-state-machine durations from the `trace`. Finally it drains leftover pending
-messages back to the bus and clears the per-session latency entry.
+title generation. A `turn.latency` breakdown is emitted by the state-machine
+driver as soon as the machine reaches DONE — total wall-clock split into
+`llm_ms` (model round-trips, accumulated in the runner and handed off via
+`_pending_llm_ms`), `tools_ms`, and `local_ms` (everything else), plus the
+per-state-machine durations from the `trace`. Finally `_dispatch` drains
+leftover pending messages back to the bus and clears the per-session latency
+entry.
 
 ---
 

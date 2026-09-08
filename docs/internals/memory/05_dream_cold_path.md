@@ -350,10 +350,13 @@ bullet summary plus trailing entity/topic tags. The result is appended to
 `memory/session_summary/<key>.md` via `append_session_summary_block` — the
 same bounded, block-based store the compactor writes (oldest blocks evicted
 past the size cap, their path trailers carried forward into a synthetic head
-block). The cursor is a top-level `summary_cursor` key in the session's
-`.meta.json`, written under the same `cross_process_lock` the extract cursor
-uses, so `SessionManager.save()` — which only ever replaces the `derived`
-block — cannot erase it. Best-effort per session: one bad session logs a
+block). The append itself runs under the summary file's own
+`cross_process_lock`: the compactor writes from the gateway process and this
+pass from the dream worker subprocess, and an interleaved read-rebuild-rewrite
+would drop one side's block. The cursor is a top-level `summary_cursor` key in
+the session's `.meta.json`, written under the same `cross_process_lock` the
+extract cursor uses, so `SessionManager.save()` — which only ever replaces the
+`derived` block — cannot erase it. Best-effort per session: one bad session logs a
 warning and is skipped, never aborting the pass. Gated by
 `memory.dream.session_summaries_enabled` (default on).
 
@@ -426,7 +429,7 @@ threaded through; it is `None` when the vector index is unavailable.
    confirm it as `"same"`, or a borderline pair hit the per-run escalation cap
    before it could be investigated, the pair is recorded in
    `memory/.flagged_pairs.json`. `durin memory absorb-suggest` and the webui
-   Bandeja surface these so the operator can inspect and merge or dismiss them
+   Inbox surface these so the operator can inspect and merge or dismiss them
    manually.
 
 **Verdict cache.** A standing candidate pair whose members haven't changed
@@ -597,7 +600,7 @@ cross-process lock `SessionManager` uses for that session's sidecar.
 | `dream_vector_index` | `durin/memory/dream_passes.py` | Builds a `VectorIndex` (or returns `None` when unavailable) for the refine semantic recall step; called once per run by the cron and CLI callers. |
 | `judge_pair` | `durin/memory/absorb_judge.py` | Tier 1 LLM identity judge: renders the whole entity page via `to_markdown()` (body-capped), returns `same` / `different` / `unclear` + confidence. |
 | `escalate_judge` | `durin/memory/tier2_judge.py` | Tier 2 sub-agent: spins up a bounded `AgentRunner` with 4 read-only tools to investigate a borderline pair; returns the same `JudgeResult` envelope. Opt-in via `escalate_floor > 0`. |
-| `add_flagged` / `read_flagged` / `remove_flagged` | `durin/memory/refine_dream.py` | Write / read / delete entries in the `memory/.flagged_pairs.json` flag store: pairs the Tier 2 agent investigated but did not confirm as same. `remove_flagged` is called after the user resolves a pair (merge or separate) so it no longer appears in the Bandeja. |
+| `add_flagged` / `read_flagged` / `remove_flagged` | `durin/memory/refine_dream.py` | Write / read / delete entries in the `memory/.flagged_pairs.json` flag store: pairs the Tier 2 agent investigated but did not confirm as same. `remove_flagged` is called after the user resolves a pair (merge or separate) so it no longer appears in the Inbox. |
 | `run_always_on_pass` | `durin/memory/always_on_dream.py` | Pinned-guidance curation: rank feedback entities, fit budget, flip `always_on` flags. |
 | `ReactiveDreamGate` | `durin/memory/dream_passes.py` | In-process lock + throttle for the reactive triggers. |
 | `get_extract_cursor` / `set_extract_cursor` | `durin/memory/extract_runner.py` | Read / advance the per-session cursor (top-level key, legacy fallback). |
@@ -666,11 +669,11 @@ on the default provider (see `docs/internals/providers.md`).
 - **WebUI** — the **Dream** section (`/dream` route, `DreamView` +
   `DreamDrawer` in `webui/src/components/`) has two tabs.
 
-  **Resumen tab** — headed by an **última corrida** card showing the most
+  **Summary tab** — headed by a **Last run** card showing the most
   recent run's counts (sessions, entity updates, merges, new skills, improved
   skills — always shown, even all-zero, so an idle run is never blank; "new"
   comes from the skill-extract pass, "improved" from the curation pass), with a
-  **Historial** feed below
+  **History** feed below
   of prior runs and their activity (entity merges, entity and learning
   discoveries, skill changes). Each history card links to the affected entity or
   skill — clicking it opens an in-place peek drawer (`DreamDrawer`) that fetches
@@ -689,10 +692,10 @@ on the default provider (see `docs/internals/providers.md`).
   discoveries, and each applied skill-curation action, naming the skill and the
   verb) is mapped from the telemetry JSONL. The run summaries used to be
   re-derived from telemetry, where a busy refine pass flooded the read window and
-  the "última corrida" card silently vanished.
+  the "Last run" card silently vanished.
 
-  **Bandeja tab** (inbox) — surfaces two categories of items that need human
-  attention, with a badge on the tab when items are present.
+  **Inbox tab** (the `BandejaTab` component) — surfaces two categories of items
+  that need human attention, with a badge on the tab when items are present.
 
   - *Flagged memory pairs* — pairs the Tier 2 merge judge investigated but did
     not auto-merge (stored in `memory/.flagged_pairs.json`). Each card shows
@@ -708,7 +711,7 @@ on the default provider (see `docs/internals/providers.md`).
 
   - *Quarantined skills* — the existing quarantine list surfaced as a secondary
     section. Each card shows the skill name and routes the user to the Skills
-    section for the full triage workflow; the Bandeja does not duplicate the
+    section for the full triage workflow; the Inbox does not duplicate the
     triage UI.
 
   - *Skill suggestions* — proposed curation actions (improve / retire)

@@ -47,7 +47,7 @@ Storing the full markdown body in each LanceDB row (in addition to disk) was con
 
 A step re-selecting top-K results to balance relevance and diversity was proposed. It was deferred pending evidence that duplication is a real problem in practice.
 
-The archive of consolidated episodic eliminates the primary source of duplication: post-archive, the typical result set is one canonical entity page plus a small number of fragments — triangulation, not redundancy. The per-source cap in the search pipeline handles the secondary case. MMR remains a standalone algorithm that can be added later if bench shows residual duplication, but without evidence of the problem it adds complexity and regresses exact-match queries.
+The two-track model eliminates the primary source of duplication: fragments are never consolidated into entity pages, so the typical result set is one canonical entity page plus a small number of fragments — triangulation, not redundancy. The per-source cap in the search pipeline handles the secondary case. MMR remains a standalone algorithm that can be added later if bench shows residual duplication, but without evidence of the problem it adds complexity and regresses exact-match queries.
 
 ### SQLite structural / analytical index
 
@@ -65,7 +65,7 @@ The auto-keyword detection path already handles the primary case: the search pip
 
 The cross-encoder reranker ships opt-in, OFF by default. Making it default ON was considered and rejected.
 
-Multilingual cross-encoder models add 300–1500 ms latency on CPU and additional resident memory. Default ON would break the search latency budget for all installations without giving the operator a choice. The operator who values quality over latency enables it via workspace config, the onboarding wizard, or the web dashboard. Mainstream comparable systems ship reranking opt-in as well. The decision is structural — operator choice — not empirical.
+Multilingual cross-encoder models add several hundred milliseconds of latency on CPU and additional resident memory. Default ON would break the search latency budget for all installations without giving the operator a choice. The operator who values quality over latency enables it via workspace config, the onboarding wizard, or the web dashboard. Mainstream comparable systems ship reranking opt-in as well. The decision is structural — operator choice — not empirical.
 
 ### `memory_ingest` URL fetch and inline content branches
 
@@ -114,11 +114,11 @@ Three existing surfaces already cover archive recovery: `memory_search(scope='ar
 
 **Lesson:** "deferred until concrete trigger" without a written failure mode is functionally the same as discarded — it leaves a phantom item that returns each audit pass. When existing surfaces cover the use case, classify as discarded, not deferred.
 
-### `existing_uris_cap` Dream-prompt config knob
+### Entity-manifest cap as a Dream-prompt config knob
 
-Lifting the hard-coded cap on how many recent entity URIs appear in Dream's consolidator prompt into operator config was proposed and decided against.
+Lifting the cap on how many existing entities seed Dream's extraction prompts into operator config was proposed and decided against.
 
-Duplicate entity creation is invisible to operators: there is no telemetry measuring "duplicate avoided thanks to existing\_uris signal", so operators cannot detect "cap too low" empirically. The 100-most-recent URIs are a strong signal where duplicates actually occur — around recently-active entities. Old entities are not the typical source of duplicates. Two caps in series (producer and renderer) would require coordinated config threading for a knob no telemetry would tell the operator to turn. An operator who genuinely needs to tune the constant can change one line of code.
+Duplicate entity creation is invisible to operators: no telemetry measures "duplicate avoided thanks to the manifest", so a "cap too low" cannot be detected empirically. The manifest is relevance-retrieved through the search pipeline (`build_entity_manifest`), so the entities that reach the prompt are the ones the span is actually about, not merely the most recent. Two caps in series (producer and renderer) would require coordinated config threading for a knob no telemetry would tell the operator to turn. An operator who genuinely needs a different bound can change the call site.
 
 ### `summary` slot in entity-page embedding text
 
@@ -148,7 +148,7 @@ The dispatcher was never called anywhere in the codebase. An `EntityPage` and a 
 
 Extending temporal decay to classes beyond `episodic` and `session_summary` was proposed and decided against.
 
-`stable` carries explicit user-asserted facts that become invalid by contradiction, not by age. Entity pages are updated by Dream on every consolidation pass; old pages are consolidated, not stale. Corpus entries (ingested documents) become stale when superseded or removed, not when time passes. The `episodic` and `session_summary` classes decay because they represent recent observations whose relevance decreases as they age out of working memory. The per-class defaults match the semantics of each class. Operators who want a different shape use the `class_half_life_overrides` config field.
+`stable` carries explicit user-asserted facts that become invalid by contradiction, not by age. Entity pages are updated by Dream on every consolidation pass; old pages are consolidated, not stale. Corpus entries (ingested documents) become stale when superseded or removed, not when time passes. The `episodic` and `session_summary` classes decay because they represent recent observations whose relevance decreases as they age out of working memory. The per-class defaults matched the semantics of each class while decay existed.
 
 **Note:** temporal decay was subsequently removed entirely from the search pipeline. Search does not pre-judge recency; every hit carries `valid_from` and the LLM does the temporal reasoning from context.
 
@@ -214,7 +214,7 @@ A dedicated `memory_history` MCP tool for git log queries was not implemented. G
 
 Policies that automatically delete or compress old entries were considered and decided against.
 
-The archive of consolidated episodic already handles the primary case: post-consolidation, episodic entries move to `memory/archive/episodic/` and leave the active retrieval surfaces (vector index, FTS5, default grep), so they stop competing for ranking while remaining recoverable. Deeper forgetting — deleting the 100 archived originals to keep one summary — violates the reversibility principle. If Dream consolidates wrong, source observations must be recoverable. Disk is cheap; bad consolidations are expensive to recover from without the original evidence. Mainstream systems that delete rather than archive have lifecycle policies because they have no archive concept; durin's archive IS the middle state those policies are trying to create.
+Fragments are never folded into entity pages, so there is no backlog of superseded originals to expire; an entry leaves the active retrieval surfaces (vector index, FTS5, default grep) only when the user retires it, and `memory_forget` moves it to `memory/archive/<class>/` rather than deleting it. Deeper forgetting — deleting archived originals to keep one summary — violates the reversibility principle. If Dream consolidates wrong, source observations must be recoverable. Disk is cheap; bad consolidations are expensive to recover from without the original evidence. Mainstream systems that delete rather than archive have lifecycle policies because they have no archive concept; durin's archive IS the middle state those policies are trying to create.
 
 ### Trust scoring per source
 
@@ -256,12 +256,12 @@ We surveyed mem0, Letta/MemGPT, Zep, Graphiti, Cognee, Hermes-Agent, OpenClaude,
 | Topic | Mainstream | durin choice | Rationale |
 |---|---|---|---|
 | Cross-encoder default | Mostly opt-in OFF | Opt-in OFF | Agreed with mainstream — latency cost unjustified by default. |
-| MMR | Rarely implemented | Not in MVP | Agreed — archive-of-consolidated-episodic eliminates the primary duplication source. |
+| MMR | Rarely implemented | Not in MVP | Agreed — the two-track split (fragments never folded into entity pages) eliminates the primary duplication source. |
 | Versioning as a tool | Not standard | git history via Dream prompt + CLI | Reuse what exists; no dedicated agent-facing tool. |
 | LLM in hot path | Most avoid; cognee uses LLM classifier | Strictly avoided | Cost and latency. |
 | Multi-vector per facet | Rare (some research) | Single vector per doc | Simplicity. |
 | Closed attribute catalog | mem0 has implicit catalog via LLM tendencies | Open, with drift control via existing\_schema | Generalist use cases. |
-| Tool sectioning markers | Rare (hermes uses `<memory-context>`) | Used (CANONICAL/FRAGMENT/SESSION/INGESTED) | Structural communication outperforms imperative instructions in tool descriptions. |
+| Tool sectioning markers | Rare (hermes uses `<memory-context>`) | Used (SKILL/CANONICAL/FRAGMENT/SESSION/INGESTED) | Structural communication outperforms imperative instructions in tool descriptions. |
 | Cold-path consolidation | mem0 syncs at write | Async batched Dream | No write-path latency for the user; lower cost. |
 | Archive instead of delete | Most delete or overwrite | Archive to `memory/archive/` | Reversibility. Bad consolidations must be recoverable. |
 | Structural SQL index | Some ship SQLite per-entity stores | Not adopted | LLM agent is the analytical layer; index adds schema migration and drift risk. |
@@ -288,7 +288,7 @@ The LLM query rewriter compensated for five upstream issues: frontmatter not ent
 
 Recoverability is cheap when designed in; expensive when bolted on.
 
-Archiving consolidated episodic entries preserves provenance and enables recovery if Dream consolidates wrong. It also eliminates the main duplication problem in retrieval — archived entries leave the active search surfaces.
+Archiving instead of deleting preserves provenance and enables recovery when a merge or a retirement was wrong: an absorbed entity page moves to `memory/archive/entities/`, a retired entry to `memory/archive/<class>/`. An archived file also leaves the active search surfaces, so it stops competing for ranking.
 
 **Implication:** when removing data from active state, move it (archive) rather than delete. Disk is cheap; bad consolidations are expensive.
 
