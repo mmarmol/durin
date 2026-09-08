@@ -409,7 +409,7 @@ What it costs: one warm search on the critical path of every message of `min_que
 |---|---|---|
 | `prefetch.enabled` | `true` | Run one warm `memory_search` with the user message before the model sees it and fence the hits into the message |
 | `prefetch.limit` | `3` | Hits requested from the search (warm level: headline + summary each) |
-| `prefetch.max_chars` | `2500` | Cap on the recalled hits text, in characters, before fencing; longer output is cut with a note (the fence adds a short fixed framing) |
+| `prefetch.max_chars` | `2500` | Budget the search tool renders the recalled hits within, in characters — a hit past it becomes a pointer line instead of a full block; the loop's own cut afterwards is a safety net only |
 | `prefetch.min_query_chars` | `20` | Messages shorter than this are not searched |
 | `prefetch.timeout_s` | `5.0` | Seconds the search may take before the turn proceeds without it |
 | `prefetch.backoff_s` | `60.0` | After a timeout or error, skip the prefetch for this many seconds; `0` disables the backoff |

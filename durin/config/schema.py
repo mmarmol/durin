@@ -753,7 +753,7 @@ class MemoryPrefetchConfig(Base):
 
     enabled: bool = Field(default=True, description="Run one warm memory_search with the user message before the model sees it and fence the hits into the message")
     limit: int = Field(default=3, ge=1, le=10, description="Hits requested from the search (warm level: headline + summary each)")
-    max_chars: int = Field(default=2500, ge=200, description="Cap on the recalled hits text, in characters, before fencing; longer output is cut with a note (the fence adds a short fixed framing)")
+    max_chars: int = Field(default=2500, ge=200, description="Budget the search tool renders the recalled hits within, in characters; a hit past it becomes a pointer line instead of a full block, and the loop only cuts the text as a safety net (the fence adds a short fixed framing)")
     min_query_chars: int = Field(default=20, ge=1, description="Messages shorter than this are not searched")
     timeout_s: float = Field(default=5.0, gt=0, description="Seconds the search may take before the turn proceeds without it")
     backoff_s: float = Field(default=60.0, ge=0, description="After a timeout or error, skip the prefetch for this many seconds; 0 disables the backoff")
