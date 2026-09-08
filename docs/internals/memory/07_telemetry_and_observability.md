@@ -1,6 +1,5 @@
 ---
 title: Memory telemetry and observability
-status: current
 audience: humans and LLMs implementing or modifying this system
 depends_on: 00_overview.md, 03_search_pipeline.md, 05_dream_cold_path.md
 related: 04_agent_tools.md
@@ -26,7 +25,7 @@ Three ideas underpin the observability design:
 
 **Events are the only window into runtime behavior.** The memory subsystem is a background service — no TUI, no blocking calls visible to the user. An operator learns what happened by querying the telemetry log after the fact.
 
-**Hot-path and cold-path emit separately.** Each `memory_search` call emits a top-level `memory.recall` event and one sub-event per pipeline stage (vector, lexical, RRF, rerank). The extract, derived_from, and refine dream passes emit `memory.dream.start` / `memory.dream.end` pairs; the skill-extract and always-on passes emit their own named events (`memory.dream.skill_extract`, `memory.dream.always_on`) with no start/end envelope. This separation lets dashboards attribute latency or failure to the specific stage that caused it.
+**Hot-path and cold-path emit separately.** Each `memory_search` call emits a top-level `memory.recall` event and one sub-event per pipeline stage (vector, lexical, RRF, rerank). The extract, derived_from, session-summary and refine dream passes emit `memory.dream.start` / `memory.dream.end` pairs; the skill-extract and always-on passes emit their own named events (`memory.dream.skill_extract`, `memory.dream.always_on`) with no start/end envelope. This separation lets dashboards attribute latency or failure to the specific stage that caused it.
 
 **The catalog is authoritative; this document annotates.** `EVENTS` in `schema.py` is the exhaustive list. This document explains the fields and usage patterns that need explanation; a new event shipping without a section here is expected, not drift — consult `schema.py` for the complete set.
 
@@ -56,7 +55,7 @@ flowchart TD
 
     subgraph DreamPath["Dream cold path"]
         DS[Dream trigger\ncron / reactive / manual]
-        DS --> DST["memory.dream.start\nkind=extract | derived_from | refine"]
+        DS --> DST["memory.dream.start\nkind=extract | derived_from | session_summary | refine"]
         DST --> PA[memory.dream.patch_applied\nper entity written]
         DST --> DC[memory.dream.discover\nper session stage-2]
         DST --> DE[memory.dream.end]
@@ -110,7 +109,7 @@ Each `memory_search` call emits:
 - **`memory.recall.rrf`** — RRF fusion step. Per-source hit counts (`vector_count`, `lexical_count`, `grep_count`), `fused_count` after dedup, and `boosted` (true when keywords shifted the lexical weight).
 - **`memory.recall.grep_verify`** — grep-verify boost step. `candidates` checked, `verified` matched and boosted.
 - **`memory.recall.rerank`** — cross-encoder rerank step, when enabled. `input_count`, `output_count`, `duration_ms`, `blend_alpha`, `fallback` (true when the cross-encoder failed and RRF order was kept).
-- **`memory.prefetch`** — the automatic search the agent loop runs once per user turn with the message as the query, before the model sees it (`AgentLoop._memory_prefetch`). Fields: `session_key`, `hits`, `chars` (size of the fenced block), `duration_ms`. `skipped` names why nothing was injected — `disabled`, `command_or_empty`, `short`, `non_interactive`, `no_tool`, `no_index`, `timeout`, `error`, `no_hits` — and is absent when hits landed. A run that actually searched also emits the ordinary `memory.recall` family above, so prefetch latency and strategy are readable there.
+- **`memory.prefetch`** — the automatic search the agent loop runs once per user turn with the message as the query, before the model sees it (`AgentLoop._memory_prefetch`). Fields: `session_key`, `hits`, `chars` (size of the fenced block), `duration_ms`. `skipped` names why nothing was injected — `disabled`, `backoff`, `command_or_empty`, `short`, `non_interactive`, `no_index`, `no_tool`, `timeout`, `error`, `no_hits` — and is absent when hits landed. `backoff` is a turn skipped because an earlier `timeout` or `error` is still inside its cooldown window. A run that actually searched also emits the ordinary `memory.recall` family above, so prefetch latency and strategy are readable there.
 - **`memory.search.failure`** — emitted when any of the three safe wrappers (`_safe_vector_search`, `_safe_lexical_search`, `_safe_grep_fallback`) catches an exception. `component` is the comma-joined list of failed sources; `recovery_succeeded` indicates whether the surviving sources still returned hits.
 
 ### Write-path events
@@ -126,12 +125,13 @@ Each `memory_search` call emits:
 
 The dream runs outside the agent loop, so nothing binds the telemetry `ContextVar` for it automatically. The cron handler and each reactive trigger therefore bind their own `TelemetryLogger` (`get_session_logger("cron_dream" | "reactive_dream")`) for the duration of the run — without that bind, `emit_tool_event` resolves no logger and every dream event is silently dropped (the digest then stays empty even after a real run). The cron run additionally registers a `DreamProgressSink` on that logger to tee activity events to the webui live (see §6).
 
-Three dream passes are wrapped with a `memory.dream.start` / `memory.dream.end` pair (extract, derived_from, refine). The skill-extract and always_on passes emit their own named events directly, with no start/end envelope. The document passes (distill, seed-entities, curate-topics) and the relation-hygiene pass log to the cron log without `memory.dream.*` telemetry.
+Four dream passes are wrapped with a `memory.dream.start` / `memory.dream.end` pair (extract, derived_from, session_summary, refine). The skill-extract and always_on passes emit their own named events directly, with no start/end envelope. The document passes (distill, seed-entities, curate-topics) and the relation-hygiene pass log to the cron log without `memory.dream.*` telemetry.
 
 **Passes that use `dream.start` / `dream.end`:**
 
-- **Extract** (`kind="extract"`) — `dream.end` carries `entities_consolidated`, `entities_failed`, `sessions`, and `yielded` (true when `max_seconds_per_run` cut the pass short). Within the pass: `memory.dream.patch_applied` per entity written (Stage 1); `memory.dream.discover` per session processed (Stage 2: mention discovery, carries `proposed` / `written` / `skipped`); `memory.dream.learnings` per session processed by Stage 4 (learnings sweep, carries `proposed` / `written` / `refs`). `entities_consolidated` counts Stage-1 attribute writes only; learnings writes are tracked separately via `memory.dream.learnings`.
+- **Extract** (`kind="extract"`) — `dream.end` carries `entities_consolidated`, `entities_discovered`, `skill_signals`, `entities_failed`, `sessions`, and `yielded` (true when `max_seconds_per_run` cut the pass short). Within the pass: `memory.dream.patch_applied` per entity written (Stage 1); `memory.dream.discover` per session processed (Stage 2: mention discovery, carries `proposed` / `written` / `skipped`); `memory.dream.learnings` per session processed by Stage 4 (learnings sweep, carries `proposed` / `written` / `refs`). `entities_consolidated` counts Stage-1 attribute writes only; learnings writes are tracked separately via `memory.dream.learnings`.
 - **Derived-from** (`kind="derived_from"`) — no dedicated event beyond the `dream.start/end` pair; attribute writes emit `memory.dream.patch_applied`. `dream.end` carries `links`, `sessions`, `errors`, `yielded`.
+- **Session summary** (`kind="session_summary"`) — `dream.end` carries `sessions` walked, `written`, `skipped` (idle gate, too-short span, or nothing to say), `errors` and `yielded`. One bad session is logged and skipped, with no per-session sub-event.
 - **Refine** (`kind="refine"`) — `dream.end` carries `merged`, `kept`, `candidates`. Produces the absorb-judge events (see below).
 
 **Passes that emit a single named event (no start/end):**
@@ -172,7 +172,7 @@ These fire during the refine pass and via the manual `durin memory` commands:
 
 ### Health events
 
-- **`memory.health_check`** — emitted on every health-check tick (default interval: 900 seconds). Fields: `tick_id` (UUID, for log correlation), `status` (`ok | degraded | critical`), `components` (per-probe map: `fts`, `lance`), `drift_count` (rows repaired this tick), `duration_ms`, optional `errors` map.
+- **`memory.health_check`** — emitted on every health-check tick (default interval: 900 seconds). Fields: `tick_id` (UUID, for log correlation), `status` (`ok | degraded | critical`), `components` (per-probe map: `fts`, `lance`, `cross_encoder`), `drift_count` (rows repaired this tick), `duration_ms`, optional `errors` map.
 - **`memory.health.critical`** — emitted once when a component crosses 3 consecutive failures. `component`, `consecutive_failures`, `last_error`, `manual_recovery_hint` (the CLI command to rebuild, e.g. `durin memory reindex --target fts`). Reset on the next successful tick.
 
 ### Per-turn rollup
@@ -248,7 +248,7 @@ The following aggregations are the key operational signals. `durin memory stats`
 |---|---|---|
 | `recall_p95_ms` | `memory.recall.duration_ms` | < 130 ms (cross-encoder OFF), < 900 ms (ON) |
 | `prefetch_p95_ms` | `memory.prefetch.duration_ms` | same range as `recall_p95_ms`, and well under `memory.prefetch.timeout_s` |
-| `prefetch_timeout_rate` | `memory.prefetch` rows with `skipped == timeout` / rows | near 0; a sustained rate means the backoff is eating the prefetch |
+| `prefetch_timeout_rate` | `memory.prefetch` rows with `skipped == timeout` / rows | near 0; each timeout opens a backoff window whose skipped turns record `backoff` rather than `timeout`, so a small sustained rate hides a larger loss of recall |
 | `recall_recovery_rate` | `memory.recall.recovered_from != null` / total | < 1% |
 | `silent_miss_rate` | `turn.memory_usage` rows with `search_calls == 0` and `prefetch_hits == 0` / turns with memory-relevant queries | context-dependent; baseline with bench |
 | `strategy_distribution` | `memory.recall.strategy` | mostly `hybrid`; `grep` fallback rare |

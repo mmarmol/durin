@@ -7,13 +7,13 @@ title: "Memory: Agent Tools"
 ## Purpose
 
 This document specifies the tool API surface that the agent LLM sees for memory
-operations. Five core tools are live: `memory_search`, `memory_upsert_entity`,
-`memory_ingest`, `memory_drill`, and `memory_forget`. Three additional
-**read-only inspection tools** — `memory_read_entity`, `memory_entity_lineage`,
-and `memory_source_session` — are registered in the same auto-discovery path and
-available to the main agent as well as to the Dream Tier 2 sub-agent. A seventh
-class, `memory_store`, is compiled into the codebase but disabled at load time —
-it is documented here for completeness.
+operations. The write and retrieval tools are live: `memory_search`,
+`memory_upsert_entity`, `memory_ingest`, `memory_drill`, and `memory_forget`.
+The **read-only inspection tools** — `memory_read_entity`,
+`memory_entity_lineage`, and `memory_source_session` — are registered in the
+same auto-discovery path and available to the main agent as well as to the
+Dream Tier 2 sub-agent. One more class, `memory_store`, is compiled into the
+codebase but disabled at load time — it is documented here for completeness.
 
 These are the **only** memory-related tools the agent can invoke. Everything
 beyond this boundary — index internals, RRF coefficients, cross-encoder weights,
@@ -104,7 +104,7 @@ flowchart TD
 package at startup. For each discovered `Tool` subclass it calls
 `tool_cls.enabled(ctx)` before calling `create(ctx)`. `MemoryStoreTool.enabled()`
 returns `False` unconditionally, so it is never instantiated and never appears
-in the LLM's tool list. The five live tools return `True` (or inherit the
+in the LLM's tool list. Every other memory tool returns `True` (or inherits the
 default `True` from `Tool.enabled`).
 
 ### `memory_search`
@@ -114,8 +114,8 @@ default `True` from `Tool.enabled`).
 The tool accepts `query` (required) plus optional `scope`, `level`, `keywords`,
 `limit`, and `kinds`. It delegates the full pipeline to
 `run_search_pipeline` (`durin/memory/search_pipeline.py`), which handles query
-routing, parallel vector + lexical retrieval, RRF fusion, entity-aware rerank,
-and optional cross-encoder rerank.
+routing, vector + lexical retrieval over the same query, RRF fusion,
+entity-aware rerank, and optional cross-encoder rerank.
 
 The result is rendered by `render_sectioned` (`durin/memory/sectioned_output.py`)
 into the `sectioned_rendered` string the LLM consumes. Raw result dicts are
@@ -161,6 +161,15 @@ have neither block in their prompt).
 recognisable entity references, `default` otherwise. `recovered_from` and
 `recovery_duration_ms` appear only when the pipeline recovered from a source
 failure; they are absent on clean runs.
+
+**Following a `SESSION` hit.** A `SESSION` block names a summary *file stem*,
+not a session key — the stem is the key with every non-word character collapsed
+to `_`, so `websocket_<id>` is the session `websocket:<id>`. The follow-up is
+`session_search(session_key=…)` (`durin/agent/tools/session_search.py`), which
+searches another conversation's own transcript read-only; it is not a memory
+tool, so it does not appear in this document's tool list. A stem ending in
+`_closed_<timestamp>` is a closed conversation's summary rather than a live
+session, and is read through `memory_search` / `memory_drill` instead.
 
 ### `memory_upsert_entity`
 
@@ -629,8 +638,8 @@ future re-enable starts from a correct implementation.
 |---|---|---|
 | `memory.enabled` | `true` | Gates all memory I/O; when false, tools degrade to grep-only or verbatim-copy-only paths. |
 | `memory.embedding.model` | `intfloat/multilingual-e5-small` | Embedding model for vector retrieval. A change triggers a vector index rebuild on next startup. |
-| `memory.search.cross_encoder.enabled` | `false` | Enables cross-encoder rerank (top-50 → top-10). The reranker is a ~100 M-param sentence-transformer, not an LLM. |
-| `memory.search.cross_encoder.model` | sentence-transformers default | Model ID for cross-encoder reranking. Any `sentence-transformers`-compatible model works. |
+| `memory.search.cross_encoder.enabled` | `false` | Enables the cross-encoder blend, which reorders the top-50 candidates without dropping any. The reranker is a ~100 M-param sentence-transformer, not an LLM. |
+| `memory.search.cross_encoder.model` | `BAAI/bge-reranker-base` | Model ID for cross-encoder reranking. Any `sentence-transformers`-compatible model works. |
 | `memory.search.sectioning.max_per_source` | 3 | Per-source cap: at most this many chunks from one ingested document per search result. |
 | `memory.index_skills` | `true` | Include `skills/<name>/SKILL.md` in FTS + vector index. Flipping to `false` immediately suppresses skill hits at the tool boundary. |
 | `memory.dream.enabled` | `true` | Master switch for cron + reactive Dream triggers. |
