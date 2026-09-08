@@ -5,6 +5,7 @@ from durin.memory.field_patch import FieldPatch
 from durin.memory.memory_writer import write_entity
 from durin.memory.principal import (
     _MAX_LIBRARY_DOCS,
+    _PRINCIPAL_BODY_CHARS,
     ANONYMOUS,
     _library_subjects,
     build_library_awareness,
@@ -33,7 +34,7 @@ def test_library_awareness_lists_docs_with_outline_abstract(tmp_path):
         json.dumps({"abstract": "Kahneman on two systems of thought.", "chunk_count": 1})
     )
 
-    block = build_library_awareness(tmp_path)
+    block = build_library_awareness(tmp_path, abstracts=True)
     assert "## Your document library (2 documents)" in block
     assert 'scope="library"' in block
     assert "- The Durin Handbook" in block            # title-only (not distilled)
@@ -87,6 +88,39 @@ def test_library_subjects_excludes_agent_linked_and_ranks_by_breadth(tmp_path):
     assert "Rex" not in subjects
     assert subjects[0] == "Uroperitoneum"    # broadest first
     assert "Creatinine" in subjects
+
+
+def test_library_subjects_are_memoized_between_prompt_builds(tmp_path, monkeypatch):
+    """The subjects map parses every entity page and the pinned block that
+    carries it is rebuilt on every prompt, so repeated calls inside the TTL must
+    reuse the walk; a caller that must see a fresh entity passes ttl_s=0."""
+    from durin.memory import principal as principal_mod
+
+    ingest_reference(tmp_path, "Doc 0", "# d0\n\nbody.\n")
+    write_entity(tmp_path, "topic:uroperitoneum", [_derived("doc-0")],
+                 create=True, name="Uroperitoneum")
+
+    calls = 0
+    real = principal_mod.EntityPage.from_file
+
+    def _counting(path):
+        nonlocal calls
+        calls += 1
+        return real(path)
+
+    monkeypatch.setattr(principal_mod.EntityPage, "from_file",
+                        staticmethod(_counting))
+
+    first = _library_subjects(tmp_path)
+    assert first == ["Uroperitoneum"]
+    walked = calls
+    assert walked > 0
+
+    assert _library_subjects(tmp_path) == first
+    assert calls == walked                       # served from the cache
+
+    assert _library_subjects(tmp_path, ttl_s=0) == first
+    assert calls > walked                        # ttl_s=0 walks the tree again
 
 
 def test_library_awareness_caps_and_notes_overflow(tmp_path):
@@ -247,3 +281,89 @@ def test_resolve_pinned_refs_caches_within_ttl(tmp_path, monkeypatch):
 
     assert resolve_pinned_refs(tmp_path, ttl_s=0) == first
     assert calls == 2
+
+
+def test_library_awareness_is_titles_only_by_default(tmp_path):
+    import json
+
+    ingest_reference(tmp_path, "Thinking Fast and Slow", "# T\n\nbody.\n")
+    outline_path_for(tmp_path, "thinking-fast-and-slow").write_text(
+        json.dumps({"abstract": "Kahneman on two systems of thought.", "chunk_count": 1})
+    )
+
+    block = build_library_awareness(tmp_path)
+
+    assert "- Thinking Fast and Slow" in block
+    assert "Kahneman" not in block
+
+
+def test_library_awareness_zero_docs_keeps_header_count_and_subjects(tmp_path):
+    ingest_reference(tmp_path, "A Book", "# a\n\nx.\n")
+    ingest_reference(tmp_path, "B Book", "# b\n\ny.\n")
+    write_entity(tmp_path, "topic:x", [_derived("a-book")], create=True, name="X")
+
+    block = build_library_awareness(tmp_path, max_docs=0)
+
+    assert "## Your document library (2 documents)" in block
+    assert "- A Book" not in block
+    assert "…and 2 more" in block
+    assert "Covers: X" in block
+
+
+def test_library_awareness_reads_only_the_listed_documents(tmp_path, monkeypatch):
+    from durin.memory import principal as p
+
+    for i in range(5):
+        ingest_reference(tmp_path, f"Doc {i}", f"# d{i}\n\nbody.\n")
+    seen: list[str] = []
+    real = p._doc_descriptor
+
+    def _spy(workspace, slug, md_path, **kw):
+        seen.append(slug)
+        return real(workspace, slug, md_path, **kw)
+
+    monkeypatch.setattr(p, "_doc_descriptor", _spy)
+    build_library_awareness(tmp_path, max_docs=2)
+    assert len(seen) == 2
+
+
+def test_build_pinned_context_passes_library_caps(tmp_path):
+    ingest_reference(tmp_path, "A Book", "# a\n\nx.\n")
+    ingest_reference(tmp_path, "B Book", "# b\n\ny.\n")
+
+    ctx = build_pinned_context(tmp_path, "person:marcelo", library_max_docs=1)
+
+    assert "- A Book" in ctx
+    assert "- B Book" not in ctx
+    assert "…and 1 more" in ctx
+
+
+def test_principal_body_is_capped_with_a_pointer_to_the_full_page(tmp_path):
+    ensure_owner(tmp_path, "person:marcelo", name="Marcelo")
+    long_body = " ".join(f"fact{i}" for i in range(600))  # ≈ 4 000 chars
+    write_entity(tmp_path, "person:marcelo",
+                 [FieldPatch(kind="body_append", value=long_body,
+                             author="agent", source_ref="s", at=NOW),
+                  FieldPatch(kind="relation", value={"to": "project:durin", "type": "maintainer"},
+                             author="agent", source_ref="s", at=NOW)])
+
+    ctx = build_pinned_context(tmp_path, "person:marcelo")
+
+    who = ctx.split("## Always-on guidance")[0]
+    assert len(who) < _PRINCIPAL_BODY_CHARS + 200  # cap + headers/relations/pointer
+    assert "memory_read_entity person:marcelo" in who
+    assert "fact599" not in who
+    assert "maintainer project:durin" in who
+
+
+def test_always_on_pins_are_not_capped_by_the_principal_rule(tmp_path):
+    long_body = " ".join(f"rule{i}" for i in range(400))  # ≈ 2 800 chars
+    write_entity(tmp_path, "practice:long",
+                 [FieldPatch(kind="body_append", value=long_body,
+                             author="agent", source_ref="s", at=NOW)],
+                 create=True, name="Long practice")
+    mark_always_on(tmp_path, "practice:long")
+
+    ctx = build_pinned_context(tmp_path, "person:nobody")
+
+    assert "rule399" in ctx

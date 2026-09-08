@@ -326,6 +326,8 @@ For deeper coverage of individual subsystems, see the sibling docs:
 | `memory.search.cross_encoder.enabled` | `false` | Enable the cross-encoder rerank step (downloads ~100 MB model on first use). |
 | `memory.search.cross_encoder.model` | `BAAI/bge-reranker-base` | Sentence-transformer model for reranking. |
 | `memory.search.sectioning.max_per_source` | `3` | Maximum corpus hits per `ingest_id` in the sectioned output. |
+| `memory.library.awareness_max_docs` | `20` | Documents listed one per line in the always-on Library catalog; 0 keeps only the header, the count and the `Covers:` subject map. |
+| `memory.library.awareness_abstracts` | `false` | Append each listed document's distilled abstract to its catalog line. |
 | `memory.file_watcher.enabled` | `true` | Reactive re-indexing when `.md` files under `memory/` are modified outside the agent (vim, git merge). |
 | `memory.health_check.enabled` | `true` | Periodic consistency probe between the markdown source and the derived indices. |
 | `memory.health_check.interval_seconds` | `900` | How often the health check probe runs. |

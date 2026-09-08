@@ -289,8 +289,19 @@ class ContextBuilder:
             # it out of the canonical block are two views of the same pages,
             # and the walk loads every entity page from disk.
             always = list_always_on(self.workspace)
+            try:
+                from durin.config.loader import load_config
+                lib = load_config().memory.library
+            except Exception:  # noqa: BLE001 — test workspaces without a config file
+                from durin.config.schema import MemoryLibraryConfig
+                lib = MemoryLibraryConfig()  # schema defaults, so this can't drift
+            library_max_docs, library_abstracts = lib.awareness_max_docs, lib.awareness_abstracts
             return (
-                build_pinned_context(self.workspace, principal, always_on=always),
+                build_pinned_context(
+                    self.workspace, principal, always_on=always,
+                    library_max_docs=library_max_docs,
+                    library_abstracts=library_abstracts,
+                ),
                 pinned_refs(self.workspace, principal, always_on=always),
             )
         except Exception:  # noqa: BLE001 — never break the prompt build

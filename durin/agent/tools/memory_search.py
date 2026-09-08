@@ -643,18 +643,25 @@ class MemorySearchTool(Tool):
         capped_hits = apply_per_source_cap(enriched_hits)
 
         # Hits whose rendered content is already visible in the caller's
-        # hot layer — or whose page is pinned (principal + always_on) —
-        # collapse to pointer lines. Containment-checked per ref — a hit
-        # carrying body beyond the prefix excerpt passes through whole.
-        # Disabled for subagents (their prompt has no hot layer; see
-        # __init__).
+        # hot layer — or whose page the pinned block renders whole (the
+        # always_on guidance) — collapse to pointer lines. Containment-checked
+        # per ref — a hit carrying body beyond the prefix excerpt passes
+        # through whole. The principal's page is pinned but rendered with its
+        # body capped, so it is excluded from the whole-rendered set and its
+        # hits go through containment like any other page. Disabled for
+        # subagents (their prompt has no hot layer; see __init__).
         in_context_hits: list[SectionedHit] = []
         if self._context_dedup:
             from durin.memory.context_dedup import split_in_context
-            from durin.memory.principal import resolve_pinned_refs
+            from durin.memory.principal import (
+                resolve_owner_principal,
+                resolve_pinned_refs,
+            )
+            refs = resolve_pinned_refs(self._workspace)
+            principal = resolve_owner_principal(self._workspace)
             capped_hits, in_context_hits = split_in_context(
                 self._workspace, capped_hits,
-                pinned_refs=resolve_pinned_refs(self._workspace),
+                pinned_refs=refs, whole_refs=refs - {principal},
             )
 
         kept_uris = {h.uri for h in capped_hits}

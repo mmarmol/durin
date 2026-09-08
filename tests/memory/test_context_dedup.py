@@ -303,6 +303,31 @@ def test_non_pinned_hit_passes_when_hot_layer_is_empty(monkeypatch, tmp_path):
     assert redundant == []
 
 
+def test_principal_hit_is_kept_because_its_body_is_capped(monkeypatch, tmp_path):
+    """The principal's page is rendered with its body capped, so a search hit
+    on it can carry text the prompt does not show: it is judged by containment
+    (the hot layer excludes it → kept), never by membership."""
+    monkeypatch.setattr(
+        "durin.memory.context_dedup.read_hot_layer",
+        lambda _ws, *, exclude=frozenset(): _hot_layer(),
+    )
+    hit = SectionedHit(
+        uri="memory/entity_page/person:marcelo",
+        type="entity",
+        path="memory/entities/person/marcelo.md",
+        score=1.0,
+        summary="Late fact past the cap.",
+    )
+    pinned = frozenset({"person:marcelo", "practice:spanish"})
+
+    kept, redundant = split_in_context(
+        tmp_path, [hit], pinned_refs=pinned,
+        whole_refs=frozenset({"practice:spanish"}),
+    )
+
+    assert kept == [hit] and redundant == []
+
+
 def test_dedup_sees_the_page_the_excluded_pins_made_room_for(monkeypatch, tmp_path):
     """With pinned pages excluded from the canonical block, the prompt shows the
     next most-recent page; the dedup must see that same page, so a search hit

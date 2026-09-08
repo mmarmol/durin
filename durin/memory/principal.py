@@ -32,7 +32,7 @@ from durin.memory.memory_writer import write_entity
 # truncates with a "…and N more" note and the unlisted documents stay reachable
 # via `memory_search(scope="library")`. Ranking / topic rollup for large
 # libraries is the scaling refinement.
-_MAX_LIBRARY_DOCS = 30
+_MAX_LIBRARY_DOCS = 20
 _DESC_CHARS = 140
 # Cap on the "Covers:" subjects map — the bounded index of what the library is
 # about (from documents' distilled topics). Keeps the always-on block bounded
@@ -183,7 +183,18 @@ def _load(workspace: Path, ref: str) -> EntityPage | None:
     return EntityPage.from_file(p) if p.exists() else None
 
 
-def _render_pinned_block(page: EntityPage) -> str:
+# The principal's page is the one pinned page no budget fits: the extract
+# pass keeps appending to it. Cap its body in the prompt and point at
+# memory_read_entity for the rest. This is a count of CHARACTERS of body text,
+# not tokens, and it is unrelated to `memory.dream.always_on_token_budget` —
+# that budget fits the always_on guidance pages (whole, token-counted) and
+# never applies to this page.
+_PRINCIPAL_BODY_CHARS = 1500
+
+
+def _render_pinned_block(
+    page: EntityPage, *, body_chars: int | None = None, ref: str | None = None,
+) -> str:
     """Format one entity page for the always-injected pinned block.
 
     Renders a superset of what the hot layer's canonical block carries —
@@ -193,6 +204,13 @@ def _render_pinned_block(page: EntityPage) -> str:
     The shared line renderers come from ``hot_layer`` so the two surfaces
     cannot drift apart. ``always_on`` is dropped from the attributes: it is
     the flag that put the page here, not knowledge about it.
+
+    ``body_chars``, when given, caps the body only — every other line is
+    untouched. Past the cap the body is cut back to the last space and a
+    pointer is appended: naming ``ref`` with ``memory_read_entity`` when
+    given, else a bare ellipsis. Left ``None`` (the default) for callers that
+    already fit their pages into a token budget of their own (the always_on
+    pass); only the principal's page has no such ceiling.
     """
     lines = [f"### {page.name} ({page.type})"]
     if page.aliases:
@@ -215,17 +233,27 @@ def _render_pinned_block(page: EntityPage) -> str:
     if page.body:
         body = "\n".join(
             ln for ln in page.body.splitlines() if not ln.strip().startswith("<!--")
-        )
-        if body.strip():
-            lines.append(body.strip())
+        ).strip()
+        if body_chars is not None and len(body) > body_chars:
+            cut = body[:body_chars].rsplit(" ", 1)[0]
+            pointer = (
+                f" … (truncated; memory_read_entity {ref} for the full page)"
+                if ref else " …"
+            )
+            body = cut + pointer
+        if body:
+            lines.append(body)
     return "\n".join(lines).strip()
 
 
-def _doc_descriptor(workspace: Path, slug: str, md_path: Path) -> tuple[str, str]:
+def _doc_descriptor(
+    workspace: Path, slug: str, md_path: Path, *, with_abstract: bool = True,
+) -> tuple[str, str]:
     """(title, one-line descriptor) for a reference document.
 
-    The descriptor is the distilled outline's abstract when the dream has run,
-    otherwise empty (the title alone still tells the agent the document exists).
+    The descriptor is the distilled outline's abstract when the dream has
+    run and ``with_abstract`` is on, otherwise empty (the title alone still
+    tells the agent the document exists).
     """
     try:
         text = md_path.read_text(encoding="utf-8")
@@ -233,6 +261,8 @@ def _doc_descriptor(workspace: Path, slug: str, md_path: Path) -> tuple[str, str
         return slug, ""
     tm = re.search(r"^title:\s*(.+)$", text, re.MULTILINE)
     title = tm.group(1).strip().strip('"') if tm else slug
+    if not with_abstract:
+        return title, ""
     one = ""
     outline = md_path.with_name(f"{slug}.outline.json")
     if outline.exists():
@@ -247,7 +277,18 @@ def _doc_descriptor(workspace: Path, slug: str, md_path: Path) -> tuple[str, str
     return title, one
 
 
-def _library_subjects(workspace: Path, *, cap: int = _MAX_LIBRARY_SUBJECTS) -> list[str]:
+# The subjects map walks and parses EVERY entity page on disk, and the pinned
+# block that carries it is rebuilt on every prompt. The map only moves when the
+# dream writes entities, so a minute of lag in it is invisible; re-walking the
+# tree once per turn is not.
+_LIBRARY_SUBJECTS_TTL_S = 60.0
+_library_subjects_cache: dict[str, tuple[float, list[str]]] = {}
+
+
+def _library_subjects(
+    workspace: Path, *, cap: int = _MAX_LIBRARY_SUBJECTS,
+    ttl_s: float = _LIBRARY_SUBJECTS_TTL_S,
+) -> list[str]:
     """The subjects the library covers — its bounded "map".
 
     Collects the display names of entities the dream distilled *from* a
@@ -257,7 +298,16 @@ def _library_subjects(workspace: Path, *, cap: int = _MAX_LIBRARY_SUBJECTS) -> l
     under the wrong things. Ranked by how many documents share each subject
     (broadest first), deduped, capped. Naming the subject-space is what keeps a
     document reachable (search its subject) even past the per-document cap.
+
+    Memoized per workspace for ``ttl_s`` seconds. The ranked list is cached
+    uncapped, so any ``cap`` is served from the same entry; pass ``ttl_s=0``
+    for a caller that must observe a freshly written entity.
     """
+    cache_key = str(workspace)
+    if ttl_s > 0:
+        hit = _library_subjects_cache.get(cache_key)
+        if hit is not None and (time.monotonic() - hit[0]) < ttl_s:
+            return hit[1][:cap]
     ents_dir = Path(workspace) / "memory" / "entities"
     if not ents_dir.is_dir():
         return []
@@ -274,7 +324,10 @@ def _library_subjects(workspace: Path, *, cap: int = _MAX_LIBRARY_SUBJECTS) -> l
             slug = ref.split(":", 1)[1] if ":" in ref else ref
             by_subject.setdefault(page.name, set()).add(slug)
     ranked = sorted(by_subject.items(), key=lambda kv: (-len(kv[1]), kv[0].lower()))
-    return [name for name, _docs in ranked[:cap]]
+    names = [name for name, _docs in ranked]
+    if ttl_s > 0:
+        _library_subjects_cache[cache_key] = (time.monotonic(), names)
+    return names[:cap]
 
 
 def _library_topics(workspace: Path) -> list[str]:
@@ -303,31 +356,37 @@ def _library_topics(workspace: Path) -> list[str]:
     ]
 
 
-def build_library_awareness(workspace: Path, *, max_docs: int = _MAX_LIBRARY_DOCS) -> str:
+def build_library_awareness(
+    workspace: Path, *, max_docs: int = _MAX_LIBRARY_DOCS, abstracts: bool = False,
+) -> str:
     """A compact, always-on catalog of ingested documents (one line each).
 
     Gives the agent proactive awareness of what's in the Library without
     carrying any content — the raw documents stay out of default recall, so
     this line-per-document index is how the agent knows a document exists and
     can decide to reach it with ``memory_search(scope="library")`` or a drill.
+    Only the listed documents are opened (titles come from their frontmatter);
+    the rest are counted. ``max_docs=0`` keeps the header, the count and the
+    subject map.
     """
     refs_dir = Path(workspace) / "memory" / "references"
     if not refs_dir.is_dir():
         return ""
-    docs = [
-        _doc_descriptor(workspace, md.stem, md)
-        for md in sorted(refs_dir.glob("*.md"))
-    ]
-    if not docs:
+    md_files = sorted(refs_dir.glob("*.md"))
+    if not md_files:
         return ""
-    shown = docs[:max_docs]
-    lines = [f"- {t}" + (f" — {d}" if d else "") for t, d in shown]
-    more = len(docs) - len(shown)
+    shown_files = md_files[: max(0, max_docs)]
+    docs = [
+        _doc_descriptor(workspace, md.stem, md, with_abstract=abstracts)
+        for md in shown_files
+    ]
+    lines = [f"- {t}" + (f" — {d}" if d else "") for t, d in docs]
+    more = len(md_files) - len(shown_files)
     if more > 0:
         lines.append(f"- …and {more} more (search its subject to reach it)")
     header = (
-        f"## Your document library ({len(docs)} "
-        f"document{'s' if len(docs) != 1 else ''})"
+        f"## Your document library ({len(md_files)} "
+        f"document{'s' if len(md_files) != 1 else ''})"
     )
     note = (
         "These ingested documents are NOT in default recall. Reach one by "
@@ -353,17 +412,29 @@ def build_library_awareness(workspace: Path, *, max_docs: int = _MAX_LIBRARY_DOC
 
 
 def build_pinned_context(
-    workspace: Path, principal_ref: str, *, always_on: Sequence[str] | None = None,
+    workspace: Path, principal_ref: str, *,
+    always_on: Sequence[str] | None = None,
+    library_max_docs: int = _MAX_LIBRARY_DOCS,
+    library_abstracts: bool = False,
 ) -> str:
     """The always-injected layer: who the user is + always_on feedback +
     a one-line-per-document awareness catalog of the ingested Library.
 
     ``always_on`` lets a caller that already walked the entity tree pass the
-    result in; omitted, this walks it itself."""
+    result in; omitted, this walks it itself.
+
+    ``library_max_docs`` and ``library_abstracts`` go straight to
+    :func:`build_library_awareness`: how many documents the catalog lists one
+    per line (0 keeps only the header, the count and the subject map), and
+    whether each listed line also carries the document's distilled abstract.
+    The prompt build fills both from the ``memory.library`` config."""
     parts: list[str] = []
     principal = _load(workspace, principal_ref)
     if principal:
-        parts.append("## Who you're talking to\n\n" + _render_pinned_block(principal))
+        parts.append(
+            "## Who you're talking to\n\n"
+            + _render_pinned_block(principal, body_chars=_PRINCIPAL_BODY_CHARS, ref=principal_ref)
+        )
     pins: list[str] = []
     for ref in (list_always_on(workspace) if always_on is None else always_on):
         if ref == principal_ref:
@@ -373,7 +444,9 @@ def build_pinned_context(
             pins.append(_render_pinned_block(page))
     if pins:
         parts.append("## Always-on guidance\n\n" + "\n\n".join(pins))
-    library = build_library_awareness(workspace)
+    library = build_library_awareness(
+        workspace, max_docs=library_max_docs, abstracts=library_abstracts,
+    )
     if library:
         parts.append(library)
     return "\n\n".join(parts)

@@ -380,6 +380,13 @@ background file watching, and health checks. See
 | `search.cross_encoder.top_n` | `10` | Top-N hits kept after the rerank step |
 | `search.sectioning.max_per_source` | `3` | Max hits from the same ingested document surviving sectioning |
 
+**`memory.library`** — the always-on Library awareness catalog in the pinned block:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `library.awareness_max_docs` | `20` | Documents listed one per line on every turn; `0` keeps only the header, the count and the `Covers:` subject map |
+| `library.awareness_abstracts` | `false` | Append each listed document's distilled abstract to its line (roughly doubles the catalog) |
+
 **`memory.file_watcher`** — background filesystem watcher:
 
 | Key | Default | Meaning |
