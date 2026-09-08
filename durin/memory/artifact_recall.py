@@ -4,8 +4,9 @@
 path (compaction summaries carry "Files/paths examined" trailers; episodic
 notes cite paths) with the lexical index only — no embedding, no grep — so
 a ``read_file`` can carry them at millisecond cost. ``entities_derived_from``
-lists the entity pages a reference document was distilled into, so a drill
-into the document also shows what memory already holds about it.
+lists the entity pages a reference document was distilled into — also from the
+lexical index — so a drill into the document also shows what memory already
+holds about it.
 """
 
 from __future__ import annotations
@@ -19,9 +20,18 @@ from durin.memory.lexical_search import lexical_search
 from durin.memory.query_router import decide_lexical_route
 from durin.memory.storage import load_entry
 
-__all__ = ["entities_derived_from", "memory_notes_for_path"]
+__all__ = [
+    "entities_derived_from",
+    "entities_derived_from_candidates",
+    "memory_notes_for_path",
+]
 
 _NOTE_CLASSES = ("episodic", "stable", "session_summary")
+
+# Ceiling on the entity pages one reference lookup will open. Generous
+# because it bounds a document's whole distilled set, not a page of results;
+# past it the walk it replaced would have been the slower answer anyway.
+_MAX_ENTITY_CANDIDATES = 500
 
 # One rendered note is one line of prose; a long paragraph is cut here so a
 # single entry can't dominate the read result.
@@ -114,18 +124,60 @@ def memory_notes_for_path(workspace: Path, rel_path: str, *, limit: int | None =
     return out
 
 
+def entities_derived_from_candidates(workspace: Path, ref: str) -> list[Path]:
+    """Entity pages that may name ``ref`` in ``derived_from``, path-sorted.
+
+    An entity page's indexed text carries a ``derived_from:`` line, so a
+    phrase search for the ref narrows the walk to the handful of pages that
+    mention it. The index only narrows: a ref quoted in a page's body matches
+    too, so every caller parses the candidate and checks ``derived_from``
+    itself — the page is the truth.
+
+    Falls back to every entity page when the workspace has no index file yet
+    (never indexed), and when the index lookup fails: answering from a walk
+    is slow, answering nothing would be wrong. An empty ref has no candidates
+    at all — a ``derived_from`` entry is always a ``reference:<slug>``.
+    """
+    root = Path(workspace) / "memory" / "entities"
+    ref = (ref or "").strip()
+    if not ref or not root.is_dir():
+        return []
+    if not fts_index_path(workspace).exists():
+        return sorted(root.rglob("*.md"))
+    try:
+        with FTSIndex.open(workspace) as index:
+            hits = lexical_search(
+                index, decide_lexical_route(ref, keywords=ref),
+                limit=_MAX_ENTITY_CANDIDATES,
+                # A side effect of a drill or a webui page load, not a memory
+                # search: the event's row count is read as the number of
+                # searches and its duration as search latency, so emitting
+                # here would dilute both.
+                emit=False,
+            )
+    except Exception:  # noqa: BLE001 — a broken index degrades to a walk
+        return sorted(root.rglob("*.md"))
+    out: list[Path] = []
+    for hit in hits:
+        if hit.type != "entity" or not hit.path:
+            continue
+        md = Path(workspace) / hit.path
+        if md.is_file():
+            out.append(md)
+    return sorted(out)
+
+
 def entities_derived_from(workspace: Path, reference_ref: str, *, limit: int = 12) -> list[str]:
     """Entity refs whose ``derived_from`` names ``reference_ref``, alphabetical.
 
-    Every entity page is scanned, so each file is read once and its raw text
-    is checked for the ref before the much costlier parse. A page that cannot
-    be read or parsed is skipped rather than dropping the whole result.
+    Candidates come from the index (see
+    :func:`entities_derived_from_candidates`); each one is read once and its
+    raw text checked for the ref before the much costlier parse, and the
+    parsed ``derived_from`` decides. A page that cannot be read or parsed is
+    skipped rather than dropping the whole result.
     """
-    root = Path(workspace) / "memory" / "entities"
-    if not root.is_dir():
-        return []
     out: list[str] = []
-    for md in sorted(root.rglob("*.md")):
+    for md in entities_derived_from_candidates(workspace, reference_ref):
         try:
             text = md.read_text(encoding="utf-8")
             if reference_ref not in text:

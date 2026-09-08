@@ -881,7 +881,14 @@ def _uri_for(workspace: Path, md_path: Path) -> Optional[str]:
 
 
 def _entity_text(page: EntityPage) -> str:
-    """Compose the BM25 text for an entity page."""
+    """Compose the BM25 text for an entity page.
+
+    The ``derived_from`` refs ride in their own line so "which entities came
+    from this document" is an index query: a phrase search for the ref lands
+    on the pages that name it instead of walking and parsing every entity
+    page. The refs are frontmatter, not prose — they appear nowhere else in
+    the composed text.
+    """
     parts: list[str] = [page.name]
     if page.aliases:
         parts.append(" ".join(page.aliases))
@@ -889,6 +896,8 @@ def _entity_text(page: EntityPage) -> str:
         parts.append(_render_attributes(page.attributes))
     if page.relations:
         parts.append(_render_relations(page.relations))
+    if page.derived_from:
+        parts.append("derived_from: " + " ".join(page.derived_from))
     if page.body:
         parts.append(page.body)
     return "\n".join(p for p in parts if p)

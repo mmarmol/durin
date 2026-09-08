@@ -168,3 +168,21 @@ def test_reindex_one_file_under_archive_is_noop(tmp_path: Path) -> None:
     reindex_one_file(tmp_path, p)
     with FTSIndex.open(tmp_path) as idx:
         assert idx.count() == 0
+
+
+def test_entity_row_carries_its_derived_from_refs(tmp_path: Path) -> None:
+    """A `derived_from` ref is searchable as a phrase in the entity's FTS row,
+    so a lookup of "which entities came from this document" is an index query
+    instead of a walk over every entity page."""
+    page = EntityPage(
+        type="topic", name="Two Systems", aliases=[], body="Fast and slow.",
+        derived_from=["reference:thinking-fast-and-slow"],
+    )
+    page.save(tmp_path / "memory" / "entities" / "topic" / "two-systems.md")
+    _entity(tmp_path, "topic", "unrelated", body="Nothing to do with the book.")
+    rebuild_fts_index(tmp_path)
+
+    with FTSIndex.open(tmp_path) as idx:
+        hits = idx.search('"reference:thinking-fast-and-slow"')
+
+    assert [h.uri for h in hits] == ["topic:two-systems"]

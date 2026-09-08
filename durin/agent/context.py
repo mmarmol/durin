@@ -310,7 +310,7 @@ class ContextBuilder:
         # Pinned memory: who the user is + always_on feedback
         # (stance/practice). Always injected, independent of retrieval — this
         # is what re-feeds the agent its authored knowledge.
-        pinned, pinned_refs = self._build_pinned_memory(channel=channel)
+        pinned, pinned_refs = self._build_pinned_memory()
         if pinned:
             breakdown["memory_pinned"] = pinned
             parts.append(pinned)
@@ -336,14 +336,14 @@ class ContextBuilder:
         self._last_layer_breakdown["stable"] = breakdown
         return "\n\n---\n\n".join(parts)
 
-    def _build_pinned_memory(self, *, channel: str | None) -> tuple[str, frozenset[str]]:
+    def _build_pinned_memory(self) -> tuple[str, frozenset[str]]:
         """The pinned memory layer: the principal's entity + always_on feedback,
         and the set of entity refs it rendered (so the hot layer skips them).
 
         Always injected, independent of retrieval. The principal is resolved
-        channel → owner (config) → person:anonymous; the owner config is
-        optional (defaults to anonymous until set). Never raises — a failure
-        degrades to no pinned block so the prompt still builds.
+        owner (config) → person:anonymous; the owner config is optional
+        (defaults to anonymous until set). Never raises — a failure degrades
+        to no pinned block so the prompt still builds.
         """
         try:
             from durin.memory.principal import (
@@ -352,7 +352,7 @@ class ContextBuilder:
                 pinned_refs,
                 resolve_owner_principal,
             )
-            principal = resolve_owner_principal(self.workspace, channel)
+            principal = resolve_owner_principal(self.workspace)
             # One walk per prompt build: the block and the ref set that keeps
             # it out of the canonical block are two views of the same pages,
             # and the walk loads every entity page from disk.

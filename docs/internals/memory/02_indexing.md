@@ -166,7 +166,9 @@ Every write goes to **both** tables. The `FTSIndex.upsert` method deletes the pr
 
 **`fts_meta`** stores `uri`, `mtime`, and `indexed_at` for every indexed file. The health-check and staleness detection logic reads `fts_meta` to find rows whose backing file is gone (orphaned rows) or whose `mtime` has advanced since indexing (stale rows).
 
-**BM25 text composition.** FTS5 indexes the full document text with no character budget. For entity pages: `name + aliases + rendered attributes + relations + body` (full body, not truncated). For entries: `headline + summary + entities + topics + body`. For skills: `name + description + body`. The functions `_entity_text` and `_entry_text` in `indexer.py` build these strings.
+**BM25 text composition.** FTS5 indexes the full document text with no character budget. For entity pages: `name + aliases + rendered attributes + relations + derived_from + body` (full body, not truncated). For entries: `headline + summary + entities + topics + body`. For skills: `name + description + body`. The functions `_entity_text` and `_entry_text` in `indexer.py` build these strings.
+
+The `derived_from` refs are composed as their own `derived_from: reference:<slug> …` line. They are frontmatter, not prose, and would otherwise be absent from the row — carrying them makes "which entities were distilled from this document" a phrase query over the index (`artifact_recall.entities_derived_from_candidates`) instead of a walk that parses every entity page. The index only narrows: a ref quoted in a page's body matches the phrase too, so callers parse the candidate and check its `derived_from` list. A workspace with no index file at all falls back to the walk.
 
 ### Session-turn FTS indexing
 
@@ -177,6 +179,8 @@ The indexer's third pass in `rebuild_fts_index` walks `sessions/*.md` and yields
 ### Auto-rebuild on schema mismatch
 
 `ensure_index_fresh` (called at startup) checks the on-disk `meta.json` schema version against `CURRENT_SCHEMA_VERSION`. When they differ, it calls `rebuild_fts_index` and (if the embedding model also changed) `VectorIndex.rebuild_from_workspace`. After the rebuild, it saves a fresh `meta.json` recording the new schema version and model. Previous model identifiers are preserved in `previous_models` as a migration history.
+
+This is the migration mechanism for the composed text itself: a change to what `_entity_text` (or any composer) puts in a row only reaches already-indexed workspaces if `CURRENT_SCHEMA_VERSION` is bumped in the same change. Without the bump, old rows keep their old text and any query that depends on the new signal silently answers empty against them. The constant's comment block records what each version added.
 
 ### File watcher integration
 

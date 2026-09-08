@@ -476,10 +476,15 @@ per-response render budget collapsed to a one-line headline pointer
 
 **Artifact-keyed recall:** drilling a reference document opens with the entities
 that were distilled from it, when any exist — a leading
-`Entities distilled from this document: <ref>, <ref>, …` line built from each
-entity page's `derived_from` list
+`Entities distilled from this document: <ref>, <ref>, …` line
 (`durin/memory/artifact_recall.py::entities_derived_from`), followed by a blank
-line and the unchanged document. It applies to every
+line and the unchanged document. The candidate pages come from the lexical
+index — an entity row carries its `derived_from` refs, so the header is a phrase
+query rather than a walk that parses every entity page — and each candidate is
+then parsed so its `derived_from` list has the final say. An entity written
+since the last index update is missing from the header until it is indexed; a
+workspace with no index falls back to the walk. The webui's reference detail
+(`graph_api._entities_derived_from`) shares the same candidate helper. It applies to every
 uri shape in the reference row of the table above, with or without a section
 anchor, in the single-`uri` form and inside a `uris` batch alike; the shapes are
 normalised to one ref by `durin/memory/drill.py::reference_ref_for_uri`. The companion half

@@ -142,8 +142,9 @@ def test_pinned_context_includes_library_awareness(tmp_path):
 
 
 def test_resolve_principal_owner_then_anonymous():
-    assert resolve_principal("slack:U1", owner="person:marcelo") == "person:marcelo"
+    assert resolve_principal("person:marcelo") == "person:marcelo"
     assert resolve_principal(None) == ANONYMOUS
+    assert resolve_principal() == ANONYMOUS
 
 
 def test_ensure_owner_cold_start(tmp_path):

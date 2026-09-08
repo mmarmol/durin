@@ -1,6 +1,6 @@
 """Principal resolution + the pinned hot-context.
 
-The "user" of a message is resolved PER-MESSAGE: channel-id → owner (config) →
+The "user" of a message is resolved PER-MESSAGE: owner (config) →
 ``person:anonymous``. The pinned context (always injected, independent of
 retrieval) is the principal's person entity + the ``always_on`` feedback
 entities (stance/practice the dream marked always_on). This closes the loop:
@@ -56,13 +56,8 @@ __all__ = [
 ANONYMOUS = "person:anonymous"
 
 
-def resolve_principal(channel_id: str | None, *, owner: str | None = None) -> str:
-    """Who is the user for this message? owner → anonymous.
-
-    ``channel_id`` is accepted for callers that resolve a principal per
-    channel (see :func:`resolve_owner_principal`) but does not affect the
-    result here — no configuration surface maps a channel to a principal.
-    """
+def resolve_principal(owner: str | None = None) -> str:
+    """Who is the user for this message? owner → anonymous."""
     if owner:
         return owner
     return ANONYMOUS
@@ -116,8 +111,8 @@ def list_always_on(workspace: Path) -> list[str]:
     return out
 
 
-def resolve_owner_principal(workspace: Path, channel: str | None = None) -> str:
-    """The principal the prompt build resolves for *channel*.
+def resolve_owner_principal(workspace: Path) -> str:
+    """The principal the prompt build resolves.
 
     The one place that reads ``memory.owner`` from config: the prompt build
     and the search dedup must agree on who the principal is, or the dedup
@@ -130,7 +125,7 @@ def resolve_owner_principal(workspace: Path, channel: str | None = None) -> str:
         owner = getattr(load_config().memory, "owner", None)
     except Exception:  # noqa: BLE001 — no config file is a normal state
         owner = None
-    return resolve_principal(channel, owner=owner)
+    return resolve_principal(owner)
 
 
 def pinned_refs(

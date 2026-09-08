@@ -24,6 +24,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from durin.memory.artifact_recall import entities_derived_from_candidates
 from durin.memory.entity_page import EntityPage
 from durin.memory.paths import walk_class
 from durin.memory.storage import load_entry
@@ -1023,7 +1024,7 @@ def _clean_significance(body: str) -> str | None:
     return text[:200] or None
 
 
-def _entities_derived_from(memory_root: Path, ref: str) -> list[dict[str, Any]]:
+def _entities_derived_from(workspace: Path, ref: str) -> list[dict[str, Any]]:
     """Entities linked to a reference via ``derived_from`` — with the KIND of link.
 
     ``derived_from`` is written by two producers with different meaning, and the
@@ -1037,12 +1038,13 @@ def _entities_derived_from(memory_root: Path, ref: str) -> list[dict[str, Any]]:
       cited a paper).
 
     Distilled entities sort first, then by name.
+
+    Candidate pages come from the lexical index (a page's indexed text carries
+    its ``derived_from`` refs), so only the pages that name the document are
+    opened; the parsed page still decides.
     """
-    entities_dir = memory_root / "entities"
-    if not entities_dir.is_dir():
-        return []
     out: list[dict[str, Any]] = []
-    for md in sorted(entities_dir.rglob("*.md")):
+    for md in entities_derived_from_candidates(workspace, ref):
         try:
             page = EntityPage.from_file(md)
         except Exception:  # noqa: BLE001
@@ -1134,6 +1136,6 @@ def get_reference_detail(
         "chunks_total": len(chunks),
         "body": body,
         "outline": outline,
-        "entities": _entities_derived_from(Path(workspace) / "memory", ref),
+        "entities": _entities_derived_from(Path(workspace), ref),
         "chunks_preview": chunks_preview,
     }
