@@ -380,3 +380,22 @@ async def test_session_key_unknown_session_is_a_clear_message(tmp_path):
     tool = _tool(SessionManager(tmp_path))
     out = await tool.execute(query="x", session_key="websocket:nope")
     assert out == "No session found for key 'websocket:nope'."
+
+
+@pytest.mark.asyncio
+async def test_session_key_zero_matches_includes_session_prefix(tmp_path):
+    """When searching another session and finding no matches, the output
+    must still start with 'Session <key>:' to name the searched session."""
+    sm = SessionManager(tmp_path)
+    _seed_session(sm, "websocket:old", [
+        {"role": "user", "content": "we chose postgres for the ledger"},
+        {"role": "assistant", "content": "noted: postgres it is"},
+    ])
+    sm.save(sm.get_or_create("websocket:old"))
+    sm.invalidate("websocket:old")
+    tool = _tool(sm)
+
+    out = await tool.execute(query="mongodb", session_key="websocket:old")
+
+    assert out.startswith("Session websocket:old:")
+    assert "No matches for 'mongodb'" in out

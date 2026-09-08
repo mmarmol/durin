@@ -304,17 +304,14 @@ class SessionSearchTool(Tool, ContextAware):
     def description(self) -> str:
         return (
             "Search this conversation's prior messages for a keyword or "
-            "regex. Use when you need to recall a specific value, file "
-            "path, error, or decision from earlier in the session and "
-            "re-reading the full history would be wasteful. Covers the "
-            "live history AND older history trimmed from the transcript "
-            "into the session archive, so matches may predate anything "
-            "still visible. Returns matches with their message index "
-            "(or [archived <time>] for archived ones), role, and a short "
-            "surrounding snippet. Searches only this session — for "
-            "cross-session lookups, use memory tools instead. Pass "
-            "`session_key` to search a different, earlier session by its "
-            "key."
+            "regex, or an earlier session when `session_key` is given (read-only). "
+            "Use when you need to recall a specific value, file path, error, "
+            "or decision from earlier in the session and re-reading the full "
+            "history would be wasteful. Covers the live history AND older "
+            "history trimmed from the transcript into the session archive, so "
+            "matches may predate anything still visible. Returns matches with "
+            "their message index (or [archived <time>] for archived ones), role, "
+            "and a short surrounding snippet."
         )
 
     def _session(self) -> Any | None:
@@ -415,6 +412,8 @@ class SessionSearchTool(Tool, ContextAware):
                     + ("" if archive_complete else " (partial scan)")
                     + "."
                 )
+            if other:
+                out = f"Session {session_key}:\n" + out
             return out
 
         # Keep the last `cap` matches — chronological tail is usually the
