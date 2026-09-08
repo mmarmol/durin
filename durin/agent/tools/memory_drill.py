@@ -155,6 +155,14 @@ class MemoryDrillTool(Tool):
             return {"error": str(exc)}
         except OSError as exc:
             return {"error": f"io error: {exc}"}
+        if uri.startswith("reference:"):
+            try:
+                from durin.memory.artifact_recall import entities_derived_from
+                refs = entities_derived_from(self._workspace, uri.split("#", 1)[0])
+            except Exception:  # noqa: BLE001
+                refs = []
+            if refs:
+                text = text.rstrip() + "\n\nEntities distilled from this document: " + ", ".join(refs)
         return {"uri": uri, "content": text}
 
     def _drill_one_safe(self, uri: str) -> dict[str, Any]:

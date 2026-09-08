@@ -757,6 +757,15 @@ class MemoryPrefetchConfig(Base):
     backoff_s: float = Field(default=60.0, ge=0, description="After a timeout or error, skip the prefetch for this many seconds; 0 disables the backoff")
 
 
+class MemoryArtifactRecallConfig(Base):
+    """Memory keyed by the artifact in use: ``read_file`` ends with the memory
+    entries that mention the file (lexical lookup, milliseconds) and a
+    ``memory_drill`` on a reference lists the entities distilled from it."""
+
+    enabled: bool = Field(default=True, description="Append memory notes about a file to read_file results and distilled entities to reference drills")
+    max_notes: int = Field(default=3, ge=1, le=10, description="Notes appended to one read_file result")
+
+
 class MemoryConfig(Base):
     """Memory subsystem configuration root.
 
@@ -801,6 +810,7 @@ class MemoryConfig(Base):
         default_factory=MemoryHealthCheckConfig,
         description="Periodic memory subsystem health probe",
     )
+    artifact_recall: MemoryArtifactRecallConfig = Field(default_factory=MemoryArtifactRecallConfig, description="Memory notes on file reads and reference drills")
 
 
 class AuxModelsConfig(Base):

@@ -474,6 +474,12 @@ class ReadFileTool(_FsTool):
             else:
                 result += f"\n\n(End of file — {total} lines total)"
                 truncated = False
+            notes = self._memory_notes(fp)
+            if notes:
+                result += (
+                    "\n\nMemory notes about this file (memory_drill a uri for the full body):\n"
+                    + "\n".join(notes)
+                )
             self._file_states.record_read(fp, offset=offset, limit=limit)
             self._emit("tool.read_file", {
                 "path": self._display_path(fp),
@@ -491,6 +497,16 @@ class ReadFileTool(_FsTool):
             return f"Error: {e}"
         except Exception as e:
             return f"Error reading file: {e}"
+
+    def _memory_notes(self, fp: Path) -> list[str]:
+        """Memory entries that mention this file, or [] — never raises."""
+        if self._workspace is None:
+            return []
+        try:
+            from durin.memory.artifact_recall import memory_notes_for_path
+            return memory_notes_for_path(self._workspace, self._display_path(fp))
+        except Exception:  # noqa: BLE001
+            return []
 
     def _read_pdf(self, fp: Path, pages: str | None) -> str:
         try:

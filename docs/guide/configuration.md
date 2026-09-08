@@ -426,6 +426,16 @@ Slash commands, workflow nodes, subagents, and every session kind the runtime tr
 | `enabled` | `true` | Run periodic health probe; disable for one less background thread |
 | `interval_seconds` | `900` | Probe interval in seconds (min 60, max 86400) |
 
+**`memory.artifact_recall`** — memory notes on file reads and reference drills:
+a `read_file` text result ends with the memory entries that mention the file
+(lexical lookup only, no embedding), and a `memory_drill` on a `reference:<slug>`
+document ends with the entities distilled from it:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `true` | Append memory notes about a file to `read_file` results and distilled entities to reference drills |
+| `max_notes` | `3` | Notes appended to one `read_file` result |
+
 ---
 
 ### `documents`
