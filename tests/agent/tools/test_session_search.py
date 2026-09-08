@@ -354,3 +354,29 @@ async def test_archive_scan_respects_the_byte_budget(tmp_path, monkeypatch):
     assert "needle new" in out, "newest segment is always scanned"
     assert "needle old" not in out, "older segment was beyond the budget"
     assert "partial scan" in out
+
+
+@pytest.mark.asyncio
+async def test_session_key_searches_another_session_read_only(tmp_path):
+    sm = SessionManager(tmp_path)
+    _seed_session(sm, "websocket:old", [
+        {"role": "user", "content": "we chose postgres for the ledger"},
+        {"role": "assistant", "content": "noted: postgres it is"},
+    ])
+    sm.save(sm.get_or_create("websocket:old"))   # _seed_session only fills the cache
+    sm.invalidate("websocket:old")                # read_session_file must find it on disk
+    tool = _tool(sm)  # its RequestContext points at cli:d, not websocket:old
+
+    out = await tool.execute(query="postgres", session_key="websocket:old")
+
+    assert out.startswith("Session websocket:old:")
+    assert "2 matches" in out
+    assert "postgres" in out
+    assert "websocket:old" not in sm._cache   # read_session_file, never get_or_create
+
+
+@pytest.mark.asyncio
+async def test_session_key_unknown_session_is_a_clear_message(tmp_path):
+    tool = _tool(SessionManager(tmp_path))
+    out = await tool.execute(query="x", session_key="websocket:nope")
+    assert out == "No session found for key 'websocket:nope'."
