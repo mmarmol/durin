@@ -818,9 +818,9 @@ async def test_timeout_ends_the_recall_with_zero(tmp_path: Path, monkeypatch) ->
 
 @pytest.mark.asyncio
 async def test_a_skipped_prefetch_emits_no_frames(tmp_path: Path, monkeypatch) -> None:
-    """A gate skip (here, a message too short to search) never opens a
-    recall in the first place, so it emits neither a `start` nor an `end`
-    frame — same as today, before this announcement existed."""
+    """A gate skip — a message too short to search, or an active backoff —
+    never opens a recall in the first place, so it emits neither a `start`
+    nor an `end` frame — same as today, before this announcement existed."""
     fake = _FakeSearch()
     loop, captured, rec = _make_loop(tmp_path, monkeypatch, fake=fake)
     seen: list[tuple[str, bool, list[dict] | None]] = []
@@ -836,3 +836,62 @@ async def test_a_skipped_prefetch_emits_no_frames(tmp_path: Path, monkeypatch) -
     recall = [ev for _c, _h, evs in seen for ev in (evs or []) if ev.get("name") == "memory_prefetch"]
     assert recall == []
     assert fake.calls == []
+
+    # The backoff gate (time-dependent, unlike the message-shape gates above)
+    # skips the same way: no frames, and the row names the gate that fired.
+    loop._prefetch_backoff_until = time.monotonic() + 10
+    seen.clear()
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION),
+        on_progress=on_progress,
+    )
+
+    recall = [ev for _c, _h, evs in seen for ev in (evs or []) if ev.get("name") == "memory_prefetch"]
+    assert recall == []
+    assert fake.calls == []
+    assert [d for t, d in rec.events if t == "memory.prefetch"][-1]["skipped"] == "backoff"
+
+
+@pytest.mark.asyncio
+async def test_gates_are_evaluated_once_per_turn(tmp_path: Path, monkeypatch) -> None:
+    """`_state_build` computes `_prefetch_skip_reason` once to decide whether
+    to announce a `start`/`end` frame pair, then hands that verdict to
+    `_memory_prefetch` rather than letting it recompute one of its own. Two
+    evaluations can disagree — the backoff and no_index gates are time- and
+    filesystem-dependent, so a concurrent session (or the clock) can flip the
+    answer across the `await` between the `start` frame and the call to
+    `_memory_prefetch` — which would announce a search that then reports
+    itself skipped, or (as covered by the other tests in this file) close
+    with zero hits despite a search that actually ran. One evaluation per
+    turn keeps the announcement and the `memory.prefetch` row honest by
+    construction."""
+    fake = _FakeSearch(total=1)
+    loop, captured, rec = _make_loop(tmp_path, monkeypatch, fake=fake)
+    real_skip_reason = AgentLoop._prefetch_skip_reason
+    calls = 0
+
+    def counting_skip_reason(self, ctx, cfg):
+        nonlocal calls
+        calls += 1
+        return real_skip_reason(self, ctx, cfg)
+
+    monkeypatch.setattr(AgentLoop, "_prefetch_skip_reason", counting_skip_reason)
+    seen: list[tuple[str, bool, list[dict] | None]] = []
+
+    async def on_progress(content: str, *, tool_hint: bool = False, tool_events: list[dict] | None = None) -> None:
+        seen.append((content, tool_hint, tool_events))
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION),
+        on_progress=on_progress,
+    )
+
+    assert calls == 1
+
+    recall = [ev for _c, _h, evs in seen for ev in (evs or []) if ev.get("name") == "memory_prefetch"]
+    assert [ev["phase"] for ev in recall] == ["start", "end"]
+    end_hits = recall[1]["arguments"]["hits"]
+    assert end_hits > 0
+    row = [d for t, d in rec.events if t == "memory.prefetch"][-1]
+    assert "skipped" not in row
+    assert row["hits"] == end_hits

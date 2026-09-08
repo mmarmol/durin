@@ -2917,10 +2917,18 @@ class AgentLoop:
             reason = "no_tool"
         return reason
 
-    async def _memory_prefetch(self, ctx: TurnContext) -> str:
+    async def _memory_prefetch(
+        self, ctx: TurnContext, *, skip_reason: str | None, cfg: "MemoryPrefetchConfig"
+    ) -> str:
         """One warm memory_search with the user message, fenced for the wire
         copy of the message. Returns "" (and records why) whenever the search
-        should not or could not run — the turn never waits on memory."""
+        should not or could not run — the turn never waits on memory.
+
+        `skip_reason` and `cfg` come from the caller's own `_prefetch_skip_reason`
+        call rather than a second one here: that gate reads the clock and the
+        filesystem, so evaluating it twice for one turn (once to decide the
+        `start` announcement, again here) could disagree with itself across
+        the `await` between them."""
         import re
 
         from durin.agent.context import build_memory_context_block
@@ -2932,9 +2940,8 @@ class AgentLoop:
             reset_telemetry,
         )
 
-        cfg = self._prefetch_config()
         text = ctx.msg.content.strip() if isinstance(ctx.msg.content, str) else ""
-        reason = self._prefetch_skip_reason(ctx, cfg)
+        reason = skip_reason
         if reason is not None:
             self._emit_prefetch(ctx.session_key, hits=0, chars=0, duration_ms=0, skipped=reason)
             return ""
@@ -3056,13 +3063,19 @@ class AgentLoop:
         if ctx.on_retry_wait is None:
             ctx.on_retry_wait = await self._build_retry_wait_callback(ctx.msg)
 
-        # Whether a search will run is known before it runs — the same gate
-        # check _memory_prefetch makes internally — so the announcement can
-        # bracket the search with a `start` frame before and an `end` frame
-        # after, rather than only surfacing it on the way out. A gate skip
-        # announces nothing, as today.
+        # Whether a search will run is known before it runs, so the
+        # announcement can bracket the search with a `start` frame before and
+        # an `end` frame after, rather than only surfacing it on the way out.
+        # Evaluated exactly once: the gate reads the clock and the
+        # filesystem, so a second evaluation inside _memory_prefetch (after
+        # the `await` below) could disagree with this one — a `start` frame
+        # fires, backoff then kicks in, and the search reports itself
+        # skipped instead of closing the recall it opened. _memory_prefetch
+        # takes this verdict as an argument and never recomputes it. A gate
+        # skip announces nothing, as today.
         prefetch_cfg = self._prefetch_config()
-        prefetch_will_search = self._prefetch_skip_reason(ctx, prefetch_cfg) is None
+        prefetch_skip_reason = self._prefetch_skip_reason(ctx, prefetch_cfg)
+        prefetch_will_search = prefetch_skip_reason is None
         if prefetch_will_search and ctx.on_progress is not None:
             from durin.utils.progress_events import invoke_on_progress
             query = ctx.msg.content.strip() if isinstance(ctx.msg.content, str) else ""
@@ -3080,7 +3093,9 @@ class AgentLoop:
             with suppress(Exception):
                 await invoke_on_progress(ctx.on_progress, "", tool_hint=True, tool_events=[start_event])
 
-        ctx.memory_prefetch = await self._memory_prefetch(ctx)
+        ctx.memory_prefetch = await self._memory_prefetch(
+            ctx, skip_reason=prefetch_skip_reason, cfg=prefetch_cfg
+        )
 
         if prefetch_will_search and ctx.on_progress is not None:
             from durin.utils.progress_events import invoke_on_progress
