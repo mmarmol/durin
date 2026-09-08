@@ -313,6 +313,13 @@ class ContextCompositionEvent(TypedDict):
     the caching?" or "how much of our context is memory vs history
     today?".
 
+    One row per real prompt build. The build that opens a turn runs
+    before the loop binds the per-run telemetry logger, so the row is
+    routed to the session's logger by ``session_key``; a build with
+    neither a bound logger nor a session key emits nothing. The
+    consolidator's token probe builds a throwaway prompt and is
+    excluded (``probe=True``), so the series describes turns only.
+
     All counts are tiktoken-estimated (cl100k_base) over the rendered
     text — they're indicative, not byte-exact for every provider's
     tokenizer.

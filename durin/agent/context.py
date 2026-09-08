@@ -482,8 +482,16 @@ class ContextBuilder:
         supports_audio_input: bool = False,
         active_persona_soul: str | None = None,
         memory_prefetch: str | None = None,
+        *,
+        probe: bool = False,
     ) -> list[dict[str, Any]]:
-        """Build the complete message list for an LLM call."""
+        """Build the complete message list for an LLM call.
+
+        ``probe=True`` marks a throwaway build whose only purpose is to be
+        measured (the consolidator's token estimate). Such a build neither
+        emits ``context.composition`` nor updates ``last_composition``, so the
+        telemetry series and the cached payload keep describing real turns.
+        """
         # The task-state anchor groups goal + decision log + todos
         # + executing-plan pointer under one <task-state> frame, re-injected
         # every turn (derived from session.metadata, so it survives
@@ -560,6 +568,18 @@ class ContextBuilder:
             last = dict(messages[-1])
             last["content"] = self._merge_message_content(last.get("content"), merged)
             messages[-1] = last
+            if not probe:
+                self._emit_composition_event(
+                    history=history,
+                    current_user_content=merged,
+                    tools=tools,
+                    iteration=iteration,
+                    session_key=session_key,
+                    memory_prefetch=memory_prefetch,
+                )
+            return messages
+        messages.append({"role": current_role, "content": merged})
+        if not probe:
             self._emit_composition_event(
                 history=history,
                 current_user_content=merged,
@@ -568,16 +588,6 @@ class ContextBuilder:
                 session_key=session_key,
                 memory_prefetch=memory_prefetch,
             )
-            return messages
-        messages.append({"role": current_role, "content": merged})
-        self._emit_composition_event(
-            history=history,
-            current_user_content=merged,
-            tools=tools,
-            iteration=iteration,
-            session_key=session_key,
-            memory_prefetch=memory_prefetch,
-        )
         return messages
 
     def _emit_composition_event(
@@ -598,7 +608,10 @@ class ContextBuilder:
         try:
             import json
 
-            from durin.telemetry.logger import current_telemetry
+            from durin.telemetry.logger import (
+                current_telemetry,
+                get_session_logger,
+            )
             from durin.utils.helpers import (
                 estimate_message_tokens,
                 estimate_text_tokens,
@@ -606,7 +619,14 @@ class ContextBuilder:
 
             logger_obj = current_telemetry()
             if logger_obj is None:
-                return
+                # The turn's first prompt build happens before the agent loop
+                # binds the per-run telemetry ContextVar, so resolve the
+                # session's logger by key instead. Without this fallback the
+                # row describing the real turn — the only one that carries the
+                # per-turn memory prefetch — is silently dropped.
+                if not session_key:
+                    return
+                logger_obj = get_session_logger(session_key)
 
             stable = self._last_layer_breakdown.get("stable", {})
             volatile = self._last_layer_breakdown.get("volatile", {})

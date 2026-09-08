@@ -919,6 +919,10 @@ class Consolidator:
                 summary = legacy.get("text") if isinstance(legacy.get("text"), str) else None
             elif isinstance(legacy, str):
                 summary = legacy
+        # ``probe=True``: this build exists only to be measured. Without the
+        # flag it would emit a ``context.composition`` row and overwrite the
+        # cached payload that /status and the CLI footer read, so the estimate
+        # would masquerade as the turn's real prompt composition.
         probe_messages = self._build_messages(
             history=history,
             current_message="[token-probe]",
@@ -927,6 +931,7 @@ class Consolidator:
             sender_id=None,
             session_summary=summary,
             session_metadata=session.metadata,
+            probe=True,
         )
         return estimate_prompt_tokens_chain(
             self.provider,

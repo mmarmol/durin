@@ -218,3 +218,109 @@ def test_composition_event_history_growth_is_observable(monkeypatch, tmp_path):
     ][-1][1]["history_msg_tokens"]
 
     assert long_history_tokens > short_history_tokens * 5
+
+
+class _SessionLoggerRecorder:
+    """Stand-in for ``get_session_logger``: one recorder for every key."""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict]] = []
+
+    def __call__(self, session_key, base_dir=None):
+        return self
+
+    def log(self, event_type, data=None):
+        self.events.append((event_type, dict(data or {})))
+
+
+def test_turn_build_emits_through_the_session_logger_without_a_bound_contextvar(
+    monkeypatch, tmp_path,
+):
+    """The real turn's first build runs before the loop binds the per-run
+    telemetry ContextVar, so the row has to reach the session logger by key —
+    otherwise the turn that carries the prefetch never reports its composition."""
+    from durin.agent.context import build_memory_context_block
+    from durin.telemetry.logger import current_telemetry
+
+    assert current_telemetry() is None
+    rec = _SessionLoggerRecorder()
+    monkeypatch.setattr("durin.telemetry.logger.get_session_logger", rec)
+
+    b = _make_builder(tmp_path)
+    block = build_memory_context_block(
+        "=== CANONICAL: person:ana (canonical entity page) ===\n"
+        + "Ana runs the bakery on Main St. " * 40
+        + "\n=== END CANONICAL ==="
+    )
+
+    b.build_messages(
+        history=[{"role": "user", "content": "hi"}],
+        current_message="what does Ana do",
+        session_key="websocket:abc",
+        iteration=0,
+        memory_prefetch=block,
+    )
+
+    composition = [e for e in rec.events if e[0] == "context.composition"]
+    assert len(composition) == 1, f"got events: {[e[0] for e in rec.events]}"
+    payload = composition[0][1]
+    assert payload["session_key"] == "websocket:abc"
+    assert payload["iteration"] == 0
+    assert payload["volatile_breakdown"]["memory_prefetch"] > 0
+    assert b.last_composition == payload
+
+
+def test_no_session_key_and_no_telemetry_emits_nothing(monkeypatch, tmp_path):
+    """Without a bound logger and without a session key there is nowhere to
+    route the row; the build must not invent a destination."""
+    rec = _SessionLoggerRecorder()
+    monkeypatch.setattr("durin.telemetry.logger.get_session_logger", rec)
+    monkeypatch.setattr("durin.telemetry.logger.current_telemetry", lambda: None)
+
+    b = _make_builder(tmp_path)
+    b.build_messages(history=[], current_message="hi")
+
+    assert rec.events == []
+    assert b.last_composition is None
+
+
+def test_compaction_probe_emits_nothing_and_leaves_last_composition(monkeypatch, tmp_path):
+    """The consolidator's token probe builds a throwaway prompt. It must not
+    emit a composition row nor overwrite the cached payload that /status and
+    the CLI footer read — those describe the real turn."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from durin.agent.loop import AgentLoop
+    from durin.bus.queue import MessageBus
+    from durin.providers.base import LLMResponse
+
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    provider.estimate_prompt_tokens.return_value = (10_000, "test")
+    loop = AgentLoop(
+        bus=MessageBus(), provider=provider, workspace=tmp_path, model="test-model",
+    )
+    loop.provider.chat_with_retry = AsyncMock(return_value=LLMResponse(content="ok", tool_calls=[]))
+    loop.tools.get_definitions = MagicMock(return_value=[])
+
+    session = loop.sessions.get_or_create("cli:probe")
+    for i in range(3):
+        session.add_message("user", f"question {i}")
+        session.add_message("assistant", f"answer {i}")
+    loop.sessions.save(session)
+
+    sentinel = {"estimated_total": 1234, "session_key": "cli:probe"}
+    loop.context.last_composition = sentinel
+
+    # Consolidation runs with the session's telemetry bound — that binding is
+    # what let the probe's rows reach the log in the first place.
+    events = _bind_telemetry(monkeypatch)
+    rec = _SessionLoggerRecorder()
+    monkeypatch.setattr("durin.telemetry.logger.get_session_logger", rec)
+
+    tokens, _source = loop.consolidator.estimate_session_prompt_tokens(session)
+
+    assert tokens > 0
+    assert [e for e in events if e[0] == "context.composition"] == []
+    assert [e for e in rec.events if e[0] == "context.composition"] == []
+    assert loop.context.last_composition is sentinel
