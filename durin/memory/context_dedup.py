@@ -38,6 +38,7 @@ from durin.memory.sectioned_output import SectionedHit
 __all__ = [
     "dedup_key",
     "prefix_map",
+    "prefix_map_from_text",
     "render_in_context_section",
     "split_in_context",
 ]
@@ -98,6 +99,34 @@ def prefix_map(hot: HotLayer) -> dict[str, str]:
     return out
 
 
+_RENDERED_BLOCK = re.compile(
+    r"^=== (?P<kind>CANONICAL|FRAGMENT): (?P<header>.*?) ===\n"
+    r"(?P<body>.*?)"
+    r"^=== END (?P=kind) ===$",
+    re.MULTILINE | re.DOTALL,
+)
+
+
+def prefix_map_from_text(text: str) -> dict[str, str]:
+    """Same map as ``prefix_map``, recovered from an already-rendered hot layer.
+
+    A caller whose prompt carries a *frozen* eager surface holds the hot layer
+    as the text the model was shown, not as a ``HotLayer``: the blocks are
+    parsed back out by their markers so containment is judged against exactly
+    that text. Section prose between blocks is ignored, and an unterminated
+    block (a truncated rendering) simply contributes no key.
+    """
+    out: dict[str, str] = {}
+    for match in _RENDERED_BLOCK.finditer(text):
+        key = match.group("header").rsplit(" (", 1)[0].strip()
+        if not key:
+            continue
+        if match.group("kind") == "FRAGMENT" and key.endswith(".md"):
+            key = key[: -len(".md")]
+        out[key] = _norm(match.group("body"))
+    return out
+
+
 def dedup_key(ref: str) -> str:
     """Reduce a rendered marker's ref to the key `whole_refs` is matched on.
 
@@ -134,6 +163,7 @@ def split_in_context(
     workspace: Path, hits: list[SectionedHit], *,
     pinned_refs: frozenset[str] = frozenset(),
     whole_refs: frozenset[str] | None = None,
+    hot_layer_text: str | None = None,
 ) -> tuple[list[SectionedHit], list[SectionedHit]]:
     """Partition ``hits`` into ``(kept, already_in_context)``.
 
@@ -146,6 +176,15 @@ def split_in_context(
     pinned block renders those pages whole and they never appear in the
     hot layer), or when the hot-layer block for its ref exists AND fully
     contains the hit's rendered body.
+
+    ``hot_layer_text`` overrides that disk read with a hot layer already
+    rendered — what a caller whose eager surface is frozen for the session
+    actually has in context. Passing it (``""`` included: a session frozen
+    over a workspace with nothing canonical carries a genuinely empty hot
+    layer) means the workspace is never read, so a page written after the
+    freeze cannot collapse a hit the model was never shown. The matching
+    ``pinned_refs``/``whole_refs`` for that same frozen rendering are the
+    caller's to pass.
 
     ``whole_refs`` is the subset of ``pinned_refs`` the pinned block
     renders whole — the always_on guidance — and defaults to
@@ -161,7 +200,10 @@ def split_in_context(
         return hits, []
     whole = pinned_refs if whole_refs is None else whole_refs
     try:
-        prefix = prefix_map(read_hot_layer(workspace, exclude=pinned_refs))
+        if hot_layer_text is None:
+            prefix = prefix_map(read_hot_layer(workspace, exclude=pinned_refs))
+        else:
+            prefix = prefix_map_from_text(hot_layer_text)
     except Exception:  # noqa: BLE001 - degrade to no-dedup
         return hits, []
     if not prefix and not whole:

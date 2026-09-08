@@ -17,12 +17,16 @@ import pytest
 
 from durin.agent.tools.memory_search import (
     MemorySearchTool,
+    bind_turn_eager_surface,
     bind_turn_prefetch_refs,
+    reset_turn_eager_surface,
     reset_turn_prefetch_refs,
 )
 from durin.memory.aliases_cache import _clear_all
+from durin.memory.eager_surface import EagerSnapshot
 from durin.memory.entity_page import EntityPage
 from durin.memory.field_patch import FieldPatch
+from durin.memory.hot_layer import HotLayer
 from durin.memory.memory_writer import write_entity
 from durin.memory.principal import (
     _PRINCIPAL_BODY_CHARS,
@@ -31,6 +35,7 @@ from durin.memory.principal import (
     ensure_owner,
     mark_always_on,
 )
+from durin.memory.section_markers import end_marker, fragment_marker
 
 
 @pytest.fixture(autouse=True)
@@ -131,3 +136,135 @@ def test_principal_page_hit_survives_past_the_body_cap(tmp_path: Path) -> None:
     assert out["total"] == 1
     assert f"=== CANONICAL: memory/entity_page/{ANONYMOUS}" in out["sectioned_rendered"]
     assert "## Matches shown in your Memory sections" not in out["sectioned_rendered"]
+
+
+# ---------------------------------------------------------------------------
+# The dedup judges the frozen eager surface, not the live workspace
+# ---------------------------------------------------------------------------
+
+
+def _snapshot(hot: str, refs: frozenset[str] = frozenset()) -> EagerSnapshot:
+    return EagerSnapshot(
+        pinned="", hot=hot, refs=refs, turn=1,
+        frozen_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+
+def _frozen_hot(*fragments: str) -> str:
+    """A hot layer rendered exactly the way the prompt renders it."""
+    return HotLayer(
+        identity="", canonical_blocks=[], fragment_blocks=list(fragments), headlines=[],
+    ).render()
+
+
+def _fragment(path: str, body: str) -> str:
+    return "\n".join([fragment_marker(path, ts="2026-09-08"), body, end_marker("fragment")])
+
+
+def _write_entry(workspace: Path, entities: str) -> None:
+    entries = workspace / "memory" / "episodic"
+    entries.mkdir(parents=True, exist_ok=True)
+    (entries / "bakery.md").write_text(
+        "---\nid: bakery\nheadline: Ana opened a bakery\n"
+        f"summary: Ana opened a bakery on Main St in March.\nentities: {entities}\n---\n\n"
+        "Ana opened a bakery on Main St in March.\n",
+        encoding="utf-8",
+    )
+
+
+def test_a_hit_inside_the_frozen_hot_text_collapses_to_a_pointer(tmp_path: Path) -> None:
+    """The entry is untagged, so it never reaches the live hot layer: the only
+    thing that can collapse this hit is the frozen text the turn carries."""
+    _write_entry(tmp_path, "[]")
+    tool = MemorySearchTool(workspace=tmp_path, context_dedup=True)
+
+    plain = asyncio.run(tool.execute(query="bakery", scope="dreamed", level="warm"))
+    assert "already_in_context" not in plain
+
+    token = bind_turn_eager_surface(_snapshot(_frozen_hot(
+        _fragment("memory/episodic/bakery.md", "Ana opened a bakery on Main St in March."),
+    )))
+    try:
+        out = asyncio.run(tool.execute(query="bakery", scope="dreamed", level="warm"))
+    finally:
+        reset_turn_eager_surface(token)
+
+    assert out["already_in_context"] == ["memory/episodic/bakery"]
+    assert "=== FRAGMENT: memory/episodic/bakery " not in out["sectioned_rendered"]
+
+
+def test_an_entry_written_after_the_freeze_still_renders_whole(tmp_path: Path) -> None:
+    """It is in the live hot layer but not in the text the model was shown at
+    the freeze — collapsing it would hand the model a pointer to content it
+    never received."""
+    _write_entry(tmp_path, "[person:ana]")
+    tool = MemorySearchTool(workspace=tmp_path, context_dedup=True)
+
+    # Premise: judged against the live workspace, this hit collapses.
+    live = asyncio.run(tool.execute(query="bakery", scope="dreamed", level="warm"))
+    assert live["already_in_context"] == ["memory/episodic/bakery"]
+
+    token = bind_turn_eager_surface(_snapshot(_frozen_hot(
+        _fragment("memory/episodic/other.md", "Something else entirely."),
+    )))
+    try:
+        out = asyncio.run(tool.execute(query="bakery", scope="dreamed", level="warm"))
+    finally:
+        reset_turn_eager_surface(token)
+
+    assert "already_in_context" not in out
+    assert "=== FRAGMENT: memory/episodic/bakery " in out["sectioned_rendered"]
+
+
+def test_a_page_pinned_after_the_freeze_still_renders_whole(tmp_path: Path) -> None:
+    """The whole-rendered set comes off the snapshot too: a page marked
+    always_on after the freeze is in the live pinned block, not in the frozen
+    one the model holds."""
+    page = EntityPage(
+        type="practice", name="Always Spanish",
+        body="Answer in Spanish unless asked otherwise.",
+    )
+    page.save(tmp_path / "memory" / "entities" / "practice" / "always-spanish.md")
+    mark_always_on(tmp_path, "practice:always-spanish")
+    tool = MemorySearchTool(workspace=tmp_path, context_dedup=True)
+
+    # Premise: live, the pin collapses the hit (the pinned block renders it whole).
+    live = asyncio.run(tool.execute(query="Always Spanish", scope="dreamed", level="warm"))
+    assert live["already_in_context"] == ["memory/entity_page/practice:always-spanish"]
+
+    token = bind_turn_eager_surface(_snapshot(_frozen_hot(), refs=frozenset()))
+    try:
+        out = asyncio.run(tool.execute(query="Always Spanish", scope="dreamed", level="warm"))
+    finally:
+        reset_turn_eager_surface(token)
+
+    assert "already_in_context" not in out
+    assert "=== CANONICAL: memory/entity_page/practice:always-spanish" in out["sectioned_rendered"]
+
+
+def test_concurrent_sessions_never_see_each_others_snapshot(tmp_path: Path) -> None:
+    """One tool instance serves every session; the surface is carried in a
+    ContextVar so a search landing on session B while A's turn is open judges
+    B's own frozen text."""
+    _write_entry(tmp_path, "[]")
+    tool = MemorySearchTool(workspace=tmp_path, context_dedup=True)
+    contains = _snapshot(_frozen_hot(
+        _fragment("memory/episodic/bakery.md", "Ana opened a bakery on Main St in March."),
+    ))
+    lacks = _snapshot(_frozen_hot(_fragment("memory/episodic/other.md", "Something else.")))
+
+    async def _turn(snapshot: EagerSnapshot) -> dict:
+        token = bind_turn_eager_surface(snapshot)
+        try:
+            await asyncio.sleep(0)  # let the other task bind before we search
+            return await tool.execute(query="bakery", scope="dreamed", level="warm")
+        finally:
+            reset_turn_eager_surface(token)
+
+    async def _both() -> tuple[dict, dict]:
+        return await asyncio.gather(_turn(contains), _turn(lacks))
+
+    deduped, whole = asyncio.run(_both())
+
+    assert deduped["already_in_context"] == ["memory/episodic/bakery"]
+    assert "already_in_context" not in whole

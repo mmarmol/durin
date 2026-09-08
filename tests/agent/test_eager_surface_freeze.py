@@ -10,6 +10,7 @@ bring the write straight back into the hot layer.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -309,3 +310,239 @@ def test_session_is_autonomous_matches_origin_type_and_prefixes(tmp_path: Path) 
     # reads the session-kind half of the check off the key alone.
     assert loop._session_is_autonomous(None, "cron:job1:run:1") is True
     assert loop._session_is_autonomous(None, "websocket:c") is False
+
+
+# ---------------------------------------------------------------------------
+# Session boundaries
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_new_makes_the_next_turn_render_live_and_freeze_again(tmp_path: Path) -> None:
+    """``/new`` starts a different conversation: the surface it inherits was
+    rendered for the one that just closed, so the first turn after it renders
+    from disk and stores a snapshot of its own."""
+    _seed_workspace(tmp_path)
+    loop, stable = _make_loop(tmp_path)
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION)
+    )
+    first = EagerSnapshot.from_metadata(
+        loop.sessions.get_or_create("websocket:c").metadata[SNAPSHOT_KEY]
+    )
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content="/new")
+    )
+    assert SNAPSHOT_KEY not in loop.sessions.get_or_create("websocket:c").metadata
+
+    _write_entity(tmp_path, "company:bakery", "The bakery opened on Main St in March.", "Bakery")
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION)
+    )
+
+    # A command never reaches the model, so these are the two model turns.
+    assert len(stable) == 2
+    assert "company:bakery" in stable[1]["memory_hot"]
+    fresh = EagerSnapshot.from_metadata(
+        loop.sessions.get_or_create("websocket:c").metadata[SNAPSHOT_KEY]
+    )
+    assert fresh is not None and first is not None
+    assert fresh.hot == stable[1]["memory_hot"] != first.hot
+
+
+@pytest.mark.asyncio
+async def test_a_compaction_round_makes_the_next_turn_render_live(tmp_path: Path) -> None:
+    """Compaction rewrites the conversation, so the cached prefix is gone
+    anyway: refreshing the eager surface there is free, and it is the boundary
+    that keeps a long session's eager view from going arbitrarily stale."""
+    _seed_workspace(tmp_path)
+    loop, stable = _make_loop(tmp_path)
+    # The hook's own LLM work (decision log, learnings) is not under test.
+    loop.consolidator.decision_log_enabled = False
+    loop.consolidator.compaction_learnings_enabled = False
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION)
+    )
+    _write_entity(tmp_path, "company:bakery", "The bakery opened on Main St in March.", "Bakery")
+
+    session = loop.sessions.get_or_create("websocket:c")
+    assert SNAPSHOT_KEY in session.metadata
+    session.last_consolidated = len(session.messages)
+    await loop.consolidator._post_compaction_hooks(session, 0, True)
+    assert SNAPSHOT_KEY not in session.metadata
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION)
+    )
+
+    assert stable[1]["memory_hot"] != stable[0]["memory_hot"]
+    assert "company:bakery" in stable[1]["memory_hot"]
+    assert SNAPSHOT_KEY in loop.sessions.get_or_create("websocket:c").metadata
+
+
+@pytest.mark.asyncio
+async def test_the_compaction_drop_is_saved_immediately(tmp_path: Path) -> None:
+    """A turn that dies before its own save must not leave the stale surface on
+    disk for the next process to pick up."""
+    _seed_workspace(tmp_path)
+    loop, _ = _make_loop(tmp_path)
+    loop.consolidator.decision_log_enabled = False
+    loop.consolidator.compaction_learnings_enabled = False
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION)
+    )
+    session = loop.sessions.get_or_create("websocket:c")
+    session.last_consolidated = len(session.messages)
+    await loop.consolidator._post_compaction_hooks(session, 0, True)
+
+    reloaded = SessionManager(workspace=tmp_path).get_or_create("websocket:c")
+    assert SNAPSHOT_KEY not in reloaded.metadata
+
+
+# ---------------------------------------------------------------------------
+# The turn's own searches are judged against the frozen surface
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_search_in_the_turn_is_judged_against_the_frozen_surface(
+    tmp_path: Path,
+) -> None:
+    """An entity written after the freeze is in the workspace's hot layer but
+    not in the prompt the model holds. The model's own search for it must
+    render it whole: collapsing it to a pointer would cite content this
+    conversation was never shown."""
+    from durin.agent.tools.memory_search import MemorySearchTool
+    from durin.providers.base import ToolCallRequest
+
+    _seed_workspace(tmp_path)
+    loop, _ = _make_loop(tmp_path)
+    loop.tools.register(MemorySearchTool(workspace=tmp_path, context_dedup=True))
+
+    tool_outputs: list[str] = []
+    calls = {"n": 0}
+
+    async def _chat(*args, **kwargs):
+        messages = args[0] if args else kwargs["messages"]
+        for m in messages:
+            if m.get("role") == "tool":
+                tool_outputs.append(str(m.get("content")))
+        calls["n"] += 1
+        if calls["n"] % 2 == 1:
+            return LLMResponse(content="", tool_calls=[ToolCallRequest(
+                id=f"c{calls['n']}", name="memory_search",
+                arguments={"query": "bakery", "scope": "dreamed", "level": "warm"},
+            )])
+        return LLMResponse(content="ok", tool_calls=[])
+
+    loop.provider.chat_with_retry = AsyncMock(side_effect=_chat)
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION)
+    )
+    _write_entity(tmp_path, "company:bakery", "The bakery opened on Main St in March.", "Bakery")
+    tool_outputs.clear()
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION)
+    )
+
+    assert tool_outputs, "the turn's search must have produced a tool result"
+    payload = json.loads(tool_outputs[-1])
+    assert "memory/entity_page/company:bakery" not in payload.get("already_in_context", [])
+    assert "=== CANONICAL: memory/entity_page/company:bakery" in payload["sectioned_rendered"]
+    # The page seeded before the freeze IS in the text the model holds, so it
+    # still collapses — the frozen surface is being judged, not ignored.
+    assert "memory/entity_page/company:supplier" in payload["already_in_context"]
+
+    # The control: judged against the live workspace — no turn bound — the same
+    # search collapses the write too, which is what the freeze has to prevent.
+    live = await MemorySearchTool(workspace=tmp_path, context_dedup=True).execute(
+        query="bakery", scope="dreamed", level="warm",
+    )
+    assert "memory/entity_page/company:bakery" in live["already_in_context"]
+
+
+@pytest.mark.asyncio
+async def test_the_surface_binding_does_not_outlive_the_turn(tmp_path: Path) -> None:
+    """The binding describes one prompt. Left standing it would judge the next
+    session's searches against this session's text."""
+    from durin.agent.tools.memory_search import _turn_eager_surface
+
+    _seed_workspace(tmp_path)
+    loop, _ = _make_loop(tmp_path)
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION)
+    )
+
+    assert _turn_eager_surface.get() is None
+
+
+# ---------------------------------------------------------------------------
+# The consolidator's token probe
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_token_probe_measures_the_frozen_surface(tmp_path: Path) -> None:
+    """The probe decides when to compact. Sizing a live render while the real
+    prompt ships a larger frozen one under-estimates the prompt and lets the
+    trigger fire too late."""
+    _seed_workspace(tmp_path)
+    loop, _ = _make_loop(tmp_path)
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION)
+    )
+    session = loop.sessions.get_or_create("websocket:c")
+    stored = EagerSnapshot.from_metadata(session.metadata[SNAPSHOT_KEY])
+    assert stored is not None
+    padding = "\n".join(f"- fact {i} about the bakery" for i in range(2000))
+    session.metadata[SNAPSHOT_KEY] = {
+        **stored.to_metadata(), "hot": f"{stored.hot}\n\n{padding}",
+    }
+
+    frozen_tokens, _src = loop.consolidator.estimate_session_prompt_tokens(session)
+    session.metadata.pop(SNAPSHOT_KEY)
+    live_tokens, _src2 = loop.consolidator.estimate_session_prompt_tokens(session)
+
+    assert frozen_tokens > live_tokens + 1000
+
+
+@pytest.mark.asyncio
+async def test_a_system_message_build_forgets_the_surface_when_freeze_is_off(
+    tmp_path: Path,
+) -> None:
+    """The other build entry point owes the same cleanup BUILD does: a stored
+    surface that outlived the setting would come back the moment the setting
+    did."""
+    _seed_workspace(tmp_path)
+    loop, stable = _make_loop(tmp_path)
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION)
+    )
+    session = loop.sessions.get_or_create("websocket:c")
+    assert SNAPSHOT_KEY in session.metadata
+
+    loop.app_config = SimpleNamespace(
+        memory=SimpleNamespace(eager_surface=MemoryEagerSurfaceConfig(freeze=False))
+    )
+    _write_entity(tmp_path, "company:bakery", "The bakery opened on Main St in March.", "Bakery")
+    await loop._process_message(
+        InboundMessage(
+            channel="system",
+            sender_id="workflow_background",
+            chat_id="websocket:c",
+            content="[Background workflow 'qa' finished]\n\nWorkflow run r1: completed",
+            session_key_override="websocket:c",
+            metadata={"injected_event": "workflow_background_result", "workflow": "qa"},
+        )
+    )
+
+    assert "company:bakery" in stable[1]["memory_hot"]
+    assert SNAPSHOT_KEY not in session.metadata

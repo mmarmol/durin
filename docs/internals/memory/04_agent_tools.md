@@ -134,6 +134,17 @@ rendered with its body capped, so its hits are judged by containment and
 normally pass. This is enabled on the agent path, disabled for subagents (which
 have neither block in their prompt).
 
+What "the turn's prompt" means is the frozen eager surface when the session has
+one (see §5.5 in `06_prompts_and_instructions.md`): the agent loop binds that
+snapshot for the turn in a ContextVar, and the dedup judges containment against
+its hot-layer text and its pinned refs instead of reading the workspace. Reading
+disk would collapse a page written after the freeze — present in the live hot
+layer, absent from the text the model was actually shown — into a pointer to
+content it never received. The ContextVar is task-scoped and released when the
+turn ends, so concurrent sessions never see each other's surface; unbound (a
+session that renders live, an ad-hoc caller) the dedup reads the workspace as
+before.
+
 A warm rendering is bounded per hit and per response. Each hit's summary is cut
 to `memory.search.warm_excerpt_chars` characters (default 600); the
 completeness qualifier on its marker (`preview N/M` vs `complete`) reports how

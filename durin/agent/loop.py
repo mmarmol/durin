@@ -349,6 +349,12 @@ class TurnContext:
     # this turn renders from one, None when it renders live. Resolved once in
     # BUILD so the overflow-retry rebuild produces the same stable prefix.
     eager_snapshot: EagerSnapshot | None = None
+    # Token from binding that surface into the ContextVar memory_search reads,
+    # so its in-context dedup judges the text this turn's prompt carries. Bound
+    # in BUILD (with None when the turn renders live) and released exactly once,
+    # by _state_save or _process_message's finally, guarded by this being
+    # non-None — the same protocol prefetch_refs_token follows.
+    eager_surface_token: Token["EagerSnapshot | None"] | None = None
 
     final_content: str | None = None
     tools_used: list[str] = field(default_factory=list)
@@ -625,6 +631,7 @@ class AgentLoop:
             context_window_tokens=self.context_window_tokens,
             build_messages=self.context.build_messages,
             get_tool_definitions=self.tools.get_definitions,
+            eager_snapshot_for_session=self.eager_snapshot_for_session,
             max_completion_tokens=provider.generation.max_tokens,
             consolidation_ratio=consolidation_ratio,
             preemptive_compact_ratio=preemptive_compact_ratio,
@@ -2590,7 +2597,11 @@ class AgentLoop:
         # build would always render the eager surface live and puncture
         # the freeze the session's own turns keep.
         freezes = self._eager_surface_freezes(session, key)
-        eager_snapshot = self._resolve_eager_snapshot(session, key) if freezes else None
+        if freezes:
+            eager_snapshot = self._resolve_eager_snapshot(session, key)
+        else:
+            eager_snapshot = None
+            self._drop_eager_snapshot(session)
         messages = self.context.build_messages(
             history=history,
             current_message="" if is_subagent else msg.content,
@@ -2611,15 +2622,26 @@ class AgentLoop:
             # This build rendered live (no snapshot stored yet, or none to
             # resolve): freeze it now so the next build of this session —
             # whichever state reaches it first — reuses this exact text.
-            self._freeze_eager_surface(session, key)
-        t_wall = time.time()
-        final_content, _, all_msgs, stop_reason, _, tool_events = await self._run_agent_loop(
-            messages, session=session, channel=channel, chat_id=chat_id,
-            message_id=msg.metadata.get("message_id"),
-            metadata=msg.metadata,
-            session_key=key,
-            pending_queues=pending_queues,
+            eager_snapshot = self._freeze_eager_surface(session, key)
+        # This entry point runs its own tool loop, so it owes memory_search the
+        # same surface BUILD hands it: without the binding the dedup here would
+        # judge a live workspace the prompt above does not reflect.
+        from durin.agent.tools.memory_search import (
+            bind_turn_eager_surface,
+            reset_turn_eager_surface,
         )
+        surface_token = bind_turn_eager_surface(eager_snapshot)
+        t_wall = time.time()
+        try:
+            final_content, _, all_msgs, stop_reason, _, tool_events = await self._run_agent_loop(
+                messages, session=session, channel=channel, chat_id=chat_id,
+                message_id=msg.metadata.get("message_id"),
+                metadata=msg.metadata,
+                session_key=key,
+                pending_queues=pending_queues,
+            )
+        finally:
+            reset_turn_eager_surface(surface_token)
         wall_done = time.time()
         latency_ms = max(0, int((wall_done - t_wall) * 1000))
         self._save_turn(
@@ -2753,6 +2775,10 @@ class AgentLoop:
                 from durin.agent.tools.memory_search import reset_turn_prefetch_refs
                 reset_turn_prefetch_refs(ctx.prefetch_refs_token)
                 ctx.prefetch_refs_token = None
+            if ctx.eager_surface_token is not None:
+                from durin.agent.tools.memory_search import reset_turn_eager_surface
+                reset_turn_eager_surface(ctx.eager_surface_token)
+                ctx.eager_surface_token = None
 
         logger.debug(
             "[turn {}] Turn completed after {} states",
@@ -2932,7 +2958,7 @@ class AgentLoop:
             return False
         return not self._session_is_autonomous(session, session_key)
 
-    def _drop_eager_snapshot(self, ctx: TurnContext) -> None:
+    def _drop_eager_snapshot(self, session: Session | None) -> None:
         """Forget any stored surface for a session that no longer freezes one.
 
         Without this a snapshot outlives the setting that made it: turning
@@ -2942,8 +2968,21 @@ class AgentLoop:
         """
         from durin.memory.eager_surface import SNAPSHOT_KEY
 
-        if ctx.session is not None:
-            ctx.session.metadata.pop(SNAPSHOT_KEY, None)
+        if session is not None:
+            session.metadata.pop(SNAPSHOT_KEY, None)
+
+    def eager_snapshot_for_session(self, session: Session) -> "EagerSnapshot | None":
+        """The surface a build of this session would render from right now.
+
+        The same two questions BUILD asks, in the same order — does this
+        session freeze at all, and is what it stored still usable — bundled for
+        callers that only need the answer. The consolidator's token probe uses
+        it so its estimate measures the surface the real prompt carries; a probe
+        that re-read disk would size a prompt nobody is going to send.
+        """
+        if not self._eager_surface_freezes(session, session.key):
+            return None
+        return self._resolve_eager_snapshot(session, session.key)
 
     def _resolve_eager_snapshot(
         self, session: Session | None, session_key: str
@@ -3276,7 +3315,7 @@ class AgentLoop:
             ctx.eager_snapshot = self._resolve_eager_snapshot(ctx.session, ctx.session_key)
         else:
             ctx.eager_snapshot = None
-            self._drop_eager_snapshot(ctx)
+            self._drop_eager_snapshot(ctx.session)
         ctx.initial_messages = self._build_initial_messages(
             ctx.msg, ctx.session, ctx.history, ctx.pending_summary,
             active_persona_soul=ctx.active_persona_soul,
@@ -3289,6 +3328,17 @@ class AgentLoop:
             # its own. Carried on ctx so the overflow-retry rebuild reuses it
             # rather than re-rendering from disk.
             ctx.eager_snapshot = self._freeze_eager_surface(ctx.session, ctx.session_key)
+        # Hand the surface this build settled on to memory_search's in-context
+        # dedup, in THIS asyncio task — the one _state_run drives the tool loop
+        # in — so the model's own searches are judged against the text its
+        # prompt carries and not against a workspace that has moved on. Bound
+        # even when it is None (a live render, or a session that keeps no
+        # snapshot): the explicit binding is what keeps an outer context from
+        # reaching this turn. Reset in _state_save, or in _process_message's
+        # finally when the turn never gets there.
+        with suppress(Exception):
+            from durin.agent.tools.memory_search import bind_turn_eager_surface
+            ctx.eager_surface_token = bind_turn_eager_surface(ctx.eager_snapshot)
         ctx.user_persisted_early = self._persist_user_message_early(
             ctx.msg, ctx.session
         )
@@ -3443,6 +3493,12 @@ class AgentLoop:
             from durin.agent.tools.memory_search import reset_turn_prefetch_refs
             reset_turn_prefetch_refs(ctx.prefetch_refs_token)
             ctx.prefetch_refs_token = None
+        # Same lifetime, same reason: the next turn resolves its own surface,
+        # and the session may have refreshed it in between.
+        if ctx.eager_surface_token is not None:
+            from durin.agent.tools.memory_search import reset_turn_eager_surface
+            reset_turn_eager_surface(ctx.eager_surface_token)
+            ctx.eager_surface_token = None
 
         _pinned_chars, _hot_chars = self._memory_surface_chars(ctx)
         emit_memory_usage_rollup(

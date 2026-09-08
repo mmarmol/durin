@@ -13,6 +13,7 @@ from unittest.mock import MagicMock
 
 from durin.memory.context_dedup import (
     prefix_map,
+    prefix_map_from_text,
     render_in_context_section,
     split_in_context,
 )
@@ -360,3 +361,96 @@ def test_dedup_sees_the_page_the_excluded_pins_made_room_for(monkeypatch, tmp_pa
 
     assert kept == []
     assert redundant == [hit]
+
+
+# ---------------------------------------------------------------------------
+# Judging against a frozen hot layer instead of the workspace
+# ---------------------------------------------------------------------------
+
+
+def _rendered(*blocks: str) -> str:
+    """The hot layer as the prompt shows it: section prose around the blocks."""
+    return HotLayer(
+        identity="",
+        canonical_blocks=[b for b in blocks if "CANONICAL" in b],
+        fragment_blocks=[b for b in blocks if "FRAGMENT" in b],
+        headlines=[],
+    ).render()
+
+
+def test_prefix_map_from_text_recovers_both_block_kinds():
+    text = _rendered(
+        _canonical_block("person:marcelo", "Architect of durin."),
+        _fragment_block("memory/episodic/abc123.md", "Met on Tuesday."),
+    )
+
+    prefix = prefix_map_from_text(text)
+
+    assert prefix["person:marcelo"] == "architect of durin."
+    assert prefix["memory/episodic/abc123"] == "met on tuesday."
+
+
+def test_prefix_map_from_text_ignores_prose_outside_blocks():
+    assert prefix_map_from_text("## Memory: Canonical pages\n\nno blocks here") == {}
+
+
+def test_frozen_hot_text_is_judged_instead_of_the_workspace(monkeypatch, tmp_path):
+    """With the eager surface frozen, the model's context holds the text of the
+    freeze, not whatever disk says now: the dedup must judge that text and must
+    not read the workspace at all."""
+    def _boom(_ws, *, exclude=frozenset()):
+        raise AssertionError("the live hot layer must not be read")
+
+    monkeypatch.setattr("durin.memory.context_dedup.read_hot_layer", _boom)
+    hit = SectionedHit(
+        uri="memory/entity_page/person:marcelo", type="entity",
+        path="person:marcelo", score=1.0, summary="Prefers   Spanish.",
+    )
+
+    kept, redundant = split_in_context(
+        tmp_path, [hit],
+        hot_layer_text=_rendered(_canonical_block(
+            "person:marcelo", "Architect of durin. Prefers Spanish.",
+        )),
+    )
+
+    assert kept == []
+    assert redundant == [hit]
+
+
+def test_a_page_written_after_the_freeze_is_not_deduped(monkeypatch, tmp_path):
+    """The live hot layer carries the page, the frozen text does not — the
+    model never saw it, so the hit must render whole."""
+    _patch_hot(monkeypatch, _hot_layer(
+        canonical=[_canonical_block("company:bakery", "Opened on Main St in March.")],
+    ))
+    hit = SectionedHit(
+        uri="memory/entity_page/company:bakery", type="entity",
+        path="company:bakery", score=1.0, summary="Opened on Main St in March.",
+    )
+
+    frozen = _rendered(_canonical_block("person:marcelo", "Architect of durin."))
+    kept, redundant = split_in_context(tmp_path, [hit], hot_layer_text=frozen)
+
+    assert kept == [hit]
+    assert redundant == []
+    # Premise: without the frozen text the same hit collapses.
+    assert split_in_context(tmp_path, [hit]) == ([], [hit])
+
+
+def test_an_empty_frozen_hot_layer_is_not_a_workspace_read(monkeypatch, tmp_path):
+    """A session frozen while the workspace had no canonical pages carries an
+    empty hot layer. That is a real (empty) context, not a missing argument:
+    the dedup must judge it as empty rather than falling back to disk."""
+    _patch_hot(monkeypatch, _hot_layer(
+        canonical=[_canonical_block("company:bakery", "Opened on Main St in March.")],
+    ))
+    hit = SectionedHit(
+        uri="memory/entity_page/company:bakery", type="entity",
+        path="company:bakery", score=1.0, summary="Opened on Main St in March.",
+    )
+
+    kept, redundant = split_in_context(tmp_path, [hit], hot_layer_text="")
+
+    assert kept == [hit]
+    assert redundant == []
