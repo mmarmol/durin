@@ -724,6 +724,10 @@ class MemoryRecallEvent(TypedDict):
     # True when the automatic per-turn memory prefetch's own search produced
     # this row, rather than a memory_search the model called itself.
     prefetch: NotRequired[bool]
+    # `len(sectioned_rendered)` — the actual size of the text the LLM
+    # received, after the per-hit excerpt cut and per-response budget
+    # (`MemorySearchConfig.warm_excerpt_chars` / `warm_max_chars`) apply.
+    rendered_chars: NotRequired[int]
 
 
 class MemoryPrefetchEvent(TypedDict):

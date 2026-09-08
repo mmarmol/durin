@@ -226,3 +226,98 @@ def test_an_unreadable_entity_page_does_not_drop_the_others(tmp_path: Path) -> N
     assert entities_derived_from(tmp_path, "reference:thinking-fast-and-slow") == [
         "topic:two-systems",
     ]
+
+
+def _derived_entity(workspace: Path, ref: str, entity_ref: str, name: str) -> None:
+    from datetime import datetime, timezone
+
+    write_entity(
+        workspace, entity_ref,
+        [FieldPatch(kind="derived_from", value=ref, author="dream",
+                    source_ref="s", at=datetime.now(timezone.utc))],
+        create=True, name=name,
+    )
+
+
+def test_entities_derived_from_reads_the_index(tmp_path: Path) -> None:
+    """With an index present the lookup is an FTS query, not a walk: only the
+    pages the index names as candidates are opened."""
+    ref = "reference:thinking-fast-and-slow"
+    _derived_entity(tmp_path, ref, "topic:two-systems", "Two systems")
+    _derived_entity(tmp_path, "reference:other-book", "topic:elsewhere", "Elsewhere")
+    rebuild_fts_index(tmp_path)
+
+    assert entities_derived_from(tmp_path, ref) == ["topic:two-systems"]
+
+
+def test_an_entity_written_after_indexing_appears_once_reindexed(tmp_path: Path) -> None:
+    """The index is the candidate source, so a page written after the last
+    rebuild is invisible until the rebuild that indexes it."""
+    ref = "reference:thinking-fast-and-slow"
+    _derived_entity(tmp_path, ref, "topic:two-systems", "Two systems")
+    rebuild_fts_index(tmp_path)
+    _derived_entity(tmp_path, ref, "topic:anchoring", "Anchoring")
+
+    assert entities_derived_from(tmp_path, ref) == ["topic:two-systems"]
+
+    rebuild_fts_index(tmp_path)
+
+    assert entities_derived_from(tmp_path, ref) == ["topic:anchoring", "topic:two-systems"]
+
+
+def test_entities_derived_from_scans_when_there_is_no_index(tmp_path: Path) -> None:
+    """A workspace that has never been indexed still answers, by walking."""
+    from durin.memory.fts_index import fts_index_path
+
+    ref = "reference:thinking-fast-and-slow"
+    _derived_entity(tmp_path, ref, "topic:two-systems", "Two systems")
+
+    assert not fts_index_path(tmp_path).exists()
+    assert entities_derived_from(tmp_path, ref) == ["topic:two-systems"]
+
+
+def test_an_indexed_mention_outside_derived_from_is_not_a_result(tmp_path: Path) -> None:
+    """The index only narrows the candidates; the page is the truth."""
+    from datetime import datetime, timezone
+
+    ref = "reference:thinking-fast-and-slow"
+    _derived_entity(tmp_path, ref, "topic:two-systems", "Two systems")
+    write_entity(
+        tmp_path, "topic:hearsay",
+        [FieldPatch(kind="body_append", value=f"Mentioned in passing: {ref}.",
+                    author="agent", source_ref="s",
+                    at=datetime.now(timezone.utc))],
+        create=True, name="Hearsay",
+    )
+    rebuild_fts_index(tmp_path)
+
+    assert entities_derived_from(tmp_path, ref) == ["topic:two-systems"]
+
+
+def test_the_candidate_cap_bounds_entity_rows_not_every_matching_row(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """The candidate query is filtered to entity rows before the cap is
+    applied, so a ref cited by many session summaries can't crowd the one
+    entity distilled from it out of a small cap."""
+    from datetime import datetime, timezone
+
+    ref = "reference:thinking-fast-and-slow"
+    write_entity(
+        tmp_path, "topic:two-systems",
+        [FieldPatch(kind="derived_from", value=ref, author="dream", source_ref="s",
+                    at=datetime.now(timezone.utc))],
+        create=True, name="Two systems",
+    )
+    for i in range(40):
+        write_session_summary(
+            tmp_path, f"websocket:{i}",
+            f"- cited {ref} again",
+            last_active=date(2026, 9, 1),
+        )
+    rebuild_fts_index(tmp_path)
+
+    import durin.memory.artifact_recall as artifact_recall
+    monkeypatch.setattr(artifact_recall, "_MAX_ENTITY_CANDIDATES", 20)
+
+    assert entities_derived_from(tmp_path, ref) == ["topic:two-systems"]

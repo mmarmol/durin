@@ -881,7 +881,24 @@ def _uri_for(workspace: Path, md_path: Path) -> Optional[str]:
 
 
 def _entity_text(page: EntityPage) -> str:
-    """Compose the BM25 text for an entity page."""
+    """Compose the BM25 text for an entity page.
+
+    The slug half of each ``derived_from`` ref (the tokens after the
+    ``<type>:`` prefix, e.g. ``reference:``) rides in its own line so
+    "which entities came from this document" is an index query: a phrase
+    search for the slug lands on the pages that name it instead of
+    walking and parsing every entity page —
+    :func:`durin.memory.artifact_recall.entities_derived_from_candidates`
+    queries that same slug. Only the slug, not the whole ref: indexing
+    the type prefix too would put the literal token ``reference`` in
+    every distilled entity's row, so a query containing that word would
+    pull the whole distilled corpus into the candidate pool regardless of
+    which document it named. This still widens ordinary lexical recall on
+    purpose — an entity distilled from a document becomes findable by
+    that document's slug words (its title) even though the query never
+    mentions the entity itself; the refs are otherwise frontmatter, not
+    prose, and would be absent from the row entirely.
+    """
     parts: list[str] = [page.name]
     if page.aliases:
         parts.append(" ".join(page.aliases))
@@ -889,6 +906,10 @@ def _entity_text(page: EntityPage) -> str:
         parts.append(_render_attributes(page.attributes))
     if page.relations:
         parts.append(_render_relations(page.relations))
+    if page.derived_from:
+        parts.append(" ".join(
+            ref.split(":", 1)[-1] for ref in page.derived_from
+        ))
     if page.body:
         parts.append(page.body)
     return "\n".join(p for p in parts if p)
@@ -901,6 +922,8 @@ def _entry_text(entry) -> str:  # type: ignore[no-untyped-def]
         parts.append(entry.summary)
     if entry.entities:
         parts.append(" ".join(entry.entities))
+    if entry.topics:
+        parts.append(" ".join(entry.topics))
     if entry.body:
         parts.append(entry.body)
     return "\n".join(p for p in parts if p)

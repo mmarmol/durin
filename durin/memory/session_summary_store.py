@@ -31,7 +31,7 @@ import logging
 import re
 from datetime import date, datetime
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Sequence, Tuple
 
 from durin.memory.paths import memory_class_dir
 from durin.memory.schema import MemoryEntry
@@ -41,12 +41,16 @@ from durin.utils.file_lock import cross_process_lock
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "MAX_SUMMARY_ENTITIES",
+    "MAX_SUMMARY_TOPICS",
     "SESSION_SUMMARY_CLASS",
     "append_session_summary_block",
     "closed_record_key",
     "delete_session_summary",
     "find_previous_session_summary",
     "get_session_summary",
+    "merge_tags",
+    "read_session_summary_entry",
     "sanitize_session_key",
     "session_summary_path",
     "write_session_summary",
@@ -126,6 +130,9 @@ def write_session_summary(
     last_active: object = None,
     *,
     headline_source: Optional[str] = None,
+    entities: Optional[Sequence[str]] = None,
+    topics: Optional[Sequence[str]] = None,
+    source_key: Optional[str] = None,
 ) -> Optional[Path]:
     """Persist *text* as `memory/session_summary/<sanitized>.md`.
 
@@ -143,6 +150,23 @@ def write_session_summary(
     so the headline still summarizes recent content once older blocks
     (or a synthetic carried-paths head block) are evicted to the front
     of *text*.
+
+    ``entities`` / ``topics`` are the tags the archive prompt returns
+    alongside the bullets. They land in the entry's frontmatter, which
+    is what the FTS and vector composers read, so a summary stays
+    reachable by a name or subject its prose never spells out. Entity
+    refs must already be well-formed ``<type>:<value>`` — the schema
+    validates them and a bad ref raises rather than writing a broken
+    entry.
+
+    ``source_key``, when given, is recorded verbatim (un-sanitised) as
+    ``source_refs=["session:<source_key>"]``. This is the *original*
+    session key the text came from — usually ``session_key`` itself,
+    except for a closed-conversation record, whose file id is
+    ``closed_record_key(...)``, a different string. Without it the
+    entry carries no ``source_refs``, and ``find_previous_session_summary``
+    can only place it by the legacy sanitized-prefix match on the file
+    stem, not by an exact channel match.
     """
     text = (text or "").strip()
     if not text or text == "(nothing)":
@@ -155,6 +179,9 @@ def write_session_summary(
         headline=_headline_from(headline_source if headline_source is not None else text),
         summary=text,
         body=text,
+        source_refs=[f"session:{source_key}"] if source_key else [],
+        entities=list(entities or ()),
+        topics=list(topics or ()),
         author="agent_created",
         valid_from=valid_from,
     )
@@ -172,6 +199,19 @@ _SESSION_SUMMARY_MAX_CHARS = 16_000
 _SPAN_PATHS_PREFIX = "Files/paths examined in this span"
 _EVICTED_PATHS_PREFIX = "Files/paths from earlier spans (evicted): "
 _EVICTED_PATHS_MAX_CHARS = 1_200
+# The tag union (see `append_session_summary_block`) accumulates for the
+# life of the key — every compaction span and nightly pass adds to it, and
+# nothing ever removes a tag on its own. Left uncapped it eventually
+# starves `VectorIndex._embed_text`'s tag-line budget (spent before the
+# body) and floods `_render_block`'s `Entities:` tail. Capped to the most
+# recently seen tags so the file stays a compact, high-signal set no
+# matter how long the key has been compacting. Topics get a tighter cap
+# than entities — they're meant to stay a short set of subject labels.
+# Public (no leading underscore): `command.builtin._archive_closed_session`
+# imports these alongside `merge_tags` so a `/new` closed-conversation
+# record is capped by the same rule, not a separate uncapped union.
+MAX_SUMMARY_ENTITIES = 24
+MAX_SUMMARY_TOPICS = 12
 
 
 def _salvage_paths(evicted_block: str, carried: list[str]) -> None:
@@ -206,6 +246,29 @@ def _build_carried_line(carried: list[str]) -> str:
     return _EVICTED_PATHS_PREFIX + "; ".join(kept)
 
 
+def merge_tags(prior: list[str], new: Optional[Sequence[str]], cap: int) -> list[str]:
+    """Union *prior* and *new*, keeping the *cap* most recently (re)confirmed tags.
+
+    Order is recency, not alphabetical: a tag in *new* moves to the end
+    whether it is already in *prior* or not — reconfirming a tag counts
+    as seeing it now, not "leave it where it was first seen". Once the
+    merged list exceeds *cap*, entries are dropped from the front — the
+    tags that have gone longest without being (re)confirmed — so a tag a
+    later span keeps mentioning survives eviction even if it was first
+    seen long ago. Public: also used by
+    `command.builtin._archive_closed_session` for the `/new` closed-record
+    tag union, so the one rule lives in one place.
+    """
+    merged = list(prior)
+    for tag in new or ():
+        if tag in merged:
+            merged.remove(tag)
+        merged.append(tag)
+    if len(merged) > cap:
+        merged = merged[-cap:]
+    return merged
+
+
 def append_session_summary_block(
     workspace: Path,
     session_key: str,
@@ -213,6 +276,8 @@ def append_session_summary_block(
     *,
     last_active: object = None,
     max_chars: int = _SESSION_SUMMARY_MAX_CHARS,
+    entities: Optional[Sequence[str]] = None,
+    topics: Optional[Sequence[str]] = None,
 ) -> Optional[Path]:
     """Append *block* to the session summary, evicting oldest blocks over cap.
 
@@ -223,6 +288,15 @@ def append_session_summary_block(
     wash out at the cap horizon (long-horizon recall is the memory
     system's job), discovered paths do not.
 
+    ``entities`` / ``topics`` are this span's tags. The entry holds one
+    list of each for the whole file, so they accumulate as a recency-order
+    union over every span, capped to ``MAX_SUMMARY_ENTITIES`` /
+    ``MAX_SUMMARY_TOPICS`` — the summary stays reachable by anything any
+    of its *recent* spans was about, including spans whose text the block
+    cap already evicted, without growing the tag list without bound. New
+    tags alone are reason enough to rewrite: a repeated block contributes
+    nothing to the text but its tags must still land.
+
     The read-rebuild-rewrite runs under the summary file's own
     ``cross_process_lock``: the compactor (gateway process) and the nightly
     session-summary pass (dream worker subprocess) both append here, and
@@ -232,7 +306,15 @@ def append_session_summary_block(
     if not block or block == "(nothing)":
         return None
     with cross_process_lock(session_summary_path(workspace, session_key)):
-        existing, _ = get_session_summary(workspace, session_key)
+        entry = _load_summary_entry(session_summary_path(workspace, session_key))
+        existing = (entry.body or entry.summary or None) if entry else None
+        prior_entities = list(entry.entities) if entry else []
+        prior_topics = list(entry.topics) if entry else []
+        merged_entities = merge_tags(prior_entities, entities, MAX_SUMMARY_ENTITIES)
+        merged_topics = merge_tags(prior_topics, topics, MAX_SUMMARY_TOPICS)
+        tags_changed = (
+            merged_entities != prior_entities or merged_topics != prior_topics
+        )
         blocks = [
             b.strip() for b in (existing.split(_SUMMARY_BLOCK_SEP) if existing else [])
             if b.strip()
@@ -252,12 +334,29 @@ def append_session_summary_block(
             _salvage_paths(blocks.pop(0), carried)
         if carried:
             blocks.insert(0, _build_carried_line(carried))
-        if not blocks_changed and not carried:
+        if not blocks_changed and not carried and not tags_changed:
             return None
         return write_session_summary(
             workspace, session_key, _SUMMARY_BLOCK_SEP.join(blocks),
             last_active=last_active, headline_source=block,
+            entities=merged_entities, topics=merged_topics,
+            source_key=session_key,
         )
+
+
+def _load_summary_entry(path: Path) -> Optional[MemoryEntry]:
+    """Parse the summary entry at *path*, or ``None`` when it is absent or
+    unreadable. Best-effort — a broken file must never break the compaction
+    or the dream pass that is trying to append to it."""
+    if not path.is_file():
+        return None
+    try:
+        return load_entry(path)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "session_summary: failed to load %s: %s", path, exc,
+        )
+        return None
 
 
 def get_session_summary(
@@ -269,17 +368,41 @@ def get_session_summary(
     Returns ``(text, last_active)`` or ``(None, None)`` when the
     file doesn't exist or doesn't parse. Best-effort — never raises.
     """
-    path = session_summary_path(workspace, session_key)
-    if not path.is_file():
-        return (None, None)
-    try:
-        entry = load_entry(path)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "session_summary: failed to load %s: %s", path, exc,
-        )
+    entry = _load_summary_entry(session_summary_path(workspace, session_key))
+    if entry is None:
         return (None, None)
     return (entry.body or entry.summary or None, entry.valid_from)
+
+
+def read_session_summary_entry(
+    workspace: Path,
+    session_key: str,
+) -> Optional[MemoryEntry]:
+    """The full parsed summary entry for *session_key*, or ``None`` when
+    there is none or it doesn't parse.
+
+    Public counterpart of ``_load_summary_entry`` for callers outside this
+    module — e.g. ``/new`` building its closed-conversation record needs
+    the prior summary's text *and* its tags in one parse, rather than
+    reaching into this module's private helper across a package boundary.
+    """
+    return _load_summary_entry(session_summary_path(workspace, session_key))
+
+
+def _source_ref_channel(source_refs: Sequence[str]) -> Optional[str]:
+    """The channel named by a ``session:<channel>:<rest>`` ref in
+    *source_refs*, or ``None`` when no such ref is present.
+
+    ``split(":", 2)`` caps the split at the channel, so a chat id that
+    itself contains ``:`` doesn't fragment it further — the ref's second
+    ``:``-separated part is always the whole channel.
+    """
+    for ref in source_refs:
+        if ref.startswith("session:"):
+            parts = ref.split(":", 2)
+            if len(parts) >= 2:
+                return parts[1]
+    return None
 
 
 def find_previous_session_summary(
@@ -289,9 +412,25 @@ def find_previous_session_summary(
     summary on ``session_key``'s channel, or ``None``.
 
     Only channels in ``channels`` qualify — those are the single-user
-    surfaces where "the previous session" is the same person's. Files are
-    the sanitized-key ``.md`` entries of this class; recency is the entry's
-    ``valid_from`` (the session's last-active date), file mtime as tiebreak.
+    surfaces where "the previous session" is the same person's. Candidates
+    are narrowed with the sanitized-filename prefix glob
+    (``sanitize_session_key(channel + ":")``) before any file is opened —
+    every summary ever written for this channel, closed records included,
+    sanitises to a stem starting with that prefix (both writers pass
+    ``source_key`` at ``session_summary_path(workspace, <key or closed
+    key>)``, and ``closed_record_key`` keeps the sanitized-and-cut prefix),
+    so the glob is a safe superset and never the filter doing the real
+    work. The actual discriminator is each candidate's own ``source_refs``
+    (the ``session:<key>`` ref ``write_session_summary``/
+    ``append_session_summary_block`` write when given ``source_key``),
+    matched exactly against ``channel`` — this is what keeps e.g. channel
+    ``cli`` from picking up channel ``cli_test``'s summary even though
+    both sanitize to a stem sharing the ``cli_`` prefix. An entry with no
+    ``session:`` ref — written before this ref existed, or by any path
+    that skipped ``source_key`` — falls back to that same sanitized-prefix
+    test on the file stem instead of being excluded outright. Recency is
+    the entry's ``valid_from`` (the session's last-active date), file
+    mtime as tiebreak.
     """
     channel = session_key.split(":", 1)[0]
     if channel not in channels:
@@ -312,6 +451,12 @@ def find_previous_session_summary(
         text = entry.body or entry.summary
         if not text:
             continue
+        candidate_channel = _source_ref_channel(entry.source_refs)
+        if candidate_channel is not None:
+            if candidate_channel != channel:
+                continue
+        elif not md.stem.startswith(prefix):
+            continue  # legacy entry (no source_refs) on a different channel
         rank = (entry.valid_from or date.min, md.stat().st_mtime)
         if best is None or rank > best[0]:
             best = (rank, md.stem, text, entry.valid_from)

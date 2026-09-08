@@ -87,7 +87,13 @@ def skills_indexing_enabled() -> bool:
 # morphological variants never matched). Pre-v7 indexes were
 # tokenized without stemming — the bump forces a rebuild so
 # query-time and index-time tokenization agree.
-CURRENT_SCHEMA_VERSION: int = 7
+# v8 (entity derived_from): an entity page's FTS text gains a line
+# naming its `derived_from` refs, so the entities distilled from a
+# reference document are found with a phrase query instead of a walk
+# over every entity page. Pre-v8 rows carry no such line and would
+# answer that query empty — the bump forces a rebuild so existing
+# workspaces get it.
+CURRENT_SCHEMA_VERSION: int = 8
 
 
 @dataclass(frozen=True)

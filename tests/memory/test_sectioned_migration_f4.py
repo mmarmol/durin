@@ -142,6 +142,29 @@ def test_render_block_entities_tail_for_fragments(
     assert "Entities:" not in out
 
 
+def test_render_block_entities_tail_capped_to_eight() -> None:
+    """A hit's `entities` list is unbounded upstream (a session summary's
+    tag union grows for the life of its key), so the tail slices to 8 —
+    mirroring the `Sources:` line's own `derived_from[:8]` cap — rather
+    than dumping the whole list into the block."""
+    from durin.memory.sectioned_output import (
+        SectionedHit,
+        _render_block,
+    )
+
+    many = tuple(f"person:p{i:02d}" for i in range(12))
+    frag = SectionedHit(
+        uri="memory/episodic/e1", type="episodic",
+        path="memory/episodic/e1.md",
+        score=1.0, ts="2026-05-23",
+        summary="something",
+        entities=many,
+    )
+    out = _render_block("fragment", frag)
+    assert f"Entities: {', '.join(many[:8])}" in out
+    assert many[8] not in out
+
+
 def test_memory_search_response_has_sectioned_rendered(
     tmp_path: Path,
 ) -> None:

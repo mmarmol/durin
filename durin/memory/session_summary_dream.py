@@ -164,16 +164,18 @@ def summarize_session(
     prompt = render_template("agent/consolidator_archive.md", strip=True) + "\n\n" + text
     resp = llm_invoke(prompt, model=model) if model else llm_invoke(prompt)
     raw = resp.text if hasattr(resp, "text") else str(resp)
-    summary, _tags = parse_consolidator_response(raw)
+    summary, tags = parse_consolidator_response(raw)
 
     total = len(msgs)
     if not summary or summary.strip() == "(nothing)":
         set_summary_cursor(jsonl_path, total)
         return {"session": key, "skipped": "nothing", "cursor": total}
     # The store declines a block it already holds as the newest one (a
-    # degraded-LLM repeat), so "written" is what it reports, not what we asked.
+    # degraded-LLM repeat) with no new tags, so "written" is what it
+    # reports, not what we asked.
     path = append_session_summary_block(
         workspace, key, summary, last_active=meta.get("updated_at"),
+        entities=tags["entities"], topics=tags["topics"],
     )
     set_summary_cursor(jsonl_path, total)
     return {

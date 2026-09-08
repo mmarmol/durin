@@ -28,7 +28,8 @@ def _isolate_cache() -> None:
 
 def _page(tmp_path: Path) -> None:
     page = EntityPage(type="person", name="Ana", aliases=["ana"],
-                      attributes={"role": "baker"}, body=_BODY)
+                      attributes={"role": "baker"}, body=_BODY,
+                      derived_from=["reference:ana-bakery-license"])
     page.save(tmp_path / "memory" / "entities" / "person" / "ana.md")
 
 
@@ -44,6 +45,9 @@ def test_warm_entity_hit_shows_name_attributes_and_an_excerpt(tmp_path: Path) ->
     # "canonical entity page"/"consolidated <ts>" one inside one trailing
     # parenthesis (see `_compose_qualifiers`) — not a bare "(preview N/M)".
     assert ", preview " in rendered
+    # `_attach_derived_from` reads the page's `derived_from` from disk and
+    # the renderer turns it into a `Sources:` line pointing at the document.
+    assert "Sources: reference:ana-bakery-license." in rendered
 
 
 def test_cold_entity_hit_shows_the_whole_body(tmp_path: Path) -> None:
@@ -53,3 +57,4 @@ def test_cold_entity_hit_shows_the_whole_body(tmp_path: Path) -> None:
     assert "opens at dawn and closes at noon" in rendered
     # Same joined-qualifier shape as the warm case (see comment above).
     assert ", complete)" in rendered
+    assert "Sources: reference:ana-bakery-license." in rendered

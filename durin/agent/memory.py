@@ -793,8 +793,14 @@ class Consolidator:
         self,
         session: Session,
         replay_max_messages: int | None,
-    ) -> str | None:
-        """Archive messages that would be hidden by the replay message window."""
+    ) -> tuple[str | None, dict[str, list[str]]] | None:
+        """Archive messages that would be hidden by the replay message window.
+
+        Returns the round's ``(summary, tags)`` — the same pair ``archive()``
+        produces — or ``None`` when there was nothing to archive. The caller
+        needs the tags too: they ride the summary into the session-summary
+        store, not only into the session's metadata.
+        """
         end_idx = self._replay_overflow_boundary(session, replay_max_messages)
         if end_idx is None:
             return None
@@ -811,7 +817,7 @@ class Consolidator:
         self._merge_session_tags(session, tags)
         session.last_consolidated = end_idx
         self.sessions.save(session)
-        return summary
+        return summary, tags
 
     def _unsummarized(self, session: Session, chunk: list[dict]) -> list[dict]:
         """Drop the head of *chunk* the nightly session-summary pass already
@@ -854,8 +860,26 @@ class Consolidator:
             "topics": sorted(set(existing_topics) | set(new_topics)),
         }
 
+    @staticmethod
+    def _collect_tags(
+        collected: dict[str, list[str]],
+        new_tags: dict[str, list[str]] | None,
+    ) -> None:
+        """Fold one archive round's tags into this call's accumulator.
+
+        Separate from ``_merge_session_tags``, which accumulates over the
+        session's whole lifetime in its metadata. This one covers a single
+        ``maybe_consolidate_by_tokens`` call, which is what gets handed to
+        the session-summary store alongside the blocks it produced.
+        """
+        for field in ("entities", "topics"):
+            for value in (new_tags or {}).get(field) or []:
+                if value not in collected[field]:
+                    collected[field].append(value)
+
     def _persist_last_summary(
         self, session: Session, summaries: list[str],
+        tags: dict[str, list[str]] | None = None,
     ) -> None:
         """Append this call's span summaries to the session-summary projection.
 
@@ -863,10 +887,18 @@ class Consolidator:
         (oldest blocks evicted first). The projection under
         ``memory/session_summary/<key>.md`` remains the single source of
         truth; legacy ``_last_summary`` metadata is still dropped on sight.
+
+        ``tags`` are the entity/topic tags the archive rounds returned. The
+        entry holds one list of each for the whole file, so the store unions
+        them over every append — passing this call's tags with every block is
+        idempotent, and the write is what makes a summary reachable by a name
+        or subject its prose never spells out.
         """
         from durin.memory.session_summary_store import (
             append_session_summary_block,
         )
+        entities = (tags or {}).get("entities") or []
+        topics = (tags or {}).get("topics") or []
         for summary in summaries:
             if not summary or summary == "(nothing)":
                 continue
@@ -876,6 +908,8 @@ class Consolidator:
                     session.key,
                     summary,
                     last_active=session.updated_at,
+                    entities=entities,
+                    topics=topics,
                 )
             except Exception as exc:  # noqa: BLE001
                 # The persistence must NEVER break the compaction
@@ -1288,12 +1322,18 @@ class Consolidator:
             trigger = self._preemptive_trigger_tokens
             target = max(1, int(trigger * self.consolidation_ratio))
             new_summaries: list[str] = []
-            replay_summary = await self._consolidate_replay_overflow(
+            # This call's tags, unioned across every archive round below and
+            # handed to the session-summary store with the blocks.
+            new_tags: dict[str, list[str]] = {"entities": [], "topics": []}
+            replay_round = await self._consolidate_replay_overflow(
                 session,
                 replay_max_messages,
             )
-            if replay_summary:
-                new_summaries.append(replay_summary)
+            if replay_round is not None:
+                replay_summary, replay_tags = replay_round
+                self._collect_tags(new_tags, replay_tags)
+                if replay_summary:
+                    new_summaries.append(replay_summary)
             try:
                 estimated, source = self.estimate_session_prompt_tokens(
                     session,
@@ -1321,7 +1361,7 @@ class Consolidator:
                         len(session.messages),
                         session.last_consolidated,
                     )
-                self._persist_last_summary(session, new_summaries)
+                self._persist_last_summary(session, new_summaries, new_tags)
                 await self._post_compaction_hooks(session, start0, bool(new_summaries))
                 return
             if estimated < trigger:
@@ -1335,7 +1375,7 @@ class Consolidator:
                     trigger,
                     unconsolidated_count,
                 )
-                self._persist_last_summary(session, new_summaries)
+                self._persist_last_summary(session, new_summaries, new_tags)
                 await self._post_compaction_hooks(session, start0, bool(new_summaries))
                 return
             # The rough estimate is over the trigger — but it measures the raw
@@ -1359,7 +1399,7 @@ class Consolidator:
                             "estimated_tokens": estimated,
                             "trigger_tokens": trigger,
                         })
-                self._persist_last_summary(session, new_summaries)
+                self._persist_last_summary(session, new_summaries, new_tags)
                 await self._post_compaction_hooks(session, start0, bool(new_summaries))
                 return
             # Visibility into how often the pre-emptive threshold does actual
@@ -1424,6 +1464,7 @@ class Consolidator:
                 if summary:
                     new_summaries.append(summary)
                 self._merge_session_tags(session, tags)
+                self._collect_tags(new_tags, tags)
                 session.last_consolidated = end_idx
                 self.sessions.save(session)
                 rounds_run += 1
@@ -1469,7 +1510,7 @@ class Consolidator:
             # Persist the last summary to session metadata so it can be injected
             # into the runtime context on the next prepare_session() call, aligning
             # the summary injection strategy with AutoCompact._archive().
-            self._persist_last_summary(session, new_summaries)
+            self._persist_last_summary(session, new_summaries, new_tags)
             await self._post_compaction_hooks(session, start0, bool(new_summaries))
         finally:
             lock.release()

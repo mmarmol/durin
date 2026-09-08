@@ -382,6 +382,8 @@ passes (extract/refine/skill), background file watching, and health checks. See
 | `search.cross_encoder.batch_size` | `32` | Reranker batch size |
 | `search.cross_encoder.top_n` | `10` | Retained for signature compatibility; the rerank reorders candidates rather than trimming them |
 | `search.sectioning.max_per_source` | `3` | Max hits from the same ingested document surviving sectioning |
+| `search.warm_excerpt_chars` | `600` | Warm-level per-hit summary cut, in characters; cost: a higher value shows more of each hit's content at the price of more tokens per hit |
+| `search.warm_max_chars` | `8000` | Total budget for one warm rendering, in characters; past it the remaining hits collapse to a one-line headline pointer each instead of a full block; cost: a higher value lets more hits render in full at the price of a larger response |
 
 **`memory.library`** — the always-on Library awareness catalog in the pinned block:
 
@@ -401,7 +403,7 @@ passes (extract/refine/skill), background file watching, and health checks. See
 
 **`memory.prefetch`** — the automatic memory search that runs once per user turn, before the model sees the message. Its hits ride in that turn's copy of the message (never stored, never replayed); the `memory_search` tool stays available for follow-ups.
 
-What it costs: one warm search on the critical path of every message of `min_query_chars` or more on interactive channels, bounded by `timeout_s` (5 s) — past that the turn proceeds without the hits — plus up to `max_chars` of uncached input per turn. The first search after a cold start can take longer than the steady state while the embedding model loads. It applies even with `memory.enabled: false`, where the search still works over the markdown files (grep-level recall). Turn it off with `memory.prefetch.enabled: false`.
+What it costs: one warm search on the critical path of every message of `min_query_chars` or more on interactive channels, bounded by `timeout_s` (5 s) — past that the turn proceeds without the hits — plus up to `max_chars` of uncached input per turn. Each hit carries a real summary excerpt (up to `memory.search.warm_excerpt_chars`), not just a headline, so the fenced block is fuller than a headline-only rendering would be; `max_chars` still caps the total regardless. The first search after a cold start can take longer than the steady state while the embedding model loads. It applies even with `memory.enabled: false`, where the search still works over the markdown files (grep-level recall). Turn it off with `memory.prefetch.enabled: false`.
 
 | Key | Default | Meaning |
 |---|---|---|

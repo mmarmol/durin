@@ -91,6 +91,8 @@ Entity-page rows use their entity-ref URI directly (e.g. `person:deborah`); skil
 
 Every query token is double-quoted before FTS5 to escape special characters (`%`, `*`, `:`) and to neutralise the FTS5 boolean keywords (`AND`/`OR`/`NOT`/`NEAR`) — the recall query is natural language, so a query beginning with a word like "not" must not reach the parser as a dangling operator. Balanced double-quoted phrases in the query are preserved as FTS5 phrase tokens.
 
+An entity page's row also carries the slug half of each `derived_from` ref (see `02_indexing.md`), so an ordinary lexical query can match an entity purely through the document it was distilled from — a query for the document's title can surface an entity that never mentions that title in its own name or body.
+
 ### Step 2c — Grep fallback
 
 `search_memory(workspace, query, scope="all", level="warm")` walks `memory/`, `sessions/`, and `ingested/` for literal matches. This is the only path for raw ingested artifacts (not in LanceDB or FTS5 by design) and a recovery path for not-yet-indexed files. Session turns are FTS-indexed since schema v6, so grep and FTS often produce overlapping URIs; RRF accumulates both contributions for the same URI.
@@ -153,7 +155,9 @@ The CE nudges the existing RRF order; it does not replace it. The default model 
 
 `apply_per_source_cap` drops ingested-document hits — corpus and reference chunks — beyond the per-document cap (3 by default, configurable via `memory.search.sectioning.max_per_source`), so a single chunked document cannot monopolize the top-K. Corpus chunks group by `ingest_id`; reference chunks group by their parent document. Other classes pass through uncapped.
 
-`SectionedHit` rows are grouped into five sections by type, rendered in order: skill → canonical → fragment → session → ingested. Empty sections are omitted. Each block carries structural markers (`=== CANONICAL: <uri> ===` … `=== END CANONICAL ===`) and a completeness qualifier when body length is known. Canonical hits render the page's name and aliases, its attributes line and a bounded body excerpt at warm level, and the whole composition at cold level; the completeness qualifier compares the rendered text with the full composition.
+`SectionedHit` rows are grouped into five sections by type, rendered in order: skill → canonical → fragment → session → ingested. Empty sections are omitted. Each block carries structural markers (`=== CANONICAL: <uri> ===` … `=== END CANONICAL ===`) and a completeness qualifier when body length is known. At warm level every class's summary is cut to `memory.search.warm_excerpt_chars` — canonical hits keep the page's name/aliases and attributes line whole and cut only the trailing bounded body excerpt, the same way fragment, session and ingested hits cut their materialized summary; cold level renders the whole content instead. Exception: raw session turns keep their indexed excerpt at either level; their backing file is a transcript, not an entry, so the disk read that would fill `body` at cold cannot, and the warm summary is kept rather than falling through to the short snippet. The completeness qualifier compares the rendered text with the full, uncut length, so a cut hit shows `preview N/M` and an uncut one shows `complete`. A block outside the canonical and skill sections ends with an `Entities: …` tail listing the entity refs the hit is tagged with — the thread from a fragment or a session summary back to the canonical pages it is about; the refs travel from the vector row through `SectionedHit.entities` — a hit surfaced through the lexical (FTS) arm only carries no `entities` metadata to propagate, so its block has no tail.
+
+A second, response-wide budget (`memory.search.warm_max_chars`) governs which blocks render in full. Hits render section by section, in the skill → canonical → fragment → session → ingested order, highest score first within each section — not one global ranking. Once a hit's full block would push the running total past the budget, that hit and every hit after it — in the current section and every section still to come — render as a one-line headline pointer instead (`- <headline> (<uri>; drill for the body)`), still grouped under its section: a one-way ratchet, not a per-hit re-check. The one exception is the very first block of the whole rendering (the highest-ranked hit overall): it always renders whole even when it alone exceeds the budget, so a rendering never comes back with zero content — the ratchet only starts from the second block on. Past that exemption, a block is never partially cut — a hit is either whole or a pointer. Section headers and pointer lines sit outside the budget check and always print, so it bounds the full blocks rather than capping the total rendered size. Cold level is not subject to this budget.
 
 The pipeline returns `SearchPipelineResult` with the capped `hits`, source counts, and degradation information.
 
@@ -179,7 +183,7 @@ The pipeline returns `SearchPipelineResult` with the capped `hits`, source count
 | `DEFAULT_MODEL` | `durin/memory/cross_encoder.py` | `"BAAI/bge-reranker-base"` — MIT, ~100M params, multilingual. |
 | `SectionedHit` | `durin/memory/sectioned_output.py` | Frozen dataclass: `uri`, `type`, `path`, `score`, `ts`, `snippet`, `summary`, `body`, `body_length`, `ingest_id`. Consumed by renderer. |
 | `apply_per_source_cap` | `durin/memory/sectioned_output.py` | Drops ingested-document hits (corpus and reference chunks) beyond `max_per_source` (default 3) per source document. Other types pass through. |
-| `render_sectioned` | `durin/memory/sectioned_output.py` | Groups hits by section type and renders structural markers for LLM consumption. |
+| `render_sectioned` | `durin/memory/sectioned_output.py` | Groups hits by section type and renders structural markers for LLM consumption. Optional `max_chars` bounds the total size — hits past the budget render as headline pointers instead of full blocks. |
 
 ---
 
@@ -192,6 +196,8 @@ The pipeline returns `SearchPipelineResult` with the capped `hits`, source count
 | `memory.search.cross_encoder.batch_size` | `32` | Batch size for `CrossEncoder.predict` calls. |
 | `memory.search.cross_encoder.top_n` | `10` | Retained for API compatibility; the blend reorders all top-50 candidates and downstream sectioning trims. |
 | `memory.search.sectioning.max_per_source` | `3` | Max ingested-document hits (corpus and reference chunks) per source document in the final result. Prevents a single chunked document from monopolizing top-K. |
+| `memory.search.warm_excerpt_chars` | `600` | Per-hit warm-level summary cut, in characters, applied to every class. The completeness qualifier reports how much of the full content that is. |
+| `memory.search.warm_max_chars` | `8000` | Per-response warm-level rendering budget, in characters. Hits past it render as headline pointers instead of full blocks. Not applied at `level=cold`. |
 
 The pipeline is invoked by the `memory_search` tool (`04_agent_tools.md`). The tool wraps scope/level/limit logic around `run_search_pipeline`:
 

@@ -188,6 +188,37 @@ class TestConsolidatorTokenBudget:
         assert text == "old conversation summary"
         consolidator.sessions.save.assert_called()
 
+    async def test_archive_tags_land_on_the_session_summary_entry(
+        self,
+        consolidator,
+    ):
+        """The entities and topics the archive prompt extracts ride the entry
+        the compactor persists — the index reads them off its frontmatter."""
+        consolidator._SAFETY_BUFFER = 0
+        session = Session(key="test:archive-tags")
+        for i in range(10):
+            session.add_message("user", f"u{i}")
+            session.add_message("assistant", f"a{i}")
+
+        consolidator.estimate_session_prompt_tokens = MagicMock(return_value=(100, "tiktoken"))
+        consolidator.archive = AsyncMock(return_value=(
+            "old conversation summary",
+            {"entities": ["project:durin"], "topics": ["compaction"]},
+        ))
+
+        await consolidator.maybe_consolidate_by_tokens(
+            session,
+            replay_max_messages=6,
+        )
+
+        from durin.memory.session_summary_store import session_summary_path
+        from durin.memory.storage import load_entry
+        entry = load_entry(
+            session_summary_path(consolidator.store.workspace, session.key),
+        )
+        assert entry.entities == ["project:durin"]
+        assert entry.topics == ["compaction"]
+
     async def test_replay_window_overflow_matches_history_tool_boundary(
         self,
         consolidator,

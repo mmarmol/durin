@@ -628,14 +628,19 @@ class TestNewCommandArchival:
         from durin.memory.session_summary_store import get_session_summary, write_session_summary
 
         loop = self._make_loop(tmp_path)
-        write_session_summary(tmp_path, "cli:test", "- earlier: chose postgres")
+        write_session_summary(
+            tmp_path, "cli:test", "- earlier: chose postgres",
+            entities=["tool:postgres"], topics=["database"],
+        )
         session = loop.sessions.get_or_create("cli:test")
         session.add_message("user", "I prefer terse answers")
         session.add_message("assistant", "Noted.")
         loop.sessions.save(session)
 
         async def _fake_archive(_messages):
-            return "- user prefers terse answers", {"entities": ["person:marcelo"], "topics": []}
+            return "- user prefers terse answers", {
+                "entities": ["person:marcelo"], "topics": ["preferences"],
+            }
 
         loop.consolidator.archive = _fake_archive  # type: ignore[method-assign]
 
@@ -651,6 +656,16 @@ class TestNewCommandArchival:
         text = closed[0].read_text(encoding="utf-8")
         assert "earlier: chose postgres" in text
         assert "user prefers terse answers" in text
+        # The record holds two texts — the prior summary and this archive
+        # round — so it carries both their tags, or it would be searchable by
+        # less than it holds. The prior summary's file is deleted by then, so
+        # its tags must be read before the record is filed. Order is the
+        # store's `merge_tags` recency rule (prior tags first, this round's
+        # newly (re)confirmed tags appended last), not alphabetical.
+        from durin.memory.storage import load_entry
+        entry = load_entry(closed[0])
+        assert entry.entities == ["tool:postgres", "person:marcelo"]
+        assert entry.topics == ["database", "preferences"]
 
     @pytest.mark.asyncio
     async def test_new_with_nothing_to_archive_still_clears_the_key(self, tmp_path: Path) -> None:

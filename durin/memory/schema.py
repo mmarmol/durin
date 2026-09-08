@@ -35,6 +35,10 @@ class MemoryEntry(BaseModel):
     source_refs: list[str] = Field(default_factory=list)
     related: list[str] = Field(default_factory=list)
     entities: list[str] = Field(default_factory=list)
+    # Free-form short subject labels (1-3 words). Unlike ``entities`` these
+    # carry no shape contract — an open vocabulary the summarizer writes and
+    # the index reads as extra retrieval signal.
+    topics: list[str] = Field(default_factory=list)
     author: Author = "user_authored"
     valid_from: Optional[date] = None
     body: str = ""

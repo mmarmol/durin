@@ -867,6 +867,14 @@ class VectorIndex:
         }
 
     _EMBED_BUDGET_CHARS = 1500  # ~375 tokens; e5-small max_seq is 512.
+    # Entities + Topics lines share this many chars of the embed budget.
+    # An entry's tag lists can grow large (a session summary's union
+    # accumulates for the life of its key) — without a bound here, a long
+    # list would eat most or all of the remaining budget via `_add`'s own
+    # truncation, leaving the body — the embedder's actual semantic
+    # signal — with little or nothing. This caps the tags' worst-case
+    # share regardless of how many the entry carries.
+    _TAG_LINES_BUDGET_CHARS = 300
 
     # H4: class-level alias of the module-level
     # ``SUMMARY_FALLBACK_CHARS`` — kept so existing callers that read
@@ -874,16 +882,46 @@ class VectorIndex:
     _SUMMARY_FALLBACK_CHARS = SUMMARY_FALLBACK_CHARS
 
     @staticmethod
+    def _tag_lines(entry: MemoryEntry, budget: int) -> list[str]:
+        """Build the ``Entities:``/``Topics:`` lines, the pair sharing
+        *budget* chars total.
+
+        Tags are dropped whole from the end of each list to fit — never a
+        raw mid-string slice — so every surviving tag stays well-formed.
+        Entities are filled first (mirrors the field order elsewhere in
+        this method); Topics get whatever budget remains.
+        """
+        lines: list[str] = []
+        remaining = budget
+        for prefix, tags in (("Entities", entry.entities), ("Topics", entry.topics)):
+            if not tags or remaining <= 0:
+                continue
+            kept: list[str] = []
+            used = len(prefix) + 2  # "<prefix>: "
+            for tag in tags:
+                added = len(tag) + (2 if kept else 0)  # ", " separator
+                if used + added > remaining:
+                    break
+                kept.append(tag)
+                used += added
+            if kept:
+                line = f"{prefix}: " + ", ".join(kept)
+                lines.append(line)
+                remaining -= len(line)
+        return lines
+
+    @staticmethod
     def _embed_text(entry: MemoryEntry, *, budget_chars: int | None = None) -> str:
         """Build the text fed to the embedder.
 
-        Composes ``headline → summary → entities → body`` in that order
-        until the char budget is filled. Most distilled signal first
-        (headline / summary), then named entities, then the longest and
-        most truncatable part (body). Previously only ``summary`` (or
-        headline / body as fallback) was embedded, which gave poor recall
-        for corpus entries where the body carries the information and
-        summary is empty.
+        Composes ``headline → summary → entities → topics → body`` in that
+        order until the char budget is filled. Most distilled signal first
+        (headline / summary), then the named entities and subject labels
+        (query-shaped words the body often never spells out), then the
+        longest and most truncatable part (body). Previously only
+        ``summary`` (or headline / body as fallback) was embedded, which
+        gave poor recall for corpus entries where the body carries the
+        information and summary is empty.
         """
         budget = budget_chars if budget_chars is not None else VectorIndex._EMBED_BUDGET_CHARS
         parts: list[str] = []
@@ -917,8 +955,8 @@ class VectorIndex:
         # from its body prefix.
         if not _is_body_prefix(entry.summary, entry.body):
             _add(entry.summary)
-        if entry.entities:
-            _add("Entities: " + ", ".join(entry.entities))
+        for line in VectorIndex._tag_lines(entry, VectorIndex._TAG_LINES_BUDGET_CHARS):
+            _add(line)
         _add(entry.body)
 
         text = "\n\n".join(parts)

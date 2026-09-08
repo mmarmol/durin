@@ -117,9 +117,9 @@ def test_current_schema_version_is_positive_int() -> None:
     assert CURRENT_SCHEMA_VERSION >= 1
 
 
-def test_schema_version_is_7_for_porter_stemming() -> None:
-    """v7 forces a rebuild so existing indexes are re-tokenized with
-    Porter stemming on ``memory_fts`` — query-time and index-time
-    tokenization must agree or stemmed queries silently miss pre-v7
-    rows. v6 did the same for session-FTS rows, v5 for skill rows."""
-    assert CURRENT_SCHEMA_VERSION == 7
+def test_schema_version_is_8_for_entity_derived_from() -> None:
+    """v8 forces a rebuild so entity rows carry their ``derived_from`` refs
+    in the indexed text — without it, looking up the entities distilled from
+    a reference document answers empty against a pre-v8 index. v7 did the
+    same for Porter stemming, v6 for session-FTS rows, v5 for skill rows."""
+    assert CURRENT_SCHEMA_VERSION == 8

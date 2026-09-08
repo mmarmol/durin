@@ -647,3 +647,46 @@ def test_get_reference_detail_undistilled_has_null_outline(tmp_path: Path) -> No
     assert d["entities"] == []
     assert d["chunks_preview"]  # chunks still previewed
     assert "body." in d["body"]  # full text available even before distillation
+
+
+def test_get_reference_detail_entities_come_from_the_index(tmp_path: Path) -> None:
+    """With an index present the entity list is built from FTS candidates
+    instead of a walk over every page, and its shape does not change."""
+    from datetime import timezone
+
+    from durin.memory.field_patch import FieldPatch
+    from durin.memory.indexer import rebuild_fts_index
+    from durin.memory.memory_writer import write_entity
+    from durin.memory.reference import ingest_reference
+
+    ingest_reference(tmp_path, "Uroperitoneum Paper", "# Study\n\nRatios.\n")
+    ref = "reference:uroperitoneum-paper"
+    now = datetime.datetime(2026, 6, 7, tzinfo=timezone.utc)
+    write_entity(
+        tmp_path, "patient:drako",
+        [FieldPatch(kind="derived_from", value=ref, author="agent",
+                    source_ref="[[sessions/websocket_x.md#turn-4]]", at=now)],
+        create=True, name="Drako",
+    )
+    write_entity(
+        tmp_path, "topic:uroperitoneum",
+        [FieldPatch(kind="derived_from", value=ref, author="dream",
+                    source_ref="[[references/uroperitoneum-paper.md]]", at=now)],
+        create=True, name="Uroperitoneum",
+    )
+    # An entity that names no document at all must stay out of the result.
+    write_entity(
+        tmp_path, "topic:unrelated",
+        [FieldPatch(kind="body_append", value="Nothing to do with the paper.",
+                    author="agent", source_ref="s", at=now)],
+        create=True, name="Unrelated",
+    )
+    rebuild_fts_index(tmp_path)
+
+    d = get_reference_detail(tmp_path, "uroperitoneum-paper")
+
+    assert d is not None
+    assert [(e["ref"], e["relation"]) for e in d["entities"]] == [
+        ("topic:uroperitoneum", "distilled"),
+        ("patient:drako", "referenced"),
+    ]

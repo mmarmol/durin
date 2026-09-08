@@ -243,6 +243,11 @@ def run_search_pipeline(
             # the completeness qualifier (``complete`` vs ``preview N/M``)
             # in the marker line.
             body_length=int(meta.get("body_length", 0) or 0),
+            # The indexed entity tags. The reranker already read them off
+            # the metadata dict; the hit needs them too, or the rendered
+            # block loses the ``Entities:`` tail that points the agent at
+            # the canonical pages behind a fragment or a session summary.
+            entities=tuple(meta.get("entities") or ()),
         ))
     # Honour the configured cap when supplied; fall back to
     # `DEFAULT_MAX_PER_SOURCE` otherwise.

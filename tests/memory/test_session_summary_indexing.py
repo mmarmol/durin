@@ -151,6 +151,37 @@ def test_persisted_entry_is_pydantic_valid(tmp_path: Path) -> None:
     assert entry.author == "agent_created"
 
 
+def test_persisted_entry_carries_entities_and_topics(tmp_path: Path) -> None:
+    """The archive prompt extracts typed entity refs and topic labels for
+    every summary; the store keeps both in the entry's frontmatter."""
+    from durin.memory.storage import load_entry
+
+    write_session_summary(
+        tmp_path, "cli:test", "Body text.",
+        entities=["person:marcelo", "project:durin"],
+        topics=["ranking", "latency"],
+    )
+    entry = load_entry(session_summary_path(tmp_path, "cli:test"))
+    assert entry.entities == ["person:marcelo", "project:durin"]
+    assert entry.topics == ["ranking", "latency"]
+
+
+def test_fts_finds_a_summary_by_one_of_its_topics(tmp_path: Path) -> None:
+    """A topic word absent from the summary text still retrieves the entry:
+    the BM25 composition feeds topics to the index."""
+    from durin.memory.fts_index import FTSIndex
+    from durin.memory.indexer import rebuild_fts_index
+
+    write_session_summary(
+        tmp_path, "cli:test", "Body text with nothing else in it.",
+        topics=["hydroponics"],
+    )
+    rebuild_fts_index(tmp_path)
+    with FTSIndex.open(tmp_path) as idx:
+        hits = idx.search("hydroponics")
+    assert any(h.uri == "memory/session_summary/cli_test" for h in hits)
+
+
 def test_indexer_assigns_session_summary_class_name(tmp_path: Path) -> None:
     """The indexer's _payload_for assigns class_name from parts[0]
     — `memory/session_summary/<key>.md` → class_name="session_summary".

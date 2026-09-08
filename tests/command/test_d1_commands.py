@@ -175,17 +175,26 @@ async def test_compact_summarises_and_advances_cursor(tmp_path: Path) -> None:
         {"role": "user", "content": "u1"},
         {"role": "assistant", "content": "a1"},
     ]
+    # `archive()` returns tags its parser already validated, so the refs a
+    # faithful double hands back are well-formed `<type>:<value>` strings.
     loop.consolidator.archive = AsyncMock(
-        return_value=("a brief summary", {"entities": ["x"], "topics": []})
+        return_value=("a brief summary", {"entities": ["project:durin"], "topics": ["compaction"]})
     )
     ctx = _ctx(loop, "/compact")
     out = await cmd_compact(ctx)
     assert "Compacted 2 messages" in out.content
     assert session.last_consolidated == 2
     # A10: summary lives in `memory/session_summary/<key>.md` now.
-    from durin.memory.session_summary_store import get_session_summary
+    from durin.memory.session_summary_store import (
+        get_session_summary,
+        session_summary_path,
+    )
+    from durin.memory.storage import load_entry
     text, _ = get_session_summary(loop.workspace, session.key)
     assert text == "a brief summary"
+    entry = load_entry(session_summary_path(loop.workspace, session.key))
+    assert entry.entities == ["project:durin"]
+    assert entry.topics == ["compaction"]
 
 
 @pytest.mark.asyncio

@@ -313,3 +313,44 @@ def test_search_trigram_returns_bm25_order(tmp_path: Path) -> None:
         )
         uris = [h.uri for h in idx.search_trigram("記憶装置")]
     assert uris == ["strong", "weak"]
+
+
+# ---------------------------------------------------------------------------
+# Row-type filter — `type_` narrows MATCH results to one row type
+# ---------------------------------------------------------------------------
+
+
+def test_search_type_filter_excludes_other_row_types(tmp_path: Path) -> None:
+    """`type_` adds `AND type = ?` to the query, so a caller that only wants
+    entity rows never has to see episodic/session_summary rows that happen to
+    match the same phrase."""
+    with FTSIndex.open(tmp_path) as idx:
+        idx.upsert(
+            uri="topic:two-systems", path="a.md", type_="entity", entity_type="topic",
+            text="derived_from: reference:thinking-fast-and-slow",
+            mtime=1.0,
+        )
+        idx.upsert(
+            uri="memory/episodic/e1", path="b.md", type_="episodic", entity_type=None,
+            text="discussed reference:thinking-fast-and-slow today",
+            mtime=1.0,
+        )
+        hits = idx.search('"reference:thinking-fast-and-slow"', type_="entity")
+    assert [h.uri for h in hits] == ["topic:two-systems"]
+
+
+def test_search_without_type_filter_returns_every_row_type(tmp_path: Path) -> None:
+    """Omitting `type_` (the default) keeps the existing unfiltered behaviour."""
+    with FTSIndex.open(tmp_path) as idx:
+        idx.upsert(
+            uri="topic:two-systems", path="a.md", type_="entity", entity_type="topic",
+            text="derived_from: reference:thinking-fast-and-slow",
+            mtime=1.0,
+        )
+        idx.upsert(
+            uri="memory/episodic/e1", path="b.md", type_="episodic", entity_type=None,
+            text="discussed reference:thinking-fast-and-slow today",
+            mtime=1.0,
+        )
+        hits = idx.search('"reference:thinking-fast-and-slow"')
+    assert {h.uri for h in hits} == {"topic:two-systems", "memory/episodic/e1"}

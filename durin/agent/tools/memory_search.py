@@ -47,8 +47,6 @@ def _skill_uri_to_path(uri: str) -> str:
     return uri
 
 
-_ENTITY_EXCERPT_CHARS = 600   # same per-page body cap the hot layer uses
-
 # Refs the turn's automatic prefetch already fenced into the user message.
 # Task-scoped (contextvars), not an attribute on the tool instance: one
 # MemorySearchTool is shared by the whole AgentLoop, whose concurrency model
@@ -109,7 +107,9 @@ _PARAMETERS = tool_parameters_schema(
     ),
     level=StringSchema(
         "How much content to return per result. 'warm' (default) returns "
-        "headlines + summaries; 'cold' returns full bodies.",
+        "headlines + summaries; 'cold' returns full bodies. Exception: "
+        "raw session turns keep their indexed excerpt at either level; "
+        "their backing file is a transcript.",
         enum=["warm", "cold"],
     ),
     keywords=StringSchema(
@@ -288,7 +288,9 @@ class MemorySearchTool(Tool):
         )
         return self._cross_encoder_cache
 
-    def _load_entity_page(self, uri: str) -> "EntityPage | None":
+    def _load_entity_page(
+        self, uri: str, cache: dict[str, "EntityPage | None"],
+    ) -> "EntityPage | None":
         """Load the entity page an entity-page ``uri`` addresses.
 
         ``uri`` is the legacy ``memory/entity_page/<type>:<slug>`` shape
@@ -296,17 +298,35 @@ class MemorySearchTool(Tool):
         ``memory/entities/<type>/<slug>.md`` path. Returns ``None`` on any
         failure (missing file, malformed frontmatter) so callers fall back
         to their pre-existing name/aliases-only behaviour.
+
+        Memoised in ``cache`` for the duration of the caller's ``execute()``
+        call: an entity hit's page is otherwise re-read and re-parsed by up
+        to three call sites (sectioned conversion, body-length probe,
+        derived_from attachment). ``cache`` is a plain dict the caller
+        creates fresh per call and passes explicitly — never an attribute
+        on ``self`` — so two ``execute()`` calls running concurrently on
+        this shared tool instance (different sessions; see the
+        ``_turn_prefetch_refs`` comment above for the same hazard on a
+        different piece of turn-scoped state) never read or reset each
+        other's cache.
         """
+        if uri in cache:
+            return cache[uri]
+
         from durin.memory.drill import _translate_entity_page_uri
         from durin.memory.entity_page import EntityPage
 
         path = self._workspace / _translate_entity_page_uri(uri)
         try:
-            return EntityPage.from_file(path)
+            page = EntityPage.from_file(path)
         except Exception:  # noqa: BLE001
-            return None
+            page = None
+        cache[uri] = page
+        return page
 
-    def _entity_full_length(self, uri: str) -> int:
+    def _entity_full_length(
+        self, uri: str, cache: dict[str, "EntityPage | None"],
+    ) -> int:
         """Full-composition length for an entity-page uri.
 
         Feeds the renderer's completeness qualifier (``_completeness_for``
@@ -314,7 +334,7 @@ class MemorySearchTool(Tool):
         backward-compat convention ``SectionedHit.body_length`` already
         uses for hits whose true length isn't tracked.
         """
-        page = self._load_entity_page(uri)
+        page = self._load_entity_page(uri, cache)
         if page is None:
             return 0
         return len(_entity_composition(page, excerpt_chars=None))
@@ -323,11 +343,20 @@ class MemorySearchTool(Tool):
         """Populate ``body`` on a vector-shaped Result by loading the entry.
 
         Vector index stores ``summary``/``headline`` but not the full
-        body — for cold-tier callers we read the markdown back. The
-        ``uri`` shape is ``memory/<class>/<entry_id>``; we map that to
-        ``<workspace>/memory/<class>/<entry_id>.md``. Returns the
-        original result unchanged when the file is missing or unreadable
-        (don't break the result set over a single bad entry).
+        body — for cold-tier callers we read the markdown back. Most
+        classes' ``uri`` is the logical shape ``memory/<class>/<entry_id>``
+        (no extension), which we map to
+        ``<workspace>/memory/<class>/<entry_id>.md``. Session-typed hits
+        (``session_summary``, ``session``) instead carry ``uri`` copied
+        from the pipeline's ``path`` field, which is already the on-disk
+        path INCLUDING its ``.md`` suffix (e.g.
+        ``memory/session_summary/<key>.md``, or ``sessions/<key>.md`` for a
+        raw turn) — appending another ``.md`` for those would look up
+        ``<key>.md.md`` and never find the file, silently falling back to
+        the (short) snippet. Resolve any already-``.md``-suffixed uri
+        directly as a workspace-relative path instead of re-deriving one.
+        Returns the original result unchanged when the file is missing or
+        unreadable (don't break the result set over a single bad entry).
         """
         import dataclasses
 
@@ -350,11 +379,14 @@ class MemorySearchTool(Tool):
         # Entity-page hits never reach here needing a body: their composition
         # is built in `_sectioned_to_result`, which only falls through to this
         # method when the page could not be loaded at all.
-        try:
-            _, class_name, entry_id = r.uri.split("/", 2)
-        except ValueError:
-            return r
-        path = self._workspace / "memory" / class_name / f"{entry_id}.md"
+        if r.uri.endswith(".md"):
+            path = self._workspace / r.uri
+        else:
+            try:
+                _, class_name, entry_id = r.uri.split("/", 2)
+            except ValueError:
+                return r
+            path = self._workspace / "memory" / class_name / f"{entry_id}.md"
         if not path.is_file():
             return r
         try:
@@ -363,7 +395,9 @@ class MemorySearchTool(Tool):
             return r
         return dataclasses.replace(r, body=entry.body)
 
-    def _attach_derived_from(self, hits: list) -> list:
+    def _attach_derived_from(
+        self, hits: list, cache: dict[str, "EntityPage | None"],
+    ) -> list:
         """Populate ``derived_from`` on canonical (entity) hits from disk.
 
         The pipeline builds hits from the vector / FTS indices, which don't
@@ -371,46 +405,50 @@ class MemorySearchTool(Tool):
         frontmatter so the renderer can surface a ``Sources:`` line — the link
         the agent follows to ``memory_drill`` the source document. Bounded
         (runs post-cap on the few surviving hits) and best-effort (a
-        missing / unreadable page just yields no sources)."""
-        import dataclasses
+        missing / unreadable page just yields no sources).
 
-        from durin.memory.entity_page import EntityPage
+        Resolves through ``_load_entity_page`` (uri form: ``memory/entity_page/
+        <type>:<slug>``, same as the sectioned-conversion and body-length call
+        sites), passing the SAME ``cache`` the caller used for those, so a
+        page already parsed earlier in this ``execute()`` call is reused
+        instead of re-read from disk."""
+        import dataclasses
 
         out = []
         for h in hits:
             if h.type != "entity":
                 out.append(h)
                 continue
-            ref = (
-                h.uri[len("memory/entity_page/"):]
-                if h.uri.startswith("memory/entity_page/")
-                else h.uri
+            page = self._load_entity_page(h.uri, cache)
+            derived: tuple[str, ...] = (
+                tuple(page.derived_from or ()) if page is not None else ()
             )
-            type_, _, slug = ref.partition(":")
-            page_path = (
-                self._workspace / "memory" / "entities" / type_ / f"{slug}.md"
-            )
-            derived: tuple[str, ...] = ()
-            if type_ and slug and page_path.is_file():
-                try:
-                    page = EntityPage.from_file(page_path)
-                    derived = tuple(page.derived_from or ()) if page else ()
-                except Exception:  # noqa: BLE001
-                    derived = ()
             out.append(dataclasses.replace(h, derived_from=derived))
         return out
 
-    def _attach_reference_bodies(self, hits: list) -> list:
+    def _attach_reference_bodies(
+        self, hits: list, *, level: str, warm_excerpt_chars: int,
+    ) -> list:
         """Give reference (library) hits a content preview from disk.
 
         A reference chunk's indexed ``summary`` is the head of its raw text,
         which for scraped web/PDF docs is the metadata header (title, URL,
         author, date) — so the agent's preview, and any reranker input, sees
         page chrome, not substance. Read the actual chunk from the
-        ``.chunks.jsonl`` sidecar and strip that leading boilerplate so the
-        preview leads with content; ``body_length`` stays the raw length so the
-        block still shows ``preview N/M`` and the agent knows to drill for the
-        rest. Best-effort and bounded (post-cap)."""
+        ``.chunks.jsonl`` sidecar.
+
+        At warm level, strip that leading boilerplate and cut to
+        ``warm_excerpt_chars`` so the preview leads with content within the
+        same per-hit budget every other class respects; ``body_length``
+        stays the raw length so the block still shows ``preview N/M`` and
+        the agent knows to drill for the rest. At cold level, keep the raw
+        chunk whole (``body=full``, ``summary`` cleared so it doesn't shadow
+        ``body`` in ``_render_block``'s ``summary > body > snippet``
+        preference) — at cold level every class gets full bodies, references
+        included, except a raw session-turn hit: its backing file is a
+        rendered transcript rather than an entry, so it keeps its indexed
+        excerpt at either level (see the ``level`` parameter description).
+        Best-effort and bounded (post-cap)."""
         import dataclasses
 
         from durin.memory.reference import (
@@ -446,7 +484,14 @@ class MemorySearchTool(Tool):
                 rec = next((c for c in chunks if int(c.get("idx", -1)) == idx), None)
             rec = rec or chunks[0]
             full = str(rec.get("text") or "")
-            preview = strip_scraped_boilerplate(full)[:600]
+            if level == "cold":
+                if not full:
+                    out.append(h)
+                    continue
+                out.append(dataclasses.replace(
+                    h, summary="", body=full, body_length=len(full)))
+                continue
+            preview = strip_scraped_boilerplate(full)[:warm_excerpt_chars]
             if preview:
                 out.append(dataclasses.replace(
                     h, summary=preview, body="", body_length=len(full)))
@@ -547,6 +592,41 @@ class MemorySearchTool(Tool):
         if kinds not in ("all", "skill", "fact"):
             return {"error": f"invalid kinds {kinds!r}"}
 
+        # Per-call cache for parsed entity pages. An entity hit's page is
+        # otherwise parsed up to three times per search call (sectioned
+        # conversion, body-length probe, derived_from attachment) — cache
+        # it here so `_load_entity_page` reads the file once per uri.
+        # A plain local, not an attribute on `self`: this tool instance is
+        # shared across concurrent `execute()` calls (different sessions),
+        # and an instance attribute would let one call's reset or writes
+        # reach another's still-in-flight cache — the same hazard the
+        # `_turn_prefetch_refs` comment above describes for a different
+        # piece of turn-scoped state. A fresh dict per call sidesteps it
+        # entirely, and a page a dream rewrites between calls is never
+        # served stale.
+        page_cache: dict[str, "EntityPage | None"] = {}
+
+        # `warm_excerpt_chars` / `warm_max_chars` bound a warm rendering's
+        # size — see `MemorySearchConfig`. Read via a fresh `load_config()`
+        # call rather than `self._app_config`, so callers that construct
+        # the tool directly (graph_api / webui search, tier2_judge — none
+        # of them pass `app_config`) still honour the operator's
+        # configured budget, not just the agent's own tool-call path.
+        # `load_config()` is read per call, cheaply — there is no per-call
+        # cost worth caching against. Schema defaults are the fallback so
+        # a config load failure degrades to the pre-existing hard-coded
+        # behaviour instead of raising.
+        try:
+            from durin.config.loader import load_config
+            _search_cfg = load_config().memory.search
+            warm_excerpt_chars = int(_search_cfg.warm_excerpt_chars)
+            warm_max_chars = int(_search_cfg.warm_max_chars)
+        except Exception:  # noqa: BLE001
+            from durin.config.schema import MemorySearchConfig
+            _search_defaults = MemorySearchConfig()
+            warm_excerpt_chars = _search_defaults.warm_excerpt_chars
+            warm_max_chars = _search_defaults.warm_max_chars
+
         # Archive is intentionally not indexed (vector/lexical/grep over
         # memory/ exclude `memory/archive/**`). The `scope='archive'`
         # surface is a separate on-demand walk for recovery / diagnostic
@@ -555,7 +635,11 @@ class MemorySearchTool(Tool):
         if scope == "archive":
             import asyncio
             # Off-loop: walks + reads every archived .md (blocking file I/O).
-            return await asyncio.to_thread(self._run_archive_scope, query, limit=limit)
+            return await asyncio.to_thread(
+                self._run_archive_scope, query,
+                limit=limit, max_chars=warm_max_chars,
+                warm_excerpt_chars=warm_excerpt_chars,
+            )
 
         # Delegate the whole search to `run_search_pipeline` — query
         # router + lexical FTS + vector + cross-source RRF + entity-aware
@@ -687,10 +771,19 @@ class MemorySearchTool(Tool):
         # block rendering goes via `sectioned_output.render_sectioned`
         # so the per-source cap and section intros actually activate.
         results: list[Result] = []
+        # Kept in lockstep with `results` (only entries `_sectioned_to_result`
+        # didn't drop) so the `enriched_hits` build below can read each
+        # kept hit's own `body_length` back off the ORIGINAL pipeline hit —
+        # see the comment there.
+        kept_pipeline_hits: list[Any] = []
         for h in hits:
-            r = self._sectioned_to_result(h, level=level)
+            r = self._sectioned_to_result(
+                h, level=level, cache=page_cache,
+                warm_excerpt_chars=warm_excerpt_chars,
+            )
             if r is not None:
                 results.append(r)
+                kept_pipeline_hits.append(h)
 
         # Apply per-source cap + render sectioned output.
         from durin.memory.sectioned_output import (
@@ -703,6 +796,10 @@ class MemorySearchTool(Tool):
             "entity_page": "entity",
             "episodic": "episodic", "stable": "stable",
             "corpus": "corpus", "session_summary": "session_summary",
+            # A raw session turn. Without this key it fell to the
+            # `episodic` default and a transcript match rendered under
+            # FRAGMENT with a fragment marker.
+            "session": "session",
             "reference": "reference",
         }
         enriched_hits = [
@@ -717,12 +814,19 @@ class MemorySearchTool(Tool):
                 summary=r.summary,
                 entities=tuple(r.entities),
                 ingest_id=None,
+                # Entity pages: the full page composition length (name +
+                # attributes + body), same as Task 1. Every other class:
+                # the true full length the pipeline already computed
+                # (`h.body_length`, 0 when unknown) — read straight off
+                # the ORIGINAL pipeline hit rather than the (now excerpt-
+                # cut) `Result`, or `_completeness_for` could never show
+                # `preview N/M` for anything but entities.
                 body_length=(
-                    self._entity_full_length(r.uri)
-                    if r.class_name == "entity_page" else 0
+                    self._entity_full_length(r.uri, page_cache)
+                    if r.class_name == "entity_page" else h.body_length
                 ),
             )
-            for r in results
+            for r, h in zip(results, kept_pipeline_hits)
         ]
         capped_hits = apply_per_source_cap(enriched_hits)
 
@@ -754,9 +858,17 @@ class MemorySearchTool(Tool):
 
         kept_uris = {h.uri for h in capped_hits}
         results = [r for r in results if r.uri in kept_uris]
-        capped_hits = self._attach_derived_from(capped_hits)
-        capped_hits = self._attach_reference_bodies(capped_hits)
-        sectioned_rendered = render_sectioned(capped_hits)
+        capped_hits = self._attach_derived_from(capped_hits, page_cache)
+        capped_hits = self._attach_reference_bodies(
+            capped_hits, level=level, warm_excerpt_chars=warm_excerpt_chars,
+        )
+        # The per-response budget is a warm-tier concern only — `cold`
+        # explicitly means "full bodies" (see the tool description), so it
+        # stays unbounded.
+        sectioned_rendered = render_sectioned(
+            capped_hits,
+            max_chars=warm_max_chars if level == "warm" else None,
+        )
         if in_context_hits:
             from durin.memory.context_dedup import (
                 render_in_context_section,
@@ -799,6 +911,7 @@ class MemorySearchTool(Tool):
             "skill_result_count": sum(1 for r in results if r.kind == "skill"),
             "keywords": keywords,
             "in_context_deduped": len(in_context_hits),
+            "rendered_chars": len(sectioned_rendered),
         }
         if pipeline_result.recovered_from:
             recall_payload["recovered_from"] = list(
@@ -842,7 +955,8 @@ class MemorySearchTool(Tool):
         return response
 
     def _run_archive_scope(
-        self, query: str, *, limit: int,
+        self, query: str, *, limit: int, max_chars: int,
+        warm_excerpt_chars: int,
     ) -> dict[str, Any]:
         """On-demand walk of `memory/archive/**` for `scope='archive'` queries.
 
@@ -853,6 +967,15 @@ class MemorySearchTool(Tool):
         No vector / lexical / cross-encoder — recovery surface,
         not the hot path. The shape mirrors the normal response so the
         agent renders it the same way (`results`, `total`, `strategy`).
+        Always rendered at (the effective) warm level, so `max_chars` —
+        the caller's `warm_max_chars` — bounds this rendering exactly like
+        the main path's warm-level `render_sectioned` call. Each hit's
+        body is cut to `warm_excerpt_chars` before rendering, the same
+        way the main path's warm-level `_sectioned_to_result` cuts its
+        summary — otherwise `max_chars` would bound a set of raw file
+        dumps rather than blocks comparable in size to every other
+        section, and one large archived entry could burn most of the
+        budget on its own excerpt.
         """
         import re
 
@@ -934,24 +1057,11 @@ class MemorySearchTool(Tool):
                 body=body,
                 class_name=class_name,
                 valid_from=str(front.get("valid_from", "") or ""),
-                entities=(),
+                entities=tuple(front.get("entities") or ()),
             ))
             if len(hits) >= limit:
                 break
 
-        emit_tool_event(
-            "memory.recall",
-            {
-                "query": query,
-                "scope": "archive",
-                "level": "warm",
-                "result_count": len(hits),
-                "strategy": "archive",
-                "duration_ms": 0.0,
-                "total_candidates": len(hits),
-                "keywords": None,
-            },
-        )
         # Archive path also uses sectioned rendering for parity with
         # the main path. Map each Result to a SectionedHit and call
         # render_sectioned. Per-source cap rarely triggers on archive
@@ -976,7 +1086,10 @@ class MemorySearchTool(Tool):
                 score=0.0,
                 ts=r.valid_from,
                 snippet=r.snippet,
-                body=r.body,
+                # Cut like the main path's warm-level summary cut (see the
+                # docstring above) — an archived file's raw body is
+                # otherwise unbounded and would dominate `max_chars` alone.
+                body=r.body[:warm_excerpt_chars],
                 summary=r.summary,
                 entities=tuple(r.entities),
                 ingest_id=None,
@@ -1004,11 +1117,26 @@ class MemorySearchTool(Tool):
             )
         kept = {h.uri for h in capped}
         kept_results = [r for r in hits if r.uri in kept]
+        sectioned_rendered = render_sectioned(capped, max_chars=max_chars)
+        emit_tool_event(
+            "memory.recall",
+            {
+                "query": query,
+                "scope": "archive",
+                "level": "warm",
+                "result_count": len(hits),
+                "strategy": "archive",
+                "duration_ms": 0.0,
+                "total_candidates": len(hits),
+                "keywords": None,
+                "rendered_chars": len(sectioned_rendered),
+            },
+        )
         archive_response: dict[str, Any] = {
             "total": len(kept_results),
             "strategy": "archive",
             "ranking": "default",
-            "sectioned_rendered": render_sectioned(capped),
+            "sectioned_rendered": sectioned_rendered,
         }
         if self._include_raw_results:
             archive_response["results"] = [
@@ -1018,6 +1146,8 @@ class MemorySearchTool(Tool):
 
     def _sectioned_to_result(
         self, hit: Any, *, level: str,
+        cache: dict[str, "EntityPage | None"],
+        warm_excerpt_chars: int,
     ) -> Optional[Result]:
         """Convert a :class:`durin.memory.sectioned_output.SectionedHit`
         into a legacy :class:`Result` for the tool's response shape.
@@ -1026,6 +1156,12 @@ class MemorySearchTool(Tool):
           carries snippet only).
         - Maps `entity` → `class_name='entity_page'` to preserve the
           canonical vs fragment marker rendering contract.
+        - At warm level, every class's `summary` is cut to
+          `warm_excerpt_chars` (the entity branch already cut its own
+          composition this way; every other class now does too — see
+          `MemorySearchConfig.warm_excerpt_chars`).
+        - `cache` memoises parsed entity pages for the caller's
+          `execute()` call — see `_load_entity_page`.
         """
         # Derive the legacy class_name + uri + source shape.
         hit_path = hit.path or ""
@@ -1078,20 +1214,43 @@ class MemorySearchTool(Tool):
                 )
             source = "memory"
 
-        entities = (hit.uri,) if class_name == "entity_page" else ()
-        # Prefer the body the search pipeline already carries (populated
-        # from the LanceDB row). Falls back to disk read via
-        # `_enrich_body` only when the vector index didn't have the row
-        # (e.g. grep-only path).
+        # A canonical page IS its entity, so it points at itself; every other
+        # class points at the entities it was tagged with, which is what makes
+        # a fragment or a session summary drillable to canonical.
+        entities = (
+            (hit.uri,) if class_name == "entity_page"
+            else tuple(getattr(hit, "entities", ()) or ())
+        )
+        # Prefer the pipeline's materialised summary (authoritative Dream
+        # summary, or the body-prefix fallback `VectorIndex` computes) over
+        # the bare snippet/headline — see the "never falls back to a
+        # 60-char headline" comment on SectionedHit construction in
+        # search_pipeline.py. Grep-only hits (no vector/lexical metadata)
+        # carry no summary, so this still falls back to the snippet.
         carried_body = getattr(hit, "body", "") or ""
-        summary = hit.snippet or ""
-        body = carried_body if level == "cold" else ""
+        summary = hit.summary or hit.snippet or ""
+        # The warm-level cut, kept around regardless of `level` — the cold
+        # branch below clears `summary` so `_enrich_body` can fill `body`
+        # from disk, but restores this if that enrich comes back empty
+        # (see the `not result.body` check at the end of this method).
+        warm_summary = summary[:warm_excerpt_chars]
+        if level == "cold":
+            body = carried_body
+            # Clear summary so `_render_block`'s `summary > body >
+            # snippet` preference falls through to `body` — filled in
+            # below via `_enrich_body` with the true full text from
+            # disk. Leaving the (short) summary here would shadow it
+            # and cold would render the same short text as warm.
+            summary = ""
+        else:
+            body = ""
+            summary = warm_summary
         if class_name == "entity_page":
             # The vector index stores an entity's summary as its name +
             # aliases only (`VectorIndex.upsert_entity_page`) — replace it
             # with the fuller composition so a hit on the page actually
             # tells the model something about it without a drill.
-            page = self._load_entity_page(uri)
+            page = self._load_entity_page(uri, cache)
             if page is not None:
                 if level == "cold":
                     # `_render_block` prefers `summary` over `body`
@@ -1102,7 +1261,7 @@ class MemorySearchTool(Tool):
                     summary = full
                     body = full
                 else:
-                    summary = _entity_composition(page, excerpt_chars=_ENTITY_EXCERPT_CHARS)
+                    summary = _entity_composition(page, excerpt_chars=warm_excerpt_chars)
         result = Result(
             source=source,
             uri=uri,
@@ -1116,4 +1275,15 @@ class MemorySearchTool(Tool):
         )
         if level == "cold" and not result.body:
             result = self._enrich_body(result)
+            if not result.body:
+                # `_enrich_body` couldn't produce a body either — e.g. a
+                # raw session turn's uri (`sessions/<key>.md`) is a
+                # rendered transcript with no frontmatter, so `load_entry`
+                # raises and the result comes back unchanged. Put the
+                # warm summary back rather than leaving `summary` cleared,
+                # which would fall through to the 160-char `snippet` —
+                # smaller than what warm rendered for the same hit. Cold
+                # must never render less than warm.
+                import dataclasses
+                result = dataclasses.replace(result, summary=warm_summary)
         return result

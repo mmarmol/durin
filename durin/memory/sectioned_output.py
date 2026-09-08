@@ -176,12 +176,38 @@ def _source_group_key(hit: SectionedHit) -> str:
     return hit.uri
 
 
-def render_sectioned(hits: Iterable[SectionedHit]) -> str:
+def render_sectioned(
+    hits: Iterable[SectionedHit], *, max_chars: int | None = None,
+) -> str:
     """Render the sectioned output as a single string.
 
     Sections appear in canonical → fragment → session → ingested
     order. Empty sections are omitted; if no hits exist the function
     returns ``""``.
+
+    ``max_chars`` governs which blocks render in full. Ordering is
+    section-major, score-minor: hits render section by section in
+    ``_SECTION_ORDER``, highest score first within each section — not
+    one ranking across the whole result set. Once a hit's full block
+    would push the running length past the budget, that hit and every
+    remaining hit — in this section and any section still to come —
+    renders as a one-line headline pointer (``- <headline> (<uri>;
+    drill for the body)``) instead, grouped under its own section like
+    a full block would be: a one-way ratchet, not a per-hit re-check —
+    a later section's hits degrade to pointers too even if individually
+    small, once an earlier section has tripped it. A block is never
+    partially cut: a hit is either rendered whole or as a pointer.
+    Section headers and pointer lines sit outside the check and always
+    print, so ``max_chars`` bounds the full blocks rather than capping
+    the total rendering length. ``None`` (the default) renders every
+    hit as a full block, unbounded — the pre-budget behaviour.
+
+    The very first block of the whole rendering (the highest-ranked hit
+    overall — canonical sorts first) always renders whole, even when it
+    alone exceeds ``max_chars``: a rendering must never carry zero
+    content. The ratchet still starts immediately after it, so a second
+    block that would otherwise have fit on its own still degrades to a
+    pointer once the first one blew the budget.
     """
     by_section: dict[str, list[SectionedHit]] = {
         s: [] for s in _SECTION_ORDER
@@ -193,19 +219,56 @@ def render_sectioned(hits: Iterable[SectionedHit]) -> str:
         by_section[section].sort(key=lambda h: h.score, reverse=True)
 
     parts: list[str] = []
+    running_length = 0
+    over_budget = False
+    rendered_first_block = False
+
+    def _append(part: str) -> None:
+        nonlocal running_length
+        running_length += (2 if parts else 0) + len(part)
+        parts.append(part)
+
     for section in _SECTION_ORDER:
         section_hits = by_section[section]
         if not section_hits:
             continue
-        parts.append(f"## {section.title()}\n\n{_SECTION_INTRO[section]}")
+        _append(f"## {section.title()}\n\n{_SECTION_INTRO[section]}")
         for hit in section_hits:
-            parts.append(_render_block(section, hit))
+            if not over_budget:
+                block = _render_block(section, hit)
+                projected = running_length + (2 if parts else 0) + len(block)
+                fits = max_chars is None or projected <= max_chars
+                if fits or not rendered_first_block:
+                    _append(block)
+                    rendered_first_block = True
+                    if not fits:
+                        over_budget = True
+                    continue
+                over_budget = True
+            _append(_headline_pointer(hit))
     return "\n\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
 # internals
 # ---------------------------------------------------------------------------
+
+
+def _headline_pointer(hit: SectionedHit) -> str:
+    """One-line stand-in for a hit the ``max_chars`` budget dropped.
+
+    Carries just enough for the agent to decide whether it's worth a
+    drill: a short headline and the uri to drill. The headline is the
+    hit's snippet — falling back to its uri when there is none, mirrors
+    the ``headline = hit.snippet or hit.uri`` fallback used elsewhere
+    for the same purpose — cut to its first line and 80 characters, so a
+    multi-line or long snippet reads as an actual headline rather than a
+    repetitive body prefix.
+    """
+    raw = (hit.snippet or hit.uri).strip()
+    first_line = raw.splitlines()[0] if raw else hit.uri
+    headline = first_line[:80]
+    return f"- {headline} ({hit.uri}; drill for the body)"
 
 
 def _render_block(section: str, hit: SectionedHit) -> str:
@@ -236,7 +299,10 @@ def _render_block(section: str, hit: SectionedHit) -> str:
     if section == "canonical" and hit.derived_from:
         parts.append("Sources: " + ", ".join(hit.derived_from[:8]) + ".")
     if section not in ("canonical", "skill") and hit.entities:
-        parts.append(f"Entities: {', '.join(hit.entities)}")
+        # Sliced like `derived_from[:8]` above — a hit's entities list is
+        # unbounded upstream, and the tail is a pointer trail for the LLM
+        # to drill, not the full tag set.
+        parts.append(f"Entities: {', '.join(hit.entities[:8])}")
     from durin.memory.section_markers import end_marker
     parts.append(end_marker(section))
     return "\n".join(parts)

@@ -146,3 +146,40 @@ def test_missing_memory_dir_no_op(tmp_path: Path) -> None:
     result = ensure_index_fresh(tmp_path)
     assert result["rebuilt"] is False
     assert result["reason"] in ("no_memory_dir", "cached")
+
+
+def test_the_schema_bump_lands_derived_from_on_already_indexed_pages(tmp_path: Path) -> None:
+    """The migration the version bump exists for: a workspace indexed under an
+    older schema carries entity rows without the ``derived_from`` line, so the
+    reference lookup answers empty against it until the freshness check
+    rebuilds."""
+    from durin.memory.artifact_recall import entities_derived_from
+    from durin.memory.indexer import (
+        _RESET_FRESHNESS_CACHE_FOR_TESTS,
+        ensure_index_fresh,
+        rebuild_fts_index,
+    )
+
+    ref = "reference:thinking-fast-and-slow"
+    page = EntityPage(
+        type="topic", name="Two Systems", aliases=[], body="Fast and slow.",
+        derived_from=[ref],
+    )
+    page.save(tmp_path / "memory" / "entities" / "topic" / "two-systems.md")
+    rebuild_fts_index(tmp_path)
+    # Strip the line the bump introduces, so the row looks pre-v8.
+    with FTSIndex.open(tmp_path) as idx:
+        idx.upsert(
+            uri="topic:two-systems",
+            path="memory/entities/topic/two-systems.md",
+            type_="entity", entity_type="topic",
+            text="Two Systems\nFast and slow.", mtime=0.0,
+        )
+    save_index_meta(tmp_path, IndexMeta(schema_version=7, embedding_model_id="m"))
+    _RESET_FRESHNESS_CACHE_FOR_TESTS()
+
+    assert entities_derived_from(tmp_path, ref) == []
+
+    assert ensure_index_fresh(tmp_path)["rebuilt"] is True
+
+    assert entities_derived_from(tmp_path, ref) == ["topic:two-systems"]
