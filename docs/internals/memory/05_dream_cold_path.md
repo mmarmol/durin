@@ -350,10 +350,12 @@ bullet summary plus trailing entity/topic tags. The result is appended to
 `memory/session_summary/<key>.md` via `append_session_summary_block` — the
 same bounded, block-based store the compactor writes (oldest blocks evicted
 past the size cap, their path trailers carried forward into a synthetic head
-block). The tags go with it: the entry accumulates the sorted union of every
-span's `entities` and `topics`, which the FTS and vector composers index, so
-the summary stays reachable by a name or subject its prose never spells out —
-including one whose span the cap later evicted. New tags alone are reason to
+block). The tags go with it: the entry accumulates a recency-bounded union of
+every span's `entities` and `topics` — the most recently (re)confirmed tags
+kept, the rest dropped once the cap is reached — which the FTS and vector
+composers index, so the summary stays reachable by a name or subject its
+prose never spells out — including one whose span the cap later evicted.
+New tags alone are reason to
 rewrite, so a degraded round that repeats the previous block still contributes
 them. The append itself runs under the summary file's own
 `cross_process_lock`: the compactor writes from the gateway process and this

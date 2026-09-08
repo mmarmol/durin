@@ -57,9 +57,10 @@ def test_consecutive_duplicate_block_not_reappended(tmp_path: Path) -> None:
 def test_append_unions_entities_and_topics_across_blocks(tmp_path: Path) -> None:
     """Each span contributes its own tags; the entry accumulates the union
     so a summary stays searchable by anything any of its spans mentioned.
-    Order is recency, not alphabetical: existing tags keep their position,
-    new ones land at the end — the ordering the cap (see the next test)
-    truncates from the front of."""
+    Order is recency, not alphabetical: a tag moves to the end whether it's
+    new or a reconfirmation of one already there — "search" repeats in span
+    two, so it ends up after "dream", not before it — the ordering the cap
+    (see the next test) truncates from the front of."""
     append_session_summary_block(
         tmp_path, KEY, "- span one",
         entities=["project:durin"], topics=["search"],
@@ -70,7 +71,7 @@ def test_append_unions_entities_and_topics_across_blocks(tmp_path: Path) -> None
     )
     entry = load_entry(session_summary_path(tmp_path, KEY))
     assert entry.entities == ["project:durin", "person:marcelo"]
-    assert entry.topics == ["search", "dream"]
+    assert entry.topics == ["dream", "search"]
 
 
 def test_append_records_new_tags_when_the_block_repeats(tmp_path: Path) -> None:
@@ -109,6 +110,29 @@ def test_append_caps_topics_keeping_the_most_recent(tmp_path: Path) -> None:
     entry = load_entry(session_summary_path(tmp_path, KEY))
     assert len(entry.topics) == 12
     assert entry.topics == [f"topic-{i:02d}" for i in range(8, 20)]
+
+
+def test_reconfirmed_tag_moves_to_the_newest_position_and_survives_the_cap(tmp_path: Path) -> None:
+    """A tag a later span keeps mentioning is truly the most recent one —
+    it must move to the end, not stay pinned at its first-seen position, or
+    a long-lived key could evict a tag every span reconfirms while keeping
+    ones nothing has mentioned since. "old" is first seen in span 0 and
+    reconfirmed right before the cap (12 topics) forces an eviction; only
+    "t00", never reconfirmed, is old enough to be the one dropped."""
+    append_session_summary_block(tmp_path, KEY, "- span 0", topics=["old"])
+    for i in range(11):
+        append_session_summary_block(tmp_path, KEY, f"- span {i + 1}", topics=[f"t{i:02d}"])
+    entry = load_entry(session_summary_path(tmp_path, KEY))
+    assert len(entry.topics) == 12
+    assert "old" in entry.topics
+
+    append_session_summary_block(tmp_path, KEY, "- reconfirm", topics=["old", "t11"])
+
+    entry = load_entry(session_summary_path(tmp_path, KEY))
+    assert len(entry.topics) == 12
+    assert "old" in entry.topics       # reconfirmed just now — survives
+    assert "t00" not in entry.topics   # oldest, never reconfirmed — evicted
+    assert entry.topics[-2:] == ["old", "t11"]
 
 
 def test_evicted_block_paths_are_carried_forward(tmp_path: Path) -> None:

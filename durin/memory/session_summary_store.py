@@ -47,7 +47,7 @@ __all__ = [
     "delete_session_summary",
     "find_previous_session_summary",
     "get_session_summary",
-    "get_session_summary_tags",
+    "read_session_summary_entry",
     "sanitize_session_key",
     "session_summary_path",
     "write_session_summary",
@@ -129,6 +129,7 @@ def write_session_summary(
     headline_source: Optional[str] = None,
     entities: Optional[Sequence[str]] = None,
     topics: Optional[Sequence[str]] = None,
+    source_key: Optional[str] = None,
 ) -> Optional[Path]:
     """Persist *text* as `memory/session_summary/<sanitized>.md`.
 
@@ -154,6 +155,15 @@ def write_session_summary(
     refs must already be well-formed ``<type>:<value>`` — the schema
     validates them and a bad ref raises rather than writing a broken
     entry.
+
+    ``source_key``, when given, is recorded verbatim (un-sanitised) as
+    ``source_refs=["session:<source_key>"]``. This is the *original*
+    session key the text came from — usually ``session_key`` itself,
+    except for a closed-conversation record, whose file id is
+    ``closed_record_key(...)``, a different string. Without it the
+    entry carries no ``source_refs``, and ``find_previous_session_summary``
+    can only place it by the legacy sanitized-prefix match on the file
+    stem, not by an exact channel match.
     """
     text = (text or "").strip()
     if not text or text == "(nothing)":
@@ -166,6 +176,7 @@ def write_session_summary(
         headline=_headline_from(headline_source if headline_source is not None else text),
         summary=text,
         body=text,
+        source_refs=[f"session:{source_key}"] if source_key else [],
         entities=list(entities or ()),
         topics=list(topics or ()),
         author="agent_created",
@@ -230,19 +241,21 @@ def _build_carried_line(carried: list[str]) -> str:
 
 
 def _merge_tags(prior: list[str], new: Optional[Sequence[str]], cap: int) -> list[str]:
-    """Union *prior* and *new*, keeping the *cap* most recently seen tags.
+    """Union *prior* and *new*, keeping the *cap* most recently (re)confirmed tags.
 
-    *prior*'s own order is preserved and any tag in *new* not already
-    present is appended after it — recency order, not alphabetical, so
-    "most recently seen" is well-defined. Once the merged list exceeds
-    *cap*, entries are dropped from the front (the oldest survivors),
-    never from *new* preferentially over *prior* or vice versa — only
-    position (how long ago a tag was last (re)confirmed) decides.
+    Order is recency, not alphabetical: a tag in *new* moves to the end
+    whether it is already in *prior* or not — reconfirming a tag counts
+    as seeing it now, not "leave it where it was first seen". Once the
+    merged list exceeds *cap*, entries are dropped from the front — the
+    tags that have gone longest without being (re)confirmed — so a tag a
+    later span keeps mentioning survives eviction even if it was first
+    seen long ago.
     """
     merged = list(prior)
     for tag in new or ():
-        if tag not in merged:
-            merged.append(tag)
+        if tag in merged:
+            merged.remove(tag)
+        merged.append(tag)
     if len(merged) > cap:
         merged = merged[-cap:]
     return merged
@@ -319,6 +332,7 @@ def append_session_summary_block(
             workspace, session_key, _SUMMARY_BLOCK_SEP.join(blocks),
             last_active=last_active, headline_source=block,
             entities=merged_entities, topics=merged_topics,
+            source_key=session_key,
         )
 
 
@@ -352,23 +366,35 @@ def get_session_summary(
     return (entry.body or entry.summary or None, entry.valid_from)
 
 
-def get_session_summary_tags(
+def read_session_summary_entry(
     workspace: Path,
     session_key: str,
-) -> dict[str, list[str]]:
-    """``{"entities": [...], "topics": [...]}`` of *session_key*'s summary,
-    both empty when there is none — the same tags-dict shape every other
-    producer (``parse_consolidator_response``, ``Consolidator._collect_tags``)
-    uses, so callers don't juggle two different tag shapes.
+) -> Optional[MemoryEntry]:
+    """The full parsed summary entry for *session_key*, or ``None`` when
+    there is none or it doesn't parse.
 
-    Callers that fold one summary's text into a different record — ``/new``
-    building its closed-conversation record — carry its tags across too, or
-    the record ends up searchable by less than the text it holds.
+    Public counterpart of ``_load_summary_entry`` for callers outside this
+    module — e.g. ``/new`` building its closed-conversation record needs
+    the prior summary's text *and* its tags in one parse, rather than
+    reaching into this module's private helper across a package boundary.
     """
-    entry = _load_summary_entry(session_summary_path(workspace, session_key))
-    if entry is None:
-        return {"entities": [], "topics": []}
-    return {"entities": list(entry.entities), "topics": list(entry.topics)}
+    return _load_summary_entry(session_summary_path(workspace, session_key))
+
+
+def _source_ref_channel(source_refs: Sequence[str]) -> Optional[str]:
+    """The channel named by a ``session:<channel>:<rest>`` ref in
+    *source_refs*, or ``None`` when no such ref is present.
+
+    ``split(":", 2)`` caps the split at the channel, so a chat id that
+    itself contains ``:`` doesn't fragment it further — the ref's second
+    ``:``-separated part is always the whole channel.
+    """
+    for ref in source_refs:
+        if ref.startswith("session:"):
+            parts = ref.split(":", 2)
+            if len(parts) >= 2:
+                return parts[1]
+    return None
 
 
 def find_previous_session_summary(
@@ -378,9 +404,19 @@ def find_previous_session_summary(
     summary on ``session_key``'s channel, or ``None``.
 
     Only channels in ``channels`` qualify — those are the single-user
-    surfaces where "the previous session" is the same person's. Files are
-    the sanitized-key ``.md`` entries of this class; recency is the entry's
-    ``valid_from`` (the session's last-active date), file mtime as tiebreak.
+    surfaces where "the previous session" is the same person's. A
+    candidate's channel is read from its own ``source_refs`` (the
+    ``session:<key>`` ref ``write_session_summary``/
+    ``append_session_summary_block`` write when given ``source_key``) and
+    matched exactly against ``channel`` — not a sanitized-filename prefix,
+    which would conflate e.g. channel ``cli`` with channel ``cli_test``
+    (``sanitize_session_key("cli_test:...")`` starts with the same ``cli_``
+    a prefix glob for ``cli`` would use). An entry with no ``session:`` ref
+    — written before this ref existed, or by any path that skipped
+    ``source_key`` — falls back to that sanitized-prefix test on the file
+    stem instead of being excluded outright. Recency is the entry's
+    ``valid_from`` (the session's last-active date), file mtime as
+    tiebreak.
     """
     channel = session_key.split(":", 1)[0]
     if channel not in channels:
@@ -391,7 +427,7 @@ def find_previous_session_summary(
     if not directory.is_dir():
         return None
     best: Optional[Tuple[Tuple[date, float], str, str, Optional[date]]] = None
-    for md in directory.glob(f"{prefix}*.md"):
+    for md in directory.glob("*.md"):
         if md.stem == own_stem:
             continue
         try:
@@ -401,6 +437,12 @@ def find_previous_session_summary(
         text = entry.body or entry.summary
         if not text:
             continue
+        candidate_channel = _source_ref_channel(entry.source_refs)
+        if candidate_channel is not None:
+            if candidate_channel != channel:
+                continue
+        elif not md.stem.startswith(prefix):
+            continue  # legacy entry (no source_refs) on a different channel
         rank = (entry.valid_from or date.min, md.stat().st_mtime)
         if best is None or rank > best[0]:
             best = (rank, md.stem, text, entry.valid_from)

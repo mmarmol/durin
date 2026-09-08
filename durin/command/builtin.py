@@ -508,6 +508,7 @@ async def _archive_closed_session(
             loop.workspace, closed_key, "\n\n---\n\n".join(parts), last_active=last_active,
             entities=sorted(set(prior_tags.get("entities") or []) | set(tags.get("entities") or [])),
             topics=sorted(set(prior_tags.get("topics") or []) | set(tags.get("topics") or [])),
+            source_key=key,
         )
     except Exception:  # noqa: BLE001
         log.exception("/new closed-conversation record failed for %s", key)
@@ -519,9 +520,8 @@ async def cmd_new(ctx: CommandContext) -> OutboundMessage:
     await loop._cancel_active_tasks(ctx.key)
 
     from durin.memory.session_summary_store import (
-        _load_summary_entry,
         delete_session_summary,
-        session_summary_path,
+        read_session_summary_entry,
     )
 
     session = ctx.session or loop.sessions.get_or_create(ctx.key)
@@ -529,9 +529,9 @@ async def cmd_new(ctx: CommandContext) -> OutboundMessage:
     last_active = session.updated_at            # before clear() stamps "now"
     # Read before the delete below: the record is filed in the background,
     # by which time the key's summary file is gone. One parse for both the
-    # text and its tags — `get_session_summary` + `get_session_summary_tags`
-    # would load and parse the same file twice.
-    prior_entry = _load_summary_entry(session_summary_path(loop.workspace, ctx.key))
+    # text and its tags — `read_session_summary_entry` returns the whole
+    # entry, so a separate tags-only read isn't needed.
+    prior_entry = read_session_summary_entry(loop.workspace, ctx.key)
     prior_summary = (
         (prior_entry.body or prior_entry.summary or None) if prior_entry else None
     )
