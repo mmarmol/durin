@@ -711,3 +711,65 @@ class TestNewCommandArchival:
         prefix = sanitize_session_key(key)[:40]
         closed = sorted((tmp_path / "memory" / "session_summary").glob(f"{prefix}_closed_*.md"))
         assert len(closed) == 2
+
+
+class TestCompactorSkipsSummarizedSpan:
+    """The nightly session-summary pass and the compactor share one span."""
+
+    @pytest.mark.asyncio
+    async def test_compaction_skips_the_span_the_dream_summarized(
+        self, tmp_path: Path,
+    ) -> None:
+        """An idle session the dream summarized, then resumed and compacted:
+        the compactor's chunk starts at ``last_consolidated``, so without the
+        overlap check it re-summarizes the turns the pass already covered."""
+        from durin.memory.session_summary_dream import set_summary_cursor
+        from durin.providers.base import LLMResponse
+
+        loop = TestNewCommandArchival._make_loop(tmp_path)
+        # That fixture pins a 1-token window to force /new's archive; here the
+        # replay window is the trigger, so give the token path a real budget
+        # and let it find nothing left to do.
+        loop.consolidator.context_window_tokens = 200_000
+        loop.consolidator.max_completion_tokens = 4096
+        session = loop.sessions.get_or_create("cli:test")
+        session.add_message("user", "old question one")
+        session.add_message("assistant", "old answer one")
+        session.add_message("user", "old question two")
+        session.add_message("assistant", "old answer two")
+        session.add_message(
+            "assistant", "let me read the file",
+            tool_calls=[{
+                "id": "t1", "type": "function",
+                "function": {"name": "read_file", "arguments": "{}"},
+            }],
+        )
+        session.add_message("tool", "fresh file contents", tool_call_id="t1")
+        loop.sessions.save(session)
+
+        # The nightly pass already summarized the first four messages.
+        set_summary_cursor(loop.sessions._get_session_path("cli:test"), 4)
+
+        archived: list[str] = []
+
+        async def _chat(*args, **kwargs):
+            # Compaction also runs the decision-log and learnings extractors;
+            # only the archive call carries the consolidator archive prompt.
+            messages = kwargs["messages"]
+            if "Extract key facts" in (messages[0].get("content") or ""):
+                archived.append(messages[-1]["content"])
+            return LLMResponse(content="- compacted", tool_calls=[])
+
+        loop.provider.chat_with_retry = AsyncMock(side_effect=_chat)
+
+        # A replay window of one leaves a tail that cannot legally start a
+        # replay, so the compactor archives the whole unconsolidated span.
+        await loop.consolidator.maybe_consolidate_by_tokens(
+            session, replay_max_messages=1,
+        )
+
+        assert len(archived) == 1
+        assert "let me read the file" in archived[0]
+        assert "fresh file contents" in archived[0]
+        assert "old question one" not in archived[0]
+        assert "old answer two" not in archived[0]

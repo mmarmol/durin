@@ -321,19 +321,9 @@ class MemorySearchTool(Tool):
                 return r
             return dataclasses.replace(r, body=text)
 
-        # Entity-page hits address `memory/entity_page/<type>:<slug>`, not
-        # the `memory/<class>/<id>` triplet the split below expects (that
-        # would look for a `memory/entity_page/<type>:<slug>.md` file,
-        # which never exists — entity pages live under
-        # `memory/entities/<type>/<slug>.md`).
-        if r.class_name == "entity_page":
-            page = self._load_entity_page(r.uri)
-            if page is None:
-                return r
-            return dataclasses.replace(
-                r, body=_entity_composition(page, excerpt_chars=None),
-            )
-
+        # Entity-page hits never reach here needing a body: their composition
+        # is built in `_sectioned_to_result`, which only falls through to this
+        # method when the page could not be loaded at all.
         try:
             _, class_name, entry_id = r.uri.split("/", 2)
         except ValueError:

@@ -335,6 +335,14 @@ past the end of the file — the file shrank without the cursor resetting,
 because `/new` emptied it or the file cap trimmed it — what is there now is a
 new conversation, and the span falls back to `last_consolidated`.
 
+The exclusion runs both ways, since the two writers advance different cursors
+over the same message list. The pass never re-summarizes a span the compactor
+already archived, because its start respects `last_consolidated`. And when an
+idle-then-summarized session resumes and compacts, `Consolidator._unsummarized`
+trims the head of the compaction chunk that this pass's `summary_cursor`
+already covers — an entirely covered chunk means no LLM call and no block
+appended.
+
 The span is rendered as one line per message (timestamp + role + content)
 and run through the **same archive prompt the compactor uses**
 (`agent/consolidator_archive.md`), so both paths produce the same shape of
