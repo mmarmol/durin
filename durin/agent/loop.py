@@ -2964,12 +2964,16 @@ class AgentLoop:
         Without this a snapshot outlives the setting that made it: turning
         `freeze` back on later would resurrect text rendered arbitrarily long
         ago, since with the default `refresh_after_min` a snapshot never ages
-        out on its own.
+        out on its own. Also pops any pending `DROP_REASON_KEY`: with `freeze`
+        off, `_freeze_eager_surface` never runs to consume it, so a reason left
+        over from before the setting flipped (a compaction, `/new`) would
+        otherwise mislabel the first freeze once `freeze` comes back on.
         """
-        from durin.memory.eager_surface import SNAPSHOT_KEY
+        from durin.memory.eager_surface import DROP_REASON_KEY, SNAPSHOT_KEY
 
         if session is not None:
             session.metadata.pop(SNAPSHOT_KEY, None)
+            session.metadata.pop(DROP_REASON_KEY, None)
 
     def eager_snapshot_for_session(self, session: Session) -> "EagerSnapshot | None":
         """The surface a build of this session would render from right now.
@@ -2987,13 +2991,31 @@ class AgentLoop:
     def _resolve_eager_snapshot(
         self, session: Session | None, session_key: str
     ) -> "EagerSnapshot | None":
-        """The session's stored eager surface, or None to render live."""
-        from durin.memory.eager_surface import SNAPSHOT_KEY, EagerSnapshot, snapshot_is_stale
+        """The session's stored eager surface, or None to render live.
+
+        A stored value present but rejected by `EagerSnapshot.from_metadata`
+        (a hand-edited or format-drifted sidecar) is popped here rather than
+        left in place: left alone, the next freeze's
+        `_eager_surface_freeze_reason` would find `SNAPSHOT_KEY` still
+        present and misreport `refresh_window` — a config window the
+        operator may never have set — instead of `corrupt`.
+        """
+        from durin.memory.eager_surface import (
+            DROP_REASON_KEY,
+            SNAPSHOT_KEY,
+            EagerSnapshot,
+            snapshot_is_stale,
+        )
 
         if session is None:
             return None
-        snapshot = EagerSnapshot.from_metadata(session.metadata.get(SNAPSHOT_KEY))
+        stored = session.metadata.get(SNAPSHOT_KEY)
+        if stored is None:
+            return None
+        snapshot = EagerSnapshot.from_metadata(stored)
         if snapshot is None:
+            session.metadata.pop(SNAPSHOT_KEY, None)
+            session.metadata[DROP_REASON_KEY] = "corrupt"
             return None
         if snapshot_is_stale(
             snapshot, refresh_after_min=self._eager_surface_config().refresh_after_min
@@ -3057,21 +3079,23 @@ class AgentLoop:
         """Why this build is freezing a fresh surface, for the
         ``memory.eager_surface`` row ``_freeze_eager_surface`` is about to emit.
 
-        ``/new`` (``Session.clear()``) and a compaction round
-        (``Consolidator._post_compaction_hooks``) both pop the stored snapshot
-        immediately and leave ``eager_surface.DROP_REASON_KEY`` behind naming
-        why — by the time this build resolves nothing to reuse, the key is
-        simply absent either way, so without that marker "the session never
-        had one" and "something just cleared it" look identical. A snapshot
-        that failed ``snapshot_is_stale`` is left in place by
-        ``_resolve_eager_snapshot`` (nothing pops it there), so finding
-        ``SNAPSHOT_KEY`` still present is what separates ``refresh_window``
-        from a session that never stored one at all (``first_build``).
+        ``/new`` (``Session.clear()``), a compaction round
+        (``Consolidator._post_compaction_hooks``), and a corrupt stored value
+        (``_resolve_eager_snapshot``, when ``EagerSnapshot.from_metadata``
+        rejects it) all pop the stored snapshot immediately and leave
+        ``eager_surface.DROP_REASON_KEY`` behind naming why — by the time
+        this build resolves nothing to reuse, the key is simply absent
+        either way, so without that marker "the session never had one" and
+        "something just cleared it" look identical. A snapshot that failed
+        ``snapshot_is_stale`` is left in place by ``_resolve_eager_snapshot``
+        (nothing pops it there), so finding ``SNAPSHOT_KEY`` still present is
+        what separates ``refresh_window`` from a session that never stored
+        one at all (``first_build``).
         """
         from durin.memory.eager_surface import DROP_REASON_KEY, SNAPSHOT_KEY
 
         reason = session.metadata.pop(DROP_REASON_KEY, None)
-        if reason in ("new", "compaction"):
+        if reason in ("new", "compaction", "corrupt"):
             return reason
         if session.metadata.get(SNAPSHOT_KEY) is not None:
             return "refresh_window"

@@ -768,11 +768,12 @@ class MemoryEagerSurfaceEvent(TypedDict):
     ``reason`` names the boundary that made this build render live instead
     of reusing a stored snapshot: ``first_build`` (the session had none yet),
     ``new`` (``/new`` cleared the prior one), ``compaction`` (a compaction
-    round dropped it), or ``refresh_window`` (``memory.eager_surface.
-    refresh_after_min`` expired it). ``turn`` is the 1-based message ordinal
+    round dropped it), ``refresh_window`` (``memory.eager_surface.
+    refresh_after_min`` expired it), or ``corrupt`` (the stored value failed
+    to parse). ``turn`` is the 1-based message ordinal
     this freeze was taken on, counted over the session's full history."""
 
-    reason: Literal["first_build", "new", "compaction", "refresh_window"]
+    reason: Literal["first_build", "new", "compaction", "refresh_window", "corrupt"]
     turn: int
     pinned_chars: int
     hot_chars: int

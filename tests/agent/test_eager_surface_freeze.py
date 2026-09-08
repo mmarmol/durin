@@ -23,7 +23,7 @@ from durin.agent.loop import AgentLoop
 from durin.bus.events import InboundMessage
 from durin.bus.queue import MessageBus
 from durin.config.schema import MemoryEagerSurfaceConfig
-from durin.memory.eager_surface import SNAPSHOT_KEY, EagerSnapshot
+from durin.memory.eager_surface import DROP_REASON_KEY, SNAPSHOT_KEY, EagerSnapshot
 from durin.memory.field_patch import FieldPatch
 from durin.memory.fts_index import FTSIndex
 from durin.memory.memory_writer import write_entity
@@ -872,6 +872,78 @@ async def test_eager_surface_telemetry_reason_refresh_window(
 
     rows = [d for t, d in rec.events if t == "memory.eager_surface"]
     assert [r["reason"] for r in rows] == ["first_build", "refresh_window"]
+
+
+@pytest.mark.asyncio
+async def test_a_corrupt_stored_snapshot_reports_corrupt_not_refresh_window(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """A stored value ``EagerSnapshot.from_metadata`` rejects (a hand-edited
+    or format-drifted sidecar) must not be mistaken for a snapshot merely
+    waiting out its refresh window: ``_resolve_eager_snapshot`` pops the key
+    on sight, so the next freeze reports ``corrupt`` instead of attributing
+    it to a config window the operator may never have set."""
+    _seed_workspace(tmp_path)
+    loop, stable = _make_loop(tmp_path)
+    rec = _Rec()
+    monkeypatch.setattr("durin.telemetry.logger.get_session_logger", lambda key, base_dir=None: rec)
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION)
+    )
+    session = loop.sessions.get_or_create("websocket:c")
+    session.metadata[SNAPSHOT_KEY] = {"not": "a valid snapshot shape"}
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION)
+    )
+
+    rows = [d for t, d in rec.events if t == "memory.eager_surface"]
+    assert [r["reason"] for r in rows] == ["first_build", "corrupt"]
+    # The fresh freeze that followed replaced the corrupt value with a real one.
+    fresh = EagerSnapshot.from_metadata(session.metadata.get(SNAPSHOT_KEY))
+    assert fresh is not None and fresh.hot == stable[1]["memory_hot"]
+
+
+@pytest.mark.asyncio
+async def test_freeze_off_then_on_after_a_pending_drop_reports_first_build(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """A compaction leaves ``DROP_REASON_KEY`` pending; turning ``freeze``
+    off before the next build must forget that marker too, not just the
+    snapshot — ``freeze: false`` never runs ``_freeze_eager_surface`` to
+    consume it, so a reason left over from before the setting flipped would
+    otherwise mislabel the first freeze once ``freeze`` comes back on."""
+    _seed_workspace(tmp_path)
+    loop, stable = _make_loop(tmp_path)
+    loop.consolidator.decision_log_enabled = False
+    loop.consolidator.compaction_learnings_enabled = False
+    rec = _Rec()
+    monkeypatch.setattr("durin.telemetry.logger.get_session_logger", lambda key, base_dir=None: rec)
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION)
+    )
+    session = loop.sessions.get_or_create("websocket:c")
+    session.last_consolidated = len(session.messages)
+    await loop.consolidator._post_compaction_hooks(session, 0, True)
+    assert session.metadata.get(DROP_REASON_KEY) == "compaction"
+
+    loop.app_config = SimpleNamespace(
+        memory=SimpleNamespace(eager_surface=MemoryEagerSurfaceConfig(freeze=False))
+    )
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION)
+    )
+    assert DROP_REASON_KEY not in session.metadata
+
+    loop.app_config = None  # back to the default config: freeze on again
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION)
+    )
+
+    rows = [d for t, d in rec.events if t == "memory.eager_surface"]
+    assert [r["reason"] for r in rows] == ["first_build", "first_build"]
 
 
 @pytest.mark.asyncio
