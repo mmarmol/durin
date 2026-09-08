@@ -90,6 +90,17 @@ class ActivityCluster(Vertical):
         self._tool_count += 1
         self._update_header()
 
+    def remove_tool_step(self) -> None:
+        """Decrement the tool-call counter and refresh header.
+
+        Mirrors add_tool_step(): called when a bubble that was already
+        counted gets removed instead of finalised (e.g. an empty memory
+        recall dropped by the caller), so the collapsed header doesn't
+        keep claiming a tool ran with nothing left inside to show for it.
+        """
+        self._tool_count = max(0, self._tool_count - 1)
+        self._update_header()
+
     def finalize(self) -> None:
         """Mark the cluster as done — switch header to summary, collapse."""
         self._finalized = True

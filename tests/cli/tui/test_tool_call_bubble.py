@@ -136,6 +136,28 @@ async def test_memory_prefetch_running_body_reads_recalling_memory() -> None:
 
 
 @pytest.mark.asyncio
+async def test_memory_prefetch_header_shows_the_hit_count() -> None:
+    """The recall's header reports how many memories came back, not the
+    query — the query is already visible in the user's own turn above, so
+    repeating it in the header is noise; the hit count is the one thing
+    the header doesn't already show."""
+    app = DurinApp(agent_loop=None)
+    async with app.run_test() as pilot:
+        chat = app.query_one(ChatView)
+        bubble = ToolCallBubble({
+            "call_id": "memory_prefetch:t1",
+            "name": "memory_prefetch",
+            "arguments": {"query": "what did we decide about X", "hits": 2},
+            "phase": "end",
+        })
+        chat.mount(bubble)
+        await pilot.pause()
+        summary = bubble._summary_line()
+        assert "2 memories recalled" in summary
+        assert "what did we decide about X" not in summary
+
+
+@pytest.mark.asyncio
 async def test_exec_body_shows_command_then_output_when_expanded() -> None:
     """exec body shows `$ command` line, then output (no IN/OUT labels)."""
     app = DurinApp(agent_loop=None)

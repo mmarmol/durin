@@ -359,6 +359,13 @@ class ToolCallBubble(Vertical):
     def _summary_line(self) -> str:
         """One-line summary of what this call is operating on."""
         a = self._args if isinstance(self._args, dict) else {}
+        if self._name == "memory_prefetch":
+            # The header reports how many memories came back, not the
+            # query it searched for — the query is already visible in the
+            # user's own turn above, and the hit count is the one thing
+            # the header doesn't already show.
+            hits = a.get("hits")
+            return f"{hits} memories recalled" if isinstance(hits, int) else "memories recalled"
         for key in (
             "path", "file_path", "filename", "url", "query",
             "command", "pattern", "question", "name",

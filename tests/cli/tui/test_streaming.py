@@ -286,3 +286,35 @@ async def test_memory_prefetch_empty_recall_leaves_no_bubble(tmp_path) -> None:
         ])
         await pilot.pause()
         assert list(chat.query(ToolCallBubble)) == []
+
+
+@pytest.mark.asyncio
+async def test_memory_prefetch_empty_recall_decrements_cluster_tool_count(tmp_path) -> None:
+    """The `start` frame's bubble lands inside an ActivityCluster, which
+    counts it via add_tool_step(); dropping the bubble on an empty recall
+    must mirror that with remove_tool_step() or the collapsed cluster
+    header keeps claiming a tool ran with nothing left inside to show for
+    it."""
+    from durin.cli.tui.widgets import ActivityCluster, ToolCallBubble
+
+    bus = MessageBus()
+    app = DurinApp(agent_loop=_fake_agent_loop(bus, tmp_path))
+    async with app.run_test() as pilot:
+        chat = app.query_one(ChatView)
+        await _inject(bus, "", _tool_hint=True, _tool_events=[
+            {"version": 1, "phase": "start", "call_id": "memory_prefetch:t4",
+             "name": "memory_prefetch", "arguments": {"query": "no matches here"}},
+        ])
+        await pilot.pause()
+        cluster = chat.query_one(ActivityCluster)
+        assert cluster._tool_count == 1
+
+        await _inject(bus, "", _tool_hint=True, _tool_events=[
+            {"version": 1, "phase": "end", "call_id": "memory_prefetch:t4",
+             "name": "memory_prefetch",
+             "arguments": {"query": "no matches here", "hits": 0},
+             "result": {"refs": []}},
+        ])
+        await pilot.pause()
+        assert list(chat.query(ToolCallBubble)) == []
+        assert cluster._tool_count == 0

@@ -576,7 +576,7 @@ class DurinApp(App[None]):
 
     def _render_tool_event(self, event: dict[str, Any]) -> None:
         """Add or update a ToolCallBubble for one tool-call lifecycle event."""
-        from durin.cli.tui.widgets import ToolCallBubble
+        from durin.cli.tui.widgets import ActivityCluster, ToolCallBubble
 
         call_id = str(event.get("call_id") or "")
         phase = str(event.get("phase") or "")
@@ -591,6 +591,14 @@ class DurinApp(App[None]):
             if hits == 0:
                 bubble = self._tool_bubbles.pop(call_id, None)
                 if bubble is not None:
+                    # The bubble was counted by the cluster's
+                    # add_tool_step() when it was mounted; dropping it here
+                    # without the matching decrement would leave the
+                    # collapsed header claiming a tool ran with nothing
+                    # left inside to show for it.
+                    parent = bubble.parent
+                    if isinstance(parent, ActivityCluster):
+                        parent.remove_tool_step()
                     try:
                         bubble.remove()
                     except Exception:  # noqa: BLE001
