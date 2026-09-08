@@ -21,6 +21,7 @@ from durin.telemetry.logger import (
     bind_telemetry,
     reset_telemetry,
 )
+from durin.telemetry.schema import ToolReadFileEvent
 
 
 @pytest.fixture(autouse=True)
@@ -110,6 +111,28 @@ class TestReadFileTelemetry:
         assert len(events) == 2
         assert events[0]["data"]["dedup"] is False
         assert events[1]["data"]["dedup"] is True
+
+    def test_verbatim_read_emits_declared_shape(self, tmp_path: Path, telemetry_log):
+        """The `verbatim=True` path (execute_code scripts reading raw content)
+        must emit a row matching `ToolReadFileEvent`: `verbatim` declared on
+        the schema, and `dedup` present like every other read row."""
+        logger, log_path = telemetry_log
+        target = tmp_path / "raw.txt"
+        target.write_text("raw content\n")
+
+        tool = ReadFileTool(workspace=tmp_path)
+        token = bind_telemetry(logger)
+        try:
+            asyncio.run(tool.execute(path="raw.txt", verbatim=True))
+        finally:
+            reset_telemetry(token)
+
+        events = _read_events(log_path)
+        assert len(events) == 1
+        data = events[0]["data"]
+        assert set(data) <= set(ToolReadFileEvent.__annotations__)
+        assert data["dedup"] is False
+        assert data["verbatim"] is True
 
     def test_no_logger_bound_does_not_crash(self, tmp_path: Path):
         target = tmp_path / "no_log.txt"

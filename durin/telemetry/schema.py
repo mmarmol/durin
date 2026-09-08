@@ -416,6 +416,8 @@ class ToolReadFileEvent(TypedDict):
     ``memory_notes`` counts the artifact-recall notes appended after it (0
     when none matched or the feature is off) — the field that measures
     artifact recall, since the lookup itself emits no search event.
+    ``verbatim`` marks the raw-content path used by scripts; no numbered
+    view, no notes.
     """
 
     path: str
@@ -428,6 +430,7 @@ class ToolReadFileEvent(TypedDict):
     result_chars: NotRequired[int]
     memory_notes: NotRequired[int]
     truncated: NotRequired[bool]
+    verbatim: NotRequired[bool]
 
 
 class ToolEditFileEvent(TypedDict):
