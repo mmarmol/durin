@@ -440,11 +440,14 @@ wastes a round-trip) — **or** to pull a document a `Sources:` line / a
 | `skills/<slug>/SKILL.md` | Skill file. |
 | Any other workspace-relative path | Read as-is. |
 
-**Artifact-keyed recall:** drilling a `reference:<slug>` document (single-`uri`
-form) ends with the entities that were distilled from it, when any exist —
-a trailing `Entities distilled from this document: <ref>, <ref>, …` line built
-from each entity page's `derived_from` list
-(`durin/memory/artifact_recall.py::entities_derived_from`). The companion half
+**Artifact-keyed recall:** drilling a reference document ends with the entities
+that were distilled from it, when any exist — a trailing
+`Entities distilled from this document: <ref>, <ref>, …` line built from each
+entity page's `derived_from` list
+(`durin/memory/artifact_recall.py::entities_derived_from`). It applies to every
+uri shape in the reference row of the table above, with or without a section
+anchor, in the single-`uri` form and inside a `uris` batch alike; the shapes are
+normalised to one ref by `durin/memory/drill.py::reference_ref_for_uri`. The companion half
 of artifact-keyed recall sits on `read_file`, not `memory_drill`: a text read
 ends with the memory entries that mention the file — see the `read_file` row in
 [tools.md](../tools.md). Both halves are gated by `memory.artifact_recall`

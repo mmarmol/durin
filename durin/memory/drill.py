@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-__all__ = ["DrillError", "drill", "extract_section"]
+__all__ = ["DrillError", "drill", "extract_section", "reference_ref_for_uri"]
 
 
 class DrillError(ValueError):
@@ -66,32 +66,49 @@ def _translate_skill_uri(path_part: str) -> str:
     return path_part
 
 
-def _translate_reference_uri(path_part: str) -> str:
-    """Map an ingested reference-document uri to its on-disk path.
+def reference_ref_for_uri(uri: str) -> str | None:
+    """Canonical ``reference:<slug>`` ref for a uri that addresses an
+    ingested reference document, or ``None`` when it addresses anything else.
 
-    A reference surfaces under several uri shapes that all address the same
-    file ``memory/references/<slug>.md``:
+    A reference surfaces under several uri shapes that all name the same
+    document:
 
     - ``reference:<slug>`` — the ref form stored in an entity's
       ``derived_from`` and emitted by FTS library hits.
     - ``memory/reference/[reference:]<slug>`` — the singular-directory form
       emitted by the vector / grep ``scope="library"`` search.
+    - ``memory/references/<slug>.md`` — the on-disk path.
 
-    Both are translated here so an agent can drill straight from a
-    ``derived_from`` pointer or a library search hit. The on-disk plural
-    ``memory/references/<slug>.md`` already resolves literally, and any other
-    string passes through unchanged."""
+    A trailing ``#<anchor>`` is ignored, so a section drill resolves to the
+    same ref as a whole-document drill. This is the one place the shapes are
+    parsed; ``_translate_reference_uri`` maps the ref back to its file."""
+    path_part = (uri or "").split("#", 1)[0]
     slug: str | None = None
     if path_part.startswith("reference:"):
         slug = path_part[len("reference:"):]
+    elif path_part.startswith("memory/references/"):
+        slug = path_part[len("memory/references/"):]
     elif path_part.startswith("memory/reference/"):
         rest = path_part[len("memory/reference/"):]
         slug = rest[len("reference:"):] if rest.startswith("reference:") else rest
     if slug is None:
-        return path_part
+        return None
     if slug.endswith(".md"):
         slug = slug[:-3]
-    return f"memory/references/{slug}.md" if slug else path_part
+    return f"reference:{slug}" if slug else None
+
+
+def _translate_reference_uri(path_part: str) -> str:
+    """Map an ingested reference-document uri to its on-disk path.
+
+    Every accepted shape (see ``reference_ref_for_uri``) resolves to
+    ``memory/references/<slug>.md`` so an agent can drill straight from a
+    ``derived_from`` pointer or a library search hit. Any other string passes
+    through unchanged."""
+    ref = reference_ref_for_uri(path_part)
+    if ref is None:
+        return path_part
+    return f"memory/references/{ref[len('reference:'):]}.md"
 
 
 def drill(workspace: Path, uri: str) -> str:
