@@ -459,44 +459,71 @@ async def cmd_retry(ctx: CommandContext) -> OutboundMessage | None:
     return None
 
 
-async def _archive_closed_session(loop, key: str, snapshot: list[dict], last_active) -> None:
-    """Summarize the messages a ``/new`` just cleared and persist the summary
-    where compaction summaries live (``memory/session_summary/<key>.md``), so
-    it is indexed and replayable instead of stopping at the legacy history
-    file. Best-effort: a failure is logged and the new session is unaffected.
-    The session object is deliberately NOT touched here — the next turn on
-    this key may already be writing it."""
-    import logging
+async def _archive_closed_session(
+    loop, key: str, snapshot: list[dict], last_active, prior_summary: str | None,
+) -> None:
+    """File the conversation a ``/new`` just closed as its own record.
 
-    from durin.memory.session_summary_store import append_session_summary_block
+    The record is ``<key>:closed:<timestamp>`` in the session-summary store:
+    indexed like any summary, so ``memory_search`` reaches it, but never
+    replayed — the live key's archived-context slot was cleared in
+    ``cmd_new``, so the next conversation on this key starts clean. It holds
+    the archive of the messages that were still unconsolidated plus
+    ``prior_summary``, the compaction summary the key carried until now, so
+    the closed conversation's whole arc stays reachable. Best-effort: a
+    failure is logged and the new session is unaffected. The session object
+    is deliberately not touched here — the next turn may already be writing
+    it.
+    """
+    import logging
+    from datetime import datetime
+
+    from durin.memory.session_summary_store import write_session_summary
 
     log = logging.getLogger(__name__)
-    try:
-        result = await loop.consolidator.archive(snapshot)
-    except Exception:  # noqa: BLE001 — fire-and-forget; the session is already cleared
-        log.exception("/new archive failed for %s", key)
+    summary: str | None = None
+    if snapshot:
+        try:
+            result = await loop.consolidator.archive(snapshot)
+            first = result[0] if isinstance(result, tuple) else None
+            if isinstance(first, str) and first.strip() and first.strip() != "(nothing)":
+                summary = first.strip()
+        except Exception:  # noqa: BLE001 — fire-and-forget; the session is already cleared
+            log.exception("/new archive failed for %s", key)
+    parts = [p for p in (prior_summary, summary) if p]
+    if not parts:
         return
-    summary = result[0] if isinstance(result, tuple) else None
-    if not isinstance(summary, str) or not summary.strip() or summary == "(nothing)":
-        return
+    when = last_active if isinstance(last_active, datetime) else datetime.now()
+    closed_key = f"{key}:closed:{when.strftime('%Y%m%dT%H%M%S')}"
     try:
-        append_session_summary_block(loop.workspace, key, summary, last_active=last_active)
+        write_session_summary(
+            loop.workspace, closed_key, "\n\n---\n\n".join(parts), last_active=last_active,
+        )
     except Exception:  # noqa: BLE001
-        log.exception("/new summary persist failed for %s", key)
+        log.exception("/new closed-conversation record failed for %s", key)
 
 
 async def cmd_new(ctx: CommandContext) -> OutboundMessage:
     """Stop active task and start a fresh session."""
     loop = ctx.loop
     await loop._cancel_active_tasks(ctx.key)
+
+    from durin.memory.session_summary_store import delete_session_summary, get_session_summary
+
     session = ctx.session or loop.sessions.get_or_create(ctx.key)
     snapshot = session.messages[session.last_consolidated:]
+    last_active = session.updated_at            # before clear() stamps "now"
+    prior_summary, _ = get_session_summary(loop.workspace, ctx.key)
     session.clear()
     loop.sessions.save(session)
     loop.sessions.invalidate(session.key)
-    if snapshot:
+    # A fresh session starts without archived context: the key's summary file
+    # is what the next turn would replay, so it goes; its text rides into the
+    # closed-conversation record instead.
+    delete_session_summary(loop.workspace, ctx.key)
+    if snapshot or prior_summary:
         loop._schedule_background(
-            _archive_closed_session(loop, ctx.key, snapshot, session.updated_at)
+            _archive_closed_session(loop, ctx.key, snapshot, last_active, prior_summary)
         )
     # Session-close trigger fires once per /new
     # regardless of whether the snapshot above triggered compaction.

@@ -620,13 +620,15 @@ class TestNewCommandArchival:
         assert archived.is_set()
 
     @pytest.mark.asyncio
-    async def test_new_persists_its_summary_to_the_session_summary_store(self, tmp_path: Path) -> None:
-        """The summary /new produces must land where compaction summaries
-        live (indexed, replayable), not only in the legacy history file."""
+    async def test_new_files_the_closed_conversation_and_clears_the_key(self, tmp_path: Path) -> None:
+        """/new leaves the key without archived context (nothing to replay) and
+        files the closed conversation — prior compaction summary + the archive
+        of the unconsolidated tail — as its own indexed record."""
         from durin.bus.events import InboundMessage
-        from durin.memory.session_summary_store import get_session_summary
+        from durin.memory.session_summary_store import get_session_summary, write_session_summary
 
         loop = self._make_loop(tmp_path)
+        write_session_summary(tmp_path, "cli:test", "- earlier: chose postgres")
         session = loop.sessions.get_or_create("cli:test")
         session.add_message("user", "I prefer terse answers")
         session.add_message("assistant", "Noted.")
@@ -643,6 +645,27 @@ class TestNewCommandArchival:
         assert response is not None
         await loop.close_mcp()  # drains the background archive task
 
-        text, _last_active = get_session_summary(tmp_path, "cli:test")
-        assert text is not None
+        assert get_session_summary(tmp_path, "cli:test") == (None, None)
+        closed = sorted((tmp_path / "memory" / "session_summary").glob("cli_test_closed_*.md"))
+        assert len(closed) == 1
+        text = closed[0].read_text(encoding="utf-8")
+        assert "earlier: chose postgres" in text
         assert "user prefers terse answers" in text
+
+    @pytest.mark.asyncio
+    async def test_new_with_nothing_to_archive_still_clears_the_key(self, tmp_path: Path) -> None:
+        from durin.bus.events import InboundMessage
+        from durin.memory.session_summary_store import get_session_summary, write_session_summary
+
+        loop = self._make_loop(tmp_path)
+        write_session_summary(tmp_path, "cli:test", "- earlier: chose postgres")
+        response = await loop._process_message(
+            InboundMessage(channel="cli", sender_id="user", chat_id="test", content="/new")
+        )
+        assert response is not None
+        await loop.close_mcp()
+
+        assert get_session_summary(tmp_path, "cli:test") == (None, None)
+        closed = sorted((tmp_path / "memory" / "session_summary").glob("cli_test_closed_*.md"))
+        assert len(closed) == 1
+        assert "earlier: chose postgres" in closed[0].read_text(encoding="utf-8")

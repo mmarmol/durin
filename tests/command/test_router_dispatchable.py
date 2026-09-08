@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -63,8 +64,12 @@ class TestMidTurnCommandDispatchedDirectly:
         return r
 
     @pytest.fixture()
-    def fake_loop(self) -> MagicMock:
+    def fake_loop(self, tmp_path: Path) -> MagicMock:
         loop = MagicMock()
+        # A real directory, not a mock: /new reads and deletes the key's
+        # session-summary file, and a MagicMock path answers is_file() with a
+        # truthy mock, sending the loader off to parse a mock as YAML.
+        loop.workspace = tmp_path
         loop.sessions = MagicMock()
         loop.sessions.get_or_create = MagicMock(return_value=MagicMock(
             messages=[], last_consolidated=0, clear=MagicMock(),
