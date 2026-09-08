@@ -119,3 +119,13 @@ def test_snapshot_is_stale_true_for_unparseable_frozen_at():
     # falls back to a live render instead of the prompt build crashing.
     snap = _snapshot(frozen_at="not-a-timestamp")
     assert snapshot_is_stale(snap, refresh_after_min=5) is True
+
+
+def test_snapshot_is_stale_true_for_a_naive_frozen_at():
+    # A timestamp with no offset parses fine but cannot be compared against
+    # the aware "now" the rule measures age from. The prompt build calls this
+    # on every turn once a refresh window is configured, so a hand-edited or
+    # foreign-written sidecar must degrade to a live render, not take the
+    # turn down with a TypeError.
+    snap = _snapshot(frozen_at="2026-09-08T12:00:00")
+    assert snapshot_is_stale(snap, refresh_after_min=5) is True

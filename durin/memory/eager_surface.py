@@ -45,8 +45,8 @@ class EagerSnapshot:
     shape the pinned-block builder returns today), carried alongside the
     text so a later in-context dedup can judge containment against what the
     model was actually shown, not against a live hot layer that may have
-    moved on. ``turn`` is the message-count position the snapshot was taken
-    at; ``frozen_at`` is an ISO-8601 UTC timestamp consumed by
+    moved on. ``turn`` is the 1-based message ordinal of the turn it was
+    taken on; ``frozen_at`` is an ISO-8601 UTC timestamp consumed by
     ``snapshot_is_stale``.
     """
 
@@ -101,18 +101,21 @@ def snapshot_is_stale(snap: EagerSnapshot, *, refresh_after_min: int, now: datet
     snapshot never goes stale by age alone, matching
     ``MemoryEagerSurfaceConfig.refresh_after_min``'s ``0`` default.
 
-    A ``frozen_at`` that fails to parse is treated as stale rather than
-    raised: ``from_metadata`` already keeps a snapshot with a bad
-    ``frozen_at`` from being constructed, but this is a second, independent
-    guard so this function itself never raises regardless of how the
-    snapshot it's given was built.
+    A ``frozen_at`` that fails to parse, or that parses but cannot be
+    measured against ``now`` (a naive timestamp against an aware one), is
+    treated as stale rather than raised: ``from_metadata`` already keeps an
+    unparseable ``frozen_at`` from being constructed, but this is a second,
+    independent guard so this function itself never raises regardless of how
+    the snapshot it's given was built. The prompt build calls it on every
+    turn once a refresh window is configured; a foreign sidecar must cost a
+    live render, not the turn.
     """
     if refresh_after_min <= 0:
         return False
     reference = now if now is not None else datetime.now(timezone.utc)
     try:
         frozen_at = datetime.fromisoformat(snap.frozen_at)
+        age_minutes = (reference - frozen_at).total_seconds() / 60
     except (ValueError, TypeError):
         return True
-    age_minutes = (reference - frozen_at).total_seconds() / 60
     return age_minutes > refresh_after_min

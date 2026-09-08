@@ -44,6 +44,10 @@ pipeline: the model, when it calls `memory_search`, and the agent loop itself, w
 runs the same search once per user turn with the message as the query and fences the
 hits into that turn's copy of the message — memory reaches the turn whether or not the
 model thinks to ask. Determinism is what makes an automatic search affordable per turn.
+That per-turn search, together with the ones the model runs itself, is also how anything
+written mid-session reaches the model: the always-on blocks in the stable prompt tier are
+rendered once per session and reused verbatim until the next session boundary, so a write
+does not rebuild the cached prefix (`memory.eager_surface.freeze`).
 
 **Cold-path dream consolidation.** The extract pass reads every session with unprocessed
 turns (tracked by a per-session cursor in `session.meta.json`) and discovers or enriches

@@ -255,8 +255,12 @@ The handlers, in order:
   history (`session.get_history`), then runs one automatic warm `memory_search`
   with the user's message and fences the hits into the wire copy of that message
   as reference data, and finally assembles the LLM message list via
-  `context.build_messages`. It also persists the user message early so an
-  interrupted run is recoverable.
+  `context.build_messages` — handing it the session's frozen eager memory
+  surface (the pinned block and hot layer rendered on the session's first
+  build, `memory.eager_surface`) so a write mid-session does not rebuild the
+  provider's cached prefix, and taking the freeze from that build when there
+  is none yet. It also persists the user message early so an interrupted run
+  is recoverable.
 
   The search is bounded and best-effort: skipped for slash commands, for
   messages under the configured minimum length, for sessions the runtime treats
