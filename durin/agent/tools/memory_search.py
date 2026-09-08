@@ -656,6 +656,16 @@ class MemorySearchTool(Tool):
             warm_excerpt_chars = _search_defaults.warm_excerpt_chars
             warm_max_chars = _search_defaults.warm_max_chars
 
+        # `max_chars` keyword override: internal, not on `_PARAMETERS` (the
+        # model never sees or sets it). Lets a caller — the per-turn memory
+        # prefetch — replace the config-driven `warm_max_chars` for this one
+        # call, so the renderer's own budget (whole blocks plus pointer
+        # headlines, never a cut inside a block) bounds its response instead
+        # of the caller slicing the already-rendered text afterwards.
+        max_chars_override = kwargs.get("max_chars")
+        if max_chars_override is not None:
+            warm_max_chars = int(max_chars_override)
+
         # Archive is intentionally not indexed (vector/lexical/grep over
         # memory/ exclude `memory/archive/**`). The `scope='archive'`
         # surface is a separate on-demand walk for recovery / diagnostic

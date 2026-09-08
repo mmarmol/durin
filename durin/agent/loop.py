@@ -3192,7 +3192,7 @@ class AgentLoop:
             # function has returned and reset it here.
             prefetch_token = bind_prefetch_search()
             response = await asyncio.wait_for(
-                tool.execute(query=text, limit=cfg.limit, level="warm"),
+                tool.execute(query=text, limit=cfg.limit, level="warm", max_chars=cfg.max_chars),
                 timeout=cfg.timeout_s,
             )
         except asyncio.TimeoutError:
@@ -3224,6 +3224,12 @@ class AgentLoop:
         if total == 0 or not rendered_full.strip():
             self._emit_prefetch(ctx.session_key, hits=0, chars=0, duration_ms=duration_ms, skipped="no_hits")
             return ""
+        # The tool already rendered within `cfg.max_chars` (passed as its own
+        # `max_chars` above), so this is a safety net rather than the budget
+        # itself: it only fires if the tool's own bound is somehow exceeded
+        # (a caller-side miscount, a future renderer regression). In the
+        # steady state `rendered_full` is already inside budget and this is
+        # a no-op.
         truncated = len(rendered_full) > cfg.max_chars
         rendered = (
             rendered_full[:cfg.max_chars].rstrip() + "\n… (truncated; memory_search for the rest)"

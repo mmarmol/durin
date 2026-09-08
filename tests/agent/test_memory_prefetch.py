@@ -42,6 +42,26 @@ class _FakeSearch:
                 "sectioned_rendered": self.rendered if self.total else ""}
 
 
+class _RenderingSearch:
+    """Renders through the real `render_sectioned` (durin/memory/sectioned_output.py)
+    over real `SectionedHit` fixtures, so a `max_chars` passed through from the
+    caller exercises the renderer's actual whole-block-plus-pointer budget —
+    not a canned string standing in for it."""
+
+    name = "memory_search"
+
+    def __init__(self, hits: list) -> None:
+        self.calls: list[dict] = []
+        self.hits = hits
+
+    async def execute(self, **kwargs):
+        self.calls.append(dict(kwargs))
+        from durin.memory.sectioned_output import render_sectioned
+        rendered = render_sectioned(self.hits, max_chars=kwargs.get("max_chars"))
+        return {"total": len(self.hits), "strategy": "hybrid", "ranking": "rrf",
+                "sectioned_rendered": rendered}
+
+
 class _RaisingSearch:
     name = "memory_search"
 
@@ -207,7 +227,7 @@ async def test_prefetch_runs_a_warm_search_and_fences_the_hits(tmp_path: Path, m
 
     await loop._process_message(InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION))
 
-    assert fake.calls == [{"query": QUESTION, "limit": 3, "level": "warm"}]
+    assert fake.calls == [{"query": QUESTION, "limit": 3, "level": "warm", "max_chars": 2500}]
     content = _user_content(captured)
     assert content.index(QUESTION) < content.index("<memory-context>")
     assert "Ana runs the bakery" in content and "</memory-context>" in content
@@ -336,7 +356,7 @@ async def test_prefetch_gate_follows_the_runtime_autonomous_session_kinds(
 
     row = [d for t, d in rec.events if t == "memory.prefetch"][-1]
     if prefetched:
-        assert fake.calls == [{"query": QUESTION, "limit": 3, "level": "warm"}]
+        assert fake.calls == [{"query": QUESTION, "limit": 3, "level": "warm", "max_chars": 2500}]
         assert "skipped" not in row
     else:
         assert fake.calls == []
@@ -511,6 +531,70 @@ async def test_hits_count_the_blocks_that_survived_the_cut(tmp_path: Path, monke
     end = [ev for ev in recall if ev["phase"] == "end"]
     assert len(end) == 1
     assert end[0]["arguments"]["hits"] == 2
+    assert end[0]["result"]["refs"] == ["memory/episodic/0", "memory/episodic/1"]
+
+
+@pytest.mark.asyncio
+async def test_prefetch_passes_max_chars_to_the_tool_so_it_bounds_its_own_render(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Task 12b: the prefetch's `max_chars` now travels into the tool call
+    (`tool.execute(..., max_chars=cfg.max_chars)`) so group A's
+    `render_sectioned` bounds the block itself — whole blocks plus one-line
+    pointers, never a cut inside a block — instead of `_memory_prefetch`
+    slicing the tool's already-rendered text afterwards. Three hits, a
+    `max_chars` that only leaves room for the first two full FRAGMENT
+    blocks: the render carries those two whole plus one pointer line, comes
+    in under budget on its own, so the raw-slice safety net never fires and
+    `truncated` stays False even though one hit lost its full body.
+    """
+    from durin.memory.sectioned_output import SectionedHit
+
+    filler = ("Ana bakes rye every morning at the bakery on Main Street. " * 5)[:220]
+    hits = [
+        SectionedHit(
+            uri=f"memory/episodic/{n}", type="episodic", path=f"memory/episodic/{n}",
+            score=float(3 - n), ts="2026-01-01", snippet=f"hit {n}", body=f"{filler} #{n}",
+        )
+        for n in range(3)
+    ]
+    fake = _RenderingSearch(hits)
+    loop, captured, rec = _make_loop(tmp_path, monkeypatch, fake=fake)
+    loop.app_config = SimpleNamespace(memory=SimpleNamespace(prefetch=MemoryPrefetchConfig(max_chars=800)))
+    seen: list[tuple[str, bool, list[dict] | None]] = []
+
+    async def on_progress(content: str, *, tool_hint: bool = False, tool_events: list[dict] | None = None) -> None:
+        seen.append((content, tool_hint, tool_events))
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION),
+        on_progress=on_progress,
+    )
+
+    assert fake.calls == [{"query": QUESTION, "limit": 3, "level": "warm", "max_chars": 800}]
+    content = _user_content(captured)
+    block = content[content.index("<memory-context>"):content.index("</memory-context>")]
+    assert block.count("=== END FRAGMENT ===") == 2
+    assert block.count("drill for the body)") == 1
+    assert "(truncated" not in block  # the raw-slice safety net never fires
+
+    prefetch = [d for t, d in rec.events if t == "memory.prefetch"][-1]
+    assert prefetch["hits"] == 3          # all three hits reached the message, in some form
+    assert prefetch["truncated"] is False
+
+    recall = [ev for _c, _h, evs in seen for ev in (evs or []) if ev.get("name") == "memory_prefetch"]
+    end = [ev for ev in recall if ev["phase"] == "end"]
+    assert len(end) == 1
+    assert end[0]["arguments"]["hits"] == 3
+    # `refs` stays the two WHOLE blocks, not all three: `ctx.prefetch_refs`
+    # also feeds the ContextVar the model's own follow-up `memory_search`
+    # this same turn reads to collapse already-shown hits to pointers
+    # (`whole_refs` in durin/memory/context_dedup.py). The third hit here was
+    # only ever a pointer, never shown whole — folding it into that set
+    # would make a genuine follow-up search on it collapse to "already
+    # shown" without the model having seen the body. `hits` (3) and `refs`
+    # (2) answer different questions on purpose: everything that reached the
+    # message in some form, versus everything that reached it whole.
     assert end[0]["result"]["refs"] == ["memory/episodic/0", "memory/episodic/1"]
 
 
@@ -1057,6 +1141,6 @@ async def test_overflow_rebuild_keeps_the_prefetch_block(tmp_path: Path, monkeyp
     assert second_call_content.count("<memory-context>") == 1
     assert second_call_content.count("</memory-context>") == 1
     assert "Ana runs the bakery" in second_call_content
-    assert fake.calls == [{"query": QUESTION, "limit": 3, "level": "warm"}], (
+    assert fake.calls == [{"query": QUESTION, "limit": 3, "level": "warm", "max_chars": 2500}], (
         "the prefetch search must not re-run on the rebuild"
     )
