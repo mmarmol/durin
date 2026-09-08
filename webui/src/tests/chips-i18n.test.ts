@@ -9,6 +9,10 @@ const keysDeep = (o: object, p = ""): string[] =>
 const placeholdersIn = (s: unknown): string[] =>
   typeof s === "string" ? [...s.matchAll(/\{\{(\w+)\}\}/g)].map((m) => m[1]).sort() : [];
 
+// Locales whose plural rule has no singular category: i18next always resolves
+// `_other` there, so an `_one` key is meaningless and may be absent.
+const NO_SINGULAR = new Set(["id", "ja", "ko", "vi", "zh-CN", "zh-TW"]);
+
 describe("message.chips i18n parity", () => {
   const enChips = (resources.en.common as any).message.chips as Record<string, string>;
   const enKeys = keysDeep(enChips);
@@ -18,11 +22,13 @@ describe("message.chips i18n parity", () => {
     const chips = (resource.common as any).message.chips as Record<string, string>;
 
     it(`${locale} carries every en message.chips key, minus at most the _one plural variants`, () => {
-      // A locale may skip an `_one` key when its plural rule has no
-      // singular form (i18next then always resolves `_other`) — anything
-      // else missing, or any key the catalog shouldn't have, is a real gap.
+      // Only a locale without a singular plural category may skip an
+      // `_one` key; anything else missing, or any key the catalog
+      // shouldn't have, is a real gap.
       const keys = keysDeep(chips);
-      const missing = enKeys.filter((k) => !keys.includes(k) && !k.endsWith("_one"));
+      const missing = enKeys.filter(
+        (k) => !keys.includes(k) && !(k.endsWith("_one") && NO_SINGULAR.has(locale)),
+      );
       const extra = keys.filter((k) => !enKeys.includes(k));
       expect({ missing, extra }).toEqual({ missing: [], extra: [] });
     });
