@@ -318,8 +318,9 @@ listens, thinks, and speaks. See [docs/internals/voice.md](../internals/voice.md
 
 ### `memory`
 
-Controls the memory subsystem: vector retrieval, dream passes (extract/refine/skill),
-background file watching, and health checks. See
+Controls the memory subsystem: vector retrieval, the automatic per-turn search, the
+always-on Library catalog, previous-session continuity, artifact-keyed recall, dream
+passes (extract/refine/skill), background file watching, and health checks. See
 [docs/internals/memory/](../internals/memory/) for architecture details.
 
 | Key | Default | Meaning |
@@ -335,7 +336,7 @@ background file watching, and health checks. See
 | `provider` | `fastembed` | Embedding adapter; currently only `fastembed` |
 | `model` | `intfloat/multilingual-e5-small` | Embedding model from fastembed's catalog; multilingual, retrieval-tuned |
 | `batch_size` | `32` | Texts per ONNX run inside one embed call; bounds peak activation memory |
-| `isolation` | `process` | `process` runs embeddings in a recyclable worker subprocess so the ONNX arena is reclaimed with the child; `inline` keeps them in the gateway process |
+| `isolation` | `service` | `service` routes embeds to the gateway-supervised standing embedding server — one warm model shared by every durin process, falling back to `process` when none is reachable; `process` runs them in a recyclable worker subprocess so the ONNX arena is reclaimed with the child; `inline` keeps them in the calling process |
 | `worker_recycle_batches` | `64` | With `isolation: process`, recycle the worker after this many embed calls |
 | `base_url` | `null` | HTTP provider base URL (reserved for future adapters) |
 | `api_key` | `null` | HTTP provider API key (reserved for future adapters) |
@@ -379,7 +380,7 @@ background file watching, and health checks. See
 | `search.cross_encoder.enabled` | `false` | Enable cross-encoder reranker (triggers a one-time model download on first search) |
 | `search.cross_encoder.model` | `BAAI/bge-reranker-base` | Reranker model; MIT, multilingual |
 | `search.cross_encoder.batch_size` | `32` | Reranker batch size |
-| `search.cross_encoder.top_n` | `10` | Top-N hits kept after the rerank step |
+| `search.cross_encoder.top_n` | `10` | Retained for signature compatibility; the rerank reorders candidates rather than trimming them |
 | `search.sectioning.max_per_source` | `3` | Max hits from the same ingested document surviving sectioning |
 
 **`memory.library`** — the always-on Library awareness catalog in the pinned block:
@@ -400,7 +401,7 @@ background file watching, and health checks. See
 
 **`memory.prefetch`** — the automatic memory search that runs once per user turn, before the model sees the message. Its hits ride in that turn's copy of the message (never stored, never replayed); the `memory_search` tool stays available for follow-ups.
 
-What it costs: one extra search on the critical path of every message of `min_query_chars` or more on interactive channels — p95 in the low hundreds of milliseconds without the cross-encoder, up to ~900 ms with it, and `timeout_s` (5 s) in the worst case — plus up to `max_chars` of uncached input per turn. It applies even with `memory.enabled: false`, where the search still works over the markdown files (grep-level recall). Turn it off with `memory.prefetch.enabled: false`.
+What it costs: one warm search on the critical path of every message of `min_query_chars` or more on interactive channels, bounded by `timeout_s` (5 s) — past that the turn proceeds without the hits — plus up to `max_chars` of uncached input per turn. The first search after a cold start can take longer than the steady state while the embedding model loads. It applies even with `memory.enabled: false`, where the search still works over the markdown files (grep-level recall). Turn it off with `memory.prefetch.enabled: false`.
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -411,7 +412,7 @@ What it costs: one extra search on the critical path of every message of `min_qu
 | `prefetch.timeout_s` | `5.0` | Seconds the search may take before the turn proceeds without it |
 | `prefetch.backoff_s` | `60.0` | After a timeout or error, skip the prefetch for this many seconds; `0` disables the backoff |
 
-Slash commands, workflow nodes, subagents, and every session kind the runtime treats as autonomous (cron, automation, dream, workflow, sub-agent runs) are never prefetched.
+Slash commands, workflow nodes, subagents, and every session kind the runtime treats as autonomous (cron, automation, dream, workflow, sub-agent runs) are never prefetched. A workspace whose lexical index has not been created yet is also skipped, until the first memory write or search creates it.
 
 **`memory.file_watcher`** — background filesystem watcher:
 

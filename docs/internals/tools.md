@@ -191,10 +191,12 @@ launches (`background_launches`, tools whose `launches_background` is true, like
 read-only tools accept a list and fan out internally with `asyncio.gather`,
 turning N independent calls into one guaranteed-parallel call regardless of
 whether the model batched: `memory_drill` (`uris`), `web_fetch` (`urls`),
-`web_search` (`queries`), `read_file` (`paths`), and `memory_search` (vector +
-FTS + grep in one call). Each takes the single form OR the list form (not both),
-caps the list, and returns one record per item in order with a per-item `error`
-field so one failure does not abort the batch.
+`web_search` (`queries`) and `read_file` (`paths`). Each takes the single form
+OR the list form (not both), caps the list, and returns one record per item in
+order with a per-item `error` field so one failure does not abort the batch.
+`memory_search` is parallel in a different sense — it takes one scalar `query`
+and no list parameter, and fans that query across the vector, lexical and grep
+paths inside a single call.
 
 For each tool call, `_run_tool()` applies checks in this order:
 
@@ -330,14 +332,14 @@ controls which MCP tools are registered.
 |---|---|
 | Filesystem | `read_file` (text reads end with up to `memory.artifact_recall.max_notes` memory entries that mention the file), `write_file`, `edit_file`, `list_dir` |
 | Document reading | `convert_to_markdown` (local document → markdown via markitdown, with local OCR transcribing scanned PDF pages when enabled; returned into the current turn — transient, persists nothing. A document needing more OCR than the inline budget is not read this way — `memory_ingest` it instead, which enqueues a [background job](jobs.md)) |
-| Search | `grep`, `repo_overview` |
+| Search | `grep`, `repo_overview`, `dependents` (what references a skill, a workflow script or a workflow — the reverse edges of the definition graph) |
 | Shell | `exec`, `process` |
 | Web | `web_search`, `web_fetch` |
-| Memory | `memory_search`, `memory_store`, `memory_forget`, `memory_ingest`, `memory_drill`, `memory_upsert_entity`, `memory_read_entity`, `memory_entity_lineage`, `memory_source_session` |
+| Memory | `memory_search`, `memory_store`, `memory_forget`, `memory_ingest`, `memory_drill` (a drill into an ingested document ends with the entities distilled from it, under the same `memory.artifact_recall` gate), `memory_upsert_entity`, `memory_read_entity`, `memory_entity_lineage`, `memory_source_session` |
 | Session & planning | `session_search` (searches the live session, or any earlier session by key (`session_key`), read-only), `todo_write`, `enter_plan_mode`, `exit_plan_mode`, `note_decision` |
 | Agent control | `ask_user_question`, `long_task`, `complete_goal`, `sleep`, `message` |
-| Background work | `spawn`, `run_workflow`, `list_workflows`, `workflow_write`, `workflow_edit`, `tasks` (list / status / stop, over sub-agents + workflow runs + [jobs](jobs.md), scoped to this session), `workflow_runs` (read-only `search` (date-filterable via `since`/`until`) / `show` / `cost` (per-run token table, including child sub-workflow runs) over every past workflow run recorded in the workspace — across every session, not just this one — so a question about prior work can be answered by reading a manifest and its artifact files instead of re-running the workflow; when answering from a prior run, state the run's date and flag a producer model/version that differs from the current configuration, and prefer re-running when the user asked for a fresh investigation), `subagent_monitor`, `subagent_output` |
-| Skills | `skills_list`, `skill_view`, `skill_search`, `skill_import`, `skill_write`, `skill_edit`, `skill_audit`, `skill_observe`, `skill_acquire_seed`, `skill_install_deps` |
+| Background work | `spawn`, `run_workflow`, `list_workflows`, `workflow_write`, `workflow_edit`, `workflow_script_write` (the code a `script` node runs — the generic file tools cannot write under `workflows/`, so this door validates the name, writes under the editor's lock and commits to the workflow version history), `tasks` (list / status / stop, over sub-agents + workflow runs + [jobs](jobs.md), scoped to this session), `workflow_runs` (read-only `search` (date-filterable via `since`/`until`) / `show` / `cost` (per-run token table, including child sub-workflow runs) over every past workflow run recorded in the workspace — across every session, not just this one — so a question about prior work can be answered by reading a manifest and its artifact files instead of re-running the workflow; when answering from a prior run, state the run's date and flag a producer model/version that differs from the current configuration, and prefer re-running when the user asked for a fresh investigation), `subagent_monitor`, `subagent_output` |
+| Skills | `skills_list`, `skill_view`, `skill_search`, `skill_import`, `skill_write`, `skill_edit`, `skill_audit`, `skill_observe`, `skill_acquire_seed`, `skill_install_deps`, `skill_publish` (promote a draft under `skill-drafts/<name>/` into the active registry, through the composition gate and security scan), `skill_discard` (drop a draft; active skills are untouched) |
 | MCP management | `mcp_manage`, `mcp_search` |
 | Capability bridges | `interpret_image`, `interpret_audio`, `execute_code`, `notebook_edit` |
 | Secrets | `list_secrets`, `request_secret` (`update=true` asks the user to replace an existing secret's value; the agent never sees values) |

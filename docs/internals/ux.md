@@ -126,6 +126,19 @@ surface. `GET /api/v1/commands` serves the registry scoped to a surface
 (the WebUI calls it with the `webui` surface, so its palette only shows
 webui-listed commands).
 
+**`/status` composition breakdown.** Once a turn has run, `/status` closes with
+a "Last turn — composition" block that splits its prompt into two buckets:
+what the conversation contributed (prior turns, the current message, and the
+per-turn volatile blocks — active memory, the automatic memory prefetch, recent
+history, an archived session summary) and what infrastructure contributed
+(identity, bootstrap files, skills, the memory pinned and hot layers, the agent
+mode, tool definitions). The figures come from the turn's `context.composition`
+payload, rolled into the two buckets by `summarize_composition`
+(`durin/agent/context.py`) — the same rollup the TUI footer reads. The automatic
+prefetch gets a line of its own even though its block rides inside the current
+user message on the wire: its tokens are subtracted from the message's count, so
+recalled memory is never billed as something the user typed.
+
 ### Agent execution
 
 `AgentRunner` iterates LLM calls and tool batches. During execution:
@@ -492,14 +505,15 @@ operations are safe from both async channel handlers and sync CLI contexts.
 
 | Surface | How to start |
 |---|---|
-| Interactive CLI | `durin agent` |
-| Textual TUI | `durin agent --tui` |
-| WebUI (gateway) | `durin gateway` — serves WebSocket channel + SPA on `gateway.host:gateway.port` |
+| Textual TUI | `durin agent` — the default |
+| Legacy REPL | `durin agent --legacy` — single-line input, no streaming UI |
+| WebUI (gateway) | `durin gateway` — serves the WebSocket channel + SPA on `channels.websocket.host:port` |
 
 ### WebUI features
 
-The WebUI (served by `durin gateway` on port `gateway.port`, default 18790)
-provides browser-based interaction over WebSocket.
+The WebUI (served by `durin gateway` on the websocket channel's host and port,
+default `127.0.0.1:8765`; `gateway.public_url` overrides the URL `durin status`
+prints) provides browser-based interaction over WebSocket.
 
 **Composer toolbar.** Above the text input, two pill buttons control the model
 and agent:
