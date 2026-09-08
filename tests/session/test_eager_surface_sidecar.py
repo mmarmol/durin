@@ -91,3 +91,20 @@ def test_load_merges_eager_surface_snapshot_back_from_sidecar(tmp_path: Path):
     sm.invalidate("test")
     reloaded = sm.get_or_create("test")
     assert reloaded.metadata[SNAPSHOT_KEY] == _sample_snapshot()
+
+
+def test_clear_after_a_pending_compaction_drop_reports_new() -> None:
+    """A background compaction round can pop the snapshot and leave its
+    reason pending before the next freeze runs; a /new that follows is the
+    later boundary, so it must overwrite that reason even though there was
+    no snapshot left to pop."""
+    session = Session(key="websocket:c")
+    session.metadata["_eager_surface_drop_reason"] = "compaction"
+    session.clear()
+    assert session.metadata["_eager_surface_drop_reason"] == "new"
+
+
+def test_clear_without_snapshot_or_pending_reason_leaves_no_reason() -> None:
+    session = Session(key="websocket:c")
+    session.clear()
+    assert "_eager_surface_drop_reason" not in session.metadata

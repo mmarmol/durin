@@ -309,13 +309,16 @@ class Session:
         # _DERIVED_METADATA_KEYS in SessionManager). A frozen surface belongs
         # to the session it was rendered for, so a fresh session must not
         # inherit it.
-        if self.metadata.pop("_eager_surface", None) is not None:
-            # "_eager_surface_drop_reason" mirrors
-            # durin.memory.eager_surface.DROP_REASON_KEY, duplicated for the
-            # same reason as SNAPSHOT_KEY above. Recorded only when a
-            # snapshot actually existed to drop, so `memory.eager_surface`
-            # telemetry can report the next freeze as "new" rather than
-            # "first_build" — the popped key alone doesn't say why it's gone.
+        had_snapshot = self.metadata.pop("_eager_surface", None) is not None
+        # "_eager_surface_drop_reason" mirrors
+        # durin.memory.eager_surface.DROP_REASON_KEY, duplicated for the same
+        # reason as SNAPSHOT_KEY above. The most recent boundary names the
+        # next freeze: a snapshot dropped here reports "new", and so does a
+        # reason an earlier boundary (a background compaction round) left
+        # pending without a freeze in between — /new is the later event. A
+        # session that had neither leaves the key unset so the next freeze
+        # reports "first_build".
+        if had_snapshot or "_eager_surface_drop_reason" in self.metadata:
             self.metadata["_eager_surface_drop_reason"] = "new"
 
     def retain_recent_legal_suffix(self, max_messages: int) -> None:
