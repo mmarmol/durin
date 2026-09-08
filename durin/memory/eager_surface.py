@@ -47,7 +47,13 @@ class EagerSnapshot:
     model was actually shown, not against a live hot layer that may have
     moved on. ``turn`` is the 1-based message ordinal of the turn it was
     taken on; ``frozen_at`` is an ISO-8601 UTC timestamp consumed by
-    ``snapshot_is_stale``.
+    ``snapshot_is_stale``. ``principal`` is the owner ref the pinned block
+    was resolved for at freeze time — the dedup needs it to exclude the
+    right ref from ``whole_refs`` (see ``memory_search``'s in-context dedup);
+    resolving it live instead would use whichever principal the CURRENT
+    config names, which can differ from the one this snapshot was frozen
+    with if the operator changes it mid-session. Defaults to ``""`` so a
+    snapshot frozen before this field existed still loads.
     """
 
     pinned: str
@@ -55,6 +61,7 @@ class EagerSnapshot:
     refs: frozenset[str]
     turn: int
     frozen_at: str
+    principal: str = ""
 
     def to_metadata(self) -> dict[str, Any]:
         """Serialise to a JSON-safe dict for ``session.metadata[SNAPSHOT_KEY]``."""
@@ -64,6 +71,7 @@ class EagerSnapshot:
             "refs": sorted(self.refs),
             "turn": self.turn,
             "frozen_at": self.frozen_at,
+            "principal": self.principal,
         }
 
     @classmethod
@@ -81,17 +89,26 @@ class EagerSnapshot:
         refs = data.get("refs")
         turn = data.get("turn")
         frozen_at = data.get("frozen_at")
+        # Missing entirely (a snapshot frozen before this field existed)
+        # defaults to "" — a shape error only when the key is present with
+        # the wrong type.
+        principal = data.get("principal", "")
         if not isinstance(pinned, str) or not isinstance(hot, str):
             return None
         if not isinstance(refs, list) or not all(isinstance(r, str) for r in refs):
             return None
         if not isinstance(turn, int) or not isinstance(frozen_at, str):
             return None
+        if not isinstance(principal, str):
+            return None
         try:
             datetime.fromisoformat(frozen_at)
         except (ValueError, TypeError):
             return None
-        return cls(pinned=pinned, hot=hot, refs=frozenset(refs), turn=turn, frozen_at=frozen_at)
+        return cls(
+            pinned=pinned, hot=hot, refs=frozenset(refs), turn=turn,
+            frozen_at=frozen_at, principal=principal,
+        )
 
 
 def snapshot_is_stale(snap: EagerSnapshot, *, refresh_after_min: int, now: datetime | None = None) -> bool:

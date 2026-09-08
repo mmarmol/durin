@@ -41,6 +41,23 @@ def test_to_metadata_round_trips_through_from_metadata():
     assert restored == snap
 
 
+def test_principal_round_trips_through_metadata():
+    snap = _snapshot(principal="person:marcelo")
+    assert snap.to_metadata()["principal"] == "person:marcelo"
+    restored = EagerSnapshot.from_metadata(snap.to_metadata())
+    assert restored == snap
+
+
+def test_from_metadata_defaults_principal_for_old_metadata_without_it():
+    # A snapshot frozen before the `principal` field existed has no such key
+    # in its sidecar — it must still load, with the field defaulting to "".
+    base = _snapshot().to_metadata()
+    del base["principal"]
+    restored = EagerSnapshot.from_metadata(base)
+    assert restored is not None
+    assert restored.principal == ""
+
+
 def test_to_metadata_is_json_safe_and_survives_a_json_round_trip():
     # session.metadata is persisted as JSON via the sidecar — refs (a
     # frozenset) must come out as something json.dumps can carry.

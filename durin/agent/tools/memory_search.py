@@ -877,13 +877,22 @@ class MemorySearchTool(Tool):
                 resolve_owner_principal,
                 resolve_pinned_refs,
             )
-            # With the surface frozen for the session, both the pinned refs and
-            # the hot-layer text come off the snapshot: they describe the prompt
-            # the model is holding, while disk has moved on with every write
-            # since the freeze.
+            # With the surface frozen for the session, the pinned refs, the
+            # hot-layer text, AND the principal come off the snapshot: they
+            # describe the prompt the model is holding, while disk (and the
+            # configured owner) may have moved on since the freeze. A live
+            # principal resolution here would exclude whichever ref the
+            # CURRENT config names from whole_refs below — the wrong one if
+            # the operator changed the owner mid-session, since the pinned
+            # block the model is holding still renders the frozen principal's
+            # page, not the new one's.
             surface = _turn_eager_surface.get()
             refs = surface.refs if surface is not None else resolve_pinned_refs(self._workspace)
-            principal = resolve_owner_principal(self._workspace)
+            principal = (
+                surface.principal
+                if surface is not None and surface.principal
+                else resolve_owner_principal(self._workspace)
+            )
             capped_hits, in_context_hits = split_in_context(
                 self._workspace, capped_hits,
                 pinned_refs=refs,

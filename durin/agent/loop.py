@@ -3016,6 +3016,7 @@ class AgentLoop:
         from datetime import datetime, timezone
 
         from durin.memory.eager_surface import SNAPSHOT_KEY, EagerSnapshot
+        from durin.memory.principal import resolve_owner_principal
 
         rendered = getattr(self.context, "last_eager_render", None)
         if not rendered or session is None:
@@ -3032,6 +3033,11 @@ class AgentLoop:
             # points at the transcript line it was taken on.
             turn=len(session.messages) + 1,
             frozen_at=datetime.now(timezone.utc).isoformat(),
+            # Resolved the same way the dedup's own live fallback resolves it
+            # (no channel) — the owner the pinned block above was actually
+            # rendered for, so a later config change cannot make the dedup
+            # exclude the wrong ref from whole_refs.
+            principal=resolve_owner_principal(self.workspace),
         )
         session.metadata[SNAPSHOT_KEY] = snapshot.to_metadata()
         return snapshot
@@ -3264,6 +3270,32 @@ class AgentLoop:
         if ctx.on_retry_wait is None:
             ctx.on_retry_wait = await self._build_retry_wait_callback(ctx.msg)
 
+        # The eager memory surface (pinned block + hot layer) is rendered once
+        # per session and reused verbatim afterwards: both sit in the stable
+        # prefix, so re-reading them off disk each turn would hand the
+        # provider a different prefix the moment anything wrote an entity
+        # page. Resolved and bound HERE, before the prefetch below: the
+        # prefetch is one warm memory_search like any other, and its own
+        # in-context dedup reads this same ContextVar. Binding it only after
+        # the prefetch had already run left that call judging the live
+        # workspace instead of the surface the turn is about to reuse — a
+        # write the model has not been shown yet would collapse into a
+        # pointer line in the prefetch's own fenced block.
+        freezes = self._eager_surface_freezes(ctx.session, ctx.session_key)
+        if freezes:
+            ctx.eager_snapshot = self._resolve_eager_snapshot(ctx.session, ctx.session_key)
+        else:
+            ctx.eager_snapshot = None
+            self._drop_eager_snapshot(ctx.session)
+        # Bound even when it is None (a live render, a session that keeps no
+        # snapshot, or — on a first-build turn — nothing resolved yet): the
+        # explicit binding is what keeps an outer context from reaching this
+        # turn. Rebound further down once the freeze step (after the build)
+        # renders something new to hand the model's own searches instead.
+        with suppress(Exception):
+            from durin.agent.tools.memory_search import bind_turn_eager_surface
+            ctx.eager_surface_token = bind_turn_eager_surface(ctx.eager_snapshot)
+
         # Whether a search will run is known before it runs, so the
         # announcement can bracket the search with a `start` frame before and
         # an `end` frame after, rather than only surfacing it on the way out.
@@ -3304,18 +3336,6 @@ class AgentLoop:
                     ctx, "end", hits=ctx.prefetch_hits, refs=list(ctx.prefetch_refs),
                 )
 
-        # The eager memory surface (pinned block + hot layer) is rendered once
-        # per session and reused verbatim afterwards: both sit in the stable
-        # prefix, so re-reading them off disk each turn would hand the provider
-        # a different prefix the moment anything wrote an entity page. What is
-        # written mid-session still reaches the model through the prefetch above
-        # and its own searches.
-        freezes = self._eager_surface_freezes(ctx.session, ctx.session_key)
-        if freezes:
-            ctx.eager_snapshot = self._resolve_eager_snapshot(ctx.session, ctx.session_key)
-        else:
-            ctx.eager_snapshot = None
-            self._drop_eager_snapshot(ctx.session)
         ctx.initial_messages = self._build_initial_messages(
             ctx.msg, ctx.session, ctx.history, ctx.pending_summary,
             active_persona_soul=ctx.active_persona_soul,
@@ -3328,17 +3348,19 @@ class AgentLoop:
             # its own. Carried on ctx so the overflow-retry rebuild reuses it
             # rather than re-rendering from disk.
             ctx.eager_snapshot = self._freeze_eager_surface(ctx.session, ctx.session_key)
-        # Hand the surface this build settled on to memory_search's in-context
-        # dedup, in THIS asyncio task — the one _state_run drives the tool loop
-        # in — so the model's own searches are judged against the text its
-        # prompt carries and not against a workspace that has moved on. Bound
-        # even when it is None (a live render, or a session that keeps no
-        # snapshot): the explicit binding is what keeps an outer context from
-        # reaching this turn. Reset in _state_save, or in _process_message's
-        # finally when the turn never gets there.
-        with suppress(Exception):
-            from durin.agent.tools.memory_search import bind_turn_eager_surface
-            ctx.eager_surface_token = bind_turn_eager_surface(ctx.eager_snapshot)
+            # The bind up top carried None on this first-build turn (nothing
+            # had been resolved to freeze yet at that point) — reset it and
+            # rebind to what this build just froze, so exactly one live token
+            # sits on ctx.eager_surface_token and the model's own searches
+            # (driven next, by _state_run) judge the text this turn actually
+            # settled on rather than the stale None.
+            if ctx.eager_surface_token is not None:
+                from durin.agent.tools.memory_search import reset_turn_eager_surface
+                reset_turn_eager_surface(ctx.eager_surface_token)
+                ctx.eager_surface_token = None
+            with suppress(Exception):
+                from durin.agent.tools.memory_search import bind_turn_eager_surface
+                ctx.eager_surface_token = bind_turn_eager_surface(ctx.eager_snapshot)
         ctx.user_persisted_early = self._persist_user_message_early(
             ctx.msg, ctx.session
         )

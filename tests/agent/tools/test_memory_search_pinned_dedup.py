@@ -268,3 +268,39 @@ def test_concurrent_sessions_never_see_each_others_snapshot(tmp_path: Path) -> N
 
     assert deduped["already_in_context"] == ["memory/episodic/bakery"]
     assert "already_in_context" not in whole
+
+
+def test_the_snapshots_own_principal_is_excluded_from_whole_refs_not_the_live_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The principal's page belongs in ``pinned_refs`` but is deliberately kept
+    OUT of ``whole_refs`` (its body is capped, so it is judged by containment
+    like any other page — see ``test_principal_page_hit_survives_past_the_body_cap``).
+    That exclusion has to use the principal the snapshot was frozen with. A
+    dedup that resolves the principal live instead would exclude whichever ref
+    the CURRENT config owner happens to be — the wrong one if the operator
+    changed it mid-session — leaving the frozen principal's own ref sitting in
+    ``whole_refs`` and auto-collapsing any hit on it regardless of containment.
+    """
+    write_entity(
+        tmp_path, "person:a",
+        [FieldPatch(kind="body_append", value="Sails a catamaran every winter.",
+                    author="agent", source_ref="s", at=datetime.now(timezone.utc))],
+        create=True, name="A",
+    )
+    import durin.memory.principal as principal_mod
+    monkeypatch.setattr(principal_mod, "resolve_owner_principal", lambda *a, **k: "person:b")
+
+    tool = MemorySearchTool(workspace=tmp_path, context_dedup=True)
+    token = bind_turn_eager_surface(EagerSnapshot(
+        pinned="", hot=_frozen_hot(), refs=frozenset({"person:a"}), turn=1,
+        frozen_at=datetime.now(timezone.utc).isoformat(), principal="person:a",
+    ))
+    try:
+        out = asyncio.run(tool.execute(query="catamaran", scope="dreamed", level="warm"))
+    finally:
+        reset_turn_eager_surface(token)
+
+    assert "memory/entity_page/person:a" not in out.get("already_in_context", [])
+    assert out["total"] == 1
+    assert "=== CANONICAL: memory/entity_page/person:a" in out["sectioned_rendered"]

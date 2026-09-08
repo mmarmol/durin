@@ -969,9 +969,12 @@ class Consolidator:
         # the real prompt ships that text, and a snapshot taken before a run of
         # entity writes can be larger than a live render — measuring the live
         # one would under-estimate the prompt and let compaction fire too late.
-        # Passing a snapshot also leaves the builder's ``last_eager_render``
-        # untouched, so this background probe cannot clobber what a concurrent
-        # turn is about to freeze.
+        # Passing a snapshot also makes the builder set ``last_eager_render``
+        # to ``None`` instead of publishing a rendering of its own there (see
+        # ``ContextBuilder._build_stable_layer``): a concurrent turn between
+        # its own build and its own freeze step can then find nothing to
+        # freeze from this probe, rather than picking up the probe's render
+        # and freezing text nobody's prompt actually shipped.
         eager_snapshot = (
             self._eager_snapshot_for_session(session)
             if self._eager_snapshot_for_session is not None else None

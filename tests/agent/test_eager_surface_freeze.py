@@ -11,6 +11,7 @@ bring the write straight back into the hot layer.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -41,9 +42,21 @@ class _FakeSearch:
     name = "memory_search"
     description = "test double"
     parameters: dict = {}
+    # Not a real Tool subclass, so the runner's own default (read_only=False
+    # → concurrency_safe=False) needs restating here for tests that dispatch
+    # an actual model-issued tool_call against this double.
+    concurrency_safe = False
 
     async def execute(self, **kwargs):
         return {"total": 0, "sectioned_rendered": ""}
+
+    def cast_params(self, params: dict) -> dict:
+        # ToolRegistry.prepare_call casts before dispatching a real
+        # model-issued tool_call; an empty schema means nothing to cast.
+        return params
+
+    def validate_params(self, params: dict) -> list:
+        return []
 
     def to_schema(self) -> dict:
         # The post-save consolidation estimate reads every registered tool's
@@ -151,6 +164,73 @@ async def test_a_system_message_build_reuses_the_frozen_surface(tmp_path: Path) 
     assert stable[1]["memory_hot"] == stable[0]["memory_hot"]
     assert stable[1]["memory_pinned"] == stable[0]["memory_pinned"]
     assert "company:bakery" not in stable[1]["memory_hot"]
+
+
+@pytest.mark.asyncio
+async def test_a_system_message_build_binds_the_snapshot_for_its_own_tool_loop(
+    tmp_path: Path,
+) -> None:
+    """``_process_system_message`` runs its own tool loop (``_run_agent_loop``),
+    so a ``memory_search`` call made there owes the dedup the same bound
+    surface BUILD's own turns get. Instrumented the same way as the
+    prefetch's own binding test: record what the ContextVar carries at the
+    moment the tool actually runs, inside the system-message entry point's
+    tool loop specifically."""
+    from durin.agent.tools.memory_search import _turn_eager_surface
+    from durin.providers.base import ToolCallRequest
+
+    _seed_workspace(tmp_path)
+    loop, _ = _make_loop(tmp_path)
+
+    seen: list[EagerSnapshot | None] = []
+    fake = loop.tools.get("memory_search")
+    original_execute = fake.execute
+
+    async def _recording_execute(**kwargs):
+        seen.append(_turn_eager_surface.get())
+        return await original_execute(**kwargs)
+
+    fake.execute = _recording_execute
+
+    calls = {"n": 0}
+
+    async def _chat(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            # The system message's own tool loop: ask for a memory_search
+            # call so _recording_execute runs inside it.
+            return LLMResponse(content="", tool_calls=[ToolCallRequest(
+                id="c1", name="memory_search",
+                arguments={"query": "bakery", "scope": "dreamed", "level": "warm"},
+            )])
+        return LLMResponse(content="ok", tool_calls=[])
+
+    loop.provider.chat_with_retry = AsyncMock(side_effect=_chat)
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION)
+    )
+    session = loop.sessions.get_or_create("websocket:c")
+    stored = EagerSnapshot.from_metadata(session.metadata[SNAPSHOT_KEY])
+    assert stored is not None
+
+    await loop._process_message(
+        InboundMessage(
+            channel="system",
+            sender_id="workflow_background",
+            chat_id="websocket:c",
+            content="[Background workflow 'qa' finished]\n\nWorkflow run r1: completed",
+            session_key_override="websocket:c",
+            metadata={"injected_event": "workflow_background_result", "workflow": "qa"},
+        )
+    )
+
+    # Turn 1's own prefetch call (bound to None: nothing stored yet on the
+    # first build) is call index 0; the system message's tool-loop search is
+    # index 1 — the one this test is actually about.
+    assert len(seen) == 2
+    assert seen[0] is None
+    assert seen[1] == stored
 
 
 @pytest.mark.asyncio
@@ -480,6 +560,116 @@ async def test_the_surface_binding_does_not_outlive_the_turn(tmp_path: Path) -> 
     )
 
     assert _turn_eager_surface.get() is None
+
+
+# ---------------------------------------------------------------------------
+# The turn's own automatic prefetch is judged against the frozen surface too
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_prefetch_sees_the_snapshot_bound(tmp_path: Path) -> None:
+    """The automatic warm search (``_memory_prefetch``) is a ``memory_search``
+    call like any other, run before the tool loop even starts. Binding the
+    eager surface only after ``_state_build`` awaits the prefetch would leave
+    the ContextVar unset for that call, so this asserts the bound value the
+    prefetch's own ``execute`` sees, not just the one the model's later tool
+    calls see."""
+    from durin.agent.tools.memory_search import _turn_eager_surface
+
+    _seed_workspace(tmp_path)
+    loop, _ = _make_loop(tmp_path)
+
+    seen: list[EagerSnapshot | None] = []
+    fake = loop.tools.get("memory_search")
+    original_execute = fake.execute
+
+    async def _recording_execute(**kwargs):
+        seen.append(_turn_eager_surface.get())
+        return await original_execute(**kwargs)
+
+    fake.execute = _recording_execute
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION)
+    )
+    _write_entity(tmp_path, "company:bakery", "The bakery opened on Main St in March.", "Bakery")
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION)
+    )
+
+    assert len(seen) == 2
+    # Turn 1: nothing stored yet — the first build's own resolve returns None.
+    assert seen[0] is None
+    # Turn 2: the snapshot turn 1 froze is resolved and bound BEFORE the
+    # prefetch runs, not after — the fix under test.
+    session = loop.sessions.get_or_create("websocket:c")
+    stored = EagerSnapshot.from_metadata(session.metadata[SNAPSHOT_KEY])
+    assert stored is not None
+    assert seen[1] == stored
+
+
+@pytest.mark.asyncio
+async def test_the_prefetch_block_carries_a_post_freeze_write_whole(
+    tmp_path: Path,
+) -> None:
+    """The prefetch block is what actually carries a mid-session write to the
+    model (fenced into the wire copy of the user message). If the prefetch's
+    own search dedups against the live workspace instead of the frozen
+    surface, a page written after the freeze collapses to a pointer line
+    there — the model is told to go drill for content it was never shown,
+    because the pointer claims it is already in the (stale) hot layer.
+
+    A dedicated minimal workspace (not ``_seed_workspace``): the second
+    turn's query needs a lexical match specific enough to land the written
+    page without competing against other seeded entities, since the test
+    double has no embedding model to fall back on for a looser match."""
+    from durin.agent.tools.memory_search import MemorySearchTool
+
+    loop, _ = _make_loop(tmp_path)
+    loop.tools.register(MemorySearchTool(workspace=tmp_path, context_dedup=True))
+    _write_entity(tmp_path, "person:anonymous", "Runs a small consulting business.", "Anon")
+
+    wire_messages: list[list[dict]] = []
+
+    async def _chat(*args, **kwargs):
+        messages = args[0] if args else kwargs["messages"]
+        wire_messages.append(messages)
+        return LLMResponse(content="ok", tool_calls=[])
+
+    loop.provider.chat_with_retry = AsyncMock(side_effect=_chat)
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content="checking in for today")
+    )
+    _write_entity(
+        tmp_path, "company:bakery",
+        "Lighthouse Bakery opened on Main St in March.", "Lighthouse Bakery",
+    )
+    await loop._process_message(
+        InboundMessage(
+            channel="websocket", sender_id="u", chat_id="c",
+            content="Lighthouse Bakery opened on Main St",
+        )
+    )
+
+    assert len(wire_messages) == 2
+    user_message = [m for m in wire_messages[1] if m.get("role") == "user"][-1]
+    content = user_message["content"]
+    text = content if isinstance(content, str) else json.dumps(content)
+    assert "=== CANONICAL: memory/entity_page/company:bakery" in text
+    assert "memory/entity_page/company:bakery" not in _pointer_uris(text)
+
+
+def _pointer_uris(wire_text: str) -> list[str]:
+    """The uris listed under the prefetch block's in-context pointer section,
+    if it rendered one — the same "- <uri>" lines ``render_in_context_section``
+    prints."""
+    marker = "## Matches shown in your Memory sections"
+    if marker not in wire_text:
+        return []
+    section = wire_text.split(marker, 1)[1]
+    return re.findall(r"^- (\S+)", section, re.M)
 
 
 # ---------------------------------------------------------------------------
