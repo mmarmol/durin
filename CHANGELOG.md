@@ -5,6 +5,111 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.10.0 — 2026-09-08
+
+### Highlights
+
+- **Memory comes to the turn, not the other way round.** Before the model
+  sees a user message, durin runs one warm memory search with the message as
+  the query and fences the hits into the API copy of that message as a
+  `<memory-context>` block — never stored in the session, never in the cached
+  prompt prefix. The identity prompt tells the model the block is a starting
+  point, not the whole of memory; the model's own `memory_search` in the same
+  turn collapses hits the prefetch already showed into pointer lines. Slash
+  commands, short messages and every non-interactive session kind (workflow
+  nodes, subagents, cron and automation runs) are skipped; a timeout or error
+  backs the prefetch off for a while. New `memory.prefetch` config, on by
+  default, with its per-turn cost stated in the guide. (#576)
+
+- **The chat shows what memory recalled.** A turn with prefetch hits renders
+  a `🧠 N memories recalled` chip in the thread, next to the other tool chips.
+  Reading a file brings along the memory notes that mention that file;
+  drilling a reference document brings the entities distilled from it — the
+  file-context pattern, keyed to the artifact in use, at the top of the tool
+  result so a truncated tail never hides it. New `memory.artifact_recall`
+  config, on by default. (#577, #581)
+
+- **Sessions leave a trace and pick up where the last one ended.** A nightly
+  dream pass summarises every conversation left idle for a few hours without
+  compacting or `/new`, into the same session-summary store the compactor
+  writes. A fresh session on a single-user channel (webui, CLI) opens with the
+  newest summary from that channel as a `PREVIOUS SESSION SUMMARY` block for
+  its first turns, and `session_search` can read an earlier session by key.
+  New `memory.continuity` config and `memory.dream.session_summaries_enabled`.
+  (#575)
+
+- **The always-on memory surface is repaired and bounded.** The audit that
+  started this cycle found the hot layer repeating the pinned pages in every
+  prompt, a "Known Entities" section that was always empty, a `/new` that
+  filed the closed conversation where nothing could find it, and the
+  `turn.memory_usage` telemetry event that was never written. All four are
+  fixed. The Library catalog in the pinned block now lists titles only (capped
+  by `memory.library.awareness_max_docs`, abstracts opt-in) and the
+  principal's page body is capped with a pointer to the full page. (#573, #574)
+
+### Changes
+
+**Memory**
+
+- `turn.memory_usage` is emitted through the session logger with
+  `pinned_chars`, `hot_chars` and `prefetch_hits`; `memory.prefetch` records
+  each turn's hits, chars, duration and skip reason. (#573, #576)
+- Pinned pages are excluded from the hot layer's canonical block and treated
+  as already in context by the search dedup; the pinned block renders
+  everything the canonical block used to (aliases, relations, identifiers,
+  sources). The hot layer's "Known Entities" section is replaced by page
+  counts per type. (#573)
+- `/new` files the closed conversation as its own indexed session-summary
+  record (searchable, never replayed) and clears the key's archived-context
+  summary so the next conversation starts clean. (#573)
+- One entity-tree walk per prompt build instead of two; the search dedup's
+  pinned set and the library subjects map are cached briefly between builds.
+  (#573, #574)
+- `memory.library.awareness_max_docs` (default 20) and
+  `memory.library.awareness_abstracts` (default off) bound the Library
+  awareness catalog; only the listed reference files are opened. (#574)
+- Session summaries: the nightly `session_summary` pass keeps a per-session
+  cursor, the compactor skips the span the pass already summarised, both
+  cursors restart when the session file shrank, and the summary file's
+  read-modify-write runs under the file lock. (#575)
+- `memory_search` entity hits show the page's name, attributes and a body
+  excerpt at warm level and the full body at cold, with a truthful
+  completeness qualifier. (#575)
+- `session_search(session_key=…)` searches an earlier session read-only. (#575)
+- The prefetch block is its own line in the `/status` context breakdown
+  instead of being billed as the user's message. (#576)
+- `read_file` appends up to `memory.artifact_recall.max_notes` memory notes
+  that mention the file (matched on a path boundary, so a note about
+  `src/app.py` never attaches to a read of `app.py`); `memory_drill` on a
+  reference document appends the entities distilled from it, whichever URI
+  form the drill received. Both fail open. (#577)
+
+- The memory notes on a file read and the entities on a reference drill ride at
+  the top of the tool result, so a long file or document that the loop truncates
+  at the tail still carries them. (#581)
+- `context.composition` is emitted for every turn build through the session
+  logger, with the prefetch as its own line; the compaction's token probe no
+  longer emits composition rows nor overwrites the payload `/status` and the
+  CLI footer display. (#581)
+
+**WebUI**
+
+- `🧠 N memories recalled` chip on turns with a memory prefetch. (#577)
+
+**Compaction**
+
+- The token-path compaction reports `already_summarized` instead of
+  `summary_failed` when the nightly pass already covered the span. (#576)
+
+**Runtime**
+
+- `automation:` session keys count as autonomous alongside `cron:`,
+  `workflow:` and `subagent:` for the approval and prefetch gates. (#576)
+
+**Data**
+
+- Weekly vendored refresh of the MCP floor and the model catalog. (#565, #567)
+
 ## 0.9.3 — 2026-09-07
 
 ### Highlights
