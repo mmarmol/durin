@@ -689,6 +689,23 @@ class SkillsConfig(Base):
     )
 
 
+class MemoryLibraryConfig(Base):
+    """Always-on Library awareness — the one-line-per-document catalog the
+    pinned block carries so the agent knows which ingested documents exist.
+
+    Documents stay out of default recall; the catalog is how the agent
+    decides to reach one with ``memory_search(scope="library")``. It rides
+    in EVERY prompt, so it is bounded: ``awareness_max_docs`` lines (0 keeps
+    only the header, the count and the ``Covers:`` subject map — a document
+    is then reached by searching its subject), and titles only unless
+    ``awareness_abstracts`` is on (an abstract adds roughly 140 characters
+    per line).
+    """
+
+    awareness_max_docs: int = Field(default=20, ge=0, description="Documents listed one per line in the pinned Library catalog; 0 keeps only the header, the count and the Covers: subject map")
+    awareness_abstracts: bool = Field(default=False, description="Append each listed document's distilled abstract to its line (roughly doubles the catalog)")
+
+
 class MemoryConfig(Base):
     """Memory subsystem configuration root.
 
@@ -719,6 +736,10 @@ class MemoryConfig(Base):
     embedding: MemoryEmbeddingConfig = Field(default_factory=MemoryEmbeddingConfig, description="Embedding model for the vector index")
     dream: MemoryDreamConfig = Field(default_factory=MemoryDreamConfig, description="Dream passes (extract / refine / skill / always_on) and their cron + reactive triggers")
     search: MemorySearchConfig = Field(default_factory=MemorySearchConfig, description="Search pipeline settings (cross-encoder reranker, sectioning)")
+    library: MemoryLibraryConfig = Field(
+        default_factory=MemoryLibraryConfig,
+        description="Size of the always-on Library awareness catalog in the pinned block",
+    )
     file_watcher: MemoryFileWatcherConfig = Field(
         default_factory=MemoryFileWatcherConfig,
         description="Background filesystem watcher that re-indexes manually edited memory/*.md files",

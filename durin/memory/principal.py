@@ -32,7 +32,7 @@ from durin.memory.memory_writer import write_entity
 # truncates with a "…and N more" note and the unlisted documents stay reachable
 # via `memory_search(scope="library")`. Ranking / topic rollup for large
 # libraries is the scaling refinement.
-_MAX_LIBRARY_DOCS = 30
+_MAX_LIBRARY_DOCS = 20
 _DESC_CHARS = 140
 # Cap on the "Covers:" subjects map — the bounded index of what the library is
 # about (from documents' distilled topics). Keeps the always-on block bounded
@@ -221,11 +221,14 @@ def _render_pinned_block(page: EntityPage) -> str:
     return "\n".join(lines).strip()
 
 
-def _doc_descriptor(workspace: Path, slug: str, md_path: Path) -> tuple[str, str]:
+def _doc_descriptor(
+    workspace: Path, slug: str, md_path: Path, *, with_abstract: bool = True,
+) -> tuple[str, str]:
     """(title, one-line descriptor) for a reference document.
 
-    The descriptor is the distilled outline's abstract when the dream has run,
-    otherwise empty (the title alone still tells the agent the document exists).
+    The descriptor is the distilled outline's abstract when the dream has
+    run and ``with_abstract`` is on, otherwise empty (the title alone still
+    tells the agent the document exists).
     """
     try:
         text = md_path.read_text(encoding="utf-8")
@@ -233,6 +236,8 @@ def _doc_descriptor(workspace: Path, slug: str, md_path: Path) -> tuple[str, str
         return slug, ""
     tm = re.search(r"^title:\s*(.+)$", text, re.MULTILINE)
     title = tm.group(1).strip().strip('"') if tm else slug
+    if not with_abstract:
+        return title, ""
     one = ""
     outline = md_path.with_name(f"{slug}.outline.json")
     if outline.exists():
@@ -303,31 +308,37 @@ def _library_topics(workspace: Path) -> list[str]:
     ]
 
 
-def build_library_awareness(workspace: Path, *, max_docs: int = _MAX_LIBRARY_DOCS) -> str:
+def build_library_awareness(
+    workspace: Path, *, max_docs: int = _MAX_LIBRARY_DOCS, abstracts: bool = False,
+) -> str:
     """A compact, always-on catalog of ingested documents (one line each).
 
     Gives the agent proactive awareness of what's in the Library without
     carrying any content — the raw documents stay out of default recall, so
     this line-per-document index is how the agent knows a document exists and
     can decide to reach it with ``memory_search(scope="library")`` or a drill.
+    Only the listed documents are opened (titles come from their frontmatter);
+    the rest are counted. ``max_docs=0`` keeps the header, the count and the
+    subject map.
     """
     refs_dir = Path(workspace) / "memory" / "references"
     if not refs_dir.is_dir():
         return ""
-    docs = [
-        _doc_descriptor(workspace, md.stem, md)
-        for md in sorted(refs_dir.glob("*.md"))
-    ]
-    if not docs:
+    md_files = sorted(refs_dir.glob("*.md"))
+    if not md_files:
         return ""
-    shown = docs[:max_docs]
-    lines = [f"- {t}" + (f" — {d}" if d else "") for t, d in shown]
-    more = len(docs) - len(shown)
+    shown_files = md_files[: max(0, max_docs)]
+    docs = [
+        _doc_descriptor(workspace, md.stem, md, with_abstract=abstracts)
+        for md in shown_files
+    ]
+    lines = [f"- {t}" + (f" — {d}" if d else "") for t, d in docs]
+    more = len(md_files) - len(shown_files)
     if more > 0:
         lines.append(f"- …and {more} more (search its subject to reach it)")
     header = (
-        f"## Your document library ({len(docs)} "
-        f"document{'s' if len(docs) != 1 else ''})"
+        f"## Your document library ({len(md_files)} "
+        f"document{'s' if len(md_files) != 1 else ''})"
     )
     note = (
         "These ingested documents are NOT in default recall. Reach one by "
@@ -353,7 +364,10 @@ def build_library_awareness(workspace: Path, *, max_docs: int = _MAX_LIBRARY_DOC
 
 
 def build_pinned_context(
-    workspace: Path, principal_ref: str, *, always_on: Sequence[str] | None = None,
+    workspace: Path, principal_ref: str, *,
+    always_on: Sequence[str] | None = None,
+    library_max_docs: int = _MAX_LIBRARY_DOCS,
+    library_abstracts: bool = False,
 ) -> str:
     """The always-injected layer: who the user is + always_on feedback +
     a one-line-per-document awareness catalog of the ingested Library.
@@ -373,7 +387,9 @@ def build_pinned_context(
             pins.append(_render_pinned_block(page))
     if pins:
         parts.append("## Always-on guidance\n\n" + "\n\n".join(pins))
-    library = build_library_awareness(workspace)
+    library = build_library_awareness(
+        workspace, max_docs=library_max_docs, abstracts=library_abstracts,
+    )
     if library:
         parts.append(library)
     return "\n\n".join(parts)

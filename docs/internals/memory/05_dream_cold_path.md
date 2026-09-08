@@ -439,12 +439,14 @@ entity is ever deleted**, so a pruned or contradicted item returns automatically
 when the budget frees or the conflict resolves.
 
 The pinned context (`principal.build_pinned_context`) also carries a **Library
-awareness catalog** — one short line per ingested reference document (its title,
-plus the distilled outline abstract when present). This is the always-on Tier-2
-awareness: ingested documents are kept out of default recall, so this
-line-per-document index is how the agent knows a document exists and can decide
-to reach it with `memory_search(scope="library")` or a drill. It is capped
-(`principal._MAX_LIBRARY_DOCS`) and truncates with a "…and N more" note.
+awareness catalog** — one short line per ingested reference document (its title;
+the distilled outline abstract too when `memory.library.awareness_abstracts` is
+on). This is the always-on Tier-2 awareness: ingested documents are kept out of
+default recall, so this line-per-document index is how the agent knows a
+document exists and can decide to reach it with `memory_search(scope="library")`
+or a drill. It is capped by `memory.library.awareness_max_docs` (only the listed
+documents are opened; the rest are counted) and truncates with a "…and N more"
+note.
 
 The block also carries a bounded **subjects map** — a `Covers: …` line naming
 what the library is about, so a document stays reachable (search its subject)

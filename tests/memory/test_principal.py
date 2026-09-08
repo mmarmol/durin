@@ -33,7 +33,7 @@ def test_library_awareness_lists_docs_with_outline_abstract(tmp_path):
         json.dumps({"abstract": "Kahneman on two systems of thought.", "chunk_count": 1})
     )
 
-    block = build_library_awareness(tmp_path)
+    block = build_library_awareness(tmp_path, abstracts=True)
     assert "## Your document library (2 documents)" in block
     assert 'scope="library"' in block
     assert "- The Durin Handbook" in block            # title-only (not distilled)
@@ -247,3 +247,58 @@ def test_resolve_pinned_refs_caches_within_ttl(tmp_path, monkeypatch):
 
     assert resolve_pinned_refs(tmp_path, ttl_s=0) == first
     assert calls == 2
+
+
+def test_library_awareness_is_titles_only_by_default(tmp_path):
+    import json
+
+    ingest_reference(tmp_path, "Thinking Fast and Slow", "# T\n\nbody.\n")
+    outline_path_for(tmp_path, "thinking-fast-and-slow").write_text(
+        json.dumps({"abstract": "Kahneman on two systems of thought.", "chunk_count": 1})
+    )
+
+    block = build_library_awareness(tmp_path)
+
+    assert "- Thinking Fast and Slow" in block
+    assert "Kahneman" not in block
+
+
+def test_library_awareness_zero_docs_keeps_header_count_and_subjects(tmp_path):
+    ingest_reference(tmp_path, "A Book", "# a\n\nx.\n")
+    ingest_reference(tmp_path, "B Book", "# b\n\ny.\n")
+    write_entity(tmp_path, "topic:x", [_derived("a-book")], create=True, name="X")
+
+    block = build_library_awareness(tmp_path, max_docs=0)
+
+    assert "## Your document library (2 documents)" in block
+    assert "- A Book" not in block
+    assert "…and 2 more" in block
+    assert "Covers: X" in block
+
+
+def test_library_awareness_reads_only_the_listed_documents(tmp_path, monkeypatch):
+    from durin.memory import principal as p
+
+    for i in range(5):
+        ingest_reference(tmp_path, f"Doc {i}", f"# d{i}\n\nbody.\n")
+    seen: list[str] = []
+    real = p._doc_descriptor
+
+    def _spy(workspace, slug, md_path, **kw):
+        seen.append(slug)
+        return real(workspace, slug, md_path, **kw)
+
+    monkeypatch.setattr(p, "_doc_descriptor", _spy)
+    build_library_awareness(tmp_path, max_docs=2)
+    assert len(seen) == 2
+
+
+def test_build_pinned_context_passes_library_caps(tmp_path):
+    ingest_reference(tmp_path, "A Book", "# a\n\nx.\n")
+    ingest_reference(tmp_path, "B Book", "# b\n\ny.\n")
+
+    ctx = build_pinned_context(tmp_path, "person:marcelo", library_max_docs=1)
+
+    assert "- A Book" in ctx
+    assert "- B Book" not in ctx
+    assert "…and 1 more" in ctx
