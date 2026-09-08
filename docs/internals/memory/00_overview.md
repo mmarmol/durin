@@ -392,8 +392,8 @@ durin memory forget <uri>           archive one entry and drop its index rows
 
 ### Agent tools
 
-The agent accesses memory through five core tools plus three read-only
-inspection tools (see [04_agent_tools.md](04_agent_tools.md) for signatures):
+The agent accesses memory through a small set of write and retrieval tools
+plus a few read-only inspection tools (see [04_agent_tools.md](04_agent_tools.md) for signatures):
 
 - `memory_search` — query the search pipeline
 - `memory_upsert_entity` — create or update an entity page
