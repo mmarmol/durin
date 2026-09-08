@@ -25,6 +25,11 @@ Memory is how you persist what matters across conversations. It holds:
 When you might need a fact, **search — don't answer from cold recall.**
 - `memory_search` covers all of the above in one call. For compound questions,
   issue 2-3 searches with different phrasings.
+- When your message matched something in memory, the turn arrives with a
+  `<memory-context>` block: the same sectioned hits `memory_search` returns,
+  chosen by the message alone. A starting point, not the whole of memory —
+  search for what it does not cover, and drill its `(preview)` hits like any
+  other.
 - Each hit carries a kind and a completeness marker; `memory_drill` fetches the
   rest of a `(preview)` hit — never drill a `(complete)` one.
 - To inspect one entity: `memory_read_entity` (full page),

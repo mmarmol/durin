@@ -1,0 +1,171 @@
+"""Automatic memory search per user turn: one warm memory_search with the
+message as the query, fenced into the API copy of the user message."""
+
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from durin.agent.context import ContextBuilder, build_memory_context_block
+from durin.agent.loop import AgentLoop
+from durin.bus.events import InboundMessage
+from durin.bus.queue import MessageBus
+from durin.config.schema import MemoryPrefetchConfig
+from durin.memory.fts_index import FTSIndex
+from durin.providers.base import LLMResponse
+
+_RENDERED = (
+    "=== CANONICAL: person:ana (complete) ===\nAna\nAna runs the bakery on Main St.\n=== END CANONICAL ==="
+)
+
+
+class _FakeSearch:
+    name = "memory_search"
+
+    def __init__(self, total: int = 1, delay: float = 0.0, rendered: str = _RENDERED) -> None:
+        self.calls: list[dict] = []
+        self.total = total
+        self.delay = delay
+        self.rendered = rendered
+
+    async def execute(self, **kwargs):
+        self.calls.append(dict(kwargs))
+        if self.delay:
+            await asyncio.sleep(self.delay)
+        return {"total": self.total, "strategy": "hybrid", "ranking": "rrf",
+                "sectioned_rendered": self.rendered if self.total else ""}
+
+
+class _Rec:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict]] = []
+
+    def log(self, event_type, data=None):
+        self.events.append((event_type, dict(data or {})))
+
+
+def _make_loop(tmp_path: Path, monkeypatch, *, fake: _FakeSearch | None = None) -> tuple[AgentLoop, list[list[dict]], _Rec]:
+    with FTSIndex.open(tmp_path):      # a real index file → the prefetch gate is open
+        pass
+    rec = _Rec()
+    monkeypatch.setattr("durin.telemetry.logger.get_session_logger", lambda key, base_dir=None: rec)
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    loop = AgentLoop(bus=MessageBus(), provider=provider, workspace=tmp_path, model="test-model")
+    loop.tools.get_definitions = MagicMock(return_value=[])
+    if fake is not None:
+        loop.tools.register(fake)  # replaces the real memory_search for this loop
+    captured: list[list[dict]] = []
+
+    async def _chat(*args, **kwargs):
+        captured.append(kwargs.get("messages") or (args[0] if args else []))
+        return LLMResponse(content="ok", tool_calls=[])
+
+    loop.provider.chat_with_retry = AsyncMock(side_effect=_chat)
+    return loop, captured, rec
+
+
+def _user_content(captured: list[list[dict]]) -> str:
+    msgs = captured[0]
+    user = [m for m in msgs if m.get("role") == "user"][-1]
+    return user["content"] if isinstance(user["content"], str) else "".join(
+        b.get("text", "") for b in user["content"] if isinstance(b, dict)
+    )
+
+
+QUESTION = "What do you remember about Ana's bakery on Main Street?"
+
+
+def test_build_messages_places_block_after_text_before_runtime_context(tmp_path: Path) -> None:
+    builder = ContextBuilder(workspace=tmp_path)
+    block = build_memory_context_block(_RENDERED)
+
+    msgs = builder.build_messages(history=[], current_message="hola", channel="cli", chat_id="c",
+                                  memory_prefetch=block)
+
+    content = msgs[-1]["content"]
+    assert content.index("hola") < content.index("<memory-context>") < content.index(ContextBuilder._RUNTIME_CONTEXT_TAG)
+    assert "Ana runs the bakery" in content
+
+
+@pytest.mark.asyncio
+async def test_prefetch_runs_a_warm_search_and_fences_the_hits(tmp_path: Path, monkeypatch) -> None:
+    fake = _FakeSearch(total=1)
+    loop, captured, rec = _make_loop(tmp_path, monkeypatch, fake=fake)
+
+    await loop._process_message(InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION))
+
+    assert fake.calls == [{"query": QUESTION, "limit": 3, "level": "warm"}]
+    content = _user_content(captured)
+    assert content.index(QUESTION) < content.index("<memory-context>")
+    assert "Ana runs the bakery" in content and "</memory-context>" in content
+    stored = loop.sessions.get_or_create("websocket:c").messages
+    assert all("<memory-context>" not in str(m.get("content")) for m in stored)
+    prefetch = [d for t, d in rec.events if t == "memory.prefetch"]
+    assert prefetch and prefetch[0]["hits"] == 1 and "skipped" not in prefetch[0]
+    usage = [d for t, d in rec.events if t == "turn.memory_usage"]
+    assert usage[0]["prefetch_hits"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content,reason", [
+    ("/status", "command_or_empty"),
+    ("ok thanks", "short"),
+])
+async def test_prefetch_gates(tmp_path: Path, monkeypatch, content: str, reason: str) -> None:
+    fake = _FakeSearch()
+    loop, captured, rec = _make_loop(tmp_path, monkeypatch, fake=fake)
+    if content.startswith("/"):
+        loop.commands.dispatch = AsyncMock(return_value=None)   # let the message reach BUILD
+
+    await loop._process_message(InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=content))
+
+    assert fake.calls == []
+    assert [d for t, d in rec.events if t == "memory.prefetch"][0]["skipped"] == reason
+
+
+@pytest.mark.asyncio
+async def test_prefetch_skips_non_interactive_sessions_and_disabled_config(tmp_path: Path, monkeypatch) -> None:
+    fake = _FakeSearch()
+    loop, captured, rec = _make_loop(tmp_path, monkeypatch, fake=fake)
+    session = loop.sessions.get_or_create("websocket:node")
+    session.metadata["origin_type"] = "workflow_node"
+    loop.sessions.save(session)
+    await loop._process_message(InboundMessage(channel="websocket", sender_id="u", chat_id="node", content=QUESTION))
+    assert fake.calls == []
+    assert [d for t, d in rec.events if t == "memory.prefetch"][-1]["skipped"] == "non_interactive"
+
+    loop.app_config = SimpleNamespace(memory=SimpleNamespace(prefetch=MemoryPrefetchConfig(enabled=False)))
+    await loop._process_message(InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION))
+    assert fake.calls == []
+
+
+@pytest.mark.asyncio
+async def test_prefetch_no_hits_and_timeout_add_nothing(tmp_path: Path, monkeypatch) -> None:
+    loop, captured, rec = _make_loop(tmp_path, monkeypatch, fake=_FakeSearch(total=0))
+    await loop._process_message(InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION))
+    assert "<memory-context>" not in _user_content(captured)
+    assert [d for t, d in rec.events if t == "memory.prefetch"][-1]["skipped"] == "no_hits"
+
+    slow = _FakeSearch(total=1, delay=0.5)
+    loop, captured, rec = _make_loop(tmp_path, monkeypatch, fake=slow)
+    loop.app_config = SimpleNamespace(memory=SimpleNamespace(prefetch=MemoryPrefetchConfig(timeout_s=0.05)))
+    await loop._process_message(InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION))
+    assert "<memory-context>" not in _user_content(captured)
+    assert [d for t, d in rec.events if t == "memory.prefetch"][-1]["skipped"] == "timeout"
+
+
+@pytest.mark.asyncio
+async def test_prefetch_block_is_cut_at_max_chars(tmp_path: Path, monkeypatch) -> None:
+    # Longer than the smallest max_chars the config accepts, so the cut fires.
+    fake = _FakeSearch(total=1, rendered=_RENDERED + "\nAna bakes rye every morning." * 20)
+    loop, captured, rec = _make_loop(tmp_path, monkeypatch, fake=fake)
+    loop.app_config = SimpleNamespace(memory=SimpleNamespace(prefetch=MemoryPrefetchConfig(max_chars=200)))
+    await loop._process_message(InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION))
+    content = _user_content(captured)
+    block = content[content.index("<memory-context>"):content.index("</memory-context>")]
+    assert "(truncated" in block and len(block) < 200 + 400

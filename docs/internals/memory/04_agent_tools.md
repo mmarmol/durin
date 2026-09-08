@@ -19,6 +19,14 @@ These are the **only** memory-related tools the agent can invoke. Everything
 beyond this boundary — index internals, RRF coefficients, cross-encoder weights,
 LanceDB schema — is invisible to the LLM.
 
+`memory_search` is not only invoked by the model: the agent loop runs the same
+tool once per user turn with the message itself as the query and fences the hits
+into the wire copy of that message, so a turn reaches memory whether or not the
+model thinks to ask (the prefetch — see `06_prompts_and_instructions.md` §5.7).
+The tool below is unchanged by this and remains the surface for follow-ups,
+for a rephrasing the message alone would not produce, and for the compound
+questions that need two or three queries.
+
 ---
 
 ## Mental model

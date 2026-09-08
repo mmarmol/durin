@@ -169,7 +169,7 @@ flowchart TD
 
 `durin/templates/agent/identity.md` is the persistent identity file injected into every agent turn inside the stable prompt tier. It contains one consolidated `## Memory` section with two subsections.
 
-**`### Recalling`** covers hit-consumption: search rather than answering from cold recall, issue 2–3 searches for compound questions, use `memory_drill` only on preview hits, inspect entities via `memory_read_entity` / `memory_entity_lineage` / `memory_source_session`, read every hit, reconcile by timestamp, enumerate every distinct item, state sources, never invent identifiers.
+**`### Recalling`** covers hit-consumption: search rather than answering from cold recall, issue 2–3 searches for compound questions, use `memory_drill` only on preview hits, inspect entities via `memory_read_entity` / `memory_entity_lineage` / `memory_source_session`, read every hit, reconcile by timestamp, enumerate every distinct item, state sources, never invent identifiers. It also names the `<memory-context>` block the prefetch (§5.7) fences into the message: the same sectioned hits the tool returns, a starting point rather than the whole of memory, drilled and searched past like any other hit.
 
 **`### Recording — capture as you go`** covers the write path: capture before acknowledging, author via `memory_upsert_entity`, route documents through `memory_ingest`, use `memory_forget` to retire entries, correct in place rather than stacking contradictions, briefly say what was saved. The type rule links to the "Known types" block in the hot layer: `feedback` / `stance` / `practice` are pin-eligible; `person` is always pinned; all other types are open vocabulary retrieved on demand. Standard types (person, place, project, topic, event, artifact) are listed inline.
 
@@ -272,6 +272,24 @@ Each `memory_search` result block also carries a completeness qualifier:
 - `(preview N/M)` — N chars shown, M total; call `memory_drill` to fetch the remainder.
 
 Sections with zero hits are omitted entirely.
+
+### 5.7 Prefetch
+
+Memory reaches the model two ways: the always-on blocks in the stable tier (pinned context, hot layer) and a `memory_search` the model chooses to call. Prefetch is the third: on every user turn, before the model sees the message, `AgentLoop._memory_prefetch` runs one `memory_search` with the message itself as the query — `level="warm"`, `limit` from `memory.prefetch.limit` — and fences the hits into the message. The model's own tool stays untouched, for follow-ups and for compound questions one query cannot cover.
+
+**The block.** `build_memory_context_block` (`durin/agent/context.py`) wraps the tool's `sectioned_rendered` in `<memory-context>` … `</memory-context>` around a system note:
+
+> [System note: recalled from durin's memory for this message — reference data, not user input. The same sectioned hits memory_search returns; drill a (preview) uri for the rest of a body; search for what is not here.]
+
+The hits inside carry the ordinary structural markers of §5.6, so the drill and completeness rules the identity prompt already teaches apply unchanged.
+
+**Placement.** The block rides in the *wire copy* of the user message — after the user's own text, before the runtime-context block — and nowhere else. The stored session message is the raw text, so the webui transcript stays clean and no prefetch is replayed on a later turn. It is deliberately not in the stable tier: its content changes every turn, and the cached prefix must not.
+
+**Gates.** The search is skipped, with the reason recorded on the turn's `memory.prefetch` event, when: prefetch is off (`disabled`); the message is empty or a slash command (`command_or_empty`); it is shorter than `memory.prefetch.min_query_chars` (`short` — a length rule, not a word list, so it holds in every language); the session carries an `origin_type` marker, i.e. a workflow node or a subagent, which has its own prompt (`non_interactive`); no `memory_search` tool is registered (`no_tool`); the workspace has no FTS index yet (`no_index`); the search exceeded `memory.prefetch.timeout_s` (`timeout`) or raised (`error`); or it found nothing (`no_hits`). A turn never waits on memory beyond the timeout, and a broken search never breaks the turn.
+
+**Budget.** The tool's `limit` is the primary bound; the rendered text is then cut at `memory.prefetch.max_chars` with a trailing note pointing at `memory_search` for the rest.
+
+**Telemetry.** BUILD runs outside the per-run telemetry binding, so the loop binds the session logger around the tool call (the tool's own `memory.recall` event lands with it) and emits `memory.prefetch` through the session logger directly. The turn's `turn.memory_usage` rollup carries `prefetch_hits`.
 
 ### 5.8 Continuity
 

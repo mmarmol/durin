@@ -398,6 +398,18 @@ background file watching, and health checks. See
 | `continuity.max_chars` | `2000` | Tail of the previous summary shown, in characters |
 | `continuity.max_turns` | `3` | Turns of the fresh session that carry the previous summary before it drops out |
 
+**`memory.prefetch`** — the automatic memory search that runs once per user turn, before the model sees the message. Its hits ride in that turn's copy of the message (never stored, never replayed); the `memory_search` tool stays available for follow-ups:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `prefetch.enabled` | `true` | Run one warm `memory_search` with the user message before the model sees it and fence the hits into the message |
+| `prefetch.limit` | `3` | Hits requested from the search (warm level: headline + summary each) |
+| `prefetch.max_chars` | `2500` | Cap on the fenced block, in characters; longer output is cut with a note |
+| `prefetch.min_query_chars` | `20` | Messages shorter than this are not searched |
+| `prefetch.timeout_s` | `5.0` | Seconds the search may take before the turn proceeds without it |
+
+Slash commands, workflow nodes and subagents are never prefetched.
+
 **`memory.file_watcher`** — background filesystem watcher:
 
 | Key | Default | Meaning |

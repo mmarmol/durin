@@ -352,6 +352,7 @@ class TurnMemoryUsageEvent(TypedDict):
     tool_calls_total: int      # all tool calls this turn (denominator)
     pinned_chars: NotRequired[int]   # rendered size of the pinned memory block
     hot_chars: NotRequired[int]      # rendered size of the hot layer
+    prefetch_hits: NotRequired[int]  # hits the automatic per-turn search fenced in
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
 
@@ -698,6 +699,19 @@ class MemoryRecallEvent(TypedDict):
     recovery_duration_ms: NotRequired[float]
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
+
+
+class MemoryPrefetchEvent(TypedDict):
+    """Outcome of the automatic memory search that runs before the model
+    sees a user message. One row per user turn. ``skipped`` names why no
+    block was injected (disabled / command_or_empty / short / non_interactive /
+    no_index / no_tool / timeout / error / no_hits); absent when hits landed."""
+
+    session_key: str
+    hits: int
+    chars: int
+    duration_ms: int
+    skipped: NotRequired[str]
 
 
 class MemoryStoreEvent(TypedDict):
@@ -1788,6 +1802,7 @@ EVENTS: dict[str, type] = {
     "process.kill": ProcessKillEvent,
     # Memory subsystem (Phase 1)
     "memory.recall": MemoryRecallEvent,
+    "memory.prefetch": MemoryPrefetchEvent,
     "memory.store": MemoryStoreEvent,
     "memory.ingest": MemoryIngestEvent,
     "memory.forget": MemoryForgetEvent,
@@ -1922,6 +1937,7 @@ __all__ = [
     "SleepEndEvent",
     # Memory subsystem
     "MemoryRecallEvent",
+    "MemoryPrefetchEvent",
     "MemoryStoreEvent",
     "MemoryIngestEvent",
     "MemoryEmbeddingLoadEvent",

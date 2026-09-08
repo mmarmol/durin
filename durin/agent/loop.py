@@ -93,7 +93,7 @@ def _truncate_tool_output(content: str, max_chars: int, tool_name: str | None) -
 
 def emit_memory_usage_rollup(
     session_key: str, tools_used: list[str], *,
-    pinned_chars: int = 0, hot_chars: int = 0,
+    pinned_chars: int = 0, hot_chars: int = 0, prefetch_hits: int = 0,
 ) -> None:
     """Emit the per-turn ``turn.memory_usage`` rollup at save time.
 
@@ -102,6 +102,9 @@ def emit_memory_usage_rollup(
     ``pinned_chars`` / ``hot_chars`` are the sizes of the two eager memory
     blocks in this turn's last prompt build, so the cost of the always-on
     surface is tracked per turn instead of probed by hand.
+    ``prefetch_hits`` is how many hits the automatic per-turn search fenced
+    into the message, so a turn that reached memory without the model asking
+    is distinguishable from one that never reached it at all.
 
     The per-run telemetry binding is torn down inside ``_run_agent_loop``
     before the save state runs, so the session logger is fetched directly
@@ -120,6 +123,7 @@ def emit_memory_usage_rollup(
                 "tool_calls_total": len(tools_used),
                 "pinned_chars": int(pinned_chars),
                 "hot_chars": int(hot_chars),
+                "prefetch_hits": int(prefetch_hits),
             },
         )
 
@@ -321,6 +325,13 @@ class TurnContext:
 
     history: list[dict[str, Any]] = field(default_factory=list)
     initial_messages: list[dict[str, Any]] = field(default_factory=list)
+
+    # Hits of the automatic search this turn ran with the user message,
+    # fenced for the wire copy of that message only (never stored). Resolved
+    # once in BUILD so the overflow-retry rebuild reuses the same block.
+    memory_prefetch: str = ""
+    prefetch_hits: int = 0
+    prefetch_refs: list[str] = field(default_factory=list)
 
     final_content: str | None = None
     tools_used: list[str] = field(default_factory=list)
@@ -1678,6 +1689,7 @@ class AgentLoop:
         history: list[dict[str, Any]],
         pending_summary: str | None,
         active_persona_soul: str | None = None,
+        memory_prefetch: str | None = None,
     ) -> list[dict[str, Any]]:
         """Build the initial message list for the LLM turn."""
         audio_mode, supports_audio = self._audio_build_args()
@@ -1696,6 +1708,7 @@ class AgentLoop:
             audio_mode=audio_mode,
             supports_audio_input=supports_audio,
             active_persona_soul=active_persona_soul,
+            memory_prefetch=memory_prefetch,
         )
 
     async def _dispatch_command_inline(
@@ -2828,6 +2841,85 @@ class AgentLoop:
             return "shortcut"
         return "dispatch"
 
+    def _prefetch_config(self):
+        """Configured prefetch settings, or the defaults when the loop has no
+        app config (tests, ad-hoc runners)."""
+        from durin.config.schema import MemoryPrefetchConfig
+        cfg = getattr(getattr(self.app_config, "memory", None), "prefetch", None)
+        return cfg if cfg is not None else MemoryPrefetchConfig()
+
+    def _emit_prefetch(self, session_key: str, **data: Any) -> None:
+        """``memory.prefetch`` goes straight to the session logger: BUILD runs
+        outside the per-run telemetry binding."""
+        from durin.telemetry.logger import get_session_logger
+        with suppress(Exception):
+            get_session_logger(session_key).log("memory.prefetch", {"session_key": session_key, **data})
+
+    async def _memory_prefetch(self, ctx: TurnContext) -> str:
+        """One warm memory_search with the user message, fenced for the wire
+        copy of the message. Returns "" (and records why) whenever the search
+        should not or could not run — the turn never waits on memory."""
+        import re
+
+        from durin.agent.context import build_memory_context_block
+        from durin.memory.fts_index import fts_index_path
+        from durin.telemetry.logger import bind_telemetry, get_session_logger, reset_telemetry
+
+        cfg = self._prefetch_config()
+        text = ctx.msg.content.strip() if isinstance(ctx.msg.content, str) else ""
+        reason: str | None = None
+        if not cfg.enabled:
+            reason = "disabled"
+        elif not text or text.startswith("/"):
+            reason = "command_or_empty"
+        elif len(text) < cfg.min_query_chars:
+            reason = "short"
+        elif ctx.session is not None and ctx.session.metadata.get("origin_type"):
+            reason = "non_interactive"
+        elif not fts_index_path(self.workspace).exists():
+            reason = "no_index"
+        tool = self.tools.get("memory_search") if self.tools else None
+        if reason is None and tool is None:
+            reason = "no_tool"
+        if reason is not None:
+            self._emit_prefetch(ctx.session_key, hits=0, chars=0, duration_ms=0, skipped=reason)
+            return ""
+
+        t0 = time.perf_counter()
+        token = bind_telemetry(get_session_logger(ctx.session_key))
+        response: Any = None
+        try:
+            response = await asyncio.wait_for(
+                tool.execute(query=text, limit=cfg.limit, level="warm"),
+                timeout=cfg.timeout_s,
+            )
+        except asyncio.TimeoutError:
+            reason = "timeout"
+        except Exception:  # noqa: BLE001 — a broken search must not break the turn
+            logger.exception("memory prefetch failed for {}", ctx.session_key)
+            reason = "error"
+        finally:
+            reset_telemetry(token)
+        duration_ms = int((time.perf_counter() - t0) * 1000)
+        if reason is not None:
+            self._emit_prefetch(ctx.session_key, hits=0, chars=0, duration_ms=duration_ms, skipped=reason)
+            return ""
+
+        total = int((response or {}).get("total") or 0) if isinstance(response, dict) else 0
+        rendered = str((response or {}).get("sectioned_rendered") or "") if isinstance(response, dict) else ""
+        if total == 0 or not rendered.strip():
+            self._emit_prefetch(ctx.session_key, hits=0, chars=0, duration_ms=duration_ms, skipped="no_hits")
+            return ""
+        if len(rendered) > cfg.max_chars:
+            rendered = rendered[:cfg.max_chars].rstrip() + "\n… (truncated; memory_search for the rest)"
+        block = build_memory_context_block(rendered)
+        ctx.prefetch_hits = total
+        ctx.prefetch_refs = re.findall(
+            r"^=== (?:SKILL|CANONICAL|FRAGMENT|SESSION|INGESTED): (\S+)", rendered, re.M,
+        )
+        self._emit_prefetch(ctx.session_key, hits=total, chars=len(block), duration_ms=duration_ms)
+        return block
+
     async def _state_build(self, ctx: TurnContext) -> str:
         await self.consolidator.maybe_consolidate_by_tokens(
             ctx.session,
@@ -2859,9 +2951,11 @@ class AgentLoop:
             ctx.session, ctx.persona_override,
             channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
         )
+        ctx.memory_prefetch = await self._memory_prefetch(ctx)
         ctx.initial_messages = self._build_initial_messages(
             ctx.msg, ctx.session, ctx.history, ctx.pending_summary,
             active_persona_soul=ctx.active_persona_soul,
+            memory_prefetch=ctx.memory_prefetch or None,
         )
         ctx.user_persisted_early = self._persist_user_message_early(
             ctx.msg, ctx.session
@@ -2949,6 +3043,7 @@ class AgentLoop:
                 ctx.initial_messages = self._build_initial_messages(
                     ctx.msg, ctx.session, ctx.history, ctx.pending_summary,
                     active_persona_soul=ctx.active_persona_soul,
+                    memory_prefetch=ctx.memory_prefetch or None,
                 )
                 continue
             break
@@ -3008,6 +3103,7 @@ class AgentLoop:
         emit_memory_usage_rollup(
             ctx.session_key, ctx.tools_used,
             pinned_chars=_pinned_chars, hot_chars=_hot_chars,
+            prefetch_hits=ctx.prefetch_hits,
         )
 
         ctx.turn_latency_ms = max(0, int((time.time() - ctx.turn_wall_started_at) * 1000))

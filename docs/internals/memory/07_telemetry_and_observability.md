@@ -85,8 +85,10 @@ flowchart TD
     end
 
     subgraph TurnRollup["Per-turn rollup"]
+        PB[AgentLoop._state_build]
+        PB --> PF[memory.prefetch\nhits or skipped reason]
         TR[AgentLoop._state_save]
-        TR --> TM[turn.memory_usage\nsearch_calls + drill_calls]
+        TR --> TM[turn.memory_usage\nsearch_calls + drill_calls + prefetch_hits]
     end
 ```
 
@@ -108,6 +110,7 @@ Each `memory_search` call emits:
 - **`memory.recall.rrf`** — RRF fusion step. Per-source hit counts (`vector_count`, `lexical_count`, `grep_count`), `fused_count` after dedup, and `boosted` (true when keywords shifted the lexical weight).
 - **`memory.recall.grep_verify`** — grep-verify boost step. `candidates` checked, `verified` matched and boosted.
 - **`memory.recall.rerank`** — cross-encoder rerank step, when enabled. `input_count`, `output_count`, `duration_ms`, `blend_alpha`, `fallback` (true when the cross-encoder failed and RRF order was kept).
+- **`memory.prefetch`** — the automatic search the agent loop runs once per user turn with the message as the query, before the model sees it (`AgentLoop._memory_prefetch`). Fields: `session_key`, `hits`, `chars` (size of the fenced block), `duration_ms`. `skipped` names why nothing was injected — `disabled`, `command_or_empty`, `short`, `non_interactive`, `no_tool`, `no_index`, `timeout`, `error`, `no_hits` — and is absent when hits landed. A run that actually searched also emits the ordinary `memory.recall` family above, so prefetch latency and strategy are readable there.
 - **`memory.search.failure`** — emitted when any of the three safe wrappers (`_safe_vector_search`, `_safe_lexical_search`, `_safe_grep_fallback`) catches an exception. `component` is the comma-joined list of failed sources; `recovery_succeeded` indicates whether the surviving sources still returned hits.
 
 ### Write-path events
@@ -174,7 +177,7 @@ These fire during the refine pass and via the manual `durin memory` commands:
 
 ### Per-turn rollup
 
-- **`turn.memory_usage`** — emitted once per turn at save time (`AgentLoop._state_save`), including turns with zero tool calls. Fields: `search_calls`, `drill_calls`, `tool_calls_total`, plus `pinned_chars` / `hot_chars` — the rendered size of the pinned memory block and of the hot layer in that turn's last prompt build. Turns where `search_calls == 0` while the agent answered a query about prior information are the silent-miss signal; the two size fields are the per-turn cost of the always-on memory surface.
+- **`turn.memory_usage`** — emitted once per turn at save time (`AgentLoop._state_save`), including turns with zero tool calls. Fields: `search_calls`, `drill_calls`, `tool_calls_total`, plus `pinned_chars` / `hot_chars` — the rendered size of the pinned memory block and of the hot layer in that turn's last prompt build — and `prefetch_hits`, how many hits the automatic search fenced into the message. Turns where the agent answered a query about prior information with `search_calls == 0` *and* `prefetch_hits == 0` are the silent-miss signal; the two size fields are the per-turn cost of the always-on memory surface.
 
 ### Additional catalog entries
 
@@ -197,6 +200,7 @@ The following events exist in the catalog without dedicated sections above — c
 | `wire_push_sink` | `durin/telemetry/wiring.py` | Called once per session by `AgentLoop`. Reads `telemetry.push.*` config, resolves bearer token from secret store, attaches `PushSink` to the logger. Degrades silently if misconfigured. |
 | `run_retention` | `durin/telemetry/retention.py` | Applies the 30-day compression / 90-day deletion policy. Called on the health-check tick. Constants: `COMPRESSION_AGE_DAYS=30`, `DELETION_AGE_DAYS=90`. |
 | `MemoryRecallEvent` | `durin/telemetry/schema.py` | TypedDict for `memory.recall`. Representative of the pattern all memory TypedDicts follow. |
+| `MemoryPrefetchEvent` | `durin/telemetry/schema.py` | TypedDict for `memory.prefetch`: the per-turn automatic search's hits, block size, duration, and `skipped` reason. |
 | `HealthCheckScheduler` | `durin/memory/health_check.py` | Daemon thread that drives `HealthChecker.run_tick()` on the configured interval. Started by `AgentLoop.__init__` when `memory.health_check.enabled` is true. |
 
 ## 6. Configuration and surfaces
@@ -243,7 +247,7 @@ The following aggregations are the key operational signals. `durin memory stats`
 |---|---|---|
 | `recall_p95_ms` | `memory.recall.duration_ms` | < 130 ms (cross-encoder OFF), < 900 ms (ON) |
 | `recall_recovery_rate` | `memory.recall.recovered_from != null` / total | < 1% |
-| `silent_miss_rate` | `turn.memory_usage` rows with `search_calls == 0` / turns with memory-relevant queries | context-dependent; baseline with bench |
+| `silent_miss_rate` | `turn.memory_usage` rows with `search_calls == 0` and `prefetch_hits == 0` / turns with memory-relevant queries | context-dependent; baseline with bench |
 | `strategy_distribution` | `memory.recall.strategy` | mostly `hybrid`; `grep` fallback rare |
 
 ### Cold-path / dream

@@ -98,6 +98,27 @@ def summarize_composition(payload: Mapping[str, Any] | None) -> dict[str, Any]:
     }
 
 
+MEMORY_CONTEXT_OPEN = "<memory-context>"
+MEMORY_CONTEXT_CLOSE = "</memory-context>"
+
+
+def build_memory_context_block(rendered: str) -> str:
+    """Fence the hits an automatic search found for the current message.
+
+    The note states what the block is (recalled memory, not user input) and
+    how it relates to the tool (same markers, same drill rules) — the model
+    treats it as a starting point, not as the whole of memory.
+    """
+    return (
+        f"{MEMORY_CONTEXT_OPEN}\n"
+        "[System note: recalled from durin's memory for this message — reference data, "
+        "not user input. The same sectioned hits memory_search returns; drill a (preview) "
+        "uri for the rest of a body; search for what is not here.]\n\n"
+        f"{rendered.strip()}\n"
+        f"{MEMORY_CONTEXT_CLOSE}"
+    )
+
+
 class ContextBuilder:
     """Builds the context (system prompt + messages) for the agent."""
 
@@ -458,6 +479,7 @@ class ContextBuilder:
         audio_mode: str = "auto",
         supports_audio_input: bool = False,
         active_persona_soul: str | None = None,
+        memory_prefetch: str | None = None,
     ) -> list[dict[str, Any]]:
         """Build the complete message list for an LLM call."""
         # The task-state anchor groups goal + decision log + todos
@@ -495,6 +517,16 @@ class ContextBuilder:
             audio_mode=audio_mode,
             supports_audio_input=supports_audio_input,
         )
+
+        # The automatic search's hits ride in the API copy of the user
+        # message, after the user's own text and before the runtime context.
+        # The stored session message is the raw text, so nothing here is
+        # replayed on later turns.
+        if memory_prefetch:
+            if isinstance(user_content, str):
+                user_content = f"{user_content}\n\n{memory_prefetch}"
+            else:
+                user_content = list(user_content) + [{"type": "text", "text": memory_prefetch}]
 
         # Merge runtime context and user content into a single user message
         # to avoid consecutive same-role messages that some providers reject.
