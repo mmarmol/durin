@@ -348,7 +348,7 @@ For deeper coverage of individual subsystems, see the sibling docs:
 | `memory.library.awareness_abstracts` | `false` | Append each listed document's distilled abstract to its catalog line. |
 | `memory.prefetch.enabled` | `true` | Run one warm `memory_search` with the user message before the model sees it and fence the hits into that turn's copy of the message. |
 | `memory.prefetch.limit` | `3` | Hits requested from that search (warm level: headline + summary each). |
-| `memory.prefetch.max_chars` | `2500` | Cap on the recalled hits text, in characters, before fencing; longer output is cut with a note. |
+| `memory.prefetch.max_chars` | `2500` | Budget the search tool renders the recalled hits within, in characters; a hit past it becomes a pointer line instead of a full block. The loop's own cut afterwards is a safety net only. |
 | `memory.prefetch.min_query_chars` | `20` | Messages shorter than this are not searched. |
 | `memory.prefetch.timeout_s` | `5.0` | Seconds the search may take before the turn proceeds without it. |
 | `memory.prefetch.backoff_s` | `60.0` | After a timeout or error, skip the prefetch for this many seconds; 0 disables the backoff. |
