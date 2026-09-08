@@ -124,13 +124,17 @@ def _entity_composition(page: "EntityPage", *, excerpt_chars: int | None) -> str
 
     ``excerpt_chars=None`` renders the full, unbounded composition (cold
     level, and the ``body_length`` completeness probe). Otherwise
-    ``excerpt_chars`` bounds the ATTRIBUTES and BODY together — the name
-    line always renders whole regardless of budget. Attributes are cut
-    first (at the last whole-attribute boundary that fits; plainly if not
-    even the first one fits) and the body gets whatever budget is left,
-    which for a page with many attributes can be nothing: without this, a
-    page with a long attributes line could render a warm summary far past
-    ``excerpt_chars`` even though only the body was ever meant to be cut.
+    ``excerpt_chars`` bounds the whole composition: the name line always
+    renders whole (the only way past the bound is a name line longer than
+    the budget by itself), and the attributes line and the body share what
+    the name line leaves. Attributes are cut first (at the last
+    whole-attribute boundary that fits; plainly if not even the first one
+    fits) and the body gets whatever is left, which for a page with many
+    attributes can be nothing: without this, a page with a long attributes
+    line could render a warm summary far past ``excerpt_chars`` even
+    though only the body was ever meant to be cut. The attribute boundary
+    is the rendered ``"; "`` separator, so a value that itself contains
+    ``"; "`` can be cut inside that value.
     """
     from durin.memory.hot_layer import _render_attributes_line
     lines = [page.name + (f" (aliases: {', '.join(page.aliases[:5])})." if page.aliases else "")]
@@ -143,15 +147,17 @@ def _entity_composition(page: "EntityPage", *, excerpt_chars: int | None) -> str
             lines.append(body)
         return "\n".join(lines)
 
-    budget = excerpt_chars
-    if attrs:
+    # The name line spends budget too; the "\n" after it counts once
+    # anything follows.
+    budget = excerpt_chars - len(lines[0]) - 1
+    if attrs and budget > 0:
         if len(attrs) <= budget:
             lines.append(attrs)
-            budget -= len(attrs)
-            if body and budget > 0:
-                budget -= 1  # the "\n" that will separate attrs from body
+            budget -= len(attrs) + 1  # the "\n" that would precede a body
         else:
-            lines.append(_truncate_attrs_line(attrs, budget))
+            cut = _truncate_attrs_line(attrs, budget)
+            if cut:
+                lines.append(cut)
             budget = 0
     if body and budget > 0:
         lines.append(body[:budget])

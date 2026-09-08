@@ -93,7 +93,7 @@ def test_entity_composition_bounds_attrs_and_body_together() -> None:
 
     result = _entity_composition(page, excerpt_chars=excerpt_chars)
     name_line = page.name
-    assert len(result) <= excerpt_chars + len(name_line) + 1
+    assert len(result) <= excerpt_chars
 
     lines = result.split("\n")
     assert lines[0] == name_line
@@ -112,6 +112,27 @@ def test_entity_composition_bounds_attrs_and_body_together() -> None:
     # body is absent, which the rule explicitly allows.
 
 
+def test_entity_composition_counts_a_long_name_line_against_the_budget() -> None:
+    """A page whose name and aliases line is long spends budget too: the
+    name line renders whole and the attributes and body fit in what it
+    leaves, so the whole composition stays within `excerpt_chars`."""
+    page = EntityPage(
+        type="project", name="El Ojo en el Abismo — campaña homebrew del Norte",
+        aliases=["Ojo en el Abismo", "El Ojo", "campaña del Abismo", "OEA", "Abismo"],
+        attributes=_many_attributes(40),
+        body="Campaña de ocho misiones en los Reinos Olvidados del Norte. " * 50,
+    )
+    excerpt_chars = 600
+    result = _entity_composition(page, excerpt_chars=excerpt_chars)
+    lines = result.split("\n")
+    assert lines[0].startswith("El Ojo en el Abismo") and "(aliases: " in lines[0]
+    assert len(lines[0]) > 100
+    assert len(result) <= excerpt_chars
+    assert lines[1].startswith("Attributes: ")
+    full_attrs = _render_attributes_line(page.attributes)
+    assert full_attrs.startswith(lines[1])
+
+
 def test_entity_composition_cuts_the_attrs_line_plainly_when_even_the_first_attribute_overflows() -> None:
     page = EntityPage(
         type="person", name="Zorak", aliases=[],
@@ -122,8 +143,10 @@ def test_entity_composition_cuts_the_attrs_line_plainly_when_even_the_first_attr
     result = _entity_composition(page, excerpt_chars=excerpt_chars)
     lines = result.split("\n")
     full_attrs = _render_attributes_line(page.attributes)
-    assert lines[1] == full_attrs[:excerpt_chars]
+    attrs_budget = excerpt_chars - len("Zorak") - 1  # the name line spends budget too
+    assert lines[1] == full_attrs[:attrs_budget]
     assert len(lines) == 2  # body gets nothing
+    assert len(result) <= excerpt_chars
 
 
 def test_entity_composition_gives_body_the_remainder_when_attrs_fit() -> None:
@@ -178,5 +201,5 @@ def test_warm_entity_hit_with_many_attributes_bounds_the_whole_composition(tmp_p
     expected_full_len = len(_entity_composition(loaded, excerpt_chars=None))
 
     assert expected_summary in rendered
-    assert len(expected_summary) <= 600 + len(loaded.name) + 1
+    assert len(expected_summary) <= 600
     assert f", preview {len(expected_summary)}/{expected_full_len})" in rendered
