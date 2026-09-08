@@ -141,10 +141,8 @@ def test_pinned_context_includes_library_awareness(tmp_path):
     assert "A Book" in ctx
 
 
-def test_resolve_principal_channel_then_owner_then_anonymous():
-    cmap = {"slack:U1": "person:alex"}
-    assert resolve_principal("slack:U1", owner="person:marcelo", channel_map=cmap) == "person:alex"
-    assert resolve_principal("slack:U9", owner="person:marcelo", channel_map=cmap) == "person:marcelo"
+def test_resolve_principal_owner_then_anonymous():
+    assert resolve_principal("slack:U1", owner="person:marcelo") == "person:marcelo"
     assert resolve_principal(None) == ANONYMOUS
 
 
@@ -281,6 +279,28 @@ def test_resolve_pinned_refs_caches_within_ttl(tmp_path, monkeypatch):
 
     assert resolve_pinned_refs(tmp_path, ttl_s=0) == first
     assert calls == 2
+
+
+def test_pinned_refs_cache_stays_bounded(tmp_path):
+    """Many distinct workspaces sharing one process (e.g. several tenants, or
+    a test suite generating a fresh tmp_path per test) must not grow the
+    pinned-refs cache without bound, and an entry whose TTL has already
+    elapsed is dropped on the next insert rather than lingering forever."""
+    import time
+
+    from durin.memory import principal as principal_mod
+    from durin.memory.principal import resolve_pinned_refs
+
+    principal_mod._pinned_refs_cache.clear()
+    for i in range(40):
+        resolve_pinned_refs(tmp_path / f"ws{i}")
+    assert len(principal_mod._pinned_refs_cache) <= 16
+
+    principal_mod._pinned_refs_cache.clear()
+    stale_key = str(tmp_path / "stale")
+    principal_mod._pinned_refs_cache[stale_key] = (time.monotonic() - 1000, frozenset())
+    resolve_pinned_refs(tmp_path / "fresh")
+    assert stale_key not in principal_mod._pinned_refs_cache
 
 
 def test_library_awareness_is_titles_only_by_default(tmp_path):

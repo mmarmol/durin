@@ -375,8 +375,7 @@ For deeper coverage of individual subsystems, see the sibling docs:
 ### Principal resolution
 
 The principal is resolved from `memory.owner`; when it is unset the workspace
-resolves to `person:anonymous`. `resolve_principal` also accepts a per-channel
-map, but no configuration surface populates it today.
+resolves to `person:anonymous`.
 
 ### CLI surfaces
 

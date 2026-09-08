@@ -56,11 +56,13 @@ __all__ = [
 ANONYMOUS = "person:anonymous"
 
 
-def resolve_principal(channel_id: str | None, *, owner: str | None = None,
-                      channel_map: dict[str, str] | None = None) -> str:
-    """Who is the user for this message? channel → owner → anonymous."""
-    if channel_id and channel_map and channel_id in channel_map:
-        return channel_map[channel_id]
+def resolve_principal(channel_id: str | None, *, owner: str | None = None) -> str:
+    """Who is the user for this message? owner → anonymous.
+
+    ``channel_id`` is accepted for callers that resolve a principal per
+    channel (see :func:`resolve_owner_principal`) but does not affect the
+    result here — no configuration surface maps a channel to a principal.
+    """
     if owner:
         return owner
     return ANONYMOUS
@@ -150,31 +152,43 @@ def pinned_refs(
 # A few seconds of lag there is invisible; re-walking the entity tree per
 # search is not.
 _PINNED_REFS_TTL_S = 10.0
-_pinned_refs_cache: dict[tuple[str, str | None], tuple[float, frozenset[str]]] = {}
+# Cap on the cache's size: a process serving many workspaces (many tenants,
+# or a test suite handing it a fresh tmp_path per test) must not grow this
+# without bound.
+_PINNED_REFS_CACHE_MAX = 16
+_pinned_refs_cache: dict[str, tuple[float, frozenset[str]]] = {}
 
 
 def resolve_pinned_refs(
-    workspace: Path, *, channel: str | None = None, ttl_s: float = _PINNED_REFS_TTL_S,
+    workspace: Path, *, ttl_s: float = _PINNED_REFS_TTL_S,
 ) -> frozenset[str]:
     """``pinned_refs`` with the principal resolved the way the prompt build
     resolves it: the configured ``memory.owner``, else anonymous. Never
     raises — a workspace without a config file (tests, ad-hoc tools) just
     resolves to anonymous, and any failure degrades to an empty set.
 
-    Memoized per ``(workspace, channel)`` for ``ttl_s`` seconds; pass
-    ``ttl_s=0`` for a caller that must observe an ``always_on`` flip
-    immediately."""
-    cache_key = (str(workspace), channel)
+    Memoized per workspace for ``ttl_s`` seconds; pass ``ttl_s=0`` for a
+    caller that must observe an ``always_on`` flip immediately. On every
+    insert, entries older than ``ttl_s`` are swept and the cache is trimmed
+    to ``_PINNED_REFS_CACHE_MAX`` entries (oldest first) so it stays bounded."""
+    cache_key = str(workspace)
     if ttl_s > 0:
         hit = _pinned_refs_cache.get(cache_key)
         if hit is not None and (time.monotonic() - hit[0]) < ttl_s:
             return hit[1]
     try:
-        refs = pinned_refs(workspace, resolve_owner_principal(workspace, channel))
+        refs = pinned_refs(workspace, resolve_owner_principal(workspace))
     except Exception:  # noqa: BLE001 — never break a caller over a pinned lookup
         return frozenset()
     if ttl_s > 0:
-        _pinned_refs_cache[cache_key] = (time.monotonic(), refs)
+        now = time.monotonic()
+        for key, (inserted_at, _) in list(_pinned_refs_cache.items()):
+            if now - inserted_at >= ttl_s:
+                del _pinned_refs_cache[key]
+        _pinned_refs_cache[cache_key] = (now, refs)
+        while len(_pinned_refs_cache) > _PINNED_REFS_CACHE_MAX:
+            oldest_key = min(_pinned_refs_cache, key=lambda k: _pinned_refs_cache[k][0])
+            del _pinned_refs_cache[oldest_key]
     return refs
 
 
