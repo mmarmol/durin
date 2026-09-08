@@ -137,12 +137,19 @@ have neither block in their prompt).
 A warm rendering is bounded per hit and per response. Each hit's summary is cut
 to `memory.search.warm_excerpt_chars` characters (default 600); the
 completeness qualifier on its marker (`preview N/M` vs `complete`) reports how
-much of the full content that is. The whole rendering is additionally capped at
-`memory.search.warm_max_chars` characters (default 8000): once rendering the
-next hit in full would cross that budget, it and every hit after it — in any
-section — render as a one-line headline pointer instead (`- <headline>
-(<uri>; drill for the body)`), grouped under their own section like a full
-block would be. `level=cold` is exempt from both — it means "full bodies".
+much of the full content that is. A second budget,
+`memory.search.warm_max_chars` characters (default 8000), governs which blocks
+render in full: once the next hit's full block would cross it, that hit and
+every hit after it — in this section and any section still to come, a one-way
+ratchet rather than a per-hit re-check — render as a one-line headline pointer
+instead (`- <headline> (<uri>; drill for the body)`), grouped under their own
+section like a full block would be. Section headers and pointer lines sit
+outside this budget — they always print — so it bounds the full blocks, not a
+hard ceiling on the total rendered size. `level=cold` means full bodies for
+every class except raw session-turn hits: their backing file
+(`sessions/<key>.md`) is a rendered transcript, not the frontmatter+body shape
+the disk read expects, so cold still returns only the short snippet for
+those.
 
 Callers that construct `MemorySearchTool` directly, without an `app_config`
 (the webui / `graph_api.search_memory_api`, `tier2_judge`), still get the

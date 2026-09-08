@@ -64,14 +64,20 @@ def _session_summary_hit(workspace: Path, session_key: str, text: str) -> Sectio
     vector-backed search would produce for it: `summary` carries the whole
     materialised text, `body_length` the true full length, `snippet` a
     short headline — mirrors `VectorIndex._record_with_vector` /
-    `_effective_summary`."""
+    `_effective_summary`. `path` carries the on-disk path WITH its `.md`
+    suffix, the shape `_resolve_meta` actually produces (`vh.get("path")`
+    off the vector row, itself `str(rel_path)` of the `.md` file) — a bare
+    `path=""` here would silently skip the `.md`-doubling bug `_enrich_body`
+    had at cold level, since `_sectioned_to_result` would then fall back to
+    `hit.uri` (which never carries `.md`) instead."""
     write_session_summary(
         workspace, session_key, text, last_active="2026-05-20T10:00:00Z",
     )
     key = sanitize_session_key(session_key)
     uri = f"memory/session_summary/{key}"
     return SectionedHit(
-        uri=uri, type="session_summary", path="", score=1.0,
+        uri=uri, type="session_summary",
+        path=f"memory/session_summary/{key}.md", score=1.0,
         ts="2026-05-20", snippet=text[:49],
         summary=text, body_length=len(text),
     )
@@ -129,6 +135,136 @@ def test_cold_level_shows_the_whole_session_summary_text(
 
     assert text in rendered
     assert ", complete)" in rendered
+
+
+def test_cold_level_session_turn_hit_resolves_its_md_path_without_doubling(
+    tmp_path: Path,
+) -> None:
+    """The same `.md`-doubling class of bug fixed above for
+    `session_summary` also reaches a raw `session` (turn) hit, via a
+    different failure mode: its `path` is `sessions/<key>.md` — ONE path
+    segment, unlike `memory/<class>/<id>.md`'s two — so the pre-fix
+    `r.uri.split("/", 2)` raised `ValueError` (only 2 parts) and gave up
+    before ever building a wrong path. `_enrich_body`'s `uri.endswith
+    (".md")` branch resolves this shape directly instead of re-deriving
+    one, so it fixes this case too.
+
+    A real `sessions/<key>.md` transcript has no YAML frontmatter (see
+    `session_md.render_session_md` — it opens with a bare `# Session
+    <key>` heading), so `load_entry` could never parse one regardless of
+    this fix — that gap is pre-existing and untouched here. This test
+    writes a `save_entry`-shaped stand-in at that same single-segment
+    path so it isolates the path-resolution fix from that unrelated
+    format gap, exercised directly through `_sectioned_to_result` (the
+    call site `_enrich_body` fires from) rather than the full `execute()`
+    pipeline.
+    """
+    from durin.memory.schema import MemoryEntry
+    from durin.memory.storage import save_entry
+
+    key = "cli_turn-test"
+    text = "the full raw turn text a cold-level drill should return"
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir(parents=True)
+    save_entry(
+        MemoryEntry(id=key, headline="turn", body=text),
+        sessions_dir / f"{key}.md",
+    )
+
+    hit = SectionedHit(
+        uri=f"sessions/{key}.md", type="session",
+        path=f"sessions/{key}.md", score=1.0, ts="2026-05-20",
+        snippet="turn snippet", body_length=len(text),
+    )
+    tool = MemorySearchTool(workspace=tmp_path)
+    result = tool._sectioned_to_result(
+        hit, level="cold", cache={}, warm_excerpt_chars=600,
+    )
+
+    assert result is not None
+    assert result.body == text
+
+
+# ---------------------------------------------------------------------------
+# (c) reference hits also respect `warm_excerpt_chars` at warm level and
+# show the whole chunk at cold — `_attach_reference_bodies` previously
+# hardcoded a 600-char cut at every level, so cold never showed more than
+# warm did for the Library, the same class of bug C1 fixed for
+# session_summary.
+# ---------------------------------------------------------------------------
+
+
+def _make_reference_chunk_text(min_chars: int = 1200) -> str:
+    """A single-chunk (under the 384-token structural cap) reference body
+    with no leading heading/metadata line, so `strip_scraped_boilerplate`
+    passes it through unchanged and the chunk's `text` field round-trips
+    verbatim — verified empirically (`ingest_reference` + `reference_chunks`
+    on this exact shape produced one chunk, `len(chunk["text"]) ==
+    len(text)`) before writing the assertions below, not guessed."""
+    sentence = "The uroabdomen protocol needs careful monitoring of vitals."
+    text = sentence
+    while len(text) < min_chars:
+        text += " " + sentence
+    return text
+
+
+def _reference_hit(slug: str, idx: int) -> SectionedHit:
+    """The pipeline-shaped hit a real search would produce for a reference
+    chunk: fusion uri `reference:<slug>#<idx>` (no `memory/` prefix —
+    `_sectioned_to_result` adds it), matching `_attach_reference_bodies`'s
+    own prefix-stripping chain."""
+    return SectionedHit(
+        uri=f"reference:{slug}#{idx}", type="reference", path="",
+        score=1.0, snippet="a reference chunk",
+    )
+
+
+def test_warm_level_cuts_reference_hit_to_warm_excerpt_chars(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from durin.config.schema import Config
+    from durin.memory.reference import ingest_reference
+
+    cfg = Config()
+    cfg.memory.search.warm_excerpt_chars = 100
+    monkeypatch.setattr("durin.config.loader.load_config", lambda *a, **k: cfg)
+
+    text = _make_reference_chunk_text()
+    res = ingest_reference(tmp_path, "ref-warm-budget", text)
+    slug = res.ref.split(":", 1)[1]
+    hit = _reference_hit(slug, 0)
+    _stub_pipeline(monkeypatch, [hit])
+
+    tool = MemorySearchTool(workspace=tmp_path)
+    out = asyncio.run(
+        tool.execute(query="anything", scope="library", level="warm"),
+    )
+    rendered = out["sectioned_rendered"]
+
+    assert text[:100] in rendered
+    assert text[:101] not in rendered
+    assert f"preview 100/{len(text)}" in rendered
+
+
+def test_cold_level_shows_the_whole_reference_chunk_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from durin.memory.reference import ingest_reference
+
+    text = _make_reference_chunk_text()
+    res = ingest_reference(tmp_path, "ref-cold-budget", text)
+    slug = res.ref.split(":", 1)[1]
+    hit = _reference_hit(slug, 0)
+    _stub_pipeline(monkeypatch, [hit])
+
+    tool = MemorySearchTool(workspace=tmp_path)
+    out = asyncio.run(
+        tool.execute(query="anything", scope="library", level="cold"),
+    )
+    rendered = out["sectioned_rendered"]
+
+    assert text in rendered
+    assert "(complete)" in rendered
 
 
 # ---------------------------------------------------------------------------
@@ -230,6 +366,12 @@ def test_warm_response_budget_headline_fallback_when_twelve_hits_exceed_it(
     # Section order preserved: canonical still leads fragment even
     # though both sections carry hits past the budget.
     assert rendered.index("=== CANONICAL:") < rendered.index("## Fragment")
+    # The size bound holds end-to-end through the tool, not just at the
+    # renderer unit level (`test_sectioned_output.py`'s own
+    # `test_twelve_hits_all_represented_under_tight_budget` covers that) —
+    # the budget plus a generous per-hit allowance for the 13 hits that
+    # could each degrade to a headline-pointer line.
+    assert len(rendered) <= 4000 + 13 * 80
 
     payload = [p for t, p in events if t == "memory.recall"][0]
     assert payload["rendered_chars"] == len(rendered)

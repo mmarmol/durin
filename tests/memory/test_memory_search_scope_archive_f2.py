@@ -19,6 +19,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
+
 
 def _seed_archive(tmp_path: Path) -> None:
     """Place one archived episodic + one archived entity page so the
@@ -151,3 +153,60 @@ def test_scope_archive_respects_limit(tmp_path: Path) -> None:
         tool.execute(query="MATCHME", scope="archive", limit=5),
     )
     assert len(out["results"]) == 5
+
+
+def test_scope_archive_applies_warm_max_chars_and_emits_rendered_chars(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Archive used to render fully unbounded and skip `rendered_chars`
+    entirely — the same per-response budget the main path honours at warm
+    level (archive results always render at that level) must also bound
+    this path, and its `memory.recall` row must carry `rendered_chars` for
+    parity with every other scope.
+
+    Asserted by comparison (a tight budget renders strictly smaller than a
+    generous one for the same hits) rather than a hand-computed byte count,
+    which would be brittle against the snippet-window/marker-format details
+    `_run_archive_scope` and `render_sectioned` own."""
+    from durin.config.schema import Config
+
+    arch_dir = tmp_path / "memory" / "archive" / "episodic"
+    arch_dir.mkdir(parents=True)
+    for i in range(10):
+        (arch_dir / f"ep-{i:03d}.md").write_text(
+            f"---\nheadline: 'archived item {i}'\n"
+            f"summary: 'common token MATCHME {'x' * 200}'\n---\nBody {i}\n",
+            encoding="utf-8",
+        )
+
+    from durin.agent.tools.memory_search import MemorySearchTool
+    tool = MemorySearchTool(workspace=tmp_path)
+
+    loose_cfg = Config()
+    monkeypatch.setattr(
+        "durin.config.loader.load_config", lambda *a, **k: loose_cfg,
+    )
+    loose = asyncio.run(
+        tool.execute(query="MATCHME", scope="archive", limit=10),
+    )["sectioned_rendered"]
+
+    tight_cfg = Config()
+    tight_cfg.memory.search.warm_max_chars = 400
+    monkeypatch.setattr(
+        "durin.config.loader.load_config", lambda *a, **k: tight_cfg,
+    )
+    events: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        "durin.agent.tools.memory_search.emit_tool_event",
+        lambda t, d: events.append((t, d)),
+    )
+    tight = asyncio.run(
+        tool.execute(query="MATCHME", scope="archive", limit=10),
+    )["sectioned_rendered"]
+
+    assert len(tight) < len(loose)
+    assert "drill for the body" in tight
+    assert "drill for the body" not in loose
+
+    payload = [p for t, p in events if t == "memory.recall"][0]
+    assert payload["rendered_chars"] == len(tight)

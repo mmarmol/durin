@@ -185,15 +185,24 @@ def render_sectioned(
     order. Empty sections are omitted; if no hits exist the function
     returns ``""``.
 
-    ``max_chars`` bounds the total rendering size. Blocks render in
-    full, highest score first, until the next one would push the
-    running length past the budget; from that point on every remaining
-    hit — in this section and any section still to come — renders as a
-    one-line headline pointer (``- <headline> (<uri>; drill for the
-    body)``) instead, grouped under its own section like a full block
-    would be. A block is never partially cut: a hit is either rendered
-    whole or as a pointer. ``None`` (the default) renders every hit as
-    a full block, unbounded — the pre-budget behaviour.
+    ``max_chars`` governs which blocks render in full. Ordering is
+    section-major, score-minor: hits render section by section in
+    ``_SECTION_ORDER``, highest score first within each section — not
+    one ranking across the whole result set. Once a hit's full block
+    would push the running length past the budget, that hit and every
+    remaining hit — in this section and any section still to come —
+    renders as a one-line headline pointer (``- <headline> (<uri>;
+    drill for the body)``) instead, grouped under its own section like
+    a full block would be: a one-way ratchet, not a per-hit re-check —
+    a later section's hits degrade to pointers too even if individually
+    small, once an earlier section has tripped it (see
+    ``test_budget_ratchet_carries_across_sections`` in
+    ``tests/memory/test_sectioned_output.py``). A block is never
+    partially cut: a hit is either rendered whole or as a pointer.
+    Section headers and pointer lines sit outside the check and always
+    print, so ``max_chars`` bounds the full blocks rather than capping
+    the total rendering length. ``None`` (the default) renders every
+    hit as a full block, unbounded — the pre-budget behaviour.
     """
     by_section: dict[str, list[SectionedHit]] = {
         s: [] for s in _SECTION_ORDER
