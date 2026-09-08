@@ -227,3 +227,29 @@ describe("ThreadMessages — rejected interactive calls", () => {
     expect(screen.getByRole("button", { name: /tool/i })).toBeInTheDocument();
   });
 });
+
+describe("ThreadMessages — empty chip row", () => {
+  it("renders no wrapper when every chip in the row resolves to an empty label", () => {
+    const messages: UIMessage[] = [
+      {
+        id: "t1", role: "tool", kind: "trace", content: "", createdAt: 1,
+        toolEvents: [
+          { phase: "end", call_id: "m1", name: "memory_prefetch",
+            arguments: { query: "no matches", hits: 0 } },
+        ],
+      },
+      { id: "a1", role: "assistant", content: "done", createdAt: 2 },
+    ];
+    const { container } = render(
+      <ThreadMessages messages={messages} isStreaming={false} />,
+    );
+    const rows = Array.from(container.firstElementChild?.children ?? []);
+    // The empty recall's chip has nothing to show and the tool event
+    // carried no other trace content, so the row contributes no wrapper
+    // div at all — only the trailing assistant message renders, as the
+    // first (and only) unit, so it gets no leftover top margin either.
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toHaveTextContent("done");
+    expect(rows[0]).not.toHaveClass("mt-2");
+  });
+});

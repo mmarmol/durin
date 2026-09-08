@@ -79,6 +79,34 @@ async def test_tool_call_bubble_phase_error_marks_error() -> None:
 
 
 @pytest.mark.asyncio
+async def test_end_only_bubble_keeps_result_body_across_mount() -> None:
+    """_render_tool_event and history replay both construct a bubble from an
+    `end` event and call update_from_event() on it in the same tick, before
+    Textual has attached `#tc-body` (no prior `start` bubble exists for the
+    call_id, e.g. today's end-only memory_prefetch frame). update_from_event
+    can only cache the result renderable at that point; on_mount must render
+    that cache instead of clobbering it with the running-state body."""
+    app = DurinApp(agent_loop=None)
+    async with app.run_test() as pilot:
+        chat = app.query_one(ChatView)
+        event = {
+            "version": 1, "phase": "end", "call_id": "x10",
+            "name": "memory_prefetch",
+            "arguments": {"query": "how does retry work", "hits": 3},
+            "result": {"output": "found 3 memories"},
+        }
+        bubble = ToolCallBubble(event)
+        chat.mount(bubble)
+        # No pause between mount and update_from_event: this is the exact
+        # race _render_tool_event and history replay hit.
+        bubble.update_from_event(event)
+        await pilot.pause()
+        body = _body_plain(bubble)
+        assert "found 3 memories" in body
+        assert "recalling memory…" not in body
+
+
+@pytest.mark.asyncio
 async def test_edit_file_body_contains_diff_lines() -> None:
     """edit_file body must show a unified diff with +/- markers."""
     app = DurinApp(agent_loop=None)
@@ -114,6 +142,59 @@ async def test_edit_file_body_contains_diff_lines() -> None:
         body = _body_plain(bubble)
         assert "-pipx install durin" in body
         assert "+pipx install --pre durin-agent" in body
+
+
+@pytest.mark.asyncio
+async def test_memory_prefetch_running_body_reads_recalling_memory() -> None:
+    """The recall's running body reads "recalling memory…" — there is no
+    hit count yet while the search is in flight, so echoing the query
+    argument back would overstate what's known so far."""
+    app = DurinApp(agent_loop=None)
+    async with app.run_test() as pilot:
+        chat = app.query_one(ChatView)
+        bubble = ToolCallBubble({
+            "version": 1, "phase": "start", "call_id": "memory_prefetch:t1",
+            "name": "memory_prefetch",
+            "arguments": {"query": "how does the retry loop work"},
+        })
+        chat.mount(bubble)
+        await pilot.pause()
+        body = _body_plain(bubble)
+        assert "recalling memory…" in body
+
+
+@pytest.mark.asyncio
+async def test_memory_prefetch_header_shows_the_hit_count() -> None:
+    """The recall's header reports how many memories came back, not the
+    query — the query is already visible in the user's own turn above, so
+    repeating it in the header is noise; the hit count is the one thing
+    the header doesn't already show. While the search is still running
+    (no hit count yet), the header must not claim a result that hasn't
+    arrived — it reads "recalling…" instead of "memories recalled"."""
+    app = DurinApp(agent_loop=None)
+    async with app.run_test() as pilot:
+        chat = app.query_one(ChatView)
+        bubble = ToolCallBubble({
+            "call_id": "memory_prefetch:t1",
+            "name": "memory_prefetch",
+            "arguments": {"query": "what did we decide about X", "hits": 2},
+            "phase": "end",
+        })
+        chat.mount(bubble)
+        await pilot.pause()
+        summary = bubble._summary_line()
+        assert "2 memories recalled" in summary
+        assert "what did we decide about X" not in summary
+
+        running = ToolCallBubble({
+            "call_id": "memory_prefetch:t1r",
+            "name": "memory_prefetch",
+            "arguments": {"query": "what did we decide about X"},
+            "phase": "start",
+        })
+        chat.mount(running)
+        await pilot.pause()
+        assert running._summary_line() == "recalling…"
 
 
 @pytest.mark.asyncio

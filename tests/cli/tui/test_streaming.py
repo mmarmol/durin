@@ -164,6 +164,26 @@ async def test_user_submission_publishes_inbound(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_offline_mode_placeholder_names_no_document() -> None:
+    """No agent loop: the assistant bubble names the situation, not a doc."""
+    app = DurinApp(agent_loop=None)
+    async with app.run_test() as pilot:
+        chat = app.query_one(ChatView)
+        inp = app.query_one("InputArea")
+        inp.focus()
+        await pilot.pause()
+        inp.value = "hola"
+        await pilot.press("enter")
+        await pilot.pause()
+        bubbles = list(chat.query(MessageBubble))
+        assert bubbles[-1]._role == "assistant"
+        assert bubbles[-1].body == (
+            "No agent loop is connected — this TUI is running offline, "
+            "so messages are not dispatched."
+        )
+
+
+@pytest.mark.asyncio
 async def test_blocking_ask_user_does_not_duplicate_in_tui(tmp_path) -> None:
     """E2E render check: a blocking ask_user's end frame must update the
     SAME bubble created at start — even when the user's answer bubble was
@@ -228,3 +248,125 @@ async def test_memory_prefetch_frame_keeps_the_working_indicator(tmp_path) -> No
         ])
         await pilot.pause()
         assert app._working_indicator is None
+
+
+@pytest.mark.asyncio
+async def test_memory_prefetch_start_frame_mounts_a_running_bubble(tmp_path) -> None:
+    """The recall's `start` frame precedes the search just like its `end`
+    frame — it must not drop the "thinking…" spinner either, and it mounts a
+    bubble whose running body reads "recalling memory…" (there is no hit
+    count yet, so echoing the query back would overpromise)."""
+    from durin.cli.tui.widgets import ToolCallBubble
+
+    bus = MessageBus()
+    app = DurinApp(agent_loop=_fake_agent_loop(bus, tmp_path))
+    async with app.run_test() as pilot:
+        app._show_working_indicator()
+        assert app._working_indicator is not None
+
+        await _inject(bus, "", _progress=True, _tool_hint=True, _tool_events=[
+            {"version": 1, "phase": "start", "call_id": "memory_prefetch:t2",
+             "name": "memory_prefetch",
+             "arguments": {"query": "how does the retry loop work"}},
+        ])
+        await pilot.pause()
+        assert app._working_indicator is not None
+
+        chat = app.query_one(ChatView)
+        bubbles = list(chat.query(ToolCallBubble))
+        assert len(bubbles) == 1
+        assert bubbles[0].has_class("running")
+        from tests.cli.tui.test_tool_call_bubble import _body_plain
+        assert "recalling memory…" in _body_plain(bubbles[0])
+
+
+@pytest.mark.asyncio
+async def test_memory_prefetch_empty_recall_leaves_no_bubble(tmp_path) -> None:
+    """An empty recall (`hits: 0`) is not worth a permanent block in the
+    transcript: the `end` frame removes the bubble the `start` frame mounted
+    instead of finalising it into a 0-result block."""
+    from durin.cli.tui.widgets import ToolCallBubble
+
+    bus = MessageBus()
+    app = DurinApp(agent_loop=_fake_agent_loop(bus, tmp_path))
+    async with app.run_test() as pilot:
+        chat = app.query_one(ChatView)
+        await _inject(bus, "", _tool_hint=True, _tool_events=[
+            {"version": 1, "phase": "start", "call_id": "memory_prefetch:t3",
+             "name": "memory_prefetch", "arguments": {"query": "no matches here"}},
+        ])
+        await pilot.pause()
+        assert len(list(chat.query(ToolCallBubble))) == 1
+
+        await _inject(bus, "", _tool_hint=True, _tool_events=[
+            {"version": 1, "phase": "end", "call_id": "memory_prefetch:t3",
+             "name": "memory_prefetch",
+             "arguments": {"query": "no matches here", "hits": 0},
+             "result": {"refs": []}},
+        ])
+        await pilot.pause()
+        assert list(chat.query(ToolCallBubble)) == []
+
+
+@pytest.mark.asyncio
+async def test_memory_prefetch_empty_recall_decrements_cluster_tool_count(tmp_path) -> None:
+    """The `start` frame's bubble lands inside an ActivityCluster, which
+    counts it via add_tool_step(); dropping the bubble on an empty recall
+    must mirror that with remove_tool_step() or the collapsed cluster
+    header keeps claiming a tool ran with nothing left inside to show for
+    it."""
+    from durin.cli.tui.widgets import ActivityCluster, ToolCallBubble
+
+    bus = MessageBus()
+    app = DurinApp(agent_loop=_fake_agent_loop(bus, tmp_path))
+    async with app.run_test() as pilot:
+        chat = app.query_one(ChatView)
+        await _inject(bus, "", _tool_hint=True, _tool_events=[
+            {"version": 1, "phase": "start", "call_id": "memory_prefetch:t4",
+             "name": "memory_prefetch", "arguments": {"query": "no matches here"}},
+        ])
+        await pilot.pause()
+        cluster = chat.query_one(ActivityCluster)
+        assert cluster._tool_count == 1
+
+        await _inject(bus, "", _tool_hint=True, _tool_events=[
+            {"version": 1, "phase": "end", "call_id": "memory_prefetch:t4",
+             "name": "memory_prefetch",
+             "arguments": {"query": "no matches here", "hits": 0},
+             "result": {"refs": []}},
+        ])
+        await pilot.pause()
+        assert list(chat.query(ToolCallBubble)) == []
+        assert cluster._tool_count == 0
+
+
+@pytest.mark.asyncio
+async def test_memory_prefetch_empty_recall_removes_an_emptied_cluster(tmp_path) -> None:
+    """An empty recall that is a turn's only activity must not leave a
+    bordered ActivityCluster shell with nothing inside: dropping the bubble
+    that was the cluster's last child drops the cluster too, and clears
+    _active_cluster so the next tool event starts a fresh one instead of
+    mounting into the removed cluster."""
+    from durin.cli.tui.widgets import ActivityCluster, ToolCallBubble
+
+    bus = MessageBus()
+    app = DurinApp(agent_loop=_fake_agent_loop(bus, tmp_path))
+    async with app.run_test() as pilot:
+        chat = app.query_one(ChatView)
+        await _inject(bus, "", _tool_hint=True, _tool_events=[
+            {"version": 1, "phase": "start", "call_id": "memory_prefetch:t5",
+             "name": "memory_prefetch", "arguments": {"query": "no matches here"}},
+        ])
+        await pilot.pause()
+        assert len(list(chat.query(ActivityCluster))) == 1
+
+        await _inject(bus, "", _tool_hint=True, _tool_events=[
+            {"version": 1, "phase": "end", "call_id": "memory_prefetch:t5",
+             "name": "memory_prefetch",
+             "arguments": {"query": "no matches here", "hits": 0},
+             "result": {"refs": []}},
+        ])
+        await pilot.pause()
+        assert list(chat.query(ToolCallBubble)) == []
+        assert list(chat.query(ActivityCluster)) == []
+        assert app._active_cluster is None

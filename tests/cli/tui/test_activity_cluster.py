@@ -42,6 +42,22 @@ async def test_cluster_counts_reasoning_and_tools():
 
 
 @pytest.mark.asyncio
+async def test_remove_tool_step_floors_at_zero():
+    """remove_tool_step() on an already-zero count never goes negative."""
+    from textual.app import App, ComposeResult
+
+    class Host(App):
+        def compose(self) -> ComposeResult:
+            yield ActivityCluster()
+
+    async with Host().run_test() as pilot:
+        cluster = pilot.app.query_one(ActivityCluster)
+        assert cluster._tool_count == 0
+        cluster.remove_tool_step()
+        assert cluster._tool_count == 0
+
+
+@pytest.mark.asyncio
 async def test_cluster_finalize_shows_done():
     """finalize() switches header to 'Done' and collapses."""
     from textual.app import App, ComposeResult

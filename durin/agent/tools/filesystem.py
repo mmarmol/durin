@@ -381,6 +381,7 @@ class ReadFileTool(_FsTool):
                     "kind": "text",
                     "verbatim": True,
                     "result_chars": len(text),
+                    "dedup": False,
                 })
                 return text
 

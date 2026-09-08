@@ -2144,7 +2144,28 @@
       "openPanel": "Open work panel"
     },
     "queuedChip": "Queued — read when the current work finishes",
-    "steerChip": "Steer"
+    "steerChip": "Steer",
+    "chips": {
+      "spawn": "spawn {{name}}",
+      "tasks": "tasks {{action}}{{id}}",
+      "cron": "cron {{action}} {{name}}",
+      "message": "{{channel}}",
+      "messageDefault": "message",
+      "sleep": "{{reason}}",
+      "sleepDefault": "sleep {{seconds}}s",
+      "goalCompleted": "goal completed",
+      "longTask": "{{summary}}",
+      "longTaskDefault": "long task",
+      "planMode": "plan mode",
+      "memorySaved": "memory saved",
+      "entityUpdated": "{{ref}}",
+      "entityUpdatedDefault": "entity updated",
+      "memoryForgot": "forgot {{uri}}",
+      "memoriesRecalling": "recalling memory…",
+      "memoriesRecalled_one": "{{count}} memory recalled",
+      "memoriesRecalled_other": "{{count}} memories recalled",
+      "skillImport": "import {{source}}"
+    }
   },
   "lightbox": {
     "title": "Image preview",

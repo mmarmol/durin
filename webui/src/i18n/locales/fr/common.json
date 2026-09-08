@@ -2057,7 +2057,28 @@
       "openPanel": "Ouvrir le panneau de travail"
     },
     "queuedChip": "En file — à lire une fois le travail en cours terminé",
-    "steerChip": "Orienter"
+    "steerChip": "Orienter",
+    "chips": {
+      "spawn": "créer {{name}}",
+      "tasks": "tâches {{action}}{{id}}",
+      "cron": "cron {{action}} {{name}}",
+      "message": "{{channel}}",
+      "messageDefault": "message",
+      "sleep": "{{reason}}",
+      "sleepDefault": "attente {{seconds}} s",
+      "goalCompleted": "objectif terminé",
+      "longTask": "{{summary}}",
+      "longTaskDefault": "tâche longue",
+      "planMode": "mode plan",
+      "memorySaved": "mémoire enregistrée",
+      "entityUpdated": "{{ref}}",
+      "entityUpdatedDefault": "entité mise à jour",
+      "memoryForgot": "oublier {{uri}}",
+      "memoriesRecalling": "rappel de mémoire…",
+      "memoriesRecalled_one": "{{count}} souvenir récupéré",
+      "memoriesRecalled_other": "{{count}} souvenirs récupérés",
+      "skillImport": "importer {{source}}"
+    }
   },
   "lightbox": {
     "title": "Aperçu de l’image",

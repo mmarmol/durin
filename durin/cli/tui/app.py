@@ -1,8 +1,8 @@
 """DurinApp — Textual TUI for durin.
 
-D5.3 wires the AgentLoop bus into the TUI: user submissions publish
-inbound messages; a background worker drains outbound messages and
-streams them into the ChatView.
+Wires the AgentLoop bus into the TUI: user submissions publish inbound
+messages; a background worker drains outbound messages and streams them
+into the ChatView.
 
 Metadata flags consumed off OutboundMessage.metadata, matching the
 legacy CLI's ``_consume_outbound`` semantics so behaviour stays
@@ -34,7 +34,14 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Input
 
 from durin import __version__ as DURIN_VERSION  # noqa: N812 — descriptive version alias
-from durin.cli.tui.widgets import ChatView, FooterBar, GoalBanner, HeaderBar, InputArea, MessageBubble
+from durin.cli.tui.widgets import (
+    ChatView,
+    FooterBar,
+    GoalBanner,
+    HeaderBar,
+    InputArea,
+    MessageBubble,
+)
 from durin.cli.tui.widgets.footer_bar import payload_from_loop
 
 __all__ = ["DurinApp", "run_durin_tui"]
@@ -488,10 +495,9 @@ class DurinApp(App[None]):
         # the _stream_delta path in _consume_outbound.
         self._current_assistant_bubble = chat.add_message("assistant", "")
         if self._agent_loop is None:
-            # Offline / test mode — keep the D5.2 placeholder behaviour.
             self._current_assistant_bubble.body = (
-                "Streaming + agent dispatch land in D5.3 — see "
-                "docs/10_textual_migration.md."
+                "No agent loop is connected — this TUI is running offline, "
+                "so messages are not dispatched."
             )
             return
         # Spinner: shows "thinking…" between submit and first delta.
@@ -576,15 +582,47 @@ class DurinApp(App[None]):
 
     def _render_tool_event(self, event: dict[str, Any]) -> None:
         """Add or update a ToolCallBubble for one tool-call lifecycle event."""
-        from durin.cli.tui.widgets import ToolCallBubble
+        from durin.cli.tui.widgets import ActivityCluster, ToolCallBubble
 
         call_id = str(event.get("call_id") or "")
         phase = str(event.get("phase") or "")
+        name = str(event.get("name") or "")
+
+        # An empty recall is not worth a permanent block in the transcript:
+        # drop the bubble the `start` frame mounted (if any) instead of
+        # finalising it into a 0-result block.
+        if name == "memory_prefetch" and phase == "end":
+            arguments = event.get("arguments")
+            hits = arguments.get("hits") if isinstance(arguments, dict) else None
+            if hits == 0:
+                bubble = self._tool_bubbles.pop(call_id, None)
+                if bubble is not None:
+                    # The bubble was counted by the cluster's
+                    # add_tool_step() when it was mounted; dropping it here
+                    # without the matching decrement would leave the
+                    # collapsed header claiming a tool ran with nothing
+                    # left inside to show for it.
+                    parent = bubble.parent
+                    if isinstance(parent, ActivityCluster):
+                        parent.remove_tool_step()
+                    try:
+                        bubble.remove()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    # If that was the cluster's last child, drop the
+                    # cluster too instead of leaving a bordered shell with
+                    # nothing inside it.
+                    if isinstance(parent, ActivityCluster) and parent.is_empty():
+                        if self._active_cluster is parent:
+                            self._active_cluster = None
+                        try:
+                            parent.remove()
+                        except Exception:  # noqa: BLE001
+                            pass
+                return
 
         if phase == "start" or call_id not in self._tool_bubbles:
             try:
-                from durin.cli.tui.widgets import ToolCallBubble
-
                 bubble = ToolCallBubble(event)
                 cluster = self._get_or_create_cluster()
                 if cluster is not None:

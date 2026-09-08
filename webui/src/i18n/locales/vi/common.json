@@ -2057,7 +2057,27 @@
       "openPanel": "Mở bảng công việc"
     },
     "queuedChip": "Đã xếp hàng — sẽ đọc khi công việc hiện tại xong",
-    "steerChip": "Điều hướng"
+    "steerChip": "Điều hướng",
+    "chips": {
+      "spawn": "tạo {{name}}",
+      "tasks": "tác vụ {{action}}{{id}}",
+      "cron": "cron {{action}} {{name}}",
+      "message": "{{channel}}",
+      "messageDefault": "tin nhắn",
+      "sleep": "{{reason}}",
+      "sleepDefault": "chờ {{seconds}} giây",
+      "goalCompleted": "mục tiêu hoàn tất",
+      "longTask": "{{summary}}",
+      "longTaskDefault": "tác vụ dài",
+      "planMode": "chế độ kế hoạch",
+      "memorySaved": "trí nhớ đã lưu",
+      "entityUpdated": "{{ref}}",
+      "entityUpdatedDefault": "thực thể đã cập nhật",
+      "memoryForgot": "quên {{uri}}",
+      "memoriesRecalling": "đang truy xuất ký ức…",
+      "memoriesRecalled_other": "{{count}} ký ức đã truy xuất",
+      "skillImport": "nhập {{source}}"
+    }
   },
   "lightbox": {
     "title": "Xem trước ảnh",
