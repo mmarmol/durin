@@ -283,7 +283,10 @@ def _render_block(section: str, hit: SectionedHit) -> str:
     if section == "canonical" and hit.derived_from:
         parts.append("Sources: " + ", ".join(hit.derived_from[:8]) + ".")
     if section not in ("canonical", "skill") and hit.entities:
-        parts.append(f"Entities: {', '.join(hit.entities)}")
+        # Sliced like `derived_from[:8]` above — a hit's entities list is
+        # unbounded upstream, and the tail is a pointer trail for the LLM
+        # to drill, not the full tag set.
+        parts.append(f"Entities: {', '.join(hit.entities[:8])}")
     from durin.memory.section_markers import end_marker
     parts.append(end_marker(section))
     return "\n".join(parts)

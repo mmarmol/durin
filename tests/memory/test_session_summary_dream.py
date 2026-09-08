@@ -81,7 +81,9 @@ def test_summary_keeps_the_entities_the_prompt_extracted(tmp_path: Path) -> None
 
     entry = load_entry(session_summary_path(tmp_path, "websocket:tagged"))
     assert entry.entities == ["person:marcelo", "project:durin"]
-    assert entry.topics == ["memory", "testing"]
+    # Order is recency (first-seen order), not alphabetical — this is the
+    # first span, so it's simply the order the prompt returned them in.
+    assert entry.topics == ["testing", "memory"]
 
 
 def test_active_session_is_left_to_the_compactor(tmp_path: Path) -> None:

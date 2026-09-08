@@ -349,6 +349,33 @@ def test_embed_text_respects_char_budget() -> None:
     assert text.startswith("H" * 100)
 
 
+def test_embed_text_tag_lines_never_starve_the_body() -> None:
+    """A session summary's entities/topics union grows for the life of its
+    key (bounded at the store level, but other producers are free to carry
+    large lists too). Regardless of how many tags an entry holds, the
+    Entities:/Topics: lines must not consume so much of the char budget
+    that the body — the embedder's actual semantic signal — gets none of
+    it."""
+    from durin.memory.schema import MemoryEntry
+
+    entry = MemoryEntry(
+        id="x",
+        headline="h",
+        summary="s",
+        entities=[f"person:very-long-descriptive-entity-name-{i:03d}" for i in range(50)],
+        topics=[f"a-fairly-long-descriptive-topic-label-{i:03d}" for i in range(50)],
+        body="distinctive body prose that must survive the tag budget",
+    )
+    text = VectorIndex._embed_text(entry)
+    assert "distinctive body prose that must survive the tag budget" in text
+    # The tag lists were long enough to blow way past the budget on their
+    # own, so the tail of each list must have been dropped — proof the
+    # sub-budget actually bounded them rather than merely leaving
+    # leftovers by chance.
+    assert "person:very-long-descriptive-entity-name-049" not in text
+    assert "a-fairly-long-descriptive-topic-label-049" not in text
+
+
 # ---------------------------------------------------------------------------
 # Audit H4 (2026-05-29): summary fallback at vector-index write time
 # ---------------------------------------------------------------------------

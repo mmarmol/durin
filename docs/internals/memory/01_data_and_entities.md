@@ -134,7 +134,7 @@ valid_from: 2026-06-01              # optional date
 <markdown body — free-form prose>
 ```
 
-`entities` entries are validated as strict `<type>:<value>` at write time. `topics` are free-form short subject labels with no shape contract — an open vocabulary, indexed as extra retrieval signal alongside the entity refs. `source_refs` and `related` are stored as Obsidian wikilinks on disk (`[[uri]]`) and stripped to plain strings in memory. `extra="forbid"` — no unknown frontmatter keys are allowed.
+`entities` entries are validated as strict `<type>:<value>` at write time. `topics` are free-form short subject labels with no shape contract — an open vocabulary, indexed as extra retrieval signal alongside the entity refs; the field is available to every class in this schema, but today only session-summary entries populate it. `source_refs` and `related` are stored as Obsidian wikilinks on disk (`[[uri]]`) and stripped to plain strings in memory. `extra="forbid"` — no unknown frontmatter keys are allowed, which makes `topics` forward-only: entries written from here on carry it, but an older durin build's `MemoryEntry` (predating the field) raises on load rather than silently ignoring it.
 
 ### Entity page schema (EntityPage)
 

@@ -136,6 +136,36 @@ def test_scope_archive_excludes_non_archived_content(tmp_path: Path) -> None:
         assert "active" not in (hit.get("summary", "") + hit.get("headline", "")).lower()
 
 
+def test_scope_archive_surfaces_entities(tmp_path: Path) -> None:
+    """Archived hits carry their own `entities` frontmatter, same as the
+    main search path — the archive walk must not hardcode an empty tuple
+    and silently drop the `Entities:` tail and the `results[].entities`
+    field."""
+    from durin.agent.tools.memory_search import MemorySearchTool
+
+    arch_ep = tmp_path / "memory" / "archive" / "episodic"
+    arch_ep.mkdir(parents=True)
+    (arch_ep / "ep-001.md").write_text(
+        "---\n"
+        "headline: 'Trip to Paris'\n"
+        "summary: 'Visited the Louvre with Marcelo.'\n"
+        "entities: ['person:marcelo', 'city:paris']\n"
+        "valid_from: '2024-04-10'\n"
+        "archived_at: '2024-09-12T10:00:00Z'\n"
+        "archived_into: 'person:marcelo'\n"
+        "---\n"
+        "Body content about the Paris trip.\n",
+        encoding="utf-8",
+    )
+
+    tool = MemorySearchTool(workspace=tmp_path)
+    out = asyncio.run(tool.execute(query="Louvre", scope="archive"))
+    hits = out["results"]
+    assert len(hits) >= 1
+    assert hits[0]["entities"] == ["person:marcelo", "city:paris"]
+    assert "Entities: person:marcelo, city:paris" in out["sectioned_rendered"]
+
+
 def test_scope_archive_respects_limit(tmp_path: Path) -> None:
     """Many archived entries → still respect the `limit` parameter."""
     arch_dir = tmp_path / "memory" / "archive" / "episodic"

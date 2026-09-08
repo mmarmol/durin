@@ -461,7 +461,7 @@ async def cmd_retry(ctx: CommandContext) -> OutboundMessage | None:
 
 async def _archive_closed_session(
     loop, key: str, snapshot: list[dict], last_active, prior_summary: str | None,
-    prior_tags: tuple[list[str], list[str]],
+    prior_tags: dict[str, list[str]],
 ) -> None:
     """File the conversation a ``/new`` just closed as its own record.
 
@@ -506,8 +506,8 @@ async def _archive_closed_session(
     try:
         write_session_summary(
             loop.workspace, closed_key, "\n\n---\n\n".join(parts), last_active=last_active,
-            entities=sorted(set(prior_tags[0]) | set(tags.get("entities") or [])),
-            topics=sorted(set(prior_tags[1]) | set(tags.get("topics") or [])),
+            entities=sorted(set(prior_tags.get("entities") or []) | set(tags.get("entities") or [])),
+            topics=sorted(set(prior_tags.get("topics") or []) | set(tags.get("topics") or [])),
         )
     except Exception:  # noqa: BLE001
         log.exception("/new closed-conversation record failed for %s", key)
@@ -519,18 +519,26 @@ async def cmd_new(ctx: CommandContext) -> OutboundMessage:
     await loop._cancel_active_tasks(ctx.key)
 
     from durin.memory.session_summary_store import (
+        _load_summary_entry,
         delete_session_summary,
-        get_session_summary,
-        get_session_summary_tags,
+        session_summary_path,
     )
 
     session = ctx.session or loop.sessions.get_or_create(ctx.key)
     snapshot = session.messages[session.last_consolidated:]
     last_active = session.updated_at            # before clear() stamps "now"
-    prior_summary, _ = get_session_summary(loop.workspace, ctx.key)
     # Read before the delete below: the record is filed in the background,
-    # by which time the key's summary file is gone.
-    prior_tags = get_session_summary_tags(loop.workspace, ctx.key)
+    # by which time the key's summary file is gone. One parse for both the
+    # text and its tags — `get_session_summary` + `get_session_summary_tags`
+    # would load and parse the same file twice.
+    prior_entry = _load_summary_entry(session_summary_path(loop.workspace, ctx.key))
+    prior_summary = (
+        (prior_entry.body or prior_entry.summary or None) if prior_entry else None
+    )
+    prior_tags: dict[str, list[str]] = (
+        {"entities": list(prior_entry.entities), "topics": list(prior_entry.topics)}
+        if prior_entry else {"entities": [], "topics": []}
+    )
     session.clear()
     loop.sessions.save(session)
     loop.sessions.invalidate(session.key)

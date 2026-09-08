@@ -56,7 +56,10 @@ def test_consecutive_duplicate_block_not_reappended(tmp_path: Path) -> None:
 
 def test_append_unions_entities_and_topics_across_blocks(tmp_path: Path) -> None:
     """Each span contributes its own tags; the entry accumulates the union
-    so a summary stays searchable by anything any of its spans mentioned."""
+    so a summary stays searchable by anything any of its spans mentioned.
+    Order is recency, not alphabetical: existing tags keep their position,
+    new ones land at the end — the ordering the cap (see the next test)
+    truncates from the front of."""
     append_session_summary_block(
         tmp_path, KEY, "- span one",
         entities=["project:durin"], topics=["search"],
@@ -66,8 +69,8 @@ def test_append_unions_entities_and_topics_across_blocks(tmp_path: Path) -> None
         entities=["person:marcelo"], topics=["dream", "search"],
     )
     entry = load_entry(session_summary_path(tmp_path, KEY))
-    assert entry.entities == ["person:marcelo", "project:durin"]
-    assert entry.topics == ["dream", "search"]
+    assert entry.entities == ["project:durin", "person:marcelo"]
+    assert entry.topics == ["search", "dream"]
 
 
 def test_append_records_new_tags_when_the_block_repeats(tmp_path: Path) -> None:
@@ -78,7 +81,34 @@ def test_append_records_new_tags_when_the_block_repeats(tmp_path: Path) -> None:
     text, _ = get_session_summary(tmp_path, KEY)
     entry = load_entry(session_summary_path(tmp_path, KEY))
     assert text.count("- same fact") == 1
-    assert entry.topics == ["dream", "search"]
+    assert entry.topics == ["search", "dream"]
+
+
+def test_append_caps_entities_keeping_the_most_recent(tmp_path: Path) -> None:
+    """The union accumulates for the life of the key (see the test above) —
+    left unbounded it would eventually starve `_embed_text`'s tag-line
+    budget and flood the rendered `Entities:` tail. 40 spans, one new
+    entity ref each, push well past the 24-entity cap: only the 24 most
+    recently seen survive, oldest dropped from the front."""
+    for i in range(40):
+        append_session_summary_block(
+            tmp_path, KEY, f"- span {i}", entities=[f"person:p{i:02d}"],
+        )
+    entry = load_entry(session_summary_path(tmp_path, KEY))
+    assert len(entry.entities) == 24
+    assert entry.entities == [f"person:p{i:02d}" for i in range(16, 40)]
+
+
+def test_append_caps_topics_keeping_the_most_recent(tmp_path: Path) -> None:
+    """Same cap, the topics side: bound is 12, tighter than entities'
+    24 because topic labels are meant to stay a short, high-signal set."""
+    for i in range(20):
+        append_session_summary_block(
+            tmp_path, KEY, f"- span {i}", topics=[f"topic-{i:02d}"],
+        )
+    entry = load_entry(session_summary_path(tmp_path, KEY))
+    assert len(entry.topics) == 12
+    assert entry.topics == [f"topic-{i:02d}" for i in range(8, 20)]
 
 
 def test_evicted_block_paths_are_carried_forward(tmp_path: Path) -> None:

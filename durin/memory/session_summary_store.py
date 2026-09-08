@@ -185,6 +185,16 @@ _SESSION_SUMMARY_MAX_CHARS = 16_000
 _SPAN_PATHS_PREFIX = "Files/paths examined in this span"
 _EVICTED_PATHS_PREFIX = "Files/paths from earlier spans (evicted): "
 _EVICTED_PATHS_MAX_CHARS = 1_200
+# The tag union (see `append_session_summary_block`) accumulates for the
+# life of the key — every compaction span and nightly pass adds to it, and
+# nothing ever removes a tag on its own. Left uncapped it eventually
+# starves `VectorIndex._embed_text`'s tag-line budget (spent before the
+# body) and floods `_render_block`'s `Entities:` tail. Capped to the most
+# recently seen tags so the file stays a compact, high-signal set no
+# matter how long the key has been compacting. Topics get a tighter cap
+# than entities — they're meant to stay a short set of subject labels.
+_MAX_SUMMARY_ENTITIES = 24
+_MAX_SUMMARY_TOPICS = 12
 
 
 def _salvage_paths(evicted_block: str, carried: list[str]) -> None:
@@ -219,6 +229,25 @@ def _build_carried_line(carried: list[str]) -> str:
     return _EVICTED_PATHS_PREFIX + "; ".join(kept)
 
 
+def _merge_tags(prior: list[str], new: Optional[Sequence[str]], cap: int) -> list[str]:
+    """Union *prior* and *new*, keeping the *cap* most recently seen tags.
+
+    *prior*'s own order is preserved and any tag in *new* not already
+    present is appended after it — recency order, not alphabetical, so
+    "most recently seen" is well-defined. Once the merged list exceeds
+    *cap*, entries are dropped from the front (the oldest survivors),
+    never from *new* preferentially over *prior* or vice versa — only
+    position (how long ago a tag was last (re)confirmed) decides.
+    """
+    merged = list(prior)
+    for tag in new or ():
+        if tag not in merged:
+            merged.append(tag)
+    if len(merged) > cap:
+        merged = merged[-cap:]
+    return merged
+
+
 def append_session_summary_block(
     workspace: Path,
     session_key: str,
@@ -239,9 +268,11 @@ def append_session_summary_block(
     system's job), discovered paths do not.
 
     ``entities`` / ``topics`` are this span's tags. The entry holds one
-    list of each for the whole file, so they accumulate as a sorted union
-    over every span — the summary stays reachable by anything any of its
-    spans was about, including spans whose text the cap later evicted. New
+    list of each for the whole file, so they accumulate as a recency-order
+    union over every span, capped to ``_MAX_SUMMARY_ENTITIES`` /
+    ``_MAX_SUMMARY_TOPICS`` — the summary stays reachable by anything any
+    of its *recent* spans was about, including spans whose text the block
+    cap already evicted, without growing the tag list without bound. New
     tags alone are reason enough to rewrite: a repeated block contributes
     nothing to the text but its tags must still land.
 
@@ -258,8 +289,8 @@ def append_session_summary_block(
         existing = (entry.body or entry.summary or None) if entry else None
         prior_entities = list(entry.entities) if entry else []
         prior_topics = list(entry.topics) if entry else []
-        merged_entities = sorted(set(prior_entities) | set(entities or ()))
-        merged_topics = sorted(set(prior_topics) | set(topics or ()))
+        merged_entities = _merge_tags(prior_entities, entities, _MAX_SUMMARY_ENTITIES)
+        merged_topics = _merge_tags(prior_topics, topics, _MAX_SUMMARY_TOPICS)
         tags_changed = (
             merged_entities != prior_entities or merged_topics != prior_topics
         )
@@ -324,9 +355,11 @@ def get_session_summary(
 def get_session_summary_tags(
     workspace: Path,
     session_key: str,
-) -> Tuple[list[str], list[str]]:
-    """``(entities, topics)`` of *session_key*'s summary, both empty when
-    there is none.
+) -> dict[str, list[str]]:
+    """``{"entities": [...], "topics": [...]}`` of *session_key*'s summary,
+    both empty when there is none — the same tags-dict shape every other
+    producer (``parse_consolidator_response``, ``Consolidator._collect_tags``)
+    uses, so callers don't juggle two different tag shapes.
 
     Callers that fold one summary's text into a different record — ``/new``
     building its closed-conversation record — carry its tags across too, or
@@ -334,8 +367,8 @@ def get_session_summary_tags(
     """
     entry = _load_summary_entry(session_summary_path(workspace, session_key))
     if entry is None:
-        return ([], [])
-    return (list(entry.entities), list(entry.topics))
+        return {"entities": [], "topics": []}
+    return {"entities": list(entry.entities), "topics": list(entry.topics)}
 
 
 def find_previous_session_summary(

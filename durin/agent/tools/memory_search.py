@@ -444,8 +444,11 @@ class MemorySearchTool(Tool):
         the agent knows to drill for the rest. At cold level, keep the raw
         chunk whole (``body=full``, ``summary`` cleared so it doesn't shadow
         ``body`` in ``_render_block``'s ``summary > body > snippet``
-        preference) — ``cold`` means full bodies for every class, references
-        included. Best-effort and bounded (post-cap)."""
+        preference) — at cold level every class gets full bodies, references
+        included, except a raw session-turn hit: its backing file is a
+        rendered transcript rather than an entry, so it keeps its indexed
+        excerpt at either level (see the ``level`` parameter description).
+        Best-effort and bounded (post-cap)."""
         import dataclasses
 
         from durin.memory.reference import (
@@ -1045,7 +1048,7 @@ class MemorySearchTool(Tool):
                 body=body,
                 class_name=class_name,
                 valid_from=str(front.get("valid_from", "") or ""),
-                entities=(),
+                entities=tuple(front.get("entities") or ()),
             ))
             if len(hits) >= limit:
                 break
