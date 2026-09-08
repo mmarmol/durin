@@ -3022,6 +3022,10 @@ class AgentLoop:
         if not rendered or session is None:
             return None
         pinned, hot, refs = rendered
+        # Read before SNAPSHOT_KEY is overwritten below: whether a stale
+        # snapshot was still sitting there is what tells "refresh_window"
+        # apart from "first_build" once nothing else marked the drop.
+        reason = self._eager_surface_freeze_reason(session)
         snapshot = EagerSnapshot(
             pinned=pinned,
             hot=hot,
@@ -3040,7 +3044,48 @@ class AgentLoop:
             principal=resolve_owner_principal(self.workspace),
         )
         session.metadata[SNAPSHOT_KEY] = snapshot.to_metadata()
+        self._emit_eager_surface(
+            session_key,
+            reason=reason,
+            turn=snapshot.turn,
+            pinned_chars=len(pinned),
+            hot_chars=len(hot),
+        )
         return snapshot
+
+    def _eager_surface_freeze_reason(self, session: Session) -> str:
+        """Why this build is freezing a fresh surface, for the
+        ``memory.eager_surface`` row ``_freeze_eager_surface`` is about to emit.
+
+        ``/new`` (``Session.clear()``) and a compaction round
+        (``Consolidator._post_compaction_hooks``) both pop the stored snapshot
+        immediately and leave ``eager_surface.DROP_REASON_KEY`` behind naming
+        why — by the time this build resolves nothing to reuse, the key is
+        simply absent either way, so without that marker "the session never
+        had one" and "something just cleared it" look identical. A snapshot
+        that failed ``snapshot_is_stale`` is left in place by
+        ``_resolve_eager_snapshot`` (nothing pops it there), so finding
+        ``SNAPSHOT_KEY`` still present is what separates ``refresh_window``
+        from a session that never stored one at all (``first_build``).
+        """
+        from durin.memory.eager_surface import DROP_REASON_KEY, SNAPSHOT_KEY
+
+        reason = session.metadata.pop(DROP_REASON_KEY, None)
+        if reason in ("new", "compaction"):
+            return reason
+        if session.metadata.get(SNAPSHOT_KEY) is not None:
+            return "refresh_window"
+        return "first_build"
+
+    def _emit_eager_surface(self, session_key: str, **data: Any) -> None:
+        """``memory.eager_surface`` goes straight to the session logger, same
+        as ``_emit_prefetch``: BUILD runs outside the per-run telemetry
+        binding."""
+        from durin.telemetry.logger import get_session_logger
+        with suppress(Exception):
+            get_session_logger(session_key).log(
+                "memory.eager_surface", {"session_key": session_key, **data}
+            )
 
     def _emit_prefetch(self, session_key: str, **data: Any) -> None:
         """``memory.prefetch`` goes straight to the session logger: BUILD runs

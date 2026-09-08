@@ -694,6 +694,7 @@ class ContextBuilder:
                     iteration=iteration,
                     session_key=session_key,
                     memory_prefetch=memory_prefetch,
+                    eager_snapshot=eager_snapshot,
                 )
             return messages
         messages.append({"role": current_role, "content": merged})
@@ -705,6 +706,7 @@ class ContextBuilder:
                 iteration=iteration,
                 session_key=session_key,
                 memory_prefetch=memory_prefetch,
+                eager_snapshot=eager_snapshot,
             )
         return messages
 
@@ -717,8 +719,15 @@ class ContextBuilder:
         iteration: int | None,
         session_key: str | None,
         memory_prefetch: str | None = None,
+        eager_snapshot: EagerSnapshot | None = None,
     ) -> None:
         """Emit ``context.composition`` with a per-tier token breakdown.
+
+        ``eager_snapshot``, when given, is the frozen surface this build
+        reused instead of rendering ``memory_pinned``/``memory_hot`` live —
+        its ``turn`` rides in the payload as ``eager_frozen_turn`` so
+        ``/status`` and the CLI footer can say which turn the two blocks
+        were actually taken on.
 
         Best-effort: any failure is silently swallowed — telemetry must
         never affect the user-facing turn.
@@ -811,6 +820,8 @@ class ContextBuilder:
                 payload["iteration"] = iteration
             if session_key is not None:
                 payload["session_key"] = session_key
+            if eager_snapshot is not None:
+                payload["eager_frozen_turn"] = eager_snapshot.turn
 
             # Cache the most recent payload so the footer and /status
             # can read it directly (no JSONL round-trip).

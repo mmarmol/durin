@@ -137,7 +137,12 @@ payload, rolled into the two buckets by `summarize_composition`
 (`durin/agent/context.py`) — the same rollup the TUI footer reads. The automatic
 prefetch gets a line of its own even though its block rides inside the current
 user message on the wire: its tokens are subtracted from the message's count, so
-recalled memory is never billed as something the user typed.
+recalled memory is never billed as something the user typed. When that turn's
+build reused a frozen eager memory surface (`memory.eager_surface`, see
+`06_prompts_and_instructions.md` §5.5) instead of rendering the pinned block and
+hot layer live, both infrastructure rows carry a "(frozen at turn N)" suffix
+naming the turn the snapshot was taken on — the CLI footer's `infra:` chip shows
+the same note.
 
 ### Agent execution
 

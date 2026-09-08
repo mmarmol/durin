@@ -1570,8 +1570,13 @@ class Consolidator:
         # buys the model an eager view that includes what the session wrote.
         # Saved immediately: the drop must not be lost if the turn that
         # triggered this round never reaches its own save.
-        from durin.memory.eager_surface import SNAPSHOT_KEY
+        from durin.memory.eager_surface import DROP_REASON_KEY, SNAPSHOT_KEY
         if session.metadata.pop(SNAPSHOT_KEY, None) is not None:
+            # Recorded so the next freeze's `memory.eager_surface` row reports
+            # "compaction" instead of "first_build" — by the time that build
+            # resolves nothing to reuse, the dropped key looks the same as a
+            # session that never stored one.
+            session.metadata[DROP_REASON_KEY] = "compaction"
             self.sessions.save(session)
         # Tier 2 C2: arm the post-compaction loop guard. The next
         # ``window_size`` tool calls on this session will be observed;

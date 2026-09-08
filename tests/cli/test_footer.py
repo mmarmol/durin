@@ -182,10 +182,12 @@ def test_footer_omits_cache_and_composition_on_boot(tmp_path: Path) -> None:
     assert payload["cache_pct"] is None
     assert payload["conv_pct"] is None
     assert payload["infra_pct"] is None
+    assert payload["eager_frozen_turn"] is None
     html = build_footer_html(payload)
     assert "cache:" not in html.value
     assert "conv:" not in html.value
     assert "infra:" not in html.value
+    assert "frozen at turn" not in html.value
 
 
 def test_footer_shows_cache_pct_after_first_call(tmp_path: Path) -> None:
@@ -220,6 +222,29 @@ def test_footer_shows_composition_after_first_build(tmp_path: Path) -> None:
     # 500/3700 = 13%, 3200/3700 = 86%.
     assert payload["conv_pct"] == 13
     assert payload["infra_pct"] == 86
+    assert payload["eager_frozen_turn"] is None
     html = build_footer_html(payload)
     assert "conv:13%" in html.value
     assert "infra:86%" in html.value
+    assert "frozen at turn" not in html.value
+
+
+def test_footer_shows_frozen_turn_suffix_on_infra_chip(tmp_path: Path) -> None:
+    """When the last composition build reused a frozen eager surface, the
+    infra chip names the turn it was taken on."""
+    loop = _fake_loop(tmp_path)
+    loop.context = SimpleNamespace(last_composition={
+        "stable_breakdown": {"identity": 500, "bootstrap": 900, "skills_catalog": 600},
+        "context_tokens": 0,
+        "volatile_tokens": 0,
+        "volatile_breakdown": {},
+        "history_msg_tokens": 400,
+        "current_msg_tokens": 100,
+        "tools_tokens": 1200,
+        "estimated_total": 3700,
+        "eager_frozen_turn": 5,
+    })
+    payload = build_footer_text(loop, "cli", "direct")
+    assert payload["eager_frozen_turn"] == 5
+    html = build_footer_html(payload)
+    assert "infra:86% (frozen at turn 5)" in html.value

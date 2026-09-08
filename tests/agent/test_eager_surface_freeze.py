@@ -67,6 +67,23 @@ class _FakeSearch:
         }}
 
 
+class _Rec:
+    """``get_session_logger`` drop-in that records every ``.log()`` call.
+
+    BUILD emits both ``memory.eager_surface`` and ``context.composition``
+    straight to the session logger — before the loop binds the per-run
+    telemetry ContextVar — so capturing them means monkeypatching
+    ``get_session_logger`` itself, the same technique
+    ``tests/agent/test_memory_prefetch.py`` uses for ``memory.prefetch``.
+    """
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict]] = []
+
+    def log(self, event_type, data=None):
+        self.events.append((event_type, dict(data or {})))
+
+
 def _write_entity(workspace: Path, ref: str, text: str, name: str) -> None:
     write_entity(
         workspace, ref,
@@ -736,3 +753,147 @@ async def test_a_system_message_build_forgets_the_surface_when_freeze_is_off(
 
     assert "company:bakery" in stable[1]["memory_hot"]
     assert SNAPSHOT_KEY not in session.metadata
+
+
+# ---------------------------------------------------------------------------
+# Observability: memory.eager_surface + context.composition's eager_frozen_turn
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_eager_surface_telemetry_fires_once_on_freeze_not_on_reuse(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """``memory.eager_surface`` reports the turn that actually rendered and
+    stored a fresh surface — never the turn that just reused it."""
+    _seed_workspace(tmp_path)
+    loop, stable = _make_loop(tmp_path)
+    rec = _Rec()
+    monkeypatch.setattr("durin.telemetry.logger.get_session_logger", lambda key, base_dir=None: rec)
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION)
+    )
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION)
+    )
+
+    rows = [d for t, d in rec.events if t == "memory.eager_surface"]
+    assert len(rows) == 1
+    assert rows[0]["reason"] == "first_build"
+    assert rows[0]["turn"] == 1
+    assert rows[0]["pinned_chars"] == len(stable[0]["memory_pinned"])
+    assert rows[0]["hot_chars"] == len(stable[0]["memory_hot"])
+
+
+@pytest.mark.asyncio
+async def test_eager_surface_telemetry_reason_new_after_slash_new(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """After ``/new`` the freeze that follows reports ``reason == "new"``,
+    not ``"first_build"`` — the marker `Session.clear()` leaves is what tells
+    the two apart, since both look identical from "nothing stored"."""
+    _seed_workspace(tmp_path)
+    loop, stable = _make_loop(tmp_path)
+    rec = _Rec()
+    monkeypatch.setattr("durin.telemetry.logger.get_session_logger", lambda key, base_dir=None: rec)
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION)
+    )
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content="/new")
+    )
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION)
+    )
+
+    rows = [d for t, d in rec.events if t == "memory.eager_surface"]
+    assert [r["reason"] for r in rows] == ["first_build", "new"]
+    # A fresh session's own first turn, numbered from its own empty history.
+    assert rows[1]["turn"] == 1
+
+
+@pytest.mark.asyncio
+async def test_eager_surface_telemetry_reason_compaction(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """A compaction round's drop reports ``reason == "compaction"`` on the
+    freeze that follows."""
+    _seed_workspace(tmp_path)
+    loop, stable = _make_loop(tmp_path)
+    loop.consolidator.decision_log_enabled = False
+    loop.consolidator.compaction_learnings_enabled = False
+    rec = _Rec()
+    monkeypatch.setattr("durin.telemetry.logger.get_session_logger", lambda key, base_dir=None: rec)
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION)
+    )
+    session = loop.sessions.get_or_create("websocket:c")
+    session.last_consolidated = len(session.messages)
+    await loop.consolidator._post_compaction_hooks(session, 0, True)
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION)
+    )
+
+    rows = [d for t, d in rec.events if t == "memory.eager_surface"]
+    assert [r["reason"] for r in rows] == ["first_build", "compaction"]
+
+
+@pytest.mark.asyncio
+async def test_eager_surface_telemetry_reason_refresh_window(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """A snapshot expired by ``refresh_after_min`` reports
+    ``reason == "refresh_window"`` — distinguished from ``first_build`` by
+    the stale key still being present a moment before the overwrite."""
+    _seed_workspace(tmp_path)
+    loop, stable = _make_loop(tmp_path)
+    loop.app_config = SimpleNamespace(
+        memory=SimpleNamespace(eager_surface=MemoryEagerSurfaceConfig(refresh_after_min=30))
+    )
+    rec = _Rec()
+    monkeypatch.setattr("durin.telemetry.logger.get_session_logger", lambda key, base_dir=None: rec)
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION)
+    )
+    session = loop.sessions.get_or_create("websocket:c")
+    aged = datetime(2026, 9, 8, 12, 0, tzinfo=timezone.utc)
+    session.metadata[SNAPSHOT_KEY] = {
+        **session.metadata[SNAPSHOT_KEY], "frozen_at": aged.isoformat(),
+    }
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION)
+    )
+
+    rows = [d for t, d in rec.events if t == "memory.eager_surface"]
+    assert [r["reason"] for r in rows] == ["first_build", "refresh_window"]
+
+
+@pytest.mark.asyncio
+async def test_composition_event_carries_eager_frozen_turn_only_when_reused(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """The build that freezes a surface still rendered it live — its
+    ``context.composition`` row carries no ``eager_frozen_turn``. The build
+    that reuses the stored snapshot does, naming the turn it was taken on."""
+    _seed_workspace(tmp_path)
+    loop, stable = _make_loop(tmp_path)
+    rec = _Rec()
+    monkeypatch.setattr("durin.telemetry.logger.get_session_logger", lambda key, base_dir=None: rec)
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION)
+    )
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION)
+    )
+
+    rows = [d for t, d in rec.events if t == "context.composition"]
+    assert len(rows) == 2
+    assert "eager_frozen_turn" not in rows[0]
+    assert rows[1]["eager_frozen_turn"] == 1

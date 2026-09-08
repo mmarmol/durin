@@ -129,6 +129,7 @@ def build_footer_text(
     cache_pct: int | None = None
     conv_pct: int | None = None
     infra_pct: int | None = None
+    eager_frozen_turn: int | None = None
     try:
         cache_payload = getattr(agent_loop, "_last_cache_usage", None)
         if cache_payload:
@@ -145,6 +146,10 @@ def build_footer_text(
             if total > 0:
                 conv_pct = 100 * summary["conversation_tokens"] // total
                 infra_pct = 100 * summary["infra_tokens"] // total
+            # Present only when the last build reused a frozen eager surface
+            # instead of rendering the pinned block / hot layer live — those
+            # two blocks are what infra_pct above partly measures.
+            eager_frozen_turn = comp_payload.get("eager_frozen_turn")
     except Exception:  # noqa: BLE001
         pass
 
@@ -163,6 +168,7 @@ def build_footer_text(
         "cache_pct": cache_pct,
         "conv_pct": conv_pct,
         "infra_pct": infra_pct,
+        "eager_frozen_turn": eager_frozen_turn,
     }
 
 
@@ -190,7 +196,10 @@ def build_footer_html(payload: dict[str, Any]) -> HTML:
         extras.append(f"cache:{payload['cache_pct']}%")
     if payload.get("conv_pct") is not None and payload.get("infra_pct") is not None:
         extras.append(f"conv:{payload['conv_pct']}%")
-        extras.append(f"infra:{payload['infra_pct']}%")
+        infra_chip = f"infra:{payload['infra_pct']}%"
+        if payload.get("eager_frozen_turn") is not None:
+            infra_chip += f" (frozen at turn {payload['eager_frozen_turn']})"
+        extras.append(infra_chip)
     extras_str = (" · " + " · ".join(extras)) if extras else ""
 
     return HTML(

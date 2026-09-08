@@ -160,6 +160,73 @@ def test_status_composition_section_handles_empty_payload():
     assert "Last turn — composition" not in content
 
 
+def test_status_composition_section_shows_frozen_turn_suffix():
+    """When the composition payload carries ``eager_frozen_turn`` (this
+    build reused a frozen eager surface), the two memory rows — and only
+    those two — get a "(frozen at turn N)" suffix."""
+    payload = {
+        "stable_tokens": 3000,
+        "stable_breakdown": {
+            "identity": 492, "bootstrap": 921,
+            "memory_pinned": 300, "memory_hot": 400,
+        },
+        "context_tokens": 0,
+        "volatile_tokens": 0,
+        "volatile_breakdown": {},
+        "history_msg_tokens": 418,
+        "current_msg_tokens": 55,
+        "tools_tokens": 1221,
+        "estimated_total": 5807,
+        "eager_frozen_turn": 3,
+    }
+    content = build_status_content(
+        version="0.1.0",
+        model="m",
+        start_time=1000000.0,
+        last_usage={"prompt_tokens": 0, "completion_tokens": 0},
+        context_window_tokens=128000,
+        session_msg_count=4,
+        context_tokens_estimate=0,
+        composition_payload=payload,
+    )
+    assert "Memory pinned" in content
+    assert "Memory hot layer" in content
+    lines = content.splitlines()
+    pinned_line = next(line for line in lines if "Memory pinned" in line)
+    hot_line = next(line for line in lines if "Memory hot layer" in line)
+    identity_line = next(line for line in lines if "Identity" in line)
+    assert "(frozen at turn 3)" in pinned_line
+    assert "(frozen at turn 3)" in hot_line
+    assert "(frozen at turn 3)" not in identity_line
+
+
+def test_status_composition_section_omits_frozen_suffix_when_live():
+    """No ``eager_frozen_turn`` in the payload (a live render) means no
+    suffix on the memory rows."""
+    payload = {
+        "stable_tokens": 700,
+        "stable_breakdown": {"memory_pinned": 300, "memory_hot": 400},
+        "context_tokens": 0,
+        "volatile_tokens": 0,
+        "volatile_breakdown": {},
+        "history_msg_tokens": 0,
+        "current_msg_tokens": 0,
+        "tools_tokens": 0,
+        "estimated_total": 700,
+    }
+    content = build_status_content(
+        version="0.1.0",
+        model="m",
+        start_time=1000000.0,
+        last_usage={"prompt_tokens": 0, "completion_tokens": 0},
+        context_window_tokens=128000,
+        session_msg_count=1,
+        context_tokens_estimate=0,
+        composition_payload=payload,
+    )
+    assert "frozen at turn" not in content
+
+
 def test_status_context_pct_prefers_the_compaction_trigger():
     """The meter is denominated by where compaction actually fires. The raw
     window and the consolidator's own input budget can differ from the trigger

@@ -36,6 +36,18 @@ from typing import Any
 # `_last_summary` is.
 SNAPSHOT_KEY = "_eager_surface"
 
+# session.metadata key recording why the last stored snapshot was dropped:
+# "new" when `Session.clear()` popped it, "compaction" when
+# `Consolidator._post_compaction_hooks` did. Set only when a snapshot
+# actually existed to drop, and consumed (popped) by the next freeze so
+# `memory.eager_surface` telemetry can tell "this session never had one"
+# (first_build, no marker) apart from "something just cleared it" (new /
+# compaction) — by the time a later build resolves nothing to reuse, the
+# stored snapshot is simply absent either way, so nothing else records why.
+# Registered in SessionManager._DERIVED_METADATA_KEYS, same sidecar split as
+# SNAPSHOT_KEY, so it survives the reload `/new` forces before the next turn.
+DROP_REASON_KEY = "_eager_surface_drop_reason"
+
 
 @dataclass(frozen=True)
 class EagerSnapshot:
