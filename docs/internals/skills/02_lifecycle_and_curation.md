@@ -235,7 +235,7 @@ there is no dream-side "hard" variant for it, because drafts are only ever
 built by the in-loop agent. The dream's `skill_write` instance runs in `hard`
 mode instead: the override parameter is ignored and an autonomous
 narration-only write cannot land — but the bounce is never silently lost. The
-hard door queues the rejected body in the suggestions bandeja as a `create`
+hard door queues the rejected body in the suggestions inbox as a `create`
 card (`skill_suggestions.add_gate_bounce`): the full body as a diff, the
 gate's reason, and an accept action that IS the user's explicit override
 (`apply_suggestion` replays it with `composition_override=True`, actor=user).
@@ -521,7 +521,7 @@ manual mode means the skill is the user's to control. Instead:
    `skill_suggestions.is_tombstoned` before being enqueued.
 4. A surviving proposal is written to `.suggestions.json` with a rendered
    unified diff (`make_patch`) for `evolve`, and surfaced in the webui Dream
-   Bandeja for the user to accept or reject.
+   Inbox for the user to accept or reject.
 
 Accepting a suggestion replays the recorded action against the live skill
 (`skill_suggestions.apply_suggestion`) and removes it from the queue. A failed
@@ -600,9 +600,9 @@ decisions about external content are never made silently.
 - **In-session tool** — `skill_observe` (`scope="core"`) is the only
   in-loop entry point that writes to the observation queue directly; it logs
   only and never mutates a skill (see `00_overview.md`'s tool table).
-- **WebUI** — the Dream section's Bandeja tab surfaces manual-skill
+- **WebUI** — the Dream section's Inbox tab surfaces manual-skill
   suggestions (accept/reject) alongside flagged memory pairs and quarantined
-  skills; see `../memory/05_dream_cold_path.md` §6 for the shared Bandeja
+  skills; see `../memory/05_dream_cold_path.md` §6 for the shared Inbox
   layout. The Skills panel (`SkillsView`) shows each skill's open-observation
   count as a badge and 30-day usage summary (see
   `03_telemetry_and_effectiveness.md` for what feeds those numbers).

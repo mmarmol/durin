@@ -16,7 +16,7 @@ deadlocking each other.
 
 ## 2. Mental model
 
-Three ideas explain every coordination decision in the codebase.
+A handful of ideas explain every coordination decision in the codebase.
 
 **Files are the source of truth; indexes are derived.** Session transcripts
 (`sessions/<key>.jsonl` + `<key>.meta.json` + `<key>.md`) and memory markdown
@@ -30,8 +30,9 @@ transcript *is* the database.
 **Disjoint critical sections get independent lock files.** durin does not have
 one global lock. Each kind of write that must be serialized gets its own lock
 file scoped to exactly what it protects: a turn lease per session, a save lock
-per session, a config lock, two cron locks, and a memory working-tree lock. Two
-processes editing two different sessions never contend; two processes editing
+per session, a config lock, two cron locks, a memory working-tree lock, and a
+lock per session-summary file. Two processes editing two different sessions
+never contend; two processes editing
 the *same* session serialize on that session's locks. The primitive underneath
 is `cross_process_lock` in `durin/utils/file_lock.py` — an advisory `flock()`
 that the OS releases automatically if the holding process dies.

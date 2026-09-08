@@ -227,7 +227,7 @@ ran and found nothing to do" from "curation didn't run at all."
 ### `skill.suggestion_resolved` — user resolution of a manual-skill suggestion
 
 Emitted from `SkillsService.accept_suggestion` / `.reject_suggestion`
-(`durin/service/skills.py`) — the webui Bandeja actions for a
+(`durin/service/skills.py`) — the webui Inbox actions for a
 `suggest_manual_skills`-produced suggestion (see
 `02_lifecycle_and_curation.md` §4). `{skill, action, resolution}`: `action` is
 the suggestion's original type (`evolve` / `retire`), and `resolution` is
@@ -295,7 +295,7 @@ them — there is no separate skills-specific telemetry sink.
   and `memory.dream.skill_signals` becomes an `"improved"` item, each
   deep-linking to the named skill when a specific one is identified. This is
   the same digest DreamView renders for entity merges and discoveries — see
-  `../memory/05_dream_cold_path.md` §6 for the full Resumen/Bandeja layout.
+  `../memory/05_dream_cold_path.md` §6 for the full Summary/Inbox layout.
 - The **Skills panel** (`SkillsView.tsx`) reads `use_count`, `last_used_ms`,
   and `open_observations` per skill from `GET /api/v1/skills`, enriched
   server-side by `_enrich_usage`
@@ -355,7 +355,7 @@ them — there is no separate skills-specific telemetry sink.
 | `log_observation` | `durin/agent/skill_observations.py` | Emits `skill.observation_logged`; the single write path for the observation queue. |
 | `curate_catalog` | `durin/agent/skill_curation.py` | Emits `skill.curation_action` per action and `skill.curation_run` once per pass. |
 | `_enrich_usage` | `durin/service/skills.py` | Server-side join of usage + observation counts onto the `GET /api/v1/skills` payload. |
-| `SkillsService.accept_suggestion` / `.reject_suggestion` | `durin/service/skills.py` | Emit `skill.suggestion_resolved` on user resolution of a Bandeja suggestion. |
+| `SkillsService.accept_suggestion` / `.reject_suggestion` | `durin/service/skills.py` | Emit `skill.suggestion_resolved` on user resolution of an Inbox suggestion. |
 | `resolve_observation` | `durin/agent/skill_observations.py` | Emits `skill.observation_resolved` on the user's manual resolution of an observation. |
 | `discover_skill_signals` | `durin/agent/skill_signals.py` | Emits `memory.dream.skill_signals`; also drives `skill.observation_logged` via `log_observation`. |
 | `run_skill_extract_pass` | `durin/memory/dream_passes.py` | Emits `memory.dream.skill_extract`. |

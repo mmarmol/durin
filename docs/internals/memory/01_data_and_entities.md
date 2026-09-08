@@ -283,8 +283,7 @@ Archive is excluded from all default search paths: the vector index, FTS5, the g
 | Config key | Default | Effect |
 |---|---|---|
 | `memory.enabled` | `true` | Master switch for all memory I/O. |
-| `memory.owner` | — | Owner person ref for `resolve_principal()`; fallback from `principal_channel_map`. |
-| `principal_channel_map` | `{}` | Maps `channel_id → person:<name>` for principal resolution per channel. |
+| `memory.owner` | `null` | Owner person ref that `resolve_principal()` resolves the principal from; unset resolves to `person:anonymous`. |
 | `memory.file_watcher.enabled` | `true` | Reactive re-embed when the user edits a `.md` file directly. |
 | `memory.dream.auto_absorb.enabled` | `true` | ON by default; the refine pass auto-merges judged duplicates (recoverable via git revert + tombstone). When off, suggestions are logged for manual review. |
 | `memory.dream.auto_absorb.confidence_threshold` | `95` | LLM judge confidence floor (0–100) for an auto-merge. |

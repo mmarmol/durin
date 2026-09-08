@@ -7,9 +7,9 @@
 
 ## 1. Purpose
 
-The search pipeline transforms a raw query string into a ranked, sectioned list of memory hits — without invoking any LLM. It runs on every `memory_search` tool call and is the hot path for all retrieval.
+The search pipeline transforms a raw query string into a ranked, sectioned list of memory hits — without invoking any LLM. It runs on every `memory_search` tool call and on the agent loop's own automatic search once per user turn, and is the hot path for all retrieval.
 
-Three retrieval sources run in parallel (vector, lexical, grep), their ranked lists are merged by Reciprocal Rank Fusion, an entity-aware boost is applied when the query mentions a known entity, and an optional cross-encoder reranker blends its score into the final order. The result is grouped into structural sections (CANONICAL, FRAGMENT, SESSION, INGESTED) for LLM consumption.
+Three retrieval sources run over the same query (vector, lexical, grep), their ranked lists are merged by Reciprocal Rank Fusion, an entity-aware boost is applied when the query mentions a known entity, and an optional cross-encoder reranker blends its score into the final order. The result is grouped into structural sections (SKILL, CANONICAL, FRAGMENT, SESSION, INGESTED) for LLM consumption.
 
 Temporal decay is intentionally not applied: the LLM receives `valid_from` on every hit and does its own temporal reasoning.
 
@@ -106,6 +106,7 @@ All three arms must key a document by the **same** string, or RRF treats one doc
 | Entity page | `<type>:<slug>` | `memory/entity_page/<type>:<slug>` |
 | Skill | `skill/<slug>` | `skills/<slug>/SKILL.md` |
 | Episodic / stable / corpus | `memory/<class>/<id>` | same |
+| Reference document / chunk | `reference:<slug>` (FTS, whole document) · `memory/reference/<id>` (vector chunk + grep) | same |
 | Session turn | `sessions/<key>.md#turn-N` | same |
 
 The FTS indexer's `_payload_for` is the reference shape; the vector normaliser and the grep fallback both rewrite into it. The result layer re-derives the display path from the fusion URI.
@@ -150,9 +151,9 @@ The CE nudges the existing RRF order; it does not replace it. The default model 
 
 ### Step 6 — Sectioning and per-source cap
 
-`apply_per_source_cap` drops corpus hits beyond 3 per `ingest_id` (configurable via `memory.search.sectioning.max_per_source`) to prevent a single chunked document from monopolizing the top-K. Other classes pass through uncapped.
+`apply_per_source_cap` drops ingested-document hits — corpus and reference chunks — beyond the per-document cap (3 by default, configurable via `memory.search.sectioning.max_per_source`), so a single chunked document cannot monopolize the top-K. Corpus chunks group by `ingest_id`; reference chunks group by their parent document. Other classes pass through uncapped.
 
-`SectionedHit` rows are grouped into five sections by type, rendered in order: skill → canonical → fragment → session → ingested. Empty sections are omitted. Each block carries structural markers (`=== CANONICAL: <uri> ===` … `=== END CANONICAL ===`) and a completeness qualifier when body length is known. Canonical hits render the page's name, attributes and a bounded body excerpt at warm level; the completeness qualifier compares the rendered text with the full composition.
+`SectionedHit` rows are grouped into five sections by type, rendered in order: skill → canonical → fragment → session → ingested. Empty sections are omitted. Each block carries structural markers (`=== CANONICAL: <uri> ===` … `=== END CANONICAL ===`) and a completeness qualifier when body length is known. Canonical hits render the page's name and aliases, its attributes line and a bounded body excerpt at warm level, and the whole composition at cold level; the completeness qualifier compares the rendered text with the full composition.
 
 The pipeline returns `SearchPipelineResult` with the capped `hits`, source counts, and degradation information.
 
@@ -177,7 +178,7 @@ The pipeline returns `SearchPipelineResult` with the capped `hits`, source count
 | `CrossEncoderReranker` | `durin/memory/cross_encoder.py` | Wraps `sentence_transformers.CrossEncoder` with lazy load, batching, retry-after-failure, and graceful degradation. `score(query, docs) -> list[float] | None`. |
 | `DEFAULT_MODEL` | `durin/memory/cross_encoder.py` | `"BAAI/bge-reranker-base"` — MIT, ~100M params, multilingual. |
 | `SectionedHit` | `durin/memory/sectioned_output.py` | Frozen dataclass: `uri`, `type`, `path`, `score`, `ts`, `snippet`, `summary`, `body`, `body_length`, `ingest_id`. Consumed by renderer. |
-| `apply_per_source_cap` | `durin/memory/sectioned_output.py` | Drops corpus hits beyond `max_per_source` (default 3) per `ingest_id`. Other types pass through. |
+| `apply_per_source_cap` | `durin/memory/sectioned_output.py` | Drops ingested-document hits (corpus and reference chunks) beyond `max_per_source` (default 3) per source document. Other types pass through. |
 | `render_sectioned` | `durin/memory/sectioned_output.py` | Groups hits by section type and renders structural markers for LLM consumption. |
 
 ---
@@ -190,7 +191,7 @@ The pipeline returns `SearchPipelineResult` with the capped `hits`, source count
 | `memory.search.cross_encoder.model` | `"BAAI/bge-reranker-base"` | Any `sentence_transformers.CrossEncoder`-compatible model ID or local path. Validated dynamically via `probe_model`. |
 | `memory.search.cross_encoder.batch_size` | `32` | Batch size for `CrossEncoder.predict` calls. |
 | `memory.search.cross_encoder.top_n` | `10` | Retained for API compatibility; the blend reorders all top-50 candidates and downstream sectioning trims. |
-| `memory.search.sectioning.max_per_source` | `3` | Max corpus hits per `ingest_id` in the final result. Prevents a single chunked document from monopolizing top-K. |
+| `memory.search.sectioning.max_per_source` | `3` | Max ingested-document hits (corpus and reference chunks) per source document in the final result. Prevents a single chunked document from monopolizing top-K. |
 
 The pipeline is invoked by the `memory_search` tool (`04_agent_tools.md`). The tool wraps scope/level/limit logic around `run_search_pipeline`:
 
@@ -199,6 +200,7 @@ The pipeline is invoked by the `memory_search` tool (`04_agent_tools.md`). The t
 - `scope=undreamed` passes `vector_index=None` and restricts remaining hits to session types.
 - `scope=dreamed` / `all` pass the vector index; grep fallback runs but the tool keeps all non-Library hit types.
 - `level=cold` enriches each `SectionedHit` with the body read from disk after the pipeline returns.
+- **In-context dedup.** Hits whose text the caller's prompt already carries collapse to pointer lines instead of being rendered twice: the always-on guidance pages the pinned block renders whole, anything the turn's automatic search already fenced into the message, and any hit whose body is contained in its hot-layer block. The principal's page is judged by containment rather than membership, because the pinned block caps its body. Subagents, whose prompt carries no hot layer, skip the dedup entirely.
 
 The web dashboard exposes a cross-encoder toggle and model picker under Memory → Search settings. The onboarding wizard asks explicitly about enabling reranking, stating the download and latency cost.
 
