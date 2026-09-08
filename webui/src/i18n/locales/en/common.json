@@ -563,7 +563,7 @@
         "dreamEnabled": "Master switch for the automatic dream. When off, the cron and reactive triggers are disabled; the manual `durin memory dream` still works.",
         "dreamCron": "Cron expression for the daily extract / refine / skill pass. Default 0 3 * * * (3am local).",
         "dreamPostCompaction": "Run a dream pass after a session is compacted — the context is already in memory so the cost is amortised.",
-        "dreamOnSessionClose": "Run a dream pass when a session ends (/quit or idle timeout).",
+        "dreamOnSessionClose": "Run a dream pass when a conversation is closed with `/new`.",
         "dreamDiscover": "Also create entities from durable facts you mention but don't explicitly save, so memory grows from conversation — not only from explicit saves. On by default.",
         "dreamAutoAbsorb": "Let the refine pass automatically merge entities it judges duplicates (high-confidence only). Off keeps merges manual.",
         "dreamAbsorbConfidence": "Minimum confidence (0-100) the judge requires to merge two entities. 95 = high precision. Only applies when auto-absorb is on.",

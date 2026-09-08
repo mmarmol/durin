@@ -37,9 +37,9 @@ compatible Python automatically:
 
 ```bash
 # uv (recommended) — selects a compatible Python on its own
-uv tool install --prerelease allow durin-agent
+uv tool install durin-agent
 # with extras:
-uv tool install --prerelease allow 'durin-agent[memory,mcp,web]'
+uv tool install 'durin-agent[memory,mcp,web]'
 ```
 
 Don't have `uv`? Get it from <https://docs.astral.sh/uv/> (or `brew
@@ -47,23 +47,20 @@ install uv`). Or use `pipx` — but pin an in-range interpreter, because
 `pipx` builds its venv on whatever `python3` is the current default:
 
 ```bash
-pipx install --pre --python python3.13 durin-agent
+pipx install --python python3.13 durin-agent
 # plain pip works too, into an environment already on Python 3.11–3.13:
-pip install --pre durin-agent
+pip install durin-agent
 ```
-
-Once a stable release is out, drop `--prerelease allow` / `--pre`.
 
 ### From a GitHub Release wheel (no PyPI required)
 
 Every tag also produces a GitHub Release with the wheel + sdist
-attached:
+attached. Substitute the version you want — the asset list is on the
+release page:
 
 ```bash
-pipx install https://github.com/mmarmol/durin/releases/latest/download/durin_agent-0.1.0b4-py3-none-any.whl
+pipx install https://github.com/mmarmol/durin/releases/download/v<version>/durin_agent-<version>-py3-none-any.whl
 ```
-
-Replace the version in the URL with the release you want.
 
 ### From a checkout (recommended for development)
 
@@ -94,7 +91,7 @@ The wheel build normally calls `bun` (preferred) or `npm` to bundle
 
 ```bash
 # Installed from PyPI (uv picks a compatible Python)
-uv tool install --prerelease allow 'durin-agent[memory,mcp,web]'
+uv tool install 'durin-agent[memory,mcp,web]'
 
 # Editable from a checkout
 pip install -e ".[memory,mcp,web]"

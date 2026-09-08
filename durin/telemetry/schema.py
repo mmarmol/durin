@@ -812,23 +812,28 @@ class MemoryDreamEndEvent(TypedDict):
     ``kind`` names the pass — today ``"extract"``, ``"refine"``,
     ``"derived_from"`` and ``"session_summary"``; ``duration_ms`` is always
     present, the rest are per-pass. The extract pass sets
-    ``entities_consolidated`` / ``entities_failed`` / ``sessions`` /
-    ``yielded`` (``yielded=True`` when the ``max_seconds_per_run`` cap was hit
-    and the cursor will resume next time); the refine pass sets ``merged`` /
-    ``kept`` / ``candidates``; the derived_from and session-summary passes set
-    ``sessions`` / ``yielded``, and the session-summary pass adds ``written`` /
-    ``skipped``.
+    ``entities_consolidated`` / ``entities_discovered`` / ``skill_signals`` /
+    ``entities_failed`` / ``sessions`` / ``yielded`` (``yielded=True`` when the
+    ``max_seconds_per_run`` cap was hit and the cursor will resume next time);
+    the refine pass sets ``merged`` / ``kept`` / ``candidates``; the
+    derived_from and session-summary passes set ``sessions`` / ``yielded`` /
+    ``errors``, the derived_from pass adds ``links`` and the session-summary
+    pass adds ``written`` / ``skipped``.
     """
 
     kind: str
     duration_ms: int
     entities_consolidated: NotRequired[int]
+    entities_discovered: NotRequired[int]  # extract: pages the discovery stage wrote for entities the agent never upserted
+    skill_signals: NotRequired[int]  # extract: skill corrections/gaps logged as observations in hindsight
     entities_failed: NotRequired[int]
     sessions: NotRequired[int]
     yielded: NotRequired[bool]
     merged: NotRequired[int]
     kept: NotRequired[int]
     candidates: NotRequired[int]
+    links: NotRequired[int]  # derived_from: entities linked to the document they were distilled from
+    errors: NotRequired[int]  # derived_from / session_summary: sessions the pass skipped after an exception
     written: NotRequired[int]
     skipped: NotRequired[int]
 
