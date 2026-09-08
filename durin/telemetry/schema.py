@@ -729,13 +729,18 @@ class MemoryPrefetchEvent(TypedDict):
     block was injected (disabled / backoff / command_or_empty / short /
     non_interactive / no_index / no_tool / timeout / error / no_hits);
     absent when hits landed. ``backoff`` is the window after a timeout or an
-    error during which the search is not attempted again."""
+    error during which the search is not attempted again. ``hits`` counts
+    what the model can actually see: the tool's uncut total, unless the
+    rendered block was cut at ``max_chars``, in which case it is how many
+    hits' markers survived the cut — a truncated block always sets
+    ``truncated`` to True."""
 
     session_key: str
     hits: int
     chars: int
     duration_ms: int
     skipped: NotRequired[str]
+    truncated: NotRequired[bool]
 
 
 class MemoryStoreEvent(TypedDict):

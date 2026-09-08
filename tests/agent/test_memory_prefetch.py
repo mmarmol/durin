@@ -256,6 +256,41 @@ async def test_prefetch_block_is_cut_at_max_chars(tmp_path: Path, monkeypatch) -
 
 
 @pytest.mark.asyncio
+async def test_hits_count_the_blocks_that_survived_the_cut(tmp_path: Path, monkeypatch) -> None:
+    """The tool found 3 hits, but max_chars=650 only leaves room for the first
+    two FRAGMENT markers before the cut fires — the third is truncated away
+    along with the rest of its block. ``hits`` (and the refs announced to the
+    user) must count what the cut actually left in the message, not the
+    tool's uncut total."""
+    filler = ("Ana bakes rye every morning. " * 10)[:270]
+    blocks = [
+        f"=== FRAGMENT: memory/episodic/{n} ===\n{filler}\n=== END FRAGMENT ==="
+        for n in range(3)
+    ]
+    fake = _FakeSearch(total=3, rendered="\n\n".join(blocks))
+    loop, captured, rec = _make_loop(tmp_path, monkeypatch, fake=fake)
+    loop.app_config = SimpleNamespace(memory=SimpleNamespace(prefetch=MemoryPrefetchConfig(max_chars=650)))
+    seen: list[tuple[str, bool, list[dict] | None]] = []
+
+    async def on_progress(content: str, *, tool_hint: bool = False, tool_events: list[dict] | None = None) -> None:
+        seen.append((content, tool_hint, tool_events))
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION),
+        on_progress=on_progress,
+    )
+
+    prefetch = [d for t, d in rec.events if t == "memory.prefetch"][-1]
+    assert prefetch["hits"] == 2
+    assert prefetch["truncated"] is True
+
+    recall = [ev for _c, _h, evs in seen for ev in (evs or []) if ev.get("name") == "memory_prefetch"]
+    assert len(recall) == 1
+    assert recall[0]["arguments"]["hits"] == 2
+    assert recall[0]["result"]["refs"] == ["memory/episodic/0", "memory/episodic/1"]
+
+
+@pytest.mark.asyncio
 async def test_prefetch_gate_no_index(tmp_path: Path, monkeypatch) -> None:
     fake = _FakeSearch()
     loop, captured, rec = _make_loop(tmp_path, monkeypatch, fake=fake, with_index=False)

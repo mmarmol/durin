@@ -2955,17 +2955,25 @@ class AgentLoop:
             return ""
 
         total = int((response or {}).get("total") or 0) if isinstance(response, dict) else 0
-        rendered = str((response or {}).get("sectioned_rendered") or "") if isinstance(response, dict) else ""
-        if total == 0 or not rendered.strip():
+        rendered_full = str((response or {}).get("sectioned_rendered") or "") if isinstance(response, dict) else ""
+        if total == 0 or not rendered_full.strip():
             self._emit_prefetch(ctx.session_key, hits=0, chars=0, duration_ms=duration_ms, skipped="no_hits")
             return ""
-        if len(rendered) > cfg.max_chars:
-            rendered = rendered[:cfg.max_chars].rstrip() + "\n… (truncated; memory_search for the rest)"
+        truncated = len(rendered_full) > cfg.max_chars
+        rendered = (
+            rendered_full[:cfg.max_chars].rstrip() + "\n… (truncated; memory_search for the rest)"
+            if truncated else rendered_full
+        )
         block = build_memory_context_block(rendered)
-        ctx.prefetch_hits = total
         ctx.prefetch_refs = re.findall(
             r"^=== (?:SKILL|CANONICAL|FRAGMENT|SESSION|INGESTED): (\S+)", rendered, re.M,
         )
+        # A cut mid-block drops that hit's marker line along with the rest of
+        # it, so the model never sees it. Count only the markers that
+        # survived, not the tool's uncut total — otherwise the turn's own
+        # telemetry and the recall announced to the user both overstate what
+        # actually reached the prompt.
+        ctx.prefetch_hits = len(ctx.prefetch_refs) if truncated else total
         # Bind the refs into the ContextVar memory_search reads for its
         # dedup, in THIS asyncio task — the same one _state_run later drives
         # the tool loop in — so the model's own search this turn collapses
@@ -2980,7 +2988,9 @@ class AgentLoop:
             ctx.prefetch_refs_token = bind_turn_prefetch_refs(
                 {dedup_key(r) for r in ctx.prefetch_refs}
             )
-        self._emit_prefetch(ctx.session_key, hits=total, chars=len(block), duration_ms=duration_ms)
+        self._emit_prefetch(
+            ctx.session_key, hits=ctx.prefetch_hits, chars=len(block), duration_ms=duration_ms, truncated=truncated,
+        )
         return block
 
     async def _state_build(self, ctx: TurnContext) -> str:
