@@ -86,3 +86,34 @@ async def test_previous_summary_reaches_the_system_prompt(tmp_path: Path) -> Non
     system = captured[0][0]["content"]
     assert "[Archived Context Summary]" in system
     assert "decided to use X" in system
+
+
+@pytest.mark.asyncio
+async def test_previous_summary_appears_only_for_first_max_turns_turns(tmp_path: Path) -> None:
+    """The previous-session block lasts exactly max_turns turns.
+    With max_turns=2, it appears on turns 1 and 2, but not turn 3."""
+    loop = _make_loop(tmp_path)
+    write_session_summary(tmp_path, "websocket:old", "- old summary", last_active=date(2026, 9, 1))
+    loop.app_config = SimpleNamespace(memory=SimpleNamespace(continuity=MemoryContinuityConfig(max_turns=2)))
+    captured: list[list[dict]] = []
+
+    async def _chat(*args, **kwargs):
+        captured.append(kwargs.get("messages") or (args[0] if args else []))
+        return LLMResponse(content=f"response-{len(captured)}", tool_calls=[])
+
+    loop.provider.chat_with_retry = AsyncMock(side_effect=_chat)
+
+    # Turn 1
+    await loop._process_message(InboundMessage(channel="websocket", sender_id="u", chat_id="new", content="q1"))
+    system_1 = captured[0][0]["content"]
+    assert "PREVIOUS SESSION SUMMARY" in system_1
+
+    # Turn 2
+    await loop._process_message(InboundMessage(channel="websocket", sender_id="u", chat_id="new", content="q2"))
+    system_2 = captured[1][0]["content"]
+    assert "PREVIOUS SESSION SUMMARY" in system_2
+
+    # Turn 3
+    await loop._process_message(InboundMessage(channel="websocket", sender_id="u", chat_id="new", content="q3"))
+    system_3 = captured[2][0]["content"]
+    assert "PREVIOUS SESSION SUMMARY" not in system_3

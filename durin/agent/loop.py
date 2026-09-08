@@ -3276,8 +3276,10 @@ class AgentLoop:
         archive marker so the next turn can distinguish "this is a
         summary" from "this is real conversation".
 
-        Returns ``None`` when no summary has been persisted yet (fresh
-        session or no consolidation rounds have run).
+        Returns ``None`` when no summary has been persisted yet, OR the
+        session's own summary is exhausted (on old sessions). A fresh
+        session on a single-user channel gets the previous session's summary
+        instead (see ``_format_previous_session_summary``).
 
         Session summaries are stored in
         ``memory/session_summary/<sanitized_key>.md`` as the single source
@@ -3328,10 +3330,13 @@ class AgentLoop:
         turns only (until the session has its own summary or grows past
         ``max_turns``). Never raises — continuity is a convenience."""
         cfg = self._continuity_config()
+        # Messages counted here are completed turns only; the current user
+        # message is not yet persisted, so len(session.messages) < 2*max_turns
+        # means the session is still within its first max_turns turns.
         if (
             not cfg.enabled
             or session.last_consolidated
-            or len(session.messages) > 2 * cfg.max_turns
+            or len(session.messages) >= 2 * cfg.max_turns
         ):
             return None
         try:
