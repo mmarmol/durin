@@ -358,6 +358,8 @@ The marker names the previous session's summary file stem, so the agent can reac
 | `memory.prefetch.min_query_chars` | `20` | Messages shorter than this are not searched |
 | `memory.prefetch.timeout_s` | `5.0` | Seconds the turn will wait for the search |
 | `memory.prefetch.backoff_s` | `60.0` | Seconds the prefetch is skipped after a timeout or error; `0` disables the backoff |
+| `memory.artifact_recall.enabled` | `true` | Appends memory notes about a file to `read_file` results, and the entities distilled from a reference document to `memory_drill` results |
+| `memory.artifact_recall.max_notes` | `3` | Notes appended to one `read_file` result |
 
 **CLI surfaces:**
 - `durin memory dream` — run the core consolidation passes immediately (bypasses `ReactiveDreamGate`)

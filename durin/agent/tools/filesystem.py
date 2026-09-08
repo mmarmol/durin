@@ -474,6 +474,10 @@ class ReadFileTool(_FsTool):
             else:
                 result += f"\n\n(End of file — {total} lines total)"
                 truncated = False
+            # Measured before the notes are appended: `result_chars` reports
+            # the file content that was returned, and `memory_notes` reports
+            # what artifact recall added on top of it.
+            result_chars = len(result)
             notes = self._memory_notes(fp)
             if notes:
                 result += (
@@ -487,7 +491,8 @@ class ReadFileTool(_FsTool):
                 "limit": limit or self._DEFAULT_LIMIT,
                 "total_lines": total,
                 "returned_lines": end - start,
-                "result_chars": len(result),
+                "result_chars": result_chars,
+                "memory_notes": len(notes),
                 "kind": "text",
                 "truncated": truncated,
                 "dedup": False,
