@@ -188,7 +188,7 @@ The following events exist in the catalog without dedicated sections above — c
 - **`memory.index.staleness_detected`** — health-check found a row whose `fts_meta.mtime` lags behind the file's mtime, or a file with no row. `reason` is `missing_row | mtime_lag | row_for_missing_file`. `delta_seconds` is present only on `mtime_lag` and carries `current_file_mtime - indexed_mtime`.
 - **`memory.index.rebuild`** — full index rebuild completed. Fields: `target`, `indexed`, `errors`, `duration_ms`.
 - **`compaction.paths_preserved`** — a consolidation span's mechanical discovered-paths trailer (see the archive prompt in `06_prompts_and_instructions.md`) was non-empty and got appended to the session-summary block. `count` is the number of paths appended.
-- **`tool.read_file`** — a file read. `memory_notes` counts the artifact-recall notes appended to the result and is the field that measures that half of the feature: the lookup runs the lexical stage with `emit=False`, so it produces no `memory.recall.lexical` row of its own. `result_chars` measures the file content alone, so the notes never inflate it. The reference-drill half emits nothing — `memory_drill` has no tool event.
+- **`tool.read_file`** — a file read. `memory_notes` counts the artifact-recall notes added to the result and is the field that measures that half of the feature: the lookup runs the lexical stage with `emit=False`, so it produces no `memory.recall.lexical` row of its own. The notes lead the result (an over-cap tool result is truncated from the tail), and `result_chars` measures the file content alone, so they never inflate it. The reference-drill half emits nothing — `memory_drill` has no tool event.
 
 ## 5. Key types and entry points
 

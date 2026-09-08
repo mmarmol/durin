@@ -362,8 +362,8 @@ The marker names the previous session's summary file stem, so the agent can reac
 | `memory.continuity.channels` | `["websocket", "cli"]` | Channels whose sessions belong to one person, so "the previous session" is unambiguously the same person's |
 | `memory.continuity.max_chars` | `2000` | Tail of the previous summary carried in the block; a longer summary is cut from the front |
 | `memory.continuity.max_turns` | `3` | Turns of the fresh session that carry the block before it drops out |
-| `memory.artifact_recall.enabled` | `true` | Appends memory notes about a file to `read_file` results, and the entities distilled from a reference document to `memory_drill` results |
-| `memory.artifact_recall.max_notes` | `3` | Notes appended to one `read_file` result |
+| `memory.artifact_recall.enabled` | `true` | Leads `read_file` results with memory notes about the file, and `memory_drill` results with the entities distilled from the reference document |
+| `memory.artifact_recall.max_notes` | `3` | Notes added to one `read_file` result |
 
 **CLI surfaces:**
 - `durin memory dream` — run the core consolidation passes immediately (bypasses `ReactiveDreamGate`)

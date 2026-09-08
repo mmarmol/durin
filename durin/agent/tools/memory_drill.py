@@ -155,7 +155,7 @@ class MemoryDrillTool(Tool):
             return {"error": str(exc)}
         except OSError as exc:
             return {"error": f"io error: {exc}"}
-        return {"uri": uri, "content": self._with_entity_trailer(uri, text)}
+        return {"uri": uri, "content": self._with_entity_header(uri, text)}
 
     def _drill_one_safe(self, uri: str) -> dict[str, Any]:
         """Batch helper — never raises, always returns a record carrying
@@ -168,17 +168,22 @@ class MemoryDrillTool(Tool):
             return {"uri": uri, "error": str(exc)}
         except OSError as exc:
             return {"uri": uri, "error": f"io error: {exc}"}
-        return {"uri": uri, "content": self._with_entity_trailer(uri, text)}
+        return {"uri": uri, "content": self._with_entity_header(uri, text)}
 
-    def _with_entity_trailer(self, uri: str, text: str) -> str:
-        """Append the entities distilled from a reference document.
+    def _with_entity_header(self, uri: str, text: str) -> str:
+        """Prefix the entities distilled from a reference document.
 
         Applies to every uri shape that addresses an ingested reference —
         the ref form, the singular-directory form a library search emits and
         the on-disk path, with or without a section anchor. Returns ``text``
         unchanged for any other uri and for a reference with no entities.
         Recall is a convenience here, so a failure is swallowed rather than
-        turned into a drill error."""
+        turned into a drill error.
+
+        The block leads the result instead of trailing it because a drill of a
+        long document overruns the agent loop's per-result character cap, and
+        the loop keeps the head of the result and drops the tail — a trailing
+        block would be cut off before the model ever saw it."""
         ref = reference_ref_for_uri(uri)
         if ref is None:
             return text
@@ -190,4 +195,4 @@ class MemoryDrillTool(Tool):
             return text
         if not refs:
             return text
-        return text.rstrip() + "\n\nEntities distilled from this document: " + ", ".join(refs)
+        return "Entities distilled from this document: " + ", ".join(refs) + "\n\n" + text
