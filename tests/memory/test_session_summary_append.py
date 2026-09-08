@@ -54,6 +54,33 @@ def test_consecutive_duplicate_block_not_reappended(tmp_path: Path) -> None:
     assert text.count("- same fact") == 1
 
 
+def test_append_unions_entities_and_topics_across_blocks(tmp_path: Path) -> None:
+    """Each span contributes its own tags; the entry accumulates the union
+    so a summary stays searchable by anything any of its spans mentioned."""
+    append_session_summary_block(
+        tmp_path, KEY, "- span one",
+        entities=["project:durin"], topics=["search"],
+    )
+    append_session_summary_block(
+        tmp_path, KEY, "- span two",
+        entities=["person:marcelo"], topics=["dream", "search"],
+    )
+    entry = load_entry(session_summary_path(tmp_path, KEY))
+    assert entry.entities == ["person:marcelo", "project:durin"]
+    assert entry.topics == ["dream", "search"]
+
+
+def test_append_records_new_tags_when_the_block_repeats(tmp_path: Path) -> None:
+    """A degraded LLM repeating the newest block still contributes its tags —
+    the duplicate-block short circuit must not swallow them."""
+    append_session_summary_block(tmp_path, KEY, "- same fact", topics=["search"])
+    append_session_summary_block(tmp_path, KEY, "- same fact", topics=["dream"])
+    text, _ = get_session_summary(tmp_path, KEY)
+    entry = load_entry(session_summary_path(tmp_path, KEY))
+    assert text.count("- same fact") == 1
+    assert entry.topics == ["dream", "search"]
+
+
 def test_evicted_block_paths_are_carried_forward(tmp_path: Path) -> None:
     b1 = (
         "- old fact\n"

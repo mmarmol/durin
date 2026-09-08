@@ -877,13 +877,14 @@ class VectorIndex:
     def _embed_text(entry: MemoryEntry, *, budget_chars: int | None = None) -> str:
         """Build the text fed to the embedder.
 
-        Composes ``headline → summary → entities → body`` in that order
-        until the char budget is filled. Most distilled signal first
-        (headline / summary), then named entities, then the longest and
-        most truncatable part (body). Previously only ``summary`` (or
-        headline / body as fallback) was embedded, which gave poor recall
-        for corpus entries where the body carries the information and
-        summary is empty.
+        Composes ``headline → summary → entities → topics → body`` in that
+        order until the char budget is filled. Most distilled signal first
+        (headline / summary), then the named entities and subject labels
+        (query-shaped words the body often never spells out), then the
+        longest and most truncatable part (body). Previously only
+        ``summary`` (or headline / body as fallback) was embedded, which
+        gave poor recall for corpus entries where the body carries the
+        information and summary is empty.
         """
         budget = budget_chars if budget_chars is not None else VectorIndex._EMBED_BUDGET_CHARS
         parts: list[str] = []
@@ -919,6 +920,8 @@ class VectorIndex:
             _add(entry.summary)
         if entry.entities:
             _add("Entities: " + ", ".join(entry.entities))
+        if entry.topics:
+            _add("Topics: " + ", ".join(entry.topics))
         _add(entry.body)
 
         text = "\n\n".join(parts)

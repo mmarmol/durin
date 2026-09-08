@@ -107,7 +107,9 @@ _PARAMETERS = tool_parameters_schema(
     ),
     level=StringSchema(
         "How much content to return per result. 'warm' (default) returns "
-        "headlines + summaries; 'cold' returns full bodies.",
+        "headlines + summaries; 'cold' returns full bodies, except raw "
+        "session-turn hits — their backing file is a rendered transcript, "
+        "so they show their indexed excerpt at either level.",
         enum=["warm", "cold"],
     ),
     keywords=StringSchema(
@@ -789,6 +791,10 @@ class MemorySearchTool(Tool):
             "entity_page": "entity",
             "episodic": "episodic", "stable": "stable",
             "corpus": "corpus", "session_summary": "session_summary",
+            # A raw session turn. Without this key it fell to the
+            # `episodic` default and a transcript match rendered under
+            # FRAGMENT with a fragment marker.
+            "session": "session",
             "reference": "reference",
         }
         enriched_hits = [
@@ -1193,7 +1199,13 @@ class MemorySearchTool(Tool):
                 )
             source = "memory"
 
-        entities = (hit.uri,) if class_name == "entity_page" else ()
+        # A canonical page IS its entity, so it points at itself; every other
+        # class points at the entities it was tagged with, which is what makes
+        # a fragment or a session summary drillable to canonical.
+        entities = (
+            (hit.uri,) if class_name == "entity_page"
+            else tuple(getattr(hit, "entities", ()) or ())
+        )
         # Prefer the pipeline's materialised summary (authoritative Dream
         # summary, or the body-prefix fallback `VectorIndex` computes) over
         # the bare snippet/headline — see the "never falls back to a

@@ -11,7 +11,11 @@ from durin.memory.session_summary_dream import (
     run_session_summary_pass,
     summarize_session,
 )
-from durin.memory.session_summary_store import get_session_summary
+from durin.memory.session_summary_store import (
+    get_session_summary,
+    session_summary_path,
+)
+from durin.memory.storage import load_entry
 
 
 class _Resp:
@@ -55,9 +59,29 @@ def test_idle_session_gets_a_summary_and_a_cursor(tmp_path: Path) -> None:
     assert first["written"] is True
     assert "user asked three questions" in text
     assert get_summary_cursor(path) == 6
+    # The prompt's trailing tag block rides the entry, not the floor.
+    assert load_entry(session_summary_path(tmp_path, "websocket:abc")).topics == ["testing"]
 
     second = summarize_session(tmp_path, path, llm_invoke=_invoke)
     assert second["skipped"] == "too_short"     # nothing new since the cursor
+
+
+def test_summary_keeps_the_entities_the_prompt_extracted(tmp_path: Path) -> None:
+    """The archive prompt returns typed entity refs alongside the bullets; the
+    pass persists them so the search index and the renderer can use them."""
+    path = _write_session(tmp_path, "websocket:tagged")
+
+    def _tagged(prompt: str, *, model=None) -> _Resp:
+        return _Resp(
+            "- user asked three questions\n---\n"
+            "entities: [person:marcelo, project:durin]\ntopics: [testing, memory]"
+        )
+
+    assert summarize_session(tmp_path, path, llm_invoke=_tagged)["written"] is True
+
+    entry = load_entry(session_summary_path(tmp_path, "websocket:tagged"))
+    assert entry.entities == ["person:marcelo", "project:durin"]
+    assert entry.topics == ["memory", "testing"]
 
 
 def test_active_session_is_left_to_the_compactor(tmp_path: Path) -> None:

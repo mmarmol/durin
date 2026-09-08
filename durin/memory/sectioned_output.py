@@ -195,9 +195,7 @@ def render_sectioned(
     drill for the body)``) instead, grouped under its own section like
     a full block would be: a one-way ratchet, not a per-hit re-check —
     a later section's hits degrade to pointers too even if individually
-    small, once an earlier section has tripped it (see
-    ``test_budget_ratchet_carries_across_sections`` in
-    ``tests/memory/test_sectioned_output.py``). A block is never
+    small, once an earlier section has tripped it. A block is never
     partially cut: a hit is either rendered whole or as a pointer.
     Section headers and pointer lines sit outside the check and always
     print, so ``max_chars`` bounds the full blocks rather than capping

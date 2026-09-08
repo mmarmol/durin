@@ -488,7 +488,7 @@ async def test_replay_window_compaction_also_parks_real_usage(tmp_path, monkeypa
     # real path does; the token loop then finds nothing left to do.
     async def _fake_replay(sess, _replay_max):
         sess.last_consolidated = 4
-        return "replay summary"
+        return "replay summary", {"entities": [], "topics": []}
 
     monkeypatch.setattr(c, "_consolidate_replay_overflow", _fake_replay)
     monkeypatch.setattr(c, "estimate_session_prompt_tokens", lambda _s, **_k: (1, "test"))

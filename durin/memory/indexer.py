@@ -901,6 +901,8 @@ def _entry_text(entry) -> str:  # type: ignore[no-untyped-def]
         parts.append(entry.summary)
     if entry.entities:
         parts.append(" ".join(entry.entities))
+    if entry.topics:
+        parts.append(" ".join(entry.topics))
     if entry.body:
         parts.append(entry.body)
     return "\n".join(p for p in parts if p)

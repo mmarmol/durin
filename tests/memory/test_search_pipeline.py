@@ -122,6 +122,40 @@ def test_fake_vector_index_integrated(tmp_path: Path) -> None:
     assert hit.type == "entity"
 
 
+def test_hit_carries_the_indexed_entity_tags(tmp_path: Path) -> None:
+    """The vector row's `entities` column must reach the `SectionedHit`.
+
+    The reranker already read it off the metadata dict, but the hit built for
+    the renderer dropped it — so a tagged entry's block never showed the
+    `Entities:` tail that points the agent at the canonical pages."""
+    _seed(tmp_path)
+
+    class _TaggedIndex:
+        def search(self, query, top_k=50):
+            return [
+                {
+                    "id": "abc123def456",
+                    "class_name": "session_summary",
+                    "summary": "A conversation about Marcelo",
+                    "headline": "Marcelo mentioned this",
+                    "valid_from": "2026-01-15T10:00:00",
+                    "entities": ["person:marcelo", "project:durin"],
+                    "path": "memory/session_summary/abc123def456.md",
+                    "_distance": 14.2,
+                },
+            ]
+
+    result = run_search_pipeline(
+        tmp_path, "Marcelo", vector_index=_TaggedIndex(),
+    )
+    hit = next(
+        (h for h in result.hits if h.uri == "memory/session_summary/abc123def456"),
+        None,
+    )
+    assert hit is not None
+    assert hit.entities == ("person:marcelo", "project:durin")
+
+
 def test_vector_index_native_row_shape_is_accepted(tmp_path: Path) -> None:
     """Audit H1 (2026-05-29) + H28 (2026-05-30): the real
     ``VectorIndex.search()`` emits rows with ``id`` / ``class_name`` /

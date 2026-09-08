@@ -31,7 +31,7 @@ import logging
 import re
 from datetime import date, datetime
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Sequence, Tuple
 
 from durin.memory.paths import memory_class_dir
 from durin.memory.schema import MemoryEntry
@@ -47,6 +47,7 @@ __all__ = [
     "delete_session_summary",
     "find_previous_session_summary",
     "get_session_summary",
+    "get_session_summary_tags",
     "sanitize_session_key",
     "session_summary_path",
     "write_session_summary",
@@ -126,6 +127,8 @@ def write_session_summary(
     last_active: object = None,
     *,
     headline_source: Optional[str] = None,
+    entities: Optional[Sequence[str]] = None,
+    topics: Optional[Sequence[str]] = None,
 ) -> Optional[Path]:
     """Persist *text* as `memory/session_summary/<sanitized>.md`.
 
@@ -143,6 +146,14 @@ def write_session_summary(
     so the headline still summarizes recent content once older blocks
     (or a synthetic carried-paths head block) are evicted to the front
     of *text*.
+
+    ``entities`` / ``topics`` are the tags the archive prompt returns
+    alongside the bullets. They land in the entry's frontmatter, which
+    is what the FTS and vector composers read, so a summary stays
+    reachable by a name or subject its prose never spells out. Entity
+    refs must already be well-formed ``<type>:<value>`` — the schema
+    validates them and a bad ref raises rather than writing a broken
+    entry.
     """
     text = (text or "").strip()
     if not text or text == "(nothing)":
@@ -155,6 +166,8 @@ def write_session_summary(
         headline=_headline_from(headline_source if headline_source is not None else text),
         summary=text,
         body=text,
+        entities=list(entities or ()),
+        topics=list(topics or ()),
         author="agent_created",
         valid_from=valid_from,
     )
@@ -213,6 +226,8 @@ def append_session_summary_block(
     *,
     last_active: object = None,
     max_chars: int = _SESSION_SUMMARY_MAX_CHARS,
+    entities: Optional[Sequence[str]] = None,
+    topics: Optional[Sequence[str]] = None,
 ) -> Optional[Path]:
     """Append *block* to the session summary, evicting oldest blocks over cap.
 
@@ -223,6 +238,13 @@ def append_session_summary_block(
     wash out at the cap horizon (long-horizon recall is the memory
     system's job), discovered paths do not.
 
+    ``entities`` / ``topics`` are this span's tags. The entry holds one
+    list of each for the whole file, so they accumulate as a sorted union
+    over every span — the summary stays reachable by anything any of its
+    spans was about, including spans whose text the cap later evicted. New
+    tags alone are reason enough to rewrite: a repeated block contributes
+    nothing to the text but its tags must still land.
+
     The read-rebuild-rewrite runs under the summary file's own
     ``cross_process_lock``: the compactor (gateway process) and the nightly
     session-summary pass (dream worker subprocess) both append here, and
@@ -232,7 +254,15 @@ def append_session_summary_block(
     if not block or block == "(nothing)":
         return None
     with cross_process_lock(session_summary_path(workspace, session_key)):
-        existing, _ = get_session_summary(workspace, session_key)
+        entry = _load_summary_entry(session_summary_path(workspace, session_key))
+        existing = (entry.body or entry.summary or None) if entry else None
+        prior_entities = list(entry.entities) if entry else []
+        prior_topics = list(entry.topics) if entry else []
+        merged_entities = sorted(set(prior_entities) | set(entities or ()))
+        merged_topics = sorted(set(prior_topics) | set(topics or ()))
+        tags_changed = (
+            merged_entities != prior_entities or merged_topics != prior_topics
+        )
         blocks = [
             b.strip() for b in (existing.split(_SUMMARY_BLOCK_SEP) if existing else [])
             if b.strip()
@@ -252,12 +282,28 @@ def append_session_summary_block(
             _salvage_paths(blocks.pop(0), carried)
         if carried:
             blocks.insert(0, _build_carried_line(carried))
-        if not blocks_changed and not carried:
+        if not blocks_changed and not carried and not tags_changed:
             return None
         return write_session_summary(
             workspace, session_key, _SUMMARY_BLOCK_SEP.join(blocks),
             last_active=last_active, headline_source=block,
+            entities=merged_entities, topics=merged_topics,
         )
+
+
+def _load_summary_entry(path: Path) -> Optional[MemoryEntry]:
+    """Parse the summary entry at *path*, or ``None`` when it is absent or
+    unreadable. Best-effort — a broken file must never break the compaction
+    or the dream pass that is trying to append to it."""
+    if not path.is_file():
+        return None
+    try:
+        return load_entry(path)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "session_summary: failed to load %s: %s", path, exc,
+        )
+        return None
 
 
 def get_session_summary(
@@ -269,17 +315,27 @@ def get_session_summary(
     Returns ``(text, last_active)`` or ``(None, None)`` when the
     file doesn't exist or doesn't parse. Best-effort — never raises.
     """
-    path = session_summary_path(workspace, session_key)
-    if not path.is_file():
-        return (None, None)
-    try:
-        entry = load_entry(path)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "session_summary: failed to load %s: %s", path, exc,
-        )
+    entry = _load_summary_entry(session_summary_path(workspace, session_key))
+    if entry is None:
         return (None, None)
     return (entry.body or entry.summary or None, entry.valid_from)
+
+
+def get_session_summary_tags(
+    workspace: Path,
+    session_key: str,
+) -> Tuple[list[str], list[str]]:
+    """``(entities, topics)`` of *session_key*'s summary, both empty when
+    there is none.
+
+    Callers that fold one summary's text into a different record — ``/new``
+    building its closed-conversation record — carry its tags across too, or
+    the record ends up searchable by less than the text it holds.
+    """
+    entry = _load_summary_entry(session_summary_path(workspace, session_key))
+    if entry is None:
+        return ([], [])
+    return (list(entry.entities), list(entry.topics))
 
 
 def find_previous_session_summary(

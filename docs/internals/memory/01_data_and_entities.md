@@ -101,8 +101,8 @@ flowchart TD
 | Class | Path | Track | Indexed? | Mutability |
 |---|---|---|---|---|
 | Session | `sessions/<key>.jsonl` + `.meta.json` | Evidence | FTS5 per-turn rows; NOT vector-indexed | Append-only during session |
-| Session summary | `memory/session_summary/<key>.md` | 2 — raw | Vector + FTS5 | The key's compaction summary, replayed as archived context on its own key, and as the previous-session block of a fresh session on a single-user channel. Appended per consolidation span, or by the nightly session-summary pass for a conversation that went idle without one (bounded; oldest blocks evicted, their path trailers carried forward). `/new` deletes it after folding its text into the closed-conversation record below |
-| Closed conversation | `memory/session_summary/<key>_closed_<timestamp>.md` (record key is `<sanitized key, first 40 chars>_closed_<timestamp>`) | 2 — raw | Vector + FTS5 | Written once when `/new` closes a conversation: the prior compaction summary plus the archive of the still-unconsolidated tail. Searchable and, on single-user channels, may be shown once as the previous-session block of a fresh session (never replayed as the key's own archived context). |
+| Session summary | `memory/session_summary/<key>.md` | 2 — raw | Vector + FTS5 | The key's compaction summary, replayed as archived context on its own key, and as the previous-session block of a fresh session on a single-user channel. Appended per consolidation span, or by the nightly session-summary pass for a conversation that went idle without one (bounded; oldest blocks evicted, their path trailers carried forward). Carries the `entities` and `topics` the archive prompt returns with each span's bullets, unioned across spans, so the summary stays reachable by a name or subject its prose never spells out. `/new` deletes it after folding its text into the closed-conversation record below |
+| Closed conversation | `memory/session_summary/<key>_closed_<timestamp>.md` (record key is `<sanitized key, first 40 chars>_closed_<timestamp>`) | 2 — raw | Vector + FTS5 | Written once when `/new` closes a conversation: the prior compaction summary plus the archive of the still-unconsolidated tail, tagged with the union of both texts' entities and topics. Searchable and, on single-user channels, may be shown once as the previous-session block of a fresh session (never replayed as the key's own archived context). |
 | Ingested | `ingested/<ingest_id>/` | Evidence | Not directly; via references | Write-once |
 | Reference | `memory/references/<slug>.md` | 2 — raw | Vector (chunks) + FTS5 (whole doc) | Replaced on re-ingest (idempotent by content hash) |
 | Corpus (legacy) | `memory/corpus/<id>.md` | 2 — raw | Vector + FTS5 | No longer written by memory_ingest; historical entries are still indexed |
@@ -126,6 +126,7 @@ summary: <short paragraph>          # optional
 source_refs: ["[[sessions/key#turn-5]]", ...]
 related: ["[[episodic/other.md]]", ...]
 entities: ["person:marcelo", "project:durin"]
+topics: ["compaction", "search ranking"]
 author: "user_authored"             # or "agent_created"
 valid_from: 2026-06-01              # optional date
 ---
@@ -133,7 +134,7 @@ valid_from: 2026-06-01              # optional date
 <markdown body — free-form prose>
 ```
 
-`entities` entries are validated as strict `<type>:<value>` at write time. `source_refs` and `related` are stored as Obsidian wikilinks on disk (`[[uri]]`) and stripped to plain strings in memory. `extra="forbid"` — no unknown frontmatter keys are allowed.
+`entities` entries are validated as strict `<type>:<value>` at write time. `topics` are free-form short subject labels with no shape contract — an open vocabulary, indexed as extra retrieval signal alongside the entity refs. `source_refs` and `related` are stored as Obsidian wikilinks on disk (`[[uri]]`) and stripped to plain strings in memory. `extra="forbid"` — no unknown frontmatter keys are allowed.
 
 ### Entity page schema (EntityPage)
 

@@ -292,6 +292,26 @@ def test_embed_text_composes_all_fields_in_order() -> None:
     assert "project:durin" in text
 
 
+def test_embed_text_includes_topics_after_entities() -> None:
+    """Topic labels are query-shaped words the body often never spells out,
+    so they belong in the embedded text — next to the entity refs, before
+    the truncatable body."""
+    from durin.memory.schema import MemoryEntry
+
+    entry = MemoryEntry(
+        id="x",
+        headline="hed",
+        summary="sum",
+        entities=["person:marcelo"],
+        topics=["compaction", "ranking"],
+        body="bod",
+    )
+    text = VectorIndex._embed_text(entry)
+    assert text.index("Entities:") < text.index("Topics:")
+    assert text.index("Topics:") < text.index("bod")
+    assert "compaction, ranking" in text
+
+
 def test_embed_text_skips_empty_fields() -> None:
     from durin.memory.schema import MemoryEntry
 
@@ -301,6 +321,7 @@ def test_embed_text_skips_empty_fields() -> None:
     no_entities = MemoryEntry(id="x", headline="hed", summary="sum", body="bod")
     text = VectorIndex._embed_text(no_entities)
     assert "Entities:" not in text
+    assert "Topics:" not in text
     assert text == "hed\n\nsum\n\nbod"
 
 

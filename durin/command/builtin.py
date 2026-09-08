@@ -461,6 +461,7 @@ async def cmd_retry(ctx: CommandContext) -> OutboundMessage | None:
 
 async def _archive_closed_session(
     loop, key: str, snapshot: list[dict], last_active, prior_summary: str | None,
+    prior_tags: tuple[list[str], list[str]],
 ) -> None:
     """File the conversation a ``/new`` just closed as its own record.
 
@@ -472,7 +473,9 @@ async def _archive_closed_session(
     ``cmd_new``, so the next conversation on this key starts clean. It holds
     the archive of the messages that were still unconsolidated plus
     ``prior_summary``, the compaction summary the key carried until now, so
-    the closed conversation's whole arc stays reachable. Best-effort: a
+    the closed conversation's whole arc stays reachable. The record's tags are
+    the union of ``prior_tags`` (that summary's own) and the ones this archive
+    round returns, matching the two texts it holds. Best-effort: a
     failure is logged and the new session is unaffected. The session object
     is deliberately not touched here — the next turn may already be writing
     it.
@@ -484,12 +487,15 @@ async def _archive_closed_session(
 
     log = logging.getLogger(__name__)
     summary: str | None = None
+    tags: dict[str, list[str]] = {"entities": [], "topics": []}
     if snapshot:
         try:
             result = await loop.consolidator.archive(snapshot)
             first = result[0] if isinstance(result, tuple) else None
             if isinstance(first, str) and first.strip() and first.strip() != "(nothing)":
                 summary = first.strip()
+            if isinstance(result, tuple) and isinstance(result[1], dict):
+                tags = result[1]
         except Exception:  # noqa: BLE001 — fire-and-forget; the session is already cleared
             log.exception("/new archive failed for %s", key)
     parts = [p for p in (prior_summary, summary) if p]
@@ -500,6 +506,8 @@ async def _archive_closed_session(
     try:
         write_session_summary(
             loop.workspace, closed_key, "\n\n---\n\n".join(parts), last_active=last_active,
+            entities=sorted(set(prior_tags[0]) | set(tags.get("entities") or [])),
+            topics=sorted(set(prior_tags[1]) | set(tags.get("topics") or [])),
         )
     except Exception:  # noqa: BLE001
         log.exception("/new closed-conversation record failed for %s", key)
@@ -510,12 +518,19 @@ async def cmd_new(ctx: CommandContext) -> OutboundMessage:
     loop = ctx.loop
     await loop._cancel_active_tasks(ctx.key)
 
-    from durin.memory.session_summary_store import delete_session_summary, get_session_summary
+    from durin.memory.session_summary_store import (
+        delete_session_summary,
+        get_session_summary,
+        get_session_summary_tags,
+    )
 
     session = ctx.session or loop.sessions.get_or_create(ctx.key)
     snapshot = session.messages[session.last_consolidated:]
     last_active = session.updated_at            # before clear() stamps "now"
     prior_summary, _ = get_session_summary(loop.workspace, ctx.key)
+    # Read before the delete below: the record is filed in the background,
+    # by which time the key's summary file is gone.
+    prior_tags = get_session_summary_tags(loop.workspace, ctx.key)
     session.clear()
     loop.sessions.save(session)
     loop.sessions.invalidate(session.key)
@@ -525,7 +540,9 @@ async def cmd_new(ctx: CommandContext) -> OutboundMessage:
     delete_session_summary(loop.workspace, ctx.key)
     if snapshot or prior_summary:
         loop._schedule_background(
-            _archive_closed_session(loop, ctx.key, snapshot, last_active, prior_summary)
+            _archive_closed_session(
+                loop, ctx.key, snapshot, last_active, prior_summary, prior_tags,
+            )
         )
     # Session-close trigger fires once per /new
     # regardless of whether the snapshot above triggered compaction.
@@ -1396,7 +1413,7 @@ async def cmd_compact(ctx: CommandContext) -> OutboundMessage:
     session.last_consolidated = len(session.messages)
     if summary:
         loop.consolidator._merge_session_tags(session, tags)
-        loop.consolidator._persist_last_summary(session, [summary])
+        loop.consolidator._persist_last_summary(session, [summary], tags)
     loop.sessions.save(session)
 
     if summary:

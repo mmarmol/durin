@@ -367,10 +367,9 @@ def test_warm_response_budget_headline_fallback_when_twelve_hits_exceed_it(
     # though both sections carry hits past the budget.
     assert rendered.index("=== CANONICAL:") < rendered.index("## Fragment")
     # The size bound holds end-to-end through the tool, not just at the
-    # renderer unit level (`test_sectioned_output.py`'s own
-    # `test_twelve_hits_all_represented_under_tight_budget` covers that) —
-    # the budget plus a generous per-hit allowance for the 13 hits that
-    # could each degrade to a headline-pointer line.
+    # renderer unit level where `tests/memory/test_sectioned_output.py`
+    # already checks it — the budget plus a generous per-hit allowance for
+    # the 13 hits that could each degrade to a headline-pointer line.
     assert len(rendered) <= 4000 + 13 * 80
 
     payload = [p for t, p in events if t == "memory.recall"][0]

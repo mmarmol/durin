@@ -10,7 +10,7 @@ The indexer sits between the write path (tools, Dream, the file watcher) and the
 
 **Derived, reconstructible caches.** Both the LanceDB table and the FTS5 database are caches derived from `.md` files. No index column holds information absent from its backing file. Because of this, any index corruption is recoverable by rebuilding from disk.
 
-**Per-type embedding composers.** The text fed to the embedding model differs by document type. Entity pages embed `name + aliases + rendered frontmatter + body`. Memory entries embed `headline + summary + entities + body`. Session turns are FTS-only (not vector-indexed). Each type has exactly one composer function; there is no shared generic path.
+**Per-type embedding composers.** The text fed to the embedding model differs by document type. Entity pages embed `name + aliases + rendered frontmatter + body`. Memory entries embed `headline + summary + entities + topics + body`. Session turns are FTS-only (not vector-indexed). Each type has exactly one composer function; there is no shared generic path.
 
 **Schema version as an integrity contract.** `index_meta.py` tracks `CURRENT_SCHEMA_VERSION`. On startup, `ensure_index_fresh` compares the on-disk schema version against the code's expected version. A mismatch triggers an automatic rebuild. This prevents the search pipeline from operating silently against a structurally stale index after an upgrade.
 
@@ -30,7 +30,7 @@ flowchart TD
 
     subgraph Composer["Embedding text composers"]
         CE["_compose_entity_page_text\nname + aliases + frontmatter + body\n1500-char budget"]
-        ME2["_embed_text\nheadline + summary + entities + body\n1500-char budget"]
+        ME2["_embed_text\nheadline + summary + entities\n+ topics + body\n1500-char budget"]
         SK2["skill text\nname + description + body"]
     end
 
@@ -149,6 +149,7 @@ The entity type prefix (`project:`, `person:`) is intentionally omitted from the
 - `headline`
 - `summary` (skipped when it is a body prefix to avoid double-weighting the same tokens)
 - `Entities: ref1, ref2` (when entities are tagged)
+- `Topics: label, label` (when topics are tagged)
 - `body`
 
 **Skills** — `name + description + body` (composed inline in `upsert_skill` and `_skill_record`).
@@ -165,7 +166,7 @@ Every write goes to **both** tables. The `FTSIndex.upsert` method deletes the pr
 
 **`fts_meta`** stores `uri`, `mtime`, and `indexed_at` for every indexed file. The health-check and staleness detection logic reads `fts_meta` to find rows whose backing file is gone (orphaned rows) or whose `mtime` has advanced since indexing (stale rows).
 
-**BM25 text composition.** FTS5 indexes the full document text with no character budget. For entity pages: `name + aliases + rendered attributes + relations + body` (full body, not truncated). For entries: `headline + summary + entities + body`. For skills: `name + description + body`. The functions `_entity_text` and `_entry_text` in `indexer.py` build these strings.
+**BM25 text composition.** FTS5 indexes the full document text with no character budget. For entity pages: `name + aliases + rendered attributes + relations + body` (full body, not truncated). For entries: `headline + summary + entities + topics + body`. For skills: `name + description + body`. The functions `_entity_text` and `_entry_text` in `indexer.py` build these strings.
 
 ### Session-turn FTS indexing
 
@@ -189,7 +190,7 @@ The indexer's third pass in `rebuild_fts_index` walks `sessions/*.md` and yields
 |---|---|---|
 | `VectorIndex` | `durin/memory/vector_index.py` | LanceDB wrapper. Write: `upsert`, `upsert_entity_page`, `upsert_skill`, `upsert_reference_chunk`; `rebuild_from_workspace` (full). Read: `search` (top-K L2 by query string), `search_by_vector` (pre-computed vector). |
 | `VectorIndex._compose_entity_page_text` | `durin/memory/vector_index.py` | Entity-page embedding composer: `name + aliases + rendered_frontmatter + body`, 1500-char budget. Single authoritative source for entity centroid shape. |
-| `VectorIndex._embed_text` | `durin/memory/vector_index.py` | Memory-entry embedding composer: `headline + summary + entities + body`, 1500-char budget. Skips summary when it is a body prefix. |
+| `VectorIndex._embed_text` | `durin/memory/vector_index.py` | Memory-entry embedding composer: `headline + summary + entities + topics + body`, 1500-char budget. Skips summary when it is a body prefix. |
 | `VectorIndex._render_frontmatter` | `durin/memory/vector_index.py` | Renders entity attributes and relations as prose sentences for the embedding centroid. Stateful attributes render `current` value only; internal metadata keys skipped. |
 | `FTSIndex` | `durin/memory/fts_index.py` | SQLite FTS5 wrapper. Write: `upsert` (both tables + `fts_meta`), `delete_by_uri`, `delete_by_uris`; `clear`. Read: `search` (unicode61), `search_trigram` (trigram); `uris_with_prefix` (for incremental session indexing). |
 | `fts_index_path` | `durin/memory/fts_index.py` | Returns the canonical `<workspace>/.durin/index/fts.sqlite` path. |
