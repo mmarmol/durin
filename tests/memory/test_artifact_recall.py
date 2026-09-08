@@ -43,3 +43,49 @@ def test_entities_derived_from_a_reference(tmp_path: Path) -> None:
                  create=True, name="Other")
 
     assert entities_derived_from(tmp_path, "reference:thinking-fast-and-slow") == ["topic:two-systems"]
+
+
+def test_notes_false_positive_common_filename_suffix(tmp_path: Path) -> None:
+    """Summary mentioning src/app.py should not match a read of app.py (substring false positive)."""
+    write_session_summary(
+        tmp_path, "websocket:old",
+        "- reviewed the app entry\nFiles/paths examined in this span (read_file to reopen): src/app.py",
+        last_active=date(2026, 9, 1),
+    )
+    rebuild_fts_index(tmp_path)
+
+    # Reading app.py (without src/) should not return the note about src/app.py.
+    notes = memory_notes_for_path(tmp_path, "app.py")
+    assert len(notes) == 0, f"Expected no notes for app.py, but got: {notes}"
+
+
+def test_notes_match_with_dotslash_prefix(tmp_path: Path) -> None:
+    """Summary mentioning ./src/app.py should match a read of src/app.py (prefix-aware)."""
+    write_session_summary(
+        tmp_path, "websocket:old",
+        "- reviewed the app\nFiles/paths examined in this span (read_file to reopen): ./src/app.py",
+        last_active=date(2026, 9, 1),
+    )
+    rebuild_fts_index(tmp_path)
+
+    # Reading src/app.py should match because ./ is optional in the pattern.
+    notes = memory_notes_for_path(tmp_path, "src/app.py")
+    assert len(notes) == 1
+    assert "reviewed the app" in notes[0]
+
+
+def test_notes_existing_positive_still_passes(tmp_path: Path) -> None:
+    """Regression: the original test case should still pass with boundary-aware matching."""
+    write_session_summary(
+        tmp_path, "websocket:old",
+        "- fixed the retry loop\nFiles/paths examined in this span (read_file to reopen): durin/agent/loop.py",
+        last_active=date(2026, 9, 1),
+    )
+    write_session_summary(tmp_path, "websocket:other", "- unrelated work on the webui", last_active=date(2026, 9, 2))
+    rebuild_fts_index(tmp_path)
+
+    notes = memory_notes_for_path(tmp_path, "durin/agent/loop.py")
+
+    assert len(notes) == 1
+    assert notes[0].startswith("- memory/session_summary/websocket_old")
+    assert "fixed the retry loop" in notes[0]

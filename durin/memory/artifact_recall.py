@@ -10,6 +10,7 @@ into the document also shows what memory already holds about it.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from durin.memory.entity_page import EntityPage
@@ -32,19 +33,30 @@ def _enabled(default_limit: int) -> tuple[bool, int]:
         return True, default_limit
 
 
-def memory_notes_for_path(workspace: Path, rel_path: str, *, limit: int = 3) -> list[str]:
-    """``- <uri> — <headline>`` lines for entries that mention ``rel_path``."""
-    enabled, limit = _enabled(limit)
+def memory_notes_for_path(workspace: Path, rel_path: str, *, limit: int | None = None) -> list[str]:
+    """``- <uri> — <headline>`` lines for entries that mention ``rel_path``.
+
+    Caller-provided limit overrides config; defaults to 3 when no limit is passed
+    and no config exists.
+    """
+    enabled, cfg_limit = _enabled(3)
+    effective_limit = limit if limit is not None else cfg_limit
     rel_path = (rel_path or "").strip()
     if not enabled or not rel_path or not fts_index_path(workspace).exists():
         return []
     try:
         with FTSIndex.open(workspace) as index:
             hits = lexical_search(
-                index, decide_lexical_route(rel_path, keywords=rel_path), limit=limit * 4,
+                index, decide_lexical_route(rel_path, keywords=rel_path), limit=effective_limit * 4,
             )
     except Exception:  # noqa: BLE001 — recall is a convenience, never an error
         return []
+    # Build a regex that matches rel_path on a word boundary, allowing optional ./
+    # prefix. This avoids false positives: "app.py" should not match "src/app.py".
+    pattern = re.compile(
+        r"(?<![\w/.\-])(?:\./)?" + re.escape(rel_path) + r"(?![\w/.\-])",
+        re.IGNORECASE,
+    )
     out: list[str] = []
     for hit in hits:
         if hit.type not in _NOTE_CLASSES:
@@ -54,10 +66,10 @@ def memory_notes_for_path(workspace: Path, rel_path: str, *, limit: int = 3) -> 
         except Exception:  # noqa: BLE001
             continue
         text = f"{entry.headline}\n{entry.body or entry.summary or ''}"
-        if rel_path.lower() not in text.lower():
-            continue  # tokenizer matched pieces of the path, not the path
+        if not pattern.search(text):
+            continue  # FTS matched pieces of the path, not the exact path
         out.append(f"- {hit.uri} — {entry.headline}")
-        if len(out) >= limit:
+        if len(out) >= effective_limit:
             break
     return out
 
