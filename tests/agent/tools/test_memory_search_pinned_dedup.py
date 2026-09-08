@@ -52,8 +52,10 @@ def test_pinned_page_collapses_to_a_pointer_line(tmp_path: Path) -> None:
 
     assert out["already_in_context"] == ["memory/entity_page/practice:always-spanish"]
     assert "## Matches shown in your Memory sections" in out["sectioned_rendered"]
-    # The pointer replaces the body — the pinned block already carries it.
-    assert "Answer in Spanish unless asked otherwise." not in out["sectioned_rendered"]
+    # The pointer replaces the block entirely — no canonical section for it.
+    # (Canonical markers carry the full `memory/entity_page/<ref>` uri, per
+    # the `already_in_context` assertion above.)
+    assert "=== CANONICAL: memory/entity_page/practice:" not in out["sectioned_rendered"]
 
 
 def test_principal_page_hit_survives_past_the_body_cap(tmp_path: Path) -> None:

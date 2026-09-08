@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from durin.agent.tools._telemetry import emit_tool_event
 from durin.agent.tools.base import Tool, tool_parameters
@@ -24,6 +24,9 @@ from durin.memory.vector_index import VectorIndex, vector_index_available
 
 logger = logging.getLogger(__name__)
 
+if TYPE_CHECKING:
+    from durin.memory.entity_page import EntityPage
+
 
 def _skill_uri_to_path(uri: str) -> str:
     """Normalise a skill uri to its drillable on-disk shape.
@@ -41,6 +44,23 @@ def _skill_uri_to_path(uri: str) -> str:
 
         return skill_path_from_uri(uri)
     return uri
+
+
+_ENTITY_EXCERPT_CHARS = 600   # same per-page body cap the hot layer uses
+
+
+def _entity_composition(page: "EntityPage", *, excerpt_chars: int | None) -> str:
+    """Name (+ aliases), attributes line and body — the substance of an
+    entity page as one text, cut to ``excerpt_chars`` of body when given."""
+    from durin.memory.hot_layer import _render_attributes_line
+    lines = [page.name + (f" (aliases: {', '.join(page.aliases[:5])})." if page.aliases else "")]
+    attrs = _render_attributes_line(page.attributes)
+    if attrs:
+        lines.append(attrs)
+    body = (page.body or "").strip()
+    if body:
+        lines.append(body if excerpt_chars is None else body[:excerpt_chars])
+    return "\n".join(lines)
 
 
 # Cursors are loaded by entity_ranker in the search pipeline directly.
@@ -242,6 +262,37 @@ class MemorySearchTool(Tool):
         )
         return self._cross_encoder_cache
 
+    def _load_entity_page(self, uri: str) -> "EntityPage | None":
+        """Load the entity page an entity-page ``uri`` addresses.
+
+        ``uri`` is the legacy ``memory/entity_page/<type>:<slug>`` shape
+        carried on ``Result``/``SectionedHit``; translates to the on-disk
+        ``memory/entities/<type>/<slug>.md`` path. Returns ``None`` on any
+        failure (missing file, malformed frontmatter) so callers fall back
+        to their pre-existing name/aliases-only behaviour.
+        """
+        from durin.memory.drill import _translate_entity_page_uri
+        from durin.memory.entity_page import EntityPage
+
+        path = self._workspace / _translate_entity_page_uri(uri)
+        try:
+            return EntityPage.from_file(path)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _entity_full_length(self, uri: str) -> int:
+        """Full-composition length for an entity-page uri.
+
+        Feeds the renderer's completeness qualifier (``_completeness_for``
+        in ``sectioned_output.py``) — ``0`` means unknown, the same
+        backward-compat convention ``SectionedHit.body_length`` already
+        uses for hits whose true length isn't tracked.
+        """
+        page = self._load_entity_page(uri)
+        if page is None:
+            return 0
+        return len(_entity_composition(page, excerpt_chars=None))
+
     def _enrich_body(self, r: Result) -> Result:
         """Populate ``body`` on a vector-shaped Result by loading the entry.
 
@@ -269,6 +320,19 @@ class MemorySearchTool(Tool):
             except OSError:
                 return r
             return dataclasses.replace(r, body=text)
+
+        # Entity-page hits address `memory/entity_page/<type>:<slug>`, not
+        # the `memory/<class>/<id>` triplet the split below expects (that
+        # would look for a `memory/entity_page/<type>:<slug>.md` file,
+        # which never exists — entity pages live under
+        # `memory/entities/<type>/<slug>.md`).
+        if r.class_name == "entity_page":
+            page = self._load_entity_page(r.uri)
+            if page is None:
+                return r
+            return dataclasses.replace(
+                r, body=_entity_composition(page, excerpt_chars=None),
+            )
 
         try:
             _, class_name, entry_id = r.uri.split("/", 2)
@@ -637,6 +701,10 @@ class MemorySearchTool(Tool):
                 summary=r.summary,
                 entities=tuple(r.entities),
                 ingest_id=None,
+                body_length=(
+                    self._entity_full_length(r.uri)
+                    if r.class_name == "entity_page" else 0
+                ),
             )
             for r in results
         ]
@@ -996,13 +1064,32 @@ class MemorySearchTool(Tool):
         # `_enrich_body` only when the vector index didn't have the row
         # (e.g. grep-only path).
         carried_body = getattr(hit, "body", "") or ""
+        summary = hit.snippet or ""
+        body = carried_body if level == "cold" else ""
+        if class_name == "entity_page":
+            # The vector index stores an entity's summary as its name +
+            # aliases only (`VectorIndex.upsert_entity_page`) — replace it
+            # with the fuller composition so a hit on the page actually
+            # tells the model something about it without a drill.
+            page = self._load_entity_page(uri)
+            if page is not None:
+                if level == "cold":
+                    # `_render_block` prefers `summary` over `body`
+                    # (`summary > body > snippet`) — widen summary to the
+                    # full composition too, or the capped excerpt would
+                    # always win and the full body would never render.
+                    full = _entity_composition(page, excerpt_chars=None)
+                    summary = full
+                    body = full
+                else:
+                    summary = _entity_composition(page, excerpt_chars=_ENTITY_EXCERPT_CHARS)
         result = Result(
             source=source,
             uri=uri,
             headline=hit.snippet or hit.uri,
             snippet=(hit.snippet or "")[:160],
-            summary=hit.snippet or "",
-            body=carried_body if level == "cold" else "",
+            summary=summary,
+            body=body,
             class_name=class_name,
             valid_from=hit.ts or "",
             entities=entities,
