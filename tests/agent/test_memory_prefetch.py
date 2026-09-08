@@ -17,7 +17,7 @@ from durin.bus.events import InboundMessage
 from durin.bus.queue import MessageBus
 from durin.config.schema import MemoryPrefetchConfig
 from durin.memory.fts_index import FTSIndex, fts_index_path
-from durin.providers.base import LLMResponse
+from durin.providers.base import LLMResponse, ToolCallRequest
 
 _RENDERED = (
     "=== CANONICAL: person:ana (complete) ===\nAna\nAna runs the bakery on Main St.\n=== END CANONICAL ==="
@@ -333,8 +333,12 @@ async def test_prefetch_hands_its_refs_to_the_search_tool_for_the_turn(
     tmp_path: Path, monkeypatch
 ) -> None:
     """The model's own search in the same turn must not re-render what the
-    prefetch already fenced into the message; the loop hands the tool the
-    turn's refs and takes them back at save time."""
+    prefetch already fenced into the message; the loop binds the turn's refs
+    into the ContextVar memory_search reads for its dedup, and resets it at
+    save time. Both functions are imported locally where the loop calls them
+    (a top-level import would cycle back through durin.agent.tools._telemetry
+    into durin.agent's own package init), so the patch targets the source
+    module rather than durin.agent.loop's namespace."""
     seen: list[frozenset[str]] = []
     # The markers as the real tool renders them: canonical hits carry the
     # display uri, fragments the entry path with its suffix.
@@ -345,9 +349,17 @@ async def test_prefetch_hands_its_refs_to_the_search_tool_for_the_turn(
         "Ana opened the bakery in March.\n=== END FRAGMENT ==="
     )
     fake = _FakeSearch(total=2, rendered=rendered)
-    fake.set_turn_prefetch_refs = lambda refs: seen.append(frozenset(refs))
-    fake.clear_turn_prefetch_refs = lambda: seen.append(frozenset())
     loop, captured, rec = _make_loop(tmp_path, monkeypatch, fake=fake)
+
+    def _recording_bind(refs):
+        seen.append(frozenset(refs))
+        return frozenset(refs)  # stand-in token; this test only checks the handoff
+
+    def _recording_reset(token):
+        seen.append(frozenset())
+
+    monkeypatch.setattr("durin.agent.tools.memory_search.bind_turn_prefetch_refs", _recording_bind)
+    monkeypatch.setattr("durin.agent.tools.memory_search.reset_turn_prefetch_refs", _recording_reset)
 
     await loop._process_message(InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION))
 
@@ -357,6 +369,170 @@ async def test_prefetch_hands_its_refs_to_the_search_tool_for_the_turn(
         frozenset({"person:ana", "memory/episodic/2026-01-01-bakery"}),
         frozenset(),
     ]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_sessions_never_leak_prefetch_refs_across_each_other(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """One memory_search tool is shared by the whole AgentLoop, and the
+    loop's concurrency model is per-session serial / cross-session concurrent
+    (AgentLoop._dispatch: a per-session asyncio.Lock, nothing serializes
+    different sessions). If the turn's prefetch refs lived on the tool
+    instance, a session B search landing while session A's refs were still
+    bound would inherit them and wrongly collapse a hit B's own turn never
+    showed. The ContextVar binds per asyncio task instead, so two turns on
+    different sessions running genuinely concurrently (asyncio.gather) must
+    never see each other's refs.
+
+    Three asyncio.Events pin the exact overlap the bug needs, in order:
+    ``b_bound`` guarantees session B has already bound its OWN ref
+    ("person:bo") before session A binds — otherwise, under the pre-fix
+    shared-attribute bug, A's write could land first and then be masked by
+    B's own subsequent bind, hiding the leak from the very check meant to
+    catch it. ``a_bound`` then guarantees A has bound "person:ana" before B's
+    cross-session search reads anything, and ``b_searched`` guarantees A has
+    not reset yet (still mid-RUN, blocked on its own model call) when that
+    read happens. Without forcing this exact order, the two turns' bound
+    windows might never coincide the right way and the assertion would pass
+    by scheduling luck alone — on the old, buggy code as much as the new one
+    (verified: temporarily swapping the ContextVar for a plain shared
+    variable — the pre-fix instance-attribute semantics — made this test
+    fail as expected; reverted after confirming it).
+    """
+    from durin.agent.tools import memory_search as memory_search_module
+
+    b_bound = asyncio.Event()
+    a_bound = asyncio.Event()
+    b_searched = asyncio.Event()
+
+    class _ContextAwareSearch:
+        """Stands in for the shared memory_search tool. A query containing
+        "Ana"/"Bo" simulates a turn's own automatic prefetch; the literal ref
+        "person:ana" simulates the model choosing to search for that person
+        mid-turn, answered by checking the SAME ContextVar the real tool's
+        dedup block reads — the mechanism this test exists to verify."""
+
+        name = "memory_search"
+        description = "test double"
+        parameters: dict = {}
+        concurrency_safe = False
+
+        def __init__(self) -> None:
+            self.calls: list[tuple[dict, dict]] = []
+
+        def cast_params(self, params: dict) -> dict:
+            return params
+
+        def validate_params(self, params: dict) -> list[str]:
+            return []
+
+        def to_schema(self) -> dict:
+            # The background post-save consolidation check
+            # (Consolidator.estimate_session_prompt_tokens) reads every
+            # registered tool's schema independently of the chat mock above,
+            # so this fake needs one too or that best-effort background task
+            # logs a spurious AttributeError.
+            return {"type": "function", "function": {
+                "name": self.name, "description": self.description, "parameters": self.parameters,
+            }}
+
+        async def execute(self, **kwargs):
+            query = kwargs.get("query", "")
+            if query == "person:ana":
+                # Session B's mid-turn search for session A's ref. Wait for
+                # A to have actually bound first, so the check below is
+                # meaningful, then release A to finish (and reset) only
+                # after this has run — pinning the overlap deterministically.
+                await a_bound.wait()
+                seen = memory_search_module._turn_prefetch_refs.get()
+                if query in seen:
+                    result = {
+                        "total": 1, "already_in_context": [query],
+                        "sectioned_rendered": "## Matches shown in your Memory sections\n",
+                    }
+                else:
+                    result = {
+                        "total": 1, "sectioned_rendered":
+                            f"=== CANONICAL: {query} (complete) ===\nhit\n=== END CANONICAL ===",
+                    }
+                b_searched.set()
+            elif "Ana" in query:
+                # Session A's own prefetch. Wait for B to have already bound
+                # its own ref first (see the docstring above for why the
+                # order matters), then land the hit that leads to A's bind.
+                await b_bound.wait()
+                result = {
+                    "total": 1, "sectioned_rendered":
+                        "=== CANONICAL: person:ana (complete) ===\nAna runs the bakery.\n=== END CANONICAL ===",
+                }
+            elif "Bo" in query:
+                result = {
+                    "total": 1, "sectioned_rendered":
+                        "=== CANONICAL: person:bo (complete) ===\nBo runs the shop.\n=== END CANONICAL ===",
+                }
+            else:
+                result = {"total": 0, "sectioned_rendered": ""}
+            self.calls.append((dict(kwargs), result))
+            return result
+
+    fake = _ContextAwareSearch()
+    loop, _captured, _rec = _make_loop(tmp_path, monkeypatch, fake=fake)
+
+    real_bind = memory_search_module.bind_turn_prefetch_refs
+
+    def _bind_and_signal(refs):
+        token = real_bind(refs)
+        if "person:bo" in refs:
+            b_bound.set()
+        if "person:ana" in refs:
+            a_bound.set()
+        return token
+
+    monkeypatch.setattr("durin.agent.tools.memory_search.bind_turn_prefetch_refs", _bind_and_signal)
+
+    call_counts: dict[str, int] = {}
+
+    async def _chat(*args, **kwargs):
+        messages = kwargs.get("messages") or (args[0] if args else [])
+        session = "a" if "Ana" in _user_content([messages]) else "b"
+        call_counts[session] = call_counts.get(session, 0) + 1
+        if session == "a":
+            # A must not reach SAVE (and reset its bound ref) before B's
+            # cross-session search has already run against it.
+            await b_searched.wait()
+            return LLMResponse(content="Done", tool_calls=[])
+        if call_counts["b"] == 1:
+            return LLMResponse(content="", finish_reason="tool_calls", tool_calls=[
+                ToolCallRequest(id="call-b", name="memory_search", arguments={"query": "person:ana"}),
+            ])
+        return LLMResponse(content="Done", tool_calls=[])
+
+    loop.provider.chat_with_retry = AsyncMock(side_effect=_chat)
+
+    async def _run(chat_id: str, text: str) -> frozenset[str]:
+        await loop._process_message(
+            InboundMessage(channel="websocket", sender_id="u", chat_id=chat_id, content=text)
+        )
+        # Read in the SAME task _process_message just ran in (a direct
+        # await, not a child task), so this is that turn's own post-SAVE
+        # ContextVar state — not the gather-caller's, which a task's own
+        # binding never touches regardless of whether the reset ran.
+        return memory_search_module._turn_prefetch_refs.get()
+
+    after_a, after_b = await asyncio.gather(
+        _run("a", "What do you remember about Ana's bakery on Main Street?"),
+        _run("b", "What do you remember about Bo's shop across town?"),
+    )
+
+    b_cross_call = next(c for c in fake.calls if c[0].get("query") == "person:ana")
+    _kwargs, b_result = b_cross_call
+    assert "person:ana" not in b_result.get("already_in_context", [])
+
+    # Each turn's own binding is released by the time it returns, in its own
+    # task — not just eventually, and not because nobody else was watching.
+    assert after_a == frozenset()
+    assert after_b == frozenset()
 
 
 @pytest.mark.asyncio

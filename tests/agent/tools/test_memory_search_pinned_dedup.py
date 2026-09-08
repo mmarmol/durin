@@ -15,7 +15,11 @@ from pathlib import Path
 
 import pytest
 
-from durin.agent.tools.memory_search import MemorySearchTool
+from durin.agent.tools.memory_search import (
+    MemorySearchTool,
+    bind_turn_prefetch_refs,
+    reset_turn_prefetch_refs,
+)
 from durin.memory.aliases_cache import _clear_all
 from durin.memory.entity_page import EntityPage
 from durin.memory.field_patch import FieldPatch
@@ -85,15 +89,15 @@ def test_a_hit_the_turns_prefetch_already_showed_collapses_to_a_pointer(
     assert "=== FRAGMENT: memory/episodic/bakery " in plain["sectioned_rendered"]
     assert "already_in_context" not in plain
 
-    tool.set_turn_prefetch_refs({"memory/episodic/bakery"})
+    token = bind_turn_prefetch_refs({"memory/episodic/bakery"})
     out = asyncio.run(tool.execute(query="bakery", scope="dreamed", level="warm"))
 
     assert out["already_in_context"] == ["memory/episodic/bakery"]
     assert "## Matches shown in your Memory sections" in out["sectioned_rendered"]
     assert "=== FRAGMENT: memory/episodic/bakery " not in out["sectioned_rendered"]
 
-    # The refs belong to one turn only: cleared, the hit renders whole again.
-    tool.clear_turn_prefetch_refs()
+    # The refs belong to one turn only: reset, the hit renders whole again.
+    reset_turn_prefetch_refs(token)
     again = asyncio.run(tool.execute(query="bakery", scope="dreamed", level="warm"))
     assert "already_in_context" not in again
     assert "=== FRAGMENT: memory/episodic/bakery " in again["sectioned_rendered"]

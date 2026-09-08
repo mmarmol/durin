@@ -7,6 +7,7 @@ import dataclasses
 import os
 import time
 from contextlib import suppress
+from contextvars import Token
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from functools import partial
@@ -334,6 +335,13 @@ class TurnContext:
     memory_prefetch: str = ""
     prefetch_hits: int = 0
     prefetch_refs: list[str] = field(default_factory=list)
+    # Token from binding this turn's prefetch refs into the ContextVar
+    # memory_search reads for its own-search dedup (see _memory_prefetch).
+    # None until a prefetch lands hits; reset (and set back to None) in
+    # _state_save, or in _process_message's finally if the turn never gets
+    # there — exactly one of the two runs the reset, guarded by this being
+    # non-None.
+    prefetch_refs_token: Token[frozenset[str]] | None = None
 
     final_content: str | None = None
     tools_used: list[str] = field(default_factory=list)
@@ -2665,52 +2673,64 @@ class AgentLoop:
             persona_override=persona,
         )
 
-        while ctx.state is not TurnState.DONE:
-            handler_name = f"_state_{ctx.state.name.lower()}"
-            handler = getattr(self, handler_name, None)
-            if handler is None:
-                raise RuntimeError(f"Missing state handler for {ctx.state}")
+        try:
+            while ctx.state is not TurnState.DONE:
+                handler_name = f"_state_{ctx.state.name.lower()}"
+                handler = getattr(self, handler_name, None)
+                if handler is None:
+                    raise RuntimeError(f"Missing state handler for {ctx.state}")
 
-            t0 = time.perf_counter()
-            try:
-                event = await handler(ctx)
-            except Exception:
+                t0 = time.perf_counter()
+                try:
+                    event = await handler(ctx)
+                except Exception:
+                    duration = (time.perf_counter() - t0) * 1000
+                    ctx.trace.append(
+                        StateTraceEntry(
+                            state=ctx.state,
+                            started_at=t0,
+                            duration_ms=duration,
+                            event="",
+                            error="exception",
+                        )
+                    )
+                    raise
+
                 duration = (time.perf_counter() - t0) * 1000
                 ctx.trace.append(
                     StateTraceEntry(
                         state=ctx.state,
                         started_at=t0,
                         duration_ms=duration,
-                        event="",
-                        error="exception",
+                        event=event,
                     )
                 )
-                raise
-
-            duration = (time.perf_counter() - t0) * 1000
-            ctx.trace.append(
-                StateTraceEntry(
-                    state=ctx.state,
-                    started_at=t0,
-                    duration_ms=duration,
-                    event=event,
+                logger.debug(
+                    "[turn {}] State {} took {:.1f}ms -> event {}",
+                    ctx.turn_id,
+                    ctx.state.name,
+                    duration,
+                    event,
                 )
-            )
-            logger.debug(
-                "[turn {}] State {} took {:.1f}ms -> event {}",
-                ctx.turn_id,
-                ctx.state.name,
-                duration,
-                event,
-            )
 
-            next_state = self._TRANSITIONS.get((ctx.state, event))
-            if next_state is None:
-                raise RuntimeError(
-                    f"[turn {ctx.turn_id}] No transition from {ctx.state} "
-                    f"on event {event!r}"
-                )
-            ctx.state = next_state
+                next_state = self._TRANSITIONS.get((ctx.state, event))
+                if next_state is None:
+                    raise RuntimeError(
+                        f"[turn {ctx.turn_id}] No transition from {ctx.state} "
+                        f"on event {event!r}"
+                    )
+                ctx.state = next_state
+        finally:
+            # _state_save resets this in the common path (turn reaches SAVE).
+            # A turn that raises before then — or transitions straight to
+            # DONE without ever binding it (COMMAND's "shortcut" event) —
+            # must still release the ContextVar binding, or it would only be
+            # freed when this task itself is garbage collected. Guarded so
+            # _state_save's own reset is never doubled.
+            if ctx.prefetch_refs_token is not None:
+                from durin.agent.tools.memory_search import reset_turn_prefetch_refs
+                reset_turn_prefetch_refs(ctx.prefetch_refs_token)
+                ctx.prefetch_refs_token = None
 
         logger.debug(
             "[turn {}] Turn completed after {} states",
@@ -2946,16 +2966,20 @@ class AgentLoop:
         ctx.prefetch_refs = re.findall(
             r"^=== (?:SKILL|CANONICAL|FRAGMENT|SESSION|INGESTED): (\S+)", rendered, re.M,
         )
-        # Hand the refs to the tool so the model's own search this turn
-        # collapses what the block already showed into pointer lines instead
-        # of rendering it a second time. Reduced to the key shape the dedup
-        # matches hits on, not the rendered display uri. Taken back in
+        # Bind the refs into the ContextVar memory_search reads for its
+        # dedup, in THIS asyncio task — the same one _state_run later drives
+        # the tool loop in — so the model's own search this turn collapses
+        # what the block already showed into pointer lines instead of
+        # rendering it a second time, and a concurrent turn on a different
+        # session (its own task) never sees them. Reduced to the key shape
+        # the dedup matches hits on, not the rendered display uri. Reset in
         # _state_save so they never outlive the turn.
-        setter = getattr(tool, "set_turn_prefetch_refs", None)
-        if callable(setter):
+        with suppress(Exception):
+            from durin.agent.tools.memory_search import bind_turn_prefetch_refs
             from durin.memory.context_dedup import dedup_key
-            with suppress(Exception):
-                setter({dedup_key(r) for r in ctx.prefetch_refs})
+            ctx.prefetch_refs_token = bind_turn_prefetch_refs(
+                {dedup_key(r) for r in ctx.prefetch_refs}
+            )
         self._emit_prefetch(ctx.session_key, hits=total, chars=len(block), duration_ms=duration_ms)
         return block
 
@@ -3139,12 +3163,15 @@ class AgentLoop:
             emit_skill_used(_skill_calls)
 
         # The turn's prefetch refs die with the turn: the next message gets
-        # its own block, and a stale set would silently collapse hits the
-        # model never saw.
-        _clear_refs = getattr(self.tools.get("memory_search"), "clear_turn_prefetch_refs", None)
-        if callable(_clear_refs):
-            with suppress(Exception):
-                _clear_refs()
+        # its own block, and a stale binding would silently collapse hits
+        # the model never saw. None here means either no prefetch landed
+        # this turn, or _process_message's finally already reset it on an
+        # early exit (an exception earlier in this same turn) — either way
+        # there is nothing left to release.
+        if ctx.prefetch_refs_token is not None:
+            from durin.agent.tools.memory_search import reset_turn_prefetch_refs
+            reset_turn_prefetch_refs(ctx.prefetch_refs_token)
+            ctx.prefetch_refs_token = None
 
         _pinned_chars, _hot_chars = self._memory_surface_chars()
         emit_memory_usage_rollup(

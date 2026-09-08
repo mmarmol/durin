@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from contextvars import ContextVar, Token
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable, Optional
 
@@ -47,6 +48,31 @@ def _skill_uri_to_path(uri: str) -> str:
 
 
 _ENTITY_EXCERPT_CHARS = 600   # same per-page body cap the hot layer uses
+
+# Refs the turn's automatic prefetch already fenced into the user message.
+# Task-scoped (contextvars), not an attribute on the tool instance: one
+# MemorySearchTool is shared by the whole AgentLoop, whose concurrency model
+# serializes turns within a session but runs different sessions concurrently
+# (see AgentLoop._dispatch) — an instance attribute would let a session B
+# search that lands while session A's refs are still bound inherit them and
+# collapse a hit B's own turn never showed into a pointer line. The agent
+# loop binds this in _memory_prefetch, in the same asyncio task that later
+# drives the tool loop, and resets it once the turn ends; every other caller
+# (subagents, webui/graph_api search, ad-hoc scripts) sees the default.
+_turn_prefetch_refs: ContextVar[frozenset[str]] = ContextVar(
+    "durin_turn_prefetch_refs", default=frozenset(),
+)
+
+
+def bind_turn_prefetch_refs(refs: Iterable[str]) -> Token[frozenset[str]]:
+    """Bind the refs this turn's automatic prefetch already showed, for the
+    current async task."""
+    return _turn_prefetch_refs.set(frozenset(refs))
+
+
+def reset_turn_prefetch_refs(token: Token[frozenset[str]]) -> None:
+    """Forget them — they are only valid for the turn that bound them."""
+    _turn_prefetch_refs.reset(token)
 
 
 def _entity_composition(page: "EntityPage", *, excerpt_chars: int | None) -> str:
@@ -205,11 +231,6 @@ class MemorySearchTool(Tool):
         # constructions — graph_api / webui search, subagents, ad-hoc
         # scripts — face callers with no hot layer and must see every hit.
         self._context_dedup = context_dedup
-        # Refs the turn's automatic prefetch already fenced into the user
-        # message. Set by the agent loop after its own search and cleared at
-        # save time, so a search the model makes in the same turn does not
-        # render the same hit twice. Empty for every other caller.
-        self._turn_prefetch_refs: frozenset[str] = frozenset()
         # Alias index is shared process-wide via durin.memory.aliases_cache,
         # so the refine pass and EntityAbsorption see updates as soon as we
         # (or they) call refresh_for / remove on it. No per-instance state
@@ -225,14 +246,6 @@ class MemorySearchTool(Tool):
             logger.warning(
                 "memory_search: ensure_index_fresh failed: %s", exc,
             )
-
-    def set_turn_prefetch_refs(self, refs: Iterable[str]) -> None:
-        """Record the refs this turn's automatic prefetch already showed."""
-        self._turn_prefetch_refs = frozenset(refs)
-
-    def clear_turn_prefetch_refs(self) -> None:
-        """Forget them — they are only valid for the turn that set them."""
-        self._turn_prefetch_refs = frozenset()
 
     @property
     def name(self) -> str:
@@ -736,7 +749,7 @@ class MemorySearchTool(Tool):
             capped_hits, in_context_hits = split_in_context(
                 self._workspace, capped_hits,
                 pinned_refs=refs,
-                whole_refs=(refs - {principal}) | self._turn_prefetch_refs,
+                whole_refs=(refs - {principal}) | _turn_prefetch_refs.get(),
             )
 
         kept_uris = {h.uri for h in capped_hits}
