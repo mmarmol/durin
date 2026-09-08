@@ -170,10 +170,12 @@ def test_reindex_one_file_under_archive_is_noop(tmp_path: Path) -> None:
         assert idx.count() == 0
 
 
-def test_entity_row_carries_its_derived_from_refs(tmp_path: Path) -> None:
-    """A `derived_from` ref is searchable as a phrase in the entity's FTS row,
-    so a lookup of "which entities came from this document" is an index query
-    instead of a walk over every entity page."""
+def test_entity_row_carries_the_slug_of_its_derived_from_refs(tmp_path: Path) -> None:
+    """The slug half of a `derived_from` ref (the tokens after
+    `reference:`) is searchable as a phrase in the entity's FTS row, so a
+    lookup of "which entities came from this document" is an index query
+    instead of a walk over every entity page — see
+    `entities_derived_from_candidates`, which queries that same slug."""
     page = EntityPage(
         type="topic", name="Two Systems", aliases=[], body="Fast and slow.",
         derived_from=["reference:thinking-fast-and-slow"],
@@ -183,7 +185,7 @@ def test_entity_row_carries_its_derived_from_refs(tmp_path: Path) -> None:
     rebuild_fts_index(tmp_path)
 
     with FTSIndex.open(tmp_path) as idx:
-        hits = idx.search('"reference:thinking-fast-and-slow"')
+        hits = idx.search('"thinking-fast-and-slow"')
 
     assert [h.uri for h in hits] == ["topic:two-systems"]
 
@@ -201,5 +203,26 @@ def test_entity_row_does_not_index_the_derived_from_label_word(tmp_path: Path) -
 
     with FTSIndex.open(tmp_path) as idx:
         hits = idx.search('"derived from"')
+
+    assert hits == []
+
+
+def test_entity_row_does_not_index_the_derived_from_ref_type_prefix(
+    tmp_path: Path,
+) -> None:
+    """Minor 4: the `reference:` type prefix must not be indexed either —
+    only the slug. Before the fix, the full ref (`reference:<slug>`) rode
+    the row, so the literal token `reference` landed in every distilled
+    entity's row and a query for that word pulled the whole distilled
+    corpus into the candidate pool regardless of which document it named."""
+    page = EntityPage(
+        type="topic", name="Two Systems", aliases=[], body="Fast and slow.",
+        derived_from=["reference:thinking-fast-and-slow"],
+    )
+    page.save(tmp_path / "memory" / "entities" / "topic" / "two-systems.md")
+    rebuild_fts_index(tmp_path)
+
+    with FTSIndex.open(tmp_path) as idx:
+        hits = idx.search('"reference"')
 
     assert hits == []

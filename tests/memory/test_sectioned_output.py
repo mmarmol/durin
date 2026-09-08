@@ -398,6 +398,20 @@ class TestMaxCharsBudget:
         # is a pointer — structure/order stays intact for the LLM.
         assert "## Fragment" in out
 
+    def test_headline_pointer_cuts_to_first_line_and_80_chars(self) -> None:
+        """Minor 7: the pointer headline is the snippet's first line cut
+        to 80 characters, not a raw (possibly repetitive) body prefix."""
+        hit1 = _h("e1", "episodic", snippet="keeps this one whole")
+        long_line = "x" * 200
+        multiline_snippet = f"{long_line}\nsecond line must never appear"
+        hit2 = _h("e2", "episodic", snippet=multiline_snippet, score=0.9)
+        budget = len(render_sectioned([hit1]))
+
+        out = render_sectioned([hit1, hit2], max_chars=budget)
+
+        assert "second line must never appear" not in out
+        assert f"- {long_line[:80]} (e2; drill for the body)" in out
+
     def test_twelve_hits_all_represented_under_tight_budget(self) -> None:
         """Task 2 acceptance scenario: many ~1000-char hits, a 4000-char
         budget — every hit still appears (full block or pointer), not

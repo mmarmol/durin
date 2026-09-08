@@ -258,12 +258,16 @@ def _headline_pointer(hit: SectionedHit) -> str:
     """One-line stand-in for a hit the ``max_chars`` budget dropped.
 
     Carries just enough for the agent to decide whether it's worth a
-    drill: a short headline (the hit's snippet, falling back to its uri
-    when there is none) and the uri to drill — mirrors the
-    ``headline = hit.snippet or hit.uri`` fallback used elsewhere for
-    the same purpose.
+    drill: a short headline and the uri to drill. The headline is the
+    hit's snippet — falling back to its uri when there is none, mirrors
+    the ``headline = hit.snippet or hit.uri`` fallback used elsewhere
+    for the same purpose — cut to its first line and 80 characters, so a
+    multi-line or long snippet reads as an actual headline rather than a
+    repetitive body prefix.
     """
-    headline = hit.snippet or hit.uri
+    raw = (hit.snippet or hit.uri).strip()
+    first_line = raw.splitlines()[0] if raw else hit.uri
+    headline = first_line[:80]
     return f"- {headline} ({hit.uri}; drill for the body)"
 
 

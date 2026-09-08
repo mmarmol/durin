@@ -182,7 +182,13 @@ def resolve_pinned_refs(
                 del _pinned_refs_cache[key]
         _pinned_refs_cache[cache_key] = (now, refs)
         while len(_pinned_refs_cache) > _PINNED_REFS_CACHE_MAX:
-            oldest_key = min(_pinned_refs_cache, key=lambda k: _pinned_refs_cache[k][0])
+            # Snapshot with `list(...)` before scanning — iterating the
+            # live dict here (as the sweep above already avoids) would
+            # raise `RuntimeError: dictionary changed size during
+            # iteration` if another thread inserts mid-scan.
+            oldest_key = min(
+                list(_pinned_refs_cache.items()), key=lambda kv: kv[1][0],
+            )[0]
             del _pinned_refs_cache[oldest_key]
     return refs
 

@@ -41,12 +41,15 @@ from durin.utils.file_lock import cross_process_lock
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "MAX_SUMMARY_ENTITIES",
+    "MAX_SUMMARY_TOPICS",
     "SESSION_SUMMARY_CLASS",
     "append_session_summary_block",
     "closed_record_key",
     "delete_session_summary",
     "find_previous_session_summary",
     "get_session_summary",
+    "merge_tags",
     "read_session_summary_entry",
     "sanitize_session_key",
     "session_summary_path",
@@ -204,8 +207,11 @@ _EVICTED_PATHS_MAX_CHARS = 1_200
 # recently seen tags so the file stays a compact, high-signal set no
 # matter how long the key has been compacting. Topics get a tighter cap
 # than entities — they're meant to stay a short set of subject labels.
-_MAX_SUMMARY_ENTITIES = 24
-_MAX_SUMMARY_TOPICS = 12
+# Public (no leading underscore): `command.builtin._archive_closed_session`
+# imports these alongside `merge_tags` so a `/new` closed-conversation
+# record is capped by the same rule, not a separate uncapped union.
+MAX_SUMMARY_ENTITIES = 24
+MAX_SUMMARY_TOPICS = 12
 
 
 def _salvage_paths(evicted_block: str, carried: list[str]) -> None:
@@ -240,7 +246,7 @@ def _build_carried_line(carried: list[str]) -> str:
     return _EVICTED_PATHS_PREFIX + "; ".join(kept)
 
 
-def _merge_tags(prior: list[str], new: Optional[Sequence[str]], cap: int) -> list[str]:
+def merge_tags(prior: list[str], new: Optional[Sequence[str]], cap: int) -> list[str]:
     """Union *prior* and *new*, keeping the *cap* most recently (re)confirmed tags.
 
     Order is recency, not alphabetical: a tag in *new* moves to the end
@@ -249,7 +255,9 @@ def _merge_tags(prior: list[str], new: Optional[Sequence[str]], cap: int) -> lis
     merged list exceeds *cap*, entries are dropped from the front — the
     tags that have gone longest without being (re)confirmed — so a tag a
     later span keeps mentioning survives eviction even if it was first
-    seen long ago.
+    seen long ago. Public: also used by
+    `command.builtin._archive_closed_session` for the `/new` closed-record
+    tag union, so the one rule lives in one place.
     """
     merged = list(prior)
     for tag in new or ():
@@ -282,8 +290,8 @@ def append_session_summary_block(
 
     ``entities`` / ``topics`` are this span's tags. The entry holds one
     list of each for the whole file, so they accumulate as a recency-order
-    union over every span, capped to ``_MAX_SUMMARY_ENTITIES`` /
-    ``_MAX_SUMMARY_TOPICS`` — the summary stays reachable by anything any
+    union over every span, capped to ``MAX_SUMMARY_ENTITIES`` /
+    ``MAX_SUMMARY_TOPICS`` — the summary stays reachable by anything any
     of its *recent* spans was about, including spans whose text the block
     cap already evicted, without growing the tag list without bound. New
     tags alone are reason enough to rewrite: a repeated block contributes
@@ -302,8 +310,8 @@ def append_session_summary_block(
         existing = (entry.body or entry.summary or None) if entry else None
         prior_entities = list(entry.entities) if entry else []
         prior_topics = list(entry.topics) if entry else []
-        merged_entities = _merge_tags(prior_entities, entities, _MAX_SUMMARY_ENTITIES)
-        merged_topics = _merge_tags(prior_topics, topics, _MAX_SUMMARY_TOPICS)
+        merged_entities = merge_tags(prior_entities, entities, MAX_SUMMARY_ENTITIES)
+        merged_topics = merge_tags(prior_topics, topics, MAX_SUMMARY_TOPICS)
         tags_changed = (
             merged_entities != prior_entities or merged_topics != prior_topics
         )

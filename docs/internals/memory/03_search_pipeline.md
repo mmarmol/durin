@@ -91,6 +91,8 @@ Entity-page rows use their entity-ref URI directly (e.g. `person:deborah`); skil
 
 Every query token is double-quoted before FTS5 to escape special characters (`%`, `*`, `:`) and to neutralise the FTS5 boolean keywords (`AND`/`OR`/`NOT`/`NEAR`) — the recall query is natural language, so a query beginning with a word like "not" must not reach the parser as a dangling operator. Balanced double-quoted phrases in the query are preserved as FTS5 phrase tokens.
 
+An entity page's row also carries the slug half of each `derived_from` ref (see `02_indexing.md`), so an ordinary lexical query can match an entity purely through the document it was distilled from — a query for the document's title can surface an entity that never mentions that title in its own name or body.
+
 ### Step 2c — Grep fallback
 
 `search_memory(workspace, query, scope="all", level="warm")` walks `memory/`, `sessions/`, and `ingested/` for literal matches. This is the only path for raw ingested artifacts (not in LanceDB or FTS5 by design) and a recovery path for not-yet-indexed files. Session turns are FTS-indexed since schema v6, so grep and FTS often produce overlapping URIs; RRF accumulates both contributions for the same URI.

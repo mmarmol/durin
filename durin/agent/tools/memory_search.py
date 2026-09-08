@@ -608,13 +608,14 @@ class MemorySearchTool(Tool):
 
         # `warm_excerpt_chars` / `warm_max_chars` bound a warm rendering's
         # size — see `MemorySearchConfig`. Read via a fresh `load_config()`
-        # (the same pattern `_get_vector_index` uses in this file) rather
-        # than `self._app_config`, so callers that construct the tool
-        # directly (graph_api / webui search, tier2_judge — none of them
-        # pass `app_config`) still honour the operator's configured budget,
-        # not just the agent's own tool-call path. Schema defaults are the
-        # fallback so a config load failure degrades to the pre-existing
-        # hard-coded behaviour instead of raising.
+        # call rather than `self._app_config`, so callers that construct
+        # the tool directly (graph_api / webui search, tier2_judge — none
+        # of them pass `app_config`) still honour the operator's
+        # configured budget, not just the agent's own tool-call path.
+        # `load_config()` is read per call, cheaply — there is no per-call
+        # cost worth caching against. Schema defaults are the fallback so
+        # a config load failure degrades to the pre-existing hard-coded
+        # behaviour instead of raising.
         try:
             from durin.config.loader import load_config
             _search_cfg = load_config().memory.search

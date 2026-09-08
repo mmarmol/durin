@@ -659,10 +659,12 @@ class TestNewCommandArchival:
         # The record holds two texts — the prior summary and this archive
         # round — so it carries both their tags, or it would be searchable by
         # less than it holds. The prior summary's file is deleted by then, so
-        # its tags must be read before the record is filed.
+        # its tags must be read before the record is filed. Order is the
+        # store's `merge_tags` recency rule (prior tags first, this round's
+        # newly (re)confirmed tags appended last), not alphabetical.
         from durin.memory.storage import load_entry
         entry = load_entry(closed[0])
-        assert entry.entities == ["person:marcelo", "tool:postgres"]
+        assert entry.entities == ["tool:postgres", "person:marcelo"]
         assert entry.topics == ["database", "preferences"]
 
     @pytest.mark.asyncio

@@ -129,15 +129,17 @@ def memory_notes_for_path(workspace: Path, rel_path: str, *, limit: int | None =
 def entities_derived_from_candidates(workspace: Path, ref: str) -> list[Path]:
     """Entity pages that may name ``ref`` in ``derived_from``, path-sorted.
 
-    An entity page's indexed text carries its ``derived_from`` refs on their
-    own line, so a phrase search for the ref narrows the walk to the handful
-    of pages that mention it. The query is filtered to entity rows
-    (``type_="entity"``) so ``_MAX_ENTITY_CANDIDATES`` bounds entity matches
-    only — a document cited by many session summaries can't push its own
-    distilled entities out of the cap. The index only narrows: a ref quoted
-    in a page's body matches too, so every caller parses the candidate and
-    checks ``derived_from`` itself — the page is the truth; the ``hit.type``
-    check below is a belt, not the filter doing the work.
+    An entity page's indexed text carries the SLUG half of its
+    ``derived_from`` refs on its own line (see ``indexer._entity_text`` —
+    the ``<type>:`` prefix, e.g. ``reference:``, is deliberately left out
+    of the row), so a phrase search for that same slug narrows the walk to
+    the handful of pages that mention it. The query is filtered to entity
+    rows (``type_="entity"``) so ``_MAX_ENTITY_CANDIDATES`` bounds entity
+    matches only — a document cited by many session summaries can't push
+    its own distilled entities out of the cap. The index only narrows: a
+    ref quoted in a page's body matches too, so every caller parses the
+    candidate and checks ``derived_from`` itself — the page is the truth;
+    the ``hit.type`` check below is a belt, not the filter doing the work.
 
     Falls back to every entity page when the index lookup fails, and when the
     workspace has no index *file* on disk: that check only proves the file is
@@ -154,10 +156,14 @@ def entities_derived_from_candidates(workspace: Path, ref: str) -> list[Path]:
         return []
     if not fts_index_path(workspace).exists():
         return sorted(root.rglob("*.md"))
+    # Query the same slug the index carries, not the whole ref — the row
+    # no longer has the `<type>:` prefix (see `indexer._entity_text`), so
+    # a phrase search including it would never match.
+    slug = ref.split(":", 1)[-1]
     try:
         with FTSIndex.open(workspace) as index:
             hits = lexical_search(
-                index, decide_lexical_route(ref, keywords=ref),
+                index, decide_lexical_route(slug, keywords=slug),
                 limit=_MAX_ENTITY_CANDIDATES,
                 type_="entity",
                 # A side effect of a drill or a webui page load, not a memory
