@@ -2584,6 +2584,13 @@ class AgentLoop:
         current_role = "assistant" if is_subagent else "user"
 
         audio_mode, supports_audio = self._audio_build_args()
+        # A system-origin build — a background subagent/workflow result
+        # landing on the user's own session key — shares BUILD's
+        # resolve-then-freeze sequence (_state_build): without it, this
+        # build would always render the eager surface live and puncture
+        # the freeze the session's own turns keep.
+        freezes = self._eager_surface_freezes(session, key)
+        eager_snapshot = self._resolve_eager_snapshot(session, key) if freezes else None
         messages = self.context.build_messages(
             history=history,
             current_message="" if is_subagent else msg.content,
@@ -2598,7 +2605,13 @@ class AgentLoop:
             iteration=0,
             audio_mode=audio_mode,
             supports_audio_input=supports_audio,
+            eager_snapshot=eager_snapshot,
         )
+        if freezes and eager_snapshot is None:
+            # This build rendered live (no snapshot stored yet, or none to
+            # resolve): freeze it now so the next build of this session —
+            # whichever state reaches it first — reuses this exact text.
+            self._freeze_eager_surface(session, key)
         t_wall = time.time()
         final_content, _, all_msgs, stop_reason, _, tool_events = await self._run_agent_loop(
             messages, session=session, channel=channel, chat_id=chat_id,
@@ -2891,21 +2904,33 @@ class AgentLoop:
         cfg = getattr(getattr(self.app_config, "memory", None), "eager_surface", None)
         return cfg if cfg is not None else MemoryEagerSurfaceConfig()
 
-    def _eager_surface_freezes(self, ctx: TurnContext) -> bool:
+    def _session_is_autonomous(self, session: Session | None, session_key: str) -> bool:
+        """Whether this session runs unattended, with no second turn for
+        anything per-session to pay for: a workflow node/subagent's own
+        prompt (``session.metadata["origin_type"]``), or one of the
+        runtime's fresh short-lived kinds (cron, automation, dream…) named
+        in ``AUTONOMOUS_SESSION_PREFIXES``. Shared by the eager-surface
+        freeze gate and the memory-prefetch gate so both skip exactly the
+        same sessions.
+        """
+        if session is not None and session.metadata.get("origin_type"):
+            return True
+        return any(session_key.startswith(p) for p in AUTONOMOUS_SESSION_PREFIXES)
+
+    def _eager_surface_freezes(self, session: Session | None, session_key: str) -> bool:
         """Whether this turn's session keeps a frozen eager memory surface.
 
-        Off for the same contexts the automatic prefetch skips: workflow
-        nodes and subagents build their own prompts, and the runtime's
-        autonomous kinds (cron, automation, dream…) each run in a fresh
-        short-lived session, so there is no second turn for a snapshot to pay
-        for — only a save. Anything else, including channels neither list
-        names, keeps the freeze: a stable prefix is the safe default.
+        Off for the same contexts the automatic prefetch skips (see
+        ``_session_is_autonomous``): workflow nodes and subagents build
+        their own prompts, and the runtime's autonomous kinds (cron,
+        automation, dream…) each run in a fresh short-lived session, so
+        there is no second turn for a snapshot to pay for — only a save.
+        Anything else, including channels neither list names, keeps the
+        freeze: a stable prefix is the safe default.
         """
         if not self._eager_surface_config().freeze:
             return False
-        if ctx.session is not None and ctx.session.metadata.get("origin_type"):
-            return False
-        return not any(ctx.session_key.startswith(p) for p in AUTONOMOUS_SESSION_PREFIXES)
+        return not self._session_is_autonomous(session, session_key)
 
     def _drop_eager_snapshot(self, ctx: TurnContext) -> None:
         """Forget any stored surface for a session that no longer freezes one.
@@ -2920,13 +2945,15 @@ class AgentLoop:
         if ctx.session is not None:
             ctx.session.metadata.pop(SNAPSHOT_KEY, None)
 
-    def _resolve_eager_snapshot(self, ctx: TurnContext) -> "EagerSnapshot | None":
+    def _resolve_eager_snapshot(
+        self, session: Session | None, session_key: str
+    ) -> "EagerSnapshot | None":
         """The session's stored eager surface, or None to render live."""
         from durin.memory.eager_surface import SNAPSHOT_KEY, EagerSnapshot, snapshot_is_stale
 
-        if ctx.session is None:
+        if session is None:
             return None
-        snapshot = EagerSnapshot.from_metadata(ctx.session.metadata.get(SNAPSHOT_KEY))
+        snapshot = EagerSnapshot.from_metadata(session.metadata.get(SNAPSHOT_KEY))
         if snapshot is None:
             return None
         if snapshot_is_stale(
@@ -2935,7 +2962,9 @@ class AgentLoop:
             return None
         return snapshot
 
-    def _freeze_eager_surface(self, ctx: TurnContext) -> "EagerSnapshot | None":
+    def _freeze_eager_surface(
+        self, session: Session | None, session_key: str
+    ) -> "EagerSnapshot | None":
         """Store the pinned block + hot layer the build just rendered, so every
         later turn of this session reuses that exact text.
 
@@ -2950,7 +2979,7 @@ class AgentLoop:
         from durin.memory.eager_surface import SNAPSHOT_KEY, EagerSnapshot
 
         rendered = getattr(self.context, "last_eager_render", None)
-        if not rendered or ctx.session is None:
+        if not rendered or session is None:
             return None
         pinned, hot, refs = rendered
         snapshot = EagerSnapshot(
@@ -2962,10 +2991,10 @@ class AgentLoop:
             # position. Same numbering `extract_skill_calls` and
             # `memory_source_session` use, so a reading of "frozen at turn N"
             # points at the transcript line it was taken on.
-            turn=len(ctx.session.messages) + 1,
+            turn=len(session.messages) + 1,
             frozen_at=datetime.now(timezone.utc).isoformat(),
         )
-        ctx.session.metadata[SNAPSHOT_KEY] = snapshot.to_metadata()
+        session.metadata[SNAPSHOT_KEY] = snapshot.to_metadata()
         return snapshot
 
     def _emit_prefetch(self, session_key: str, **data: Any) -> None:
@@ -2992,16 +3021,13 @@ class AgentLoop:
             reason = "command_or_empty"
         elif len(text) < cfg.min_query_chars:
             reason = "short"
-        elif (ctx.session is not None and ctx.session.metadata.get("origin_type")) or any(
-            ctx.session_key.startswith(p) for p in AUTONOMOUS_SESSION_PREFIXES
-        ):
-            # origin_type: workflow nodes and subagents have their own prompts.
-            # session kind: the runtime's own list of contexts with nobody
-            # attached (cron, automation, dream…). Checking that explicit list
-            # fails OPEN — a kind on neither list, like `bench:`, keeps being
-            # prefetched, as do the interactive channels — because a wasted
-            # search costs a few hundred milliseconds while a missing one
-            # costs the recall this whole path exists for.
+        elif self._session_is_autonomous(ctx.session, ctx.session_key):
+            # The runtime's own list of contexts with nobody attached (cron,
+            # automation, dream…) fails OPEN — a kind on neither list, like
+            # `bench:`, keeps being prefetched, as do the interactive
+            # channels — because a wasted search costs a few hundred
+            # milliseconds while a missing one costs the recall this whole
+            # path exists for.
             reason = "non_interactive"
         elif not fts_index_path(self.workspace).exists():
             reason = "no_index"
@@ -3245,9 +3271,9 @@ class AgentLoop:
         # a different prefix the moment anything wrote an entity page. What is
         # written mid-session still reaches the model through the prefetch above
         # and its own searches.
-        freezes = self._eager_surface_freezes(ctx)
+        freezes = self._eager_surface_freezes(ctx.session, ctx.session_key)
         if freezes:
-            ctx.eager_snapshot = self._resolve_eager_snapshot(ctx)
+            ctx.eager_snapshot = self._resolve_eager_snapshot(ctx.session, ctx.session_key)
         else:
             ctx.eager_snapshot = None
             self._drop_eager_snapshot(ctx)
@@ -3262,7 +3288,7 @@ class AgentLoop:
             # a time and the background consolidation probe overwrites it with
             # its own. Carried on ctx so the overflow-retry rebuild reuses it
             # rather than re-rendering from disk.
-            ctx.eager_snapshot = self._freeze_eager_surface(ctx)
+            ctx.eager_snapshot = self._freeze_eager_surface(ctx.session, ctx.session_key)
         ctx.user_persisted_early = self._persist_user_message_early(
             ctx.msg, ctx.session
         )
@@ -3351,20 +3377,22 @@ class AgentLoop:
             break
         return "ok"
 
-    def _memory_surface_chars(self) -> tuple[int, int]:
-        """(pinned_chars, hot_chars) of the last prompt build, or (0, 0)
-        when the builder is a test double or has not built yet.
+    def _memory_surface_chars(self, ctx: TurnContext) -> tuple[int, int]:
+        """(pinned_chars, hot_chars) of the eager surface this turn's build
+        actually used, or (0, 0) when the builder is a test double or has
+        not built yet.
 
-        ``_last_layer_breakdown`` is builder-wide, not per-turn: any other
-        build on this loop — a concurrent turn, the consolidator's token
-        probe — overwrites it, last writer wins. That used to be exact:
-        both blocks were workspace-global, so every build rendered the same
-        text and the sizes coincided whichever one wrote them. Each session
-        now freezes its own eager surface, and a probe always renders live,
-        so the sizes can differ between builds. The series still measures
-        what the always-on surface costs; a single row is not a per-turn
-        ledger.
+        A frozen turn (``ctx.eager_snapshot`` set) reads the snapshot
+        directly. ``_last_layer_breakdown`` is builder-wide, not per-turn:
+        any other build on this loop — a concurrent turn, the
+        consolidator's token probe, both of which always render live — can
+        overwrite it between this turn's own build and SAVE, so for a
+        frozen turn it no longer reliably holds what that build wrote. A
+        live turn keeps reading the breakdown, which is exactly what that
+        build just produced.
         """
+        if ctx.eager_snapshot is not None:
+            return len(ctx.eager_snapshot.pinned), len(ctx.eager_snapshot.hot)
         try:
             stable = self.context._last_layer_breakdown.get("stable", {})
             return len(stable.get("memory_pinned", "")), len(stable.get("memory_hot", ""))
@@ -3416,7 +3444,7 @@ class AgentLoop:
             reset_turn_prefetch_refs(ctx.prefetch_refs_token)
             ctx.prefetch_refs_token = None
 
-        _pinned_chars, _hot_chars = self._memory_surface_chars()
+        _pinned_chars, _hot_chars = self._memory_surface_chars(ctx)
         emit_memory_usage_rollup(
             ctx.session_key, ctx.tools_used,
             pinned_chars=_pinned_chars, hot_chars=_hot_chars,

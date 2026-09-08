@@ -26,7 +26,7 @@ from durin.memory.field_patch import FieldPatch
 from durin.memory.fts_index import FTSIndex
 from durin.memory.memory_writer import write_entity
 from durin.providers.base import LLMResponse
-from durin.session.manager import SessionManager
+from durin.session.manager import Session, SessionManager
 
 NOW = datetime(2026, 9, 8, tzinfo=timezone.utc)
 QUESTION = "What do you remember about the bakery on Main Street?"
@@ -111,6 +111,44 @@ async def test_a_write_between_turns_moves_neither_memory_block(tmp_path: Path) 
     assert stable[0]["memory_pinned"], "the seeded principal must render a pinned block"
     assert stable[0]["memory_hot"] == stable[1]["memory_hot"]
     assert stable[0]["memory_pinned"] == stable[1]["memory_pinned"]
+    assert "company:bakery" not in stable[1]["memory_hot"]
+    # The whole stable-tier breakdown, not just the two frozen blocks: nothing
+    # else about this turn's build (identity, bootstrap, SOUL, skills) moved
+    # either, since only an entity page was written between the two turns.
+    assert "".join(stable[0].values()) == "".join(stable[1].values())
+
+
+@pytest.mark.asyncio
+async def test_a_system_message_build_reuses_the_frozen_surface(tmp_path: Path) -> None:
+    """A background subagent/workflow result lands on the user's own session
+    key through ``_process_system_message`` — a second entry point into the
+    prompt build, separate from the normal turn state machine. It must
+    resolve the same stored snapshot BUILD would, or this build renders live
+    and punctures the freeze the user's own turns keep."""
+    _seed_workspace(tmp_path)
+    loop, stable = _make_loop(tmp_path)
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION)
+    )
+    _write_entity(tmp_path, "company:bakery", "The bakery opened on Main St in March.", "Bakery")
+
+    # Mirrors RunWorkflowTool._inject_result's real construction: a system
+    # message routed back into the parent session via session_key_override.
+    await loop._process_message(
+        InboundMessage(
+            channel="system",
+            sender_id="workflow_background",
+            chat_id="websocket:c",
+            content="[Background workflow 'qa' finished]\n\nWorkflow run r1: completed\nFinal output:\n42",
+            session_key_override="websocket:c",
+            metadata={"injected_event": "workflow_background_result", "workflow": "qa"},
+        )
+    )
+
+    assert len(stable) == 2
+    assert stable[1]["memory_hot"] == stable[0]["memory_hot"]
+    assert stable[1]["memory_pinned"] == stable[0]["memory_pinned"]
     assert "company:bakery" not in stable[1]["memory_hot"]
 
 
@@ -248,3 +286,26 @@ async def test_refresh_window_drops_the_snapshot(tmp_path: Path) -> None:
     assert "company:bakery" in stable[1]["memory_hot"]
     fresh = EagerSnapshot.from_metadata(session.metadata[SNAPSHOT_KEY])
     assert fresh is not None and fresh.frozen_at != aged.isoformat()
+
+
+def test_session_is_autonomous_matches_origin_type_and_prefixes(tmp_path: Path) -> None:
+    """One predicate backs both gates that must skip exactly the same
+    sessions: the eager-surface freeze (``_eager_surface_freezes``) and the
+    memory prefetch (its ``non_interactive`` reason in ``_memory_prefetch``).
+    A workflow-node/subagent session is named by ``origin_type`` metadata;
+    the runtime's autonomous kinds (cron, automation, dream…) are named by
+    ``AUTONOMOUS_SESSION_PREFIXES``; anything else is attended and interactive."""
+    loop, _ = _make_loop(tmp_path)
+
+    interactive = Session(key="websocket:c")
+    assert loop._session_is_autonomous(interactive, "websocket:c") is False
+
+    workflow_node = Session(key="websocket:node")
+    workflow_node.metadata["origin_type"] = "workflow_node"
+    assert loop._session_is_autonomous(workflow_node, "websocket:node") is True
+
+    assert loop._session_is_autonomous(Session(key="cron:job1:run:1"), "cron:job1:run:1") is True
+    # No session object at all (a turn that has not fetched one yet) still
+    # reads the session-kind half of the check off the key alone.
+    assert loop._session_is_autonomous(None, "cron:job1:run:1") is True
+    assert loop._session_is_autonomous(None, "websocket:c") is False
