@@ -743,14 +743,14 @@ class MemoryPrefetchConfig(Base):
     the user message as reference data. The explicit tool stays for
     follow-ups. Skipped for slash commands, messages shorter than
     ``min_query_chars`` (a length rule, so it holds in every language),
-    sessions that are workflow nodes or subagents, and when the search
-    exceeds ``timeout_s``. Each turn's outcome is one ``memory.prefetch``
-    telemetry row.
+    sessions that are workflow nodes, subagents, cron or automation runs,
+    and when the search exceeds ``timeout_s``. Each turn's outcome is one
+    ``memory.prefetch`` telemetry row.
     """
 
     enabled: bool = Field(default=True, description="Run one warm memory_search with the user message before the model sees it and fence the hits into the message")
     limit: int = Field(default=3, ge=1, le=10, description="Hits requested from the search (warm level: headline + summary each)")
-    max_chars: int = Field(default=2500, ge=200, description="Cap on the fenced block, in characters; longer output is cut with a note")
+    max_chars: int = Field(default=2500, ge=200, description="Cap on the recalled hits text, in characters, before fencing; longer output is cut with a note (the fence adds a short fixed framing)")
     min_query_chars: int = Field(default=20, ge=1, description="Messages shorter than this are not searched")
     timeout_s: float = Field(default=5.0, gt=0, description="Seconds the search may take before the turn proceeds without it")
 

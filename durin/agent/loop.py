@@ -2874,7 +2874,12 @@ class AgentLoop:
             reason = "command_or_empty"
         elif len(text) < cfg.min_query_chars:
             reason = "short"
-        elif ctx.session is not None and ctx.session.metadata.get("origin_type"):
+        elif (ctx.session is not None and ctx.session.metadata.get("origin_type")) or (
+            ctx.session_key.split(":", 1)[0] in ("cron", "automation")
+        ):
+            # origin_type: workflow nodes and subagents have their own prompts.
+            # channel prefix: cron and automation runs carry no origin_type
+            # marker but are just as non-interactive.
             reason = "non_interactive"
         elif not fts_index_path(self.workspace).exists():
             reason = "no_index"
@@ -2886,20 +2891,22 @@ class AgentLoop:
             return ""
 
         t0 = time.perf_counter()
-        token = bind_telemetry(get_session_logger(ctx.session_key))
+        token = None
         response: Any = None
         try:
+            token = bind_telemetry(get_session_logger(ctx.session_key))
             response = await asyncio.wait_for(
                 tool.execute(query=text, limit=cfg.limit, level="warm"),
                 timeout=cfg.timeout_s,
             )
         except asyncio.TimeoutError:
             reason = "timeout"
-        except Exception:  # noqa: BLE001 — a broken search must not break the turn
+        except Exception:  # noqa: BLE001 — a broken search or logger must not break the turn
             logger.exception("memory prefetch failed for {}", ctx.session_key)
             reason = "error"
         finally:
-            reset_telemetry(token)
+            if token is not None:
+                reset_telemetry(token)
         duration_ms = int((time.perf_counter() - t0) * 1000)
         if reason is not None:
             self._emit_prefetch(ctx.session_key, hits=0, chars=0, duration_ms=duration_ms, skipped=reason)

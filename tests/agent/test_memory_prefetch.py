@@ -15,7 +15,7 @@ from durin.agent.loop import AgentLoop
 from durin.bus.events import InboundMessage
 from durin.bus.queue import MessageBus
 from durin.config.schema import MemoryPrefetchConfig
-from durin.memory.fts_index import FTSIndex
+from durin.memory.fts_index import FTSIndex, fts_index_path
 from durin.providers.base import LLMResponse
 
 _RENDERED = (
@@ -40,6 +40,13 @@ class _FakeSearch:
                 "sectioned_rendered": self.rendered if self.total else ""}
 
 
+class _RaisingSearch:
+    name = "memory_search"
+
+    async def execute(self, **kwargs):
+        raise RuntimeError("search backend unavailable")
+
+
 class _Rec:
     def __init__(self) -> None:
         self.events: list[tuple[str, dict]] = []
@@ -48,14 +55,22 @@ class _Rec:
         self.events.append((event_type, dict(data or {})))
 
 
-def _make_loop(tmp_path: Path, monkeypatch, *, fake: _FakeSearch | None = None) -> tuple[AgentLoop, list[list[dict]], _Rec]:
-    with FTSIndex.open(tmp_path):      # a real index file → the prefetch gate is open
-        pass
+def _make_loop(
+    tmp_path: Path, monkeypatch, *, fake: _FakeSearch | None = None, with_index: bool = True
+) -> tuple[AgentLoop, list[list[dict]], _Rec]:
+    if with_index:
+        with FTSIndex.open(tmp_path):      # a real index file → the prefetch gate is open
+            pass
     rec = _Rec()
     monkeypatch.setattr("durin.telemetry.logger.get_session_logger", lambda key, base_dir=None: rec)
     provider = MagicMock()
     provider.get_default_model.return_value = "test-model"
     loop = AgentLoop(bus=MessageBus(), provider=provider, workspace=tmp_path, model="test-model")
+    if not with_index:
+        # AgentLoop's own default tool registration opens the FTS index as a
+        # side effect, regardless of the pre-open above; remove it so there
+        # is genuinely no index on disk for the no_index gate to find.
+        fts_index_path(tmp_path).unlink(missing_ok=True)
     loop.tools.get_definitions = MagicMock(return_value=[])
     if fake is not None:
         loop.tools.register(fake)  # replaces the real memory_search for this loop
@@ -103,6 +118,9 @@ async def test_prefetch_runs_a_warm_search_and_fences_the_hits(tmp_path: Path, m
     content = _user_content(captured)
     assert content.index(QUESTION) < content.index("<memory-context>")
     assert "Ana runs the bakery" in content and "</memory-context>" in content
+    # The fake renders a "person:ana" CANONICAL marker in the fenced text;
+    # this is the structural marker ctx.prefetch_refs extracts via regex.
+    assert "=== CANONICAL: person:ana" in content
     stored = loop.sessions.get_or_create("websocket:c").messages
     assert all("<memory-context>" not in str(m.get("content")) for m in stored)
     prefetch = [d for t, d in rec.events if t == "memory.prefetch"]
@@ -142,6 +160,24 @@ async def test_prefetch_skips_non_interactive_sessions_and_disabled_config(tmp_p
     loop.app_config = SimpleNamespace(memory=SimpleNamespace(prefetch=MemoryPrefetchConfig(enabled=False)))
     await loop._process_message(InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION))
     assert fake.calls == []
+    assert [d for t, d in rec.events if t == "memory.prefetch"][-1]["skipped"] == "disabled"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("session_key", ["cron:job1:run:1", "automation:job1:run:1"])
+async def test_prefetch_skips_cron_and_automation_session_keys(
+    tmp_path: Path, monkeypatch, session_key: str
+) -> None:
+    fake = _FakeSearch()
+    loop, captured, rec = _make_loop(tmp_path, monkeypatch, fake=fake)
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION),
+        session_key=session_key,
+    )
+
+    assert fake.calls == []
+    assert [d for t, d in rec.events if t == "memory.prefetch"][-1]["skipped"] == "non_interactive"
 
 
 @pytest.mark.asyncio
@@ -169,3 +205,38 @@ async def test_prefetch_block_is_cut_at_max_chars(tmp_path: Path, monkeypatch) -
     content = _user_content(captured)
     block = content[content.index("<memory-context>"):content.index("</memory-context>")]
     assert "(truncated" in block and len(block) < 200 + 400
+
+
+@pytest.mark.asyncio
+async def test_prefetch_gate_no_index(tmp_path: Path, monkeypatch) -> None:
+    fake = _FakeSearch()
+    loop, captured, rec = _make_loop(tmp_path, monkeypatch, fake=fake, with_index=False)
+
+    await loop._process_message(InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION))
+
+    assert fake.calls == []
+    assert [d for t, d in rec.events if t == "memory.prefetch"][-1]["skipped"] == "no_index"
+
+
+@pytest.mark.asyncio
+async def test_prefetch_gate_no_tool(tmp_path: Path, monkeypatch) -> None:
+    loop, captured, rec = _make_loop(tmp_path, monkeypatch)
+    loop.tools.unregister("memory_search")
+
+    await loop._process_message(InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION))
+
+    assert [d for t, d in rec.events if t == "memory.prefetch"][-1]["skipped"] == "no_tool"
+
+
+@pytest.mark.asyncio
+async def test_prefetch_gate_error_still_replies(tmp_path: Path, monkeypatch) -> None:
+    loop, captured, rec = _make_loop(tmp_path, monkeypatch, fake=_RaisingSearch())
+
+    reply = await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION)
+    )
+
+    assert "<memory-context>" not in _user_content(captured)
+    assert [d for t, d in rec.events if t == "memory.prefetch"][-1]["skipped"] == "error"
+    # A broken search must not break the turn: the provider still ran and replied.
+    assert captured and reply is not None
