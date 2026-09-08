@@ -42,7 +42,9 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "SESSION_SUMMARY_CLASS",
     "append_session_summary_block",
+    "closed_record_key",
     "delete_session_summary",
+    "find_previous_session_summary",
     "get_session_summary",
     "sanitize_session_key",
     "session_summary_path",
@@ -70,6 +72,20 @@ def sanitize_session_key(key: str) -> str:
     safe = _SAFE_KEY_RE.sub("_", key)[:80]
     safe = _DOT_RUN_RE.sub("_", safe)
     return safe or "default"
+
+
+def closed_record_key(key: str, when: datetime) -> str:
+    """Record key for the conversation ``key`` closes at ``when``.
+
+    Truncates the sanitized session key to 40 chars *before* appending the
+    ``_closed_<timestamp>`` suffix, so a long ``key`` cannot push the
+    suffix past ``sanitize_session_key``'s 80-char cap (which would
+    silently drop it, making two closes of the same long key collide into
+    one file). The result contains only word chars, dashes and
+    underscores, so sanitizing it again — as ``write_session_summary``
+    does — leaves it unchanged.
+    """
+    return f"{sanitize_session_key(key)[:40]}_closed_{when.strftime('%Y%m%dT%H%M%S')}"
 
 
 def session_summary_path(workspace: Path, session_key: str) -> Path:
@@ -257,6 +273,42 @@ def get_session_summary(
         )
         return (None, None)
     return (entry.body or entry.summary or None, entry.valid_from)
+
+
+def find_previous_session_summary(
+    workspace: Path, session_key: str, *, channels: "set[str] | frozenset[str]",
+) -> Optional[Tuple[str, str, Optional[date]]]:
+    """``(previous_stem, text, last_active)`` for the newest OTHER session
+    summary on ``session_key``'s channel, or ``None``.
+
+    Only channels in ``channels`` qualify — those are the single-user
+    surfaces where "the previous session" is the same person's. Files are
+    the sanitized-key ``.md`` entries of this class; recency is the entry's
+    ``valid_from`` (the session's last-active date), file mtime as tiebreak.
+    """
+    channel = session_key.split(":", 1)[0]
+    if channel not in channels:
+        return None
+    own_stem = sanitize_session_key(session_key)
+    prefix = sanitize_session_key(channel + ":")
+    directory = memory_class_dir(workspace, SESSION_SUMMARY_CLASS)
+    if not directory.is_dir():
+        return None
+    best: Optional[Tuple[Tuple[date, float], str, str, Optional[date]]] = None
+    for md in directory.glob(f"{prefix}*.md"):
+        if md.stem == own_stem:
+            continue
+        try:
+            entry = load_entry(md)
+        except Exception:  # noqa: BLE001 — a broken file is not "the previous session"
+            continue
+        text = entry.body or entry.summary
+        if not text:
+            continue
+        rank = (entry.valid_from or date.min, md.stat().st_mtime)
+        if best is None or rank > best[0]:
+            best = (rank, md.stem, text, entry.valid_from)
+    return None if best is None else (best[1], best[2], best[3])
 
 
 def delete_session_summary(

@@ -3305,7 +3305,7 @@ class AgentLoop:
                     last_active = raw_last if isinstance(raw_last, str) else None
 
         if not text:
-            return None
+            return self._format_previous_session_summary(session)
         header = "consolidator"
         if last_active:
             header = f"consolidator, last active {last_active}"
@@ -3313,6 +3313,45 @@ class AgentLoop:
             f"=== ARCHIVED SUMMARY ({header}) ===\n"
             f"{text}\n"
             f"=== END ARCHIVED SUMMARY ==="
+        )
+
+    def _continuity_config(self):
+        """The configured continuity settings, or the defaults when the loop
+        was built without an app config (tests, ad-hoc runners)."""
+        from durin.config.schema import MemoryContinuityConfig
+        cfg = getattr(getattr(self.app_config, "memory", None), "continuity", None)
+        return cfg if cfg is not None else MemoryContinuityConfig()
+
+    def _format_previous_session_summary(self, session: Session) -> str | None:
+        """Continuity for a fresh session on a single-user channel: the newest
+        other session's summary on the same channel, shown for the first
+        turns only (until the session has its own summary or grows past
+        ``max_turns``). Never raises — continuity is a convenience."""
+        cfg = self._continuity_config()
+        if (
+            not cfg.enabled
+            or session.last_consolidated
+            or len(session.messages) > 2 * cfg.max_turns
+        ):
+            return None
+        try:
+            from durin.memory.session_summary_store import find_previous_session_summary
+            found = find_previous_session_summary(
+                self.workspace, session.key, channels=set(cfg.channels),
+            )
+        except Exception:  # noqa: BLE001
+            return None
+        if found is None:
+            return None
+        prev_stem, text, last_active = found
+        text = text.strip()
+        if len(text) > cfg.max_chars:
+            text = "…" + text[-cfg.max_chars:]
+        when = f", last active {last_active.isoformat()}" if last_active else ""
+        return (
+            f"=== PREVIOUS SESSION SUMMARY ({prev_stem}{when}) ===\n"
+            f"{text}\n"
+            f"=== END PREVIOUS SESSION SUMMARY ==="
         )
 
     def _restore_runtime_checkpoint(self, session: Session) -> bool:

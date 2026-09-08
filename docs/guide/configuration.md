@@ -389,6 +389,15 @@ background file watching, and health checks. See
 | `library.awareness_max_docs` | `20` | Documents listed one per line on every turn; `0` keeps only the header, the count and the `Covers:` subject map |
 | `library.awareness_abstracts` | `false` | Append each listed document's distilled abstract to its line (roughly doubles the catalog) |
 
+**`memory.continuity`** — previous-session summary shown at the start of a fresh session on a single-user channel:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `continuity.enabled` | `true` | Show the previous session's summary at the start of a fresh session on the listed channels |
+| `continuity.channels` | `["websocket", "cli"]` | Channels whose sessions belong to one person; a fresh session there inherits the newest other session's summary |
+| `continuity.max_chars` | `2000` | Tail of the previous summary shown, in characters |
+| `continuity.max_turns` | `3` | Turns of the fresh session that carry the previous summary before it drops out |
+
 **`memory.file_watcher`** — background filesystem watcher:
 
 | Key | Default | Meaning |

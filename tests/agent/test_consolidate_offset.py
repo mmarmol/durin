@@ -669,3 +669,45 @@ class TestNewCommandArchival:
         closed = sorted((tmp_path / "memory" / "session_summary").glob("cli_test_closed_*.md"))
         assert len(closed) == 1
         assert "earlier: chose postgres" in closed[0].read_text(encoding="utf-8")
+
+    @pytest.mark.asyncio
+    async def test_new_with_long_key_files_two_distinct_closed_records(self, tmp_path: Path) -> None:
+        """A session key long enough that its sanitized form already fills the
+        store's 80-char cap must not lose the `_closed_<ts>` suffix: two /new
+        calls on it must file two distinct closed records, not silently
+        collide into one (the bug ``closed_record_key`` fixes)."""
+        from datetime import datetime
+
+        from durin.bus.events import InboundMessage
+        from durin.memory.session_summary_store import sanitize_session_key
+
+        loop = self._make_loop(tmp_path)
+        chat_id = "x" * 96
+        key = f"cli:{chat_id}"
+
+        async def _fake_archive(_messages):
+            return "- summary", {"entities": [], "topics": []}
+
+        loop.consolidator.archive = _fake_archive  # type: ignore[method-assign]
+
+        session = loop.sessions.get_or_create(key)
+        session.add_message("user", "first conversation")
+        session.updated_at = datetime(2026, 9, 1, 12, 0, 0)
+        loop.sessions.save(session)
+        await loop._process_message(
+            InboundMessage(channel="cli", sender_id="user", chat_id=chat_id, content="/new")
+        )
+        await loop.close_mcp()
+
+        session2 = loop.sessions.get_or_create(key)
+        session2.add_message("user", "second conversation")
+        session2.updated_at = datetime(2026, 9, 2, 12, 0, 0)
+        loop.sessions.save(session2)
+        await loop._process_message(
+            InboundMessage(channel="cli", sender_id="user", chat_id=chat_id, content="/new")
+        )
+        await loop.close_mcp()
+
+        prefix = sanitize_session_key(key)[:40]
+        closed = sorted((tmp_path / "memory" / "session_summary").glob(f"{prefix}_closed_*.md"))
+        assert len(closed) == 2

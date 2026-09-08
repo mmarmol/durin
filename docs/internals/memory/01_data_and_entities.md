@@ -101,7 +101,7 @@ flowchart TD
 | Class | Path | Track | Indexed? | Mutability |
 |---|---|---|---|---|
 | Session | `sessions/<key>.jsonl` + `.meta.json` | Evidence | FTS5 per-turn rows; NOT vector-indexed | Append-only during session |
-| Session summary | `memory/session_summary/<key>.md` | 2 — raw | Vector + FTS5 | The key's compaction summary, replayed as archived context on that key. Appended per consolidation span, or by the nightly session-summary pass for a conversation that went idle without one (bounded; oldest blocks evicted, their path trailers carried forward). `/new` deletes it after folding its text into the closed-conversation record below |
+| Session summary | `memory/session_summary/<key>.md` | 2 — raw | Vector + FTS5 | The key's compaction summary, replayed as archived context on its own key, and as the previous-session block of a fresh session on a single-user channel. Appended per consolidation span, or by the nightly session-summary pass for a conversation that went idle without one (bounded; oldest blocks evicted, their path trailers carried forward). `/new` deletes it after folding its text into the closed-conversation record below |
 | Closed conversation | `memory/session_summary/<key>_closed_<timestamp>.md` (record key `<key>:closed:<timestamp>`) | 2 — raw | Vector + FTS5 | Written once when `/new` closes a conversation: the prior compaction summary plus the archive of the still-unconsolidated tail. Searchable, never replayed |
 | Ingested | `ingested/<ingest_id>/` | Evidence | Not directly; via references | Write-once |
 | Reference | `memory/references/<slug>.md` | 2 — raw | Vector (chunks) + FTS5 (whole doc) | Replaced on re-ingest (idempotent by content hash) |
