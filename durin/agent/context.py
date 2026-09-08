@@ -121,6 +121,18 @@ def build_memory_context_block(rendered: str) -> str:
     )
 
 
+def _neutralise_fence_markers(text: str) -> str:
+    """Strip durin's reserved memory-context fence out of user-typed text.
+
+    ``MEMORY_CONTEXT_OPEN``/``CLOSE`` mark the block ``build_memory_context_block``
+    appends after the user's own text (see ``build_messages``). If the user's
+    message happens to contain those literal strings, left alone they would
+    let the user impersonate that block; replacing the angle brackets defuses
+    them without touching anything else the user typed.
+    """
+    return text.replace(MEMORY_CONTEXT_OPEN, "[memory-context]").replace(MEMORY_CONTEXT_CLOSE, "[/memory-context]")
+
+
 class ContextBuilder:
     """Builds the context (system prompt + messages) for the agent."""
 
@@ -527,6 +539,22 @@ class ContextBuilder:
             audio_mode=audio_mode,
             supports_audio_input=supports_audio_input,
         )
+
+        # <memory-context> is durin's own fence, reserved for the block below;
+        # neutralise it in the user's own text on this wire copy so a typed
+        # fence can never impersonate that block. Always applied — independent
+        # of whether a block is appended this turn. The session message stored
+        # by _persist_user_message_early is the raw current_message, untouched
+        # by this wire-only rewrite.
+        if isinstance(user_content, str):
+            user_content = _neutralise_fence_markers(user_content)
+        else:
+            user_content = [
+                {**block, "text": _neutralise_fence_markers(block["text"])}
+                if isinstance(block, dict) and block.get("type") == "text"
+                else block
+                for block in user_content
+            ]
 
         # The automatic search's hits ride in the API copy of the user
         # message, after the user's own text and before the runtime context.
