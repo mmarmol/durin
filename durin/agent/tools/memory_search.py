@@ -26,6 +26,7 @@ from durin.memory.vector_index import VectorIndex, vector_index_available
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
+    from durin.memory.eager_surface import EagerSnapshot
     from durin.memory.entity_page import EntityPage
 
 
@@ -71,6 +72,34 @@ def bind_turn_prefetch_refs(refs: Iterable[str]) -> Token[frozenset[str]]:
 def reset_turn_prefetch_refs(token: Token[frozenset[str]]) -> None:
     """Forget them — they are only valid for the turn that bound them."""
     _turn_prefetch_refs.reset(token)
+
+
+# The eager memory surface (pinned block + hot layer) this turn's prompt
+# actually carries. Once a session freezes that surface, the live workspace is
+# no longer what the model is looking at: a page written mid-session is in the
+# hot layer on disk but not in the text the model was shown, so judging
+# containment against disk would collapse a real result into a pointer to
+# content it never received. Task-scoped for the same reason as the prefetch
+# refs above — one tool instance serves every session. None means "no frozen
+# surface", and the dedup reads the workspace as before.
+_turn_eager_surface: ContextVar["EagerSnapshot | None"] = ContextVar(
+    "durin_turn_eager_surface", default=None,
+)
+
+
+def bind_turn_eager_surface(
+    snapshot: "EagerSnapshot | None",
+) -> Token["EagerSnapshot | None"]:
+    """Bind the eager surface this turn's prompt carries, for the current async
+    task. ``None`` binds "render live", which is also what an unbound context
+    means — passing it explicitly keeps a leaked outer binding from reaching a
+    turn that renders live."""
+    return _turn_eager_surface.set(snapshot)
+
+
+def reset_turn_eager_surface(token: Token["EagerSnapshot | None"]) -> None:
+    """Forget it — it describes one turn's prompt only."""
+    _turn_eager_surface.reset(token)
 
 
 def _entity_composition(page: "EntityPage", *, excerpt_chars: int | None) -> str:
@@ -848,12 +877,27 @@ class MemorySearchTool(Tool):
                 resolve_owner_principal,
                 resolve_pinned_refs,
             )
-            refs = resolve_pinned_refs(self._workspace)
-            principal = resolve_owner_principal(self._workspace)
+            # With the surface frozen for the session, the pinned refs, the
+            # hot-layer text, AND the principal come off the snapshot: they
+            # describe the prompt the model is holding, while disk (and the
+            # configured owner) may have moved on since the freeze. A live
+            # principal resolution here would exclude whichever ref the
+            # CURRENT config names from whole_refs below — the wrong one if
+            # the operator changed the owner mid-session, since the pinned
+            # block the model is holding still renders the frozen principal's
+            # page, not the new one's.
+            surface = _turn_eager_surface.get()
+            refs = surface.refs if surface is not None else resolve_pinned_refs(self._workspace)
+            principal = (
+                surface.principal
+                if surface is not None and surface.principal
+                else resolve_owner_principal(self._workspace)
+            )
             capped_hits, in_context_hits = split_in_context(
                 self._workspace, capped_hits,
                 pinned_refs=refs,
                 whole_refs=(refs - {principal}) | _turn_prefetch_refs.get(),
+                hot_layer_text=surface.hot if surface is not None else None,
             )
 
         kept_uris = {h.uri for h in capped_hits}

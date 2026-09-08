@@ -416,6 +416,17 @@ What it costs: one warm search on the critical path of every message of `min_que
 
 Slash commands, workflow nodes, subagents, and every session kind the runtime treats as autonomous (cron, automation, dream, workflow, sub-agent runs) are never prefetched. A workspace whose lexical index has not been created yet is also skipped, until the first memory write or search creates it.
 
+**`memory.eager_surface`** — freezes the pinned memory block and the hot layer for the life of a session instead of rebuilding them on every prompt build.
+
+What it costs: one render per session instead of one per turn, and a copy of both rendered blocks rides along in every session save, in the sidecar — a few kilobytes per save. The model's eager view is the one rendered at session start; anything written since reaches it through the automatic prefetch (`memory.prefetch`) and the model's own `memory_search` calls, not through the frozen surface itself. The one exception is the pinned block's `always_on` pages: their normal contract is unconditional injection regardless of retrieval, but a page pinned `always_on` or edited after the freeze reaches the model only if a search happens to hit it, until the next session boundary or `refresh_after_min` re-renders the block. Turn it off with `memory.eager_surface.freeze: false` to go back to a fresh render every turn.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `eager_surface.freeze` | `true` | Keep the pinned block and the hot layer byte-identical for the life of a session; a fresh render happens at session boundaries (`/new`, compaction) and after `refresh_after_min` |
+| `eager_surface.refresh_after_min` | `0` | Minutes after which a frozen surface is re-rendered at the next build; `0` keeps it until a session boundary |
+
+How to see it: `/status` names the turn a frozen block was actually taken on — the "Memory pinned" and "Memory hot layer" rows in its composition breakdown both get a "(frozen at turn N)" suffix whenever the last turn's build reused a stored surface instead of rendering it live; the CLI footer's `infra:` chip carries the same note. A freeze is also recorded in telemetry as one `memory.eager_surface` event per fresh render, naming why it rendered (`first_build`, `new`, `compaction`, `refresh_window`, or `corrupt`).
+
 **`memory.file_watcher`** — background filesystem watcher:
 
 | Key | Default | Meaning |

@@ -12,6 +12,7 @@ from durin.agent.memory import MemoryStore
 from durin.agent.skill_usage import compute_working_set
 from durin.agent.skills import SkillsLoader
 from durin.agent.task_state import task_state_runtime_lines
+from durin.memory.eager_surface import EagerSnapshot
 from durin.memory.hot_layer import read_hot_layer
 from durin.utils.helpers import (
     current_time_str,
@@ -20,6 +21,25 @@ from durin.utils.helpers import (
 from durin.utils.prompt_templates import render_template
 
 logger = logging.getLogger(__name__)
+
+# The stable tier's sub-block labels for the ``/status`` composition
+# breakdown (see ``summarize_composition`` below).
+STABLE_LABELS: tuple[tuple[str, str], ...] = (
+    ("identity", "Identity"),
+    ("bootstrap", "Bootstrap files"),
+    ("skills_active", "Skills (active)"),
+    ("skills_catalog", "Skills catalog"),
+    ("memory_pinned", "Memory pinned"),
+    ("memory_hot", "Memory hot layer"),
+)
+
+# The two labels the eager-surface freeze covers — durin/utils/helpers.py's
+# ``/status`` and CLI-footer "(frozen at turn N)" suffix applies to exactly
+# these, nothing else in the infrastructure bucket. Derived from
+# STABLE_LABELS rather than duplicated so the two never drift apart.
+FROZEN_STABLE_LABELS = frozenset(
+    label for key, label in STABLE_LABELS if key in ("memory_pinned", "memory_hot")
+)
 
 
 def summarize_composition(payload: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -70,15 +90,7 @@ def summarize_composition(payload: Mapping[str, Any] | None) -> dict[str, Any]:
         conv["Current message"] = current_n
 
     infra: dict[str, int] = {}
-    stable_labels = (
-        ("identity", "Identity"),
-        ("bootstrap", "Bootstrap files"),
-        ("skills_active", "Skills (active)"),
-        ("skills_catalog", "Skills catalog"),
-        ("memory_pinned", "Memory pinned"),
-        ("memory_hot", "Memory hot layer"),
-    )
-    for key, label in stable_labels:
+    for key, label in STABLE_LABELS:
         n = int(payload.get("stable_breakdown", {}).get(key, 0) or 0)
         if n:
             infra[label] = n
@@ -204,6 +216,12 @@ class ContextBuilder:
         # event data). Exposed so AgentLoop / footer / /status can read
         # the current breakdown without touching the JSONL log.
         self.last_composition: dict[str, Any] | None = None
+        # The pinned block, the hot layer and the pinned refs exactly as the
+        # last build rendered them from disk — ``(pinned, hot, refs)`` — or
+        # None when that build reused a caller-supplied snapshot instead.
+        # The caller reads it right after a build to freeze the surface for
+        # the rest of the session; nothing else depends on it.
+        self.last_eager_render: tuple[str, str, frozenset[str]] | None = None
         # Hot working-set tier: the ranked set is memoized keyed on the
         # candidate name-set, so the stable prefix stays byte-identical
         # across turns yet a skill installed or removed mid-process (the
@@ -221,6 +239,7 @@ class ContextBuilder:
         session_summary: str | None = None,
         agent_mode_name: str | None = None,
         active_persona_soul: str | None = None,
+        eager_snapshot: EagerSnapshot | None = None,
     ) -> str:
         """Build the system prompt in 3 cache-friendly tiers.
 
@@ -243,10 +262,22 @@ class ContextBuilder:
         weight; moving it to the Context tier preserves that ordering
         relative to volatile blocks (which would dilute its visibility
         if placed below) while still keeping the stable prefix intact.
+
+        ``eager_snapshot`` supplies the pinned block and the hot layer
+        already rendered, instead of reading them off disk again. Both sit
+        in the stable tier, so re-reading them mid-session hands the
+        provider a different prefix as soon as anything writes an entity
+        page; a caller that wants the prefix to hold for the session passes
+        the same snapshot back on every build. Omitted, both are rendered
+        live and exposed through ``last_eager_render``.
         """
         # Reset the per-call breakdown — each layer fills its slot.
         self._last_layer_breakdown = {"stable": {}, "context": {}, "volatile": {}}
-        stable = self._build_stable_layer(channel=channel, active_persona_soul=active_persona_soul)
+        stable = self._build_stable_layer(
+            channel=channel,
+            active_persona_soul=active_persona_soul,
+            eager_snapshot=eager_snapshot,
+        )
         context = self._build_context_layer(agent_mode_name=agent_mode_name)
         volatile = self._build_volatile_layer(session_summary=session_summary)
         return "\n\n---\n\n".join(p for p in (stable, context, volatile) if p)
@@ -261,12 +292,23 @@ class ContextBuilder:
             return ""
         return render_template("agent/operating_floor.md")
 
-    def _build_stable_layer(self, *, channel: str | None, active_persona_soul: str | None = None) -> str:
+    def _build_stable_layer(
+        self,
+        *,
+        channel: str | None,
+        active_persona_soul: str | None = None,
+        eager_snapshot: EagerSnapshot | None = None,
+    ) -> str:
         """Identity + bootstrap + SOUL + skills catalog. Cache-friendly anchor.
 
         Aside from workspace/runtime info embedded in the identity
         template (path, OS, Python version — all stable per process),
         this layer is byte-identical across turns of the same session.
+
+        ``eager_snapshot`` replaces the disk read for the pinned block and
+        the hot layer with a rendering taken earlier in the session, which
+        is what keeps that claim true once something writes an entity page
+        mid-session.
         """
         breakdown: dict[str, str] = {}
 
@@ -310,7 +352,23 @@ class ContextBuilder:
         # Pinned memory: who the user is + always_on feedback
         # (stance/practice). Always injected, independent of retrieval — this
         # is what re-feeds the agent its authored knowledge.
-        pinned, pinned_refs = self._build_pinned_memory()
+        #
+        # It and the hot layer below are the two blocks a snapshot replaces:
+        # both are workspace-global renderings that move whenever a page is
+        # written, so they are resolved together here — either both off disk
+        # (and published for the caller to freeze) or both off the snapshot.
+        if eager_snapshot is not None:
+            # The snapshot's refs are not needed here: they exist for the
+            # in-context dedup, which reads them off the snapshot itself.
+            pinned, hot = eager_snapshot.pinned, eager_snapshot.hot
+            self.last_eager_render = None
+        else:
+            pinned, pinned_refs = self._build_pinned_memory()
+            # Pages the pinned block already renders are excluded from the
+            # hot layer so they are not fed to the model twice.
+            hot = read_hot_layer(self.workspace, exclude=pinned_refs).render()
+            self.last_eager_render = (pinned, hot, pinned_refs)
+
         if pinned:
             breakdown["memory_pinned"] = pinned
             parts.append(pinned)
@@ -323,12 +381,10 @@ class ContextBuilder:
             breakdown["rich_output"] = rich_output
             parts.append(rich_output)
 
-        # Memory hot layer. Always-loaded snapshot of identity + canonical
-        # pages + headlines + known types. Lives at the END of the stable
-        # tier so the earlier (more stable) parts stay cache-hot when the
-        # hot layer rotates daily under dream. Pages the pinned block above
-        # already renders are excluded so they are not fed twice.
-        hot = read_hot_layer(self.workspace, exclude=pinned_refs).render()
+        # Memory hot layer (resolved above, with the pinned block). Always-loaded
+        # snapshot of identity + canonical pages + headlines + known types. Lives
+        # at the END of the stable tier so the earlier (more stable) parts stay
+        # cache-hot when the hot layer rotates daily under dream.
         if hot:
             breakdown["memory_hot"] = hot
             parts.append(hot)
@@ -529,6 +585,7 @@ class ContextBuilder:
         memory_prefetch: str | None = None,
         *,
         probe: bool = False,
+        eager_snapshot: EagerSnapshot | None = None,
     ) -> list[dict[str, Any]]:
         """Build the complete message list for an LLM call.
 
@@ -536,6 +593,10 @@ class ContextBuilder:
         measured (the consolidator's token estimate). Such a build neither
         emits ``context.composition`` nor updates ``last_composition``, so the
         telemetry series and the cached payload keep describing real turns.
+
+        ``eager_snapshot`` goes straight to ``build_system_prompt``: the
+        pinned block and hot layer already rendered for this session, rather
+        than a fresh read off disk.
         """
         # The task-state anchor groups goal + decision log + todos
         # + executing-plan pointer under one <task-state> frame, re-injected
@@ -627,6 +688,7 @@ class ContextBuilder:
                     session_summary=session_summary,
                     agent_mode_name=agent_mode_name,
                     active_persona_soul=active_persona_soul,
+                    eager_snapshot=eager_snapshot,
                 ),
             },
             *history,
@@ -643,6 +705,7 @@ class ContextBuilder:
                     iteration=iteration,
                     session_key=session_key,
                     memory_prefetch=memory_prefetch,
+                    eager_snapshot=eager_snapshot,
                 )
             return messages
         messages.append({"role": current_role, "content": merged})
@@ -654,6 +717,7 @@ class ContextBuilder:
                 iteration=iteration,
                 session_key=session_key,
                 memory_prefetch=memory_prefetch,
+                eager_snapshot=eager_snapshot,
             )
         return messages
 
@@ -666,8 +730,15 @@ class ContextBuilder:
         iteration: int | None,
         session_key: str | None,
         memory_prefetch: str | None = None,
+        eager_snapshot: EagerSnapshot | None = None,
     ) -> None:
         """Emit ``context.composition`` with a per-tier token breakdown.
+
+        ``eager_snapshot``, when given, is the frozen surface this build
+        reused instead of rendering ``memory_pinned``/``memory_hot`` live —
+        its ``turn`` rides in the payload as ``eager_frozen_turn`` so
+        ``/status`` and the CLI footer can say which turn the two blocks
+        were actually taken on.
 
         Best-effort: any failure is silently swallowed — telemetry must
         never affect the user-facing turn.
@@ -760,6 +831,8 @@ class ContextBuilder:
                 payload["iteration"] = iteration
             if session_key is not None:
                 payload["session_key"] = session_key
+            if eager_snapshot is not None:
+                payload["eager_frozen_turn"] = eager_snapshot.turn
 
             # Cache the most recent payload so the footer and /status
             # can read it directly (no JSONL round-trip).

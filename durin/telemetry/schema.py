@@ -33,7 +33,7 @@ flag a deviation):
 
 from __future__ import annotations
 
-from typing import NotRequired, TypedDict
+from typing import Literal, NotRequired, TypedDict
 
 # ===========================================================================
 # Loop-control events
@@ -344,6 +344,14 @@ class ContextCompositionEvent(TypedDict):
     # Sum of all the above (what we expect provider's prompt_tokens to
     # approximate, modulo tokenizer differences).
     estimated_total: int
+    # The turn the frozen eager surface (memory_pinned + memory_hot, both
+    # inside stable_breakdown above) was taken on, present only when this
+    # build reused a stored snapshot instead of rendering the two blocks
+    # live. Absent on the build that freezes one — that build still rendered
+    # from disk. The 1-based ordinal is counted over the session's full
+    # message history, so after `Session.enforce_file_cap` trims older
+    # messages it can read higher than the session's current live count.
+    eager_frozen_turn: NotRequired[int]
 
 
 class TurnMemoryUsageEvent(TypedDict):
@@ -748,6 +756,28 @@ class MemoryPrefetchEvent(TypedDict):
     duration_ms: int
     skipped: NotRequired[str]
     truncated: NotRequired[bool]
+
+
+class MemoryEagerSurfaceEvent(TypedDict):
+    """A session's frozen eager memory surface (pinned block + hot layer) was
+    (re)rendered from disk and stored, so every later build of the session
+    can reuse it verbatim instead of re-reading the workspace (see
+    ``AgentLoop._freeze_eager_surface``). One row per freeze, never per turn
+    — a turn that reused an existing snapshot emits nothing here.
+
+    ``reason`` names the boundary that made this build render live instead
+    of reusing a stored snapshot: ``first_build`` (the session had none yet),
+    ``new`` (``/new`` cleared the prior one), ``compaction`` (a compaction
+    round dropped it), ``refresh_window`` (``memory.eager_surface.
+    refresh_after_min`` expired it), or ``corrupt`` (the stored value failed
+    to parse). ``turn`` is the 1-based message ordinal
+    this freeze was taken on, counted over the session's full history."""
+
+    reason: Literal["first_build", "new", "compaction", "refresh_window", "corrupt"]
+    turn: int
+    pinned_chars: int
+    hot_chars: int
+    session_key: str
 
 
 class MemoryStoreEvent(TypedDict):
@@ -1859,6 +1889,7 @@ EVENTS: dict[str, type] = {
     # Memory subsystem (Phase 1)
     "memory.recall": MemoryRecallEvent,
     "memory.prefetch": MemoryPrefetchEvent,
+    "memory.eager_surface": MemoryEagerSurfaceEvent,
     "memory.store": MemoryStoreEvent,
     "memory.ingest": MemoryIngestEvent,
     "memory.forget": MemoryForgetEvent,

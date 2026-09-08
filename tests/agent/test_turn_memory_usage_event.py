@@ -161,3 +161,78 @@ async def test_rollup_reports_non_zero_surface_sizes_when_memory_is_pinned(
     assert len(rows) == 1
     assert rows[0]["pinned_chars"] > 0
     assert rows[0]["hot_chars"] > 0
+
+
+@pytest.mark.asyncio
+async def test_frozen_turn_memory_usage_reads_the_snapshot_not_a_stale_shared_breakdown(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """``turn.memory_usage``'s pinned/hot sizes must be what THIS session's
+    frozen build actually used. ``_last_layer_breakdown`` lives on the
+    shared ``ContextBuilder``, not per turn: a concurrent turn's build or
+    the consolidator's token-estimate probe (both of which always render
+    live) can land between this turn's own build and its save and overwrite
+    it — a frozen turn must read its own snapshot instead of that shared,
+    racy state."""
+    from datetime import datetime, timezone
+
+    from durin.memory.eager_surface import SNAPSHOT_KEY, EagerSnapshot
+    from durin.memory.field_patch import FieldPatch
+    from durin.memory.memory_writer import write_entity
+    from durin.memory.principal import mark_always_on
+
+    now = datetime.now(timezone.utc)
+    write_entity(tmp_path, "practice:spanish",
+                 [FieldPatch(kind="body_append", value="Always respond in Spanish.",
+                             author="agent", source_ref="s", at=now)],
+                 create=True, name="Always Spanish")
+    mark_always_on(tmp_path, "practice:spanish")
+
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    loop = AgentLoop(
+        bus=MessageBus(), provider=provider, workspace=tmp_path, model="test-model",
+    )
+    loop.provider.chat_with_retry = AsyncMock(
+        return_value=LLMResponse(content="Hola.", tool_calls=[]),
+    )
+    loop.tools.get_definitions = MagicMock(return_value=[])
+    # The consolidator's own token-estimate probe renders live and would
+    # otherwise race this test's own simulated intervening build below —
+    # neutralized so the mutation inside chat_with_retry is deterministically
+    # what SAVE finds, not whichever of the two lands last.
+    loop.consolidator.maybe_consolidate_by_tokens = AsyncMock(return_value=None)
+
+    # Turn 1 freezes the surface.
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content="hola"),
+    )
+    session = loop.sessions.get_or_create("websocket:c")
+    snap = EagerSnapshot.from_metadata(session.metadata[SNAPSHOT_KEY])
+    assert snap is not None
+    assert len(snap.pinned) > 0 and len(snap.hot) > 0
+
+    rec = _capture(monkeypatch)  # isolate turn 2's row
+
+    async def _chat_with_intervening_build(*args, **kwargs):
+        # Simulate a build landing on the shared ContextBuilder between this
+        # turn's own build and its save — a concurrent turn's build, or the
+        # consolidator's always-live token-estimate probe.
+        loop.context._last_layer_breakdown["stable"] = {
+            "memory_pinned": "bogus pinned from another build",
+            "memory_hot": "bogus hot from another build",
+        }
+        return LLMResponse(content="Hola de nuevo.", tool_calls=[])
+
+    loop.provider.chat_with_retry = AsyncMock(side_effect=_chat_with_intervening_build)
+
+    # Turn 2 reuses the same frozen snapshot (nothing dropped or refreshed it).
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content="hola otra vez"),
+    )
+    await loop.close_mcp()  # drain background tasks before teardown
+
+    rows = [d for t, d in rec.events if t == "turn.memory_usage"]
+    assert len(rows) == 1
+    assert rows[0]["pinned_chars"] == len(snap.pinned)
+    assert rows[0]["hot_chars"] == len(snap.hot)

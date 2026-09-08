@@ -140,7 +140,11 @@ def _render(p: dict[str, Any]) -> str:
     infra_pct = p.get("infra_pct")
     if conv_pct is not None and infra_pct is not None:
         extras.append(f"[dim]conv:[/dim]{conv_pct}%")
-        extras.append(f"[dim]infra:[/dim]{infra_pct}%")
+        infra_chip = f"[dim]infra:[/dim]{infra_pct}%"
+        eager_frozen_turn = p.get("eager_frozen_turn")
+        if eager_frozen_turn is not None:
+            infra_chip += f" (frozen at turn {eager_frozen_turn})"
+        extras.append(infra_chip)
     extras_part = (" · " + " · ".join(extras)) if extras else ""
 
     mode = p.get("mode")

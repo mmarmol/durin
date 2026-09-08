@@ -44,6 +44,10 @@ pipeline: the model, when it calls `memory_search`, and the agent loop itself, w
 runs the same search once per user turn with the message as the query and fences the
 hits into that turn's copy of the message — memory reaches the turn whether or not the
 model thinks to ask. Determinism is what makes an automatic search affordable per turn.
+That per-turn search, together with the ones the model runs itself, is also how anything
+written mid-session reaches the model: the always-on blocks in the stable prompt tier are
+rendered once per session and reused verbatim until the next session boundary, so a write
+does not rebuild the cached prefix (`memory.eager_surface.freeze`).
 
 **Cold-path dream consolidation.** The extract pass reads every session with unprocessed
 turns (tracked by a per-session cursor in `session.meta.json`) and discovers or enriches
@@ -348,6 +352,8 @@ For deeper coverage of individual subsystems, see the sibling docs:
 | `memory.prefetch.min_query_chars` | `20` | Messages shorter than this are not searched. |
 | `memory.prefetch.timeout_s` | `5.0` | Seconds the search may take before the turn proceeds without it. |
 | `memory.prefetch.backoff_s` | `60.0` | After a timeout or error, skip the prefetch for this many seconds; 0 disables the backoff. |
+| `memory.eager_surface.freeze` | `true` | Keeps the pinned block and the hot layer byte-identical for the life of a session; a fresh render happens at session boundaries (`/new`, compaction) and after `refresh_after_min` |
+| `memory.eager_surface.refresh_after_min` | `0` | Minutes after which a frozen surface is re-rendered at the next build; `0` keeps it until a session boundary |
 | `memory.continuity.enabled` | `true` | Show the previous session's summary at the start of a fresh session on the listed channels. |
 | `memory.continuity.channels` | `["websocket", "cli"]` | Channels whose sessions belong to one person; a fresh session there inherits the newest other session's summary. |
 | `memory.continuity.max_chars` | `2000` | Tail of the previous summary shown, in characters. |

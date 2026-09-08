@@ -223,6 +223,26 @@ def test_footer_mode_flanked_by_bullets() -> None:
     assert "build[/bold] ·" in out
 
 
+def test_footer_shows_frozen_turn_suffix_on_infra_chip() -> None:
+    """When the last composition build reused a frozen eager surface, the
+    TUI footer's infra chip names the turn it was taken on — same suffix as
+    the HTML footer's ``infra:`` chip (``test_footer.py``'s
+    ``test_footer_shows_frozen_turn_suffix_on_infra_chip``)."""
+    from durin.cli.tui.widgets.footer_bar import _render
+
+    out = _render({
+        "model": "opus-4.8", "conv_pct": 13, "infra_pct": 86, "eager_frozen_turn": 5,
+    })
+    assert "infra:[/dim]86% (frozen at turn 5)" in out
+
+
+def test_footer_omits_frozen_suffix_when_not_frozen() -> None:
+    from durin.cli.tui.widgets.footer_bar import _render
+
+    out = _render({"model": "opus-4.8", "conv_pct": 13, "infra_pct": 86})
+    assert "frozen at turn" not in out
+
+
 def test_footer_omits_mode_and_latency_when_absent() -> None:
     from durin.cli.tui.widgets.footer_bar import _render
 

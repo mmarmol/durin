@@ -31,6 +31,7 @@ from durin.utils.post_compaction_guard import PostCompactionLoopGuard
 from durin.utils.prompt_templates import render_template
 
 if TYPE_CHECKING:
+    from durin.memory.eager_surface import EagerSnapshot
     from durin.providers.base import LLMProvider
     from durin.session.manager import SessionManager
 
@@ -546,6 +547,8 @@ class Consolidator:
         context_window_tokens: int,
         build_messages: Callable[..., list[dict[str, Any]]],
         get_tool_definitions: Callable[[], list[dict[str, Any]]],
+        *,
+        eager_snapshot_for_session: Callable[[Session], EagerSnapshot | None] | None = None,
         max_completion_tokens: int = 4096,
         consolidation_ratio: float = 0.5,
         preemptive_compact_ratio: float = 0.5,
@@ -586,6 +589,12 @@ class Consolidator:
         self.compaction_learnings_enabled = compaction_learnings_enabled
         self._build_messages = build_messages
         self._get_tool_definitions = get_tool_definitions
+        # Resolves the frozen eager memory surface a session's real prompt
+        # carries, so the token probe measures that text instead of re-reading
+        # the workspace. None (a test scaffold, an ad-hoc runner) makes the
+        # probe render live, which is what a session without a frozen surface
+        # gets anyway.
+        self._eager_snapshot_for_session = eager_snapshot_for_session
         self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
             weakref.WeakValueDictionary()
         )
@@ -957,6 +966,21 @@ class Consolidator:
         # flag it would emit a ``context.composition`` row and overwrite the
         # cached payload that /status and the CLI footer read, so the estimate
         # would masquerade as the turn's real prompt composition.
+        #
+        # The eager memory surface goes in frozen when the session holds one:
+        # the real prompt ships that text, and a snapshot taken before a run of
+        # entity writes can be larger than a live render — measuring the live
+        # one would under-estimate the prompt and let compaction fire too late.
+        # Passing a snapshot also makes the builder set ``last_eager_render``
+        # to ``None`` instead of publishing a rendering of its own there (see
+        # ``ContextBuilder._build_stable_layer``): a concurrent turn between
+        # its own build and its own freeze step can then find nothing to
+        # freeze from this probe, rather than picking up the probe's render
+        # and freezing text nobody's prompt actually shipped.
+        eager_snapshot = (
+            self._eager_snapshot_for_session(session)
+            if self._eager_snapshot_for_session is not None else None
+        )
         probe_messages = self._build_messages(
             history=history,
             current_message="[token-probe]",
@@ -966,6 +990,7 @@ class Consolidator:
             session_summary=summary,
             session_metadata=session.metadata,
             probe=True,
+            eager_snapshot=eager_snapshot,
         )
         return estimate_prompt_tokens_chain(
             self.provider,
@@ -1540,6 +1565,21 @@ class Consolidator:
         self._bounded_put(
             self._awaiting_real_usage, session.key, len(session.messages),
         )
+        # A compaction round is a boundary for the frozen eager memory surface.
+        # The surface is frozen to keep the provider's cached prefix stable
+        # across turns, and this round has already invalidated everything after
+        # it by rewriting the conversation — so a refresh costs nothing here and
+        # buys the model an eager view that includes what the session wrote.
+        # Saved immediately: the drop must not be lost if the turn that
+        # triggered this round never reaches its own save.
+        from durin.memory.eager_surface import DROP_REASON_KEY, SNAPSHOT_KEY
+        if session.metadata.pop(SNAPSHOT_KEY, None) is not None:
+            # Recorded so the next freeze's `memory.eager_surface` row reports
+            # "compaction" instead of "first_build" — by the time that build
+            # resolves nothing to reuse, the dropped key looks the same as a
+            # session that never stored one.
+            session.metadata[DROP_REASON_KEY] = "compaction"
+            self.sessions.save(session)
         # Tier 2 C2: arm the post-compaction loop guard. The next
         # ``window_size`` tool calls on this session will be observed;
         # identical ``(name, args, result)`` triples trip the guard.

@@ -767,18 +767,26 @@ def _format_composition_section(payload: dict[str, Any]) -> list[str]:
     but not highlighted as their own bucket: their share matters in
     small contexts but disappears as sessions grow.
     """
-    from durin.agent.context import summarize_composition
+    from durin.agent.context import FROZEN_STABLE_LABELS, summarize_composition
 
     summary = summarize_composition(payload)
     total = summary["total"]
     if total <= 0:
         return []
 
-    def _row(label: str, n: int, indent: int = 2) -> str:
-        return f"{' ' * indent}{label:<24} {n:>6}"
+    def _row(label: str, n: int, indent: int = 2, suffix: str = "") -> str:
+        return f"{' ' * indent}{label:<24} {n:>6}{suffix}"
 
     def _pct(n: int) -> str:
         return f"{(100 * n // total) if total else 0}%"
+
+    # When this build reused a frozen eager surface instead of rendering the
+    # pinned block / hot layer live, the payload names the turn it was taken
+    # on (AgentLoop._freeze_eager_surface). Appended only to FROZEN_STABLE_LABELS'
+    # rows — the freeze covers just the pinned block and the hot layer,
+    # nothing else in the infrastructure bucket.
+    eager_frozen_turn = payload.get("eager_frozen_turn")
+    frozen_labels = FROZEN_STABLE_LABELS
 
     out: list[str] = ["", "\U0001f9ee Last turn \u2014 composition"]
     out.append(f"  Prompt tokens          {total:>6}")
@@ -796,7 +804,12 @@ def _format_composition_section(payload: dict[str, Any]) -> list[str]:
     for label, n in sorted(
         summary["infra_breakdown"].items(), key=lambda kv: -kv[1]
     ):
-        out.append(_row(label, n, indent=4))
+        suffix = (
+            f"  (frozen at turn {eager_frozen_turn})"
+            if eager_frozen_turn is not None and label in frozen_labels
+            else ""
+        )
+        out.append(_row(label, n, indent=4, suffix=suffix))
     return out
 
 

@@ -304,6 +304,22 @@ class Session:
         self.last_consolidated = 0
         self.updated_at = datetime.now()
         self.metadata.pop("_last_summary", None)
+        # "_eager_surface" mirrors durin.memory.eager_surface.SNAPSHOT_KEY,
+        # duplicated as a literal to avoid importing durin.memory here (see
+        # _DERIVED_METADATA_KEYS in SessionManager). A frozen surface belongs
+        # to the session it was rendered for, so a fresh session must not
+        # inherit it.
+        had_snapshot = self.metadata.pop("_eager_surface", None) is not None
+        # "_eager_surface_drop_reason" mirrors
+        # durin.memory.eager_surface.DROP_REASON_KEY, duplicated for the same
+        # reason as SNAPSHOT_KEY above. The most recent boundary names the
+        # next freeze: a snapshot dropped here reports "new", and so does a
+        # reason an earlier boundary (a background compaction round) left
+        # pending without a freeze in between — /new is the later event. A
+        # session that had neither leaves the key unset so the next freeze
+        # reports "first_build".
+        if had_snapshot or "_eager_surface_drop_reason" in self.metadata:
+            self.metadata["_eager_surface_drop_reason"] = "new"
 
     def retain_recent_legal_suffix(self, max_messages: int) -> None:
         """Keep a legal recent suffix constrained by a hard message cap."""
@@ -422,7 +438,17 @@ class SessionManager:
     # Add new entries here when introducing future derived state (e.g.
     # ``"session_embedding"``, ``"narrative_summary"``). Keys NOT listed
     # here flow through line 0 unchanged.
-    _DERIVED_METADATA_KEYS = frozenset({"_last_summary", "_last_tags", "skill_calls"})
+    #
+    # "_eager_surface" mirrors durin.memory.eager_surface.SNAPSHOT_KEY, and
+    # "_eager_surface_drop_reason" mirrors durin.memory.eager_surface.
+    # DROP_REASON_KEY, both duplicated as literals (not imported) because
+    # durin.memory already imports this module transitively (embedding ->
+    # agent tools telemetry -> agent.context/memory -> session.manager);
+    # importing back would create a circular import.
+    _DERIVED_METADATA_KEYS = frozenset({
+        "_last_summary", "_last_tags", "skill_calls",
+        "_eager_surface", "_eager_surface_drop_reason",
+    })
 
     # Keys in ``Session.metadata`` that hold volatile per-turn state —
     # mid-turn recovery payloads that must survive a process restart but

@@ -759,6 +759,24 @@ class MemoryPrefetchConfig(Base):
     backoff_s: float = Field(default=60.0, ge=0, description="After a timeout or error, skip the prefetch for this many seconds; 0 disables the backoff")
 
 
+class MemoryEagerSurfaceConfig(Base):
+    """Freeze the pinned memory block and the hot layer for the life of a session.
+
+    Both blocks are otherwise rebuilt from disk on every prompt build; any
+    entity write during a session changes a page's ``updated_at``, reordering
+    the hot layer (and possibly the pinned block) and invalidating the
+    provider's cached prompt prefix on the very next call. Freezing the
+    rendering at the first build of a session and reusing it verbatim turns
+    that per-turn invalidation into at most one per session — writes made
+    since the freeze still reach the model through the per-turn prefetch and
+    its own ``memory_search`` calls, just not through the frozen surface
+    itself.
+    """
+
+    freeze: bool = Field(default=True, description="Keep the pinned block and the hot layer byte-identical for the life of a session; a fresh render happens at session boundaries (/new, compaction) and after refresh_after_min")
+    refresh_after_min: int = Field(default=0, ge=0, description="Minutes after which a frozen surface is re-rendered at the next build; 0 keeps it until a session boundary")
+
+
 class MemoryArtifactRecallConfig(Base):
     """Memory keyed by the artifact in use: ``read_file`` opens with the memory
     entries that mention the file (lexical lookup, milliseconds) and a
@@ -806,6 +824,7 @@ class MemoryConfig(Base):
     )
     continuity: MemoryContinuityConfig = Field(default_factory=MemoryContinuityConfig, description="Previous-session summary for fresh sessions on single-user channels")
     prefetch: MemoryPrefetchConfig = Field(default_factory=MemoryPrefetchConfig, description="Automatic memory search per user turn")
+    eager_surface: MemoryEagerSurfaceConfig = Field(default_factory=MemoryEagerSurfaceConfig, description="Freeze the pinned block and hot layer for the life of a session instead of re-rendering them every turn")
     file_watcher: MemoryFileWatcherConfig = Field(
         default_factory=MemoryFileWatcherConfig,
         description="Background filesystem watcher that re-indexes manually edited memory/*.md files",
