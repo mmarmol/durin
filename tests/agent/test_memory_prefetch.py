@@ -405,9 +405,10 @@ async def test_hits_count_the_blocks_that_survived_the_cut(tmp_path: Path, monke
     assert prefetch["truncated"] is True
 
     recall = [ev for _c, _h, evs in seen for ev in (evs or []) if ev.get("name") == "memory_prefetch"]
-    assert len(recall) == 1
-    assert recall[0]["arguments"]["hits"] == 2
-    assert recall[0]["result"]["refs"] == ["memory/episodic/0", "memory/episodic/1"]
+    end = [ev for ev in recall if ev["phase"] == "end"]
+    assert len(end) == 1
+    assert end[0]["arguments"]["hits"] == 2
+    assert end[0]["result"]["refs"] == ["memory/episodic/0", "memory/episodic/1"]
 
 
 @pytest.mark.asyncio
@@ -582,16 +583,6 @@ async def test_concurrent_sessions_never_leak_prefetch_refs_across_each_other(
         def validate_params(self, params: dict) -> list[str]:
             return []
 
-        def to_schema(self) -> dict:
-            # The background post-save consolidation check
-            # (Consolidator.estimate_session_prompt_tokens) reads every
-            # registered tool's schema independently of the chat mock above,
-            # so this fake needs one too or that best-effort background task
-            # logs a spurious AttributeError.
-            return {"type": "function", "function": {
-                "name": self.name, "description": self.description, "parameters": self.parameters,
-            }}
-
         async def execute(self, **kwargs):
             query = kwargs.get("query", "")
             if query == "person:ana":
@@ -719,11 +710,11 @@ async def test_prefetch_with_hits_announces_a_recall_event(tmp_path: Path, monke
     )
 
     recall = [ev for _c, _h, evs in seen for ev in (evs or []) if ev.get("name") == "memory_prefetch"]
-    assert len(recall) == 1
-    assert recall[0]["phase"] == "end"
-    assert recall[0]["arguments"]["hits"] == 1
-    assert recall[0]["result"]["refs"] == ["person:ana"]
-    assert recall[0]["call_id"].startswith("memory_prefetch:")
+    end = [ev for ev in recall if ev["phase"] == "end"]
+    assert len(end) == 1
+    assert end[0]["arguments"]["hits"] == 1
+    assert end[0]["result"]["refs"] == ["person:ana"]
+    assert end[0]["call_id"].startswith("memory_prefetch:")
 
 
 @pytest.mark.asyncio
@@ -746,8 +737,102 @@ async def test_recall_event_reaches_the_bus_without_an_injected_callback(tmp_pat
         ev for m in tool_event_msgs for ev in (m.metadata.get("_tool_events") or [])
         if ev.get("name") == "memory_prefetch"
     ]
-    assert len(recall_events) == 1
-    assert recall_events[0]["phase"] == "end"
-    assert recall_events[0]["arguments"]["hits"] == 1
-    assert recall_events[0]["result"]["refs"] == ["person:ana"]
-    assert recall_events[0]["call_id"].startswith("memory_prefetch:")
+    end_events = [ev for ev in recall_events if ev["phase"] == "end"]
+    assert len(end_events) == 1
+    assert end_events[0]["arguments"]["hits"] == 1
+    assert end_events[0]["result"]["refs"] == ["person:ana"]
+    assert end_events[0]["call_id"].startswith("memory_prefetch:")
+
+
+@pytest.mark.asyncio
+async def test_recall_start_then_end_frames(tmp_path: Path, monkeypatch) -> None:
+    """A search that finds hits announces itself with a `start` frame before
+    it runs and closes with an `end` frame carrying the hits and refs — both
+    sharing one call_id, so a UI can pair the close to the open it made."""
+    fake = _FakeSearch(total=1)
+    loop, captured, rec = _make_loop(tmp_path, monkeypatch, fake=fake)
+    seen: list[tuple[str, bool, list[dict] | None]] = []
+
+    async def on_progress(content: str, *, tool_hint: bool = False, tool_events: list[dict] | None = None) -> None:
+        seen.append((content, tool_hint, tool_events))
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION),
+        on_progress=on_progress,
+    )
+
+    recall = [ev for _c, _h, evs in seen for ev in (evs or []) if ev.get("name") == "memory_prefetch"]
+    assert [ev["phase"] for ev in recall] == ["start", "end"]
+    start, end = recall
+    assert start["call_id"] == end["call_id"]
+    assert start["call_id"].startswith("memory_prefetch:")
+    assert start["arguments"] == {"query": QUESTION[:80]}
+    assert end["arguments"]["hits"] == 1
+    assert end["result"]["refs"] == ["person:ana"]
+
+
+@pytest.mark.asyncio
+async def test_no_hits_ends_the_recall_with_zero(tmp_path: Path, monkeypatch) -> None:
+    """A search that runs but finds nothing still closes the recall it
+    opened — with hits and refs both empty, not by staying silent."""
+    loop, captured, rec = _make_loop(tmp_path, monkeypatch, fake=_FakeSearch(total=0))
+    seen: list[tuple[str, bool, list[dict] | None]] = []
+
+    async def on_progress(content: str, *, tool_hint: bool = False, tool_events: list[dict] | None = None) -> None:
+        seen.append((content, tool_hint, tool_events))
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION),
+        on_progress=on_progress,
+    )
+
+    recall = [ev for _c, _h, evs in seen for ev in (evs or []) if ev.get("name") == "memory_prefetch"]
+    assert [ev["phase"] for ev in recall] == ["start", "end"]
+    assert recall[1]["arguments"]["hits"] == 0
+    assert recall[1]["result"]["refs"] == []
+
+
+@pytest.mark.asyncio
+async def test_timeout_ends_the_recall_with_zero(tmp_path: Path, monkeypatch) -> None:
+    """A search abandoned on timeout still closes the recall it opened, with
+    zero hits — the same as an ordinary miss from the announcement's point
+    of view."""
+    slow = _FakeSearch(total=1, delay=0.5)
+    loop, captured, rec = _make_loop(tmp_path, monkeypatch, fake=slow)
+    loop.app_config = SimpleNamespace(memory=SimpleNamespace(prefetch=MemoryPrefetchConfig(timeout_s=0.05)))
+    seen: list[tuple[str, bool, list[dict] | None]] = []
+
+    async def on_progress(content: str, *, tool_hint: bool = False, tool_events: list[dict] | None = None) -> None:
+        seen.append((content, tool_hint, tool_events))
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION),
+        on_progress=on_progress,
+    )
+
+    recall = [ev for _c, _h, evs in seen for ev in (evs or []) if ev.get("name") == "memory_prefetch"]
+    assert [ev["phase"] for ev in recall] == ["start", "end"]
+    assert recall[1]["arguments"]["hits"] == 0
+    assert recall[1]["result"]["refs"] == []
+
+
+@pytest.mark.asyncio
+async def test_a_skipped_prefetch_emits_no_frames(tmp_path: Path, monkeypatch) -> None:
+    """A gate skip (here, a message too short to search) never opens a
+    recall in the first place, so it emits neither a `start` nor an `end`
+    frame — same as today, before this announcement existed."""
+    fake = _FakeSearch()
+    loop, captured, rec = _make_loop(tmp_path, monkeypatch, fake=fake)
+    seen: list[tuple[str, bool, list[dict] | None]] = []
+
+    async def on_progress(content: str, *, tool_hint: bool = False, tool_events: list[dict] | None = None) -> None:
+        seen.append((content, tool_hint, tool_events))
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content="ok thanks"),
+        on_progress=on_progress,
+    )
+
+    recall = [ev for _c, _h, evs in seen for ev in (evs or []) if ev.get("name") == "memory_prefetch"]
+    assert recall == []
+    assert fake.calls == []

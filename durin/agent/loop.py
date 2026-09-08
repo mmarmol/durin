@@ -2882,23 +2882,13 @@ class AgentLoop:
         with suppress(Exception):
             get_session_logger(session_key).log("memory.prefetch", {"session_key": session_key, **data})
 
-    async def _memory_prefetch(self, ctx: TurnContext) -> str:
-        """One warm memory_search with the user message, fenced for the wire
-        copy of the message. Returns "" (and records why) whenever the search
-        should not or could not run — the turn never waits on memory."""
-        import re
-
-        from durin.agent.context import build_memory_context_block
+    def _prefetch_skip_reason(self, ctx: TurnContext, cfg: "MemoryPrefetchConfig") -> str | None:
+        """The gates `_memory_prefetch` checks before it searches, factored
+        out so `_state_build` can ask the same question up front — whether a
+        search will run at all decides whether it announces one with a
+        `start` progress frame. Returns None when a search will run."""
         from durin.memory.fts_index import fts_index_path
-        from durin.telemetry.logger import (
-            bind_prefetch_search,
-            bind_telemetry,
-            get_session_logger,
-            reset_prefetch_search,
-            reset_telemetry,
-        )
 
-        cfg = self._prefetch_config()
         text = ctx.msg.content.strip() if isinstance(ctx.msg.content, str) else ""
         reason: str | None = None
         if not cfg.enabled:
@@ -2925,9 +2915,30 @@ class AgentLoop:
         tool = self.tools.get("memory_search") if self.tools else None
         if reason is None and tool is None:
             reason = "no_tool"
+        return reason
+
+    async def _memory_prefetch(self, ctx: TurnContext) -> str:
+        """One warm memory_search with the user message, fenced for the wire
+        copy of the message. Returns "" (and records why) whenever the search
+        should not or could not run — the turn never waits on memory."""
+        import re
+
+        from durin.agent.context import build_memory_context_block
+        from durin.telemetry.logger import (
+            bind_prefetch_search,
+            bind_telemetry,
+            get_session_logger,
+            reset_prefetch_search,
+            reset_telemetry,
+        )
+
+        cfg = self._prefetch_config()
+        text = ctx.msg.content.strip() if isinstance(ctx.msg.content, str) else ""
+        reason = self._prefetch_skip_reason(ctx, cfg)
         if reason is not None:
             self._emit_prefetch(ctx.session_key, hits=0, chars=0, duration_ms=0, skipped=reason)
             return ""
+        tool = self.tools.get("memory_search") if self.tools else None
 
         t0 = time.perf_counter()
         token = None
@@ -3045,11 +3056,36 @@ class AgentLoop:
         if ctx.on_retry_wait is None:
             ctx.on_retry_wait = await self._build_retry_wait_callback(ctx.msg)
 
-        ctx.memory_prefetch = await self._memory_prefetch(ctx)
-        if ctx.prefetch_hits and ctx.on_progress is not None:
+        # Whether a search will run is known before it runs — the same gate
+        # check _memory_prefetch makes internally — so the announcement can
+        # bracket the search with a `start` frame before and an `end` frame
+        # after, rather than only surfacing it on the way out. A gate skip
+        # announces nothing, as today.
+        prefetch_cfg = self._prefetch_config()
+        prefetch_will_search = self._prefetch_skip_reason(ctx, prefetch_cfg) is None
+        if prefetch_will_search and ctx.on_progress is not None:
             from durin.utils.progress_events import invoke_on_progress
             query = ctx.msg.content.strip() if isinstance(ctx.msg.content, str) else ""
-            event = {
+            start_event = {
+                "version": 1,
+                "phase": "start",
+                "call_id": f"memory_prefetch:{ctx.turn_id}",
+                "name": "memory_prefetch",
+                "arguments": {"query": query[:80]},
+                "result": None,
+                "error": None,
+                "files": [],
+                "embeds": [],
+            }
+            with suppress(Exception):
+                await invoke_on_progress(ctx.on_progress, "", tool_hint=True, tool_events=[start_event])
+
+        ctx.memory_prefetch = await self._memory_prefetch(ctx)
+
+        if prefetch_will_search and ctx.on_progress is not None:
+            from durin.utils.progress_events import invoke_on_progress
+            query = ctx.msg.content.strip() if isinstance(ctx.msg.content, str) else ""
+            end_event = {
                 "version": 1,
                 "phase": "end",
                 "call_id": f"memory_prefetch:{ctx.turn_id}",
@@ -3061,7 +3097,7 @@ class AgentLoop:
                 "embeds": [],
             }
             with suppress(Exception):
-                await invoke_on_progress(ctx.on_progress, "", tool_hint=True, tool_events=[event])
+                await invoke_on_progress(ctx.on_progress, "", tool_hint=True, tool_events=[end_event])
         ctx.initial_messages = self._build_initial_messages(
             ctx.msg, ctx.session, ctx.history, ctx.pending_summary,
             active_persona_soul=ctx.active_persona_soul,
