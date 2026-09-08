@@ -3008,6 +3008,17 @@ class AgentLoop:
         # telemetry and the recall announced to the user both overstate what
         # actually reached the prompt.
         ctx.prefetch_hits = len(ctx.prefetch_refs) if truncated else total
+        if truncated and not ctx.prefetch_refs:
+            # The cut landed before any hit's marker line — typically inside
+            # a section's own header, reachable only with max_chars near its
+            # floor — so nothing whole reached the message. Record it as a
+            # plain no_hits skip rather than fencing a marker-less block or
+            # announcing a hits-landed row with no `skipped`: a cut that
+            # leaves no whole hit standing counts as no hits.
+            self._emit_prefetch(
+                ctx.session_key, hits=0, chars=0, duration_ms=duration_ms, skipped="no_hits", truncated=True,
+            )
+            return ""
         # Bind the refs into the ContextVar memory_search reads for its
         # dedup, in THIS asyncio task — the same one _state_run later drives
         # the tool loop in — so the model's own search this turn collapses
@@ -3026,6 +3037,38 @@ class AgentLoop:
             ctx.session_key, hits=ctx.prefetch_hits, chars=len(block), duration_ms=duration_ms, truncated=truncated,
         )
         return block
+
+    async def _announce_prefetch(
+        self, ctx: TurnContext, phase: str, *, hits: int | None = None, refs: list[str] | None = None,
+    ) -> None:
+        """Emit one memory_prefetch progress frame ('start' or 'end').
+
+        Both frames share version/call_id/name/error/files/embeds and the
+        query — computed once here rather than duplicated per call site.
+        ``hits``/``refs`` are the 'end' frame's payload; the 'start' frame
+        (neither passed) carries just the query, with ``result`` staying
+        None. A no-op when the turn has no progress callback.
+        """
+        if ctx.on_progress is None:
+            return
+        from durin.utils.progress_events import invoke_on_progress
+        query = ctx.msg.content.strip() if isinstance(ctx.msg.content, str) else ""
+        arguments: dict[str, Any] = {"query": query[:80]}
+        if hits is not None:
+            arguments["hits"] = hits
+        event = {
+            "version": 1,
+            "phase": phase,
+            "call_id": f"memory_prefetch:{ctx.turn_id}",
+            "name": "memory_prefetch",
+            "arguments": arguments,
+            "result": {"refs": refs} if refs is not None else None,
+            "error": None,
+            "files": [],
+            "embeds": [],
+        }
+        with suppress(Exception):
+            await invoke_on_progress(ctx.on_progress, "", tool_hint=True, tool_events=[event])
 
     async def _state_build(self, ctx: TurnContext) -> str:
         await self.consolidator.maybe_consolidate_by_tokens(
@@ -3076,43 +3119,33 @@ class AgentLoop:
         prefetch_cfg = self._prefetch_config()
         prefetch_skip_reason = self._prefetch_skip_reason(ctx, prefetch_cfg)
         prefetch_will_search = prefetch_skip_reason is None
-        if prefetch_will_search and ctx.on_progress is not None:
-            from durin.utils.progress_events import invoke_on_progress
-            query = ctx.msg.content.strip() if isinstance(ctx.msg.content, str) else ""
-            start_event = {
-                "version": 1,
-                "phase": "start",
-                "call_id": f"memory_prefetch:{ctx.turn_id}",
-                "name": "memory_prefetch",
-                "arguments": {"query": query[:80]},
-                "result": None,
-                "error": None,
-                "files": [],
-                "embeds": [],
-            }
-            with suppress(Exception):
-                await invoke_on_progress(ctx.on_progress, "", tool_hint=True, tool_events=[start_event])
+        if prefetch_will_search:
+            await self._announce_prefetch(ctx, "start")
 
-        ctx.memory_prefetch = await self._memory_prefetch(
-            ctx, skip_reason=prefetch_skip_reason, cfg=prefetch_cfg
-        )
+        try:
+            ctx.memory_prefetch = await self._memory_prefetch(
+                ctx, skip_reason=prefetch_skip_reason, cfg=prefetch_cfg
+            )
+        except asyncio.CancelledError:
+            # Esc / /stop cancels the turn's own task (_cancel_active_tasks);
+            # the prefetch window is the first thing in the turn and can be
+            # seconds long on a cold embedding load — precisely when a user
+            # hits it. Awaiting the close here would just be cancelled again
+            # (this except block is still running inside the task being
+            # cancelled), so hand it to a background task instead: the frame
+            # still reaches the surface that opened the recall, without
+            # swallowing or delaying the cancellation itself.
+            if prefetch_will_search:
+                self._schedule_background(self._announce_prefetch(
+                    ctx, "end", hits=ctx.prefetch_hits, refs=list(ctx.prefetch_refs),
+                ))
+            raise
+        else:
+            if prefetch_will_search:
+                await self._announce_prefetch(
+                    ctx, "end", hits=ctx.prefetch_hits, refs=list(ctx.prefetch_refs),
+                )
 
-        if prefetch_will_search and ctx.on_progress is not None:
-            from durin.utils.progress_events import invoke_on_progress
-            query = ctx.msg.content.strip() if isinstance(ctx.msg.content, str) else ""
-            end_event = {
-                "version": 1,
-                "phase": "end",
-                "call_id": f"memory_prefetch:{ctx.turn_id}",
-                "name": "memory_prefetch",
-                "arguments": {"query": query[:80], "hits": ctx.prefetch_hits},
-                "result": {"refs": list(ctx.prefetch_refs)},
-                "error": None,
-                "files": [],
-                "embeds": [],
-            }
-            with suppress(Exception):
-                await invoke_on_progress(ctx.on_progress, "", tool_hint=True, tool_events=[end_event])
         ctx.initial_messages = self._build_initial_messages(
             ctx.msg, ctx.session, ctx.history, ctx.pending_summary,
             active_persona_soul=ctx.active_persona_soul,

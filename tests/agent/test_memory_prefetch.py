@@ -389,10 +389,81 @@ async def test_prefetch_flag_survives_an_abandoned_timeout_thread(tmp_path: Path
     # The abandoned thread is still sleeping — its row has not landed yet.
     assert [t for t, _d in rec.events if t == "memory.recall.rrf"] == []
 
-    await asyncio.sleep(0.6)  # let the abandoned thread finish its emit
+    # Wait for the row, not a fixed duration: the abandoned thread's own
+    # time.sleep(delay) plus the emit is not bounded tightly enough for a
+    # fixed sleep to be safe on a machine already busy running the suite.
+    # Bounded so a real regression (the row never landing) still fails.
+    deadline = time.monotonic() + 5.0
+    while not any(t == "memory.recall.rrf" for t, _d in rec.events) and time.monotonic() < deadline:
+        await asyncio.sleep(0.01)
 
     rrf_rows = [d for t, d in rec.events if t == "memory.recall.rrf"]
     assert rrf_rows and rrf_rows[0]["prefetch"] is True
+
+
+@pytest.mark.asyncio
+async def test_cancellation_mid_search_still_closes_the_recall_frame(tmp_path: Path, monkeypatch) -> None:
+    """Esc / `/stop` cancels the turn's own task (AgentLoop._cancel_active_tasks);
+    the prefetch window is the first thing in the turn and can be seconds
+    long on a cold embedding load — precisely when a user hits it. A surface
+    that opened a bubble/chip on the `start` frame must still get a matching
+    `end`, or it stays open on every future reload — so the close has to
+    land even though the turn's own task, the one that would normally await
+    and emit it, is the one being cancelled."""
+    fake = _FakeSearch(total=1, delay=2.0)
+    loop, captured, rec = _make_loop(tmp_path, monkeypatch, fake=fake)
+    seen: list[tuple[str, bool, list[dict] | None]] = []
+
+    async def on_progress(content: str, *, tool_hint: bool = False, tool_events: list[dict] | None = None) -> None:
+        seen.append((content, tool_hint, tool_events))
+
+    # _memory_prefetch's own `finally` resets both ContextVars on every
+    # exit, cancellation included; spy on the resets to pin that this still
+    # happens once _state_build itself starts handling the cancellation too.
+    import durin.telemetry.logger as telemetry_logger
+    reset_calls: list[str] = []
+    _orig_reset_prefetch = telemetry_logger.reset_prefetch_search
+    _orig_reset_telemetry = telemetry_logger.reset_telemetry
+
+    def _spy_reset_prefetch(token):
+        reset_calls.append("prefetch")
+        return _orig_reset_prefetch(token)
+
+    def _spy_reset_telemetry(token):
+        reset_calls.append("telemetry")
+        return _orig_reset_telemetry(token)
+
+    monkeypatch.setattr(telemetry_logger, "reset_prefetch_search", _spy_reset_prefetch)
+    monkeypatch.setattr(telemetry_logger, "reset_telemetry", _spy_reset_telemetry)
+
+    task = asyncio.create_task(loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION),
+        on_progress=on_progress,
+    ))
+    deadline = time.monotonic() + 2.0
+    while not fake.calls and time.monotonic() < deadline:
+        await asyncio.sleep(0.01)
+    assert fake.calls, "the search never started"
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    # The close frame is delivered from a background task rather than
+    # awaited inline inside the now-cancelled turn task — wait for it to
+    # land rather than assume it already has.
+    frames: list[dict] = []
+    deadline = time.monotonic() + 2.0
+    while len(frames) < 2 and time.monotonic() < deadline:
+        frames = [ev for _c, _h, evs in seen for ev in (evs or []) if ev.get("name") == "memory_prefetch"]
+        if len(frames) < 2:
+            await asyncio.sleep(0.01)
+
+    assert [f["phase"] for f in frames] == ["start", "end"]
+    assert frames[0]["call_id"] == frames[-1]["call_id"]
+    assert frames[-1]["arguments"]["hits"] == 0
+    assert frames[-1]["result"]["refs"] == []
+    assert "prefetch" in reset_calls and "telemetry" in reset_calls
 
 
 @pytest.mark.asyncio
@@ -441,6 +512,34 @@ async def test_hits_count_the_blocks_that_survived_the_cut(tmp_path: Path, monke
     assert len(end) == 1
     assert end[0]["arguments"]["hits"] == 2
     assert end[0]["result"]["refs"] == ["memory/episodic/0", "memory/episodic/1"]
+
+
+@pytest.mark.asyncio
+async def test_cut_before_the_first_marker_is_recorded_as_no_hits(tmp_path: Path, monkeypatch) -> None:
+    """max_chars near its floor, with two sections present: the cut can land
+    before any hit's marker line — inside the first section's own header —
+    leaving no ref behind even though the search found hits and the text
+    was truncated. That must not fence an empty, marker-less block, nor
+    announce a hits-landed row with no `skipped`: a cut that leaves no whole
+    hit standing counts as no hits, same as finding nothing at all."""
+    filler = "x" * 300
+    rendered = (
+        f"## Canonical\n\n{filler}\n\n"
+        "=== CANONICAL: person:ana ===\nAna runs the bakery.\n=== END CANONICAL ===\n\n"
+        "## Fragment\n\nRecent notes.\n\n"
+        "=== FRAGMENT: memory/episodic/1 ===\nMore detail here.\n=== END FRAGMENT ==="
+    )
+    fake = _FakeSearch(total=2, rendered=rendered)
+    loop, captured, rec = _make_loop(tmp_path, monkeypatch, fake=fake)
+    loop.app_config = SimpleNamespace(memory=SimpleNamespace(prefetch=MemoryPrefetchConfig(max_chars=200)))
+
+    await loop._process_message(InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION))
+
+    assert "<memory-context>" not in _user_content(captured)
+    row = [d for t, d in rec.events if t == "memory.prefetch"][-1]
+    assert row["skipped"] == "no_hits"
+    assert row["truncated"] is True
+    assert row["hits"] == 0
 
 
 @pytest.mark.asyncio

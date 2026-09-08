@@ -256,19 +256,31 @@ _CHAT_ID_RE = re.compile(r"^[A-Za-z0-9_:-]{1,64}$")
 
 
 def _is_live_progress_only(payload: dict[str, Any]) -> bool:
-    """Return True when every tool_event in the payload has phase 'running'.
+    """Return True when every tool_event in the payload needs no transcript row.
 
     Running frames are streamed live to open connections for inline block
     updates but are reconstructable from the terminal frame, so they do not
-    need to be persisted to the webui transcript.  A mixed frame (at least one
-    non-running event) or a frame with no tool_events still persists.
+    need to be persisted to the webui transcript. A memory_prefetch 'start'
+    frame is the same case: the loop always follows it with an 'end' frame,
+    even on cancellation (delivered from a background task rather than
+    dropped — see AgentLoop._state_build), so persisting 'start' on its own
+    would only ever produce an orphan record. A mixed frame (at least one
+    record-worthy event) or a frame with no tool_events still persists.
     """
     te = payload.get("tool_events")
     return (
         isinstance(te, list)
         and len(te) > 0
-        and all(isinstance(e, dict) and e.get("phase") == "running" for e in te)
+        and all(_is_live_only_event(e) for e in te)
     )
+
+
+def _is_live_only_event(event: Any) -> bool:
+    if not isinstance(event, dict):
+        return False
+    if event.get("phase") == "running":
+        return True
+    return event.get("phase") == "start" and event.get("name") == "memory_prefetch"
 
 
 def _is_valid_chat_id(value: Any) -> bool:

@@ -66,3 +66,41 @@ def test_event_without_phase_returns_false() -> None:
         "tool_events": [{"call_id": "c1", "name": "web_search"}],
     }
     assert _is_live_progress_only(payload) is False
+
+
+def test_memory_prefetch_start_returns_true() -> None:
+    """The loop always follows a memory_prefetch 'start' with an 'end' frame
+    (even on cancellation — AgentLoop._state_build), so persisting 'start' on
+    its own would only ever produce an orphan chip; treat it as live-only
+    like a 'running' frame, reconstructable from the terminal frame."""
+    payload = {
+        "event": "message",
+        "tool_events": [
+            {"phase": "start", "call_id": "memory_prefetch:1", "name": "memory_prefetch", "arguments": {"query": "q"}},
+        ],
+    }
+    assert _is_live_progress_only(payload) is True
+
+
+def test_other_tool_start_phase_returns_false() -> None:
+    """The 'start' exemption is scoped to memory_prefetch specifically, not
+    to phase 'start' in general — an ordinary tool's start frame still
+    persists, same as before."""
+    payload = {
+        "event": "message",
+        "tool_events": [
+            {"phase": "start", "call_id": "c1", "name": "web_search", "arguments": {}},
+        ],
+    }
+    assert _is_live_progress_only(payload) is False
+
+
+def test_memory_prefetch_start_mixed_with_running_returns_true() -> None:
+    payload = {
+        "event": "message",
+        "tool_events": [
+            {"phase": "running", "call_id": "c1", "name": "web_search"},
+            {"phase": "start", "call_id": "memory_prefetch:1", "name": "memory_prefetch", "arguments": {"query": "q"}},
+        ],
+    }
+    assert _is_live_progress_only(payload) is True
