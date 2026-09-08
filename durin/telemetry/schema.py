@@ -403,6 +403,14 @@ class PlanModePresentedEvent(TypedDict):
 
 
 class ToolReadFileEvent(TypedDict):
+    """Agent read a file.
+
+    ``result_chars`` measures the returned file content only.
+    ``memory_notes`` counts the artifact-recall notes appended after it (0
+    when none matched or the feature is off) — the field that measures
+    artifact recall, since the lookup itself emits no search event.
+    """
+
     path: str
     offset: NotRequired[int]
     limit: NotRequired[int]
@@ -411,6 +419,7 @@ class ToolReadFileEvent(TypedDict):
     total_lines: NotRequired[int]
     returned_lines: NotRequired[int]
     result_chars: NotRequired[int]
+    memory_notes: NotRequired[int]
     truncated: NotRequired[bool]
 
 

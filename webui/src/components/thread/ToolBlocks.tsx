@@ -250,6 +250,10 @@ function chipLabel(event: ToolProgressEvent): string {
       return `🧠 ${s("ref") || "entity updated"}`;
     case "memory_forget":
       return `🧠 forgot ${s("uri")}`.trim();
+    case "memory_prefetch": {
+      const hits = typeof a.hits === "number" ? a.hits : "?";
+      return `🧠 ${hits} memories recalled`;
+    }
     case "skill_import":
       return `🧩 import ${s("source").slice(0, 40)}`.trim();
     default:

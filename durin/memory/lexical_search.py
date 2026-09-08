@@ -44,20 +44,25 @@ def lexical_search(
     decision: RoutingDecision,
     *,
     limit: int = 50,
+    emit: bool = True,
 ) -> list[FTSHit]:
     """Execute the lexical part of the search pipeline.
 
     Returns up to ``limit`` :class:`FTSHit` rows in best-first order
     (BM25 score for FTS paths; insertion order for the LIKE fallback).
 
-    Emits ``memory.recall.lexical`` after the run.
+    Emits ``memory.recall.lexical`` after the run. Pass ``emit=False`` from a
+    caller that is not a memory search: the event's row count is read as the
+    number of searches, and its duration series is the search latency, so a
+    lookup that is a side effect of some other tool would dilute both.
     """
     t0 = time.perf_counter()
     hits: list[FTSHit] = []
     query = decision.normalized_query
     if not query:
-        _emit_lexical(decision=decision, hit_count=0,
-                      duration_ms=(time.perf_counter() - t0) * 1000.0)
+        if emit:
+            _emit_lexical(decision=decision, hit_count=0,
+                          duration_ms=(time.perf_counter() - t0) * 1000.0)
         return hits
 
     if decision.route is LexicalRoute.UNICODE61:
@@ -67,10 +72,11 @@ def lexical_search(
     elif decision.route is LexicalRoute.LIKE_SUBSTRING:
         hits = _like_substring_scan(index, query, limit=limit)
 
-    _emit_lexical(
-        decision=decision, hit_count=len(hits),
-        duration_ms=(time.perf_counter() - t0) * 1000.0,
-    )
+    if emit:
+        _emit_lexical(
+            decision=decision, hit_count=len(hits),
+            duration_ms=(time.perf_counter() - t0) * 1000.0,
+        )
     return hits
 
 

@@ -1243,7 +1243,16 @@ class DurinApp(App[None]):
             # The hint content (msg.content) is redundant with the
             # structured events — the bubble derives its summary line
             # from the event's arguments. Don't double-render it.
-            self._dismiss_working_indicator()
+            #
+            # A memory_prefetch frame is synthetic: it announces the
+            # automatic recall that runs BEFORE the model is called, so it
+            # is the first frame of the turn. Dismissing the spinner on it
+            # would leave the whole turn with no in-thread progress.
+            if not all(
+                str(event.get("name") or "") == "memory_prefetch"
+                for event in tool_events
+            ):
+                self._dismiss_working_indicator()
             self._clear_retry_status()
             for event in tool_events:
                 if str(event.get("name") or "") in ("workflow_progress", "subagent_result"):

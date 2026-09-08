@@ -547,3 +547,52 @@ async def test_prefetch_gate_error_still_replies(tmp_path: Path, monkeypatch) ->
     assert [d for t, d in rec.events if t == "memory.prefetch"][-1]["skipped"] == "error"
     # A broken search must not break the turn: the provider still ran and replied.
     assert captured and reply is not None
+
+
+@pytest.mark.asyncio
+async def test_prefetch_with_hits_announces_a_recall_event(tmp_path: Path, monkeypatch) -> None:
+    fake = _FakeSearch(total=1)
+    loop, captured, rec = _make_loop(tmp_path, monkeypatch, fake=fake)
+    seen: list[tuple[str, bool, list[dict] | None]] = []
+
+    async def on_progress(content: str, *, tool_hint: bool = False, tool_events: list[dict] | None = None) -> None:
+        seen.append((content, tool_hint, tool_events))
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION),
+        on_progress=on_progress,
+    )
+
+    recall = [ev for _c, _h, evs in seen for ev in (evs or []) if ev.get("name") == "memory_prefetch"]
+    assert len(recall) == 1
+    assert recall[0]["phase"] == "end"
+    assert recall[0]["arguments"]["hits"] == 1
+    assert recall[0]["result"]["refs"] == ["person:ana"]
+    assert recall[0]["call_id"].startswith("memory_prefetch:")
+
+
+@pytest.mark.asyncio
+async def test_recall_event_reaches_the_bus_without_an_injected_callback(tmp_path: Path, monkeypatch) -> None:
+    """Verify the recall event is emitted to the bus even without explicit on_progress."""
+    fake = _FakeSearch(total=1)
+    loop, captured, rec = _make_loop(tmp_path, monkeypatch, fake=fake)
+
+    await loop._dispatch(InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION))
+
+    # Drain all outbound messages and find those carrying _tool_events
+    outbound = []
+    while loop.bus.outbound_size > 0:
+        outbound.append(await loop.bus.consume_outbound())
+
+    tool_event_msgs = [m for m in outbound if m.metadata and m.metadata.get("_tool_events")]
+    assert tool_event_msgs, "expected at least one outbound message with _tool_events"
+
+    recall_events = [
+        ev for m in tool_event_msgs for ev in (m.metadata.get("_tool_events") or [])
+        if ev.get("name") == "memory_prefetch"
+    ]
+    assert len(recall_events) == 1
+    assert recall_events[0]["phase"] == "end"
+    assert recall_events[0]["arguments"]["hits"] == 1
+    assert recall_events[0]["result"]["refs"] == ["person:ana"]
+    assert recall_events[0]["call_id"].startswith("memory_prefetch:")

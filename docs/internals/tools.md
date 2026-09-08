@@ -328,7 +328,7 @@ controls which MCP tools are registered.
 
 | Group | Tools |
 |---|---|
-| Filesystem | `read_file`, `write_file`, `edit_file`, `list_dir` |
+| Filesystem | `read_file` (text reads end with up to `memory.artifact_recall.max_notes` memory entries that mention the file), `write_file`, `edit_file`, `list_dir` |
 | Document reading | `convert_to_markdown` (local document → markdown via markitdown, with local OCR transcribing scanned PDF pages when enabled; returned into the current turn — transient, persists nothing. A document needing more OCR than the inline budget is not read this way — `memory_ingest` it instead, which enqueues a [background job](jobs.md)) |
 | Search | `grep`, `repo_overview` |
 | Shell | `exec`, `process` |

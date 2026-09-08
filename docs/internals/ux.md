@@ -314,6 +314,13 @@ background work is running or has finished. Clicking it opens the work panel.
 Per-node detail and sub-agent steps are not expanded inline — they live in the
 panel.
 
+**Tool chips.** The thread's trace row also carries non-clickable chips for tool
+events that have nothing to open. The automatic per-turn memory recall is one of
+them: when it finds hits, the loop announces it as a synthetic `memory_prefetch`
+tool event, and the thread renders that as a `🧠 N memories recalled` chip in the
+same row as the other chips, on the turn it served. The event carries the
+recalled refs in its result.
+
 **Work strip.** The panel's collapsed representation: a slim status line docked
 directly above the composer, rendered only while the panel is closed and there
 is something to report (opening the panel replaces it, so the two never show at

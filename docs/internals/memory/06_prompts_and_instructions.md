@@ -299,6 +299,8 @@ The hits inside carry the ordinary structural markers of §5.6, so the drill and
 
 **Telemetry.** BUILD runs outside the per-run telemetry binding, so the loop binds the session logger around the tool call (the tool's own `memory.recall` event lands with it) and emits `memory.prefetch` through the session logger directly. The turn's `turn.memory_usage` rollup carries `prefetch_hits`. The block is also its own line in the turn's `context.composition` breakdown — `memory_prefetch` among the volatile blocks, excluded from the current message's count — so `/status` and the footer attribute it to memory rather than to what the user wrote.
 
+**Announcement.** When the search finds hits, the recall is announced to the user's surface as a synthetic `memory_prefetch` tool event (chip in the webui, bubble in the TUI).
+
 ### 5.8 Continuity
 
 The volatile layer's `[Archived Context Summary]` slot (`AgentLoop._format_pending_summary`) carries the session's own compaction summary when it has one. A fresh session that has neither compacted nor grown past its first few turns gets, instead, continuity: on a channel listed in `memory.continuity.channels` (the webui and the CLI by default — single-user surfaces where "the previous session" is unambiguously the same person's), it is shown the newest *other* session's summary on that channel, wrapped in `=== PREVIOUS SESSION SUMMARY (<file stem>, last active <date>) ===` markers. The block is shown for the fresh session's first `memory.continuity.max_turns` turns, then drops out — whether or not the session ever compacts its own summary. Turns are counted as the user messages that reached the model: a slash command is persisted for the transcript but costs none of them.
@@ -356,6 +358,8 @@ The marker names the previous session's summary file stem, so the agent can reac
 | `memory.prefetch.min_query_chars` | `20` | Messages shorter than this are not searched |
 | `memory.prefetch.timeout_s` | `5.0` | Seconds the turn will wait for the search |
 | `memory.prefetch.backoff_s` | `60.0` | Seconds the prefetch is skipped after a timeout or error; `0` disables the backoff |
+| `memory.artifact_recall.enabled` | `true` | Appends memory notes about a file to `read_file` results, and the entities distilled from a reference document to `memory_drill` results |
+| `memory.artifact_recall.max_notes` | `3` | Notes appended to one `read_file` result |
 
 **CLI surfaces:**
 - `durin memory dream` — run the core consolidation passes immediately (bypasses `ReactiveDreamGate`)

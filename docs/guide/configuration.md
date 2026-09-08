@@ -426,6 +426,22 @@ Slash commands, workflow nodes, subagents, and every session kind the runtime tr
 | `enabled` | `true` | Run periodic health probe; disable for one less background thread |
 | `interval_seconds` | `900` | Probe interval in seconds (min 60, max 86400) |
 
+**`memory.artifact_recall`** — memory notes on file reads and reference drills:
+a `read_file` text result ends with the memory entries that mention the file
+(lexical lookup only, no embedding), and a `memory_drill` on a `reference:<slug>`
+document ends with the entities distilled from it:
+
+What it costs: roughly a millisecond on a text `read_file` — one lexical index
+lookup, no embedding call and no LLM call — whether or not it finds anything. A
+reference drill is the heavier half: it parses every entity page synchronously,
+so it grows with the size of the entity graph, but a drill into a document is a
+rare, deliberate action. Turn it off with `memory.artifact_recall.enabled: false`.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `true` | Append memory notes about a file to `read_file` results and distilled entities to reference drills |
+| `max_notes` | `3` | Notes appended to one `read_file` result |
+
 ---
 
 ### `documents`

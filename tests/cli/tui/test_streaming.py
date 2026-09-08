@@ -200,3 +200,31 @@ async def test_blocking_ask_user_does_not_duplicate_in_tui(tmp_path) -> None:
         assert "¿Qué color?" in body
         # A single ❓ in the rendered question.
         assert body.count("❓") == 1
+
+
+@pytest.mark.asyncio
+async def test_memory_prefetch_frame_keeps_the_working_indicator(tmp_path) -> None:
+    """The recall chip is the first frame of a prefetched turn — it arrives
+    before the model is called, so it must not take the "thinking…" spinner
+    down with it. A real tool call still does."""
+    bus = MessageBus()
+    app = DurinApp(agent_loop=_fake_agent_loop(bus, tmp_path))
+    async with app.run_test() as pilot:
+        app._show_working_indicator()
+        assert app._working_indicator is not None
+
+        await _inject(bus, "", _progress=True, _tool_hint=True, _tool_events=[
+            {"version": 1, "phase": "end", "call_id": "memory_prefetch:t1",
+             "name": "memory_prefetch",
+             "arguments": {"query": "how does the retry loop work", "hits": 2},
+             "result": {"refs": ["memory/episodic/a"]}},
+        ])
+        await pilot.pause()
+        assert app._working_indicator is not None
+
+        await _inject(bus, "", _tool_hint=True, _tool_events=[
+            {"version": 1, "phase": "start", "call_id": "r1",
+             "name": "read_file", "arguments": {"path": "a.py"}},
+        ])
+        await pilot.pause()
+        assert app._working_indicator is None

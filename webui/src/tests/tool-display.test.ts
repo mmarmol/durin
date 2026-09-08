@@ -24,6 +24,7 @@ describe("toolDisplayClass", () => {
       "long_task",
       "enter_plan_mode",
       "tasks",
+      "memory_prefetch",
     ]) {
       expect(toolDisplayClass(name)).toBe("chip");
     }

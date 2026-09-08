@@ -18,7 +18,7 @@ from durin.agent.tools.schema import (
     StringSchema,
     tool_parameters_schema,
 )
-from durin.memory.drill import DrillError, drill
+from durin.memory.drill import DrillError, drill, reference_ref_for_uri
 
 # Cap on the number of URIs per call. 10 chosen because
 # ``memory_search.limit`` defaults to 10 — drilling more than the
@@ -155,7 +155,7 @@ class MemoryDrillTool(Tool):
             return {"error": str(exc)}
         except OSError as exc:
             return {"error": f"io error: {exc}"}
-        return {"uri": uri, "content": text}
+        return {"uri": uri, "content": self._with_entity_trailer(uri, text)}
 
     def _drill_one_safe(self, uri: str) -> dict[str, Any]:
         """Batch helper — never raises, always returns a record carrying
@@ -168,4 +168,26 @@ class MemoryDrillTool(Tool):
             return {"uri": uri, "error": str(exc)}
         except OSError as exc:
             return {"uri": uri, "error": f"io error: {exc}"}
-        return {"uri": uri, "content": text}
+        return {"uri": uri, "content": self._with_entity_trailer(uri, text)}
+
+    def _with_entity_trailer(self, uri: str, text: str) -> str:
+        """Append the entities distilled from a reference document.
+
+        Applies to every uri shape that addresses an ingested reference —
+        the ref form, the singular-directory form a library search emits and
+        the on-disk path, with or without a section anchor. Returns ``text``
+        unchanged for any other uri and for a reference with no entities.
+        Recall is a convenience here, so a failure is swallowed rather than
+        turned into a drill error."""
+        ref = reference_ref_for_uri(uri)
+        if ref is None:
+            return text
+        try:
+            from durin.memory.artifact_recall import entities_derived_from
+
+            refs = entities_derived_from(self._workspace, ref)
+        except Exception:  # noqa: BLE001
+            return text
+        if not refs:
+            return text
+        return text.rstrip() + "\n\nEntities distilled from this document: " + ", ".join(refs)

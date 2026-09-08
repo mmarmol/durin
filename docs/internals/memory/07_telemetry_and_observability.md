@@ -106,7 +106,7 @@ Each `memory_search` call emits:
 
 - **`memory.recall`** — top-level event, once per call. Carries `query`, `scope`, `level`, `result_count`, `strategy`, `duration_ms`, `total_candidates`. Optional `in_context_deduped` (hits collapsed because content was already in the hot layer), and `recovered_from` / `recovery_duration_ms` on degraded runs.
 - **`memory.recall.vector`** — vector retrieval sub-path. Fields include `query`, `scope`, `embedding_model`, `hit_count`, `duration_ms`. Entity-aware ranking fields (`ranking`, `query_entities_count`, `reordered`, `top_1_id_before/after`) are optional and present when entity-aware reranking ran.
-- **`memory.recall.lexical`** — FTS5 path. `route` is `unicode61 | trigram | like_substring`, chosen by `query_router.py`. `cjk_chars` drives the routing decision. Raw `query` is intentionally omitted (already in `memory.recall`) to halve per-row storage on the hot path.
+- **`memory.recall.lexical`** — FTS5 path. `route` is `unicode61 | trigram | like_substring`, chosen by `query_router.py`. `cjk_chars` drives the routing decision. Raw `query` is intentionally omitted (already in `memory.recall`) to halve per-row storage on the hot path. One row means one search: callers that run the lexical stage outside a `memory_search` pass `emit=False`, so the row count keeps equalling the number of searches and the duration series is not diluted.
 - **`memory.recall.rrf`** — RRF fusion step. Per-source hit counts (`vector_count`, `lexical_count`, `grep_count`), `fused_count` after dedup, and `boosted` (true when keywords shifted the lexical weight).
 - **`memory.recall.grep_verify`** — grep-verify boost step. `candidates` checked, `verified` matched and boosted.
 - **`memory.recall.rerank`** — cross-encoder rerank step, when enabled. `input_count`, `output_count`, `duration_ms`, `blend_alpha`, `fallback` (true when the cross-encoder failed and RRF order was kept).
@@ -188,6 +188,7 @@ The following events exist in the catalog without dedicated sections above — c
 - **`memory.index.staleness_detected`** — health-check found a row whose `fts_meta.mtime` lags behind the file's mtime, or a file with no row. `reason` is `missing_row | mtime_lag | row_for_missing_file`. `delta_seconds` is present only on `mtime_lag` and carries `current_file_mtime - indexed_mtime`.
 - **`memory.index.rebuild`** — full index rebuild completed. Fields: `target`, `indexed`, `errors`, `duration_ms`.
 - **`compaction.paths_preserved`** — a consolidation span's mechanical discovered-paths trailer (see the archive prompt in `06_prompts_and_instructions.md`) was non-empty and got appended to the session-summary block. `count` is the number of paths appended.
+- **`tool.read_file`** — a file read. `memory_notes` counts the artifact-recall notes appended to the result and is the field that measures that half of the feature: the lookup runs the lexical stage with `emit=False`, so it produces no `memory.recall.lexical` row of its own. `result_chars` measures the file content alone, so the notes never inflate it. The reference-drill half emits nothing — `memory_drill` has no tool event.
 
 ## 5. Key types and entry points
 
