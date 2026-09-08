@@ -360,6 +360,8 @@ The marker names the previous session's summary file stem, so the agent can reac
 | `memory.prefetch.min_query_chars` | `20` | Messages shorter than this are not searched |
 | `memory.prefetch.timeout_s` | `5.0` | Seconds the turn will wait for the search |
 | `memory.prefetch.backoff_s` | `60.0` | Seconds the prefetch is skipped after a timeout or error; `0` disables the backoff |
+| `memory.eager_surface.freeze` | `true` | Keeps the pinned block and the hot layer byte-identical for the life of a session; a fresh render happens at session boundaries (`/new`, compaction) and after `refresh_after_min` |
+| `memory.eager_surface.refresh_after_min` | `0` | Minutes after which a frozen surface is re-rendered at the next build; `0` keeps it until a session boundary |
 | `memory.continuity.enabled` | `true` | Shows the previous session's summary at the start of a fresh session (§5.8) |
 | `memory.continuity.channels` | `["websocket", "cli"]` | Channels whose sessions belong to one person, so "the previous session" is unambiguously the same person's |
 | `memory.continuity.max_chars` | `2000` | Tail of the previous summary carried in the block; a longer summary is cut from the front |

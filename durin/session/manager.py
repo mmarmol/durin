@@ -304,6 +304,12 @@ class Session:
         self.last_consolidated = 0
         self.updated_at = datetime.now()
         self.metadata.pop("_last_summary", None)
+        # "_eager_surface" mirrors durin.memory.eager_surface.SNAPSHOT_KEY,
+        # duplicated as a literal to avoid importing durin.memory here (see
+        # _DERIVED_METADATA_KEYS in SessionManager). A frozen surface belongs
+        # to the session it was rendered for, so a fresh session must not
+        # inherit it.
+        self.metadata.pop("_eager_surface", None)
 
     def retain_recent_legal_suffix(self, max_messages: int) -> None:
         """Keep a legal recent suffix constrained by a hard message cap."""
@@ -422,7 +428,13 @@ class SessionManager:
     # Add new entries here when introducing future derived state (e.g.
     # ``"session_embedding"``, ``"narrative_summary"``). Keys NOT listed
     # here flow through line 0 unchanged.
-    _DERIVED_METADATA_KEYS = frozenset({"_last_summary", "_last_tags", "skill_calls"})
+    #
+    # "_eager_surface" mirrors durin.memory.eager_surface.SNAPSHOT_KEY,
+    # duplicated as a literal (not imported) because durin.memory already
+    # imports this module transitively (embedding -> agent tools telemetry
+    # -> agent.context/memory -> session.manager); importing back would
+    # create a circular import.
+    _DERIVED_METADATA_KEYS = frozenset({"_last_summary", "_last_tags", "skill_calls", "_eager_surface"})
 
     # Keys in ``Session.metadata`` that hold volatile per-turn state —
     # mid-turn recovery payloads that must survive a process restart but
