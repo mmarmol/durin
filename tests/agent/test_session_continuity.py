@@ -15,7 +15,7 @@ from durin.bus.events import InboundMessage
 from durin.bus.queue import MessageBus
 from durin.config.schema import MemoryContinuityConfig
 from durin.memory.session_summary_store import write_session_summary
-from durin.providers.base import LLMResponse
+from durin.providers.base import LLMResponse, ToolCallRequest
 
 
 def _make_loop(tmp_path: Path) -> AgentLoop:
@@ -91,32 +91,45 @@ async def test_previous_summary_reaches_the_system_prompt(tmp_path: Path) -> Non
 @pytest.mark.asyncio
 async def test_previous_summary_appears_only_for_first_max_turns_turns(tmp_path: Path) -> None:
     """The previous-session block lasts exactly max_turns turns.
-    With max_turns=2, it appears on turns 1 and 2, but not turn 3."""
+    With max_turns=2, it appears on turns 1 and 2, but not turn 3 —
+    even when an agentic turn persists far more than two messages of its
+    own (tool results land in session.messages too)."""
     loop = _make_loop(tmp_path)
     write_session_summary(tmp_path, "websocket:old", "- old summary", last_active=date(2026, 9, 1))
     loop.app_config = SimpleNamespace(memory=SimpleNamespace(continuity=MemoryContinuityConfig(max_turns=2)))
     captured: list[list[dict]] = []
+    responses = iter([
+        # Turn 1 is agentic: one stub tool, three results inside the turn.
+        LLMResponse(content="", tool_calls=[
+            ToolCallRequest(id=f"call{i}", name="read_file", arguments={"path": f"f{i}.txt"})
+            for i in range(3)
+        ]),
+        LLMResponse(content="response-1", tool_calls=[]),
+        LLMResponse(content="response-2", tool_calls=[]),
+        LLMResponse(content="response-3", tool_calls=[]),
+    ])
 
     async def _chat(*args, **kwargs):
         captured.append(kwargs.get("messages") or (args[0] if args else []))
-        return LLMResponse(content=f"response-{len(captured)}", tool_calls=[])
+        return next(responses)
 
     loop.provider.chat_with_retry = AsyncMock(side_effect=_chat)
+    loop.tools.prepare_call = MagicMock(return_value=(None, {"path": "foo.txt"}, None))
+    loop.tools.execute = AsyncMock(return_value="ok")
 
-    # Turn 1
-    await loop._process_message(InboundMessage(channel="websocket", sender_id="u", chat_id="new", content="q1"))
-    system_1 = captured[0][0]["content"]
-    assert "PREVIOUS SESSION SUMMARY" in system_1
+    async def _turn(text: str) -> str:
+        """Run one turn; return the system prompt it opened with."""
+        at = len(captured)
+        await loop._process_message(
+            InboundMessage(channel="websocket", sender_id="u", chat_id="new", content=text)
+        )
+        return captured[at][0]["content"]
 
-    # Turn 2
-    await loop._process_message(InboundMessage(channel="websocket", sender_id="u", chat_id="new", content="q2"))
-    system_2 = captured[1][0]["content"]
-    assert "PREVIOUS SESSION SUMMARY" in system_2
-
-    # Turn 3
-    await loop._process_message(InboundMessage(channel="websocket", sender_id="u", chat_id="new", content="q3"))
-    system_3 = captured[2][0]["content"]
-    assert "PREVIOUS SESSION SUMMARY" not in system_3
+    assert "PREVIOUS SESSION SUMMARY" in await _turn("q1")
+    # One completed turn, but well past 2 * max_turns persisted messages.
+    assert len(loop.sessions.get_or_create("websocket:new").messages) > 4
+    assert "PREVIOUS SESSION SUMMARY" in await _turn("q2")
+    assert "PREVIOUS SESSION SUMMARY" not in await _turn("q3")
 
 
 @pytest.mark.asyncio

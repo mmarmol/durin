@@ -3330,13 +3330,16 @@ class AgentLoop:
         turns only (until the session has its own summary or grows past
         ``max_turns``). Never raises — continuity is a convenience."""
         cfg = self._continuity_config()
-        # Messages counted here are completed turns only; the current user
-        # message is not yet persisted, so len(session.messages) < 2*max_turns
-        # means the session is still within its first max_turns turns.
+        # Count user messages, not messages: an agentic turn also persists the
+        # assistant's tool-call message and every tool result, so a message
+        # bound would end continuity mid-turn. The current user message is not
+        # yet persisted at this point, so this is the number of turns already
+        # completed.
+        turns_done = sum(1 for m in session.messages if m.get("role") == "user")
         if (
             not cfg.enabled
             or session.last_consolidated
-            or len(session.messages) >= 2 * cfg.max_turns
+            or turns_done >= cfg.max_turns
         ):
             return None
         try:
