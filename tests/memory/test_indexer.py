@@ -186,3 +186,20 @@ def test_entity_row_carries_its_derived_from_refs(tmp_path: Path) -> None:
         hits = idx.search('"reference:thinking-fast-and-slow"')
 
     assert [h.uri for h in hits] == ["topic:two-systems"]
+
+
+def test_entity_row_does_not_index_the_derived_from_label_word(tmp_path: Path) -> None:
+    """Only the bare refs are indexed, not the `derived_from:` label — a
+    query for "derived from" must not match every entity that has any
+    derived_from ref, and the label's tokens must not inflate BM25 length."""
+    page = EntityPage(
+        type="topic", name="Two Systems", aliases=[], body="Fast and slow.",
+        derived_from=["reference:thinking-fast-and-slow"],
+    )
+    page.save(tmp_path / "memory" / "entities" / "topic" / "two-systems.md")
+    rebuild_fts_index(tmp_path)
+
+    with FTSIndex.open(tmp_path) as idx:
+        hits = idx.search('"derived from"')
+
+    assert hits == []

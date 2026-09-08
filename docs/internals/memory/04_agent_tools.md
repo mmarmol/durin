@@ -483,8 +483,7 @@ index — an entity row carries its `derived_from` refs, so the header is a phra
 query rather than a walk that parses every entity page — and each candidate is
 then parsed so its `derived_from` list has the final say. An entity written
 since the last index update is missing from the header until it is indexed; a
-workspace with no index falls back to the walk. The webui's reference detail
-(`graph_api._entities_derived_from`) shares the same candidate helper. It applies to every
+workspace with no index falls back to the walk. It applies to every
 uri shape in the reference row of the table above, with or without a section
 anchor, in the single-`uri` form and inside a `uris` batch alike; the shapes are
 normalised to one ref by `durin/memory/drill.py::reference_ref_for_uri`. The companion half
@@ -493,7 +492,8 @@ opens with the memory entries that mention the file — see the `read_file` row 
 [tools.md](../tools.md). Both blocks lead their result rather than trailing it
 because the loop truncates an over-cap tool result from the tail, so a trailing
 block never reaches the model on a long document. Both halves are gated by
-`memory.artifact_recall` (`enabled`, `max_notes`).
+`memory.artifact_recall` (`enabled`, `max_notes`). The webui's reference detail
+(`graph_api._entities_derived_from`) shares the same candidate helper.
 
 **Return (single):**
 

@@ -45,6 +45,7 @@ def lexical_search(
     *,
     limit: int = 50,
     emit: bool = True,
+    type_: Optional[str] = None,
 ) -> list[FTSHit]:
     """Execute the lexical part of the search pipeline.
 
@@ -55,6 +56,11 @@ def lexical_search(
     caller that is not a memory search: the event's row count is read as the
     number of searches, and its duration series is the search latency, so a
     lookup that is a side effect of some other tool would dilute both.
+
+    ``type_``, when given, restricts every route to rows of that stored
+    ``type`` — a caller that wants only one row shape (e.g. entity pages)
+    gets ``limit`` spent on that shape, not truncated by unrelated rows that
+    also match the query text.
     """
     t0 = time.perf_counter()
     hits: list[FTSHit] = []
@@ -66,11 +72,11 @@ def lexical_search(
         return hits
 
     if decision.route is LexicalRoute.UNICODE61:
-        hits = index.search(_quote_for_fts(query), limit=limit)
+        hits = index.search(_quote_for_fts(query), limit=limit, type_=type_)
     elif decision.route is LexicalRoute.TRIGRAM:
-        hits = index.search_trigram(_quote_for_fts(query), limit=limit)
+        hits = index.search_trigram(_quote_for_fts(query), limit=limit, type_=type_)
     elif decision.route is LexicalRoute.LIKE_SUBSTRING:
-        hits = _like_substring_scan(index, query, limit=limit)
+        hits = _like_substring_scan(index, query, limit=limit, type_=type_)
 
     if emit:
         _emit_lexical(
@@ -166,7 +172,7 @@ def _extract_phrases(query: str) -> tuple[list[str], list[str], bool]:
 
 
 def _like_substring_scan(
-    index: FTSIndex, query: str, *, limit: int,
+    index: FTSIndex, query: str, *, limit: int, type_: Optional[str] = None,
 ) -> list[FTSHit]:
     """Direct LIKE scan on the unicode61 table for short CJK queries.
 
@@ -174,14 +180,23 @@ def _like_substring_scan(
     can't tokenise tokens shorter than 3 chars (a single CJK char
     typically). LIKE is O(N) but the workspace size is small enough
     that this is fine as a fallback.
+
+    ``type_``, when given, adds ``AND type = ?`` — see ``lexical_search``.
     """
     conn = index._conn  # noqa: SLF001 — intentional friend access
     like = f"%{query}%"
-    cur = conn.execute(
-        "SELECT uri, path, type, entity_type FROM memory_fts "
-        "WHERE text LIKE ? LIMIT ?",
-        (like, limit),
-    )
+    if type_ is None:
+        cur = conn.execute(
+            "SELECT uri, path, type, entity_type FROM memory_fts "
+            "WHERE text LIKE ? LIMIT ?",
+            (like, limit),
+        )
+    else:
+        cur = conn.execute(
+            "SELECT uri, path, type, entity_type FROM memory_fts "
+            "WHERE text LIKE ? AND type = ? LIMIT ?",
+            (like, type_, limit),
+        )
     return [
         FTSHit(uri=u, path=p, type=t, entity_type=et)
         for (u, p, t, et) in cur.fetchall()

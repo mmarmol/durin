@@ -28,7 +28,9 @@ __all__ = [
 
 _NOTE_CLASSES = ("episodic", "stable", "session_summary")
 
-# Ceiling on the entity pages one reference lookup will open. Generous
+# Ceiling on the entity rows matching the ref phrase (the FTS query is
+# filtered to type="entity", so this bounds entity candidates only — session
+# rows and summaries that also cite the ref never compete for it). Generous
 # because it bounds a document's whole distilled set, not a page of results;
 # past it the walk it replaced would have been the slower answer anyway.
 _MAX_ENTITY_CANDIDATES = 500
@@ -127,16 +129,24 @@ def memory_notes_for_path(workspace: Path, rel_path: str, *, limit: int | None =
 def entities_derived_from_candidates(workspace: Path, ref: str) -> list[Path]:
     """Entity pages that may name ``ref`` in ``derived_from``, path-sorted.
 
-    An entity page's indexed text carries a ``derived_from:`` line, so a
-    phrase search for the ref narrows the walk to the handful of pages that
-    mention it. The index only narrows: a ref quoted in a page's body matches
-    too, so every caller parses the candidate and checks ``derived_from``
-    itself — the page is the truth.
+    An entity page's indexed text carries its ``derived_from`` refs on their
+    own line, so a phrase search for the ref narrows the walk to the handful
+    of pages that mention it. The query is filtered to entity rows
+    (``type_="entity"``) so ``_MAX_ENTITY_CANDIDATES`` bounds entity matches
+    only — a document cited by many session summaries can't push its own
+    distilled entities out of the cap. The index only narrows: a ref quoted
+    in a page's body matches too, so every caller parses the candidate and
+    checks ``derived_from`` itself — the page is the truth; the ``hit.type``
+    check below is a belt, not the filter doing the work.
 
-    Falls back to every entity page when the workspace has no index file yet
-    (never indexed), and when the index lookup fails: answering from a walk
-    is slow, answering nothing would be wrong. An empty ref has no candidates
-    at all — a ``derived_from`` entry is always a ``reference:<slug>``.
+    Falls back to every entity page when the index lookup fails, and when the
+    workspace has no index *file* on disk: that check only proves the file is
+    present, not that every entity is in it — a present-but-empty (or
+    partially stale) index answers the query empty rather than triggering
+    this fallback, and the health check's row-repair pass is what backstops
+    that gap. Answering from a walk when there's truly no index is slow,
+    answering nothing would be wrong. An empty ref has no candidates at all —
+    a ``derived_from`` entry is always a ``reference:<slug>``.
     """
     root = Path(workspace) / "memory" / "entities"
     ref = (ref or "").strip()
@@ -149,6 +159,7 @@ def entities_derived_from_candidates(workspace: Path, ref: str) -> list[Path]:
             hits = lexical_search(
                 index, decide_lexical_route(ref, keywords=ref),
                 limit=_MAX_ENTITY_CANDIDATES,
+                type_="entity",
                 # A side effect of a drill or a webui page load, not a memory
                 # search: the event's row count is read as the number of
                 # searches and its duration as search latency, so emitting

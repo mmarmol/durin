@@ -292,3 +292,32 @@ def test_an_indexed_mention_outside_derived_from_is_not_a_result(tmp_path: Path)
     rebuild_fts_index(tmp_path)
 
     assert entities_derived_from(tmp_path, ref) == ["topic:two-systems"]
+
+
+def test_the_candidate_cap_bounds_entity_rows_not_every_matching_row(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """The candidate query is filtered to entity rows before the cap is
+    applied, so a ref cited by many session summaries can't crowd the one
+    entity distilled from it out of a small cap."""
+    from datetime import datetime, timezone
+
+    ref = "reference:thinking-fast-and-slow"
+    write_entity(
+        tmp_path, "topic:two-systems",
+        [FieldPatch(kind="derived_from", value=ref, author="dream", source_ref="s",
+                    at=datetime.now(timezone.utc))],
+        create=True, name="Two systems",
+    )
+    for i in range(40):
+        write_session_summary(
+            tmp_path, f"websocket:{i}",
+            f"- cited {ref} again",
+            last_active=date(2026, 9, 1),
+        )
+    rebuild_fts_index(tmp_path)
+
+    import durin.memory.artifact_recall as artifact_recall
+    monkeypatch.setattr(artifact_recall, "_MAX_ENTITY_CANDIDATES", 20)
+
+    assert entities_derived_from(tmp_path, ref) == ["topic:two-systems"]

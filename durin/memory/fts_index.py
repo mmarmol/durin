@@ -224,13 +224,20 @@ class FTSIndex:
 
     # --- queries ----------------------------------------------------------
 
-    def search(self, query: str, *, limit: int = 50) -> list[FTSHit]:
-        """Run a query against ``memory_fts`` (unicode61)."""
-        return self._search("memory_fts", query, limit=limit)
+    def search(self, query: str, *, limit: int = 50, type_: Optional[str] = None) -> list[FTSHit]:
+        """Run a query against ``memory_fts`` (unicode61).
 
-    def search_trigram(self, query: str, *, limit: int = 50) -> list[FTSHit]:
-        """Run a query against ``memory_fts_trigram`` (trigram)."""
-        return self._search("memory_fts_trigram", query, limit=limit)
+        ``type_``, when given, restricts results to rows whose stored
+        ``type`` column equals it — a caller that only wants one row type
+        (e.g. entity pages) filters at the SQL level instead of over-reading
+        and discarding rows the cap should have spent on matches it wants.
+        """
+        return self._search("memory_fts", query, limit=limit, type_=type_)
+
+    def search_trigram(self, query: str, *, limit: int = 50, type_: Optional[str] = None) -> list[FTSHit]:
+        """Run a query against ``memory_fts_trigram`` (trigram). See
+        :meth:`search` for ``type_``."""
+        return self._search("memory_fts_trigram", query, limit=limit, type_=type_)
 
     def count(self) -> int:
         """Return how many distinct uris are indexed (meta-table count)."""
@@ -270,7 +277,7 @@ class FTSIndex:
 
     # --- internals --------------------------------------------------------
 
-    def _search(self, table: str, query: str, *, limit: int) -> list[FTSHit]:
+    def _search(self, table: str, query: str, *, limit: int, type_: Optional[str] = None) -> list[FTSHit]:
         """Both tables share the same row schema. We use a MATCH clause
         with the FTS5 query as-is; the caller's job to sanitise.
 
@@ -278,12 +285,25 @@ class FTSIndex:
         MATCH results in rowid (insertion) order, so the "ranked"
         list fed to RRF fusion was really file-walk order and rows
         indexed later always lost regardless of BM25 relevance.
+
+        ``type_``, when given, adds ``AND type = ?`` so ``LIMIT`` bounds rows
+        of that type only — without it, a cap meant for one row type is spent
+        on every row shape that matches the query text, and rows of the
+        wanted type can be pushed out of the cap entirely before a caller
+        ever gets to filter them.
         """
-        cur = self._conn.execute(
-            f"SELECT uri, path, type, entity_type FROM {table} "
-            f"WHERE {table} MATCH ? ORDER BY rank LIMIT ?",
-            (query, limit),
-        )
+        if type_ is None:
+            cur = self._conn.execute(
+                f"SELECT uri, path, type, entity_type FROM {table} "
+                f"WHERE {table} MATCH ? ORDER BY rank LIMIT ?",
+                (query, limit),
+            )
+        else:
+            cur = self._conn.execute(
+                f"SELECT uri, path, type, entity_type FROM {table} "
+                f"WHERE {table} MATCH ? AND type = ? ORDER BY rank LIMIT ?",
+                (query, type_, limit),
+            )
         return [
             FTSHit(uri=u, path=p, type=t, entity_type=et)
             for (u, p, t, et) in cur.fetchall()

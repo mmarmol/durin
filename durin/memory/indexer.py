@@ -897,7 +897,7 @@ def _entity_text(page: EntityPage) -> str:
     if page.relations:
         parts.append(_render_relations(page.relations))
     if page.derived_from:
-        parts.append("derived_from: " + " ".join(page.derived_from))
+        parts.append(" ".join(page.derived_from))
     if page.body:
         parts.append(page.body)
     return "\n".join(p for p in parts if p)

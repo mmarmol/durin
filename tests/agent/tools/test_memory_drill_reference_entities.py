@@ -6,6 +6,7 @@ import pytest
 
 from durin.agent.tools.memory_drill import MemoryDrillTool
 from durin.memory.field_patch import FieldPatch
+from durin.memory.indexer import rebuild_fts_index
 from durin.memory.memory_writer import write_entity
 from durin.memory.reference import ingest_reference
 
@@ -27,7 +28,10 @@ def _prepare(tmp_path: Path, body: str = "# T\n\nbody.\n") -> None:
     "memory/references/thinking-fast-and-slow.md",
 ])
 def test_drilling_a_reference_lists_its_entities(tmp_path: Path, uri: str) -> None:
+    """Indexed, so the header comes from the FTS candidate lookup rather than
+    the no-index scan fallback."""
     _prepare(tmp_path)
+    rebuild_fts_index(tmp_path)
 
     out = asyncio.run(MemoryDrillTool(workspace=tmp_path).execute(uri=uri))
 
