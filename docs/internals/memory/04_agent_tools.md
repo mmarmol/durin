@@ -119,10 +119,11 @@ to avoid doubling the token cost.
 
 A context-dedup step (`durin/memory/context_dedup.py`) collapses hits whose
 content is already present in the system prompt — contained in a hot-layer
-block, or a page the pinned block renders whole (the principal's page and the
-`always_on` guidance) — into pointer lines, preventing redundant injection.
-This is enabled on the agent path, disabled for subagents (which have neither
-block in their prompt).
+block, or one of the always-on guidance pages the pinned block renders whole —
+into pointer lines, preventing redundant injection. The principal's own page is
+rendered with its body capped, so its hits are judged by containment and
+normally pass. This is enabled on the agent path, disabled for subagents (which
+have neither block in their prompt).
 
 **Parameters:**
 
