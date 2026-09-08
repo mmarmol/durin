@@ -438,10 +438,11 @@ user-authored first, then most-recently-updated), fits the ranked list into
 entity is ever deleted**, so a pruned or contradicted item returns automatically
 when the budget frees or the conflict resolves.
 
-The principal's own page ("Who you're talking to") is rendered with its body
-capped and a pointer to `memory_read_entity`; the pins are fitted by this pass,
-the principal by that cap, and the Library catalog by `memory.library` — the
-three parts of the pinned block, each bounded on its own.
+The principal's own page ("Who you're talking to") is rendered with its **body**
+capped and a pointer to `memory_read_entity`; its attributes and relations lines
+are not capped. The always_on pins are fitted by this pass and the Library
+catalog by `memory.library`. A single ceiling over the whole pinned block does
+not exist yet; `turn.memory_usage.pinned_chars` is the measurement for one.
 
 The pinned context (`principal.build_pinned_context`) also carries a **Library
 awareness catalog** — one short line per ingested reference document (its title;
