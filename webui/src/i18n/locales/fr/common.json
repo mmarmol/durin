@@ -563,7 +563,7 @@
         "dreamEnabled": "Interrupteur principal du dream automatique. Lorsqu’il est désactivé, le cron et les déclencheurs réactifs sont désactivés ; la commande manuelle `durin memory dream` fonctionne toujours.",
         "dreamCron": "Expression cron pour la passe quotidienne extract / refine / skill. Par défaut 0 3 * * * (3h heure locale).",
         "dreamPostCompaction": "Exécute une passe dream après la compaction d’une session — le contexte est déjà en mémoire, donc le coût est amorti.",
-        "dreamOnSessionClose": "Exécute une passe dream à la fin d’une session (/quit ou délai d’inactivité).",
+        "dreamOnSessionClose": "Exécute une passe dream lorsqu’une conversation est fermée avec `/new`.",
         "dreamDiscover": "Crée aussi des entités à partir de faits durables que vous mentionnez mais n’enregistrez pas explicitement, afin que la mémoire s’enrichisse à partir de la conversation — pas seulement des enregistrements explicites. Activé par défaut.",
         "dreamAutoAbsorb": "Permet à la passe refine de fusionner automatiquement les entités qu’elle juge être des doublons (haute confiance uniquement). Désactivé, les fusions restent manuelles.",
         "dreamAbsorbConfidence": "Confiance minimale (0-100) requise par le juge pour fusionner deux entités. 95 = haute précision. S’applique uniquement quand l’absorption automatique est activée.",

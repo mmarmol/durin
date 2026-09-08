@@ -563,7 +563,7 @@
         "dreamEnabled": "Công tắc chính cho dream tự động. Khi tắt, cron và các trigger phản ứng sẽ bị vô hiệu hóa; lệnh thủ công `durin memory dream` vẫn hoạt động.",
         "dreamCron": "Biểu thức cron cho lượt trích xuất / tinh chỉnh / skill hằng ngày. Mặc định 0 3 * * * (3 giờ sáng giờ địa phương).",
         "dreamPostCompaction": "Chạy một lượt dream sau khi phiên được nén — ngữ cảnh đã có sẵn trong bộ nhớ nên chi phí được san sẻ.",
-        "dreamOnSessionClose": "Chạy một lượt dream khi phiên kết thúc (/quit hoặc hết thời gian chờ).",
+        "dreamOnSessionClose": "Chạy một lượt dream khi cuộc trò chuyện được đóng bằng `/new`.",
         "dreamDiscover": "Cũng tạo thực thể từ các sự kiện lâu dài bạn đề cập nhưng không lưu rõ ràng, để bộ nhớ phát triển từ cuộc trò chuyện — không chỉ từ việc lưu tường minh. Mặc định bật.",
         "dreamAutoAbsorb": "Cho phép lượt tinh chỉnh tự động gộp các thực thể mà nó đánh giá là trùng lặp (chỉ khi độ tin cậy cao). Tắt để giữ việc gộp thủ công.",
         "dreamAbsorbConfidence": "Độ tin cậy tối thiểu (0-100) mà bộ giám định yêu cầu để gộp hai thực thể. 95 = độ chính xác cao. Chỉ áp dụng khi tự động gộp được bật.",
