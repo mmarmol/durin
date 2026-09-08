@@ -2890,7 +2890,13 @@ class AgentLoop:
 
         from durin.agent.context import build_memory_context_block
         from durin.memory.fts_index import fts_index_path
-        from durin.telemetry.logger import bind_telemetry, get_session_logger, reset_telemetry
+        from durin.telemetry.logger import (
+            bind_prefetch_search,
+            bind_telemetry,
+            get_session_logger,
+            reset_prefetch_search,
+            reset_telemetry,
+        )
 
         cfg = self._prefetch_config()
         text = ctx.msg.content.strip() if isinstance(ctx.msg.content, str) else ""
@@ -2925,9 +2931,17 @@ class AgentLoop:
 
         t0 = time.perf_counter()
         token = None
+        prefetch_token = None
         response: Any = None
         try:
             token = bind_telemetry(get_session_logger(ctx.session_key))
+            # Bound alongside the telemetry logger so emit_tool_event can tag
+            # this search's memory.recall* rows as the prefetch's. asyncio.
+            # to_thread copies the calling context when the pipeline's thread
+            # starts, so a search abandoned below on timeout keeps the flag
+            # in its own copy and still tags the rows it emits after this
+            # function has returned and reset it here.
+            prefetch_token = bind_prefetch_search()
             response = await asyncio.wait_for(
                 tool.execute(query=text, limit=cfg.limit, level="warm"),
                 timeout=cfg.timeout_s,
@@ -2940,6 +2954,8 @@ class AgentLoop:
         finally:
             if token is not None:
                 reset_telemetry(token)
+            if prefetch_token is not None:
+                reset_prefetch_search(prefetch_token)
         duration_ms = int((time.perf_counter() - t0) * 1000)
         if reason is None and isinstance(response, dict) and "error" in response:
             # The tool answered with its own refusal shape; that is a failure,

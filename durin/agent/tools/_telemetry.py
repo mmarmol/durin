@@ -19,7 +19,7 @@ from __future__ import annotations
 from contextlib import suppress
 from typing import Any
 
-from durin.telemetry.logger import current_telemetry
+from durin.telemetry.logger import current_telemetry, is_prefetch_search
 
 # Privacy bound for free-text fields. The full query is
 # never persisted to telemetry — only the first N chars, enough to
@@ -50,11 +50,20 @@ def emit_tool_event(event_type: str, data: dict[str, Any]) -> None:
     auto-injected into the payload when the caller hasn't already
     populated them. Dashboards joining `memory.recall` to other events
     on `(session_key, iteration)` now have data to join on.
+
+    ``memory.recall*`` events additionally get a ``prefetch: True`` stamp
+    when emitted while the automatic per-turn memory prefetch's search is
+    bound (see ``durin.telemetry.logger.bind_prefetch_search``) — this is
+    how a dashboard tells those rows apart from a ``memory_search`` the
+    model called itself, including a row an abandoned (timed-out) prefetch
+    search thread emits after the turn has already moved on.
     """
     logger_obj = current_telemetry()
     if logger_obj is None:
         return
     safe_data = _truncate_freetext(data)
+    if event_type.startswith("memory.recall") and is_prefetch_search():
+        safe_data["prefetch"] = True
     # Auto-inject identity fields if absent. Caller-supplied values always
     # win so subagents / replay tools can stamp a different identity when
     # they need to. `getattr` defaults keep ad-hoc test loggers working —

@@ -4,6 +4,7 @@ message as the query, fenced into the API copy of the user message."""
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -46,6 +47,37 @@ class _RaisingSearch:
 
     async def execute(self, **kwargs):
         raise RuntimeError("search backend unavailable")
+
+
+class _ThreadEmittingSearch:
+    """Mirrors the real `memory_search` tool's shape: its pipeline runs off
+    the event loop via `asyncio.to_thread` (`run_search_pipeline` in
+    `durin/agent/tools/memory_search.py`), and the `memory.recall*`
+    sub-events are emitted from inside that thread. ``delay`` lets a test
+    hold the thread past the prefetch's `timeout_s`, so `_memory_prefetch`
+    abandons it while it is still running — the row it eventually emits
+    must still land tagged as the prefetch's.
+    """
+
+    name = "memory_search"
+
+    def __init__(self, delay: float = 0.0) -> None:
+        self.calls: list[dict] = []
+        self.delay = delay
+
+    async def execute(self, **kwargs):
+        self.calls.append(dict(kwargs))
+        await asyncio.to_thread(self._emit)
+        return {"total": 1, "strategy": "hybrid", "ranking": "rrf", "sectioned_rendered": _RENDERED}
+
+    def _emit(self) -> None:
+        if self.delay:
+            time.sleep(self.delay)
+        from durin.agent.tools._telemetry import emit_tool_event
+        emit_tool_event("memory.recall.rrf", {
+            "vector_count": 1, "lexical_count": 0, "grep_count": 0,
+            "fused_count": 1, "boosted": False, "duration_ms": 1.0,
+        })
 
 
 class _ErrorDictSearch:
@@ -241,6 +273,43 @@ async def test_prefetch_no_hits_and_timeout_add_nothing(tmp_path: Path, monkeypa
     await loop._process_message(InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION))
     assert "<memory-context>" not in _user_content(captured)
     assert [d for t, d in rec.events if t == "memory.prefetch"][-1]["skipped"] == "timeout"
+
+
+@pytest.mark.asyncio
+async def test_prefetch_flags_the_recall_rows_its_search_emits(tmp_path: Path, monkeypatch) -> None:
+    """The search the prefetch runs goes through `asyncio.to_thread` just
+    like the real tool's pipeline. Its `memory.recall*` rows must carry
+    `prefetch: true` so a dashboard can tell them from a search the model
+    asked for itself."""
+    fake = _ThreadEmittingSearch()
+    loop, captured, rec = _make_loop(tmp_path, monkeypatch, fake=fake)
+
+    await loop._process_message(InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION))
+
+    rrf_rows = [d for t, d in rec.events if t == "memory.recall.rrf"]
+    assert rrf_rows and rrf_rows[0]["prefetch"] is True
+
+
+@pytest.mark.asyncio
+async def test_prefetch_flag_survives_an_abandoned_timeout_thread(tmp_path: Path, monkeypatch) -> None:
+    """A search that blows past `timeout_s` is abandoned by `wait_for`, but
+    the thread it started keeps running and can still emit `memory.recall*`
+    rows after the turn has already moved on. Those rows must still carry
+    `prefetch: true` — the thread's context copy was made, with the flag
+    already set, before `_memory_prefetch`'s `finally` resets it."""
+    slow = _ThreadEmittingSearch(delay=0.5)
+    loop, captured, rec = _make_loop(tmp_path, monkeypatch, fake=slow)
+    loop.app_config = SimpleNamespace(memory=SimpleNamespace(prefetch=MemoryPrefetchConfig(timeout_s=0.05)))
+
+    await loop._process_message(InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION))
+    assert [d for t, d in rec.events if t == "memory.prefetch"][-1]["skipped"] == "timeout"
+    # The abandoned thread is still sleeping — its row has not landed yet.
+    assert [t for t, _d in rec.events if t == "memory.recall.rrf"] == []
+
+    await asyncio.sleep(0.6)  # let the abandoned thread finish its emit
+
+    rrf_rows = [d for t, d in rec.events if t == "memory.recall.rrf"]
+    assert rrf_rows and rrf_rows[0]["prefetch"] is True
 
 
 @pytest.mark.asyncio

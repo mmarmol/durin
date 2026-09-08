@@ -289,7 +289,7 @@ The hits inside carry the ordinary structural markers of §5.6, so the drill and
 
 `no_index` is defensive: the index file is created lazily by the first `FTSIndex.open` — the first memory write, the first search the model runs, or a health-check drift repair — so a workspace that has ever written or searched memory has one. It exists for a brand-new workspace, and for ad-hoc runners and tests.
 
-**Backoff.** `asyncio.wait_for` abandons the search — the thread it runs on keeps going — so retrying a search that times out every turn strands one worker per turn. After a `timeout` or an `error` the loop stops trying for `memory.prefetch.backoff_s` (`0` disables the backoff) and the skipped turns record `backoff`.
+**Backoff.** `asyncio.wait_for` abandons the search — the thread it runs on keeps going — so retrying a search that times out every turn strands one worker per turn. After a `timeout` or an `error` the loop stops trying for `memory.prefetch.backoff_s` (`0` disables the backoff) and the skipped turns record `backoff`. Whatever `memory.recall*` rows that stranded thread still emits carry `prefetch: true`, since the bound flag is copied into the thread's context before the loop resets it.
 
 **The query.** The whole message is the query, verbatim: no keyword extraction, no rewriting, no summarisation. The pipeline's `query_router` normalises it and truncates over-long input (`MAX_QUERY_CHARS` / `MAX_QUERY_TOKENS`), flagging the row as truncated. The tool description's advice about short topical queries is written for the *model's* follow-up searches, where the model picks the words; whether a rewritten query beats the raw message here is an A/B question, not an assumption to bake in.
 

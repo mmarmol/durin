@@ -721,6 +721,9 @@ class MemoryRecallEvent(TypedDict):
     recovery_duration_ms: NotRequired[float]
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
+    # True when the automatic per-turn memory prefetch's own search produced
+    # this row, rather than a memory_search the model called itself.
+    prefetch: NotRequired[bool]
 
 
 class MemoryPrefetchEvent(TypedDict):
@@ -820,6 +823,9 @@ class MemoryRecallVectorEvent(TypedDict):
     top_1_id_after: NotRequired[str]
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
+    # True when the automatic per-turn memory prefetch's own search produced
+    # this row, rather than a memory_search the model called itself.
+    prefetch: NotRequired[bool]
 
 
 class MemoryDreamStartEvent(TypedDict):
@@ -1153,6 +1159,9 @@ class MemoryRecallLexicalEvent(TypedDict):
     duration_ms: float
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
+    # True when the automatic per-turn memory prefetch's own search produced
+    # this row, rather than a memory_search the model called itself.
+    prefetch: NotRequired[bool]
 
 
 class MemoryRecallRRFEvent(TypedDict):
@@ -1172,6 +1181,9 @@ class MemoryRecallRRFEvent(TypedDict):
     duration_ms: float
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
+    # True when the automatic per-turn memory prefetch's own search produced
+    # this row, rather than a memory_search the model called itself.
+    prefetch: NotRequired[bool]
 
 
 class MemoryRecallGrepVerifyEvent(TypedDict):
@@ -1188,6 +1200,9 @@ class MemoryRecallGrepVerifyEvent(TypedDict):
     duration_ms: float
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
+    # True when the automatic per-turn memory prefetch's own search produced
+    # this row, rather than a memory_search the model called itself.
+    prefetch: NotRequired[bool]
 
 
 class MemoryRecallRerankEvent(TypedDict):
@@ -1207,6 +1222,9 @@ class MemoryRecallRerankEvent(TypedDict):
     fallback: NotRequired[bool]
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
+    # True when the automatic per-turn memory prefetch's own search produced
+    # this row, rather than a memory_search the model called itself.
+    prefetch: NotRequired[bool]
 
 
 class MemoryRecallFailureEvent(TypedDict):
