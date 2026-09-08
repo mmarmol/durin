@@ -252,17 +252,19 @@ The handlers, in order:
   → `BUILD`.
 - **`_state_build`** — runs `maybe_consolidate_by_tokens` (compacting before
   building so the prompt fits), sets the per-tool request context, slices
-  history (`session.get_history`), then runs one automatic warm `memory_search`
-  with the user's message and fences the hits into the wire copy of that message
-  as reference data, and finally assembles the LLM message list via
-  `context.build_messages` — handing it the session's frozen eager memory
-  surface (the pinned block and hot layer rendered on the session's first
-  build, `memory.eager_surface`) so a write mid-session does not rebuild the
-  provider's cached prefix, and taking the freeze from that build when there
-  is none yet. That surface is then bound for the turn (task-scoped, released
-  in `_state_save`) so `memory_search`'s in-context dedup judges the text this
-  prompt carries rather than the live workspace. It also persists the user
-  message early so an interrupted run is recoverable.
+  history (`session.get_history`), then resolves the session's frozen eager
+  memory surface (the pinned block and hot layer rendered on the session's
+  first build, `memory.eager_surface`) and binds it for the turn (task-scoped,
+  released in `_state_save`) before any search runs, so `memory_search`'s
+  in-context dedup — the loop's own prefetch included — judges the text this
+  prompt carries rather than the live workspace. It then runs one automatic
+  warm `memory_search` with the user's message and fences the hits into the
+  wire copy of that message as reference data, and finally assembles the LLM
+  message list via `context.build_messages` — handing it that surface so a
+  write mid-session does not rebuild the provider's cached prefix, and, when
+  the session had no snapshot yet, taking the freeze from this build and
+  re-binding the turn to it. It also persists the user message early so an
+  interrupted run is recoverable.
 
   The search is bounded and best-effort: skipped for slash commands, for
   messages under the configured minimum length, for sessions the runtime treats
