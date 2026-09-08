@@ -168,7 +168,7 @@ Every write goes to **both** tables. The `FTSIndex.upsert` method deletes the pr
 
 **BM25 text composition.** FTS5 indexes the full document text with no character budget. For entity pages: `name + aliases + rendered attributes + relations + derived_from + body` (full body, not truncated). For entries: `headline + summary + entities + topics + body`. For skills: `name + description + body`. The functions `_entity_text` and `_entry_text` in `indexer.py` build these strings.
 
-The `derived_from` refs are composed as their own `derived_from: reference:<slug> …` line. They are frontmatter, not prose, and would otherwise be absent from the row — carrying them makes "which entities were distilled from this document" a phrase query over the index (`artifact_recall.entities_derived_from_candidates`) instead of a walk that parses every entity page. The index only narrows: a ref quoted in a page's body matches the phrase too, so callers parse the candidate and check its `derived_from` list. A workspace with no index file at all falls back to the walk.
+The `derived_from` refs are composed as their own line of bare refs (`reference:<slug> …`, no label word, so a query for the label matches nothing and the row's length is not inflated). They are frontmatter, not prose, and would otherwise be absent from the row — carrying them makes "which entities were distilled from this document" a phrase query over the index (`artifact_recall.entities_derived_from_candidates`) instead of a walk that parses every entity page. The index only narrows: a ref quoted in a page's body matches the phrase too, so callers parse the candidate and check its `derived_from` list. A workspace with no index file at all falls back to the walk.
 
 ### Session-turn FTS indexing
 
