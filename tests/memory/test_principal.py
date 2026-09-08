@@ -5,6 +5,7 @@ from durin.memory.field_patch import FieldPatch
 from durin.memory.memory_writer import write_entity
 from durin.memory.principal import (
     _MAX_LIBRARY_DOCS,
+    _PRINCIPAL_BODY_CHARS,
     ANONYMOUS,
     _library_subjects,
     build_library_awareness,
@@ -87,6 +88,39 @@ def test_library_subjects_excludes_agent_linked_and_ranks_by_breadth(tmp_path):
     assert "Rex" not in subjects
     assert subjects[0] == "Uroperitoneum"    # broadest first
     assert "Creatinine" in subjects
+
+
+def test_library_subjects_are_memoized_between_prompt_builds(tmp_path, monkeypatch):
+    """The subjects map parses every entity page and the pinned block that
+    carries it is rebuilt on every prompt, so repeated calls inside the TTL must
+    reuse the walk; a caller that must see a fresh entity passes ttl_s=0."""
+    from durin.memory import principal as principal_mod
+
+    ingest_reference(tmp_path, "Doc 0", "# d0\n\nbody.\n")
+    write_entity(tmp_path, "topic:uroperitoneum", [_derived("doc-0")],
+                 create=True, name="Uroperitoneum")
+
+    calls = 0
+    real = principal_mod.EntityPage.from_file
+
+    def _counting(path):
+        nonlocal calls
+        calls += 1
+        return real(path)
+
+    monkeypatch.setattr(principal_mod.EntityPage, "from_file",
+                        staticmethod(_counting))
+
+    first = _library_subjects(tmp_path)
+    assert first == ["Uroperitoneum"]
+    walked = calls
+    assert walked > 0
+
+    assert _library_subjects(tmp_path) == first
+    assert calls == walked                       # served from the cache
+
+    assert _library_subjects(tmp_path, ttl_s=0) == first
+    assert calls > walked                        # ttl_s=0 walks the tree again
 
 
 def test_library_awareness_caps_and_notes_overflow(tmp_path):
@@ -316,7 +350,7 @@ def test_principal_body_is_capped_with_a_pointer_to_the_full_page(tmp_path):
     ctx = build_pinned_context(tmp_path, "person:marcelo")
 
     who = ctx.split("## Always-on guidance")[0]
-    assert len(who) < 1500 + 200
+    assert len(who) < _PRINCIPAL_BODY_CHARS + 200  # cap + headers/relations/pointer
     assert "memory_read_entity person:marcelo" in who
     assert "fact599" not in who
     assert "maintainer project:durin" in who

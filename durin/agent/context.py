@@ -292,9 +292,10 @@ class ContextBuilder:
             try:
                 from durin.config.loader import load_config
                 lib = load_config().memory.library
-                library_max_docs, library_abstracts = lib.awareness_max_docs, lib.awareness_abstracts
             except Exception:  # noqa: BLE001 — test workspaces without a config file
-                library_max_docs, library_abstracts = 20, False
+                from durin.config.schema import MemoryLibraryConfig
+                lib = MemoryLibraryConfig()  # schema defaults, so this can't drift
+            library_max_docs, library_abstracts = lib.awareness_max_docs, lib.awareness_abstracts
             return (
                 build_pinned_context(
                     self.workspace, principal, always_on=always,

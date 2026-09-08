@@ -185,7 +185,10 @@ def _load(workspace: Path, ref: str) -> EntityPage | None:
 
 # The principal's page is the one pinned page no budget fits: the extract
 # pass keeps appending to it. Cap its body in the prompt and point at
-# memory_read_entity for the rest.
+# memory_read_entity for the rest. This is a count of CHARACTERS of body text,
+# not tokens, and it is unrelated to `memory.dream.always_on_token_budget` —
+# that budget fits the always_on guidance pages (whole, token-counted) and
+# never applies to this page.
 _PRINCIPAL_BODY_CHARS = 1500
 
 
@@ -274,7 +277,18 @@ def _doc_descriptor(
     return title, one
 
 
-def _library_subjects(workspace: Path, *, cap: int = _MAX_LIBRARY_SUBJECTS) -> list[str]:
+# The subjects map walks and parses EVERY entity page on disk, and the pinned
+# block that carries it is rebuilt on every prompt. The map only moves when the
+# dream writes entities, so a minute of lag in it is invisible; re-walking the
+# tree once per turn is not.
+_LIBRARY_SUBJECTS_TTL_S = 60.0
+_library_subjects_cache: dict[str, tuple[float, list[str]]] = {}
+
+
+def _library_subjects(
+    workspace: Path, *, cap: int = _MAX_LIBRARY_SUBJECTS,
+    ttl_s: float = _LIBRARY_SUBJECTS_TTL_S,
+) -> list[str]:
     """The subjects the library covers — its bounded "map".
 
     Collects the display names of entities the dream distilled *from* a
@@ -284,7 +298,16 @@ def _library_subjects(workspace: Path, *, cap: int = _MAX_LIBRARY_SUBJECTS) -> l
     under the wrong things. Ranked by how many documents share each subject
     (broadest first), deduped, capped. Naming the subject-space is what keeps a
     document reachable (search its subject) even past the per-document cap.
+
+    Memoized per workspace for ``ttl_s`` seconds. The ranked list is cached
+    uncapped, so any ``cap`` is served from the same entry; pass ``ttl_s=0``
+    for a caller that must observe a freshly written entity.
     """
+    cache_key = str(workspace)
+    if ttl_s > 0:
+        hit = _library_subjects_cache.get(cache_key)
+        if hit is not None and (time.monotonic() - hit[0]) < ttl_s:
+            return hit[1][:cap]
     ents_dir = Path(workspace) / "memory" / "entities"
     if not ents_dir.is_dir():
         return []
@@ -301,7 +324,10 @@ def _library_subjects(workspace: Path, *, cap: int = _MAX_LIBRARY_SUBJECTS) -> l
             slug = ref.split(":", 1)[1] if ":" in ref else ref
             by_subject.setdefault(page.name, set()).add(slug)
     ranked = sorted(by_subject.items(), key=lambda kv: (-len(kv[1]), kv[0].lower()))
-    return [name for name, _docs in ranked[:cap]]
+    names = [name for name, _docs in ranked]
+    if ttl_s > 0:
+        _library_subjects_cache[cache_key] = (time.monotonic(), names)
+    return names[:cap]
 
 
 def _library_topics(workspace: Path) -> list[str]:
@@ -395,7 +421,13 @@ def build_pinned_context(
     a one-line-per-document awareness catalog of the ingested Library.
 
     ``always_on`` lets a caller that already walked the entity tree pass the
-    result in; omitted, this walks it itself."""
+    result in; omitted, this walks it itself.
+
+    ``library_max_docs`` and ``library_abstracts`` go straight to
+    :func:`build_library_awareness`: how many documents the catalog lists one
+    per line (0 keeps only the header, the count and the subject map), and
+    whether each listed line also carries the document's distilled abstract.
+    The prompt build fills both from the ``memory.library`` config."""
     parts: list[str] = []
     principal = _load(workspace, principal_ref)
     if principal:
