@@ -5,6 +5,63 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.10.1 — 2026-09-09
+
+### Highlights
+
+- **Memory stays cached for the whole session.** The pinned memory block and
+  the hot layer are now rendered once per session and reused on every later
+  turn, so writing an entity mid-conversation no longer invalidates the
+  provider's cached prompt prefix. A new conversation, a compaction, or the
+  optional `memory.eager_surface.refresh_after_min` window renders them again;
+  everything written in between reaches the model through the automatic
+  per-turn search. The search tool's own dedup judges the text the model
+  actually has, and `/status` says since which turn the surface is frozen.
+  (#586)
+
+- **Recall output is bounded, and summaries carry their tags.** A warm
+  `memory_search` cuts every hit's summary to `memory.search.warm_excerpt_chars`
+  and the whole response to `memory.search.warm_max_chars`; session summaries
+  keep the entities and topics the archive prompt extracts, searchable and
+  visible on the hit. The automatic per-turn recall renders inside its own
+  `memory.prefetch.max_chars` the same way — whole hits plus one-line pointers,
+  never a cut inside a hit. (#585, #587)
+
+- **The recall chip shows the search while it runs.** The chat chip reads
+  "recalling memory…" during the automatic search, shows the count when it
+  ends, and disappears when nothing was recalled; the TUI does the same. Chip
+  labels are localised in all nine languages. (#583, #584)
+
+### Changes
+
+**Memory**
+
+- The automatic prefetch asks the search tool for a rendering that fits its
+  budget and only marks as "already shown" the hits it rendered whole; it
+  never fences a block that lost every hit, and labels the recall telemetry it
+  produces (`prefetch: true`) — the rows of a search abandoned by the timeout
+  included. (#584, #587)
+- The `<memory-context>` fence is reserved for durin: typed markers read
+  `[memory-context]` on the wire, in the current turn and in the history. (#584)
+- Continuity picks the previous session by its exact channel. (#585)
+- Entities derived from a reference document are looked up in the index. The
+  FTS index schema changed, so the first search after the upgrade rebuilds it
+  once (a full walk of the workspace); memory entries written from now on carry
+  `topics`, which an older durin cannot load — the upgrade is forward-only. (#585)
+- A search parses each entity page once; the pinned-refs cache is bounded. (#585)
+- At warm level an entity page's excerpt bounds its name, attributes and body
+  together, so a page with many attributes no longer overflows the automatic
+  recall's budget. (#588)
+- `memory.recall` records `rendered_chars`; `context.composition` records
+  `eager_frozen_turn`; new `memory.eager_surface` event. (#585, #586)
+
+**WebUI and TUI**
+
+- A tool bubble keeps its result body across mount; an empty recall leaves no
+  bubble and no empty cluster; the offline placeholder no longer cites a
+  document. (#583)
+- `tool.read_file` declares the shape of its verbatim reads. (#583)
+
 ## 0.10.0 — 2026-09-08
 
 ### Highlights
