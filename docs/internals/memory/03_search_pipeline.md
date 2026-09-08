@@ -153,7 +153,9 @@ The CE nudges the existing RRF order; it does not replace it. The default model 
 
 `apply_per_source_cap` drops ingested-document hits — corpus and reference chunks — beyond the per-document cap (3 by default, configurable via `memory.search.sectioning.max_per_source`), so a single chunked document cannot monopolize the top-K. Corpus chunks group by `ingest_id`; reference chunks group by their parent document. Other classes pass through uncapped.
 
-`SectionedHit` rows are grouped into five sections by type, rendered in order: skill → canonical → fragment → session → ingested. Empty sections are omitted. Each block carries structural markers (`=== CANONICAL: <uri> ===` … `=== END CANONICAL ===`) and a completeness qualifier when body length is known. Canonical hits render the page's name and aliases, its attributes line and a bounded body excerpt at warm level, and the whole composition at cold level; the completeness qualifier compares the rendered text with the full composition.
+`SectionedHit` rows are grouped into five sections by type, rendered in order: skill → canonical → fragment → session → ingested. Empty sections are omitted. Each block carries structural markers (`=== CANONICAL: <uri> ===` … `=== END CANONICAL ===`) and a completeness qualifier when body length is known. At warm level every class's summary is cut to `memory.search.warm_excerpt_chars` — canonical hits cut the page's name/aliases/attributes-line/body composition the same way fragment, session and ingested hits cut their materialized summary; cold level renders the whole content instead. The completeness qualifier compares the rendered text with the full, uncut length, so a cut hit shows `preview N/M` and an uncut one shows `complete`.
+
+A second, response-wide budget (`memory.search.warm_max_chars`) bounds the whole warm rendering: blocks render in full, highest score first, until the next one would push the total past the budget; every hit from that point on — regardless of which section it belongs to — renders as a one-line headline pointer instead (`- <headline> (<uri>; drill for the body)`), still grouped under its section. A block is never partially cut — a hit is either whole or a pointer. Cold level, which means "full bodies", is not subject to this budget.
 
 The pipeline returns `SearchPipelineResult` with the capped `hits`, source counts, and degradation information.
 
@@ -179,7 +181,7 @@ The pipeline returns `SearchPipelineResult` with the capped `hits`, source count
 | `DEFAULT_MODEL` | `durin/memory/cross_encoder.py` | `"BAAI/bge-reranker-base"` — MIT, ~100M params, multilingual. |
 | `SectionedHit` | `durin/memory/sectioned_output.py` | Frozen dataclass: `uri`, `type`, `path`, `score`, `ts`, `snippet`, `summary`, `body`, `body_length`, `ingest_id`. Consumed by renderer. |
 | `apply_per_source_cap` | `durin/memory/sectioned_output.py` | Drops ingested-document hits (corpus and reference chunks) beyond `max_per_source` (default 3) per source document. Other types pass through. |
-| `render_sectioned` | `durin/memory/sectioned_output.py` | Groups hits by section type and renders structural markers for LLM consumption. |
+| `render_sectioned` | `durin/memory/sectioned_output.py` | Groups hits by section type and renders structural markers for LLM consumption. Optional `max_chars` bounds the total size — hits past the budget render as headline pointers instead of full blocks. |
 
 ---
 
@@ -192,6 +194,8 @@ The pipeline returns `SearchPipelineResult` with the capped `hits`, source count
 | `memory.search.cross_encoder.batch_size` | `32` | Batch size for `CrossEncoder.predict` calls. |
 | `memory.search.cross_encoder.top_n` | `10` | Retained for API compatibility; the blend reorders all top-50 candidates and downstream sectioning trims. |
 | `memory.search.sectioning.max_per_source` | `3` | Max ingested-document hits (corpus and reference chunks) per source document in the final result. Prevents a single chunked document from monopolizing top-K. |
+| `memory.search.warm_excerpt_chars` | `600` | Per-hit warm-level summary cut, in characters, applied to every class. The completeness qualifier reports how much of the full content that is. |
+| `memory.search.warm_max_chars` | `8000` | Per-response warm-level rendering budget, in characters. Hits past it render as headline pointers instead of full blocks. Not applied at `level=cold`. |
 
 The pipeline is invoked by the `memory_search` tool (`04_agent_tools.md`). The tool wraps scope/level/limit logic around `run_search_pipeline`:
 

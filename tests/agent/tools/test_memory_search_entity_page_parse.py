@@ -112,3 +112,61 @@ def test_cold_entity_hit_parses_once(
     assert "opens at dawn and closes at noon" in rendered
     assert ", complete)" in rendered
     assert "Sources: reference:ana-bakery-license." in rendered
+
+
+def test_concurrent_execute_calls_do_not_cross_contaminate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The per-call page cache must be a local, not `self._page_cache` —
+    the same sharing hazard the module docstring on `_turn_prefetch_refs`
+    describes for a different piece of turn-scoped state. Two `execute()`
+    calls for two different entities, run concurrently via `asyncio.gather`
+    on ONE tool instance, must each parse their own page exactly once and
+    render only their own entity — no cache entry leaking from one call's
+    cache into the other's, and no reset by one call wiping the other's
+    still-in-flight cache.
+    """
+    _page(tmp_path)  # Ana, at memory/entities/person/ana.md
+    bob_body = (
+        ("Bob tends the vineyard on Hilltop Road. " * 40)
+        + "He harvests at dusk and rests until sunrise."
+    )
+    bob = EntityPage(
+        type="person", name="Bob", aliases=["bob"],
+        attributes={"role": "vintner"}, body=bob_body,
+    )
+    bob.save(tmp_path / "memory" / "entities" / "person" / "bob.md")
+
+    calls = _count_memory_search_parses(monkeypatch)
+    tool = MemorySearchTool(workspace=tmp_path)
+
+    async def _run():
+        return await asyncio.gather(
+            tool.execute(
+                query="Ana bakery", scope="dreamed", level="warm", limit=1,
+            ),
+            tool.execute(
+                query="Bob vineyard", scope="dreamed", level="warm", limit=1,
+            ),
+        )
+
+    out_ana, out_bob = asyncio.run(_run())
+    rendered_ana = out_ana["sectioned_rendered"]
+    rendered_bob = out_bob["sectioned_rendered"]
+
+    assert "Ana" in rendered_ana and "Bob" not in rendered_ana
+    assert "Bob" in rendered_bob and "Ana" not in rendered_bob
+
+    ana_calls = [c for c in calls if c.endswith("ana.md")]
+    bob_calls = [c for c in calls if c.endswith("bob.md")]
+    assert len(ana_calls) == 1, f"expected Ana parsed once, got {ana_calls!r}"
+    assert len(bob_calls) == 1, f"expected Bob parsed once, got {bob_calls!r}"
+
+    # The design requirement itself, checked directly: no page cache
+    # left dangling on the shared tool instance. asyncio's cooperative
+    # scheduling means the content assertions above can pass even on the
+    # old shared-`self._page_cache` design (there is only one await
+    # point in `execute()`, so the two calls' cache-mutating code never
+    # truly interleaves at the statement level) — this is the one
+    # assertion that deterministically distinguishes the two designs.
+    assert not hasattr(tool, "_page_cache")

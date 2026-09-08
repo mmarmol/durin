@@ -517,6 +517,8 @@ class MemorySearchConfig(Base):
         default_factory=MemorySearchSectioningConfig,
         description="Sectioning step settings (per-source result caps)",
     )
+    warm_excerpt_chars: int = Field(default=600, ge=100, description="At warm level each hit's summary is cut to this many characters (the entity excerpt already was); the completeness qualifier says how much of the body that is")
+    warm_max_chars: int = Field(default=8000, ge=1000, description="Total budget for a warm memory_search rendering; once the sections exceed it the remaining hits render as one headline line each with a drill pointer")
 
 
 class MemoryFileWatcherConfig(Base):

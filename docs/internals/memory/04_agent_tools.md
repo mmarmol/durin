@@ -134,13 +134,29 @@ rendered with its body capped, so its hits are judged by containment and
 normally pass. This is enabled on the agent path, disabled for subagents (which
 have neither block in their prompt).
 
+A warm rendering is bounded per hit and per response. Each hit's summary is cut
+to `memory.search.warm_excerpt_chars` characters (default 600); the
+completeness qualifier on its marker (`preview N/M` vs `complete`) reports how
+much of the full content that is. The whole rendering is additionally capped at
+`memory.search.warm_max_chars` characters (default 8000): once rendering the
+next hit in full would cross that budget, it and every hit after it — in any
+section — render as a one-line headline pointer instead (`- <headline>
+(<uri>; drill for the body)`), grouped under their own section like a full
+block would be. `level=cold` is exempt from both — it means "full bodies".
+
+Callers that construct `MemorySearchTool` directly, without an `app_config`
+(the webui / `graph_api.search_memory_api`, `tier2_judge`), still get the
+operator's configured budget: it is read via a fresh `load_config()` call
+rather than the constructor's `app_config`, falling back to the schema
+defaults on any load failure.
+
 **Parameters:**
 
 | Param | Default | Description |
 |---|---|---|
 | `query` | required | Natural-language or exact-identifier query. Short topical phrase preferred. |
 | `scope` | `all` | `all` = dreamed + undreamed sessions, **excluding ingested documents**; `dreamed` = structured memory; `undreamed` = raw sessions; `library` = ingested reference documents (the Library — kept out of default recall); `archive` = on-demand recovery walk. |
-| `level` | `warm` | `warm` = headline + summary (for an entity page: its name, attributes and a body excerpt); `cold` = full body (high token cost). |
+| `level` | `warm` | `warm` = headline + a bounded summary excerpt (for an entity page: its name, attributes and a body excerpt, cut the same way); `cold` = full body (high token cost). |
 | `keywords` | — | Literal string for exact-match boost (email, UUID, path). Biases RRF toward lexical. |
 | `limit` | 10 | Final result count. Clamped to [1, 50] defensively even with schema bounds declared. |
 | `kinds` | `all` | `all` = everything; `skill` = skill procedures only; `fact` = everything except skills. |
@@ -433,7 +449,9 @@ the failing record without aborting the rest.
 **When to call:** when a `memory_search` result block is marked `(preview N/M)`
 — N chars shown, M chars exist (a `(complete)` block returns the same text and
 wastes a round-trip) — **or** to pull a document a `Sources:` line / a
-`derived_from` pointer names (`reference:<slug>`).
+`derived_from` pointer names (`reference:<slug>`) — **or** for a hit the
+per-response render budget collapsed to a one-line headline pointer
+(`- <headline> (<uri>; drill for the body)`).
 
 **URI shapes accepted** (routed by `durin/memory/drill.py`):
 

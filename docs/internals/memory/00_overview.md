@@ -338,6 +338,8 @@ For deeper coverage of individual subsystems, see the sibling docs:
 | `memory.search.cross_encoder.enabled` | `false` | Enable the cross-encoder rerank step (downloads ~100 MB model on first use). |
 | `memory.search.cross_encoder.model` | `BAAI/bge-reranker-base` | Sentence-transformer model for reranking. |
 | `memory.search.sectioning.max_per_source` | `3` | Maximum ingested-document hits (corpus and reference chunks) per source document in the sectioned output. |
+| `memory.search.warm_excerpt_chars` | `600` | Per-hit summary cut at `level=warm`, in characters, applied to every result class. |
+| `memory.search.warm_max_chars` | `8000` | Per-response rendering budget at `level=warm`, in characters. Hits past it render as one-line headline pointers instead of full blocks. |
 | `memory.library.awareness_max_docs` | `20` | Documents listed one per line in the always-on Library catalog; 0 keeps only the header, the count and the `Covers:` subject map. |
 | `memory.library.awareness_abstracts` | `false` | Append each listed document's distilled abstract to its catalog line. |
 | `memory.prefetch.enabled` | `true` | Run one warm `memory_search` with the user message before the model sees it and fence the hits into that turn's copy of the message. |

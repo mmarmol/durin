@@ -176,12 +176,24 @@ def _source_group_key(hit: SectionedHit) -> str:
     return hit.uri
 
 
-def render_sectioned(hits: Iterable[SectionedHit]) -> str:
+def render_sectioned(
+    hits: Iterable[SectionedHit], *, max_chars: int | None = None,
+) -> str:
     """Render the sectioned output as a single string.
 
     Sections appear in canonical → fragment → session → ingested
     order. Empty sections are omitted; if no hits exist the function
     returns ``""``.
+
+    ``max_chars`` bounds the total rendering size. Blocks render in
+    full, highest score first, until the next one would push the
+    running length past the budget; from that point on every remaining
+    hit — in this section and any section still to come — renders as a
+    one-line headline pointer (``- <headline> (<uri>; drill for the
+    body)``) instead, grouped under its own section like a full block
+    would be. A block is never partially cut: a hit is either rendered
+    whole or as a pointer. ``None`` (the default) renders every hit as
+    a full block, unbounded — the pre-budget behaviour.
     """
     by_section: dict[str, list[SectionedHit]] = {
         s: [] for s in _SECTION_ORDER
@@ -193,19 +205,47 @@ def render_sectioned(hits: Iterable[SectionedHit]) -> str:
         by_section[section].sort(key=lambda h: h.score, reverse=True)
 
     parts: list[str] = []
+    running_length = 0
+    over_budget = False
+
+    def _append(part: str) -> None:
+        nonlocal running_length
+        running_length += (2 if parts else 0) + len(part)
+        parts.append(part)
+
     for section in _SECTION_ORDER:
         section_hits = by_section[section]
         if not section_hits:
             continue
-        parts.append(f"## {section.title()}\n\n{_SECTION_INTRO[section]}")
+        _append(f"## {section.title()}\n\n{_SECTION_INTRO[section]}")
         for hit in section_hits:
-            parts.append(_render_block(section, hit))
+            if not over_budget:
+                block = _render_block(section, hit)
+                projected = running_length + (2 if parts else 0) + len(block)
+                if max_chars is None or projected <= max_chars:
+                    _append(block)
+                    continue
+                over_budget = True
+            _append(_headline_pointer(hit))
     return "\n\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
 # internals
 # ---------------------------------------------------------------------------
+
+
+def _headline_pointer(hit: SectionedHit) -> str:
+    """One-line stand-in for a hit the ``max_chars`` budget dropped.
+
+    Carries just enough for the agent to decide whether it's worth a
+    drill: a short headline (the hit's snippet, falling back to its uri
+    when there is none) and the uri to drill — mirrors the
+    ``headline = hit.snippet or hit.uri`` fallback used elsewhere for
+    the same purpose.
+    """
+    headline = hit.snippet or hit.uri
+    return f"- {headline} ({hit.uri}; drill for the body)"
 
 
 def _render_block(section: str, hit: SectionedHit) -> str:

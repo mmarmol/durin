@@ -47,8 +47,6 @@ def _skill_uri_to_path(uri: str) -> str:
     return uri
 
 
-_ENTITY_EXCERPT_CHARS = 600   # same per-page body cap the hot layer uses
-
 # Refs the turn's automatic prefetch already fenced into the user message.
 # Task-scoped (contextvars), not an attribute on the tool instance: one
 # MemorySearchTool is shared by the whole AgentLoop, whose concurrency model
@@ -288,7 +286,9 @@ class MemorySearchTool(Tool):
         )
         return self._cross_encoder_cache
 
-    def _load_entity_page(self, uri: str) -> "EntityPage | None":
+    def _load_entity_page(
+        self, uri: str, cache: dict[str, "EntityPage | None"],
+    ) -> "EntityPage | None":
         """Load the entity page an entity-page ``uri`` addresses.
 
         ``uri`` is the legacy ``memory/entity_page/<type>:<slug>`` shape
@@ -297,13 +297,19 @@ class MemorySearchTool(Tool):
         failure (missing file, malformed frontmatter) so callers fall back
         to their pre-existing name/aliases-only behaviour.
 
-        Memoised in ``self._page_cache`` for the duration of the current
-        ``execute()`` call: an entity hit's page is otherwise re-read and
-        re-parsed by up to three call sites (sectioned conversion,
-        body-length probe, derived_from attachment).
+        Memoised in ``cache`` for the duration of the caller's ``execute()``
+        call: an entity hit's page is otherwise re-read and re-parsed by up
+        to three call sites (sectioned conversion, body-length probe,
+        derived_from attachment). ``cache`` is a plain dict the caller
+        creates fresh per call and passes explicitly — never an attribute
+        on ``self`` — so two ``execute()`` calls running concurrently on
+        this shared tool instance (different sessions; see the
+        ``_turn_prefetch_refs`` comment above for the same hazard on a
+        different piece of turn-scoped state) never read or reset each
+        other's cache.
         """
-        if uri in self._page_cache:
-            return self._page_cache[uri]
+        if uri in cache:
+            return cache[uri]
 
         from durin.memory.drill import _translate_entity_page_uri
         from durin.memory.entity_page import EntityPage
@@ -313,10 +319,12 @@ class MemorySearchTool(Tool):
             page = EntityPage.from_file(path)
         except Exception:  # noqa: BLE001
             page = None
-        self._page_cache[uri] = page
+        cache[uri] = page
         return page
 
-    def _entity_full_length(self, uri: str) -> int:
+    def _entity_full_length(
+        self, uri: str, cache: dict[str, "EntityPage | None"],
+    ) -> int:
         """Full-composition length for an entity-page uri.
 
         Feeds the renderer's completeness qualifier (``_completeness_for``
@@ -324,7 +332,7 @@ class MemorySearchTool(Tool):
         backward-compat convention ``SectionedHit.body_length`` already
         uses for hits whose true length isn't tracked.
         """
-        page = self._load_entity_page(uri)
+        page = self._load_entity_page(uri, cache)
         if page is None:
             return 0
         return len(_entity_composition(page, excerpt_chars=None))
@@ -373,7 +381,9 @@ class MemorySearchTool(Tool):
             return r
         return dataclasses.replace(r, body=entry.body)
 
-    def _attach_derived_from(self, hits: list) -> list:
+    def _attach_derived_from(
+        self, hits: list, cache: dict[str, "EntityPage | None"],
+    ) -> list:
         """Populate ``derived_from`` on canonical (entity) hits from disk.
 
         The pipeline builds hits from the vector / FTS indices, which don't
@@ -385,8 +395,9 @@ class MemorySearchTool(Tool):
 
         Resolves through ``_load_entity_page`` (uri form: ``memory/entity_page/
         <type>:<slug>``, same as the sectioned-conversion and body-length call
-        sites) so a page already parsed earlier in this ``execute()`` call is
-        reused instead of re-read from disk."""
+        sites), passing the SAME ``cache`` the caller used for those, so a
+        page already parsed earlier in this ``execute()`` call is reused
+        instead of re-read from disk."""
         import dataclasses
 
         out = []
@@ -394,7 +405,7 @@ class MemorySearchTool(Tool):
             if h.type != "entity":
                 out.append(h)
                 continue
-            page = self._load_entity_page(h.uri)
+            page = self._load_entity_page(h.uri, cache)
             derived: tuple[str, ...] = (
                 tuple(page.derived_from or ()) if page is not None else ()
             )
@@ -552,305 +563,352 @@ class MemorySearchTool(Tool):
         # otherwise parsed up to three times per search call (sectioned
         # conversion, body-length probe, derived_from attachment) — cache
         # it here so `_load_entity_page` reads the file once per uri.
-        # Scoped to this call only (cleared in the `finally` below) so a
-        # page a dream rewrites between calls is never served stale.
-        self._page_cache: dict[str, "EntityPage | None"] = {}
+        # A plain local, not an attribute on `self`: this tool instance is
+        # shared across concurrent `execute()` calls (different sessions),
+        # and an instance attribute would let one call's reset or writes
+        # reach another's still-in-flight cache — the same hazard the
+        # `_turn_prefetch_refs` comment above describes for a different
+        # piece of turn-scoped state. A fresh dict per call sidesteps it
+        # entirely, and a page a dream rewrites between calls is never
+        # served stale.
+        page_cache: dict[str, "EntityPage | None"] = {}
+
+        # `warm_excerpt_chars` / `warm_max_chars` bound a warm rendering's
+        # size — see `MemorySearchConfig`. Read via a fresh `load_config()`
+        # (the same pattern `_get_vector_index` uses in this file) rather
+        # than `self._app_config`, so callers that construct the tool
+        # directly (graph_api / webui search, tier2_judge — none of them
+        # pass `app_config`) still honour the operator's configured budget,
+        # not just the agent's own tool-call path. Schema defaults are the
+        # fallback so a config load failure degrades to the pre-existing
+        # hard-coded behaviour instead of raising.
         try:
-            # Archive is intentionally not indexed (vector/lexical/grep over
-            # memory/ exclude `memory/archive/**`). The `scope='archive'`
-            # surface is a separate on-demand walk for recovery / diagnostic
-            # queries. No re-ranking, no entity-aware — substring match over
-            # headline + summary + body of each archived `.md`.
-            if scope == "archive":
-                import asyncio
-                # Off-loop: walks + reads every archived .md (blocking file I/O).
-                return await asyncio.to_thread(self._run_archive_scope, query, limit=limit)
+            from durin.config.loader import load_config
+            _search_cfg = load_config().memory.search
+            warm_excerpt_chars = int(_search_cfg.warm_excerpt_chars)
+            warm_max_chars = int(_search_cfg.warm_max_chars)
+        except Exception:  # noqa: BLE001
+            from durin.config.schema import MemorySearchConfig
+            _search_defaults = MemorySearchConfig()
+            warm_excerpt_chars = _search_defaults.warm_excerpt_chars
+            warm_max_chars = _search_defaults.warm_max_chars
 
-            # Delegate the whole search to `run_search_pipeline` — query
-            # router + lexical FTS + vector + cross-source RRF + entity-aware
-            # rerank + grep fallback + sectioning + per-source cap.
-            from durin.memory.search_pipeline import run_search_pipeline
-
-            vi = (
-                self._get_vector_index()
-                if scope in ("dreamed", "all", "library") else None
-            )
-
-            # Library scope filter (contamination isolation): ingested reference
-            # documents are kept out of the default recall pool and are the sole
-            # content of an explicit `library` search.
-            if scope == "library":
-                library_mode: str | None = "only"
-            elif scope in ("all", "dreamed", "undreamed"):
-                library_mode = "exclude"
-            else:
-                library_mode = None
-
-            # Cross-encoder rerank is opt-in via config. When
-            # enabled, build a reranker lazily and pass it through. The
-            # pipeline gracefully no-ops if the model fails to load.
-            cross_encoder = self._build_cross_encoder()
-            ce_top_n = 10
-            if (
-                self._app_config is not None
-                and getattr(self._app_config, "memory", None) is not None
-            ):
-                ce_cfg = getattr(
-                    self._app_config.memory.search, "cross_encoder", None,
-                )
-                if ce_cfg is not None:
-                    ce_top_n = int(getattr(ce_cfg, "top_n", 10) or 10)
-
-            # Operator-configured per-source cap for the sectioning step.
-            # Default is None → `run_search_pipeline` falls back to
-            # `DEFAULT_MAX_PER_SOURCE` so existing workspaces are unchanged.
-            max_per_source: int | None = None
-            if self._app_config is not None:
-                try:
-                    sectioning_cfg = (
-                        self._app_config.memory.search.sectioning
-                    )
-                    max_per_source = int(sectioning_cfg.max_per_source)
-                except AttributeError:
-                    max_per_source = None
-
-            t0 = time.monotonic()
-            # Off the event loop: the pipeline runs CPU/GIL-bound work (ONNX query
-            # embedding + Lance vector search) with no await, which would freeze the
-            # gateway loop on every recall — the highest-frequency tool path.
+        # Archive is intentionally not indexed (vector/lexical/grep over
+        # memory/ exclude `memory/archive/**`). The `scope='archive'`
+        # surface is a separate on-demand walk for recovery / diagnostic
+        # queries. No re-ranking, no entity-aware — substring match over
+        # headline + summary + body of each archived `.md`.
+        if scope == "archive":
             import asyncio
-            pipeline_result = await asyncio.to_thread(
-                run_search_pipeline,
-                self._workspace,
-                query,
-                keywords=keywords,
-                vector_index=vi,
-                limit=limit,
-                cross_encoder=cross_encoder,
-                cross_encoder_top_n=ce_top_n,
-                max_per_source=max_per_source,
-                library_mode=library_mode,
+            # Off-loop: walks + reads every archived .md (blocking file I/O).
+            return await asyncio.to_thread(self._run_archive_scope, query, limit=limit)
+
+        # Delegate the whole search to `run_search_pipeline` — query
+        # router + lexical FTS + vector + cross-source RRF + entity-aware
+        # rerank + grep fallback + sectioning + per-source cap.
+        from durin.memory.search_pipeline import run_search_pipeline
+
+        vi = (
+            self._get_vector_index()
+            if scope in ("dreamed", "all", "library") else None
+        )
+
+        # Library scope filter (contamination isolation): ingested reference
+        # documents are kept out of the default recall pool and are the sole
+        # content of an explicit `library` search.
+        if scope == "library":
+            library_mode: str | None = "only"
+        elif scope in ("all", "dreamed", "undreamed"):
+            library_mode = "exclude"
+        else:
+            library_mode = None
+
+        # Cross-encoder rerank is opt-in via config. When
+        # enabled, build a reranker lazily and pass it through. The
+        # pipeline gracefully no-ops if the model fails to load.
+        cross_encoder = self._build_cross_encoder()
+        ce_top_n = 10
+        if (
+            self._app_config is not None
+            and getattr(self._app_config, "memory", None) is not None
+        ):
+            ce_cfg = getattr(
+                self._app_config.memory.search, "cross_encoder", None,
             )
-            duration_ms = (time.monotonic() - t0) * 1000.0
+            if ce_cfg is not None:
+                ce_top_n = int(getattr(ce_cfg, "top_n", 10) or 10)
 
-            # Preserve `memory.recall.vector` telemetry (consumed by
-            # `durin memory stats`'s vector_total counter). Emitted
-            # whenever the vector path was attempted — matches the v1
-            # behaviour where the event fired regardless of hit count.
-            if vi is not None:
-                _ai = self._get_alias_index()
-                qents = (
-                    extract_query_entities(query, _ai)
-                    if _ai is not None else []
+        # Operator-configured per-source cap for the sectioning step.
+        # Default is None → `run_search_pipeline` falls back to
+        # `DEFAULT_MAX_PER_SOURCE` so existing workspaces are unchanged.
+        max_per_source: int | None = None
+        if self._app_config is not None:
+            try:
+                sectioning_cfg = (
+                    self._app_config.memory.search.sectioning
                 )
-                ranking_label = "entity_aware" if qents else "default"
-                emit_tool_event(
-                    "memory.recall.vector",
-                    {
-                        "query": query,
-                        "scope": scope,
-                        "embedding_model": self._embedding_model or "",
-                        "hit_count": pipeline_result.vector_count,
-                        "duration_ms": duration_ms,
-                        "ranking": ranking_label,
-                        "query_entities_count": len(qents),
-                        "reordered": False,
-                        "top_1_id_before": "",
-                        "top_1_id_after": "",
-                    },
-                )
+                max_per_source = int(sectioning_cfg.max_per_source)
+            except AttributeError:
+                max_per_source = None
 
-            # `scope=undreamed` mode is a v1 niche — the orchestrator's grep step
-            # mixes sessions with dreamed memory hits. When the caller wants ONLY
-            # undreamed, filter down to raw session material (ingested Library
-            # content was already excluded by the pipeline's library filter).
-            hits = pipeline_result.hits
-            if scope == "undreamed":
-                hits = [
-                    h for h in hits
-                    if h.type in ("session", "session_summary")
-                ]
+        t0 = time.monotonic()
+        # Off the event loop: the pipeline runs CPU/GIL-bound work (ONNX query
+        # embedding + Lance vector search) with no await, which would freeze the
+        # gateway loop on every recall — the highest-frequency tool path.
+        import asyncio
+        pipeline_result = await asyncio.to_thread(
+            run_search_pipeline,
+            self._workspace,
+            query,
+            keywords=keywords,
+            vector_index=vi,
+            limit=limit,
+            cross_encoder=cross_encoder,
+            cross_encoder_top_n=ce_top_n,
+            max_per_source=max_per_source,
+            library_mode=library_mode,
+        )
+        duration_ms = (time.monotonic() - t0) * 1000.0
 
-            # Read-side gate for `memory.index_skills=False`.
-            # The write-side gates stop NEW skills from being indexed, but a
-            # skill indexed earlier (while the flag was True) leaves FTS/vector
-            # rows that the search arms still read — and drift repair does not
-            # evict them. Drop ALL skill-typed hits at the tool boundary (the
-            # only skill-surfacing consumer) so flipping the flag off yields
-            # zero skill hits immediately, regardless of lingering rows. This
-            # sits BEFORE both the `results` conversion and `render_sectioned`,
-            # so neither the payload nor the rendered text leaks a skill.
-            if not skills_indexing_enabled():
-                hits = [h for h in hits if h.type != "skill"]
-
-            # `kinds` post-filter: 'skill' keeps only skill procedures,
-            # 'fact' drops them (facts/entities/sessions/ingested), 'all'
-            # (default) is a no-op. Skill hits carry `type == "skill"`.
-            if kinds == "skill":
-                hits = [h for h in hits if h.type == "skill"]
-            elif kinds == "fact":
-                hits = [h for h in hits if h.type != "skill"]
-
-            # Convert :class:`SectionedHit` rows into the legacy `Result`
-            # shape expected by the agent (carries `to_dict`). The LLM-facing
-            # block rendering goes via `sectioned_output.render_sectioned`
-            # so the per-source cap and section intros actually activate.
-            results: list[Result] = []
-            for h in hits:
-                r = self._sectioned_to_result(h, level=level)
-                if r is not None:
-                    results.append(r)
-
-            # Apply per-source cap + render sectioned output.
-            from durin.memory.sectioned_output import (
-                SectionedHit,
-                apply_per_source_cap,
-                render_sectioned,
+        # Preserve `memory.recall.vector` telemetry (consumed by
+        # `durin memory stats`'s vector_total counter). Emitted
+        # whenever the vector path was attempted — matches the v1
+        # behaviour where the event fired regardless of hit count.
+        if vi is not None:
+            _ai = self._get_alias_index()
+            qents = (
+                extract_query_entities(query, _ai)
+                if _ai is not None else []
             )
-            _type_from_class = {
-                "skill": "skill",
-                "entity_page": "entity",
-                "episodic": "episodic", "stable": "stable",
-                "corpus": "corpus", "session_summary": "session_summary",
-                "reference": "reference",
-            }
-            enriched_hits = [
-                SectionedHit(
-                    uri=r.uri,
-                    type=_type_from_class.get(r.class_name, "episodic"),
-                    path=r.uri,
-                    score=0.0,
-                    ts=r.valid_from,
-                    snippet=r.snippet,
-                    body=r.body,
-                    summary=r.summary,
-                    entities=tuple(r.entities),
-                    ingest_id=None,
-                    body_length=(
-                        self._entity_full_length(r.uri)
-                        if r.class_name == "entity_page" else 0
-                    ),
-                )
-                for r in results
+            ranking_label = "entity_aware" if qents else "default"
+            emit_tool_event(
+                "memory.recall.vector",
+                {
+                    "query": query,
+                    "scope": scope,
+                    "embedding_model": self._embedding_model or "",
+                    "hit_count": pipeline_result.vector_count,
+                    "duration_ms": duration_ms,
+                    "ranking": ranking_label,
+                    "query_entities_count": len(qents),
+                    "reordered": False,
+                    "top_1_id_before": "",
+                    "top_1_id_after": "",
+                },
+            )
+
+        # `scope=undreamed` mode is a v1 niche — the orchestrator's grep step
+        # mixes sessions with dreamed memory hits. When the caller wants ONLY
+        # undreamed, filter down to raw session material (ingested Library
+        # content was already excluded by the pipeline's library filter).
+        hits = pipeline_result.hits
+        if scope == "undreamed":
+            hits = [
+                h for h in hits
+                if h.type in ("session", "session_summary")
             ]
-            capped_hits = apply_per_source_cap(enriched_hits)
 
-            # Hits whose rendered content is already visible in the caller's
-            # hot layer — or whose page the pinned block renders whole (the
-            # always_on guidance) — collapse to pointer lines. Containment-checked
-            # per ref — a hit carrying body beyond the prefix excerpt passes
-            # through whole. The principal's page is pinned but rendered with its
-            # body capped, so it is excluded from the whole-rendered set and its
-            # hits go through containment like any other page. A hit the turn's
-            # automatic prefetch already fenced into the user message counts as
-            # rendered whole too — the block carries the same sectioned output
-            # this call would print. Disabled for subagents (their prompt has no
-            # hot layer; see __init__).
-            in_context_hits: list[SectionedHit] = []
-            if self._context_dedup:
-                from durin.memory.context_dedup import split_in_context
-                from durin.memory.principal import (
-                    resolve_owner_principal,
-                    resolve_pinned_refs,
-                )
-                refs = resolve_pinned_refs(self._workspace)
-                principal = resolve_owner_principal(self._workspace)
-                capped_hits, in_context_hits = split_in_context(
-                    self._workspace, capped_hits,
-                    pinned_refs=refs,
-                    whole_refs=(refs - {principal}) | _turn_prefetch_refs.get(),
-                )
+        # Read-side gate for `memory.index_skills=False`.
+        # The write-side gates stop NEW skills from being indexed, but a
+        # skill indexed earlier (while the flag was True) leaves FTS/vector
+        # rows that the search arms still read — and drift repair does not
+        # evict them. Drop ALL skill-typed hits at the tool boundary (the
+        # only skill-surfacing consumer) so flipping the flag off yields
+        # zero skill hits immediately, regardless of lingering rows. This
+        # sits BEFORE both the `results` conversion and `render_sectioned`,
+        # so neither the payload nor the rendered text leaks a skill.
+        if not skills_indexing_enabled():
+            hits = [h for h in hits if h.type != "skill"]
 
-            kept_uris = {h.uri for h in capped_hits}
-            results = [r for r in results if r.uri in kept_uris]
-            capped_hits = self._attach_derived_from(capped_hits)
-            capped_hits = self._attach_reference_bodies(capped_hits)
-            sectioned_rendered = render_sectioned(capped_hits)
-            if in_context_hits:
-                from durin.memory.context_dedup import (
-                    render_in_context_section,
-                )
-                pointer_section = render_in_context_section(in_context_hits)
-                sectioned_rendered = (
-                    f"{sectioned_rendered}\n\n{pointer_section}"
-                    if sectioned_rendered else pointer_section
-                )
+        # `kinds` post-filter: 'skill' keeps only skill procedures,
+        # 'fact' drops them (facts/entities/sessions/ingested), 'all'
+        # (default) is a no-op. Skill hits carry `type == "skill"`.
+        if kinds == "skill":
+            hits = [h for h in hits if h.type == "skill"]
+        elif kinds == "fact":
+            hits = [h for h in hits if h.type != "skill"]
 
-            # Strategy / ranking labels for downstream telemetry consumers
-            # that pattern-match. We derive them from what the pipeline
-            # actually used so the labels reflect reality, not heuristics.
-            if pipeline_result.vector_count and pipeline_result.lexical_count:
-                strategy = "hybrid"
-            elif pipeline_result.vector_count:
-                strategy = "vector"
-            elif pipeline_result.lexical_count:
-                strategy = "lexical"
-            else:
-                strategy = "grep"
-            ranking = "default"
-            ai = self._get_alias_index()
-            if ai is not None and extract_query_entities(query, ai):
-                ranking = "entity_aware"
-
-            # All diagnostic fields are already computed above; this is a
-            # payload change, not new instrumentation.
-            total_candidates = (
-                pipeline_result.vector_count + pipeline_result.lexical_count
+        # Convert :class:`SectionedHit` rows into the legacy `Result`
+        # shape expected by the agent (carries `to_dict`). The LLM-facing
+        # block rendering goes via `sectioned_output.render_sectioned`
+        # so the per-source cap and section intros actually activate.
+        results: list[Result] = []
+        # Kept in lockstep with `results` (only entries `_sectioned_to_result`
+        # didn't drop) so the `enriched_hits` build below can read each
+        # kept hit's own `body_length` back off the ORIGINAL pipeline hit —
+        # see the comment there.
+        kept_pipeline_hits: list[Any] = []
+        for h in hits:
+            r = self._sectioned_to_result(
+                h, level=level, cache=page_cache,
+                warm_excerpt_chars=warm_excerpt_chars,
             )
-            recall_payload: dict[str, Any] = {
-                "query": query,
-                "scope": scope,
-                "level": level,
-                "result_count": len(results),
-                "strategy": strategy,
-                "duration_ms": duration_ms,
-                "total_candidates": total_candidates,
-                "skill_result_count": sum(1 for r in results if r.kind == "skill"),
-                "keywords": keywords,
-                "in_context_deduped": len(in_context_hits),
-            }
-            if pipeline_result.recovered_from:
-                recall_payload["recovered_from"] = list(
-                    pipeline_result.recovered_from,
-                )
-                recall_payload["recovery_duration_ms"] = (
-                    pipeline_result.recovery_duration_ms
-                )
-            emit_tool_event("memory.recall", recall_payload)
-            if kinds == "skill" and not results:
-                from durin.memory.paths import walk_skills
-                had_candidate = any(True for _ in walk_skills(self._workspace))
-                emit_tool_event(
-                    "memory.skill_miss",
-                    {
-                        "query": query,
-                        "result_count": 0,
-                        "had_skill_candidate": had_candidate,
-                    },
-                )
-            response: dict[str, Any] = {
-                "total": len(results),
-                "strategy": strategy,
-                "ranking": ranking,
-                "sectioned_rendered": sectioned_rendered,
-            }
-            if self._include_raw_results:
-                response["results"] = [r.to_dict() for r in results]
-            if in_context_hits:
-                response["already_in_context"] = [
-                    h.uri for h in in_context_hits
-                ]
-            # Surface degraded-run info when the pipeline recovered from a
-            # source failure. Omitted on clean runs to keep the response
-            # shape minimal.
-            if pipeline_result.recovered_from:
-                response["recovered_from"] = list(pipeline_result.recovered_from)
-                response["recovery_duration_ms"] = (
-                    pipeline_result.recovery_duration_ms
-                )
-            return response
-        finally:
-            self._page_cache = {}
+            if r is not None:
+                results.append(r)
+                kept_pipeline_hits.append(h)
+
+        # Apply per-source cap + render sectioned output.
+        from durin.memory.sectioned_output import (
+            SectionedHit,
+            apply_per_source_cap,
+            render_sectioned,
+        )
+        _type_from_class = {
+            "skill": "skill",
+            "entity_page": "entity",
+            "episodic": "episodic", "stable": "stable",
+            "corpus": "corpus", "session_summary": "session_summary",
+            "reference": "reference",
+        }
+        enriched_hits = [
+            SectionedHit(
+                uri=r.uri,
+                type=_type_from_class.get(r.class_name, "episodic"),
+                path=r.uri,
+                score=0.0,
+                ts=r.valid_from,
+                snippet=r.snippet,
+                body=r.body,
+                summary=r.summary,
+                entities=tuple(r.entities),
+                ingest_id=None,
+                # Entity pages: the full page composition length (name +
+                # attributes + body), same as Task 1. Every other class:
+                # the true full length the pipeline already computed
+                # (`h.body_length`, 0 when unknown) — read straight off
+                # the ORIGINAL pipeline hit rather than the (now excerpt-
+                # cut) `Result`, or `_completeness_for` could never show
+                # `preview N/M` for anything but entities.
+                body_length=(
+                    self._entity_full_length(r.uri, page_cache)
+                    if r.class_name == "entity_page" else h.body_length
+                ),
+            )
+            for r, h in zip(results, kept_pipeline_hits)
+        ]
+        capped_hits = apply_per_source_cap(enriched_hits)
+
+        # Hits whose rendered content is already visible in the caller's
+        # hot layer — or whose page the pinned block renders whole (the
+        # always_on guidance) — collapse to pointer lines. Containment-checked
+        # per ref — a hit carrying body beyond the prefix excerpt passes
+        # through whole. The principal's page is pinned but rendered with its
+        # body capped, so it is excluded from the whole-rendered set and its
+        # hits go through containment like any other page. A hit the turn's
+        # automatic prefetch already fenced into the user message counts as
+        # rendered whole too — the block carries the same sectioned output
+        # this call would print. Disabled for subagents (their prompt has no
+        # hot layer; see __init__).
+        in_context_hits: list[SectionedHit] = []
+        if self._context_dedup:
+            from durin.memory.context_dedup import split_in_context
+            from durin.memory.principal import (
+                resolve_owner_principal,
+                resolve_pinned_refs,
+            )
+            refs = resolve_pinned_refs(self._workspace)
+            principal = resolve_owner_principal(self._workspace)
+            capped_hits, in_context_hits = split_in_context(
+                self._workspace, capped_hits,
+                pinned_refs=refs,
+                whole_refs=(refs - {principal}) | _turn_prefetch_refs.get(),
+            )
+
+        kept_uris = {h.uri for h in capped_hits}
+        results = [r for r in results if r.uri in kept_uris]
+        capped_hits = self._attach_derived_from(capped_hits, page_cache)
+        capped_hits = self._attach_reference_bodies(capped_hits)
+        # The per-response budget is a warm-tier concern only — `cold`
+        # explicitly means "full bodies" (see the tool description), so it
+        # stays unbounded.
+        sectioned_rendered = render_sectioned(
+            capped_hits,
+            max_chars=warm_max_chars if level == "warm" else None,
+        )
+        if in_context_hits:
+            from durin.memory.context_dedup import (
+                render_in_context_section,
+            )
+            pointer_section = render_in_context_section(in_context_hits)
+            sectioned_rendered = (
+                f"{sectioned_rendered}\n\n{pointer_section}"
+                if sectioned_rendered else pointer_section
+            )
+
+        # Strategy / ranking labels for downstream telemetry consumers
+        # that pattern-match. We derive them from what the pipeline
+        # actually used so the labels reflect reality, not heuristics.
+        if pipeline_result.vector_count and pipeline_result.lexical_count:
+            strategy = "hybrid"
+        elif pipeline_result.vector_count:
+            strategy = "vector"
+        elif pipeline_result.lexical_count:
+            strategy = "lexical"
+        else:
+            strategy = "grep"
+        ranking = "default"
+        ai = self._get_alias_index()
+        if ai is not None and extract_query_entities(query, ai):
+            ranking = "entity_aware"
+
+        # All diagnostic fields are already computed above; this is a
+        # payload change, not new instrumentation.
+        total_candidates = (
+            pipeline_result.vector_count + pipeline_result.lexical_count
+        )
+        recall_payload: dict[str, Any] = {
+            "query": query,
+            "scope": scope,
+            "level": level,
+            "result_count": len(results),
+            "strategy": strategy,
+            "duration_ms": duration_ms,
+            "total_candidates": total_candidates,
+            "skill_result_count": sum(1 for r in results if r.kind == "skill"),
+            "keywords": keywords,
+            "in_context_deduped": len(in_context_hits),
+            "rendered_chars": len(sectioned_rendered),
+        }
+        if pipeline_result.recovered_from:
+            recall_payload["recovered_from"] = list(
+                pipeline_result.recovered_from,
+            )
+            recall_payload["recovery_duration_ms"] = (
+                pipeline_result.recovery_duration_ms
+            )
+        emit_tool_event("memory.recall", recall_payload)
+        if kinds == "skill" and not results:
+            from durin.memory.paths import walk_skills
+            had_candidate = any(True for _ in walk_skills(self._workspace))
+            emit_tool_event(
+                "memory.skill_miss",
+                {
+                    "query": query,
+                    "result_count": 0,
+                    "had_skill_candidate": had_candidate,
+                },
+            )
+        response: dict[str, Any] = {
+            "total": len(results),
+            "strategy": strategy,
+            "ranking": ranking,
+            "sectioned_rendered": sectioned_rendered,
+        }
+        if self._include_raw_results:
+            response["results"] = [r.to_dict() for r in results]
+        if in_context_hits:
+            response["already_in_context"] = [
+                h.uri for h in in_context_hits
+            ]
+        # Surface degraded-run info when the pipeline recovered from a
+        # source failure. Omitted on clean runs to keep the response
+        # shape minimal.
+        if pipeline_result.recovered_from:
+            response["recovered_from"] = list(pipeline_result.recovered_from)
+            response["recovery_duration_ms"] = (
+                pipeline_result.recovery_duration_ms
+            )
+        return response
 
     def _run_archive_scope(
         self, query: str, *, limit: int,
@@ -1029,6 +1087,8 @@ class MemorySearchTool(Tool):
 
     def _sectioned_to_result(
         self, hit: Any, *, level: str,
+        cache: dict[str, "EntityPage | None"],
+        warm_excerpt_chars: int = 600,
     ) -> Optional[Result]:
         """Convert a :class:`durin.memory.sectioned_output.SectionedHit`
         into a legacy :class:`Result` for the tool's response shape.
@@ -1037,6 +1097,12 @@ class MemorySearchTool(Tool):
           carries snippet only).
         - Maps `entity` → `class_name='entity_page'` to preserve the
           canonical vs fragment marker rendering contract.
+        - At warm level, every class's `summary` is cut to
+          `warm_excerpt_chars` (the entity branch already cut its own
+          composition this way; every other class now does too — see
+          `MemorySearchConfig.warm_excerpt_chars`).
+        - `cache` memoises parsed entity pages for the caller's
+          `execute()` call — see `_load_entity_page`.
         """
         # Derive the legacy class_name + uri + source shape.
         hit_path = hit.path or ""
@@ -1090,19 +1156,31 @@ class MemorySearchTool(Tool):
             source = "memory"
 
         entities = (hit.uri,) if class_name == "entity_page" else ()
-        # Prefer the body the search pipeline already carries (populated
-        # from the LanceDB row). Falls back to disk read via
-        # `_enrich_body` only when the vector index didn't have the row
-        # (e.g. grep-only path).
+        # Prefer the pipeline's materialised summary (authoritative Dream
+        # summary, or the body-prefix fallback `VectorIndex` computes) over
+        # the bare snippet/headline — see the "never falls back to a
+        # 60-char headline" comment on SectionedHit construction in
+        # search_pipeline.py. Grep-only hits (no vector/lexical metadata)
+        # carry no summary, so this still falls back to the snippet.
         carried_body = getattr(hit, "body", "") or ""
-        summary = hit.snippet or ""
-        body = carried_body if level == "cold" else ""
+        summary = hit.summary or hit.snippet or ""
+        if level == "cold":
+            body = carried_body
+            # Clear summary so `_render_block`'s `summary > body >
+            # snippet` preference falls through to `body` — filled in
+            # below via `_enrich_body` with the true full text from
+            # disk. Leaving the (short) summary here would shadow it
+            # and cold would render the same short text as warm.
+            summary = ""
+        else:
+            body = ""
+            summary = summary[:warm_excerpt_chars]
         if class_name == "entity_page":
             # The vector index stores an entity's summary as its name +
             # aliases only (`VectorIndex.upsert_entity_page`) — replace it
             # with the fuller composition so a hit on the page actually
             # tells the model something about it without a drill.
-            page = self._load_entity_page(uri)
+            page = self._load_entity_page(uri, cache)
             if page is not None:
                 if level == "cold":
                     # `_render_block` prefers `summary` over `body`
@@ -1113,7 +1191,7 @@ class MemorySearchTool(Tool):
                     summary = full
                     body = full
                 else:
-                    summary = _entity_composition(page, excerpt_chars=_ENTITY_EXCERPT_CHARS)
+                    summary = _entity_composition(page, excerpt_chars=warm_excerpt_chars)
         result = Result(
             source=source,
             uri=uri,

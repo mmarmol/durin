@@ -28,11 +28,13 @@ def _h(
     score: float = 1.0,
     ts: str = "2026-05-26T10:00:00",
     snippet: str = "",
+    summary: str = "",
     ingest_id: str | None = None,
 ) -> SectionedHit:
     return SectionedHit(
         uri=uri, type=type_, path=path or f"memory/{type_}/{uri}.md",
-        score=score, ts=ts, snippet=snippet, ingest_id=ingest_id,
+        score=score, ts=ts, snippet=snippet, summary=summary,
+        ingest_id=ingest_id,
     )
 
 
@@ -293,3 +295,85 @@ class TestSourcesLine:
             path="memory/entities/topic/x.md", score=1.0, summary="X",
         )
         assert "Sources:" not in render_sectioned([hit])
+
+
+# ---------------------------------------------------------------------------
+# Task 2 (2026-09-08): `max_chars` bounds a rendering's total size — once
+# the running length would exceed it, every remaining hit (this section and
+# any section still to come) renders as a one-line headline pointer instead
+# of a full block. A hit's own block is never partially cut.
+# ---------------------------------------------------------------------------
+
+
+class TestMaxCharsBudget:
+    def test_hit_beyond_budget_renders_as_headline_pointer(self) -> None:
+        hit1 = _h("e1", "episodic", snippet="first hit")
+        hit2 = _h("e2", "episodic", snippet="second hit", score=0.9)
+        # Exactly enough budget for hit1 alone (header + its block) —
+        # derived from the real renderer so this test doesn't hard-code
+        # marker/joiner formatting.
+        budget = len(render_sectioned([hit1]))
+
+        out = render_sectioned([hit1, hit2], max_chars=budget)
+
+        assert "first hit" in out
+        assert "- second hit (e2; drill for the body)" in out
+        # hit2 never got a full FRAGMENT block of its own.
+        assert out.count("=== FRAGMENT:") == 1
+
+    def test_headline_pointer_falls_back_to_uri_when_snippet_empty(self) -> None:
+        hit1 = _h("e1", "episodic", snippet="keeps this one whole")
+        hit2 = _h("e2", "episodic", snippet="", score=0.9)
+        budget = len(render_sectioned([hit1]))
+
+        out = render_sectioned([hit1, hit2], max_chars=budget)
+
+        assert "- e2 (e2; drill for the body)" in out
+
+    def test_never_truncates_a_single_oversized_block(self) -> None:
+        """A block that alone would blow the budget renders as a pointer,
+        never a partial/cut slice of its body."""
+        huge = _h("e1", "episodic", snippet="short headline",
+                   summary="s" * 3000)
+
+        out = render_sectioned([huge], max_chars=50)
+
+        assert ("s" * 3000) not in out
+        assert "- short headline (e1; drill for the body)" in out
+
+    def test_budget_ratchet_carries_across_sections(self) -> None:
+        """Once the budget trips in one section, hits in a LATER section
+        also degrade to pointers, even though individually small —
+        the config field docs this as a one-way switch, not a per-hit
+        re-check."""
+        canonical_hit = _h("person:m", "entity", snippet="marcelo")
+        fragment_hit = _h("e1", "episodic", snippet="a small fragment")
+        budget = len(render_sectioned([canonical_hit]))
+
+        out = render_sectioned([canonical_hit, fragment_hit], max_chars=budget)
+
+        assert "marcelo" in out
+        assert "=== FRAGMENT:" not in out
+        assert "- a small fragment (e1; drill for the body)" in out
+        # The section header still appears even though every hit in it
+        # is a pointer — structure/order stays intact for the LLM.
+        assert "## Fragment" in out
+
+    def test_twelve_hits_all_represented_under_tight_budget(self) -> None:
+        """Task 2 acceptance scenario: many ~1000-char hits, a 4000-char
+        budget — every hit still appears (full block or pointer), not
+        all of them get full blocks, and the full-block portion respects
+        the budget (pointer lines are cheap and allowed beyond it)."""
+        hits = [
+            _h(f"e{i}", "episodic", snippet=f"headline {i}",
+               score=1.0 - i * 0.01, summary="x" * 1000)
+            for i in range(12)
+        ]
+
+        out = render_sectioned(hits, max_chars=4000)
+
+        for i in range(12):
+            assert f"e{i}" in out
+        assert "drill for the body" in out
+        assert out.count("=== FRAGMENT:") < 12
+        assert len(out) < 4000 + 12 * 80

@@ -382,6 +382,8 @@ passes (extract/refine/skill), background file watching, and health checks. See
 | `search.cross_encoder.batch_size` | `32` | Reranker batch size |
 | `search.cross_encoder.top_n` | `10` | Retained for signature compatibility; the rerank reorders candidates rather than trimming them |
 | `search.sectioning.max_per_source` | `3` | Max hits from the same ingested document surviving sectioning |
+| `search.warm_excerpt_chars` | `600` | Warm-level per-hit summary cut, in characters; cost: a higher value shows more of each hit's content at the price of more tokens per hit |
+| `search.warm_max_chars` | `8000` | Total budget for one warm rendering, in characters; past it the remaining hits collapse to a one-line headline pointer each instead of a full block; cost: a higher value lets more hits render in full at the price of a larger response |
 
 **`memory.library`** — the always-on Library awareness catalog in the pinned block:
 

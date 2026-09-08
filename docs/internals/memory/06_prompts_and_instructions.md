@@ -352,6 +352,8 @@ The marker names the previous session's summary file stem, so the agent can reac
 | `memory.dream.max_seconds_per_run` | `600` | Wall-clock cap for the extract pass; it yields after the current session and the per-session cursor resumes on the next trigger |
 | `memory.search.cross_encoder.enabled` | `false` | Enables the cross-encoder reranker (displayed in onboarding as an opt-in) |
 | `memory.search.cross_encoder.model` | `BAAI/bge-reranker-base` | Cross-encoder model for reranking |
+| `memory.search.warm_excerpt_chars` | `600` | Per-hit summary cut at `level=warm`, applied to every result class |
+| `memory.search.warm_max_chars` | `8000` | Per-response rendering budget at `level=warm`; hits past it render as headline pointers |
 | `memory.prefetch.enabled` | `true` | Runs the automatic per-turn search (§5.7) and fences its hits into the message |
 | `memory.prefetch.limit` | `3` | Hits the prefetch asks the tool for |
 | `memory.prefetch.max_chars` | `2500` | Cut applied to the rendered hits before fencing |
