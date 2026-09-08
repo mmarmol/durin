@@ -101,6 +101,13 @@ class ActivityCluster(Vertical):
         self._tool_count = max(0, self._tool_count - 1)
         self._update_header()
 
+    def is_empty(self) -> bool:
+        """True once every reasoning/tool step this cluster ever held has
+        been removed again — used to drop the cluster itself instead of
+        leaving a bordered shell with nothing inside (e.g. an empty memory
+        recall that was a turn's only activity)."""
+        return self._tool_count == 0 and self._reasoning_count == 0
+
     def finalize(self) -> None:
         """Mark the cluster as done — switch header to summary, collapse."""
         self._finalized = True

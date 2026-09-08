@@ -184,16 +184,28 @@ class ToolCallBubble(Vertical):
                 yield Static("✎ Refine", id="tc-plan-refine", classes="tc-option")
 
     def on_mount(self) -> None:
-        """Render the body once mounted, from the start args (result/error
-        replace it later via `update_from_event`).
+        """Render the body once mounted.
 
         `#tc-body` isn't queryable from inside `compose()` — Textual
         attaches a widget's yielded children only after `compose()`
         returns, so calling `_update_body` there would hit the `query_one`
         lookup failure `_rerender_body_with_truncation` swallows and
         silently no-op. Mounting is complete by the time this runs.
+
+        A caller can also call `update_from_event` before this runs — it
+        constructs the bubble from an `end` event and updates it from that
+        same event in the same tick whenever there is no prior `start`
+        bubble for the call_id (an end-only tool frame, or TUI history
+        replay). `#tc-body` isn't attached yet at that point either, so
+        `update_from_event` only cached the result renderable. Render that
+        cache instead of the running body, or the cached result is
+        silently replaced by a running-state placeholder that never
+        updates again.
         """
-        self._update_body(self._render_running_body())
+        if self._last_full_renderable is None:
+            self._update_body(self._render_running_body())
+        else:
+            self._rerender_body_with_truncation()
 
     def on_click(self, event) -> None:  # noqa: ANN001 — Textual Click event
         # Clicks on the right-side controls trigger the matching action;
@@ -363,9 +375,12 @@ class ToolCallBubble(Vertical):
             # The header reports how many memories came back, not the
             # query it searched for — the query is already visible in the
             # user's own turn above, and the hit count is the one thing
-            # the header doesn't already show.
+            # the header doesn't already show. `hits` is only known once
+            # the search ends; while it's absent (the running `start`
+            # phase) the header must not claim a result that hasn't
+            # arrived yet.
             hits = a.get("hits")
-            return f"{hits} memories recalled" if isinstance(hits, int) else "memories recalled"
+            return f"{hits} memories recalled" if isinstance(hits, int) else "recalling…"
         for key in (
             "path", "file_path", "filename", "url", "query",
             "command", "pattern", "question", "name",

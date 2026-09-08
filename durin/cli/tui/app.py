@@ -1,8 +1,8 @@
 """DurinApp — Textual TUI for durin.
 
-D5.3 wires the AgentLoop bus into the TUI: user submissions publish
-inbound messages; a background worker drains outbound messages and
-streams them into the ChatView.
+Wires the AgentLoop bus into the TUI: user submissions publish inbound
+messages; a background worker drains outbound messages and streams them
+into the ChatView.
 
 Metadata flags consumed off OutboundMessage.metadata, matching the
 legacy CLI's ``_consume_outbound`` semantics so behaviour stays
@@ -609,12 +609,20 @@ class DurinApp(App[None]):
                         bubble.remove()
                     except Exception:  # noqa: BLE001
                         pass
+                    # If that was the cluster's last child, drop the
+                    # cluster too instead of leaving a bordered shell with
+                    # nothing inside it.
+                    if isinstance(parent, ActivityCluster) and parent.is_empty():
+                        if self._active_cluster is parent:
+                            self._active_cluster = None
+                        try:
+                            parent.remove()
+                        except Exception:  # noqa: BLE001
+                            pass
                 return
 
         if phase == "start" or call_id not in self._tool_bubbles:
             try:
-                from durin.cli.tui.widgets import ToolCallBubble
-
                 bubble = ToolCallBubble(event)
                 cluster = self._get_or_create_cluster()
                 if cluster is not None:

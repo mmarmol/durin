@@ -168,6 +168,46 @@ async def test_history_tool_message_becomes_tool_call_bubble() -> None:
 
 
 @pytest.mark.asyncio
+async def test_history_tool_message_shows_its_result_not_its_arguments() -> None:
+    """Replay mounts the bubble from the `end` event and calls
+    update_from_event() on it in the same tick (app.py:331-341) — the same
+    mount-before-attach race _render_tool_event hits for an end-only call.
+    The restored bubble must show the tool's result, not fall back to the
+    running/arguments body."""
+    from durin.cli.tui.widgets import ToolCallBubble
+
+    messages = [
+        {"role": "user", "content": "find needle"},
+        {
+            "role": "assistant", "content": "",
+            "tool_calls": [{
+                "id": "call_g1", "type": "function",
+                "function": {
+                    "name": "grep",
+                    "arguments": _json.dumps({"pattern": "needle"}),
+                },
+            }],
+        },
+        {
+            "role": "tool", "tool_call_id": "call_g1", "name": "grep",
+            "content": "file.py:10: found the needle",
+        },
+        {"role": "assistant", "content": "Found it."},
+    ]
+    loop = _fake_agent_loop(messages)
+    app = DurinApp(agent_loop=loop, cli_chat_id="histtcb4")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        chat = app.query_one(ChatView)
+        bubbles = list(chat.query(ToolCallBubble))
+        assert len(bubbles) == 1
+        from tests.cli.tui.test_tool_call_bubble import _body_plain
+        body = _body_plain(bubbles[0])
+        assert "file.py:10: found the needle" in body
+        assert '"pattern"' not in body
+
+
+@pytest.mark.asyncio
 async def test_history_assistant_with_only_tool_calls_has_no_empty_bubble() -> None:
     """Empty-content assistant messages (just tool_calls) must NOT produce
     a stray empty MessageBubble — the tool result bubbles cover them."""

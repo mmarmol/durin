@@ -329,15 +329,15 @@ panel.
 
 **Tool chips.** The thread's trace row also carries non-clickable chips for tool
 events that have nothing to open. The automatic per-turn memory recall is one of
-them: the loop announces a synthetic `memory_prefetch` tool event before running
-the search and again once it completes, both under the same `call_id`. The chip
-reads `🧠 recalling memory…` while the search is in flight, becomes a `🧠 N
-memories recalled` chip once it ends, and disappears entirely when the search
-found nothing — an empty recall is not worth a permanent line in the transcript.
-The end event carries the recalled refs in its result. Chip labels are localised
-through the `message.chips` catalog block (one entry per chipped tool, in each
-locale's `common.json`), not hard-coded — only the emoji prefix and the raw
-argument values (channel names, action verbs, ids) stay unlocalized.
+them, rendered from `memory_prefetch` progress events sharing one `call_id`: a
+`start` frame renders a `🧠 recalling memory…` chip while the search is in
+flight, and an `end` frame renders a `🧠 N memories recalled` chip, or nothing
+at all when it reports zero hits — an empty recall is not worth a permanent
+line in the transcript. The end event carries the recalled refs in its result.
+Chip labels are localised through the `message.chips` catalog block (one entry
+per chipped tool, in each locale's `common.json`), not hard-coded — only the
+emoji prefix and the raw argument values (channel names, action verbs, ids)
+stay unlocalized.
 
 **Work strip.** The panel's collapsed representation: a slim status line docked
 directly above the composer, rendered only while the panel is closed and there
@@ -577,6 +577,11 @@ turn and the active agent mode.
 **Edit affordance.** Each user message carries a dim edit hint; clicking the
 message reloads its text into the composer input for revision. This is a refill
 only — it does not truncate history or automatically resend.
+
+**Tool call bubbles.** The memory-recall bubble's header shows the hit count
+once the search ends, an empty recall leaves no bubble at all, and the
+enclosing activity cluster's tool count — and the cluster itself, if that
+bubble was its only child — follows suit.
 
 **Empty-thread landing.** When the thread is empty, the chat area shows only
 the durin logo/banner — no suggestion chips or canned prompts. A
