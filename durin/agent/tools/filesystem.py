@@ -474,15 +474,21 @@ class ReadFileTool(_FsTool):
             else:
                 result += f"\n\n(End of file — {total} lines total)"
                 truncated = False
-            # Measured before the notes are appended: `result_chars` reports
+            # Measured before the notes are added: `result_chars` reports
             # the file content that was returned, and `memory_notes` reports
             # what artifact recall added on top of it.
             result_chars = len(result)
             notes = self._memory_notes(fp)
             if notes:
-                result += (
-                    "\n\nMemory notes about this file (memory_drill a uri for the full body):\n"
+                # The notes lead the result instead of trailing it: a read of a
+                # long file overruns the agent loop's per-result character cap,
+                # and the loop keeps the head of the result and drops the tail —
+                # a trailing block would be cut off before the model saw it.
+                result = (
+                    "Memory notes about this file (memory_drill a uri for the full body):\n"
                     + "\n".join(notes)
+                    + "\n\n"
+                    + result
                 )
             self._file_states.record_read(fp, offset=offset, limit=limit)
             self._emit("tool.read_file", {

@@ -428,9 +428,12 @@ Slash commands, workflow nodes, subagents, and every session kind the runtime tr
 | `interval_seconds` | `900` | Probe interval in seconds (min 60, max 86400) |
 
 **`memory.artifact_recall`** — memory notes on file reads and reference drills:
-a `read_file` text result ends with the memory entries that mention the file
+a `read_file` text result opens with the memory entries that mention the file
 (lexical lookup only, no embedding), and a `memory_drill` on a `reference:<slug>`
-document ends with the entities distilled from it:
+document opens with the entities distilled from it. Both blocks lead the result
+rather than trailing it because a result over the agent loop's per-result
+character cap is truncated from the tail, which would drop a trailing block
+before the model read it:
 
 What it costs: roughly a millisecond on a text `read_file` — one lexical index
 lookup, no embedding call and no LLM call — whether or not it finds anything. A
@@ -440,8 +443,8 @@ rare, deliberate action. Turn it off with `memory.artifact_recall.enabled: false
 
 | Key | Default | Meaning |
 |---|---|---|
-| `enabled` | `true` | Append memory notes about a file to `read_file` results and distilled entities to reference drills |
-| `max_notes` | `3` | Notes appended to one `read_file` result |
+| `enabled` | `true` | Lead `read_file` results with memory notes about the file, and reference drills with the entities distilled from the document |
+| `max_notes` | `3` | Notes added to one `read_file` result |
 
 ---
 

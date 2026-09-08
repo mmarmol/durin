@@ -758,12 +758,14 @@ class MemoryPrefetchConfig(Base):
 
 
 class MemoryArtifactRecallConfig(Base):
-    """Memory keyed by the artifact in use: ``read_file`` ends with the memory
+    """Memory keyed by the artifact in use: ``read_file`` opens with the memory
     entries that mention the file (lexical lookup, milliseconds) and a
-    ``memory_drill`` on a reference lists the entities distilled from it."""
+    ``memory_drill`` on a reference opens with the entities distilled from it.
+    Both blocks lead their result because an over-cap tool result is truncated
+    from the tail, which would drop a trailing block."""
 
-    enabled: bool = Field(default=True, description="Append memory notes about a file to read_file results and distilled entities to reference drills")
-    max_notes: int = Field(default=3, ge=1, le=10, description="Notes appended to one read_file result")
+    enabled: bool = Field(default=True, description="Lead read_file results with memory notes about the file, and reference drills with the entities distilled from the document")
+    max_notes: int = Field(default=3, ge=1, le=10, description="Notes added to one read_file result")
 
 
 class MemoryConfig(Base):

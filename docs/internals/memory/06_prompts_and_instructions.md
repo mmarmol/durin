@@ -297,7 +297,7 @@ The hits inside carry the ordinary structural markers of §5.6, so the drill and
 
 **Compaction.** The block is part of the wire copy, so the provider counts it in that turn's prompt tokens, and the compaction estimate — anchored on those provider counts — carries it too, even though the block itself is never replayed.
 
-**Telemetry.** BUILD runs outside the per-run telemetry binding, so the loop binds the session logger around the tool call (the tool's own `memory.recall` event lands with it) and emits `memory.prefetch` through the session logger directly. The turn's `turn.memory_usage` rollup carries `prefetch_hits`. The block is also its own line in the turn's `context.composition` breakdown — `memory_prefetch` among the volatile blocks, excluded from the current message's count — so `/status` and the footer attribute it to memory rather than to what the user wrote.
+**Telemetry.** BUILD runs outside the per-run telemetry binding, so the loop binds the session logger around the tool call (the tool's own `memory.recall` event lands with it) and emits `memory.prefetch` through the session logger directly. The turn's `turn.memory_usage` rollup carries `prefetch_hits`. The block is also its own line in the turn's `context.composition` breakdown — `memory_prefetch` among the volatile blocks, excluded from the current message's count — so `/status` and the footer attribute it to memory rather than to what the user wrote. That composition row is emitted from the same BUILD, outside the binding, so it takes the same route: `ContextBuilder._emit_composition_event` falls back to the session logger resolved from `session_key` whenever no logger is bound. Without the fallback the only turn-shaped row would be lost and the surfaces would show the consolidator's probe instead.
 
 **Announcement.** When the search finds hits, the recall is announced to the user's surface as a synthetic `memory_prefetch` tool event (chip in the webui, bubble in the TUI).
 
@@ -362,8 +362,8 @@ The marker names the previous session's summary file stem, so the agent can reac
 | `memory.continuity.channels` | `["websocket", "cli"]` | Channels whose sessions belong to one person, so "the previous session" is unambiguously the same person's |
 | `memory.continuity.max_chars` | `2000` | Tail of the previous summary carried in the block; a longer summary is cut from the front |
 | `memory.continuity.max_turns` | `3` | Turns of the fresh session that carry the block before it drops out |
-| `memory.artifact_recall.enabled` | `true` | Appends memory notes about a file to `read_file` results, and the entities distilled from a reference document to `memory_drill` results |
-| `memory.artifact_recall.max_notes` | `3` | Notes appended to one `read_file` result |
+| `memory.artifact_recall.enabled` | `true` | Leads `read_file` results with memory notes about the file, and `memory_drill` results with the entities distilled from the reference document |
+| `memory.artifact_recall.max_notes` | `3` | Notes added to one `read_file` result |
 
 **CLI surfaces:**
 - `durin memory dream` — run the core consolidation passes immediately (bypasses `ReactiveDreamGate`)

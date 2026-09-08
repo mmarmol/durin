@@ -350,8 +350,8 @@ For deeper coverage of individual subsystems, see the sibling docs:
 | `memory.continuity.channels` | `["websocket", "cli"]` | Channels whose sessions belong to one person; a fresh session there inherits the newest other session's summary. |
 | `memory.continuity.max_chars` | `2000` | Tail of the previous summary shown, in characters. |
 | `memory.continuity.max_turns` | `3` | Turns of the fresh session that carry the previous summary before it drops out. |
-| `memory.artifact_recall.enabled` | `true` | Append memory notes about a file to `read_file` results, and the entities distilled from a reference to its drill. |
-| `memory.artifact_recall.max_notes` | `3` | Notes appended to one `read_file` result. |
+| `memory.artifact_recall.enabled` | `true` | Lead `read_file` results with memory notes about the file, and a reference drill with the entities distilled from it. |
+| `memory.artifact_recall.max_notes` | `3` | Notes added to one `read_file` result. |
 | `memory.file_watcher.enabled` | `true` | Reactive re-indexing when `.md` files under `memory/` are modified outside the agent (vim, git merge). |
 | `memory.health_check.enabled` | `true` | Periodic consistency probe between the markdown source and the derived indices. |
 | `memory.health_check.interval_seconds` | `900` | How often the health check probe runs. |
