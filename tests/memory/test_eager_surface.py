@@ -76,6 +76,15 @@ def test_from_metadata_returns_none_for_wrong_field_types():
     assert EagerSnapshot.from_metadata(dict(base, frozen_at=None)) is None
 
 
+def test_from_metadata_returns_none_for_unparseable_frozen_at():
+    # A hand-edited sidecar can carry a frozen_at that is a string but not a
+    # valid ISO-8601 timestamp. from_metadata must discard it like any other
+    # shape error rather than constructing a snapshot that later blows up
+    # snapshot_is_stale's datetime.fromisoformat call.
+    base = _snapshot().to_metadata()
+    assert EagerSnapshot.from_metadata(dict(base, frozen_at="not-a-timestamp")) is None
+
+
 # ---------------------------------------------------------------------------
 # snapshot_is_stale
 # ---------------------------------------------------------------------------
@@ -99,3 +108,14 @@ def test_snapshot_is_stale_true_past_the_refresh_window():
     snap = _snapshot(frozen_at=frozen_at.isoformat())
     now = frozen_at + timedelta(minutes=15)
     assert snapshot_is_stale(snap, refresh_after_min=10, now=now) is True
+
+
+def test_snapshot_is_stale_true_for_unparseable_frozen_at():
+    # from_metadata rejects a garbage frozen_at before a snapshot is ever
+    # built (see test_from_metadata_returns_none_for_unparseable_frozen_at),
+    # but snapshot_is_stale must not trust that as its only guard: given a
+    # snapshot built some other way with a bad frozen_at, it must still
+    # never raise — it treats the parse failure as stale so the caller
+    # falls back to a live render instead of the prompt build crashing.
+    snap = _snapshot(frozen_at="not-a-timestamp")
+    assert snapshot_is_stale(snap, refresh_after_min=5) is True

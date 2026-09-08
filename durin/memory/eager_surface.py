@@ -87,6 +87,10 @@ class EagerSnapshot:
             return None
         if not isinstance(turn, int) or not isinstance(frozen_at, str):
             return None
+        try:
+            datetime.fromisoformat(frozen_at)
+        except (ValueError, TypeError):
+            return None
         return cls(pinned=pinned, hot=hot, refs=frozenset(refs), turn=turn, frozen_at=frozen_at)
 
 
@@ -96,10 +100,19 @@ def snapshot_is_stale(snap: EagerSnapshot, *, refresh_after_min: int, now: datet
     ``refresh_after_min <= 0`` means "session boundaries only" — the
     snapshot never goes stale by age alone, matching
     ``MemoryEagerSurfaceConfig.refresh_after_min``'s ``0`` default.
+
+    A ``frozen_at`` that fails to parse is treated as stale rather than
+    raised: ``from_metadata`` already keeps a snapshot with a bad
+    ``frozen_at`` from being constructed, but this is a second, independent
+    guard so this function itself never raises regardless of how the
+    snapshot it's given was built.
     """
     if refresh_after_min <= 0:
         return False
     reference = now if now is not None else datetime.now(timezone.utc)
-    frozen_at = datetime.fromisoformat(snap.frozen_at)
+    try:
+        frozen_at = datetime.fromisoformat(snap.frozen_at)
+    except (ValueError, TypeError):
+        return True
     age_minutes = (reference - frozen_at).total_seconds() / 60
     return age_minutes > refresh_after_min
