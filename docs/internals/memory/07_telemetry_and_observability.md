@@ -84,7 +84,7 @@ flowchart TD
         HC --> IR[memory.index.rebuild\non durin reindex]
     end
 
-    subgraph TurnRollup["Per-turn rollup"]
+    subgraph PerTurn["Per-turn memory events"]
         PB[AgentLoop._state_build]
         PB --> PF[memory.prefetch\nhits or skipped reason]
         TR[AgentLoop._state_save]
@@ -246,9 +246,13 @@ The following aggregations are the key operational signals. `durin memory stats`
 | Metric | Source | Healthy range |
 |---|---|---|
 | `recall_p95_ms` | `memory.recall.duration_ms` | < 130 ms (cross-encoder OFF), < 900 ms (ON) |
+| `prefetch_p95_ms` | `memory.prefetch.duration_ms` | same range as `recall_p95_ms`, and well under `memory.prefetch.timeout_s` |
+| `prefetch_timeout_rate` | `memory.prefetch` rows with `skipped == timeout` / rows | near 0; a sustained rate means the backoff is eating the prefetch |
 | `recall_recovery_rate` | `memory.recall.recovered_from != null` / total | < 1% |
 | `silent_miss_rate` | `turn.memory_usage` rows with `search_calls == 0` and `prefetch_hits == 0` / turns with memory-relevant queries | context-dependent; baseline with bench |
 | `strategy_distribution` | `memory.recall.strategy` | mostly `hybrid`; `grep` fallback rare |
+
+`recall_p95_ms` mixes both callers: the automatic prefetch runs the same tool and emits the same `memory.recall` row as a search the model asked for, so the recall percentiles now describe every search, not only the model's. `prefetch_p95_ms` is the per-turn latency the user actually waits for.
 
 ### Cold-path / dream
 

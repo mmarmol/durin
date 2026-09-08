@@ -1410,7 +1410,8 @@ class Consolidator:
                     source,
                     len(chunk),
                 )
-                summary, tags = await self.archive(self._unsummarized(session, chunk))
+                pending = self._unsummarized(session, chunk)
+                summary, tags = await self.archive(pending)
                 # Advance the cursor either way: on success the chunk was
                 # summarized; on failure archive() already raw-archived it as
                 # a breadcrumb. Re-archiving the same chunk on the next call
@@ -1422,9 +1423,13 @@ class Consolidator:
                 self.sessions.save(session)
                 rounds_run += 1
                 if not summary:
-                    # LLM is degraded — stop hammering it this call;
-                    # the next invocation can retry a fresh chunk.
-                    exit_reason = "summary_failed"
+                    # No summary has two causes. An empty chunk means the
+                    # nightly session-summary pass already covered this span,
+                    # so archive() never called an LLM and nothing failed —
+                    # the cursor moved and the work is done. Otherwise the LLM
+                    # is degraded: stop hammering it this call and let the next
+                    # invocation retry a fresh chunk.
+                    exit_reason = "already_summarized" if not pending else "summary_failed"
                     break
 
                 try:

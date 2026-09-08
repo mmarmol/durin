@@ -773,3 +773,51 @@ class TestCompactorSkipsSummarizedSpan:
         assert "fresh file contents" in archived[0]
         assert "old question one" not in archived[0]
         assert "old answer two" not in archived[0]
+
+    @pytest.mark.asyncio
+    async def test_token_path_skips_a_span_the_dream_covered_without_calling_the_llm(
+        self, tmp_path: Path, monkeypatch,
+    ) -> None:
+        """The token path shares the overlap check with the replay path. When
+        the dream's cursor covers the whole round, there is nothing to
+        summarize: no LLM call, and the run reports a clean skip rather than a
+        failed summary."""
+        import durin.agent.memory as memory_module
+        from durin.memory.session_summary_dream import set_summary_cursor
+
+        events: list[tuple[str, dict]] = []
+        monkeypatch.setattr(
+            memory_module, "current_telemetry",
+            lambda: type("_Sink", (), {"log": lambda _s, t, d: events.append((t, dict(d)))})(),
+        )
+
+        loop = TestNewCommandArchival._make_loop(tmp_path)
+        loop.consolidator.context_window_tokens = 200
+        loop.consolidator.max_completion_tokens = 20
+        loop.consolidator._SAFETY_BUFFER = 0
+        session = loop.sessions.get_or_create("cli:test")
+        for i in range(4):
+            session.add_message("user", f"question {i}")
+            session.add_message("assistant", f"answer {i}")
+        loop.sessions.save(session)
+        # The nightly pass already summarized every message the round can cut.
+        set_summary_cursor(loop.sessions._get_session_path("cli:test"), len(session.messages))
+
+        archive_calls: list[list[dict]] = []
+        real_archive = loop.consolidator.archive
+
+        async def _spy(messages):
+            archive_calls.append(list(messages))
+            return await real_archive(messages)
+
+        loop.consolidator.archive = _spy  # type: ignore[method-assign]
+        loop.consolidator.estimate_session_prompt_tokens = lambda _s, **_kw: (500, "test")
+
+        await loop.consolidator.maybe_consolidate_by_tokens(session)
+
+        # archive() ran on an empty remainder, so no provider call was made.
+        assert archive_calls == [[]]
+        assert loop.provider.chat_with_retry.await_count == 0
+        done = [d for t, d in events if t == "compaction.completed"]
+        assert done and done[0]["exit_reason"] == "already_summarized"
+        assert done[0]["rounds"] == 1

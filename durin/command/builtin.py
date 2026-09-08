@@ -464,8 +464,10 @@ async def _archive_closed_session(
 ) -> None:
     """File the conversation a ``/new`` just closed as its own record.
 
-    The record is ``<key>:closed:<timestamp>`` in the session-summary store:
-    indexed like any summary, so ``memory_search`` reaches it, but never
+    The record key comes from ``closed_record_key`` — the sanitized session
+    key cut to its first 40 characters plus ``_closed_<timestamp>``, so two
+    closes of one long key cannot collide. It lands in the session-summary
+    store: indexed like any summary, so ``memory_search`` reaches it, but never
     replayed — the live key's archived-context slot was cleared in
     ``cmd_new``, so the next conversation on this key starts clean. It holds
     the archive of the messages that were still unconsolidated plus

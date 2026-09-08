@@ -187,8 +187,9 @@ class CompactionCompletedEvent(TypedDict):
 
     ``exit_reason`` says why the round loop stopped: ``target_reached``,
     ``no_boundary`` (ran out of user-turn boundaries to cut on),
-    ``max_rounds``, ``summary_failed``, ``empty_chunk`` or
-    ``estimate_unavailable``."""
+    ``max_rounds``, ``summary_failed``, ``already_summarized`` (the round's
+    span was entirely covered by the nightly session-summary pass, so no LLM
+    call was made), ``empty_chunk`` or ``estimate_unavailable``."""
     session_key: str
     rounds: int
     exit_reason: str

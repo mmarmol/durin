@@ -3473,12 +3473,18 @@ class AgentLoop:
         turns only (until the session has its own summary or grows past
         ``max_turns``). Never raises — continuity is a convenience."""
         cfg = self._continuity_config()
-        # Count user messages, not messages: an agentic turn also persists the
-        # assistant's tool-call message and every tool result, so a message
-        # bound would end continuity mid-turn. The current user message is not
-        # yet persisted at this point, so this is the number of turns already
+        # Count conversation turns, not messages: an agentic turn also persists
+        # the assistant's tool-call message and every tool result, so a message
+        # bound would end continuity mid-turn. Slash commands are excluded too
+        # (they carry ``_command``): they are persisted for the transcript but
+        # never reached the model, so they cost the user none of the turns the
+        # previous summary is shown for. The current user message is not yet
+        # persisted at this point, so this is the number of turns already
         # completed.
-        turns_done = sum(1 for m in session.messages if m.get("role") == "user")
+        turns_done = sum(
+            1 for m in session.messages
+            if m.get("role") == "user" and not m.get("_command")
+        )
         if (
             not cfg.enabled
             or session.last_consolidated

@@ -157,3 +157,39 @@ async def test_closed_record_feeds_the_fresh_session(tmp_path: Path) -> None:
     assert block is not None
     assert "PREVIOUS SESSION SUMMARY" in block
     assert "user prefers terse answers" in block
+
+
+@pytest.mark.asyncio
+async def test_a_slash_command_turn_does_not_consume_a_continuity_turn(tmp_path: Path) -> None:
+    """Continuity is measured in conversation turns. A slash command persists a
+    user message like any other turn, but it never reached the model, so it
+    must not spend one of the turns the previous summary is shown for."""
+    loop = _make_loop(tmp_path)
+    write_session_summary(tmp_path, "websocket:old", "- old summary", last_active=date(2026, 9, 1))
+    loop.app_config = SimpleNamespace(memory=SimpleNamespace(continuity=MemoryContinuityConfig(max_turns=1)))
+    captured: list[list[dict]] = []
+
+    async def _chat(*args, **kwargs):
+        captured.append(kwargs.get("messages") or (args[0] if args else []))
+        return LLMResponse(content="ok", tool_calls=[])
+
+    loop.provider.chat_with_retry = AsyncMock(side_effect=_chat)
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="new", content="/help")
+    )
+    session = loop.sessions.get_or_create("websocket:new")
+    # The command turn is persisted (and marked), so a plain message count
+    # would already be at the limit here.
+    assert [m.get("_command") for m in session.messages] == [True, True]
+    assert captured == []                                  # it never reached the model
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="new", content="q1")
+    )
+    assert "PREVIOUS SESSION SUMMARY" in captured[0][0]["content"]
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="new", content="q2")
+    )
+    assert "PREVIOUS SESSION SUMMARY" not in captured[1][0]["content"]

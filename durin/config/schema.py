@@ -743,10 +743,10 @@ class MemoryPrefetchConfig(Base):
     the user message as reference data. The explicit tool stays for
     follow-ups. Skipped for slash commands, messages shorter than
     ``min_query_chars`` (a length rule, so it holds in every language),
-    sessions that are workflow nodes, subagents, cron or automation runs,
-    and when the search exceeds ``timeout_s`` — after which it is skipped
-    outright for ``backoff_s``. Each turn's outcome is one
-    ``memory.prefetch`` telemetry row.
+    sessions the runtime treats as autonomous (workflow nodes, subagents,
+    cron and automation runs), and when the search exceeds ``timeout_s`` —
+    after which it is skipped outright for ``backoff_s``. Each turn's outcome
+    is one ``memory.prefetch`` telemetry row.
     """
 
     enabled: bool = Field(default=True, description="Run one warm memory_search with the user message before the model sees it and fence the hits into the message")
