@@ -302,3 +302,34 @@ def test_build_pinned_context_passes_library_caps(tmp_path):
     assert "- A Book" in ctx
     assert "- B Book" not in ctx
     assert "…and 1 more" in ctx
+
+
+def test_principal_body_is_capped_with_a_pointer_to_the_full_page(tmp_path):
+    ensure_owner(tmp_path, "person:marcelo", name="Marcelo")
+    long_body = " ".join(f"fact{i}" for i in range(600))  # ≈ 4 000 chars
+    write_entity(tmp_path, "person:marcelo",
+                 [FieldPatch(kind="body_append", value=long_body,
+                             author="agent", source_ref="s", at=NOW),
+                  FieldPatch(kind="relation", value={"to": "project:durin", "type": "maintainer"},
+                             author="agent", source_ref="s", at=NOW)])
+
+    ctx = build_pinned_context(tmp_path, "person:marcelo")
+
+    who = ctx.split("## Always-on guidance")[0]
+    assert len(who) < 1500 + 200
+    assert "memory_read_entity person:marcelo" in who
+    assert "fact599" not in who
+    assert "maintainer project:durin" in who
+
+
+def test_always_on_pins_are_not_capped_by_the_principal_rule(tmp_path):
+    long_body = " ".join(f"rule{i}" for i in range(400))  # ≈ 2 800 chars
+    write_entity(tmp_path, "practice:long",
+                 [FieldPatch(kind="body_append", value=long_body,
+                             author="agent", source_ref="s", at=NOW)],
+                 create=True, name="Long practice")
+    mark_always_on(tmp_path, "practice:long")
+
+    ctx = build_pinned_context(tmp_path, "person:nobody")
+
+    assert "rule399" in ctx

@@ -183,7 +183,15 @@ def _load(workspace: Path, ref: str) -> EntityPage | None:
     return EntityPage.from_file(p) if p.exists() else None
 
 
-def _render_pinned_block(page: EntityPage) -> str:
+# The principal's page is the one pinned page no budget fits: the extract
+# pass keeps appending to it. Cap its body in the prompt and point at
+# memory_read_entity for the rest.
+_PRINCIPAL_BODY_CHARS = 1500
+
+
+def _render_pinned_block(
+    page: EntityPage, *, body_chars: int | None = None, ref: str | None = None,
+) -> str:
     """Format one entity page for the always-injected pinned block.
 
     Renders a superset of what the hot layer's canonical block carries —
@@ -193,6 +201,13 @@ def _render_pinned_block(page: EntityPage) -> str:
     The shared line renderers come from ``hot_layer`` so the two surfaces
     cannot drift apart. ``always_on`` is dropped from the attributes: it is
     the flag that put the page here, not knowledge about it.
+
+    ``body_chars``, when given, caps the body only — every other line is
+    untouched. Past the cap the body is cut back to the last space and a
+    pointer is appended: naming ``ref`` with ``memory_read_entity`` when
+    given, else a bare ellipsis. Left ``None`` (the default) for callers that
+    already fit their pages into a token budget of their own (the always_on
+    pass); only the principal's page has no such ceiling.
     """
     lines = [f"### {page.name} ({page.type})"]
     if page.aliases:
@@ -215,9 +230,16 @@ def _render_pinned_block(page: EntityPage) -> str:
     if page.body:
         body = "\n".join(
             ln for ln in page.body.splitlines() if not ln.strip().startswith("<!--")
-        )
-        if body.strip():
-            lines.append(body.strip())
+        ).strip()
+        if body_chars is not None and len(body) > body_chars:
+            cut = body[:body_chars].rsplit(" ", 1)[0]
+            pointer = (
+                f" … (truncated; memory_read_entity {ref} for the full page)"
+                if ref else " …"
+            )
+            body = cut + pointer
+        if body:
+            lines.append(body)
     return "\n".join(lines).strip()
 
 
@@ -377,7 +399,10 @@ def build_pinned_context(
     parts: list[str] = []
     principal = _load(workspace, principal_ref)
     if principal:
-        parts.append("## Who you're talking to\n\n" + _render_pinned_block(principal))
+        parts.append(
+            "## Who you're talking to\n\n"
+            + _render_pinned_block(principal, body_chars=_PRINCIPAL_BODY_CHARS, ref=principal_ref)
+        )
     pins: list[str] = []
     for ref in (list_always_on(workspace) if always_on is None else always_on):
         if ref == principal_ref:
