@@ -12,11 +12,18 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Sequence
 
 from durin.memory.entity_page import EntityPage
 from durin.memory.field_patch import FieldPatch
+from durin.memory.hot_layer import (
+    _render_identifiers_line,
+    _render_relations_line,
+    _render_sources_line,
+)
 from durin.memory.memory_writer import write_entity
 
 # Cap on the Library awareness catalog pinned every turn. One short line per
@@ -36,9 +43,12 @@ _MAX_LIBRARY_SUBJECTS = 14
 __all__ = [
     "ANONYMOUS",
     "resolve_principal",
+    "resolve_owner_principal",
     "ensure_owner",
     "mark_always_on",
     "list_always_on",
+    "pinned_refs",
+    "resolve_pinned_refs",
     "build_library_awareness",
     "build_pinned_context",
 ]
@@ -104,19 +114,104 @@ def list_always_on(workspace: Path) -> list[str]:
     return out
 
 
+def resolve_owner_principal(workspace: Path, channel: str | None = None) -> str:
+    """The principal the prompt build resolves for *channel*.
+
+    The one place that reads ``memory.owner`` from config: the prompt build
+    and the search dedup must agree on who the principal is, or the dedup
+    would exclude a page the pinned block never rendered. A workspace with
+    no config file (tests, ad-hoc tools) is a normal state and resolves to
+    anonymous.
+    """
+    try:
+        from durin.config.loader import load_config
+        owner = getattr(load_config().memory, "owner", None)
+    except Exception:  # noqa: BLE001 — no config file is a normal state
+        owner = None
+    return resolve_principal(channel, owner=owner)
+
+
+def pinned_refs(
+    workspace: Path, principal_ref: str, *, always_on: Sequence[str] | None = None,
+) -> frozenset[str]:
+    """Every entity ref rendered in the pinned block: the principal's page
+    plus the always_on guidance. Readers that show entity pages elsewhere
+    in the prompt (the hot layer's canonical block) or in tool output (the
+    search dedup) use this set to avoid rendering the same page twice.
+
+    ``always_on`` lets a caller that already walked the entity tree pass the
+    result in; omitted, this walks it itself."""
+    always = list_always_on(workspace) if always_on is None else always_on
+    return frozenset({principal_ref, *always})
+
+
+# The pinned set only moves when a dream flips an ``always_on`` attribute or
+# the owner config changes, and the search dedup asks for it on every search.
+# A few seconds of lag there is invisible; re-walking the entity tree per
+# search is not.
+_PINNED_REFS_TTL_S = 10.0
+_pinned_refs_cache: dict[tuple[str, str | None], tuple[float, frozenset[str]]] = {}
+
+
+def resolve_pinned_refs(
+    workspace: Path, *, channel: str | None = None, ttl_s: float = _PINNED_REFS_TTL_S,
+) -> frozenset[str]:
+    """``pinned_refs`` with the principal resolved the way the prompt build
+    resolves it: the configured ``memory.owner``, else anonymous. Never
+    raises — a workspace without a config file (tests, ad-hoc tools) just
+    resolves to anonymous, and any failure degrades to an empty set.
+
+    Memoized per ``(workspace, channel)`` for ``ttl_s`` seconds; pass
+    ``ttl_s=0`` for a caller that must observe an ``always_on`` flip
+    immediately."""
+    cache_key = (str(workspace), channel)
+    if ttl_s > 0:
+        hit = _pinned_refs_cache.get(cache_key)
+        if hit is not None and (time.monotonic() - hit[0]) < ttl_s:
+            return hit[1]
+    try:
+        refs = pinned_refs(workspace, resolve_owner_principal(workspace, channel))
+    except Exception:  # noqa: BLE001 — never break a caller over a pinned lookup
+        return frozenset()
+    if ttl_s > 0:
+        _pinned_refs_cache[cache_key] = (time.monotonic(), refs)
+    return refs
+
+
 def _load(workspace: Path, ref: str) -> EntityPage | None:
     p = _page_path(workspace, ref)
     return EntityPage.from_file(p) if p.exists() else None
 
 
 def _render_pinned_block(page: EntityPage) -> str:
+    """Format one entity page for the always-injected pinned block.
+
+    Renders a superset of what the hot layer's canonical block carries —
+    aliases, attributes, relations, legacy identifiers, sources, body — so a
+    page that is pinned can be excluded from the canonical block without
+    losing anything, and the same exclusion in the search dedup is sound.
+    The shared line renderers come from ``hot_layer`` so the two surfaces
+    cannot drift apart. ``always_on`` is dropped from the attributes: it is
+    the flag that put the page here, not knowledge about it.
+    """
     lines = [f"### {page.name} ({page.type})"]
+    if page.aliases:
+        lines.append("Aliases: " + ", ".join(page.aliases[:5]) + ".")
     if page.attributes:
         attrs = ", ".join(
             f"{k}: {v}" for k, v in page.attributes.items() if k != "always_on"
         )
         if attrs:
             lines.append(attrs)
+    for line in (
+        _render_relations_line(page.relations),
+        # Legacy v1 emergent field: still rendered so workspaces that have not
+        # migrated to v2 attributes keep their identifiers visible.
+        _render_identifiers_line(page.extra.get("identifiers") if page.extra else None),
+        _render_sources_line(page.derived_from),
+    ):
+        if line:
+            lines.append(line)
     if page.body:
         body = "\n".join(
             ln for ln in page.body.splitlines() if not ln.strip().startswith("<!--")
@@ -257,15 +352,20 @@ def build_library_awareness(workspace: Path, *, max_docs: int = _MAX_LIBRARY_DOC
     return f"{header}\n\n{note}\n\n{covers}" + "\n".join(lines)
 
 
-def build_pinned_context(workspace: Path, principal_ref: str) -> str:
+def build_pinned_context(
+    workspace: Path, principal_ref: str, *, always_on: Sequence[str] | None = None,
+) -> str:
     """The always-injected layer: who the user is + always_on feedback +
-    a one-line-per-document awareness catalog of the ingested Library."""
+    a one-line-per-document awareness catalog of the ingested Library.
+
+    ``always_on`` lets a caller that already walked the entity tree pass the
+    result in; omitted, this walks it itself."""
     parts: list[str] = []
     principal = _load(workspace, principal_ref)
     if principal:
         parts.append("## Who you're talking to\n\n" + _render_pinned_block(principal))
     pins: list[str] = []
-    for ref in list_always_on(workspace):
+    for ref in (list_always_on(workspace) if always_on is None else always_on):
         if ref == principal_ref:
             continue
         page = _load(workspace, ref)

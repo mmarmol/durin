@@ -34,7 +34,6 @@ def _hot_layer(
         canonical_blocks=canonical or [],
         fragment_blocks=fragments or [],
         headlines=[],
-        entities=[],
     )
 
 
@@ -82,7 +81,8 @@ def test_prefix_map_ignores_malformed_blocks():
 
 def _patch_hot(monkeypatch, hot: HotLayer) -> None:
     monkeypatch.setattr(
-        "durin.memory.context_dedup.read_hot_layer", lambda ws: hot
+        "durin.memory.context_dedup.read_hot_layer",
+        lambda ws, *, exclude=frozenset(): hot,
     )
 
 
@@ -181,7 +181,7 @@ def test_empty_hot_layer_keeps_everything(monkeypatch, tmp_path):
 
 
 def test_hot_layer_read_failure_degrades_to_no_dedup(monkeypatch, tmp_path):
-    def _boom(ws):
+    def _boom(ws, *, exclude=frozenset()):
         raise OSError("disk gone")
 
     monkeypatch.setattr("durin.memory.context_dedup.read_hot_layer", _boom)
@@ -256,3 +256,82 @@ def test_create_enables_dedup_for_core_scope_and_missing_scope(tmp_path):
     assert MemorySearchTool.create(
         _tool_ctx(tmp_path, None)
     )._context_dedup is True
+
+
+def test_pinned_ref_hit_is_deduped_even_when_hot_layer_is_empty(monkeypatch, tmp_path):
+    """A pinned page is fully visible in the prompt's pinned block, which
+    the hot-layer prefix map does not cover — the caller passes the pinned
+    refs and the hit collapses to a pointer line."""
+    monkeypatch.setattr(
+        "durin.memory.context_dedup.read_hot_layer",
+        lambda _ws, *, exclude=frozenset(): _hot_layer(),
+    )
+    hit = SectionedHit(
+        uri="memory/entity_page/practice:spanish",
+        type="entity",
+        path="memory/entities/practice/spanish.md",
+        score=1.0,
+        summary="Always respond in Spanish.",
+    )
+
+    kept, redundant = split_in_context(
+        tmp_path, [hit], pinned_refs=frozenset({"practice:spanish"}),
+    )
+
+    assert kept == []
+    assert redundant == [hit]
+
+
+def test_non_pinned_hit_passes_when_hot_layer_is_empty(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "durin.memory.context_dedup.read_hot_layer",
+        lambda _ws, *, exclude=frozenset(): _hot_layer(),
+    )
+    hit = SectionedHit(
+        uri="memory/entity_page/person:ana",
+        type="entity",
+        path="memory/entities/person/ana.md",
+        score=1.0,
+        summary="Ana runs the bakery.",
+    )
+
+    kept, redundant = split_in_context(
+        tmp_path, [hit], pinned_refs=frozenset({"practice:spanish"}),
+    )
+
+    assert kept == [hit]
+    assert redundant == []
+
+
+def test_dedup_sees_the_page_the_excluded_pins_made_room_for(monkeypatch, tmp_path):
+    """With pinned pages excluded from the canonical block, the prompt shows the
+    next most-recent page; the dedup must see that same page, so a search hit
+    on it collapses to a pointer instead of rendering twice."""
+    from datetime import datetime
+
+    from durin.memory import hot_layer as hl
+    from durin.memory.entity_page import EntityPage
+
+    def _page(slug: str, name: str, when: str) -> None:
+        page = EntityPage(type="person", name=name, aliases=[], body=f"{name} body.",
+                          updated_at=datetime.fromisoformat(when))
+        page.save(tmp_path / "memory" / "entities" / "person" / f"{slug}.md")
+
+    _page("pin-a", "Pin A", "2026-05-22T10:00:00")
+    _page("pin-b", "Pin B", "2026-05-21T10:00:00")
+    _page("next", "Next", "2026-05-20T10:00:00")
+    monkeypatch.setattr(hl, "_MAX_CANONICAL", 2)
+    pinned = frozenset({"person:pin-a", "person:pin-b"})
+
+    hit = SectionedHit(
+        uri="memory/entity_page/person:next",
+        type="entity",
+        path="memory/entities/person/next.md",
+        score=1.0,
+        summary="Next body.",
+    )
+
+    kept, redundant = split_in_context(tmp_path, [hit], pinned_refs=pinned)
+
+    assert kept == []
+    assert redundant == [hit]

@@ -7,12 +7,14 @@ the same text twice in the turn it lands, then re-reads it on every
 subsequent turn of the session as part of replayed history.
 
 The dedup is containment-based and false-negative-safe: a hit is
-"already in context" only when its rendered body (the exact text
+"already in context" when its rendered body (the exact text
 ``sectioned_output._render_block`` would print, ``summary > body >
 snippet``) is a whitespace-normalised substring of the hot-layer block
-for the SAME ref. A hit that carries anything beyond what the prefix
-shows passes through untouched. Redundant hits are not dropped — they
-surface as pointer lines (uri + ts) so the model keeps citation refs
+for the SAME ref, OR when its ref is one the pinned block renders whole
+— the principal's page and the always_on guidance, passed in by the
+caller as ``pinned_refs``. A hit that carries anything beyond what the
+prefix shows passes through untouched. Redundant hits are not dropped —
+they surface as pointer lines (uri + ts) so the model keeps citation refs
 and can ``memory_drill`` for the full body.
 
 Callers whose system prompt does NOT carry the hot layer (subagents —
@@ -106,27 +108,38 @@ def _hit_key(hit: SectionedHit) -> str | None:
 
 
 def split_in_context(
-    workspace: Path, hits: list[SectionedHit],
+    workspace: Path, hits: list[SectionedHit], *,
+    pinned_refs: frozenset[str] = frozenset(),
 ) -> tuple[list[SectionedHit], list[SectionedHit]]:
     """Partition ``hits`` into ``(kept, already_in_context)``.
 
-    A hit lands in ``already_in_context`` only when the hot-layer block
-    for its ref exists AND fully contains the hit's rendered body.
-    Order is preserved in both lists. Any failure reading the hot layer
-    degrades to "keep everything" — dedup must never cost a result.
+    The hot layer is read the same way the prompt builds it — with
+    ``pinned_refs`` excluded from the canonical block — so the canonical
+    slots this dedup sees are exactly the ones the model sees; a page
+    freed up for the next-most-recent entity by that exclusion is a page
+    this dedup must also see. A hit lands in ``already_in_context`` when
+    its ref is in ``pinned_refs`` (matched by plain membership, since the
+    pinned block renders those pages whole and they never appear in the
+    hot layer), or when the hot-layer block for its ref exists AND fully
+    contains the hit's rendered body. Order is preserved in both lists.
+    Any failure reading the hot layer degrades to "keep everything" —
+    dedup must never cost a result.
     """
     if not hits:
         return hits, []
     try:
-        prefix = prefix_map(read_hot_layer(workspace))
+        prefix = prefix_map(read_hot_layer(workspace, exclude=pinned_refs))
     except Exception:  # noqa: BLE001 - degrade to no-dedup
         return hits, []
-    if not prefix:
+    if not prefix and not pinned_refs:
         return hits, []
     kept: list[SectionedHit] = []
     redundant: list[SectionedHit] = []
     for hit in hits:
         key = _hit_key(hit)
+        if key and key in pinned_refs:
+            redundant.append(hit)
+            continue
         block = prefix.get(key) if key else None
         rendered = (hit.summary or hit.body or hit.snippet or "").strip()
         if block and rendered and _norm(rendered) in block:

@@ -350,6 +350,8 @@ class TurnMemoryUsageEvent(TypedDict):
     search_calls: int          # memory_search invocations this turn
     drill_calls: int           # memory_drill invocations this turn
     tool_calls_total: int      # all tool calls this turn (denominator)
+    pinned_chars: NotRequired[int]   # rendered size of the pinned memory block
+    hot_chars: NotRequired[int]      # rendered size of the hot layer
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
 
@@ -1263,7 +1265,7 @@ class MemoryHotLayerFailureEvent(TypedDict):
     """Hot-layer assembly failed for one component.
 
     The hot layer renders five sections (identity / canonical / fragments /
-    headlines / entities). If any section's disk read or parse raises,
+    headlines / types). If any section's disk read or parse raises,
     the renderer logs this event and degrades that section to empty so
     the agent prompt still builds. The whole layer never fails hard.
 
@@ -1275,7 +1277,7 @@ class MemoryHotLayerFailureEvent(TypedDict):
     """
 
     component: str  # "canonical_blocks" | "fragment_blocks" | "identity" |
-                    # "headlines" | "entities" | "canonical_blocks:<file>"
+                    # "headlines" | "types" | "canonical_blocks:<file>"
     error: str
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]

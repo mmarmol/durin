@@ -165,7 +165,7 @@ These fire during the refine pass and via the manual `durin memory` commands:
 
 ### Hot-layer failure
 
-- **`memory.hot_layer.failure`** — the hot-layer renderer failed to assemble one context block (read error, parse error). `component` identifies which section degraded (`canonical_blocks`, `fragment_blocks`, `identity`, `headlines`, `entities`, or `canonical_blocks:<file>` for per-page parse failures). The whole layer never fails hard; the degraded section renders empty.
+- **`memory.hot_layer.failure`** — the hot-layer renderer failed to assemble one context block (read error, parse error). `component` identifies which section degraded (`canonical_blocks`, `fragment_blocks`, `identity`, `headlines`, `types`, or `canonical_blocks:<file>` for per-page parse failures). The whole layer never fails hard; the degraded section renders empty.
 
 ### Health events
 
@@ -174,7 +174,7 @@ These fire during the refine pass and via the manual `durin memory` commands:
 
 ### Per-turn rollup
 
-- **`turn.memory_usage`** — emitted once per turn at save time (`AgentLoop._state_save`), including turns with zero tool calls. Fields: `search_calls`, `drill_calls`, `tool_calls_total`. Turns where `search_calls == 0` while the agent answered a query about prior information are the silent-miss signal.
+- **`turn.memory_usage`** — emitted once per turn at save time (`AgentLoop._state_save`), including turns with zero tool calls. Fields: `search_calls`, `drill_calls`, `tool_calls_total`, plus `pinned_chars` / `hot_chars` — the rendered size of the pinned memory block and of the hot layer in that turn's last prompt build. Turns where `search_calls == 0` while the agent answered a query about prior information are the silent-miss signal; the two size fields are the per-turn cost of the always-on memory surface.
 
 ### Additional catalog entries
 

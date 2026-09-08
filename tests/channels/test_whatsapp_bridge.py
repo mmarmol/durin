@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import subprocess
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -134,7 +135,16 @@ class TestBridgeSupervisor:
                                auth_dir=tmp_path, media_dir=tmp_path, logger=None)
         sup._initial_delay = 0.05  # keep the test fast
         await sup.start()
-        await asyncio.sleep(0.5)
+        # Wait for the restart to be observable rather than assuming it fits a
+        # fixed window: the two subprocess spawns dominate the elapsed time and
+        # cost far more than the backoff on a loaded machine, so a short sleep
+        # races them. The deadline is generous — it only bounds a real failure
+        # (a supervisor that never restarts), never a slow pass.
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline:
+            if marker.exists() and marker.read_text().count("run") >= 2:
+                break
+            await asyncio.sleep(0.02)
         await sup.stop()
         assert marker.read_text().count("run") >= 2
 

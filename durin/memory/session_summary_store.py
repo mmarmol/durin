@@ -265,9 +265,11 @@ def delete_session_summary(
 ) -> bool:
     """Drop the `.md` for *session_key* if it exists.
 
-    Used by `Session.clear()` so a reset wipes both the in-memory
-    state and the on-disk projection. Returns True iff a file was
-    actually deleted.
+    Used by the `/new` command: the file is the key's archived-context
+    slot, replayed on every turn, so a fresh conversation on the key
+    starts without it. (`Session.clear()` does not call this — it only
+    resets the in-memory state.) Returns True iff a file was actually
+    deleted.
     """
     path = session_summary_path(workspace, session_key)
     if not path.is_file():

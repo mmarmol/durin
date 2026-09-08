@@ -3,9 +3,12 @@
 The hot layer renderer builds the prompt context block: identity essentials,
 canonical entity pages (the "main memory"), recent tagged fragments (two-track
 model — fragments are not consolidated into pages, so they surface by
-recency), top headlines and a de-duplicated entity name list. By design it
-changes at most once per Dream pass; between passes it is read-only so the
-upstream provider's prompt cache stays warm across many turns.
+recency), top headlines, and the entity types on disk with their page
+counts. The block is re-read from disk on every prompt build, so it changes
+when a Dream pass rewrites pages AND when the agent writes an entity page
+mid-session (a fresh ``updated_at`` re-orders the canonical block); between
+those writes it is byte-identical turn to turn, which keeps the upstream
+provider's prompt cache warm.
 
 The renderer reads from disk on every prompt build (cheap walk + YAML
 parse, <5ms typical). Sections that fail to assemble degrade silently
@@ -37,16 +40,14 @@ from durin.telemetry.logger import current_telemetry
 __all__ = ["HotLayer", "read_hot_layer"]
 
 # Token budgets:
-# Total ~1900 tokens — still cache-friendly between dreams.
+# Total ≈ the sum of the section budgets below — sized to stay cache-friendly between dreams.
 _IDENTITY_BUDGET_CHARS = 800    # ~200 tokens
 _CANONICAL_BUDGET_CHARS = 2400  # ~600 tokens — N entity pages
 _FRAGMENTS_BUDGET_CHARS = 1200  # ~300 tokens — recent tagged entries
 _HEADLINES_BUDGET_CHARS = 1200  # ~300 tokens — legacy class entries
-_ENTITIES_BUDGET_CHARS = 600    # ~150 tokens
 _MAX_CANONICAL = 12
 _MAX_FRAGMENTS = 8
 _MAX_HEADLINES = 12
-_MAX_ENTITIES = 50
 
 # Per-page body cap inside the canonical block. Keeps a single huge
 # page from consuming the whole canonical budget.
@@ -64,17 +65,16 @@ class HotLayer(NamedTuple):
     canonical_blocks: list[str]
     fragment_blocks: list[str]
     headlines: list[str]
-    entities: list[str]
-    types: Sequence[str] = ()
+    types: Sequence[tuple[str, int]] = ()
 
     def render(self) -> str:
         """Render the hot layer as markdown for the stable prompt tier.
 
         Section order: identity → canonical (main memory) →
         fragments (recent, by recency) → headlines (legacy entries) →
-        entity list. The LLM sees the canonical first, marked as
-        authoritative; fragments come next with their timestamp so the
-        model can reconcile temporal contradictions.
+        known types with page counts. The LLM sees the canonical first,
+        marked as authoritative; fragments come next with their timestamp
+        so the model can reconcile temporal contradictions.
         """
         parts: list[str] = []
         if self.identity.strip():
@@ -99,24 +99,28 @@ class HotLayer(NamedTuple):
         if self.headlines:
             bullets = "\n".join(f"- {h}" for h in self.headlines)
             parts.append(f"## Memory: Key Points\n\n{bullets}")
-        if self.entities:
-            csv = ", ".join(self.entities)
-            parts.append(f"## Memory: Known Entities\n\n{csv}")
         if self.types:
-            csv = ", ".join(self.types)
+            csv = ", ".join(f"{name} ({count})" for name, count in self.types)
             parts.append(f"## Memory: Known types\n\n{csv}")
         return "\n\n".join(parts)
 
 
-def read_hot_layer(workspace: Path) -> HotLayer:
+def read_hot_layer(
+    workspace: Path, *, exclude: frozenset[str] = frozenset(),
+) -> HotLayer:
     """Assemble the hot layer for a workspace.
+
+    ``exclude`` holds entity refs (``<type>:<slug>``) already rendered
+    elsewhere in the prompt — the pinned block's principal and always_on
+    pages — so the canonical budget goes to pages the model would not
+    otherwise see.
 
     Each section is wrapped in its own try/except: any failure emits
     ``memory.hot_layer.failure`` telemetry and degrades the
     section to empty so the prompt still builds.
     """
     try:
-        canonicals = _read_canonical_blocks(workspace)
+        canonicals = _read_canonical_blocks(workspace, exclude)
     except Exception as exc:  # pragma: no cover - defensive
         _emit_failure("canonical_blocks", exc)
         canonicals = []
@@ -140,13 +144,7 @@ def read_hot_layer(workspace: Path) -> HotLayer:
         headlines = []
 
     try:
-        entities = _read_entity_list(workspace)
-    except Exception as exc:  # pragma: no cover - defensive
-        _emit_failure("entities", exc)
-        entities = []
-
-    try:
-        types = _read_type_list(workspace)
+        types = _read_type_counts(workspace)
     except Exception as exc:  # pragma: no cover - defensive
         _emit_failure("types", exc)
         types = []
@@ -156,7 +154,6 @@ def read_hot_layer(workspace: Path) -> HotLayer:
         canonical_blocks=canonicals,
         fragment_blocks=fragments,
         headlines=headlines,
-        entities=entities,
         types=types,
     )
 
@@ -177,11 +174,13 @@ def _emit_failure(component: str, exc: BaseException) -> None:
 
 def _read_canonical_blocks(
     workspace: Path,
+    exclude: frozenset[str] = frozenset(),
 ) -> list[str]:
     """Render top N entity pages as ``=== CANONICAL ===`` blocks.
 
     Pages under ``archive/`` are skipped (absorbed records, surfaced only via
-    ``durin memory expand``).
+    ``durin memory expand``), and so are refs in ``exclude`` — pages the
+    pinned block already renders in full.
 
     Per-page parse failures degrade silently with a telemetry event;
     the rest of the walk continues so one bad page can't break the
@@ -198,6 +197,8 @@ def _read_canonical_blocks(
             continue
         slug = page_path.stem
         ref = f"{page.type}:{slug}"
+        if ref in exclude:
+            continue
         # Sort key: prefer updated_at, fall back to mtime so freshly
         # written pages surface even pre-frontmatter updated_at adoption.
         updated = _resolve_updated_at(page, page_path)
@@ -521,9 +522,11 @@ def _read_top_headlines(workspace: Path) -> list[str]:
     )
 
 
-def _read_type_list(workspace: Path, cap: int = 100) -> list[str]:
-    """Distinct entity *types* on disk — the subdirectories of
-    ``memory/entities/`` that hold at least one page. Alphabetical.
+def _read_type_counts(workspace: Path, cap: int = 100) -> list[tuple[str, int]]:
+    """Entity *types* on disk with their page counts — the subdirectories of
+    ``memory/entities/`` that hold at least one page, alphabetical, as
+    ``(type, pages)`` pairs. The count tells the agent whether a type is a
+    one-off or a populated class it should search before assuming.
 
     Capped at ``cap`` (rendered into the prompt); a count past the cap is a
     sprawl signal, logged as a warning so it surfaces in the gateway log /
@@ -532,31 +535,19 @@ def _read_type_list(workspace: Path, cap: int = 100) -> list[str]:
     root = Path(workspace) / "memory" / "entities"
     if not root.is_dir():
         return []
-    types = sorted(
-        d.name for d in root.iterdir()
-        if d.is_dir() and any(d.glob("*.md"))
+    counts = sorted(
+        (d.name, sum(1 for _ in d.glob("*.md")))
+        for d in root.iterdir()
+        if d.is_dir()
     )
-    if len(types) > cap:
+    counts = [(name, pages) for name, pages in counts if pages > 0]
+    if len(counts) > cap:
         logger.warning(
             "memory entity-type sprawl: {} distinct types (rendering {})",
-            len(types), cap,
+            len(counts), cap,
         )
-        return types[:cap]
-    return types
-
-
-def _read_entity_list(workspace: Path) -> list[str]:
-    """Aggregate entities across all memory entries; dedup + alphabetise."""
-    entities: set[str] = set()
-    for class_name in MEMORY_CLASSES:
-        for path in walk_class(workspace, class_name):
-            try:
-                entry = load_entry(path)
-            except Exception:
-                continue
-            entities.update(entry.entities)
-
-    return _trim_to_budget(sorted(entities)[:_MAX_ENTITIES], _ENTITIES_BUDGET_CHARS)
+        return counts[:cap]
+    return counts
 
 
 def _trim_to_budget(items: list[str], budget_chars: int) -> list[str]:

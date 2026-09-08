@@ -13,7 +13,7 @@ def test_empty_workspace_yields_empty_hot_layer(tmp_path: Path) -> None:
     layer = read_hot_layer(tmp_path)
     assert layer.identity == ""
     assert layer.headlines == []
-    assert layer.entities == []
+    assert layer.types == []
     assert layer.render() == ""
 
 
@@ -72,14 +72,7 @@ def test_identity_md_excluded_from_headlines(tmp_path: Path) -> None:
     assert "identity headline" not in layer.headlines
 
 
-def test_entities_aggregated_dedup_and_sorted(tmp_path: Path) -> None:
-    store_memory(tmp_path, content="x", entities=["topic:zoo", "topic:alpha"])
-    store_memory(tmp_path, content="y", entities=["topic:alpha", "topic:beta"])
-    layer = read_hot_layer(tmp_path)
-    assert layer.entities == ["topic:alpha", "topic:beta", "topic:zoo"]
-
-
-def test_render_produces_three_sections(tmp_path: Path) -> None:
+def test_render_produces_identity_and_key_points(tmp_path: Path) -> None:
     stable_dir = tmp_path / "memory" / "stable"
     stable_dir.mkdir(parents=True)
     (stable_dir / "IDENTITY.md").write_text(
@@ -90,7 +83,7 @@ def test_render_produces_three_sections(tmp_path: Path) -> None:
     rendered = read_hot_layer(tmp_path).render()
     assert "## Memory: Identity" in rendered
     assert "## Memory: Key Points" in rendered
-    assert "## Memory: Known Entities" in rendered
+    assert "Known Entities" not in rendered
 
 
 def test_headlines_budget_truncates_at_limit(tmp_path: Path) -> None:
@@ -123,7 +116,7 @@ def test_context_builder_omits_hot_layer_when_empty(tmp_path: Path) -> None:
     stable = builder._build_stable_layer(channel=None)
     assert "## Memory: Key Points" not in stable
     assert "## Memory: Identity" not in stable
-    assert "## Memory: Known Entities" not in stable
+    assert "## Memory: Known types" not in stable
 
 
 def test_canonical_block_renders_sources_from_derived_from() -> None:
@@ -149,3 +142,62 @@ def test_canonical_block_omits_sources_when_no_derived_from() -> None:
         "topic:uroperitoneum", page, consolidated_ts="2026-07-05",
     )
     assert "Sources:" not in block
+
+
+def test_context_builder_renders_a_pinned_page_once(tmp_path: Path) -> None:
+    """An always_on page is rendered in the pinned block and must NOT be
+    repeated as a canonical block a few lines below."""
+    from datetime import datetime, timezone
+
+    from durin.agent.context import ContextBuilder
+    from durin.memory.field_patch import FieldPatch
+    from durin.memory.memory_writer import write_entity
+    from durin.memory.principal import mark_always_on
+
+    now = datetime.now(timezone.utc)
+    write_entity(tmp_path, "practice:spanish",
+                 [FieldPatch(kind="body_append", value="Always respond in Spanish.",
+                             author="agent", source_ref="s", at=now)],
+                 create=True, name="Always Spanish")
+    mark_always_on(tmp_path, "practice:spanish")
+
+    stable = ContextBuilder(workspace=tmp_path)._build_stable_layer(channel=None)
+
+    assert stable.count("Always respond in Spanish.") == 1
+    assert "## Always-on guidance" in stable
+    assert "=== CANONICAL: practice:spanish" not in stable
+
+
+def test_stable_layer_walks_the_entity_tree_once(tmp_path: Path, monkeypatch) -> None:
+    """One prompt build reads the always_on set once. The walk loads every
+    entity page from disk, so the pinned block and the ref set that excludes
+    it from the canonical block must share a single pass."""
+    from datetime import datetime, timezone
+
+    from durin.agent.context import ContextBuilder
+    from durin.memory import principal as principal_mod
+    from durin.memory.field_patch import FieldPatch
+    from durin.memory.memory_writer import write_entity
+    from durin.memory.principal import mark_always_on
+
+    now = datetime.now(timezone.utc)
+    write_entity(tmp_path, "practice:spanish",
+                 [FieldPatch(kind="body_append", value="Always respond in Spanish.",
+                             author="agent", source_ref="s", at=now)],
+                 create=True, name="Always Spanish")
+    mark_always_on(tmp_path, "practice:spanish")
+
+    real = principal_mod.list_always_on
+    calls = 0
+
+    def _counting(workspace):
+        nonlocal calls
+        calls += 1
+        return real(workspace)
+
+    monkeypatch.setattr(principal_mod, "list_always_on", _counting)
+
+    stable = ContextBuilder(workspace=tmp_path)._build_stable_layer(channel=None)
+
+    assert "Always respond in Spanish." in stable
+    assert calls == 1

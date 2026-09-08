@@ -91,22 +91,37 @@ def _truncate_tool_output(content: str, max_chars: int, tool_name: str | None) -
     return truncate_text_fn(content, max_chars, direction=direction)
 
 
-def emit_memory_usage_rollup(tools_used: list[str]) -> None:
+def emit_memory_usage_rollup(
+    session_key: str, tools_used: list[str], *,
+    pinned_chars: int = 0, hot_chars: int = 0,
+) -> None:
     """Emit the per-turn ``turn.memory_usage`` rollup at save time.
 
     Emitted on EVERY turn, including turns with zero tool calls —
     silent-miss analysis needs the rows where ``search_calls == 0``.
-    """
-    from durin.agent.tools._telemetry import emit_tool_event
+    ``pinned_chars`` / ``hot_chars`` are the sizes of the two eager memory
+    blocks in this turn's last prompt build, so the cost of the always-on
+    surface is tracked per turn instead of probed by hand.
 
-    emit_tool_event(
-        "turn.memory_usage",
-        {
-            "search_calls": tools_used.count("memory_search"),
-            "drill_calls": tools_used.count("memory_drill"),
-            "tool_calls_total": len(tools_used),
-        },
-    )
+    The per-run telemetry binding is torn down inside ``_run_agent_loop``
+    before the save state runs, so the session logger is fetched directly
+    rather than through the contextvar (same reason ``turn.latency`` does).
+    Never raises: telemetry must not break the turn.
+    """
+    from durin.telemetry.logger import get_session_logger
+
+    with suppress(Exception):
+        get_session_logger(session_key).log(
+            "turn.memory_usage",
+            {
+                "session_key": session_key,
+                "search_calls": tools_used.count("memory_search"),
+                "drill_calls": tools_used.count("memory_drill"),
+                "tool_calls_total": len(tools_used),
+                "pinned_chars": int(pinned_chars),
+                "hot_chars": int(hot_chars),
+            },
+        )
 
 
 if TYPE_CHECKING:
@@ -2939,6 +2954,22 @@ class AgentLoop:
             break
         return "ok"
 
+    def _memory_surface_chars(self) -> tuple[int, int]:
+        """(pinned_chars, hot_chars) of the last prompt build, or (0, 0)
+        when the builder is a test double or has not built yet.
+
+        ``_last_layer_breakdown`` is builder-wide, not per-turn: concurrent
+        turns on the same loop overwrite it, last writer wins. Reading it
+        here is still sound because both memory blocks are workspace-global
+        — every concurrent turn builds the same pinned and hot text — so the
+        sizes coincide whichever turn wrote them.
+        """
+        try:
+            stable = self.context._last_layer_breakdown.get("stable", {})
+            return len(stable.get("memory_pinned", "")), len(stable.get("memory_hot", ""))
+        except Exception:  # noqa: BLE001 — measurement must never break the turn
+            return 0, 0
+
     async def _state_save(self, ctx: TurnContext) -> str:
         if ctx.final_content is None or not ctx.final_content.strip():
             ctx.final_content = EMPTY_FINAL_RESPONSE_MESSAGE
@@ -2973,7 +3004,11 @@ class AgentLoop:
             ctx.session.metadata.setdefault("skill_calls", []).extend(_skill_calls)
             emit_skill_used(_skill_calls)
 
-        emit_memory_usage_rollup(ctx.tools_used)
+        _pinned_chars, _hot_chars = self._memory_surface_chars()
+        emit_memory_usage_rollup(
+            ctx.session_key, ctx.tools_used,
+            pinned_chars=_pinned_chars, hot_chars=_hot_chars,
+        )
 
         ctx.turn_latency_ms = max(0, int((time.time() - ctx.turn_wall_started_at) * 1000))
         self._save_turn(

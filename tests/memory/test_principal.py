@@ -163,3 +163,87 @@ def test_library_awareness_prefers_curated_topic_index(tmp_path):
     block = build_library_awareness(tmp_path)
     assert "Covers: Clean Theme." in block
     assert "Granular thing" not in block   # curated index wins over the heuristic
+
+
+def test_pinned_refs_is_principal_plus_always_on(tmp_path):
+    from durin.memory.principal import pinned_refs
+
+    ensure_owner(tmp_path, "person:marcelo", name="Marcelo")
+    write_entity(tmp_path, "practice:spanish",
+                 [FieldPatch(kind="body_append", value="Always respond in Spanish.",
+                             author="agent", source_ref="s", at=NOW)],
+                 create=True, name="Always Spanish")
+    write_entity(tmp_path, "practice:tdd",
+                 [FieldPatch(kind="body_append", value="Tests first.",
+                             author="agent", source_ref="s", at=NOW)],
+                 create=True, name="TDD")
+    mark_always_on(tmp_path, "practice:spanish")
+
+    assert pinned_refs(tmp_path, "person:marcelo") == frozenset(
+        {"person:marcelo", "practice:spanish"}
+    )
+
+
+def test_resolve_pinned_refs_never_raises_without_config(tmp_path):
+    from durin.memory.principal import resolve_pinned_refs
+
+    write_entity(tmp_path, "practice:spanish",
+                 [FieldPatch(kind="body_append", value="Always respond in Spanish.",
+                             author="agent", source_ref="s", at=NOW)],
+                 create=True, name="Always Spanish")
+    mark_always_on(tmp_path, "practice:spanish")
+
+    refs = resolve_pinned_refs(tmp_path)
+    assert "practice:spanish" in refs
+    assert "person:anonymous" in refs      # no owner configured in the test home
+
+
+def test_pinned_block_carries_aliases_relations_and_sources(tmp_path):
+    ensure_owner(tmp_path, "person:marcelo", name="Marcelo")
+    write_entity(tmp_path, "person:marcelo", [
+        FieldPatch(kind="body_append", value="Architect of durin.",
+                   author="agent", source_ref="s", at=NOW),
+        FieldPatch(kind="alias", value="marce", author="agent", source_ref="s", at=NOW),
+        FieldPatch(kind="relation", value={"to": "project:durin", "type": "maintainer"},
+                   author="agent", source_ref="s", at=NOW),
+        FieldPatch(kind="derived_from", value="reference:durin-handbook",
+                   author="dream", source_ref="s", at=NOW),
+    ])
+
+    ctx = build_pinned_context(tmp_path, "person:marcelo")
+
+    assert "Aliases: marce." in ctx
+    assert "maintainer project:durin" in ctx
+    assert "Sources: reference:durin-handbook." in ctx
+
+
+def test_resolve_pinned_refs_caches_within_ttl(tmp_path, monkeypatch):
+    """The search dedup calls this on every search; the pinned set only moves
+    when a dream flips always_on or the owner config changes, so repeated
+    calls inside the TTL must not re-walk the entity tree."""
+    from durin.memory import principal as principal_mod
+    from durin.memory.principal import resolve_pinned_refs
+
+    write_entity(tmp_path, "practice:spanish",
+                 [FieldPatch(kind="body_append", value="Always respond in Spanish.",
+                             author="agent", source_ref="s", at=NOW)],
+                 create=True, name="Always Spanish")
+    mark_always_on(tmp_path, "practice:spanish")
+
+    real = principal_mod.list_always_on
+    calls = 0
+
+    def _counting(workspace):
+        nonlocal calls
+        calls += 1
+        return real(workspace)
+
+    monkeypatch.setattr(principal_mod, "list_always_on", _counting)
+
+    first = resolve_pinned_refs(tmp_path)
+    assert "practice:spanish" in first
+    assert resolve_pinned_refs(tmp_path) == first
+    assert calls == 1
+
+    assert resolve_pinned_refs(tmp_path, ttl_s=0) == first
+    assert calls == 2

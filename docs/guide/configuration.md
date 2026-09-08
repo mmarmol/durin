@@ -347,7 +347,7 @@ background file watching, and health checks. See
 | `enabled` | `true` | Master switch; `false` disables cron + reactive triggers; manual `durin memory dream` still works |
 | `cron` | `0 3 * * *` | Cron expression for the daily extract pass |
 | `post_compaction` | `true` | Run a dream pass after a session is compacted |
-| `on_session_close` | `true` | Run a dream pass when a session ends |
+| `on_session_close` | `true` | Run a dream pass when a session is closed with `/new` |
 | `discover_enabled` | `true` | Grow the entity graph from agent-mentioned facts (mention-based entity discovery) |
 | `distill_references_enabled` | `true` | Distil each ingested reference document into an outline sidecar (abstract + per-section summaries) |
 | `seed_entities_from_docs_enabled` | `true` | Seed candidate entity pages from each distilled document's outline (the refine pass dedups them) |

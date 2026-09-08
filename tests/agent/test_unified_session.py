@@ -248,6 +248,9 @@ class TestCmdNewUnifiedSession:
         # and no RuntimeWarning is emitted.
         loop = SimpleNamespace(
             sessions=sessions,
+            # /new reads and deletes the key's session-summary file, so the
+            # double needs the real workspace a production loop always has.
+            workspace=tmp_path,
             consolidator=SimpleNamespace(archive=AsyncMock(return_value=("summary", {"entities": [], "topics": []}))),
             _cancel_active_tasks=AsyncMock(return_value=0),
         )
@@ -282,6 +285,9 @@ class TestCmdNewUnifiedSession:
 
         loop = SimpleNamespace(
             sessions=sessions,
+            # /new reads and deletes the key's session-summary file, so the
+            # double needs the real workspace a production loop always has.
+            workspace=tmp_path,
             consolidator=SimpleNamespace(archive=AsyncMock(return_value=("summary", {"entities": [], "topics": []}))),
             _cancel_active_tasks=AsyncMock(return_value=0),
         )

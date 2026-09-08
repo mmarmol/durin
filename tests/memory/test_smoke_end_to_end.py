@@ -74,10 +74,9 @@ def test_phase_1_pure_function_chain(tmp_path: Path) -> None:
     headlines = [r.headline for r in results if r.source == "memory"]
     assert "Cache flush rule" in headlines
 
-    # 5) The hot layer carries the headline + entity into the stable prompt tier.
+    # 5) The hot layer carries the headline into the stable prompt tier.
     hot = read_hot_layer(workspace)
     assert "Cache flush rule" in hot.headlines
-    assert "topic:cache" in hot.entities
     rendered = hot.render()
     assert "## Memory: Key Points" in rendered
     assert "Cache flush rule" in rendered

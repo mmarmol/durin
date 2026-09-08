@@ -15,12 +15,10 @@ from unittest.mock import patch
 from durin.memory.entity_page import EntityPage
 from durin.memory.hot_layer import (
     _CANONICAL_BUDGET_CHARS,
-    _ENTITIES_BUDGET_CHARS,
     _FRAGMENTS_BUDGET_CHARS,
     _HEADLINES_BUDGET_CHARS,
     _IDENTITY_BUDGET_CHARS,
     _MAX_CANONICAL,
-    _MAX_ENTITIES,
     _MAX_FRAGMENTS,
     _MAX_HEADLINES,
     read_hot_layer,
@@ -34,16 +32,14 @@ from durin.telemetry.logger import TelemetryLogger, bind_telemetry, reset_teleme
 
 
 def test_budget_constants_match_spec_8_2() -> None:
-    """Locks the five budget chars + four caps."""
+    """Locks the four budget chars + three caps."""
     assert _IDENTITY_BUDGET_CHARS == 800
     assert _CANONICAL_BUDGET_CHARS == 2400
     assert _FRAGMENTS_BUDGET_CHARS == 1200
     assert _HEADLINES_BUDGET_CHARS == 1200
-    assert _ENTITIES_BUDGET_CHARS == 600
     assert _MAX_CANONICAL == 12
     assert _MAX_FRAGMENTS == 8
     assert _MAX_HEADLINES == 12
-    assert _MAX_ENTITIES == 50
 
 
 # ---------------------------------------------------------------------------
@@ -351,3 +347,22 @@ def test_v2_canonical_block_exact_snapshot(tmp_path: Path) -> None:
         "=== END CANONICAL ==="
     )
     assert block == expected
+
+
+def test_canonical_block_skips_excluded_refs(tmp_path: Path) -> None:
+    """Pages already rendered in the pinned block must not eat canonical
+    slots: the budget goes to the next most-recent pages instead."""
+    _write_v1_page(tmp_path, slug="pinned", name="Pinned", updated_at="2026-05-22T10:00:00")
+    _write_v1_page(tmp_path, slug="second", name="Second", updated_at="2026-05-21T10:00:00")
+    _write_v1_page(tmp_path, slug="third", name="Third", updated_at="2026-05-20T10:00:00")
+
+    layer = read_hot_layer(tmp_path, exclude=frozenset({"person:pinned"}))
+
+    rendered = "\n".join(layer.canonical_blocks)
+    assert "=== CANONICAL: person:pinned" not in rendered
+    assert rendered.index("person:second") < rendered.index("person:third")
+
+
+def test_canonical_block_default_excludes_nothing(tmp_path: Path) -> None:
+    _write_v1_page(tmp_path, slug="only", name="Only")
+    assert "=== CANONICAL: person:only" in "\n".join(read_hot_layer(tmp_path).canonical_blocks)
