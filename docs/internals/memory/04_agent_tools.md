@@ -146,7 +146,11 @@ session that renders live, an ad-hoc caller) the dedup reads the workspace as
 before.
 
 A warm rendering is bounded per hit and per response. Each hit's summary is cut
-to `memory.search.warm_excerpt_chars` characters (default 600); the
+to `memory.search.warm_excerpt_chars` characters (default 600); for a
+canonical entity page that bound covers the name line, attributes line and
+body TOGETHER — the name line always renders whole, attributes are cut first
+(at a whole-attribute boundary) and the body gets whatever budget is left,
+which for a page with many attributes can be nothing. The
 completeness qualifier on its marker (`preview N/M` vs `complete`) reports how
 much of the full content that is. A second budget,
 `memory.search.warm_max_chars` characters (default 8000), governs which blocks
@@ -178,7 +182,7 @@ defaults on any load failure.
 |---|---|---|
 | `query` | required | Natural-language or exact-identifier query. Short topical phrase preferred. |
 | `scope` | `all` | `all` = dreamed + undreamed sessions, **excluding ingested documents**; `dreamed` = structured memory; `undreamed` = raw sessions; `library` = ingested reference documents (the Library — kept out of default recall); `archive` = on-demand recovery walk. |
-| `level` | `warm` | `warm` = headline + a bounded summary excerpt (for an entity page: its name, attributes and a body excerpt, cut the same way); `cold` = full body (high token cost). Exception: raw session turns keep their indexed excerpt at either level; their backing file is a transcript. |
+| `level` | `warm` | `warm` = headline + a bounded summary excerpt (for an entity page: name whole, attributes and body sharing the same bound, attributes cut first); `cold` = full body (high token cost). Exception: raw session turns keep their indexed excerpt at either level; their backing file is a transcript. |
 | `keywords` | — | Literal string for exact-match boost (email, UUID, path). Biases RRF toward lexical. |
 | `limit` | 10 | Final result count. Clamped to [1, 50] defensively even with schema bounds declared. |
 | `kinds` | `all` | `all` = everything; `skill` = skill procedures only; `fact` = everything except skills. |
