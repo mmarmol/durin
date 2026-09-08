@@ -547,3 +547,25 @@ async def test_prefetch_gate_error_still_replies(tmp_path: Path, monkeypatch) ->
     assert [d for t, d in rec.events if t == "memory.prefetch"][-1]["skipped"] == "error"
     # A broken search must not break the turn: the provider still ran and replied.
     assert captured and reply is not None
+
+
+@pytest.mark.asyncio
+async def test_prefetch_with_hits_announces_a_recall_event(tmp_path: Path, monkeypatch) -> None:
+    fake = _FakeSearch(total=1)
+    loop, captured, rec = _make_loop(tmp_path, monkeypatch, fake=fake)
+    seen: list[tuple[str, bool, list[dict] | None]] = []
+
+    async def on_progress(content: str, *, tool_hint: bool = False, tool_events: list[dict] | None = None) -> None:
+        seen.append((content, tool_hint, tool_events))
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION),
+        on_progress=on_progress,
+    )
+
+    recall = [ev for _c, _h, evs in seen for ev in (evs or []) if ev.get("name") == "memory_prefetch"]
+    assert len(recall) == 1
+    assert recall[0]["phase"] == "end"
+    assert recall[0]["arguments"]["hits"] == 1
+    assert recall[0]["result"]["refs"] == ["person:ana"]
+    assert recall[0]["call_id"].startswith("memory_prefetch:")

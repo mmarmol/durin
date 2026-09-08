@@ -3014,7 +3014,28 @@ class AgentLoop:
             ctx.session, ctx.persona_override,
             channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
         )
+        if ctx.on_progress is None:
+            ctx.on_progress = await self._build_bus_progress_callback(ctx.msg)
+        if ctx.on_retry_wait is None:
+            ctx.on_retry_wait = await self._build_retry_wait_callback(ctx.msg)
+
         ctx.memory_prefetch = await self._memory_prefetch(ctx)
+        if ctx.prefetch_hits and ctx.on_progress is not None:
+            from durin.utils.progress_events import invoke_on_progress
+            query = ctx.msg.content.strip() if isinstance(ctx.msg.content, str) else ""
+            event = {
+                "version": 1,
+                "phase": "end",
+                "call_id": f"memory_prefetch:{ctx.turn_id}",
+                "name": "memory_prefetch",
+                "arguments": {"query": query[:80], "hits": ctx.prefetch_hits},
+                "result": {"refs": list(ctx.prefetch_refs)},
+                "error": None,
+                "files": [],
+                "embeds": [],
+            }
+            with suppress(Exception):
+                await invoke_on_progress(ctx.on_progress, "", tool_hint=True, tool_events=[event])
         ctx.initial_messages = self._build_initial_messages(
             ctx.msg, ctx.session, ctx.history, ctx.pending_summary,
             active_persona_soul=ctx.active_persona_soul,
@@ -3023,11 +3044,6 @@ class AgentLoop:
         ctx.user_persisted_early = self._persist_user_message_early(
             ctx.msg, ctx.session
         )
-
-        if ctx.on_progress is None:
-            ctx.on_progress = await self._build_bus_progress_callback(ctx.msg)
-        if ctx.on_retry_wait is None:
-            ctx.on_retry_wait = await self._build_retry_wait_callback(ctx.msg)
 
         return "ok"
 

@@ -36,6 +36,7 @@ const CHIPPED = new Set([
   "memory_store",
   "memory_upsert_entity",
   "memory_forget",
+  "memory_prefetch",
   "skill_import",
 ]);
 

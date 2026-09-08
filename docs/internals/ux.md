@@ -312,6 +312,8 @@ cancelled icon rather than success or failure marks.
 **Work chip.** A compact inline indicator in the message thread shows that
 background work is running or has finished. Clicking it opens the work panel.
 Per-node detail and sub-agent steps are not expanded inline — they live in the
+panel. An automatic memory recall renders as a `🧠 N memories recalled` chip on
+the turn it served; the chip's refs are in the event's result for the work
 panel.
 
 **Work strip.** The panel's collapsed representation: a slim status line docked

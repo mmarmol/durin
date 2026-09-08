@@ -154,6 +154,17 @@ describe("ToolChipRow", () => {
     expect(screen.getByText(/cron/)).toBeInTheDocument();
     expect(screen.getByText(/telegram/)).toBeInTheDocument();
   });
+
+  it("labels an automatic memory recall with the hit count", () => {
+    render(
+      <ToolChipRow
+        events={[
+          { phase: "end", call_id: "memory_prefetch:t1", name: "memory_prefetch", arguments: { query: "Ana", hits: 3 } },
+        ]}
+      />,
+    );
+    expect(screen.getByText(/🧠 3 memories recalled/)).toBeInTheDocument();
+  });
 });
 
 describe("HoistedToolBlock — subagent_result", () => {
