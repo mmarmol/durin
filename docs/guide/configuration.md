@@ -359,6 +359,8 @@ background file watching, and health checks. See
 | `model_override` | `null` | Dream model (deprecated — prefer `agents.aux_models.memory`); `null` falls through to the bundled default (resolution order: `agents.aux_models.memory` → `memory.dream.model_override` → bundled default) |
 | `min_seconds_between_runs` | `300` | Throttle for reactive triggers; `0` disables throttle (daily cron is never throttled) |
 | `max_seconds_per_run` | `600` | Wall-clock cap per extract pass; `0` = run to completion |
+| `session_summaries_enabled` | `true` | Nightly pass that writes a session summary for conversations that went idle without compacting or `/new`, so every conversation leaves a searchable record |
+| `session_summary_idle_hours` | `6` | Hours a conversation must have been idle before the nightly pass summarizes it; a live session is left to the compactor |
 | `always_on_token_budget` | `1500` | Token budget for the always-on guidance pin injected into every prompt; `0` disables |
 
 **`memory.dream.auto_absorb`** — post-dream automatic entity deduplication (ON by default):

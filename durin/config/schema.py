@@ -356,6 +356,19 @@ class MemoryDreamConfig(Base):
         description="Wall-clock cap in seconds per extract pass; the pass yields after the current session when crossed; 0 = run to completion",
     )
 
+    session_summaries_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("sessionSummariesEnabled", "session_summaries_enabled"),
+        description="Nightly pass that writes a session summary for conversations that went idle without compacting or /new, so every conversation leaves a searchable record",
+    )
+
+    session_summary_idle_hours: int = Field(
+        default=6,
+        ge=1,
+        validation_alias=AliasChoices("sessionSummaryIdleHours", "session_summary_idle_hours"),
+        description="A conversation must have been idle this many hours before the nightly pass summarizes it; a live session is left to the compactor",
+    )
+
     max_rss_mb: int = Field(
         default=0,
         ge=0,

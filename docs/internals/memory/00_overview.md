@@ -17,11 +17,12 @@ Two coexisting tracks run through the same workspace:
   entity pages.
 
 A cold-path Dream process (daily cron or reactive hook) runs a sequence of
-consolidation passes — extract, derived_from, document distillation, skill-extract,
-refine, relation hygiene, always_on — that grow the entity graph, link knowledge to
-source documents, mine reusable skills, deduplicate near-duplicate entities, and
-curate guidance pins. Crucially, Dream never blocks the agent; all user turns see
-the most recent completed pass.
+consolidation passes — extract, derived_from, session summaries, document
+distillation, skill-extract, refine, relation hygiene, always_on — that grow
+the entity graph, link knowledge to source documents, summarize conversations
+that went idle, mine reusable skills, deduplicate near-duplicate entities, and
+curate guidance pins. Crucially, Dream never blocks the agent; all user turns
+see the most recent completed pass.
 
 ---
 
@@ -88,11 +89,12 @@ flowchart TD
     subgraph DREAM["Dream — cold-path passes, cron + reactive"]
         D_EXTRACT["1. Extract\nper-session cursor · entity discovery\n(agent upserts + mention-based)"]
         D_DERIVED["2. derived_from\nlink entities to ingested docs"]
-        D_DOCS["3. Documents\ndistill outlines · seed entities · curate topics"]
-        D_SKILL["4. Skill-extract\nagentic sub-agent · skill_write"]
-        D_REFINE["5. Refine\nalias-overlap · absorb-judge · EntityAbsorption"]
-        D_REL["6. Relations\ncanonicalise edge vocabulary"]
-        D_ALWAYS["7. always_on\nrank feedback entities · token budget\npinned context every turn"]
+        D_SESSSUM["3. Session summary\nidle conversations to session records"]
+        D_DOCS["4. Documents\ndistill outlines · seed entities · curate topics"]
+        D_SKILL["5. Skill-extract\nagentic sub-agent · skill_write"]
+        D_REFINE["6. Refine\nalias-overlap · absorb-judge · EntityAbsorption"]
+        D_REL["7. Relations\ncanonicalise edge vocabulary"]
+        D_ALWAYS["8. always_on\nrank feedback entities · token budget\npinned context every turn"]
     end
 
     AGENT_WRITE --> MW
@@ -121,7 +123,8 @@ flowchart TD
     SESSIONS --> D_EXTRACT
     D_EXTRACT -->|"memory_writer CAS"| MD_ENTITIES
     D_EXTRACT --> D_DERIVED
-    D_DERIVED --> D_DOCS
+    D_DERIVED --> D_SESSSUM
+    D_SESSSUM --> D_DOCS
     D_DOCS --> D_SKILL
     D_SKILL --> D_REFINE
     D_REFINE -->|"absorb"| ARCHIVE
@@ -273,11 +276,13 @@ session close) run only the extract pass, throttled by `ReactiveDreamGate`.
    Only the flag changes; no entities are ever deleted by this pass. The principal
    resolver injects always_on entities into the pinned context on every agent turn.
 
-The daily cron runs more passes than the core five above: three **document passes**
-(distill outlines, seed entities, curate the topic map) after derived_from, and a
-**relation-hygiene** pass after refine, plus a workflow-improve pass and skill
-curation. The **manual** `durin memory dream` runs only the core five. See
-[05_dream_cold_path.md](05_dream_cold_path.md) for every pass in order.
+The daily cron runs more passes than the core five above: a
+**session-summary** pass after derived_from (a summary for every conversation
+idle past `session_summary_idle_hours` without compacting or `/new`), three
+**document passes** (distill outlines, seed entities, curate the topic map),
+a **relation-hygiene** pass after refine, plus a workflow-improve pass and
+skill curation. The **manual** `durin memory dream` runs only the core five.
+See [05_dream_cold_path.md](05_dream_cold_path.md) for every pass in order.
 
 ---
 

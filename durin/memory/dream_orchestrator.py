@@ -115,6 +115,7 @@ def run_full_dream(
         run_skill_extract_pass,
     )
     from durin.memory.model_resolve import resolve_aux_preset
+    from durin.memory.session_summary_dream import run_session_summary_pass
     from durin.telemetry.logger import bind_telemetry, get_session_logger, reset_telemetry
     from durin.workflow.workflow_improve_dream import run_workflow_improve_pass
 
@@ -147,6 +148,15 @@ def run_full_dream(
                 vector_index=vi)
             _emit_rss(progress, "extract")
             df = run_derived_from_pass(workspace, model=model, max_seconds=max_s)
+            ss = (
+                run_session_summary_pass(
+                    workspace, model=model, max_seconds=max_s,
+                    idle_hours=config.memory.dream.session_summary_idle_hours,
+                )
+                if config.memory.dream.session_summaries_enabled
+                else {"sessions": 0, "written": 0, "skipped": 0, "duration_ms": 0}
+            )
+            _emit_rss(progress, "session_summary")
             # Distil ingested reference documents into outline sidecars — the
             # "know the book" index. Independent of entity merges, so it slots
             # right after the source-link pass.
