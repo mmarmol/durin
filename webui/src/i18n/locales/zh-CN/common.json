@@ -563,7 +563,7 @@
         "dreamEnabled": "自动 Dream 的总开关。关闭后，cron 定时和响应式触发都会被禁用；手动执行 `durin memory dream` 仍然可用。",
         "dreamCron": "每日提取 / 精炼 / 技能处理流程的 Cron 表达式。默认值为 0 3 * * *（本地时间凌晨 3 点）。",
         "dreamPostCompaction": "在会话被压缩后运行一次 Dream 流程——上下文已经在内存中，因此这部分成本被摊薄。",
-        "dreamOnSessionClose": "在会话结束时（/quit 或空闲超时）运行一次 Dream 流程。",
+        "dreamOnSessionClose": "在会话通过 `/new` 关闭时运行一次 Dream 流程。",
         "dreamDiscover": "同时从你提到但未显式保存的持久性事实中创建实体，使记忆能从对话本身积累，而不仅依赖显式保存。默认开启。",
         "dreamAutoAbsorb": "让精炼流程自动合并它判定为重复的实体（仅限高置信度）。关闭时合并操作需要手动进行。",
         "dreamAbsorbConfidence": "评判模型合并两个实体所需的最低置信度（0-100）。95 表示高精确度。仅在自动合并开启时生效。",

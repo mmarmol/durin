@@ -102,7 +102,10 @@ Two things bridge a Library document back into everyday use:
   knowledge — each carrying a pointer back to the source. So a normal question can
   turn up "durin learned *X* from this document," and pull the document from there.
 - **A short catalog** of what you have ingested rides in durin's context, so it
-  proactively knows the Library's contents without carrying their text.
+  proactively knows what is in the Library without carrying the text. The catalog
+  lists titles up to a cap (`memory.library.awareness_max_docs`); past that it
+  keeps the count and the `Covers:` subject map, and a document is reached by
+  searching its subject.
 
 ## What "understanding" a document means
 

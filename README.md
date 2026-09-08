@@ -56,8 +56,14 @@ documents, decisions — and keeps it as plain markdown *you own*. Recall is ins
 and offline: it searches an FTS + vector index **without an LLM in the hot path**,
 so it's fast and private. Documents you hand it (PDF, Office, EPUB, web pages) land
 in a separate **Library**, kept apart from everyday recall. The markdown is the
-source of truth; the search indexes are derived and rebuildable. (Benchmarked at
-LoCoMo ≈ 0.79.)
+source of truth; the search indexes are derived and rebuildable.
+
+Recall is not something you have to ask for: before the model sees your message,
+durin searches memory with it and hands the hits to that turn as reference data,
+and the chat shows what came back as a **🧠 N memories recalled** chip. When
+durin opens a file, the notes memory already holds about it ride along too. And a
+new conversation is not a blank slate — on the surfaces where it is always you (the
+dashboard, the CLI), it opens knowing how the last one ended.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/mmarmol/durin/main/docs/assets/mockup-memory.svg" alt="durin's memory browser: a table of typed entities with a detail panel and its related entities" width="860">
@@ -84,13 +90,13 @@ watch a run, open a paused checkpoint, and pick up right where it stopped.
 
 ### And more
 
-- **Any model, or none.** 35 provider integrations — Anthropic, OpenAI, Gemini,
-  NVIDIA, Mistral, DeepSeek, Groq, Z.AI, Qwen, Moonshot, and more, plus OpenRouter
-  and other gateways that reach hundreds of models. Switch mid-conversation, or run
-  fully local with Ollama / llama.cpp / vLLM / LM Studio.
+- **Any model, or none.** Dozens of provider integrations — Anthropic, OpenAI,
+  Gemini, NVIDIA, Mistral, DeepSeek, Groq, Z.AI, Qwen, Moonshot, and more, plus
+  OpenRouter and other gateways that reach hundreds of models. Switch
+  mid-conversation, or run fully local with Ollama / llama.cpp / vLLM / LM Studio.
 - **Talk to it anywhere.** A CLI, a Textual TUI, a browser dashboard, and chat
-  channels — Telegram, Slack, Discord, email, WhatsApp, WebSocket — all reach the
-  same agent and the same memory.
+  channels — Telegram, Slack, Discord, email, WhatsApp, WebSocket, and more — all
+  reach the same agent and the same memory.
 - **Local-first & private.** Runs as a daemon on your own machine under
   `~/.durin/`; nothing phones home.
 - **Personas, voice, and schedules.** Per-channel personas (a SOUL + a model),
@@ -109,7 +115,7 @@ Python for you — nothing on your system has to match. Don't have uv yet?
 `curl -LsSf https://astral.sh/uv/install.sh | sh`
 
 ```bash
-uv tool install --prerelease allow durin-agent   # PyPI (uv picks a compatible Python)
+uv tool install durin-agent      # PyPI (uv picks a compatible Python)
 durin onboard                    # interactive setup wizard
 durin doctor                     # confirm setup is healthy
 durin agent                      # launch the TUI
@@ -134,6 +140,8 @@ commands, see the [CLI reference](https://github.com/mmarmol/durin/blob/main/doc
 - [Channels](https://github.com/mmarmol/durin/blob/main/docs/guide/channels.md) — Telegram, Slack, Discord, email, and more
 - [Documents & your knowledge](https://github.com/mmarmol/durin/blob/main/docs/guide/documents.md)
 - [Workflows](https://github.com/mmarmol/durin/blob/main/docs/guide/workflows.md)
+- [Automations](https://github.com/mmarmol/durin/blob/main/docs/guide/automations.md) — standing triggers that fire a workflow on their own
+- [OpenAI-compatible API](https://github.com/mmarmol/durin/blob/main/docs/guide/openai-api.md) — point any OpenAI client at durin with a scoped token
 - [How it works (internals)](https://github.com/mmarmol/durin/blob/main/docs/internals/README.md)
 
 ## License

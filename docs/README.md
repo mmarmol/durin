@@ -7,21 +7,24 @@ LLM (Claude, GLM, local models via Ollama or LM Studio, and others) through long
 multi-turn work. It is more than a memory store — it bundles four things into one
 runtime:
 
-- **Memory** — persistent, cross-session knowledge kept as markdown that the
-  agent can search without an LLM in the hot path, including a **Library** of
-  documents you ingest, kept apart from everyday recall.
+- **Memory** — persistent, cross-session knowledge kept as markdown, searched
+  without an LLM in the hot path. Every user message on an interactive surface
+  triggers one automatic search whose hits ride in that turn — the chat shows
+  what came back — and the agent can search again itself; a **Library** of
+  documents you ingest is kept apart from everyday recall.
 - **Context** — a layered system prompt (stable + per-session + volatile) that
   feeds the model the right history, skills, and pinned facts each turn.
 - **Adaptation** — runtime model/provider switching, permission-as-data agent
-  modes (plan / build / explore), and MCP servers connected on demand.
+  modes, and MCP servers connected on demand.
 - **Self-learning** — a cold-path *dream* that consolidates conversations into
-  an entity graph and curated skills, plus *cron* for scheduled work.
+  an entity graph and curated skills, leaves every conversation a searchable
+  summary, and *cron* for scheduled work.
 
 Every chat surface — terminal CLI, the Textual TUI, the web dashboard, and chat
-channels like Telegram, Discord, Slack, Email, and a raw WebSocket — funnels
-through the same internal message bus and the same agent loop. Channels differ
-only in their I/O; the agent's behaviour is identical regardless of where the
-message came from.
+channels like Telegram, Discord, Slack, WhatsApp, email, a raw WebSocket, and
+more — funnels through the same internal message bus and the same agent loop.
+Channels differ only in their I/O; the agent's behaviour is identical regardless
+of where the message came from.
 
 ## Where to go next
 
@@ -85,9 +88,10 @@ Three things to hold in your head:
    from the files.
 
 3. **Hot path vs cold path.** The hot path is the per-turn loop (receive →
-   restore → respond → persist). The cold path runs offline: the dream job
-   consolidates conversations into memory and skills; cron schedules reminders and
-   agent tasks.
+   restore → respond → persist), including the automatic memory search that runs
+   before the model sees the message. The cold path runs offline: the dream job
+   consolidates conversations into memory and skills and summarizes the
+   conversations that went idle; cron schedules reminders and agent tasks.
 
 ## The whole system at a glance
 

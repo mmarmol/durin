@@ -563,7 +563,7 @@
         "dreamEnabled": "自動 Dream 的總開關。關閉時，cron 與反應式觸發都會停用；手動執行的 `durin memory dream` 仍可使用。",
         "dreamCron": "每日擷取／精煉／技能處理程序所使用的 cron 運算式。預設為 0 3 * * *（本地時間凌晨 3 點）。",
         "dreamPostCompaction": "在會話壓縮後執行一次 Dream 處理——因為內容已經在記憶體中，成本會被分攤。",
-        "dreamOnSessionClose": "在會話結束時（/quit 或閒置逾時）執行一次 Dream 處理。",
+        "dreamOnSessionClose": "在會話透過 `/new` 關閉時執行一次 Dream 處理。",
         "dreamDiscover": "也會從你提及但未明確儲存的持久性事實建立實體，讓記憶能從對話中成長，而不只是來自明確的儲存動作。預設為開啟。",
         "dreamAutoAbsorb": "讓精煉處理程序自動合併它判定為重複的實體（僅限高信賴度）。關閉時合併仍須手動進行。",
         "dreamAbsorbConfidence": "評判者合併兩個實體所需的最低信賴度（0-100）。95 代表高精確度。僅在啟用自動合併時生效。",
