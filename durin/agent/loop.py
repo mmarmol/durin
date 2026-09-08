@@ -2598,7 +2598,7 @@ class AgentLoop:
         # the freeze the session's own turns keep.
         freezes = self._eager_surface_freezes(session, key)
         if freezes:
-            eager_snapshot = self._resolve_eager_snapshot(session, key)
+            eager_snapshot = self._resolve_eager_snapshot(session)
         else:
             eager_snapshot = None
             self._drop_eager_snapshot(session)
@@ -2986,11 +2986,9 @@ class AgentLoop:
         """
         if not self._eager_surface_freezes(session, session.key):
             return None
-        return self._resolve_eager_snapshot(session, session.key)
+        return self._resolve_eager_snapshot(session)
 
-    def _resolve_eager_snapshot(
-        self, session: Session | None, session_key: str
-    ) -> "EagerSnapshot | None":
+    def _resolve_eager_snapshot(self, session: Session | None) -> "EagerSnapshot | None":
         """The session's stored eager surface, or None to render live.
 
         A stored value present but rejected by `EagerSnapshot.from_metadata`
@@ -3352,7 +3350,7 @@ class AgentLoop:
         # pointer line in the prefetch's own fenced block.
         freezes = self._eager_surface_freezes(ctx.session, ctx.session_key)
         if freezes:
-            ctx.eager_snapshot = self._resolve_eager_snapshot(ctx.session, ctx.session_key)
+            ctx.eager_snapshot = self._resolve_eager_snapshot(ctx.session)
         else:
             ctx.eager_snapshot = None
             self._drop_eager_snapshot(ctx.session)

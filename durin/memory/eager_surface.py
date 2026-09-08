@@ -19,9 +19,11 @@ metadata: it rides in the session's ``.meta.json`` sidecar, never in the
 from the memory store rather than session content.
 
 This module defines only the snapshot type and its staleness rule.
-Building a snapshot during a prompt build and consuming it there (including
-the in-context dedup reading frozen refs instead of the live hot layer) is
-wired in separately.
+``AgentLoop._freeze_eager_surface`` builds a snapshot right after a prompt
+build and stores it on the session; ``AgentLoop._resolve_eager_snapshot``
+reads it back for a later build. ``durin.agent.tools.memory_search`` binds
+the turn's snapshot to a ``ContextVar`` (``bind_turn_eager_surface``) so its
+in-context dedup can read the frozen refs instead of the live hot layer.
 """
 
 from __future__ import annotations
@@ -59,13 +61,14 @@ class EagerSnapshot:
     model was actually shown, not against a live hot layer that may have
     moved on. ``turn`` is the 1-based message ordinal of the turn it was
     taken on; ``frozen_at`` is an ISO-8601 UTC timestamp consumed by
-    ``snapshot_is_stale``. ``principal`` is the owner ref the pinned block
-    was resolved for at freeze time — the dedup needs it to exclude the
-    right ref from ``whole_refs`` (see ``memory_search``'s in-context dedup);
-    resolving it live instead would use whichever principal the CURRENT
-    config names, which can differ from the one this snapshot was frozen
-    with if the operator changes it mid-session. Defaults to ``""`` so a
-    snapshot frozen before this field existed still loads.
+    ``snapshot_is_stale``. ``principal`` is resolved the same way the dedup
+    resolves it (owner config, no channel map) — the dedup needs it to
+    exclude the right ref from ``whole_refs`` (see ``memory_search``'s
+    in-context dedup); resolving it live instead would use whichever
+    principal the CURRENT config names, which can differ from the one this
+    snapshot was frozen with if the operator changes it mid-session.
+    Defaults to ``""`` so a snapshot frozen before this field existed still
+    loads.
     """
 
     pinned: str

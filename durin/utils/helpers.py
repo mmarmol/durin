@@ -767,7 +767,7 @@ def _format_composition_section(payload: dict[str, Any]) -> list[str]:
     but not highlighted as their own bucket: their share matters in
     small contexts but disappears as sessions grow.
     """
-    from durin.agent.context import summarize_composition
+    from durin.agent.context import FROZEN_STABLE_LABELS, summarize_composition
 
     summary = summarize_composition(payload)
     total = summary["total"]
@@ -782,11 +782,11 @@ def _format_composition_section(payload: dict[str, Any]) -> list[str]:
 
     # When this build reused a frozen eager surface instead of rendering the
     # pinned block / hot layer live, the payload names the turn it was taken
-    # on (AgentLoop._freeze_eager_surface). Appended only to those two rows —
-    # the freeze covers just the pinned block and the hot layer, nothing else
-    # in the infrastructure bucket.
+    # on (AgentLoop._freeze_eager_surface). Appended only to FROZEN_STABLE_LABELS'
+    # rows — the freeze covers just the pinned block and the hot layer,
+    # nothing else in the infrastructure bucket.
     eager_frozen_turn = payload.get("eager_frozen_turn")
-    frozen_labels = {"Memory pinned", "Memory hot layer"}
+    frozen_labels = FROZEN_STABLE_LABELS
 
     out: list[str] = ["", "\U0001f9ee Last turn \u2014 composition"]
     out.append(f"  Prompt tokens          {total:>6}")

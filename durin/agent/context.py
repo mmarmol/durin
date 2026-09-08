@@ -22,6 +22,25 @@ from durin.utils.prompt_templates import render_template
 
 logger = logging.getLogger(__name__)
 
+# The stable tier's sub-block labels for the ``/status`` composition
+# breakdown (see ``summarize_composition`` below).
+STABLE_LABELS: tuple[tuple[str, str], ...] = (
+    ("identity", "Identity"),
+    ("bootstrap", "Bootstrap files"),
+    ("skills_active", "Skills (active)"),
+    ("skills_catalog", "Skills catalog"),
+    ("memory_pinned", "Memory pinned"),
+    ("memory_hot", "Memory hot layer"),
+)
+
+# The two labels the eager-surface freeze covers — durin/utils/helpers.py's
+# ``/status`` and CLI-footer "(frozen at turn N)" suffix applies to exactly
+# these, nothing else in the infrastructure bucket. Derived from
+# STABLE_LABELS rather than duplicated so the two never drift apart.
+FROZEN_STABLE_LABELS = frozenset(
+    label for key, label in STABLE_LABELS if key in ("memory_pinned", "memory_hot")
+)
+
 
 def summarize_composition(payload: Mapping[str, Any] | None) -> dict[str, Any]:
     """Roll a ``context.composition`` payload into 2 user-facing buckets.
@@ -71,15 +90,7 @@ def summarize_composition(payload: Mapping[str, Any] | None) -> dict[str, Any]:
         conv["Current message"] = current_n
 
     infra: dict[str, int] = {}
-    stable_labels = (
-        ("identity", "Identity"),
-        ("bootstrap", "Bootstrap files"),
-        ("skills_active", "Skills (active)"),
-        ("skills_catalog", "Skills catalog"),
-        ("memory_pinned", "Memory pinned"),
-        ("memory_hot", "Memory hot layer"),
-    )
-    for key, label in stable_labels:
+    for key, label in STABLE_LABELS:
         n = int(payload.get("stable_breakdown", {}).get(key, 0) or 0)
         if n:
             infra[label] = n

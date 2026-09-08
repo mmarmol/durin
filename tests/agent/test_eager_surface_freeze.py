@@ -317,6 +317,39 @@ async def test_the_snapshot_is_stored_and_survives_a_save_load_round_trip(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_a_build_after_restart_uses_the_sidecar_snapshot(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """The round-trip test above only shows the metadata survives a reload;
+    this drives an actual build from it. A second ``AgentLoop`` over the same
+    workspace — its own fresh ``SessionManager``, so nothing is shared with
+    the first loop's in-memory cache — must build with the stored snapshot
+    verbatim (byte-identical blocks) rather than rendering live, and no fresh
+    ``memory.eager_surface`` row fires: the whole point of the sidecar split
+    is that a restart does not cost a re-render."""
+    _seed_workspace(tmp_path)
+    loop, stable = _make_loop(tmp_path)
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION)
+    )
+
+    restarted, restarted_stable = _make_loop(tmp_path)
+    assert restarted.sessions is not loop.sessions
+    rec = _Rec()
+    monkeypatch.setattr("durin.telemetry.logger.get_session_logger", lambda key, base_dir=None: rec)
+
+    await restarted._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION)
+    )
+
+    assert restarted_stable[0]["memory_pinned"] == stable[0]["memory_pinned"]
+    assert restarted_stable[0]["memory_hot"] == stable[0]["memory_hot"]
+    rows = [d for t, d in rec.events if t == "memory.eager_surface"]
+    assert rows == []
+
+
+@pytest.mark.asyncio
 async def test_autonomous_sessions_keep_rendering_live(tmp_path: Path) -> None:
     """Cron, workflow-node and subagent turns have no eager surface to freeze:
     each is its own short-lived session, so a snapshot would only cost a save."""
@@ -753,6 +786,43 @@ async def test_a_system_message_build_forgets_the_surface_when_freeze_is_off(
 
     assert "company:bakery" in stable[1]["memory_hot"]
     assert SNAPSHOT_KEY not in session.metadata
+
+
+# ---------------------------------------------------------------------------
+# The overflow-retry rebuild reuses the frozen prefix
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_overflow_retry_rebuild_carries_the_same_frozen_prefix(tmp_path: Path) -> None:
+    """Iteration-0 overflow recovery (``AgentLoop._state_run``) rebuilds
+    ``ctx.initial_messages`` for one retry after a
+    ``mid_turn_precheck_overflow`` on the first attempt, passing
+    ``eager_snapshot=ctx.eager_snapshot`` straight through rather than
+    resolving it again — the same invariant
+    ``tests/agent/test_memory_prefetch.py``'s
+    ``test_overflow_rebuild_keeps_the_prefetch_block`` pins for the prefetch
+    block. The retried call's system prompt must carry the identical frozen
+    stable tier, not a fresh disk read."""
+    _seed_workspace(tmp_path)
+    loop, _stable = _make_loop(tmp_path)
+    loop._run_agent_loop = AsyncMock(side_effect=[
+        ("Error: prompt overflow before LLM call.", [], [], "mid_turn_precheck_overflow", False, []),
+        ("Done.", [], [{"role": "assistant", "content": "Done."}], "completed", False, []),
+    ])
+
+    await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="u", chat_id="c", content=QUESTION)
+    )
+
+    calls = loop._run_agent_loop.await_args_list
+    assert len(calls) == 2, "must retry once after the forced consolidation"
+    first_system = calls[0].args[0][0]["content"]
+    second_system = calls[1].args[0][0]["content"]
+    # Sanity: the seeded pinned block actually rendered, so equality below
+    # is not vacuously true on two empty strings.
+    assert "Runs a small bakery supply business." in first_system
+    assert first_system == second_system
 
 
 # ---------------------------------------------------------------------------

@@ -418,7 +418,7 @@ Slash commands, workflow nodes, subagents, and every session kind the runtime tr
 
 **`memory.eager_surface`** — freezes the pinned memory block and the hot layer for the life of a session instead of rebuilding them on every prompt build.
 
-What it costs: one render per session instead of one per turn. The model's eager view is the one rendered at session start; anything written since reaches it through the automatic prefetch (`memory.prefetch`) and the model's own `memory_search` calls, not through the frozen surface itself. Turn it off with `memory.eager_surface.freeze: false` to go back to a fresh render every turn.
+What it costs: one render per session instead of one per turn, and a copy of both rendered blocks rides along in every session save, in the sidecar — a few kilobytes per save. The model's eager view is the one rendered at session start; anything written since reaches it through the automatic prefetch (`memory.prefetch`) and the model's own `memory_search` calls, not through the frozen surface itself. The one exception is the pinned block's `always_on` pages: their normal contract is unconditional injection regardless of retrieval, but a page pinned `always_on` or edited after the freeze reaches the model only if a search happens to hit it, until the next session boundary or `refresh_after_min` re-renders the block. Turn it off with `memory.eager_surface.freeze: false` to go back to a fresh render every turn.
 
 | Key | Default | Meaning |
 |---|---|---|

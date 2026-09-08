@@ -179,7 +179,7 @@ These fire during the refine pass and via the manual `durin memory` commands:
 
 ### Per-turn rollup
 
-- **`turn.memory_usage`** — emitted once per turn at save time (`AgentLoop._state_save`), including turns with zero tool calls. Fields: `search_calls`, `drill_calls`, `tool_calls_total`, plus `pinned_chars` / `hot_chars` — the rendered size of the pinned memory block and of the hot layer in that turn's last prompt build — and `prefetch_hits`, how many hits the automatic search fenced into the message. Turns where the agent answered a query about prior information with `search_calls == 0` *and* `prefetch_hits == 0` are the silent-miss signal; the two size fields are the per-turn cost of the always-on memory surface.
+- **`turn.memory_usage`** — emitted once per turn at save time (`AgentLoop._state_save`), including turns with zero tool calls. Fields: `search_calls`, `drill_calls`, `tool_calls_total`, plus `pinned_chars` / `hot_chars` — the size of the eager surface that turn's prompt actually carried, frozen or live — and `prefetch_hits`, how many hits the automatic search fenced into the message. Turns where the agent answered a query about prior information with `search_calls == 0` *and* `prefetch_hits == 0` are the silent-miss signal; the two size fields are the per-turn cost of the always-on memory surface.
 
 ### Additional catalog entries
 

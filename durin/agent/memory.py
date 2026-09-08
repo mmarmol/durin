@@ -31,6 +31,7 @@ from durin.utils.post_compaction_guard import PostCompactionLoopGuard
 from durin.utils.prompt_templates import render_template
 
 if TYPE_CHECKING:
+    from durin.memory.eager_surface import EagerSnapshot
     from durin.providers.base import LLMProvider
     from durin.session.manager import SessionManager
 
@@ -546,7 +547,8 @@ class Consolidator:
         context_window_tokens: int,
         build_messages: Callable[..., list[dict[str, Any]]],
         get_tool_definitions: Callable[[], list[dict[str, Any]]],
-        eager_snapshot_for_session: Callable[[Session], Any] | None = None,
+        *,
+        eager_snapshot_for_session: Callable[[Session], EagerSnapshot | None] | None = None,
         max_completion_tokens: int = 4096,
         consolidation_ratio: float = 0.5,
         preemptive_compact_ratio: float = 0.5,
