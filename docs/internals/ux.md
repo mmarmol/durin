@@ -45,7 +45,7 @@ effect on agent behavior. Lifecycle commands (`durin onboard`, `durin config`,
 flowchart TD
     subgraph surfaces["User-facing surfaces"]
         CLI["Interactive CLI\n(prompt_toolkit)"]
-        TUI["Textual TUI\n(durin agent --tui)"]
+        TUI["Textual TUI\n(durin agent)"]
         WEB["WebUI\n(WebSocket channel)"]
         EXT["External channels\n(Slack / Telegram / Matrix / etc.)"]
     end
@@ -547,7 +547,7 @@ only — it does not truncate history or automatically resend.
 ### TUI features
 
 
-The Textual TUI (`durin agent --tui`) provides richer interaction affordances
+The Textual TUI (`durin agent`, the default) provides richer interaction affordances
 than the interactive CLI.
 
 **Keybindings**
