@@ -312,9 +312,14 @@ cancelled icon rather than success or failure marks.
 **Work chip.** A compact inline indicator in the message thread shows that
 background work is running or has finished. Clicking it opens the work panel.
 Per-node detail and sub-agent steps are not expanded inline — they live in the
-panel. An automatic memory recall renders as a `🧠 N memories recalled` chip on
-the turn it served; the chip's refs are in the event's result for the work
 panel.
+
+**Tool chips.** The thread's trace row also carries non-clickable chips for tool
+events that have nothing to open. The automatic per-turn memory recall is one of
+them: when it finds hits, the loop announces it as a synthetic `memory_prefetch`
+tool event, and the thread renders that as a `🧠 N memories recalled` chip in the
+same row as the other chips, on the turn it served. The event carries the
+recalled refs in its result.
 
 **Work strip.** The panel's collapsed representation: a slim status line docked
 directly above the composer, rendered only while the panel is closed and there
