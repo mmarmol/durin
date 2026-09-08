@@ -721,6 +721,9 @@ class MemoryRecallEvent(TypedDict):
     recovery_duration_ms: NotRequired[float]
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
+    # True when the automatic per-turn memory prefetch's own search produced
+    # this row, rather than a memory_search the model called itself.
+    prefetch: NotRequired[bool]
 
 
 class MemoryPrefetchEvent(TypedDict):
@@ -729,13 +732,18 @@ class MemoryPrefetchEvent(TypedDict):
     block was injected (disabled / backoff / command_or_empty / short /
     non_interactive / no_index / no_tool / timeout / error / no_hits);
     absent when hits landed. ``backoff`` is the window after a timeout or an
-    error during which the search is not attempted again."""
+    error during which the search is not attempted again. ``hits`` counts
+    what the model can actually see: the tool's uncut total, unless the
+    rendered block was cut at ``max_chars``, in which case it is how many
+    hits' markers survived the cut — a truncated block always sets
+    ``truncated`` to True."""
 
     session_key: str
     hits: int
     chars: int
     duration_ms: int
     skipped: NotRequired[str]
+    truncated: NotRequired[bool]
 
 
 class MemoryStoreEvent(TypedDict):
@@ -815,6 +823,9 @@ class MemoryRecallVectorEvent(TypedDict):
     top_1_id_after: NotRequired[str]
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
+    # True when the automatic per-turn memory prefetch's own search produced
+    # this row, rather than a memory_search the model called itself.
+    prefetch: NotRequired[bool]
 
 
 class MemoryDreamStartEvent(TypedDict):
@@ -1148,6 +1159,9 @@ class MemoryRecallLexicalEvent(TypedDict):
     duration_ms: float
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
+    # True when the automatic per-turn memory prefetch's own search produced
+    # this row, rather than a memory_search the model called itself.
+    prefetch: NotRequired[bool]
 
 
 class MemoryRecallRRFEvent(TypedDict):
@@ -1167,6 +1181,9 @@ class MemoryRecallRRFEvent(TypedDict):
     duration_ms: float
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
+    # True when the automatic per-turn memory prefetch's own search produced
+    # this row, rather than a memory_search the model called itself.
+    prefetch: NotRequired[bool]
 
 
 class MemoryRecallGrepVerifyEvent(TypedDict):
@@ -1183,6 +1200,9 @@ class MemoryRecallGrepVerifyEvent(TypedDict):
     duration_ms: float
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
+    # True when the automatic per-turn memory prefetch's own search produced
+    # this row, rather than a memory_search the model called itself.
+    prefetch: NotRequired[bool]
 
 
 class MemoryRecallRerankEvent(TypedDict):
@@ -1202,6 +1222,9 @@ class MemoryRecallRerankEvent(TypedDict):
     fallback: NotRequired[bool]
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
+    # True when the automatic per-turn memory prefetch's own search produced
+    # this row, rather than a memory_search the model called itself.
+    prefetch: NotRequired[bool]
 
 
 class MemoryRecallFailureEvent(TypedDict):

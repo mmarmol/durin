@@ -2882,17 +2882,13 @@ class AgentLoop:
         with suppress(Exception):
             get_session_logger(session_key).log("memory.prefetch", {"session_key": session_key, **data})
 
-    async def _memory_prefetch(self, ctx: TurnContext) -> str:
-        """One warm memory_search with the user message, fenced for the wire
-        copy of the message. Returns "" (and records why) whenever the search
-        should not or could not run — the turn never waits on memory."""
-        import re
-
-        from durin.agent.context import build_memory_context_block
+    def _prefetch_skip_reason(self, ctx: TurnContext, cfg: "MemoryPrefetchConfig") -> str | None:
+        """The gates `_memory_prefetch` checks before it searches, factored
+        out so `_state_build` can ask the same question up front — whether a
+        search will run at all decides whether it announces one with a
+        `start` progress frame. Returns None when a search will run."""
         from durin.memory.fts_index import fts_index_path
-        from durin.telemetry.logger import bind_telemetry, get_session_logger, reset_telemetry
 
-        cfg = self._prefetch_config()
         text = ctx.msg.content.strip() if isinstance(ctx.msg.content, str) else ""
         reason: str | None = None
         if not cfg.enabled:
@@ -2919,15 +2915,51 @@ class AgentLoop:
         tool = self.tools.get("memory_search") if self.tools else None
         if reason is None and tool is None:
             reason = "no_tool"
+        return reason
+
+    async def _memory_prefetch(
+        self, ctx: TurnContext, *, skip_reason: str | None, cfg: "MemoryPrefetchConfig"
+    ) -> str:
+        """One warm memory_search with the user message, fenced for the wire
+        copy of the message. Returns "" (and records why) whenever the search
+        should not or could not run — the turn never waits on memory.
+
+        `skip_reason` and `cfg` come from the caller's own `_prefetch_skip_reason`
+        call rather than a second one here: that gate reads the clock and the
+        filesystem, so evaluating it twice for one turn (once to decide the
+        `start` announcement, again here) could disagree with itself across
+        the `await` between them."""
+        import re
+
+        from durin.agent.context import build_memory_context_block
+        from durin.telemetry.logger import (
+            bind_prefetch_search,
+            bind_telemetry,
+            get_session_logger,
+            reset_prefetch_search,
+            reset_telemetry,
+        )
+
+        text = ctx.msg.content.strip() if isinstance(ctx.msg.content, str) else ""
+        reason = skip_reason
         if reason is not None:
             self._emit_prefetch(ctx.session_key, hits=0, chars=0, duration_ms=0, skipped=reason)
             return ""
+        tool = self.tools.get("memory_search") if self.tools else None
 
         t0 = time.perf_counter()
         token = None
+        prefetch_token = None
         response: Any = None
         try:
             token = bind_telemetry(get_session_logger(ctx.session_key))
+            # Bound alongside the telemetry logger so emit_tool_event can tag
+            # this search's memory.recall* rows as the prefetch's. asyncio.
+            # to_thread copies the calling context when the pipeline's thread
+            # starts, so a search abandoned below on timeout keeps the flag
+            # in its own copy and still tags the rows it emits after this
+            # function has returned and reset it here.
+            prefetch_token = bind_prefetch_search()
             response = await asyncio.wait_for(
                 tool.execute(query=text, limit=cfg.limit, level="warm"),
                 timeout=cfg.timeout_s,
@@ -2940,6 +2972,8 @@ class AgentLoop:
         finally:
             if token is not None:
                 reset_telemetry(token)
+            if prefetch_token is not None:
+                reset_prefetch_search(prefetch_token)
         duration_ms = int((time.perf_counter() - t0) * 1000)
         if reason is None and isinstance(response, dict) and "error" in response:
             # The tool answered with its own refusal shape; that is a failure,
@@ -2955,17 +2989,36 @@ class AgentLoop:
             return ""
 
         total = int((response or {}).get("total") or 0) if isinstance(response, dict) else 0
-        rendered = str((response or {}).get("sectioned_rendered") or "") if isinstance(response, dict) else ""
-        if total == 0 or not rendered.strip():
+        rendered_full = str((response or {}).get("sectioned_rendered") or "") if isinstance(response, dict) else ""
+        if total == 0 or not rendered_full.strip():
             self._emit_prefetch(ctx.session_key, hits=0, chars=0, duration_ms=duration_ms, skipped="no_hits")
             return ""
-        if len(rendered) > cfg.max_chars:
-            rendered = rendered[:cfg.max_chars].rstrip() + "\n… (truncated; memory_search for the rest)"
+        truncated = len(rendered_full) > cfg.max_chars
+        rendered = (
+            rendered_full[:cfg.max_chars].rstrip() + "\n… (truncated; memory_search for the rest)"
+            if truncated else rendered_full
+        )
         block = build_memory_context_block(rendered)
-        ctx.prefetch_hits = total
         ctx.prefetch_refs = re.findall(
             r"^=== (?:SKILL|CANONICAL|FRAGMENT|SESSION|INGESTED): (\S+)", rendered, re.M,
         )
+        # A cut mid-block drops that hit's marker line along with the rest of
+        # it, so the model never sees it. Count only the markers that
+        # survived, not the tool's uncut total — otherwise the turn's own
+        # telemetry and the recall announced to the user both overstate what
+        # actually reached the prompt.
+        ctx.prefetch_hits = len(ctx.prefetch_refs) if truncated else total
+        if truncated and not ctx.prefetch_refs:
+            # The cut landed before any hit's marker line — typically inside
+            # a section's own header, reachable only with max_chars near its
+            # floor — so nothing whole reached the message. Record it as a
+            # plain no_hits skip rather than fencing a marker-less block or
+            # announcing a hits-landed row with no `skipped`: a cut that
+            # leaves no whole hit standing counts as no hits.
+            self._emit_prefetch(
+                ctx.session_key, hits=0, chars=0, duration_ms=duration_ms, skipped="no_hits", truncated=True,
+            )
+            return ""
         # Bind the refs into the ContextVar memory_search reads for its
         # dedup, in THIS asyncio task — the same one _state_run later drives
         # the tool loop in — so the model's own search this turn collapses
@@ -2980,8 +3033,42 @@ class AgentLoop:
             ctx.prefetch_refs_token = bind_turn_prefetch_refs(
                 {dedup_key(r) for r in ctx.prefetch_refs}
             )
-        self._emit_prefetch(ctx.session_key, hits=total, chars=len(block), duration_ms=duration_ms)
+        self._emit_prefetch(
+            ctx.session_key, hits=ctx.prefetch_hits, chars=len(block), duration_ms=duration_ms, truncated=truncated,
+        )
         return block
+
+    async def _announce_prefetch(
+        self, ctx: TurnContext, phase: str, *, hits: int | None = None, refs: list[str] | None = None,
+    ) -> None:
+        """Emit one memory_prefetch progress frame ('start' or 'end').
+
+        Both frames share version/call_id/name/error/files/embeds and the
+        query — computed once here rather than duplicated per call site.
+        ``hits``/``refs`` are the 'end' frame's payload; the 'start' frame
+        (neither passed) carries just the query, with ``result`` staying
+        None. A no-op when the turn has no progress callback.
+        """
+        if ctx.on_progress is None:
+            return
+        from durin.utils.progress_events import invoke_on_progress
+        query = ctx.msg.content.strip() if isinstance(ctx.msg.content, str) else ""
+        arguments: dict[str, Any] = {"query": query[:80]}
+        if hits is not None:
+            arguments["hits"] = hits
+        event = {
+            "version": 1,
+            "phase": phase,
+            "call_id": f"memory_prefetch:{ctx.turn_id}",
+            "name": "memory_prefetch",
+            "arguments": arguments,
+            "result": {"refs": refs} if refs is not None else None,
+            "error": None,
+            "files": [],
+            "embeds": [],
+        }
+        with suppress(Exception):
+            await invoke_on_progress(ctx.on_progress, "", tool_hint=True, tool_events=[event])
 
     async def _state_build(self, ctx: TurnContext) -> str:
         await self.consolidator.maybe_consolidate_by_tokens(
@@ -3019,23 +3106,46 @@ class AgentLoop:
         if ctx.on_retry_wait is None:
             ctx.on_retry_wait = await self._build_retry_wait_callback(ctx.msg)
 
-        ctx.memory_prefetch = await self._memory_prefetch(ctx)
-        if ctx.prefetch_hits and ctx.on_progress is not None:
-            from durin.utils.progress_events import invoke_on_progress
-            query = ctx.msg.content.strip() if isinstance(ctx.msg.content, str) else ""
-            event = {
-                "version": 1,
-                "phase": "end",
-                "call_id": f"memory_prefetch:{ctx.turn_id}",
-                "name": "memory_prefetch",
-                "arguments": {"query": query[:80], "hits": ctx.prefetch_hits},
-                "result": {"refs": list(ctx.prefetch_refs)},
-                "error": None,
-                "files": [],
-                "embeds": [],
-            }
-            with suppress(Exception):
-                await invoke_on_progress(ctx.on_progress, "", tool_hint=True, tool_events=[event])
+        # Whether a search will run is known before it runs, so the
+        # announcement can bracket the search with a `start` frame before and
+        # an `end` frame after, rather than only surfacing it on the way out.
+        # Evaluated exactly once: the gate reads the clock and the
+        # filesystem, so a second evaluation inside _memory_prefetch (after
+        # the `await` below) could disagree with this one — a `start` frame
+        # fires, backoff then kicks in, and the search reports itself
+        # skipped instead of closing the recall it opened. _memory_prefetch
+        # takes this verdict as an argument and never recomputes it. A gate
+        # skip announces nothing, as today.
+        prefetch_cfg = self._prefetch_config()
+        prefetch_skip_reason = self._prefetch_skip_reason(ctx, prefetch_cfg)
+        prefetch_will_search = prefetch_skip_reason is None
+        if prefetch_will_search:
+            await self._announce_prefetch(ctx, "start")
+
+        try:
+            ctx.memory_prefetch = await self._memory_prefetch(
+                ctx, skip_reason=prefetch_skip_reason, cfg=prefetch_cfg
+            )
+        except asyncio.CancelledError:
+            # Esc / /stop cancels the turn's own task (_cancel_active_tasks);
+            # the prefetch window is the first thing in the turn and can be
+            # seconds long on a cold embedding load — precisely when a user
+            # hits it. Awaiting the close here would just be cancelled again
+            # (this except block is still running inside the task being
+            # cancelled), so hand it to a background task instead: the frame
+            # still reaches the surface that opened the recall, without
+            # swallowing or delaying the cancellation itself.
+            if prefetch_will_search:
+                self._schedule_background(self._announce_prefetch(
+                    ctx, "end", hits=ctx.prefetch_hits, refs=list(ctx.prefetch_refs),
+                ))
+            raise
+        else:
+            if prefetch_will_search:
+                await self._announce_prefetch(
+                    ctx, "end", hits=ctx.prefetch_hits, refs=list(ctx.prefetch_refs),
+                )
+
         ctx.initial_messages = self._build_initial_messages(
             ctx.msg, ctx.session, ctx.history, ctx.pending_summary,
             active_persona_soul=ctx.active_persona_soul,

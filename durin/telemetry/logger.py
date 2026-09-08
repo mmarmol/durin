@@ -234,3 +234,32 @@ def bind_telemetry(logger: TelemetryLogger) -> Token[TelemetryLogger | None]:
 
 def reset_telemetry(token: Token[TelemetryLogger | None]) -> None:
     _current_logger.reset(token)
+
+
+# Marks the automatic per-turn memory prefetch's search (AgentLoop._memory_
+# prefetch) so emit_tool_event can stamp the memory.recall* rows it produces
+# as the prefetch's, distinct from a memory_search the model calls itself.
+# Bound around the same await as _current_logger and copied by contextvars
+# the same way: asyncio.to_thread runs the search pipeline in a COPY of the
+# calling context, so a search thread still running after _memory_prefetch's
+# `finally` resets both ContextVars keeps seeing this one as True too — its
+# rows still carry the flag even though the turn has already moved on.
+_prefetch_search: ContextVar[bool] = ContextVar(
+    "durin_telemetry_prefetch_search",
+    default=False,
+)
+
+
+def is_prefetch_search() -> bool:
+    """True while the current task (or a thread copied from it) is inside
+    the automatic per-turn memory prefetch's search."""
+    return _prefetch_search.get()
+
+
+def bind_prefetch_search() -> Token[bool]:
+    """Mark the current async task as the automatic memory prefetch's search."""
+    return _prefetch_search.set(True)
+
+
+def reset_prefetch_search(token: Token[bool]) -> None:
+    _prefetch_search.reset(token)
