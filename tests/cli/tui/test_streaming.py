@@ -164,6 +164,26 @@ async def test_user_submission_publishes_inbound(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_offline_mode_placeholder_names_no_document() -> None:
+    """No agent loop: the assistant bubble names the situation, not a doc."""
+    app = DurinApp(agent_loop=None)
+    async with app.run_test() as pilot:
+        chat = app.query_one(ChatView)
+        inp = app.query_one("InputArea")
+        inp.focus()
+        await pilot.pause()
+        inp.value = "hola"
+        await pilot.press("enter")
+        await pilot.pause()
+        bubbles = list(chat.query(MessageBubble))
+        assert bubbles[-1]._role == "assistant"
+        assert bubbles[-1].body == (
+            "No agent loop is connected — this TUI is running offline, "
+            "so messages are not dispatched."
+        )
+
+
+@pytest.mark.asyncio
 async def test_blocking_ask_user_does_not_duplicate_in_tui(tmp_path) -> None:
     """E2E render check: a blocking ask_user's end frame must update the
     SAME bubble created at start — even when the user's answer bubble was

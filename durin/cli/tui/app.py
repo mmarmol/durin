@@ -34,7 +34,14 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Input
 
 from durin import __version__ as DURIN_VERSION  # noqa: N812 — descriptive version alias
-from durin.cli.tui.widgets import ChatView, FooterBar, GoalBanner, HeaderBar, InputArea, MessageBubble
+from durin.cli.tui.widgets import (
+    ChatView,
+    FooterBar,
+    GoalBanner,
+    HeaderBar,
+    InputArea,
+    MessageBubble,
+)
 from durin.cli.tui.widgets.footer_bar import payload_from_loop
 
 __all__ = ["DurinApp", "run_durin_tui"]
@@ -488,10 +495,9 @@ class DurinApp(App[None]):
         # the _stream_delta path in _consume_outbound.
         self._current_assistant_bubble = chat.add_message("assistant", "")
         if self._agent_loop is None:
-            # Offline / test mode — keep the D5.2 placeholder behaviour.
             self._current_assistant_bubble.body = (
-                "Streaming + agent dispatch land in D5.3 — see "
-                "docs/10_textual_migration.md."
+                "No agent loop is connected — this TUI is running offline, "
+                "so messages are not dispatched."
             )
             return
         # Spinner: shows "thinking…" between submit and first delta.
