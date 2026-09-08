@@ -229,6 +229,21 @@ export function ToolChipRow({ events }: { events: ToolProgressEvent[] }) {
   );
 }
 
+/**
+ * Pure label resolution for a batch of chip events, mirroring the
+ * filtering ToolChipRow does internally — exposed so a caller can tell in
+ * advance whether a row of chip events would render anything at all.
+ * Some events (e.g. a memory recall that found nothing) resolve to "" and
+ * are dropped; a caller building the row's wrapper element needs to know
+ * when every event in the batch drops out, so it can skip the wrapper too.
+ */
+export function chipLabelsFor(
+  events: ToolProgressEvent[],
+  t: (key: string, options?: Record<string, unknown>) => string,
+): string[] {
+  return events.map((event) => chipLabel(event, t)).filter(Boolean);
+}
+
 function chipLabel(event: ToolProgressEvent, t: (key: string, options?: Record<string, unknown>) => string): string {
   const a = args(event);
   const s = (key: string) => (typeof a[key] === "string" ? (a[key] as string) : "");

@@ -1,9 +1,11 @@
+import { useTranslation } from "react-i18next";
+
 import { MessageBubble } from "@/components/MessageBubble";
 import {
   AgentActivityCluster,
   isAgentActivityMember,
 } from "@/components/thread/AgentActivityCluster";
-import { HoistedToolBlock, ToolChipRow } from "@/components/thread/ToolBlocks";
+import { chipLabelsFor, HoistedToolBlock, ToolChipRow } from "@/components/thread/ToolBlocks";
 import { eventDisplayClass } from "@/lib/tool-display";
 import type { ToolProgressEvent, UIMessage } from "@/lib/types";
 
@@ -72,7 +74,10 @@ function partitionTrace(m: UIMessage): {
   return { rest, hoisted, chips };
 }
 
-function buildDisplayUnits(messages: UIMessage[]): DisplayUnit[] {
+function buildDisplayUnits(
+  messages: UIMessage[],
+  t: (key: string, options?: Record<string, unknown>) => string,
+): DisplayUnit[] {
   const out: DisplayUnit[] = [];
   let i = 0;
   while (i < messages.length) {
@@ -94,7 +99,11 @@ function buildDisplayUnits(messages: UIMessage[]): DisplayUnit[] {
         i += 1;
       }
       if (cluster.length > 0) out.push({ type: "cluster", messages: cluster });
-      if (chips.length > 0) {
+      // A chip event can still resolve to an empty label (e.g. a memory
+      // recall that found nothing) — skip the unit entirely when every
+      // chip in the row is empty, so no bare wrapper div (and its margin)
+      // survives into the layout.
+      if (chips.length > 0 && chipLabelsFor(chips.map((c) => c.event), t).length > 0) {
         out.push({
           type: "toolChips",
           events: chips.map((c) => c.event),
@@ -127,7 +136,8 @@ export function ThreadMessages({
   onRetryLast,
   onEditLastUser,
 }: ThreadMessagesProps) {
-  const units = buildDisplayUnits(messages);
+  const { t } = useTranslation();
+  const units = buildDisplayUnits(messages, t);
 
   // Find the last single-message unit indices for retry/edit targeting.
   let lastAssistantUnitIdx = -1;

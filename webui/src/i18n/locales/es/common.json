@@ -1894,7 +1894,7 @@
       "memorySaved": "memoria guardada",
       "entityUpdated": "{{ref}}",
       "entityUpdatedDefault": "entidad actualizada",
-      "memoryForgot": "olvidar {{uri}}",
+      "memoryForgot": "olvidado {{uri}}",
       "memoriesRecalling": "recordando…",
       "memoriesRecalled_one": "{{count}} recuerdo recuperado",
       "memoriesRecalled_other": "{{count}} recuerdos recuperados",
