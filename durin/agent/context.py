@@ -280,17 +280,19 @@ class ContextBuilder:
         try:
             from durin.memory.principal import (
                 build_pinned_context,
+                list_always_on,
                 pinned_refs,
-                resolve_principal,
+                resolve_owner_principal,
             )
-            owner = None
-            try:
-                from durin.config.loader import load_config
-                owner = getattr(load_config().memory, "owner", None)
-            except Exception:  # noqa: BLE001 — test workspaces without a config
-                owner = None
-            principal = resolve_principal(channel, owner=owner)
-            return build_pinned_context(self.workspace, principal), pinned_refs(self.workspace, principal)
+            principal = resolve_owner_principal(self.workspace, channel)
+            # One walk per prompt build: the block and the ref set that keeps
+            # it out of the canonical block are two views of the same pages,
+            # and the walk loads every entity page from disk.
+            always = list_always_on(self.workspace)
+            return (
+                build_pinned_context(self.workspace, principal, always_on=always),
+                pinned_refs(self.workspace, principal, always_on=always),
+            )
         except Exception:  # noqa: BLE001 — never break the prompt build
             return "", frozenset()
 

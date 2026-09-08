@@ -215,3 +215,35 @@ def test_pinned_block_carries_aliases_relations_and_sources(tmp_path):
     assert "Aliases: marce." in ctx
     assert "maintainer project:durin" in ctx
     assert "Sources: reference:durin-handbook." in ctx
+
+
+def test_resolve_pinned_refs_caches_within_ttl(tmp_path, monkeypatch):
+    """The search dedup calls this on every search; the pinned set only moves
+    when a dream flips always_on or the owner config changes, so repeated
+    calls inside the TTL must not re-walk the entity tree."""
+    from durin.memory import principal as principal_mod
+    from durin.memory.principal import resolve_pinned_refs
+
+    write_entity(tmp_path, "practice:spanish",
+                 [FieldPatch(kind="body_append", value="Always respond in Spanish.",
+                             author="agent", source_ref="s", at=NOW)],
+                 create=True, name="Always Spanish")
+    mark_always_on(tmp_path, "practice:spanish")
+
+    real = principal_mod.list_always_on
+    calls = 0
+
+    def _counting(workspace):
+        nonlocal calls
+        calls += 1
+        return real(workspace)
+
+    monkeypatch.setattr(principal_mod, "list_always_on", _counting)
+
+    first = resolve_pinned_refs(tmp_path)
+    assert "practice:spanish" in first
+    assert resolve_pinned_refs(tmp_path) == first
+    assert calls == 1
+
+    assert resolve_pinned_refs(tmp_path, ttl_s=0) == first
+    assert calls == 2

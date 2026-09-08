@@ -107,6 +107,7 @@ async def test_rollup_reaches_the_session_logger_from_a_real_turn(
 
     msg = InboundMessage(channel="websocket", sender_id="u", chat_id="c", content="hi")
     await loop._process_message(msg)
+    await loop.close_mcp()  # drain background tasks before teardown
 
     rows = [d for t, d in rec.events if t == "turn.memory_usage"]
     assert len(rows) == 1, "exactly one turn.memory_usage row per turn"
@@ -152,6 +153,7 @@ async def test_rollup_reports_non_zero_surface_sizes_when_memory_is_pinned(
     await loop._process_message(
         InboundMessage(channel="websocket", sender_id="u", chat_id="c", content="hola"),
     )
+    await loop.close_mcp()  # drain background tasks before teardown
 
     rows = [d for t, d in rec.events if t == "turn.memory_usage"]
     assert len(rows) == 1

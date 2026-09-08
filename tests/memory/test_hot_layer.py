@@ -166,3 +166,38 @@ def test_context_builder_renders_a_pinned_page_once(tmp_path: Path) -> None:
     assert stable.count("Always respond in Spanish.") == 1
     assert "## Always-on guidance" in stable
     assert "=== CANONICAL: practice:spanish" not in stable
+
+
+def test_stable_layer_walks_the_entity_tree_once(tmp_path: Path, monkeypatch) -> None:
+    """One prompt build reads the always_on set once. The walk loads every
+    entity page from disk, so the pinned block and the ref set that excludes
+    it from the canonical block must share a single pass."""
+    from datetime import datetime, timezone
+
+    from durin.agent.context import ContextBuilder
+    from durin.memory import principal as principal_mod
+    from durin.memory.field_patch import FieldPatch
+    from durin.memory.memory_writer import write_entity
+    from durin.memory.principal import mark_always_on
+
+    now = datetime.now(timezone.utc)
+    write_entity(tmp_path, "practice:spanish",
+                 [FieldPatch(kind="body_append", value="Always respond in Spanish.",
+                             author="agent", source_ref="s", at=now)],
+                 create=True, name="Always Spanish")
+    mark_always_on(tmp_path, "practice:spanish")
+
+    real = principal_mod.list_always_on
+    calls = 0
+
+    def _counting(workspace):
+        nonlocal calls
+        calls += 1
+        return real(workspace)
+
+    monkeypatch.setattr(principal_mod, "list_always_on", _counting)
+
+    stable = ContextBuilder(workspace=tmp_path)._build_stable_layer(channel=None)
+
+    assert "Always respond in Spanish." in stable
+    assert calls == 1

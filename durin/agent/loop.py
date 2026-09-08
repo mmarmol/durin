@@ -2956,7 +2956,14 @@ class AgentLoop:
 
     def _memory_surface_chars(self) -> tuple[int, int]:
         """(pinned_chars, hot_chars) of the last prompt build, or (0, 0)
-        when the builder is a test double or has not built yet."""
+        when the builder is a test double or has not built yet.
+
+        ``_last_layer_breakdown`` is builder-wide, not per-turn: concurrent
+        turns on the same loop overwrite it, last writer wins. Reading it
+        here is still sound because both memory blocks are workspace-global
+        — every concurrent turn builds the same pinned and hot text — so the
+        sizes coincide whichever turn wrote them.
+        """
         try:
             stable = self.context._last_layer_breakdown.get("stable", {})
             return len(stable.get("memory_pinned", "")), len(stable.get("memory_hot", ""))
