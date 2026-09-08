@@ -324,11 +324,13 @@ class ContextCompositionEvent(TypedDict):
                                           # skills_catalog / memory_hot
     context_tokens: int
     volatile_tokens: int
-    volatile_breakdown: dict[str, int]    # memory_long_term / recent_history /
-                                          # session_summary
+    volatile_breakdown: dict[str, int]    # memory_long_term / memory_prefetch /
+                                          # recent_history / session_summary
     # Messages portion.
     history_msg_tokens: int               # prior turns we pass back
-    current_msg_tokens: int               # current user message + runtime ctx
+    current_msg_tokens: int               # current user message + runtime ctx,
+                                          # minus the prefetch block billed
+                                          # under memory_prefetch above
     # Tool definitions JSON.
     tools_tokens: int
     # Sum of all the above (what we expect provider's prompt_tokens to

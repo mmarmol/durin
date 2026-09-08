@@ -106,6 +106,46 @@ def test_composition_event_emits_on_build_messages(monkeypatch, tmp_path):
     assert payload["estimated_total"] == expected
 
 
+def test_prefetch_block_is_billed_as_its_own_line(monkeypatch, tmp_path):
+    """The automatic prefetch's block rides in the user message, but it is not
+    the user's message: it gets its own breakdown line, and the current-message
+    count is what the person actually wrote."""
+    from durin.agent.context import build_memory_context_block
+
+    events = _bind_telemetry(monkeypatch)
+    b = _make_builder(tmp_path)
+    block = build_memory_context_block(
+        "=== CANONICAL: person:ana (canonical entity page) ===\n"
+        + "Ana runs the bakery on Main St. " * 40
+        + "\n=== END CANONICAL ==="
+    )
+
+    b.build_messages(history=[], current_message="what's the weather")
+    plain = [e for e in events if e[0] == "context.composition"][-1][1]
+
+    b.build_messages(history=[], current_message="what's the weather", memory_prefetch=block)
+    payload = [e for e in events if e[0] == "context.composition"][-1][1]
+
+    prefetch_tokens = payload["volatile_breakdown"]["memory_prefetch"]
+    assert prefetch_tokens > 100                       # the block really is big
+    assert "memory_prefetch" not in plain["volatile_breakdown"]
+    # The user's message costs the same with or without the block.
+    assert abs(payload["current_msg_tokens"] - plain["current_msg_tokens"]) <= 2
+    assert payload["volatile_tokens"] == sum(payload["volatile_breakdown"].values())
+    assert payload["estimated_total"] == (
+        payload["stable_tokens"]
+        + payload["context_tokens"]
+        + payload["volatile_tokens"]
+        + payload["history_msg_tokens"]
+        + payload["current_msg_tokens"]
+        + payload["tools_tokens"]
+    )
+    # And it reaches the operator surfaces as its own row.
+    from durin.agent.context import summarize_composition
+
+    assert summarize_composition(payload)["conversation_breakdown"]["Memory prefetch"] == prefetch_tokens
+
+
 def test_composition_event_skips_when_no_telemetry(monkeypatch, tmp_path):
     """No global telemetry bound → no event is emitted, build doesn't error."""
     monkeypatch.setattr(

@@ -291,7 +291,7 @@ The hits inside carry the ordinary structural markers of §5.6, so the drill and
 
 **Budget.** The tool's `limit` is the primary bound; the rendered text is then cut at `memory.prefetch.max_chars` with a trailing note pointing at `memory_search` for the rest. The loop also hands the block's refs to the `memory_search` tool for the rest of the turn, so a search the model makes on the same subject collapses those hits to pointer lines — the same context dedup that covers the hot layer and the pinned pages — instead of rendering them a second time; the refs are dropped at save time.
 
-**Telemetry.** BUILD runs outside the per-run telemetry binding, so the loop binds the session logger around the tool call (the tool's own `memory.recall` event lands with it) and emits `memory.prefetch` through the session logger directly. The turn's `turn.memory_usage` rollup carries `prefetch_hits`.
+**Telemetry.** BUILD runs outside the per-run telemetry binding, so the loop binds the session logger around the tool call (the tool's own `memory.recall` event lands with it) and emits `memory.prefetch` through the session logger directly. The turn's `turn.memory_usage` rollup carries `prefetch_hits`. The block is also its own line in the turn's `context.composition` breakdown — `memory_prefetch` among the volatile blocks, excluded from the current message's count — so `/status` and the footer attribute it to memory rather than to what the user wrote.
 
 ### 5.8 Continuity
 

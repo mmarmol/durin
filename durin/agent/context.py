@@ -33,7 +33,8 @@ def summarize_composition(payload: Mapping[str, Any] | None) -> dict[str, Any]:
     - **Conversation** = the user's growing footprint in this session:
       the prior turns (history_msg), the current user message, plus any
       per-turn volatile blocks (long-term memory active in the prompt,
-      recent history snippets, archived session summary).
+      the automatic prefetch's block, recent history snippets, archived
+      session summary).
     - **Infrastructure** = everything fixed by configuration: identity,
       bootstrap files, skills (catalog + active), the memory hot layer,
       the agent mode suffix, and tool definitions. The user changes
@@ -54,6 +55,7 @@ def summarize_composition(payload: Mapping[str, Any] | None) -> dict[str, Any]:
     conv: dict[str, int] = {}
     for key, label in (
         ("memory_long_term", "Memory (active)"),
+        ("memory_prefetch", "Memory prefetch"),
         ("recent_history", "Recent history"),
         ("session_summary", "Session summary"),
     ):
@@ -564,6 +566,7 @@ class ContextBuilder:
                 tools=tools,
                 iteration=iteration,
                 session_key=session_key,
+                memory_prefetch=memory_prefetch,
             )
             return messages
         messages.append({"role": current_role, "content": merged})
@@ -573,6 +576,7 @@ class ContextBuilder:
             tools=tools,
             iteration=iteration,
             session_key=session_key,
+            memory_prefetch=memory_prefetch,
         )
         return messages
 
@@ -584,6 +588,7 @@ class ContextBuilder:
         tools: list[dict[str, Any]] | None,
         iteration: int | None,
         session_key: str | None,
+        memory_prefetch: str | None = None,
     ) -> None:
         """Emit ``context.composition`` with a per-tier token breakdown.
 
@@ -613,6 +618,13 @@ class ContextBuilder:
             volatile_breakdown = {
                 name: estimate_text_tokens(text) for name, text in volatile.items()
             }
+            # The automatic prefetch's block rides inside the current user
+            # message on the wire, but it is recalled memory, not what the
+            # person wrote: bill it as its own per-turn line and take it out
+            # of the message's count below, so neither number lies.
+            prefetch_tokens = estimate_text_tokens(memory_prefetch or "")
+            if prefetch_tokens:
+                volatile_breakdown["memory_prefetch"] = prefetch_tokens
             stable_tokens = sum(stable_breakdown.values())
             volatile_tokens = sum(volatile_breakdown.values())
             context_tokens = sum(
@@ -625,8 +637,11 @@ class ContextBuilder:
             # The current user message is either a str or a list of
             # content blocks; build a synthetic message dict so
             # estimate_message_tokens does the right thing.
-            current_msg_tokens = estimate_message_tokens(
-                {"role": "user", "content": current_user_content}
+            current_msg_tokens = max(
+                0,
+                estimate_message_tokens(
+                    {"role": "user", "content": current_user_content}
+                ) - prefetch_tokens,
             )
 
             tools_tokens = (
