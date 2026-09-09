@@ -25,7 +25,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Iterator, Optional, Sequence
 
 from durin.utils.sqlite_util import connect as _sqlite_connect, execute_write as _execute_write
 
@@ -224,20 +224,45 @@ class FTSIndex:
 
     # --- queries ----------------------------------------------------------
 
-    def search(self, query: str, *, limit: int = 50, type_: Optional[str] = None) -> list[FTSHit]:
+    def search(
+        self,
+        query: str,
+        *,
+        limit: int = 50,
+        type_: Optional[str] = None,
+        include_types: Optional[Sequence[str]] = None,
+        exclude_types: Optional[Sequence[str]] = None,
+    ) -> list[FTSHit]:
         """Run a query against ``memory_fts`` (unicode61).
 
-        ``type_``, when given, restricts results to rows whose stored
-        ``type`` column equals it — a caller that only wants one row type
-        (e.g. entity pages) filters at the SQL level instead of over-reading
-        and discarding rows the cap should have spent on matches it wants.
+        ``type_`` is the one-type shorthand: when given, it restricts
+        results to rows whose stored ``type`` column equals it — a caller
+        that only wants one row type (e.g. entity pages) filters at the SQL
+        level instead of over-reading and discarding rows the cap should
+        have spent on matches it wants. ``include_types``/``exclude_types``
+        are the set forms used by the search pipeline's scope predicates;
+        see :meth:`_type_clause` for precedence.
         """
-        return self._search("memory_fts", query, limit=limit, type_=type_)
+        return self._search(
+            "memory_fts", query, limit=limit, type_=type_,
+            include_types=include_types, exclude_types=exclude_types,
+        )
 
-    def search_trigram(self, query: str, *, limit: int = 50, type_: Optional[str] = None) -> list[FTSHit]:
+    def search_trigram(
+        self,
+        query: str,
+        *,
+        limit: int = 50,
+        type_: Optional[str] = None,
+        include_types: Optional[Sequence[str]] = None,
+        exclude_types: Optional[Sequence[str]] = None,
+    ) -> list[FTSHit]:
         """Run a query against ``memory_fts_trigram`` (trigram). See
-        :meth:`search` for ``type_``."""
-        return self._search("memory_fts_trigram", query, limit=limit, type_=type_)
+        :meth:`search` for ``type_``/``include_types``/``exclude_types``."""
+        return self._search(
+            "memory_fts_trigram", query, limit=limit, type_=type_,
+            include_types=include_types, exclude_types=exclude_types,
+        )
 
     def count(self) -> int:
         """Return how many distinct uris are indexed (meta-table count)."""
@@ -277,7 +302,16 @@ class FTSIndex:
 
     # --- internals --------------------------------------------------------
 
-    def _search(self, table: str, query: str, *, limit: int, type_: Optional[str] = None) -> list[FTSHit]:
+    def _search(
+        self,
+        table: str,
+        query: str,
+        *,
+        limit: int,
+        type_: Optional[str] = None,
+        include_types: Optional[Sequence[str]] = None,
+        exclude_types: Optional[Sequence[str]] = None,
+    ) -> list[FTSHit]:
         """Both tables share the same row schema. We use a MATCH clause
         with the FTS5 query as-is; the caller's job to sanitise.
 
@@ -286,25 +320,40 @@ class FTSIndex:
         list fed to RRF fusion was really file-walk order and rows
         indexed later always lost regardless of BM25 relevance.
 
-        ``type_``, when given, adds ``AND type = ?`` so ``LIMIT`` bounds rows
-        of that type only — without it, a cap meant for one row type is spent
-        on every row shape that matches the query text, and rows of the
-        wanted type can be pushed out of the cap entirely before a caller
-        ever gets to filter them.
+        The type clause (see :meth:`_type_clause`) is applied before
+        ``LIMIT`` so the cap bounds rows the caller actually wants — without
+        it, a cap meant for a subset of row types is spent on every row
+        shape that matches the query text, and wanted rows can be pushed out
+        of the cap entirely before a caller ever gets to filter them.
         """
-        if type_ is None:
-            cur = self._conn.execute(
-                f"SELECT uri, path, type, entity_type FROM {table} "
-                f"WHERE {table} MATCH ? ORDER BY rank LIMIT ?",
-                (query, limit),
-            )
-        else:
-            cur = self._conn.execute(
-                f"SELECT uri, path, type, entity_type FROM {table} "
-                f"WHERE {table} MATCH ? AND type = ? ORDER BY rank LIMIT ?",
-                (query, type_, limit),
-            )
+        clause, params = self._type_clause(type_, include_types, exclude_types)
+        cur = self._conn.execute(
+            f"SELECT uri, path, type, entity_type FROM {table} "
+            f"WHERE {table} MATCH ?{clause} ORDER BY rank LIMIT ?",
+            (query, *params, limit),
+        )
         return [
             FTSHit(uri=u, path=p, type=t, entity_type=et)
             for (u, p, t, et) in cur.fetchall()
         ]
+
+    @staticmethod
+    def _type_clause(
+        type_: Optional[str],
+        include_types: Optional[Sequence[str]],
+        exclude_types: Optional[Sequence[str]],
+    ) -> tuple[str, list[str]]:
+        """``AND type ...`` fragment plus its parameters; empty when unfiltered.
+
+        ``type_`` (the one-type shorthand) takes precedence, then
+        ``include_types``, then ``exclude_types``.
+        """
+        if type_ is not None:
+            return " AND type = ?", [type_]
+        if include_types:
+            marks = ", ".join("?" for _ in include_types)
+            return f" AND type IN ({marks})", list(include_types)
+        if exclude_types:
+            marks = ", ".join("?" for _ in exclude_types)
+            return f" AND type NOT IN ({marks})", list(exclude_types)
+        return "", []

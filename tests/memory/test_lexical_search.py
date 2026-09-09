@@ -187,3 +187,68 @@ def test_boolean_keywords_are_quoted_as_literals() -> None:
     assert _quote_for_fts("and then") == '"and" "then"'
     assert _quote_for_fts("do NOT delete") == '"do" "NOT" "delete"'
     assert _quote_for_fts("near the edge") == '"near" "the" "edge"'
+
+
+# ---------------------------------------------------------------------------
+# Type set predicates: include_types / exclude_types
+# ---------------------------------------------------------------------------
+
+
+def test_exclude_types_keeps_the_limit_for_the_wanted_rows(tmp_path: Path) -> None:
+    with FTSIndex.open(tmp_path) as idx:
+        for i in range(60):
+            idx.upsert(
+                uri=f"reference:doc#{i}", path=f"r{i}.md",
+                type_="reference", entity_type="",
+                text="bruenor axe", mtime=float(i),
+            )
+        idx.upsert(
+            uri="memory/episodic/note1", path="n.md",
+            type_="episodic", entity_type="",
+            text="bruenor axe", mtime=100.0,
+        )
+        hits = idx.search('"bruenor"', limit=50, exclude_types=("reference",))
+        assert [h.uri for h in hits] == ["memory/episodic/note1"]
+
+
+def test_include_types_is_a_set(tmp_path: Path) -> None:
+    with FTSIndex.open(tmp_path) as idx:
+        idx.upsert(
+            uri="person:bruenor", path="p.md",
+            type_="entity", entity_type="person",
+            text="bruenor", mtime=1.0,
+        )
+        idx.upsert(
+            uri="skill/axe", path="s.md",
+            type_="skill", entity_type="",
+            text="bruenor", mtime=2.0,
+        )
+        idx.upsert(
+            uri="reference:doc#1", path="r.md",
+            type_="reference", entity_type="",
+            text="bruenor", mtime=3.0,
+        )
+        hits = idx.search('"bruenor"', include_types=("entity", "skill"))
+        assert {h.uri for h in hits} == {"person:bruenor", "skill/axe"}
+
+
+def test_like_fallback_honours_the_type_set(tmp_path: Path) -> None:
+    # "东京" is 2 CJK chars — decide_lexical_route routes it to
+    # LIKE_SUBSTRING (trigram needs >= 3 chars), which is the route
+    # this test exercises.
+    with FTSIndex.open(tmp_path) as idx:
+        idx.upsert(
+            uri="reference:doc#1", path="r.md",
+            type_="reference", entity_type="",
+            text="东京 旅行", mtime=1.0,
+        )
+        idx.upsert(
+            uri="memory/episodic/n", path="n.md",
+            type_="episodic", entity_type="",
+            text="东京 旅行", mtime=2.0,
+        )
+        hits = lexical_search(
+            idx, decide_lexical_route("东京"), emit=False,
+            exclude_types=("reference",),
+        )
+        assert [h.uri for h in hits] == ["memory/episodic/n"]
