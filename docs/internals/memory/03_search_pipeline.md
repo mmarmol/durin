@@ -17,7 +17,7 @@ Temporal decay is intentionally not applied: the LLM receives `valid_from` on ev
 
 ## 2. Mental model
 
-**Three sources, one fused rank.** Vector search (LanceDB L2) and lexical search (FTS5) run to top-50 each; a grep fallback covers raw sessions and not-yet-indexed files. Reciprocal Rank Fusion merges all three in rank space — score-scale invariant, so BM25, L2, and grep all combine cleanly.
+**Three sources, one fused rank.** Vector search (LanceDB L2) and lexical search (FTS5) run to top-50 each; a grep fallback covers raw sessions and not-yet-indexed files. For ordinary natural-language queries, lexical search ranks documents where loose tokens are OR-joined and scored by BM25, while double-quoted phrases and all `keywords` tokens are required. This produces matches on partial literal evidence (shared rare words) as well as exact phrases, creating a ranking independent of semantic similarity. Reciprocal Rank Fusion merges all three in rank space — score-scale invariant, so BM25, L2, and grep combine cleanly — ensuring fusion is a genuine multi-source consensus.
 
 **Entity-aware nudge, not override.** When the query mentions a known alias, hits tagged with that entity receive an additional RRF contribution. Entity matching is a nudge to surface canonical pages and fresh tagged entries; it does not override semantic similarity.
 
@@ -89,7 +89,7 @@ Entity-page rows use their entity-ref URI directly (e.g. `person:deborah`); skil
 - `UNICODE61` and `TRIGRAM` paths use `ORDER BY rank` (BM25) — the clause is load-bearing; without it SQLite returns rowid order, not relevance order.
 - `LIKE_SUBSTRING` returns in table order (no scoring).
 
-Every query token is double-quoted before FTS5 to escape special characters (`%`, `*`, `:`) and to neutralise the FTS5 boolean keywords (`AND`/`OR`/`NOT`/`NEAR`) — the recall query is natural language, so a query beginning with a word like "not" must not reach the parser as a dangling operator. Balanced double-quoted phrases in the query are preserved as FTS5 phrase tokens.
+Every route runs one expression, built by `build_fts_expression`: the query's loose tokens are OR-joined so bm25 ranks partial matches — a sentence finds the note that shares its rare words, not only a document containing every token. Balanced double-quoted phrases in the query, and every token of `keywords` (explicit or the router's own `auto_keywords`), are required (AND) — that is where exactness lives. `LIKE_SUBSTRING` expresses the same required/optional split as `LIKE` clauses instead of an FTS5 MATCH, since the trigram table can't tokenise the short CJK tokens that route to it. Every term is double-quoted before FTS5 to escape special characters (`%`, `*`, `:`) and to neutralise the FTS5 boolean keywords (`AND`/`OR`/`NOT`/`NEAR`) — the recall query is natural language, so a query beginning with a word like "not" must not reach the parser as a dangling operator.
 
 An entity page's row also carries the slug half of each `derived_from` ref (see `02_indexing.md`), so an ordinary lexical query can match an entity purely through the document it was distilled from — a query for the document's title can surface an entity that never mentions that title in its own name or body.
 
@@ -125,7 +125,7 @@ Weights: `w_vector = 1.0`, `w_lexical = 0.7` (boosted to `2.5` when `keywords` o
 
 After fusion, two adjustments run in order:
 
-**Grep-verify boost:** For every fused hit that came from vector but not lexical, `_grep_verify_boost` runs a per-URI FTS MATCH using the same lexical route. A confirmed literal match gains `w_lexical / (k + rank_in_vector)` — crediting the lexical evidence the top-50 cutoff dropped.
+**Grep-verify boost:** For every fused hit that came from vector but not lexical, `_grep_verify_boost` runs one batched query per route — `MATCH ... AND uri IN (...)` (or the LIKE equivalent) — against the exact expression `lexical_search` would have run for that route — the same required/optional split, not a separate, stricter all-terms check, and not one query per candidate. A confirmed hit gains `"lexical"` in `sources` and `w_lexical / (k + rank_in_vector)` — crediting the lexical evidence the top-50 cutoff dropped.
 
 **Type prior:** `apply_type_priors` multiplies each score by a per-type multiplier. Currently: raw session turns (`type="session"`) receive `×0.85`. Curated entries and entity pages are neutral. A session hit with strong enough evidence still wins; the prior demotes, it does not suppress.
 
@@ -220,7 +220,7 @@ The web dashboard exposes a cross-encoder toggle and model picker under Memory �
 
 **Lexical weight boost for identifiers.** When a query contains an email address, URL, UUID, or file path, or when the agent passes `keywords` explicitly, the lexical weight lifts from 0.7 to 2.5. This avoids a separate "exact-match pinning" mechanism and removes the need to measure keyword specificity — the presence of an identifier-shaped token is sufficient signal that the literal match matters.
 
-**Grep-verify boost.** RRF can only credit lexical evidence within the lexical top-50 cutoff. A document that vector ranks high and literally contains the query terms — but sits just past the cutoff — would receive no lexical contribution, allowing a semantically-near distractor to outrank a literally-confirmed hit. The boost corrects this by re-verifying vector-only hits against the same FTS tables and crediting the dropped evidence at the vector rank's position.
+**Grep-verify boost.** RRF can only credit lexical evidence within the lexical top-50 cutoff. A document that vector ranks high and literally contains the query terms — but sits just past the cutoff — would receive no lexical contribution, allowing a semantically-near distractor to outrank a literally-confirmed hit. The boost corrects this by re-verifying vector-only hits against the same FTS tables and crediting the dropped evidence at the vector rank's position. It runs the identical expression the lexical leg would build for the query, so it is not a second, stricter matcher — a hit sharing only some of the query's loose words verifies exactly as it would in the lexical leg itself.
 
 **Cross-encoder blend, not replace.** Running the CE in full-replace mode (α=1) performed worse than RRF-only because the reranker was blind to dates and summaries when scored against bare snippets, causing it to demote gold hits. Enriching the input (`headline + valid_from + summary`) and blending at α=0.4 preserves the RRF order's accumulated evidence while letting the CE nudge on full-relevance grounds.
 

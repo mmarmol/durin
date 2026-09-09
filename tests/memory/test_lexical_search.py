@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from durin.memory.fts_index import FTSIndex
-from durin.memory.lexical_search import lexical_search
+from durin.memory.lexical_search import build_fts_expression, lexical_search
 from durin.memory.query_router import decide_lexical_route
 
 
@@ -76,19 +76,12 @@ def test_quoting_handles_special_chars(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Audit H10 (2026-05-29): phrase matching via double-quoted substrings
+# Phrase matching via double-quoted substrings
 # ---------------------------------------------------------------------------
 #
-# Pre-H10 every token in the query was quoted independently for FTS5,
-# so a query `Marcelo Marmol` resolved to `"Marcelo" "Marmol"` — the
-# AND of two phrase-tokens, which matches a document containing both
-# words anywhere. Useful for token search but loses ordering: it also
-# matches "Marmol Marcelo lives in Spain".
-#
-# H10 lets the agent express a phrase intent with double quotes:
-# `"Marcelo Marmol" lives` is parsed as one FTS5 phrase + one token.
-# Documents must contain "Marcelo Marmol" adjacent, and the token
-# "lives" anywhere.
+# A double-quoted phrase in the query resolves to one FTS5 phrase:
+# `"Marcelo Marmol" lives` requires "Marcelo Marmol" adjacent and in
+# order, plus the loose token "lives" anywhere.
 
 
 def test_quoted_phrase_matches_exact_sequence(tmp_path: Path) -> None:
@@ -152,7 +145,7 @@ def test_unmatched_quote_falls_back_to_token_search(tmp_path: Path) -> None:
 # Regression: FTS5 boolean keywords in a natural-language query
 # ---------------------------------------------------------------------------
 #
-# `_quote_for_fts` used to pass AND/OR/NOT/NEAR through as FTS5
+# FTS5 query building used to pass AND/OR/NOT/NEAR through as FTS5
 # operators (case-insensitively). Since the recall query is natural
 # language — never a boolean expression — that hijacked the commonest
 # English function words. A query beginning with "not" left a bare
@@ -181,12 +174,14 @@ def test_leading_boolean_keyword_does_not_crash(tmp_path: Path) -> None:
 def test_boolean_keywords_are_quoted_as_literals() -> None:
     """The lowercase/uppercase boolean keywords are quoted, never
     emitted as bare FTS5 operators."""
-    from durin.memory.lexical_search import _quote_for_fts
+    from durin.memory.lexical_search import build_fts_expression
 
-    assert _quote_for_fts("not sure") == '"not" "sure"'
-    assert _quote_for_fts("and then") == '"and" "then"'
-    assert _quote_for_fts("do NOT delete") == '"do" "NOT" "delete"'
-    assert _quote_for_fts("near the edge") == '"near" "the" "edge"'
+    assert build_fts_expression("not sure").text == '("not" OR "sure")'
+    assert build_fts_expression("and then").text == '("and" OR "then")'
+    assert (build_fts_expression("do NOT delete").text
+            == '("do" OR "NOT" OR "delete")')
+    assert (build_fts_expression("near the edge").text
+            == '("near" OR "the" OR "edge")')
 
 
 # ---------------------------------------------------------------------------
@@ -274,3 +269,149 @@ def test_a_bare_string_type_set_means_that_one_type(tmp_path: Path) -> None:
         # Test exclude_types with bare string
         hits = idx.search('"bruenor"', exclude_types="reference")
         assert [h.uri for h in hits] == ["person:bruenor"]
+
+
+# ---------------------------------------------------------------------------
+# build_fts_expression: the one FTS5 expression builder
+# ---------------------------------------------------------------------------
+
+
+def test_loose_tokens_are_or_joined():
+    e = build_fts_expression("arma preferida Bruenor")
+    assert e.text == '("arma" OR "preferida" OR "Bruenor")'
+    assert (e.required, e.optional) == (0, 3)
+
+
+def test_quoted_phrases_are_required():
+    e = build_fts_expression('"Mithral Hall" hacha regalo')
+    assert e.text == '"Mithral Hall" AND ("hacha" OR "regalo")'
+    assert (e.required, e.optional) == (1, 2)
+
+
+def test_keywords_tokens_are_required_and_quoted_groups_are_phrases():
+    e = build_fts_expression("arma regalo", keywords='Bruenor "doble filo"')
+    assert e.text == '"Bruenor" AND "doble filo" AND ("arma" OR "regalo")'
+    assert (e.required, e.optional) == (2, 2)
+
+
+def test_only_required_terms_is_a_plain_and():
+    e = build_fts_expression("", keywords="Bruenor hacha")
+    assert e.text == '"Bruenor" AND "hacha"'
+
+
+def test_unbalanced_quotes_degrade_to_tokens():
+    e = build_fts_expression('Bruenor "incomplete')
+    assert e.text == '("Bruenor")'
+
+
+def test_operators_and_punctuation_stay_literal():
+    e = build_fts_expression("NOT AND alpha*beta")
+    assert e.text == '("NOT" OR "AND" OR "alpha*beta")'
+
+
+def test_empty_query_and_keywords_yield_no_expression():
+    assert build_fts_expression("   ").text == ""
+
+
+# ---------------------------------------------------------------------------
+# Task 9: lexical_search uses the expression on every route
+# ---------------------------------------------------------------------------
+
+
+def test_a_sentence_finds_the_note_that_shares_its_rare_words(tmp_path):
+    # The distractor shares connector words with the query ("la"/"y"/"se") —
+    # that's deliberate: under the OR-ranked-by-bm25 contract a document
+    # matching only on connector words is still a real match, not excluded,
+    # and it must rank below the note that shares the query's rare words.
+    # A two-document index makes bm25's idf misjudge those connectors as
+    # rare (each appears in only one of two rows), which can invert the
+    # ranking; the filler documents below give idf a realistic background
+    # so the connector words score as the common tokens they are.
+    with FTSIndex.open(tmp_path) as idx:
+        idx.upsert(uri="memory/episodic/axe", path="a.md", type_="episodic", entity_type="",
+                   text="Bruenor prefiere el hacha de doble filo forjada en Mithral Hall, regalo de Thalgrim.",
+                   mtime=1.0)
+        idx.upsert(uri="memory/episodic/other", path="b.md", type_="episodic", entity_type="",
+                   text="La panadería abre a las ocho y el pan de masa madre se agota pronto.",
+                   mtime=2.0)
+        idx.upsert(uri="memory/episodic/filler1", path="f1.md", type_="episodic", entity_type="",
+                   text="El autobús llega a las nueve y la parada está a dos cuadras de aquí.",
+                   mtime=3.0)
+        idx.upsert(uri="memory/episodic/filler2", path="f2.md", type_="episodic", entity_type="",
+                   text="La lluvia empezó temprano y el partido se suspendió por la tarde.",
+                   mtime=4.0)
+        idx.upsert(uri="memory/episodic/filler3", path="f3.md", type_="episodic", entity_type="",
+                   text="El jardín necesita agua y las plantas se marchitan si hace calor.",
+                   mtime=5.0)
+        idx.upsert(uri="memory/episodic/filler4", path="f4.md", type_="episodic", entity_type="",
+                   text="La reunión se movió al lunes y el informe se entrega la próxima semana.",
+                   mtime=6.0)
+        idx.upsert(uri="memory/episodic/filler5", path="f5.md", type_="episodic", entity_type="",
+                   text="El tren sale a las siete y la estación queda cerca del centro.",
+                   mtime=7.0)
+        idx.upsert(uri="memory/episodic/filler6", path="f6.md", type_="episodic", entity_type="",
+                   text="La tienda cierra a las diez y el dueño vive arriba del local.",
+                   mtime=8.0)
+        decision = decide_lexical_route("¿Qué arma prefiere Bruenor y quién se la regaló?")
+        hits = lexical_search(idx, decision, emit=False)
+        uris = [h.uri for h in hits]
+        assert uris[0] == "memory/episodic/axe"
+        assert "memory/episodic/other" in uris[1:]
+
+
+def test_a_required_phrase_excludes_the_near_miss(tmp_path):
+    with FTSIndex.open(tmp_path) as idx:
+        idx.upsert(uri="a", path="a.md", type_="episodic", entity_type="", text="doble filo forjada", mtime=1.0)
+        idx.upsert(uri="b", path="b.md", type_="episodic", entity_type="", text="filo doble forjada", mtime=2.0)
+        hits = lexical_search(idx, decide_lexical_route('"doble filo" forjada'), emit=False)
+        assert [h.uri for h in hits] == ["a"]
+
+
+def test_keywords_are_required_terms(tmp_path):
+    with FTSIndex.open(tmp_path) as idx:
+        idx.upsert(uri="a", path="a.md", type_="episodic", entity_type="", text="Bruenor hacha", mtime=1.0)
+        idx.upsert(uri="b", path="b.md", type_="episodic", entity_type="", text="Thalgrim hacha", mtime=2.0)
+        hits = lexical_search(idx, decide_lexical_route("hacha", keywords="Bruenor"), emit=False)
+        assert [h.uri for h in hits] == ["a"]
+
+
+def test_the_like_fallback_ors_its_tokens(tmp_path):
+    with FTSIndex.open(tmp_path) as idx:
+        idx.upsert(uri="a", path="a.md", type_="episodic", entity_type="", text="东京", mtime=1.0)
+        idx.upsert(uri="b", path="b.md", type_="episodic", entity_type="", text="大阪", mtime=2.0)
+        hits = lexical_search(idx, decide_lexical_route("东京 大阪"), emit=False)
+        assert {h.uri for h in hits} == {"a", "b"}
+
+
+# ---------------------------------------------------------------------------
+# LIKE_SUBSTRING route: `_`/`%` escaping, empty-WHERE guard
+# ---------------------------------------------------------------------------
+
+
+def test_like_route_escapes_underscore_no_over_match(tmp_path):
+    """`_` is a LIKE single-char wildcard — a literal identifier like
+    `foo_bar` must not over-match `fooXbar` on the LIKE_SUBSTRING route."""
+    from durin.memory.query_router import LexicalRoute, RoutingDecision
+
+    with FTSIndex.open(tmp_path) as idx:
+        idx.upsert(uri="a", path="a.md", type_="episodic", entity_type="",
+                   text="the foo_bar identifier", mtime=1.0)
+        idx.upsert(uri="b", path="b.md", type_="episodic", entity_type="",
+                   text="the fooXbar identifier", mtime=2.0)
+        decision = RoutingDecision(
+            normalized_query="foo_bar", route=LexicalRoute.LIKE_SUBSTRING,
+            cjk_chars=0,
+        )
+        hits = lexical_search(idx, decision, emit=False)
+        assert [h.uri for h in hits] == ["a"]
+
+
+def test_like_scan_empty_where_returns_no_rows(tmp_path):
+    """Neither optional tokens nor required terms → `[]` immediately,
+    not a full-table scan or a SQL error from a dangling `WHERE`/`AND`."""
+    from durin.memory.lexical_search import _like_substring_scan
+
+    with FTSIndex.open(tmp_path) as idx:
+        idx.upsert(uri="a", path="a.md", type_="episodic", entity_type="",
+                   text="anything at all", mtime=1.0)
+        assert _like_substring_scan(idx, [], required=[], limit=10) == []

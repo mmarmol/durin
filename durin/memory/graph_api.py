@@ -387,6 +387,7 @@ async def search_memory_api(
     scope: str = "all",
     level: str = "warm",
     kinds: str = "all",
+    keywords: str = "",
     embedding_model: str | None = None,
 ) -> dict[str, Any]:
     """Run the same search the LLM tool uses; return its JSON output.
@@ -407,6 +408,7 @@ async def search_memory_api(
     tool = MemorySearchTool(workspace=workspace, embedding_model=embedding_model)
     payload = await tool.execute(
         query=query, scope=scope, level=level, kinds=kinds,
+        keywords=keywords or None,
     )
     return payload
 

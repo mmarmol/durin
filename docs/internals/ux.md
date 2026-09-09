@@ -402,6 +402,16 @@ thing a visitor sees. The preference persists; a stored value naming a
 presentation the browser no longer offers (older installs could store the
 retired graph canvas) falls back to Table rather than being honored.
 
+**Search filter.** The `Search memory…` box above the entity list is a
+client-side, case-insensitive substring filter over entity names, aliases and
+summaries — it does not rank results and does not treat a double quote as
+anything but an ordinary character; the typed text reaches it unmodified,
+quotes included. The retrieval contract with ranking and required terms lives
+in the memory search API (`GET /api/v1/memory/search`): `q` is ranked with
+required quoted phrases, and the optional `keywords` field names terms
+required for a lexical match. Wiring this box to that endpoint would need no
+UI change — the input already passes quotes through untouched.
+
 **Main-pane states.** Exactly one message occupies the main pane at a
 time, and the presentations only mount once the payload holds at least one
 entity. That ordering is what keeps the pane from ever showing two
