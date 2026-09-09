@@ -324,21 +324,44 @@ def test_empty_query_and_keywords_yield_no_expression():
 
 
 def test_a_sentence_finds_the_note_that_shares_its_rare_words(tmp_path):
-    # The distractor avoids "la"/"y"/"se" — the query's own connector words —
-    # deliberately: the lexical contract has no stopword list (see
-    # global-constraints.md), so any token the distractor shared with the
-    # query's loose OR-group would make it a real match, not a near-miss;
-    # this note isolates the "shares rare words" behaviour from that.
+    # The distractor shares connector words with the query ("la"/"y"/"se") —
+    # that's deliberate: under the OR-ranked-by-bm25 contract a document
+    # matching only on connector words is still a real match, not excluded,
+    # and it must rank below the note that shares the query's rare words.
+    # A two-document index makes bm25's idf misjudge those connectors as
+    # rare (each appears in only one of two rows), which can invert the
+    # ranking; the filler documents below give idf a realistic background
+    # so the connector words score as the common tokens they are.
     with FTSIndex.open(tmp_path) as idx:
         idx.upsert(uri="memory/episodic/axe", path="a.md", type_="episodic", entity_type="",
                    text="Bruenor prefiere el hacha de doble filo forjada en Mithral Hall, regalo de Thalgrim.",
                    mtime=1.0)
         idx.upsert(uri="memory/episodic/other", path="b.md", type_="episodic", entity_type="",
-                   text="Una panadería abre temprano; el pan de masa madre vuela pronto.",
+                   text="La panadería abre a las ocho y el pan de masa madre se agota pronto.",
                    mtime=2.0)
+        idx.upsert(uri="memory/episodic/filler1", path="f1.md", type_="episodic", entity_type="",
+                   text="El autobús llega a las nueve y la parada está a dos cuadras de aquí.",
+                   mtime=3.0)
+        idx.upsert(uri="memory/episodic/filler2", path="f2.md", type_="episodic", entity_type="",
+                   text="La lluvia empezó temprano y el partido se suspendió por la tarde.",
+                   mtime=4.0)
+        idx.upsert(uri="memory/episodic/filler3", path="f3.md", type_="episodic", entity_type="",
+                   text="El jardín necesita agua y las plantas se marchitan si hace calor.",
+                   mtime=5.0)
+        idx.upsert(uri="memory/episodic/filler4", path="f4.md", type_="episodic", entity_type="",
+                   text="La reunión se movió al lunes y el informe se entrega la próxima semana.",
+                   mtime=6.0)
+        idx.upsert(uri="memory/episodic/filler5", path="f5.md", type_="episodic", entity_type="",
+                   text="El tren sale a las siete y la estación queda cerca del centro.",
+                   mtime=7.0)
+        idx.upsert(uri="memory/episodic/filler6", path="f6.md", type_="episodic", entity_type="",
+                   text="La tienda cierra a las diez y el dueño vive arriba del local.",
+                   mtime=8.0)
         decision = decide_lexical_route("¿Qué arma prefiere Bruenor y quién se la regaló?")
         hits = lexical_search(idx, decision, emit=False)
-        assert [h.uri for h in hits] == ["memory/episodic/axe"]
+        uris = [h.uri for h in hits]
+        assert uris[0] == "memory/episodic/axe"
+        assert "memory/episodic/other" in uris[1:]
 
 
 def test_a_required_phrase_excludes_the_near_miss(tmp_path):
