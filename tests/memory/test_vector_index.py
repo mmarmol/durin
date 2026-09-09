@@ -199,6 +199,61 @@ def test_search_strips_vector_from_results(
 
 
 # ---------------------------------------------------------------------------
+# where prefilter
+# ---------------------------------------------------------------------------
+
+
+def test_a_prefilter_takes_the_top_k_among_matching_rows(
+    tmp_path: Path, provider: _FakeEmbeddingProvider
+) -> None:
+    """Forty reference chunks sit nearer the query than the one entity page;
+    with the predicate the page is the first row, not pushed out of the
+    window."""
+    workspace = tmp_path / "ws"
+    index = VectorIndex(workspace, provider)
+    # The fake provider's vector is keyed off the first character of the
+    # text, so identical text embeds identically: forty exact matches for
+    # "near" sit at distance 0, while the page's composed text ("Ada...")
+    # starts with a different character and sits further away.
+    for i in range(40):
+        index.upsert_reference_chunk(
+            ref=f"reference:doc-{i}", idx=0, text="near", path=workspace / f"doc-{i}.md",
+        )
+    index.upsert_entity_page(
+        entity_ref="person:ada", name="Ada", aliases=[], body="further",
+        path=workspace / "memory/entities/person/ada.md", attributes={}, relations=[],
+    )
+    unfiltered = index.search("near", top_k=5)
+    assert all(r["class_name"] == "reference" for r in unfiltered)
+    filtered = index.search("near", top_k=5, where="class_name != 'reference'")
+    assert [r["id"] for r in filtered] == ["person:ada"]
+
+
+def test_search_by_vector_honours_the_same_prefilter(
+    tmp_path: Path, provider: _FakeEmbeddingProvider
+) -> None:
+    workspace = tmp_path / "ws"
+    index = VectorIndex(workspace, provider)
+    index.upsert_entity_page(entity_ref="person:ada", name="Ada", aliases=[], body="x",
+                             path=workspace / "a.md", attributes={}, relations=[])
+    index.upsert_entity_page(entity_ref="place:paris", name="Paris", aliases=[], body="x",
+                             path=workspace / "p.md", attributes={}, relations=[])
+    vec = provider.embed_query("x")
+    rows = index.search_by_vector(vec, top_k=5, where="class_name = 'entity_page' AND id LIKE 'place:%'")
+    assert [r["id"] for r in rows] == ["place:paris"]
+
+
+def test_no_predicate_is_the_old_behaviour(
+    tmp_path: Path, provider: _FakeEmbeddingProvider
+) -> None:
+    workspace = tmp_path / "ws"
+    index = VectorIndex(workspace, provider)
+    index.upsert_entity_page(entity_ref="person:ada", name="Ada", aliases=[], body="x",
+                             path=workspace / "a.md", attributes={}, relations=[])
+    assert [r["id"] for r in index.search("x", top_k=5)] == ["person:ada"]
+
+
+# ---------------------------------------------------------------------------
 # rebuild_from_workspace
 # ---------------------------------------------------------------------------
 

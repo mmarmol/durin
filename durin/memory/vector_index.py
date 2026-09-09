@@ -507,8 +507,12 @@ class VectorIndex:
         vector: list[float],
         *,
         top_k: int = 10,
+        where: str | None = None,
     ) -> list[dict[str, Any]]:
         """Same as :meth:`search` but skips the embedding step.
+
+        ``where`` is a LanceDB filter over the row columns (``class_name``,
+        ``id``), applied before the top-k.
 
         Used by callers (e.g. ``memory_store`` dedup check) that have
         already computed the query embedding and want to reuse it for
@@ -521,7 +525,12 @@ class VectorIndex:
             return []
         table = db.open_table(_TABLE_NAME)
         self._guard_dim_match(table, len(vector))
-        rows = table.search(vector).limit(top_k).to_list()
+        query_builder = table.search(vector)
+        if where:
+            # A prefilter: the top-k is taken among rows the predicate keeps,
+            # so a population that dominates the table cannot fill the window.
+            query_builder = query_builder.where(where, prefilter=True)
+        rows = query_builder.limit(top_k).to_list()
         for row in rows:
             row.pop("vector", None)
         return rows
@@ -775,8 +784,13 @@ class VectorIndex:
     # read path
     # ------------------------------------------------------------------
 
-    def search(self, query: str, *, top_k: int = 10) -> list[dict[str, Any]]:
+    def search(
+        self, query: str, *, top_k: int = 10, where: str | None = None
+    ) -> list[dict[str, Any]]:
         """Return the top-K nearest records to ``query`` (warm-tier shape).
+
+        ``where`` is a LanceDB filter over the row columns (``class_name``,
+        ``id``), applied before the top-k.
 
         Raises :class:`VectorIndexDimensionMismatchError` if the on-disk
         table's vector dim doesn't match the current provider — the
@@ -791,7 +805,12 @@ class VectorIndex:
         vec = self._provider.embed_query(query)
         table = db.open_table(_TABLE_NAME)
         self._guard_dim_match(table, len(vec))
-        rows = table.search(vec).limit(top_k).to_list()
+        query_builder = table.search(vec)
+        if where:
+            # A prefilter: the top-k is taken among rows the predicate keeps,
+            # so a population that dominates the table cannot fill the window.
+            query_builder = query_builder.where(where, prefilter=True)
+        rows = query_builder.limit(top_k).to_list()
         # Drop the raw vector from the payload — callers don't need it,
         # and 1024 floats per row is wasted bandwidth back to the agent.
         for row in rows:
