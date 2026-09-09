@@ -247,3 +247,22 @@ async def test_memory_diagnostics_reports_live_footprint(svc, local):
     assert out.rss_mb > 0
     assert out.threads >= 1
     assert out.children_mb >= 0
+
+
+async def test_logs_list_telemetry_reads_the_instance_directory(svc, local, monkeypatch, tmp_path):
+    """The telemetry source resolves the same directory the session logger writes."""
+    from durin.config.paths import get_telemetry_dir
+    from durin.logs.reader import LogPage
+
+    monkeypatch.setenv("DURIN_HOME", str(tmp_path / "instance"))
+    seen: dict = {}
+    fake_page = LogPage(lines=[], next_cursor=None, scanned_through_ts=None, has_more=False)
+
+    def fake_read_page(directory, query):
+        seen["directory"] = directory
+        return fake_page
+
+    monkeypatch.setattr("durin.logs.reader.read_page", fake_read_page)
+    monkeypatch.setattr("durin.logs.reader.compute_facets", lambda d, s: {})
+    await svc.logs_list(LogsListQuery(source="telemetry"), local)
+    assert seen["directory"] == get_telemetry_dir() == tmp_path / "instance" / "telemetry"

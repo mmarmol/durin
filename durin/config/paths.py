@@ -77,7 +77,7 @@ def get_telemetry_dir() -> Path:
     """
     import os
 
-    instance = os.environ.get("DURIN_HOME")
+    instance = os.environ.get("DURIN_HOME", "").strip()
     if instance:
         return Path(instance).expanduser() / "telemetry"
     return Path.home() / ".cache" / "durin" / "telemetry"
