@@ -39,16 +39,6 @@ def test_session_summary_is_in_memory_classes() -> None:
     assert SESSION_SUMMARY_CLASS in MEMORY_CLASSES
 
 
-def test_session_summary_not_in_agent_facing_enum_for_memory_store() -> None:
-    """Like `pending` (A2), `session_summary` exists in
-    MEMORY_CLASSES but the LLM-facing memory_store enum excludes
-    it — the agent should never write summaries directly. The
-    compactor is the only producer."""
-    from durin.agent.tools.memory_store import _AGENT_FACING_CLASSES
-
-    assert SESSION_SUMMARY_CLASS not in _AGENT_FACING_CLASSES
-
-
 # ---------------------------------------------------------------------------
 # sanitize_session_key
 # ---------------------------------------------------------------------------

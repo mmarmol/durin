@@ -18,7 +18,6 @@ import pytest
 from durin.agent.tools.memory_drill import MemoryDrillTool
 from durin.agent.tools.memory_ingest import MemoryIngestTool
 from durin.agent.tools.memory_search import MemorySearchTool
-from durin.agent.tools.memory_store import MemoryStoreTool
 from durin.memory import (
     author_scope,
     drill,
@@ -101,7 +100,6 @@ async def test_phase_1_tool_chain(tmp_path: Path) -> None:
     )
 
     ingest_tool = MemoryIngestTool(workspace=workspace)
-    store_tool = MemoryStoreTool(workspace=workspace)
     search_tool = MemorySearchTool(workspace=workspace)
     drill_tool = MemoryDrillTool(workspace=workspace)
 
@@ -109,12 +107,14 @@ async def test_phase_1_tool_chain(tmp_path: Path) -> None:
     assert "error" not in ingest_out
     assert "user prefers pytest over unittest" in ingest_out["content"]
 
-    store_out = await store_tool.execute(
-        content="User prefers pytest over unittest.",
-        class_name="stable",
-        headline="Testing preference",
-        entities=["topic:pytest", "topic:unittest"],
-    )
+    with author_scope("agent_created"):
+        store_out = store_memory(
+            workspace,
+            content="User prefers pytest over unittest.",
+            class_name="stable",
+            headline="Testing preference",
+            entities=["topic:pytest", "topic:unittest"],
+        )
     assert store_out["author"] == "agent_created"
 
     search_out = await search_tool.execute(query="pytest", scope="all")

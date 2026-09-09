@@ -2,8 +2,7 @@
 
 The canonical text the LLM sees lives in the doc. Code drift silently changes
 agent behaviour. This test parses the doc + compares against the LIVE memory
-tools' descriptions (search, upsert_entity, ingest, drill, forget) plus the
-disabled memory_store (kept in sync while it still exists).
+tools' descriptions (search, upsert_entity, ingest, drill, forget).
 
 **What we compare**: the `Tool.description` property — the field that
 `Tool.to_schema()` emits as `function.description` in the OpenAI
@@ -31,7 +30,6 @@ from durin.agent.tools.memory_lineage_tools import (
     MemorySourceSessionTool,
 )
 from durin.agent.tools.memory_search import MemorySearchTool
-from durin.agent.tools.memory_store import MemoryStoreTool
 from durin.agent.tools.memory_upsert_entity import MemoryUpsertEntityTool
 
 _DOC_PATH = (
@@ -105,69 +103,61 @@ def test_memory_search_description_matches_doc(doc_text: str) -> None:
     )
 
 
-def test_memory_store_description_matches_doc(doc_text: str) -> None:
-    expected = _extract_section_block(doc_text, "### 3.2 `memory_store`")
-    actual = _tool_description(MemoryStoreTool)
-    assert _normalise(actual) == _normalise(expected), (
-        "memory_store `.description` property drifted from doc 06 §3.2."
-    )
-
-
 def test_memory_ingest_description_matches_doc(doc_text: str) -> None:
-    expected = _extract_section_block(doc_text, "### 3.3 `memory_ingest`")
+    expected = _extract_section_block(doc_text, "### 3.2 `memory_ingest`")
     actual = _tool_description(MemoryIngestTool)
     assert _normalise(actual) == _normalise(expected), (
-        "memory_ingest `.description` property drifted from doc 06 §3.3."
+        "memory_ingest `.description` property drifted from doc 06 §3.2."
     )
 
 
 def test_memory_drill_description_matches_doc(doc_text: str) -> None:
-    expected = _extract_section_block(doc_text, "### 3.4 `memory_drill`")
+    expected = _extract_section_block(doc_text, "### 3.3 `memory_drill`")
     actual = _tool_description(MemoryDrillTool)
     assert _normalise(actual) == _normalise(expected), (
-        "memory_drill `.description` property drifted from doc 06 §3.4."
+        "memory_drill `.description` property drifted from doc 06 §3.3."
     )
 
 
 def test_memory_upsert_entity_description_matches_doc(doc_text: str) -> None:
     # N6: the live write tool MUST be doc-governed (was uncovered).
-    expected = _extract_section_block(doc_text, "### 3.5 `memory_upsert_entity`")
+    expected = _extract_section_block(doc_text, "### 3.4 `memory_upsert_entity`")
     actual = _tool_description(MemoryUpsertEntityTool)
     assert _normalise(actual) == _normalise(expected), (
-        "memory_upsert_entity `.description` property drifted from doc 06 §3.5."
+        "memory_upsert_entity `.description` property drifted from doc 06 §3.4."
     )
 
 
 def test_memory_forget_description_matches_doc(doc_text: str) -> None:
     # N6: the live delete tool MUST be doc-governed (was uncovered).
-    expected = _extract_section_block(doc_text, "### 3.6 `memory_forget`")
+    expected = _extract_section_block(doc_text, "### 3.5 `memory_forget`")
     actual = _tool_description(MemoryForgetTool)
     assert _normalise(actual) == _normalise(expected), (
-        "memory_forget `.description` property drifted from doc 06 §3.6."
+        "memory_forget `.description` property drifted from doc 06 §3.5."
     )
 
 
 def test_memory_read_entity_description_matches_doc(doc_text: str) -> None:
-    expected = _extract_section_block(doc_text, "### 3.7 `memory_read_entity`")
+    expected = _extract_section_block(doc_text, "### 3.6 `memory_read_entity`")
     actual = _tool_description(MemoryReadEntityTool)
     assert _normalise(actual) == _normalise(expected), (
-        "memory_read_entity `.description` property drifted from doc 06 §3.7."
+        "memory_read_entity `.description` property drifted from doc 06 §3.6."
     )
 
 
 def test_memory_entity_lineage_description_matches_doc(doc_text: str) -> None:
-    expected = _extract_section_block(doc_text, "### 3.8 `memory_entity_lineage`")
+    expected = _extract_section_block(doc_text, "### 3.7 `memory_entity_lineage`")
     actual = _tool_description(MemoryEntityLineageTool)
     assert _normalise(actual) == _normalise(expected), (
-        "memory_entity_lineage `.description` property drifted from doc 06 §3.8."
+        "memory_entity_lineage `.description` property drifted from doc 06 §3.7."
     )
 
 
 def test_memory_source_session_description_matches_doc(doc_text: str) -> None:
-    expected = _extract_section_block(doc_text, "### 3.9 `memory_source_session`")
+    expected = _extract_section_block(doc_text, "### 3.8 `memory_source_session`")
     actual = _tool_description(MemorySourceSessionTool)
     assert _normalise(actual) == _normalise(expected), (
-        "memory_source_session `.description` property drifted from doc 06 §3.9."
+        "memory_source_session `.description` property drifted from doc 06 §3.8."
     )
 
 

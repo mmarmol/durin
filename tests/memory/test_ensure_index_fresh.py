@@ -137,7 +137,7 @@ def test_emits_rebuild_telemetry(
 
 def test_missing_memory_dir_no_op(tmp_path: Path) -> None:
     """If `memory/` doesn't exist (fresh workspace), no rebuild and
-    no error. The first `memory_store` later will create it."""
+    no error. The first indexed write later will create it."""
     from durin.memory.indexer import (
         _RESET_FRESHNESS_CACHE_FOR_TESTS,
         ensure_index_fresh,

@@ -447,7 +447,7 @@ def test_embed_text_tag_lines_never_starve_the_body() -> None:
 # row's ``summary`` field when the source entry has none. The file on
 # disk stays the source of truth (``summary: ''`` remains a legitimate
 # state); the index carries a derived value so search results never
-# hand the LLM an empty summary. When Dream or memory_store later
+# hand the LLM an empty summary. When Dream or `/remember` later
 # populates the source's real summary, the row gets re-upserted with
 # the authoritative value.
 
@@ -499,7 +499,7 @@ def test_vector_row_derives_summary_from_body_when_source_empty(
 def test_vector_row_preserves_authoritative_summary(
     tmp_path: Path, provider: _FakeEmbeddingProvider,
 ) -> None:
-    """When the source has a real summary (Dream or memory_store
+    """When the source has a real summary (Dream or `/remember`
     explicit), the index must NOT overwrite it with the body prefix."""
     real_summary = (
         "Joanna writes movie scripts and keeps Tilly the stuffed animal "

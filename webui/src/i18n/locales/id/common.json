@@ -2070,7 +2070,6 @@
       "longTask": "{{summary}}",
       "longTaskDefault": "tugas panjang",
       "planMode": "mode rencana",
-      "memorySaved": "memori tersimpan",
       "entityUpdated": "{{ref}}",
       "entityUpdatedDefault": "entitas diperbarui",
       "memoryForgot": "lupakan {{uri}}",

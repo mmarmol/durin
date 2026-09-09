@@ -458,7 +458,7 @@ def test_session_detail_filters_memory_ops_from_events(tmp_path: Path) -> None:
         meta={
             "session_key": "websocket:sess1",
             "events": [
-                {"type": "tool_call", "tool": "memory_store", "ts": "2026-05-22T00:00:00"},
+                {"type": "tool_call", "tool": "memory_upsert_entity", "ts": "2026-05-22T00:00:00"},
                 {"type": "tool_call", "tool": "read_file", "ts": "2026-05-22T00:01:00"},
                 {"type": "tool_call", "tool": "memory_search", "ts": "2026-05-22T00:02:00"},
                 {"type": "plan", "title": "x"},
@@ -471,7 +471,7 @@ def test_session_detail_filters_memory_ops_from_events(tmp_path: Path) -> None:
     assert len(d["events"]) == 4
     # Only memory_* tools surface in memory_ops; plan is excluded.
     tools = [op["tool"] for op in d["memory_ops"]]
-    assert tools == ["memory_store", "memory_search"]
+    assert tools == ["memory_upsert_entity", "memory_search"]
 
 
 def test_session_detail_finds_entries_linked_via_source_refs(tmp_path: Path) -> None:

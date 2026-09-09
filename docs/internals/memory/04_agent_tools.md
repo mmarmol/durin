@@ -12,8 +12,7 @@ operations. The write and retrieval tools are live: `memory_search`,
 The **read-only inspection tools** — `memory_read_entity`,
 `memory_entity_lineage`, and `memory_source_session` — are registered in the
 same auto-discovery path and available to the main agent as well as to the
-Dream Tier 2 sub-agent. One more class, `memory_store`, is compiled into the
-codebase but disabled at load time — it is documented here for completeness.
+Dream Tier 2 sub-agent.
 
 These are the **only** memory-related tools the agent can invoke. Everything
 beyond this boundary — index internals, RRF coefficients, cross-encoder weights,
@@ -89,9 +88,6 @@ flowchart TD
     MRE -->|EntityPage.to_markdown| ENT
     MEL -->|dulwich git walker| ENT
     MSS -->|load_session + provenance refs| SESS["sessions/*.jsonl"]
-
-    LOADER([ToolLoader\nloader.py])
-    LOADER -->|enabled check\nmemory_store.enabled = False| SKIP[MemoryStoreTool\nNOT registered]
 ```
 
 ---
@@ -102,10 +98,9 @@ flowchart TD
 
 `ToolLoader` (`durin/agent/tools/loader.py`) scans the `durin.agent.tools`
 package at startup. For each discovered `Tool` subclass it calls
-`tool_cls.enabled(ctx)` before calling `create(ctx)`. `MemoryStoreTool.enabled()`
-returns `False` unconditionally, so it is never instantiated and never appears
-in the LLM's tool list. Every other memory tool returns `True` (or inherits the
-default `True` from `Tool.enabled`).
+`tool_cls.enabled(ctx)` before calling `create(ctx)`. Every memory tool
+returns `True` (or inherits the default `True` from `Tool.enabled`), so
+all of them appear in the LLM's tool list.
 
 ### `memory_search`
 
@@ -642,21 +637,6 @@ the referenced session files are no longer present.
 
 ---
 
-### `memory_store` (disabled)
-
-**File:** `durin/agent/tools/memory_store.py`
-
-`MemoryStoreTool.enabled()` returns `False`. The loader skips it at startup;
-the LLM never sees it. In the current entity-centric model, facts about things
-are written via `memory_upsert_entity` and documents via `memory_ingest`;
-session interactions are left for the Dream to distil.
-
-The internal `store_memory` function the class wraps is still used by internal
-callers (compaction summaries, ingest pipelines). The class is retained so a
-future re-enable starts from a correct implementation.
-
----
-
 ## Key types and entry points
 
 | Symbol | File | Role |
@@ -669,7 +649,6 @@ future re-enable starts from a correct implementation.
 | `MemoryReadEntityTool` | `durin/agent/tools/memory_lineage_tools.py` | `memory_read_entity` tool. Returns `EntityPage.to_markdown()` for a single ref — complete page, no truncation. |
 | `MemoryEntityLineageTool` | `durin/agent/tools/memory_lineage_tools.py` | `memory_entity_lineage` tool. Walks the dulwich git log for an entity page; returns up to 20 commits with SHA, timestamp, author, message. |
 | `MemorySourceSessionTool` | `durin/agent/tools/memory_lineage_tools.py` | `memory_source_session` tool. Collects `source_ref` / `derived_from` provenance entries from an entity page and reads the matching session turns. |
-| `MemoryStoreTool` | `durin/agent/tools/memory_store.py` | Disabled (`enabled()=False`). Internal `store_memory` function retained for compaction callers. |
 | `ToolLoader` | `durin/agent/tools/loader.py` | Discovers `Tool` subclasses, calls `enabled(ctx)` + `create(ctx)`, registers into `ToolRegistry`. |
 | `run_search_pipeline` | `durin/memory/search_pipeline.py` | Full search pipeline entry point called by `memory_search`. |
 | `SectionedHit` | `durin/memory/sectioned_output.py` | Frozen dataclass carrying one result row into the renderer. |
@@ -784,11 +763,6 @@ are extracted by the Dream pass from the prose `body`. The agent supplies
 observations in natural language; the system extracts typed structure
 asynchronously. This keeps the write contract simple and avoids a schema the
 agent must learn.
-
-**`memory_store` disabled, not deleted.** The internal `store_memory` function
-is still used by compaction and ingest pipelines. Keeping the class (with
-`enabled=False`) allows internal callers to remain on the same function without
-branching, and lets a future re-enable start from a correct implementation.
 
 **`memory_forget` instead of shell `rm`.** A raw deletion leaves FTS and vector
 index rows pointing at a missing file. The auto-repair cannot reconstruct them

@@ -270,8 +270,6 @@ function chipLabel(event: ToolProgressEvent, t: (key: string, options?: Record<s
     }
     case "enter_plan_mode":
       return `📐 ${t("message.chips.planMode")}`;
-    case "memory_store":
-      return `🧠 ${t("message.chips.memorySaved")}`;
     case "memory_upsert_entity": {
       const ref = s("ref");
       return `🧠 ${ref ? t("message.chips.entityUpdated", { ref }) : t("message.chips.entityUpdatedDefault")}`;

@@ -943,7 +943,7 @@ def _resolve_meta(
         if vh.get("entities"):
             meta["entities"] = vh["entities"]
         # The vector row carries summary — authoritative when Dream /
-        # memory_store set it, otherwise the body-prefix fallback
+        # `/remember` set it, otherwise the body-prefix fallback
         # materialised at upsert time. The renderer keys off this for
         # the warm-tier triage block.
         if vh.get("summary"):

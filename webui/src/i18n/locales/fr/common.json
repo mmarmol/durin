@@ -2070,7 +2070,6 @@
       "longTask": "{{summary}}",
       "longTaskDefault": "tâche longue",
       "planMode": "mode plan",
-      "memorySaved": "mémoire enregistrée",
       "entityUpdated": "{{ref}}",
       "entityUpdatedDefault": "entité mise à jour",
       "memoryForgot": "oublier {{uri}}",

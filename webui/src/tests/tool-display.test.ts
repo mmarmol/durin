@@ -39,7 +39,7 @@ describe("toolDisplayClass", () => {
 
 describe("toolDisplayClass — tier-3 chips", () => {
   it("chips memory/skill write operations", () => {
-    for (const name of ["memory_store", "memory_upsert_entity", "memory_forget", "skill_import"]) {
+    for (const name of ["memory_upsert_entity", "memory_forget", "skill_import"]) {
       expect(toolDisplayClass(name)).toBe("chip");
     }
   });

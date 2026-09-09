@@ -1,10 +1,12 @@
-"""Tests for the wired vector path in MemoryStoreTool + MemorySearchTool.
+"""Tests for the wired vector path in MemorySearchTool.
 
-memory_store now upserts each new entry into the VectorIndex; memory_search
-prefers the vector index for warm-tier dreamed queries with grep as
-fallback. The lazy VectorIndex construction inside each tool depends on
-both lancedb being available AND an embedding model name being passed in
-(``embedding_model`` kw).
+Memory entries land in the VectorIndex via ``store_memory`` (the write) plus
+an explicit ``VectorIndex.upsert`` (the index side-effect that a live write
+path — ``/remember``, ``memory_upsert_entity``, the dream — performs after
+the file write); ``memory_search`` prefers the vector index for warm-tier
+dreamed queries with grep as fallback. The lazy VectorIndex construction
+inside the search tool depends on both lancedb being available AND an
+embedding model name being passed in (``embedding_model`` kw).
 
 These tests stub fastembed via ``sys.modules`` so we don't pull the real
 2 GB model; lancedb itself runs against a real on-disk DB in ``tmp_path``.
@@ -70,7 +72,7 @@ def _stub_fastembed():
     fake.TextEmbedding = _FakeTextEmbedding  # type: ignore[attr-defined]
     sys.modules["fastembed"] = fake
 
-    # MemoryStoreTool / MemorySearchTool build their provider via
+    # VectorIndex / MemorySearchTool build their provider via
     # provider_from_config(load_config(), ...), which defaults isolation to
     # "process" — a real subprocess that doesn't see this sys.modules stub
     # (separate process) and would embed with the real fastembed model
@@ -92,75 +94,6 @@ def _stub_fastembed():
 
 
 # ---------------------------------------------------------------------------
-# memory_store wiring (upsert after write)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_store_upserts_into_vector_index(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from durin.agent.tools.memory_store import MemoryStoreTool
-    from durin.memory.embedding import FastembedProvider
-    from durin.memory.vector_index import VectorIndex
-
-    with _stub_fastembed():
-        tool = MemoryStoreTool(
-            workspace=tmp_path,
-            embedding_model=_TEST_MODEL,
-        )
-        out = await tool.execute(
-            content="cache must be flushed when payload version changes",
-            headline="cache flush rule",
-        )
-
-        # Index contains the entry
-        vi = VectorIndex(tmp_path, FastembedProvider(_TEST_MODEL))
-        hits = vi.search("cache", top_k=5)
-
-    assert "error" not in out
-    assert any(h["id"] == out["id"] for h in hits)
-
-
-@pytest.mark.asyncio
-async def test_store_without_embedding_model_skips_vector(
-    tmp_path: Path,
-) -> None:
-    """No embedding_model → tool stays grep-only; store still succeeds."""
-    from durin.agent.tools.memory_store import MemoryStoreTool
-
-    tool = MemoryStoreTool(workspace=tmp_path)  # no embedding_model
-    out = await tool.execute(content="content", headline="h")
-    assert "error" not in out
-    # No vector index folder created on disk
-    # P9 (2026-05-30): index path moved to `.durin/index/lance/` from
-    # `memory/.index.lance` so the vault stays markdown-pure.
-    from durin.memory.vector_index import _INDEX_PATH
-    assert not tmp_path.joinpath(*_INDEX_PATH).exists()
-
-
-@pytest.mark.asyncio
-async def test_store_vector_failure_does_not_break_write(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A vector upsert failure must still let the markdown write succeed."""
-    from durin.agent.tools.memory_store import MemoryStoreTool
-    from durin.memory.storage import load_entry
-
-    # Force fastembed import to fail inside the upsert path.
-    monkeypatch.setitem(sys.modules, "fastembed", None)
-    tool = MemoryStoreTool(
-        workspace=tmp_path,
-        embedding_model=_TEST_MODEL,
-    )
-    out = await tool.execute(content="content", headline="h")
-    assert "error" not in out
-    # Markdown still written
-    entry = load_entry(Path(out["path"]))
-    assert entry.headline == "h"
-
-
-# ---------------------------------------------------------------------------
 # memory_search wiring (vector path + fallback)
 # ---------------------------------------------------------------------------
 
@@ -170,15 +103,21 @@ async def test_search_uses_vector_for_dreamed_warm(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from durin.agent.tools.memory_search import MemorySearchTool
-    from durin.agent.tools.memory_store import MemoryStoreTool
+    from durin.memory.embedding import FastembedProvider
+    from durin.memory.storage import load_entry
+    from durin.memory.store import store_memory
+    from durin.memory.vector_index import VectorIndex
 
     with _stub_fastembed():
-        store = MemoryStoreTool(
-            workspace=tmp_path,
-            embedding_model=_TEST_MODEL,
-        )
-        await store.execute(content="alpha content", headline="alpha")
-        await store.execute(content="beta content", headline="beta")
+        vi = VectorIndex(tmp_path, FastembedProvider(_TEST_MODEL))
+        for content, headline in (
+            ("alpha content", "alpha"),
+            ("beta content", "beta"),
+        ):
+            stored = store_memory(tmp_path, content=content, headline=headline)
+            vi.upsert(
+                load_entry(Path(stored["path"])), stored["class"], Path(stored["path"])
+            )
 
         search = MemorySearchTool(
             workspace=tmp_path,
@@ -217,7 +156,10 @@ async def test_search_scope_all_combines_vector_and_grep(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from durin.agent.tools.memory_search import MemorySearchTool
-    from durin.agent.tools.memory_store import MemoryStoreTool
+    from durin.memory.embedding import FastembedProvider
+    from durin.memory.storage import load_entry
+    from durin.memory.store import store_memory
+    from durin.memory.vector_index import VectorIndex
 
     # Prep: one stored memory entry (will be in vector index) + one
     # session.md grep-able for the same query token.
@@ -228,10 +170,11 @@ async def test_search_scope_all_combines_vector_and_grep(
     )
 
     with _stub_fastembed():
-        await MemoryStoreTool(
-            workspace=tmp_path,
-            embedding_model=_TEST_MODEL,
-        ).execute(content="alpha memory body", headline="alpha-memory")
+        vi = VectorIndex(tmp_path, FastembedProvider(_TEST_MODEL))
+        stored = store_memory(tmp_path, content="alpha memory body", headline="alpha-memory")
+        vi.upsert(
+            load_entry(Path(stored["path"])), stored["class"], Path(stored["path"])
+        )
 
         search = MemorySearchTool(
             workspace=tmp_path,
@@ -254,13 +197,17 @@ async def test_search_cold_level_uses_vector_with_body_enrichment(
     substring grep, which failed for any natural-language query that
     didn't appear verbatim in the entry."""
     from durin.agent.tools.memory_search import MemorySearchTool
-    from durin.agent.tools.memory_store import MemoryStoreTool
+    from durin.memory.embedding import FastembedProvider
+    from durin.memory.storage import load_entry
+    from durin.memory.store import store_memory
+    from durin.memory.vector_index import VectorIndex
 
     with _stub_fastembed():
-        await MemoryStoreTool(
-            workspace=tmp_path,
-            embedding_model=_TEST_MODEL,
-        ).execute(content="alpha cold body", headline="alpha")
+        vi = VectorIndex(tmp_path, FastembedProvider(_TEST_MODEL))
+        stored = store_memory(tmp_path, content="alpha cold body", headline="alpha")
+        vi.upsert(
+            load_entry(Path(stored["path"])), stored["class"], Path(stored["path"])
+        )
 
         search = MemorySearchTool(
             workspace=tmp_path,

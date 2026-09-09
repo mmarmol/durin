@@ -15,7 +15,7 @@ from durin.cli.tui.startup import (
 def test_categorize_tools_groups_by_purpose() -> None:
     names = [
         "read_file", "write_file", "exec",
-        "memory_search", "memory_store",
+        "memory_search", "memory_ingest",
         "web_fetch", "web_search",
         "spawn", "tasks",
         "unknown_tool",
@@ -24,7 +24,7 @@ def test_categorize_tools_groups_by_purpose() -> None:
     assert "file" in cats
     assert set(cats["file"]) == {"read_file", "write_file"}
     assert cats["shell"] == ["exec"]
-    assert set(cats["memory"]) == {"memory_search", "memory_store"}
+    assert set(cats["memory"]) == {"memory_search", "memory_ingest"}
     assert set(cats["web"]) == {"web_fetch", "web_search"}
     assert set(cats["agent"]) == {"spawn", "tasks"}
     # Unknown tools fall through to misc.

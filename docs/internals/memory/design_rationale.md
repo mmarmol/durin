@@ -71,32 +71,17 @@ Multilingual cross-encoder models add several hundred milliseconds of latency on
 
 `memory_ingest` accepts only local file paths. URL and inline content variants were proposed and removed.
 
-URL fetch would duplicate `web_fetch`, which already handles URL-to-markdown extraction with Jina Reader, a readability fallback, SSRF protection, content-type sniffing, and timeout handling. Reimplementing those policies inside `memory_ingest` would either duplicate the code and drift, or call `web_fetch` internally — at which point the parameter just hides a two-step workflow behind a flag. Inline content was the province of `memory_store(class_name="corpus")`, though that tool is now disabled at load, so persisting text the agent already has in context is not a live agent operation. The only `memory_ingest`-exclusive capability is preserving the original artifact on disk by content hash and chunking it — both meaningful only for local files.
+URL fetch would duplicate `web_fetch`, which already handles URL-to-markdown extraction with Jina Reader, a readability fallback, SSRF protection, content-type sniffing, and timeout handling. Reimplementing those policies inside `memory_ingest` would either duplicate the code and drift, or call `web_fetch` internally — at which point the parameter just hides a two-step workflow behind a flag. Persisting text the agent already has in context (an inline-content variant) has no agent-facing write path either — only `/remember` and the Dream write freeform `corpus`/`episodic` entries. The only `memory_ingest`-exclusive capability is preserving the original artifact on disk by content hash and chunking it — both meaningful only for local files.
 
 The composition rule:
 
 | Workflow | Tools |
 |---|---|
 | Local file on disk | `memory_ingest(path=...)` |
-| Article found on the web | `web_fetch(url=...)` → `memory_store(content=markdown, class_name="corpus")` |
-| Text already in context | `memory_store(content=..., class_name="corpus")` |
-
-Both `memory_store` rows describe the conceptual data path, not a live call:
-`memory_store` is disabled at load, so today the agent reads with `web_fetch` /
-`convert_to_markdown` and persists durable knowledge via `memory_ingest` (local
-files) or `memory_upsert_entity` (entities).
+| A fact about a thing (person, company, product, topic, place) | `memory_upsert_entity(...)` |
+| Article found on the web, or text already in context | no agent tool; the agent reads it with `web_fetch` / `convert_to_markdown` and either distills it into an entity via `memory_upsert_entity` or leaves it for the Dream to fold into memory |
 
 **Lesson:** when spec parameters are "synced" from a doc to code, verify the schema actually implements the promised parameters. String comparison tests pass even when the behavior they describe is absent.
-
-### `memory_store` parameter surface — `valid_from` and `pending` class
-
-`valid_from` is not exposed as a tool parameter. The tool's class enum is `stable | episodic | corpus` — not the full internal set.
-
-`valid_from` defaults to today for the overwhelming majority of agent-in-conversation stores. The 1% back-dating case (seeding historical data) calls the pure `store_memory` function directly. Adding a `valid_from` parameter would expose a knob the LLM defaults to incorrectly most of the time.
-
-`pending` is excluded because entries written there are invisible to every retrieval path (the indexer and file watcher skip `memory/pending/**`). Letting the LLM write to `pending` via the tool would be silent data loss.
-
-**Lessons:** enum values that look available but are excluded from the retrieval pipeline are traps. Tool parameter names and persisted field names differ by plane — document both explicitly. Default behavior often beats new tool parameters; before exposing a knob, ask who actually needs it.
 
 ### `memory.silent_retrieval_miss` heuristic detection
 

@@ -340,7 +340,7 @@ protection, then SSRF URL detection, then workspace boundary on absolute paths.
 - *Memory vault protection* (`_guard_memory_mutation()`): mutations of the
   `memory/` directory via `rm`, `mv`, `cp`, `tee`, `sed -i`, `dd`, and redirect
   operators are blocked entirely. This preserves FTS and vector index consistency —
-  memory modifications must go through `memory_store`/`memory_forget` tools.
+  memory modifications must go through `memory_upsert_entity`/`memory_forget` tools.
 
 - *SSRF URL detection* (`contains_internal_url()`): URLs embedded in the command
   string are extracted and validated against the private-network blocklist. A
@@ -557,7 +557,7 @@ a confirmation step — the human remains in the loop for the final install deci
 **Why is the memory vault blocked from shell?** The FTS and vector indices maintain
 pointers to memory files. A raw `rm` or redirect that removes or overwrites a file
 leaves orphan index rows that auto-repair cannot reconstruct without a full rebuild.
-Routing mutations through `memory_store` and `memory_forget` tools ensures the
+Routing mutations through `memory_upsert_entity` and `memory_forget` tools ensures the
 index stays consistent.
 
 **Why does the SSRF guard pin the connection to the validated IP?** Validating at

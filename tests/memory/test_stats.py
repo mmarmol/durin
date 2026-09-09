@@ -167,40 +167,18 @@ def test_telemetry_grep_only_recall(tmp_path: Path) -> None:
     assert stats.vector_strategy_ratio == 0.0
 
 
-def test_telemetry_store_and_blocked_duplicate(tmp_path: Path) -> None:
-    tel = tmp_path / "tel"
-    now = time.time()
-    _write_jsonl(tel, "s.jsonl", [
-        {"ts": now, "type": "memory.store",
-         "data": {"entry_id": "e1", "class_name": "stable",
-                  "author": "agent_created", "headline": "hello"}},
-        {"ts": now, "type": "memory.store",
-         "data": {"entry_id": "e2", "class_name": "stable",
-                  "author": "agent_created", "headline": "world"}},
-        {"ts": now, "type": "memory.store.blocked_near_duplicate",
-         "data": {"candidate_class_name": "stable",
-                  "existing_id": "e1", "existing_class_name": "stable",
-                  "distance": 0.05, "threshold": 0.10}},
-    ])
-    stats = compute_stats(tmp_path, telemetry_dir=tel)
-    assert stats.store_total == 2
-    assert stats.store_blocked_near_duplicate == 1
-
-
 def test_telemetry_days_filter_excludes_old_events(tmp_path: Path) -> None:
     tel = tmp_path / "tel"
     now = time.time()
     old = now - (10 * 86400)  # 10 days ago
     _write_jsonl(tel, "s.jsonl", [
-        {"ts": old, "type": "memory.store",
-         "data": {"entry_id": "old", "class_name": "stable",
-                  "author": "agent_created", "headline": ""}},
-        {"ts": now, "type": "memory.store",
-         "data": {"entry_id": "new", "class_name": "stable",
-                  "author": "agent_created", "headline": ""}},
+        {"ts": old, "type": "memory.ingest",
+         "data": {"entry_id": "old", "size_bytes": 10, "suffix": ".md"}},
+        {"ts": now, "type": "memory.ingest",
+         "data": {"entry_id": "new", "size_bytes": 20, "suffix": ".md"}},
     ])
     stats = compute_stats(tmp_path, telemetry_dir=tel, days=5)
-    assert stats.store_total == 1
+    assert stats.ingest_total == 1
 
 
 def test_telemetry_skips_non_memory_events(tmp_path: Path) -> None:
@@ -209,13 +187,12 @@ def test_telemetry_skips_non_memory_events(tmp_path: Path) -> None:
     _write_jsonl(tel, "s.jsonl", [
         {"ts": now, "type": "agent_mode.turn_start", "data": {"mode": "build"}},
         {"ts": now, "type": "tool.read_file", "data": {"path": "a"}},
-        {"ts": now, "type": "memory.store",
-         "data": {"entry_id": "e1", "class_name": "stable",
-                  "author": "agent_created", "headline": ""}},
+        {"ts": now, "type": "memory.ingest",
+         "data": {"entry_id": "e1", "size_bytes": 10, "suffix": ".md"}},
     ])
     stats = compute_stats(tmp_path, telemetry_dir=tel)
     assert stats.telemetry_events_scanned == 1
-    assert stats.store_total == 1
+    assert stats.ingest_total == 1
 
 
 def test_telemetry_handles_corrupt_lines(tmp_path: Path) -> None:
@@ -223,13 +200,13 @@ def test_telemetry_handles_corrupt_lines(tmp_path: Path) -> None:
     tel.mkdir()
     (tel / "s.jsonl").write_text(
         "not json\n"
-        '{"ts": 0, "type": "memory.store", "data": {"entry_id": "x", '
-        '"class_name": "stable", "author": "agent_created", "headline": ""}}\n'
+        '{"ts": 0, "type": "memory.ingest", "data": {"entry_id": "x", '
+        '"size_bytes": 10, "suffix": ".md"}}\n'
         '{"this is": "valid json but no type"}\n',
         encoding="utf-8",
     )
     stats = compute_stats(tmp_path, telemetry_dir=tel)
-    assert stats.store_total == 1  # the one valid memory event
+    assert stats.ingest_total == 1  # the one valid memory event
 
 
 # ---------------------------------------------------------------------------

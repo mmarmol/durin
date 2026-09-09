@@ -54,8 +54,8 @@ def test_prefetch_flag_marks_only_recall_events_while_bound(tmp_path: Path) -> N
         # A non-recall event never gets the key, even while bound.
         pf_token = bind_prefetch_search()
         try:
-            emit_tool_event("memory.store", {
-                "entry_id": "x", "class_name": "note", "author": "user", "headline": "h",
+            emit_tool_event("memory.upsert_entity", {
+                "ref": "topic:x", "committed": True, "retries": 0,
             })
         finally:
             reset_prefetch_search(pf_token)
@@ -71,7 +71,7 @@ def test_prefetch_flag_marks_only_recall_events_while_bound(tmp_path: Path) -> N
     assert lines[0]["data"]["prefetch"] is True
     assert lines[1]["type"] == "memory.recall.lexical"
     assert "prefetch" not in lines[1]["data"]
-    assert lines[2]["type"] == "memory.store"
+    assert lines[2]["type"] == "memory.upsert_entity"
     assert "prefetch" not in lines[2]["data"]
 
 

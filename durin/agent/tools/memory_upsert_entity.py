@@ -164,8 +164,8 @@ class MemoryUpsertEntityTool(Tool):
 def _source_ref() -> str:
     """Per-turn provenance source: the session turn if available, else a tag."""
     try:
-        from durin.agent.tools.memory_store import _session_turn_ref
+        from durin.memory.provenance import session_turn_ref
 
-        return _session_turn_ref() or "memory_upsert_entity"
+        return session_turn_ref() or "memory_upsert_entity"
     except Exception:  # pragma: no cover — best effort
         return "memory_upsert_entity"

@@ -410,9 +410,8 @@ plus a few read-only inspection tools (see [04_agent_tools.md](04_agent_tools.md
 - `memory_read_entity` / `memory_entity_lineage` / `memory_source_session` —
   inspect an entity's full page, git history, and source conversation turns
 
-`memory_store` exists in the codebase but is disabled at load time; raw
-fragments come from `/remember` and from the session summaries the compactor,
-`/new` and the nightly idle pass write, not from the agent.
+Raw fragments come from `/remember` and from the session summaries the
+compactor, `/new` and the nightly idle pass write, not from the agent.
 
 ---
 

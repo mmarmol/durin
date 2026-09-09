@@ -3,7 +3,7 @@
 Pure file persistence. The LLM-derived fields in
 ``meta.json::derived`` (``summary``, ``entities``, ``relations``) are
 populated later — either by dream over the ``ingested/`` directory or
-by a follow-up ``memory_store`` call from the agent that just read the
+by a follow-up ``memory_upsert_entity`` call from the agent that just read the
 file content.
 
 Supported document formats (PDF, Office, EPUB, HTML, …) are converted to
@@ -296,7 +296,7 @@ def ingest_artifact(
             # trust this sidecar or should re-check it.
             "ocr_stub": is_ocr_stub,
             # LLM-derived fields stay empty until dream or a
-            # follow-up memory_store call fills them in.
+            # follow-up memory_upsert_entity call fills them in.
             "summary": "",
             "entities": [],
             "relations": [],

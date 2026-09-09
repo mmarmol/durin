@@ -780,17 +780,6 @@ class MemoryEagerSurfaceEvent(TypedDict):
     session_key: str
 
 
-class MemoryStoreEvent(TypedDict):
-    """memory_store invocation that successfully wrote a memory entry."""
-
-    entry_id: str
-    class_name: str
-    author: str
-    headline: str
-    iteration: NotRequired[int]
-    session_key: NotRequired[str | None]
-
-
 class MemoryIngestEvent(TypedDict):
     """memory_ingest invocation that copied an external artifact into ingested/."""
 
@@ -1006,23 +995,6 @@ class MemoryAbsorbEscalationCappedEvent(TypedDict):
 
     canonical: str
     absorbed: str
-
-
-class MemoryStoreBlockedNearDuplicateEvent(TypedDict):
-    """memory_store dedup pre-persist refused a write because the embedding
-    distance to an existing entry fell below the configured threshold. The
-    model receives a warning and may re-call with ``force=True`` to bypass;
-    this event records the underlying decision so duplicate rates can be
-    measured over time.
-    """
-
-    candidate_class_name: str
-    existing_id: str
-    existing_class_name: str
-    distance: float
-    threshold: float
-    iteration: NotRequired[int]
-    session_key: NotRequired[str | None]
 
 
 class MemoryDreamPatchAppliedEvent(TypedDict):
@@ -1921,7 +1893,6 @@ EVENTS: dict[str, type] = {
     "memory.recall": MemoryRecallEvent,
     "memory.prefetch": MemoryPrefetchEvent,
     "memory.eager_surface": MemoryEagerSurfaceEvent,
-    "memory.store": MemoryStoreEvent,
     "memory.ingest": MemoryIngestEvent,
     "memory.forget": MemoryForgetEvent,
     "memory.upsert_entity": MemoryUpsertEntityEvent,
@@ -1931,7 +1902,6 @@ EVENTS: dict[str, type] = {
     "memory.embedding.load": MemoryEmbeddingLoadEvent,
     "memory.embedding.embed": MemoryEmbeddingEmbedEvent,
     "memory.recall.vector": MemoryRecallVectorEvent,
-    "memory.store.blocked_near_duplicate": MemoryStoreBlockedNearDuplicateEvent,
     "memory.dream.start": MemoryDreamStartEvent,
     "memory.dream.end": MemoryDreamEndEvent,
     "memory.dream.patch_applied": MemoryDreamPatchAppliedEvent,
@@ -2057,7 +2027,6 @@ __all__ = [
     # Memory subsystem
     "MemoryRecallEvent",
     "MemoryPrefetchEvent",
-    "MemoryStoreEvent",
     "MemoryIngestEvent",
     "MemoryEmbeddingLoadEvent",
     "MemoryEmbeddingEmbedEvent",

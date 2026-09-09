@@ -1,4 +1,4 @@
-"""Tests for the memory provenance ContextVar.
+"""Tests for the memory provenance ContextVar and session_turn_ref.
 
 Contract per `durin/memory/provenance.py`: NO implicit default.
 Every memory write must wrap in :func:`author_scope`. The
@@ -6,7 +6,7 @@ Every memory write must wrap in :func:`author_scope`. The
 ``test_provenance_no_default.py`` (which opts out of the conftest's
 test-default scope). The tests here cover the scope-management
 semantics (set, nest, propagate across await) using *explicit*
-scopes throughout.
+scopes throughout, plus :func:`session_turn_ref`'s per-turn provenance ref.
 """
 
 from __future__ import annotations
@@ -15,7 +15,8 @@ import asyncio
 
 import pytest
 
-from durin.memory.provenance import author_scope, current_author
+from durin.memory.provenance import author_scope, current_author, session_turn_ref
+from durin.telemetry.logger import bind_telemetry, get_session_logger, reset_telemetry
 
 
 def test_scope_sets_author() -> None:
@@ -78,3 +79,23 @@ async def test_isolated_between_concurrent_tasks() -> None:
 
     assert results_a == ["agent_created"]
     assert results_b == ["user_authored"]
+
+
+# ---------------------------------------------------------------------------
+# session_turn_ref
+# ---------------------------------------------------------------------------
+
+
+def test_session_turn_ref_none_outside_a_bound_turn() -> None:
+    assert session_turn_ref() is None
+
+
+def test_session_turn_ref_inside_a_bound_turn(tmp_path) -> None:
+    tlog = get_session_logger("websocket:abc123", base_dir=tmp_path)
+    tlog.set_iteration(3)
+    token = bind_telemetry(tlog)
+    try:
+        ref = session_turn_ref()
+    finally:
+        reset_telemetry(token)
+    assert ref == "[[sessions/websocket_abc123.md#turn-3]]"

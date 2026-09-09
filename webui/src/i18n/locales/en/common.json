@@ -2157,7 +2157,6 @@
       "longTask": "{{summary}}",
       "longTaskDefault": "long task",
       "planMode": "plan mode",
-      "memorySaved": "memory saved",
       "entityUpdated": "{{ref}}",
       "entityUpdatedDefault": "entity updated",
       "memoryForgot": "forgot {{uri}}",

@@ -186,7 +186,7 @@ All references have the form `<type>:<value>`:
 ENTITY_REF_PATTERN = re.compile(r"^[a-z][a-z0-9_]*:[^\s].*$")
 ```
 
-Validation policy: the `memory_store` write path is strict (invalid ref → error returned to the model); the `consolidator_tags` read path is lenient (invalid refs dropped with a log warning, entry survives).
+Validation policy: the `store_memory` write path (`/remember`, Dream) is strict (invalid ref → error returned to the caller); the `consolidator_tags` read path is lenient (invalid refs dropped with a log warning, entry survives).
 
 ### Slug normalization
 
@@ -297,7 +297,7 @@ Archive is excluded from all default search paths: the vector index, FTS5, the g
 - `durin memory expand <ref>` — render a canonical entity page plus its archived predecessors.
 - `durin memory dream` — run the core dream consolidation passes manually.
 
-**Agent tool surfaces:** `memory_upsert_entity` writes entity pages; `memory_store` writes fragments (currently disabled — replaced by `memory_upsert_entity`); `memory_forget` archives a fragment or entity page.
+**Agent tool surfaces:** `memory_upsert_entity` writes entity pages; `memory_ingest` writes reference documents; `memory_forget` archives a fragment or entity page. Fragments come from `/remember` and the Dream, not from an agent-invoked write tool.
 
 ---
 

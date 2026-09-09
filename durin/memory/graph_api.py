@@ -456,7 +456,7 @@ def get_session_detail(
                 {"type": "tool_call", "tool": "memory_search", ...},
             ],
             "memory_ops": [                    # subset of events filtered to memory_* tools
-                {"tool": "memory_store", "args": "...", "result_id": "..."},
+                {"tool": "memory_upsert_entity", "args": "...", "result_id": "..."},
             ],
             "recent_messages": [               # last N message preview from jsonl
                 {"role": "user", "content": "...", "ts": ...},

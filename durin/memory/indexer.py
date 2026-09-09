@@ -10,9 +10,9 @@ Two surfaces:
     row from ``walk_memory``. Called by ``durin reindex`` and by the
     schema-version-mismatch recovery path.
   - :func:`reindex_one_file` — synchronous re-index of a single
-    ``.md`` after a tool writes (memory_store, memory_ingest, Dream
-    apply). Skipped silently when the path is outside ``memory/`` or
-    under ``memory/archive/`` / ``memory/pending/``.
+    ``.md`` after a tool writes (memory_upsert_entity, memory_ingest,
+    /remember, Dream apply). Skipped silently when the path is outside
+    ``memory/`` or under ``memory/archive/`` / ``memory/pending/``.
 
 The vector index (LanceDB) is handled separately in
 ``durin.memory.vector_index``. Both stay in sync because the writes

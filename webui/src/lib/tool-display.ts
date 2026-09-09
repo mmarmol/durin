@@ -33,7 +33,6 @@ const CHIPPED = new Set([
   "complete_goal",
   "long_task",
   "enter_plan_mode",
-  "memory_store",
   "memory_upsert_entity",
   "memory_forget",
   "memory_prefetch",

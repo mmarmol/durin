@@ -215,7 +215,7 @@ class AgentProgressHook(AgentHook):
 # structured row to count.
 _MEMORY_TOOLS = frozenset({
     "memory_search", "memory_drill",
-    "memory_store", "memory_ingest",
+    "memory_ingest",
 })
 _BENCH_RELEVANT_FALLBACK_TOOLS = frozenset({
     "grep", "list_dir", "read_file", "edit_file", "exec", "write_file",

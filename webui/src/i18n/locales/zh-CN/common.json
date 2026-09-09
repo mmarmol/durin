@@ -2070,7 +2070,6 @@
       "longTask": "{{summary}}",
       "longTaskDefault": "长任务",
       "planMode": "计划模式",
-      "memorySaved": "记忆已保存",
       "entityUpdated": "{{ref}}",
       "entityUpdatedDefault": "实体已更新",
       "memoryForgot": "忘记 {{uri}}",

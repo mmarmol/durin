@@ -1409,7 +1409,7 @@ class AgentLoop:
 
     async def _warmup_memory_embedding(self) -> None:
         """Pre-load the embedding model in background so the first
-        ``memory_store`` / ``memory_search`` doesn't pay ~18s download
+        ``memory_upsert_entity`` / ``memory_search`` doesn't pay ~18s download
         (first install) or ~230ms reload (subsequent boots) inline.
 
         Skipped silently when memory is disabled, fastembed isn't
