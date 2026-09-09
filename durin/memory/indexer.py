@@ -631,12 +631,30 @@ def reindex_one_file_vector(workspace: Path, md_path: Path, vi) -> bool:
 _MAX_CONSECUTIVE_FAILURES = 5
 
 
+@dataclass(frozen=True)
+class Backfill:
+    """One chunk of :func:`backfill_missing_vectors`.
+
+    ``done`` counts the entries embedded per class in this call.
+    ``cursor`` is ``None`` when nothing is left to embed (or the run
+    was halted by a dimension mismatch); otherwise it names the class
+    and the last entry id this call attempted, and passing it back as
+    ``cursor=`` continues from the next id — entries already attempted
+    (embedded or failed) are never retried within one backfill.
+    """
+
+    done: dict[str, int]
+    cursor: tuple[str, str] | None
+
+
 def backfill_missing_vectors(
     workspace: Path,
     vi: Any,
     *,
     classes: Sequence[str] = ("stable", "episodic", "corpus", "session_summary"),
-) -> dict[str, int]:
+    cursor: tuple[str, str] | None = None,
+    limit: int | None = None,
+) -> Backfill:
     """Embed memory entries that are in FTS but not in the vector table.
 
     Covers entries that were written (and FTS-indexed) before the
@@ -648,6 +666,14 @@ def backfill_missing_vectors(
     count per class. Intended to run off the startup path (the
     watcher's worker thread) so a large backlog never delays the
     gateway binding its port.
+
+    ``limit`` bounds the entries attempted in this call so the caller
+    can interleave other work between chunks: when the bound is hit
+    with entries still missing, the returned :class:`Backfill` carries
+    a ``cursor`` (class, last id attempted) and the next call with that
+    cursor picks up after it — ids are processed in sorted order per
+    class, classes in the order given. Without ``limit`` one call does
+    the whole run.
 
     A :class:`VectorIndexDimensionMismatchError` (the on-disk table's
     dimension disagrees with the configured embedding model — a table
@@ -670,18 +696,44 @@ def backfill_missing_vectors(
     with FTSIndex.open(workspace) as idx:
         fts_uris = idx.uris_with_prefix("memory/")
     have = vi.ids_by_class(classes)
-    for class_name in classes:
+    start = 0
+    after = ""
+    if cursor is not None:
+        cursor_class, after = cursor
+        if cursor_class in classes:
+            start = classes.index(cursor_class)
+        else:
+            # A cursor from a different class set: nothing to resume
+            # mid-way, start the given classes from their first id.
+            after = ""
+    attempted = 0
+    for offset, class_name in enumerate(classes[start:]):
+        # Only the cursor's own class resumes mid-way; later ones start
+        # from their first id.
+        lower = after if offset == 0 else ""
         prefix = f"memory/{class_name}/"
         missing = sorted(
             u[len(prefix):] for u in fts_uris if u.startswith(prefix)
         )
-        missing = [entry_id for entry_id in missing if entry_id not in have]
+        missing = [
+            entry_id for entry_id in missing
+            if entry_id not in have and entry_id > lower
+        ]
         if not missing:
             continue
+        if limit is not None and attempted >= limit:
+            return Backfill(done, (class_name, lower))
         t0 = time.perf_counter()
         count = 0
         consecutive_failures = 0
+        last = lower
+        halted = False
+        resume: tuple[str, str] | None = None
         for entry_id in missing:
+            if limit is not None and attempted >= limit:
+                resume = (class_name, last)
+                break
+            attempted += 1
             path = workspace / "memory" / class_name / f"{entry_id}.md"
             try:
                 embedded = reindex_one_file_vector(workspace, path, vi)
@@ -691,13 +743,9 @@ def backfill_missing_vectors(
                     "dimension mismatch; a rebuild will fix it)",
                     class_name,
                 )
-                done[class_name] = count
-                duration_ms = (time.perf_counter() - t0) * 1000.0
-                if count > 0:
-                    _emit_backfill(
-                        class_name=class_name, count=count, duration_ms=duration_ms,
-                    )
-                return done
+                halted = True
+                break
+            last = entry_id
             if embedded:
                 count += 1
                 consecutive_failures = 0
@@ -714,7 +762,11 @@ def backfill_missing_vectors(
         done[class_name] = count
         if count > 0:
             _emit_backfill(class_name=class_name, count=count, duration_ms=duration_ms)
-    return done
+        if halted:
+            return Backfill(done, None)
+        if resume is not None:
+            return Backfill(done, resume)
+    return Backfill(done, None)
 
 
 def reindex_one_skill(

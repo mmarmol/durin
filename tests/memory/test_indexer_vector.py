@@ -144,7 +144,7 @@ def test_backfill_embeds_entries_that_have_an_fts_row_and_no_vector_row(
     vi = VectorIndex(ws, provider)
     vi.upsert(load_entry(Path(r1["path"])), "episodic", Path(r1["path"]))  # one already embedded
 
-    done = backfill_missing_vectors(ws, vi)
+    done = backfill_missing_vectors(ws, vi).done
 
     assert done == {"episodic": 1}
     assert vi.ids_by_class(["episodic"]) == {r1["id"], r2["id"]}
@@ -182,7 +182,7 @@ def test_backfill_migrates_a_legacy_entities_column_before_embedding(
     }])
 
     vi = VectorIndex(ws, provider)
-    done = backfill_missing_vectors(ws, vi)
+    done = backfill_missing_vectors(ws, vi).done
 
     assert done == {"episodic": 1}
     hits = vi.search("entidad", top_k=5)
@@ -203,10 +203,12 @@ def test_backfill_is_idempotent(
 
     vi = VectorIndex(ws, provider)
     first = backfill_missing_vectors(ws, vi)
-    assert first == {"episodic": 1}
+    assert first.done == {"episodic": 1}
+    assert first.cursor is None
 
     second = backfill_missing_vectors(ws, vi)
-    assert second == {}
+    assert second.done == {}
+    assert second.cursor is None
     assert vi.ids_by_class(["episodic"]) == {r1["id"]}
 
 
@@ -234,7 +236,7 @@ def test_backfill_does_not_emit_event_when_count_is_zero(
         lambda class_name, count, duration_ms: events.append(("backfill", {"class": class_name, "count": count})),
     )
 
-    done = backfill_missing_vectors(ws, vi)
+    done = backfill_missing_vectors(ws, vi).done
 
     # count is 0 because reindex_one_file_vector returned False
     assert done == {"episodic": 0}
@@ -258,7 +260,7 @@ def test_backfill_emits_telemetry_with_class_count_and_duration(
     import durin.agent.tools._telemetry as _tel
     monkeypatch.setattr(_tel, "emit_tool_event", lambda t, d: events.append((t, d)))
 
-    done = backfill_missing_vectors(ws, vi)
+    done = backfill_missing_vectors(ws, vi).done
 
     assert done == {"episodic": 1}
     backfills = [e for e in events if e[0] == "memory.index.backfill"]
@@ -289,11 +291,12 @@ def test_backfill_stops_on_dimension_mismatch(
 
     monkeypatch.setattr(vi, "upsert", _raise)
 
-    done = backfill_missing_vectors(ws, vi, classes=("episodic", "stable"))
+    result = backfill_missing_vectors(ws, vi, classes=("episodic", "stable"))
 
     # Stops after the first entry (episodic) with count 0; "stable" is
-    # never reached.
-    assert done == {"episodic": 0}
+    # never reached, and there is nothing to resume from.
+    assert result.done == {"episodic": 0}
+    assert result.cursor is None
 
 
 def test_backfill_abandons_class_after_five_consecutive_failures(
@@ -319,8 +322,96 @@ def test_backfill_abandons_class_after_five_consecutive_failures(
 
     monkeypatch.setattr(vi, "upsert", _raise)
 
-    done = backfill_missing_vectors(ws, vi)
+    done = backfill_missing_vectors(ws, vi).done
 
     assert done == {"episodic": 0}
     # Exactly five attempts, not all six missing entries.
     assert len(calls) == 5
+
+
+def test_backfill_stops_at_the_limit_and_the_cursor_resumes_across_classes(
+    tmp_path: Path, provider: _FakeEmbeddingProvider
+) -> None:
+    """`limit` bounds one call; the returned cursor lets the next call
+    continue after the last id attempted — into the next class when the
+    first one is exhausted — until nothing is missing."""
+    from durin.memory.indexer import backfill_missing_vectors, reindex_one_file
+    from durin.memory.store import store_memory
+
+    ws = tmp_path / "ws"
+    episodic = [
+        store_memory(ws, content=f"nota {i}", class_name="episodic")
+        for i in range(3)
+    ]
+    stable = store_memory(ws, content="hecho estable", class_name="stable")
+    for r in [*episodic, stable]:
+        reindex_one_file(ws, Path(r["path"]))
+    vi = VectorIndex(ws, provider)
+    classes = ("episodic", "stable")
+
+    first = backfill_missing_vectors(ws, vi, classes=classes, limit=2)
+    assert first.done == {"episodic": 2}
+    assert first.cursor == ("episodic", sorted(r["id"] for r in episodic)[1])
+
+    second = backfill_missing_vectors(
+        ws, vi, classes=classes, cursor=first.cursor, limit=2,
+    )
+    assert second.done == {"episodic": 1, "stable": 1}
+    assert second.cursor is None
+    assert vi.ids_by_class(["episodic"]) == {r["id"] for r in episodic}
+    assert vi.ids_by_class(["stable"]) == {stable["id"]}
+
+
+def test_backfill_cursor_never_retries_an_entry_that_failed(
+    tmp_path: Path, provider: _FakeEmbeddingProvider, monkeypatch
+) -> None:
+    """An entry that failed to embed is behind the cursor like an
+    embedded one: the next chunk moves on instead of failing on it
+    again (a persistently broken file must not pin the backfill)."""
+    import durin.memory.indexer as indexer_mod
+    from durin.memory.indexer import backfill_missing_vectors, reindex_one_file
+    from durin.memory.store import store_memory
+
+    ws = tmp_path / "ws"
+    results = [
+        store_memory(ws, content=f"nota {i}", class_name="episodic")
+        for i in range(2)
+    ]
+    for r in results:
+        reindex_one_file(ws, Path(r["path"]))
+    first_id, second_id = sorted(r["id"] for r in results)
+    vi = VectorIndex(ws, provider)
+    attempted: list[str] = []
+
+    def _fail_first(workspace, path, vi):
+        attempted.append(path.stem)
+        return path.stem != first_id
+
+    monkeypatch.setattr(indexer_mod, "reindex_one_file_vector", _fail_first)
+
+    first = backfill_missing_vectors(ws, vi, limit=1)
+    assert first.done == {"episodic": 0}
+    assert first.cursor == ("episodic", first_id)
+
+    second = backfill_missing_vectors(ws, vi, cursor=first.cursor, limit=1)
+    assert second.done == {"episodic": 1}
+    assert second.cursor is None
+    assert attempted == [first_id, second_id]
+
+
+def test_backfill_cursor_from_another_class_set_starts_from_the_first_id(
+    tmp_path: Path, provider: _FakeEmbeddingProvider
+) -> None:
+    from durin.memory.indexer import backfill_missing_vectors, reindex_one_file
+    from durin.memory.store import store_memory
+
+    ws = tmp_path / "ws"
+    r = store_memory(ws, content="nota", class_name="episodic")
+    reindex_one_file(ws, Path(r["path"]))
+    vi = VectorIndex(ws, provider)
+
+    result = backfill_missing_vectors(
+        ws, vi, classes=("episodic",), cursor=("stable", "zzz"),
+    )
+    assert result.done == {"episodic": 1}
+    assert result.cursor is None

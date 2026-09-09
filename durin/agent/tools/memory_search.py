@@ -175,7 +175,9 @@ _PARAMETERS = tool_parameters_schema(
     ),
     scope=StringSchema(
         "Where to search. 'all' (default) covers dreamed memory entries and "
-        "undreamed sessions, but NOT ingested documents. 'library' searches "
+        "undreamed sessions, but NOT ingested documents. 'dreamed' is only "
+        "the distilled memory; 'undreamed' only raw sessions and their "
+        "summaries. 'library' searches "
         "ingested reference documents (books, PDFs, exported pages) — use it "
         "when the answer lives in a document the user loaded. 'archive' walks "
         "`memory/archive/` on demand for recovery / diagnostic queries.",
@@ -734,15 +736,14 @@ class MemorySearchTool(Tool):
         # rerank + grep fallback + sectioning + per-source cap.
         from durin.memory.search_pipeline import run_search_pipeline
 
-        vi = (
-            self._get_vector_index()
-            if scope in ("dreamed", "all", "library") else None
-        )
+        vi = self._get_vector_index()
 
-        # Scope predicate (contamination isolation): ingested reference
-        # documents are kept out of the default recall pool and are the sole
-        # content of an explicit `library` search. Built once here and
-        # applied inside both the vector and lexical legs of the pipeline.
+        # Scope predicate: the population this call wants — the person's
+        # memory (`all`), only its distilled part (`dreamed`), only raw
+        # sessions and their summaries (`undreamed`), or only ingested
+        # reference documents (`library`, kept out of the other three).
+        # Built once here and applied inside both the vector and lexical
+        # legs of the pipeline, before their top-k cut.
         from durin.memory.scope import ScopePredicate
         scope_predicate = ScopePredicate.for_search(scope, kinds)
 
@@ -821,16 +822,7 @@ class MemorySearchTool(Tool):
                 },
             )
 
-        # `scope=undreamed` mode is a v1 niche — the orchestrator's grep step
-        # mixes sessions with dreamed memory hits. When the caller wants ONLY
-        # undreamed, filter down to raw session material (ingested Library
-        # content was already excluded by the scope predicate).
         hits = pipeline_result.hits
-        if scope == "undreamed":
-            hits = [
-                h for h in hits
-                if h.type in ("session", "session_summary")
-            ]
 
         # Read-side gate for `memory.index_skills=False`.
         # The write-side gates stop NEW skills from being indexed, but a
