@@ -122,6 +122,7 @@ Each `memory_search` call emits:
 - **`memory.forget`** — one per `memory_forget` call (entry or ingested document). Fields: `uri`, `class_name` (the entry class, or `reference` for an ingested document), `reason`.
 - **`memory.upsert_entity`** — one per `memory_upsert_entity` tool write. Fields: `ref`, `committed`, `retries`.
 - **`memory.index.write`** — one per FTS row written. `trigger` is `watcher` (file-watcher steady state), `dream_apply` (post-dream re-index), or `drift_repair` (health-check repair).
+- **`memory.index.backfill`** — one per memory class where the incremental vector backfill (`backfill_missing_vectors`, run by the file watcher's worker thread on `start()`) embedded at least one entry that had an FTS row but no vector row. Fields: `class`, `count` (entries embedded for that class in this run), `duration_ms`. A class with nothing missing emits nothing.
 
 ### Dream events (cold path)
 

@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from durin.memory.embedding import EmbeddingProvider
 from durin.memory.paths import MEMORY_CLASSES, skill_uri, walk_class
@@ -534,6 +534,23 @@ class VectorIndex:
         for row in rows:
             row.pop("vector", None)
         return rows
+
+    def ids_by_class(self, class_names: Sequence[str]) -> set[str]:
+        """The ``id`` of every row whose ``class_name`` is in ``class_names``.
+
+        Used by :func:`durin.memory.indexer.backfill_missing_vectors` to
+        diff the FTS uris against what's already embedded, without
+        pulling the vector column over the wire.
+        """
+        db = self._connect()
+        if _TABLE_NAME not in db.list_tables().tables:
+            return set()
+        table = db.open_table(_TABLE_NAME).to_arrow().select(["id", "class_name"])
+        wanted = set(class_names)
+        return {
+            i for i, c in zip(table.column("id").to_pylist(), table.column("class_name").to_pylist())
+            if c in wanted
+        }
 
     def upsert_with_vector(
         self,

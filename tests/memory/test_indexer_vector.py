@@ -124,3 +124,44 @@ def test_pending_and_archive_entries_are_never_embedded(
 
     rows_hacha_antigua = vi.search("hacha antigua", top_k=3)
     assert not rows_hacha_antigua or all(r["id"] != archive_result["id"] for r in rows_hacha_antigua)
+
+
+def test_backfill_embeds_entries_that_have_an_fts_row_and_no_vector_row(
+    tmp_path: Path, provider: _FakeEmbeddingProvider
+) -> None:
+    from durin.memory.indexer import backfill_missing_vectors, reindex_one_file
+    from durin.memory.storage import load_entry
+    from durin.memory.store import store_memory
+
+    ws = tmp_path / "ws"
+    r1 = store_memory(ws, content="primera nota", class_name="episodic")
+    r2 = store_memory(ws, content="segunda nota", class_name="episodic")
+    reindex_one_file(ws, Path(r1["path"]))
+    reindex_one_file(ws, Path(r2["path"]))  # FTS rows only, no vector rows yet
+
+    vi = VectorIndex(ws, provider)
+    vi.upsert(load_entry(Path(r1["path"])), "episodic", Path(r1["path"]))  # one already embedded
+
+    done = backfill_missing_vectors(ws, vi)
+
+    assert done == {"episodic": 1}
+    assert vi.ids_by_class(["episodic"]) == {r1["id"], r2["id"]}
+
+
+def test_backfill_is_idempotent(
+    tmp_path: Path, provider: _FakeEmbeddingProvider
+) -> None:
+    from durin.memory.indexer import backfill_missing_vectors, reindex_one_file
+    from durin.memory.store import store_memory
+
+    ws = tmp_path / "ws"
+    r1 = store_memory(ws, content="tercera nota", class_name="episodic")
+    reindex_one_file(ws, Path(r1["path"]))
+
+    vi = VectorIndex(ws, provider)
+    first = backfill_missing_vectors(ws, vi)
+    assert first == {"episodic": 1}
+
+    second = backfill_missing_vectors(ws, vi)
+    assert second == {}
+    assert vi.ids_by_class(["episodic"]) == {r1["id"]}

@@ -34,7 +34,7 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterator, Optional
+from typing import Any, Iterator, Optional, Sequence
 
 from durin.memory.entity_page import EntityPage
 from durin.memory.fts_index import FTSIndex
@@ -363,6 +363,18 @@ def _emit_staleness(
         pass
 
 
+def _emit_backfill(*, class_name: str, count: int, duration_ms: float) -> None:
+    """Best-effort telemetry for one class's slice of a backfill run."""
+    try:
+        from durin.agent.tools._telemetry import emit_tool_event
+        emit_tool_event(
+            "memory.index.backfill",
+            {"class": class_name, "count": count, "duration_ms": duration_ms},
+        )
+    except Exception:  # pragma: no cover
+        pass
+
+
 def detect_index_staleness(workspace: Path) -> list[dict]:
     """Compare on-disk markdown to the FTS index and report drift.
 
@@ -595,6 +607,49 @@ def reindex_one_file_vector(workspace: Path, md_path: Path, vi) -> bool:
             return False
 
     return False
+
+
+def backfill_missing_vectors(
+    workspace: Path,
+    vi: Any,
+    *,
+    classes: Sequence[str] = MEMORY_CLASSES,
+) -> dict[str, int]:
+    """Embed memory entries that are in FTS but not in the vector table.
+
+    Covers entries that were written (and FTS-indexed) before the
+    vector index existed for this workspace, or before an embedding
+    model was configured — the reactive path in
+    :func:`reindex_one_file_vector` only fires for writes that happen
+    while a ``VectorIndex`` is wired in. Idempotent and incremental:
+    it compares ids, embeds only the missing ones, and reports the
+    count per class. Intended to run off the startup path (the
+    watcher's worker thread) so a large backlog never delays the
+    gateway binding its port.
+    """
+    workspace = Path(workspace)
+    done: dict[str, int] = {}
+    with FTSIndex.open(workspace) as idx:
+        fts_uris = idx.uris_with_prefix("memory/")
+    have = vi.ids_by_class(classes)
+    for class_name in classes:
+        prefix = f"memory/{class_name}/"
+        missing = sorted(
+            u[len(prefix):] for u in fts_uris if u.startswith(prefix)
+        )
+        missing = [entry_id for entry_id in missing if entry_id not in have]
+        if not missing:
+            continue
+        t0 = time.perf_counter()
+        count = 0
+        for entry_id in missing:
+            path = workspace / "memory" / class_name / f"{entry_id}.md"
+            if reindex_one_file_vector(workspace, path, vi):
+                count += 1
+        duration_ms = (time.perf_counter() - t0) * 1000.0
+        done[class_name] = count
+        _emit_backfill(class_name=class_name, count=count, duration_ms=duration_ms)
+    return done
 
 
 def reindex_one_skill(

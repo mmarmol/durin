@@ -188,13 +188,17 @@ This is the migration mechanism for the composed text itself: a change to what `
 
 `reindex_one_file` is the synchronous per-file indexing entry point called by the file watcher after any `.md` change under `memory/`. It skips files under `memory/archive/` and `memory/pending/`. When the file has vanished (genuine deletion), it deletes the FTS row and the corresponding LanceDB row symmetrically. To avoid incorrectly pruning files that are transiently absent during a dulwich `reset --hard`, it re-checks file presence under the git-worktree lock before deleting. `reindex_one_skill` mirrors this for `skills/<slug>/SKILL.md`.
 
+### Backfilling vector rows
+
+`backfill_missing_vectors` closes the gap left by entries that have an FTS row but no vector row — for instance, notes written before an embedding model was configured for the workspace, or before the vector index existed at all. It diffs the uris under `memory/` in the FTS index against `VectorIndex.ids_by_class` (a `class_name` column scan over the LanceDB table, no vector data pulled) and embeds only the ids missing from the vector side, via the same `reindex_one_file_vector` the reactive path uses — so `pending` and `archive` stay excluded for the same reason they're never FTS-indexed in the first place. It is idempotent: a class with nothing missing is skipped, and a second run over an already-backfilled workspace returns an empty result. `MemoryFileWatcher.start()` runs it as the first job on the worker thread (ahead of any live filesystem event), so `start()` itself returns immediately — a large backlog never delays the gateway binding its port.
+
 ---
 
 ## Key Types and Entry Points
 
 | Symbol | File | Role |
 |---|---|---|
-| `VectorIndex` | `durin/memory/vector_index.py` | LanceDB wrapper. Write: `upsert`, `upsert_entity_page`, `upsert_skill`, `upsert_reference_chunk`; `rebuild_from_workspace` (full). Read: `search` (top-K L2 by query string), `search_by_vector` (pre-computed vector). |
+| `VectorIndex` | `durin/memory/vector_index.py` | LanceDB wrapper. Write: `upsert`, `upsert_entity_page`, `upsert_skill`, `upsert_reference_chunk`; `rebuild_from_workspace` (full). Read: `search` (top-K L2 by query string), `search_by_vector` (pre-computed vector), `ids_by_class` (the `id` of every row in a set of classes, without pulling the vector column — backs the backfill's diff). |
 | `VectorIndex._compose_entity_page_text` | `durin/memory/vector_index.py` | Entity-page embedding composer: `name + aliases + rendered_frontmatter + body`, 1500-char budget. Single authoritative source for entity centroid shape. |
 | `VectorIndex._embed_text` | `durin/memory/vector_index.py` | Memory-entry embedding composer: `headline + summary + entities + topics + body`, 1500-char budget. Skips summary when it is a body prefix. |
 | `VectorIndex._render_frontmatter` | `durin/memory/vector_index.py` | Renders entity attributes and relations as prose sentences for the embedding centroid. Stateful attributes render `current` value only; internal metadata keys skipped. |
@@ -208,6 +212,7 @@ This is the migration mechanism for the composed text itself: a change to what `
 | `CURRENT_SCHEMA_VERSION` | `durin/memory/index_meta.py` | Integer constant. Bumped when indexer row shape or derivation rules change incompatibly. |
 | `rebuild_fts_index` | `durin/memory/indexer.py` | Wipes and re-derives the entire FTS5 database from `walk_memory` + skill walk + session turn walk. Returns `IndexStats(indexed, errors)`. |
 | `reindex_one_file` | `durin/memory/indexer.py` | Synchronous per-file FTS upsert (or delete) called by the file watcher and Dream apply. Skips archive and pending; symmetric vector delete on file vanish. |
+| `backfill_missing_vectors` | `durin/memory/indexer.py` | Incremental, idempotent: embeds memory entries that have an FTS row but no vector row, one class at a time. Run by the file watcher's worker thread on `start()`, ahead of live filesystem events. Returns `{class_name: count}` for classes where it embedded something. |
 | `reindex_one_file_vector` | `durin/memory/indexer.py` | Reactive entity-page vector upsert called by the file watcher. Covers `memory/entities/<type>/<slug>.md` only; other types are embedded at write time. Internal — not in `__all__`. |
 | `reindex_one_skill` | `durin/memory/indexer.py` | Synchronous per-skill FTS upsert called by `skills_store` after create/edit/delete. |
 | `reindex_session_file` | `durin/memory/indexer.py` | Incremental session FTS indexing: inserts only turns whose URIs are absent from `fts_meta`. Internal — not in `__all__`. |

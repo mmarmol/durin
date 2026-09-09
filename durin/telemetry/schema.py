@@ -1178,6 +1178,29 @@ class MemoryIndexStalenessDetectedEvent(TypedDict):
     session_key: NotRequired[str | None]
 
 
+MemoryIndexBackfillEvent = TypedDict(
+    "MemoryIndexBackfillEvent",
+    {
+        # ``class`` is a reserved word, hence the functional TypedDict
+        # syntax instead of the usual class-based one.
+        "class": str,
+        "count": int,
+        "duration_ms": float,
+        "iteration": NotRequired[int],
+        "session_key": NotRequired[str | None],
+    },
+)
+"""One class's slice of an incremental vector backfill.
+
+Emitted by :func:`durin.memory.indexer.backfill_missing_vectors` — run
+from the file watcher's worker thread on start — for every memory
+class where it embedded at least one entry that had an FTS row but no
+vector row yet (a gap left by upgrades or by writes that happened
+before an embedding model was configured). ``count`` is the number of
+entries embedded for ``class`` in this run.
+"""
+
+
 class MemoryRecallLexicalEvent(TypedDict):
     """One FTS5 lexical search ran.
 
@@ -1941,6 +1964,7 @@ EVENTS: dict[str, type] = {
     "memory.index.write": MemoryIndexWriteEvent,
     "memory.index.rebuild": MemoryIndexRebuildEvent,
     "memory.index.staleness_detected": MemoryIndexStalenessDetectedEvent,
+    "memory.index.backfill": MemoryIndexBackfillEvent,
     "memory.recall.lexical": MemoryRecallLexicalEvent,
     "memory.recall.rrf": MemoryRecallRRFEvent,
     "memory.recall.grep_verify": MemoryRecallGrepVerifyEvent,
@@ -2056,6 +2080,7 @@ __all__ = [
     "MemoryIndexWriteEvent",
     "MemoryIndexRebuildEvent",
     "MemoryIndexStalenessDetectedEvent",
+    "MemoryIndexBackfillEvent",
     # Skill loop
     "SkillAuthoredEvent",
     "SkillUsedEvent",
