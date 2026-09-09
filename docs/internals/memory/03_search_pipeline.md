@@ -125,7 +125,7 @@ Weights: `w_vector = 1.0`, `w_lexical = 0.7` (boosted to `2.5` when `keywords` o
 
 After fusion, two adjustments run in order:
 
-**Grep-verify boost:** For every fused hit that came from vector but not lexical, `_grep_verify_boost` runs a per-URI FTS MATCH using the same lexical route. A confirmed literal match gains `w_lexical / (k + rank_in_vector)` — crediting the lexical evidence the top-50 cutoff dropped.
+**Grep-verify boost:** For every fused hit that came from vector but not lexical, `_grep_verify_boost` runs a per-URI FTS MATCH against the exact expression `lexical_search` would have run for that route — the same required/optional split, not a separate, stricter all-terms check. A confirmed hit gains `"lexical"` in `sources` and `w_lexical / (k + rank_in_vector)` — crediting the lexical evidence the top-50 cutoff dropped.
 
 **Type prior:** `apply_type_priors` multiplies each score by a per-type multiplier. Currently: raw session turns (`type="session"`) receive `×0.85`. Curated entries and entity pages are neutral. A session hit with strong enough evidence still wins; the prior demotes, it does not suppress.
 
@@ -220,7 +220,7 @@ The web dashboard exposes a cross-encoder toggle and model picker under Memory �
 
 **Lexical weight boost for identifiers.** When a query contains an email address, URL, UUID, or file path, or when the agent passes `keywords` explicitly, the lexical weight lifts from 0.7 to 2.5. This avoids a separate "exact-match pinning" mechanism and removes the need to measure keyword specificity — the presence of an identifier-shaped token is sufficient signal that the literal match matters.
 
-**Grep-verify boost.** RRF can only credit lexical evidence within the lexical top-50 cutoff. A document that vector ranks high and literally contains the query terms — but sits just past the cutoff — would receive no lexical contribution, allowing a semantically-near distractor to outrank a literally-confirmed hit. The boost corrects this by re-verifying vector-only hits against the same FTS tables and crediting the dropped evidence at the vector rank's position.
+**Grep-verify boost.** RRF can only credit lexical evidence within the lexical top-50 cutoff. A document that vector ranks high and literally contains the query terms — but sits just past the cutoff — would receive no lexical contribution, allowing a semantically-near distractor to outrank a literally-confirmed hit. The boost corrects this by re-verifying vector-only hits against the same FTS tables and crediting the dropped evidence at the vector rank's position. It runs the identical expression the lexical leg would build for the query, so it is not a second, stricter matcher — a hit sharing only some of the query's loose words verifies exactly as it would in the lexical leg itself.
 
 **Cross-encoder blend, not replace.** Running the CE in full-replace mode (α=1) performed worse than RRF-only because the reranker was blind to dates and summaries when scored against bare snippets, causing it to demote gold hits. Enriching the input (`headline + valid_from + summary`) and blending at α=0.4 preserves the RRF order's accumulated evidence while letting the CE nudge on full-relevance grounds.
 

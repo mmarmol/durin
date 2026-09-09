@@ -137,6 +137,34 @@ def test_cjk_trigram_route_verifies(tmp_path: Path) -> None:
     assert abs(out[0].score - expected) < 1e-9
 
 
+def test_partial_word_match_gains_lexical_source(tmp_path: Path) -> None:
+    """Grep-verify now runs the exact expression the lexical leg would
+    run for this route: loose query tokens are OR-joined, not ANDed.
+    A hit whose text contains only some of the query's words is
+    literal evidence — the lexical leg would have found it too — so
+    it gains both the score boost and the ``"lexical"`` source. A hit
+    sharing none of the words gets neither."""
+    from durin.memory.search_pipeline import _grep_verify_boost
+
+    _index_doc(tmp_path, "memory/episodic/a", "apple banana on the table")
+    _index_doc(tmp_path, "memory/episodic/b", "nothing related at all")
+    decision = decide_lexical_route("apple banana cherry date")
+    hits = [
+        _vector_hit("memory/episodic/a", rank=1, score=0.010),
+        _vector_hit("memory/episodic/b", rank=2, score=0.009),
+    ]
+    out = _grep_verify_boost(tmp_path, decision, hits)
+    by_uri = {h.uri: h for h in out}
+
+    hit_a = by_uri["memory/episodic/a"]
+    assert "lexical" in hit_a.sources
+    assert hit_a.score > 0.010
+
+    hit_b = by_uri["memory/episodic/b"]
+    assert "lexical" not in hit_b.sources
+    assert hit_b.score == 0.009
+
+
 def test_keywords_override_verification_target(tmp_path: Path) -> None:
     """When the agent supplied `keywords`, THAT literal string is what
     must appear — it's the stronger statement of literal intent."""

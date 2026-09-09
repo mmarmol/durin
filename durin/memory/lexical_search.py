@@ -165,41 +165,6 @@ def _split_terms(query: str, keywords: str | None) -> tuple[list[str], list[str]
     return required, optional
 
 
-def _quote_for_fts(query: str) -> str:
-    """Quote every token so special chars (``%``, ``*``, ``:``) and the
-    FTS5 boolean keywords (``AND``/``OR``/``NOT``/``NEAR``) are treated
-    as literal content — the recall query is natural language, not a
-    boolean expression, so a bare leading ``NOT``/``AND`` must not reach
-    the parser as a dangling operator.
-
-    Respects agent-supplied double-quoted phrases. A balanced
-    ``"like this"`` substring in the query is
-    preserved as a single FTS5 phrase token (words must appear
-    adjacent and in order); the remaining tokens are quoted
-    individually as before. An unbalanced quote falls back to
-    token-only parsing — the lone quote is stripped and the rest of
-    the query is treated as tokens, so a malformed query degrades
-    rather than crashes.
-    """
-    phrases, loose, balanced = _extract_phrases(query)
-    if not balanced:
-        # Unbalanced — strip stray quotes from the loose tokens and
-        # fall through to the per-token path with no phrases.
-        loose = [tok.replace('"', '') for tok in loose]
-    parts: list[str] = []
-    for phrase in phrases:
-        if not phrase.strip():
-            continue
-        safe_phrase = phrase.replace('"', '""')
-        parts.append(f'"{safe_phrase}"')
-    for token in loose:
-        if not token:
-            continue
-        safe = token.replace('"', '""')
-        parts.append(f'"{safe}"')
-    return " ".join(parts)
-
-
 def _extract_phrases(query: str) -> tuple[list[str], list[str], bool]:
     """Split ``query`` into ``(phrases, loose_tokens, balanced)``.
 

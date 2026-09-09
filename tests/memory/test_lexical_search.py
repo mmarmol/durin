@@ -152,7 +152,7 @@ def test_unmatched_quote_falls_back_to_token_search(tmp_path: Path) -> None:
 # Regression: FTS5 boolean keywords in a natural-language query
 # ---------------------------------------------------------------------------
 #
-# `_quote_for_fts` used to pass AND/OR/NOT/NEAR through as FTS5
+# FTS5 query building used to pass AND/OR/NOT/NEAR through as FTS5
 # operators (case-insensitively). Since the recall query is natural
 # language — never a boolean expression — that hijacked the commonest
 # English function words. A query beginning with "not" left a bare
@@ -181,12 +181,14 @@ def test_leading_boolean_keyword_does_not_crash(tmp_path: Path) -> None:
 def test_boolean_keywords_are_quoted_as_literals() -> None:
     """The lowercase/uppercase boolean keywords are quoted, never
     emitted as bare FTS5 operators."""
-    from durin.memory.lexical_search import _quote_for_fts
+    from durin.memory.lexical_search import build_fts_expression
 
-    assert _quote_for_fts("not sure") == '"not" "sure"'
-    assert _quote_for_fts("and then") == '"and" "then"'
-    assert _quote_for_fts("do NOT delete") == '"do" "NOT" "delete"'
-    assert _quote_for_fts("near the edge") == '"near" "the" "edge"'
+    assert build_fts_expression("not sure").text == '("not" OR "sure")'
+    assert build_fts_expression("and then").text == '("and" OR "then")'
+    assert (build_fts_expression("do NOT delete").text
+            == '("do" OR "NOT" OR "delete")')
+    assert (build_fts_expression("near the edge").text
+            == '("near" OR "the" OR "edge")')
 
 
 # ---------------------------------------------------------------------------
