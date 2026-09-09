@@ -117,7 +117,7 @@ Each `memory_search` call emits:
 - **`memory.ingest`** — one per `memory_ingest` call. Fields: `entry_id`, `size_bytes`, `suffix`.
 - **`memory.forget`** — one per `memory_forget` call (entry or ingested document). Fields: `uri`, `class_name` (the entry class, or `reference` for an ingested document), `reason`.
 - **`memory.upsert_entity`** — one per `memory_upsert_entity` tool write. Fields: `ref`, `committed`, `retries`.
-- **`memory.index.write`** — one per FTS row written. `trigger` is `watcher` (file-watcher steady state), `drift_repair` (health-check repair), `forget` (`memory_forget`'s index cleanup), or `skill_store` (skill create/edit/delete).
+- **`memory.index.write`** — one per FTS row written. `trigger` is `watcher` (file-watcher steady state), `drift_repair` (health-check repair), `forget` (`memory_forget`'s index cleanup), or `skill_store` (skill create/edit/delete). The `watcher`-triggered rows, and every `memory.index.backfill` row below, are emitted from the file watcher's own worker thread; that thread binds the gateway's session logger (`session_key: gateway`) for its lifetime, so they land in the gateway's daily telemetry file instead of being silently dropped for lack of a bound logger.
 - **`memory.index.backfill`** — one per memory class where the incremental vector backfill (`backfill_missing_vectors`, run by the file watcher's worker thread on `start()`) embedded at least one entry that had an FTS row but no vector row. Fields: `class`, `count` (entries embedded for that class in this run), `duration_ms`. A class with nothing missing emits nothing.
 
 ### Dream events (cold path)

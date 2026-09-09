@@ -110,6 +110,40 @@ def _is_body_prefix(summary: str, body: str) -> bool:
     return body.startswith(summary)
 
 
+def _table_schema(dims: int) -> Any:
+    """Explicit pyarrow schema for ``_TABLE_NAME``, in the field order
+    every write path already produces: ``id``, ``class_name``,
+    ``summary``, ``headline``, ``path``, ``valid_from`` (all ``string``),
+    ``body_length`` (``int64``), ``vector`` (``fixed_size_list<float32>``
+    of ``dims``), ``entities`` (``list<string>``).
+
+    Passed to every ``create_table`` call so a fresh table's columns are
+    declared up front instead of inferred from the first record. Without
+    it, a table whose first row happens to carry ``entities: []`` (an
+    entity page, a skill, or a reference chunk — none of which tag
+    entities) is created with ``entities`` typed ``list<null>``, and no
+    later record with populated entities can ever be upserted into it
+    (:meth:`VectorIndex.migrate_schema` repairs a table already in that
+    state).
+
+    lancedb/pyarrow are optional installs, so the import stays inside
+    the function like every other lancedb access in this module.
+    """
+    import pyarrow as pa
+
+    return pa.schema([
+        pa.field("id", pa.string()),
+        pa.field("class_name", pa.string()),
+        pa.field("summary", pa.string()),
+        pa.field("headline", pa.string()),
+        pa.field("path", pa.string()),
+        pa.field("valid_from", pa.string()),
+        pa.field("body_length", pa.int64()),
+        pa.field("vector", pa.list_(pa.float32(), dims)),
+        pa.field("entities", pa.list_(pa.string())),
+    ])
+
+
 class VectorIndex:
     """LanceDB table wrapper for memory entries."""
 
@@ -159,7 +193,9 @@ class VectorIndex:
             self._guard_dim_match(table, len(record["vector"]))
             self._atomic_upsert(table, record)
         else:
-            db.create_table(_TABLE_NAME, data=[record])
+            db.create_table(
+                _TABLE_NAME, data=[record], schema=_table_schema(len(record["vector"])),
+            )
 
     def upsert_entity_page(
         self,
@@ -232,7 +268,9 @@ class VectorIndex:
             self._guard_dim_match(table, len(vec))
             self._atomic_upsert(table, record)
         else:
-            db.create_table(_TABLE_NAME, data=[record])
+            db.create_table(
+                _TABLE_NAME, data=[record], schema=_table_schema(len(vec)),
+            )
 
     def upsert_skill(
         self,
@@ -279,7 +317,9 @@ class VectorIndex:
             self._guard_dim_match(table, len(vec))
             self._atomic_upsert(table, record)
         else:
-            db.create_table(_TABLE_NAME, data=[record])
+            db.create_table(
+                _TABLE_NAME, data=[record], schema=_table_schema(len(vec)),
+            )
 
     def upsert_reference_chunk(
         self,
@@ -328,7 +368,9 @@ class VectorIndex:
             self._guard_dim_match(table, len(vec))
             self._atomic_upsert(table, record)
         else:
-            db.create_table(_TABLE_NAME, data=[record])
+            db.create_table(
+                _TABLE_NAME, data=[record], schema=_table_schema(len(vec)),
+            )
 
     def _skill_record(
         self,
@@ -565,6 +607,59 @@ class VectorIndex:
         table.delete(f"id = '{_escape(record_id)}'")
         return True
 
+    def migrate_schema(self) -> bool:
+        """Repair a table created before the explicit schema (F-A).
+
+        A table created by the old ``create_table(data=[record])`` call
+        (no schema) had its columns inferred from the first row. Every
+        write path that could plausibly be first — entity pages, skills,
+        reference chunks — persists ``entities: []``, so the column was
+        inferred ``list<null>``: a shape LanceDB can never cast to
+        ``list<string>`` in place (``alter_columns`` raises), so the
+        first later entry carrying real entity tags fails to upsert.
+
+        Rewrites the table under :func:`~durin.utils.file_lock.cross_process_lock`
+        (the same lock :meth:`rebuild_from_workspace` uses, keyed off this
+        index's uri): ``to_arrow()`` reads every row including its vector,
+        the ``entities`` column is replaced with an all-empty
+        ``list<string>`` column (a null list carries no data to lose), and
+        the result is written back with ``create_table(..., mode="overwrite")``.
+
+        Idempotent: a table whose ``entities`` column is already typed
+        (or a table that doesn't exist) is left untouched and this
+        returns False. Rows are re-checked once the lock is held, so two
+        callers racing this method can't both perform the rewrite.
+        """
+        db = self._connect()
+        if _TABLE_NAME not in db.list_tables().tables:
+            return False
+        import pyarrow as pa
+
+        with cross_process_lock(Path(self._uri)):
+            table = db.open_table(_TABLE_NAME)
+            try:
+                field = table.schema.field("entities")
+            except Exception:  # noqa: BLE001
+                return False
+            value_type = getattr(field.type, "value_type", None)
+            if value_type is None or not pa.types.is_null(value_type):
+                return False
+            arrow_table = table.to_arrow()
+            row_count = arrow_table.num_rows
+            column_index = arrow_table.schema.get_field_index("entities")
+            empty_entities = pa.array(
+                [[]] * row_count, type=pa.list_(pa.string()),
+            )
+            arrow_table = arrow_table.set_column(
+                column_index, "entities", empty_entities,
+            )
+            db.create_table(_TABLE_NAME, data=arrow_table, mode="overwrite")
+        logger.info(
+            "vector_index: migrated %s's entities column from list<null> "
+            "to list<string> (%d row(s) preserved)", _TABLE_NAME, row_count,
+        )
+        return True
+
     def rebuild_from_workspace(self) -> int:
         """Re-embed every ``memory/<class>/*.md`` entry, every
         ``memory/entities/<type>/<slug>.md`` page, AND every
@@ -740,7 +835,20 @@ class VectorIndex:
 
         db = self._connect()
         self._drop_if_exists(db)
-        db.create_table(_TABLE_NAME, data=records)
+        # `records` is non-empty here (the all-empty case returned above),
+        # so its first row's vector carries the real embedded dimension —
+        # reading it directly from the data avoids trusting a provider's
+        # `dimensions` property to agree with what `embed_passages` just
+        # produced. Entity-page records don't carry `body_length` (B1);
+        # `create_table(data=<list of dicts>, schema=...)` requires every
+        # dict's key count to already match the schema's column count, so
+        # the records are converted to a `pa.Table` against the schema
+        # first — `pa.Table.from_pylist` fills a record's missing keys
+        # with null, `create_table` does not.
+        import pyarrow as pa
+
+        schema = _table_schema(len(records[0]["vector"]))
+        db.create_table(_TABLE_NAME, data=pa.Table.from_pylist(records, schema=schema))
         return len(records)
 
     def _entity_page_record(
@@ -1231,6 +1339,7 @@ def compact_index(workspace: Path) -> dict:
         table = db.open_table(_TABLE_NAME)
         versions_before = len(table.list_versions())
         rows_before = table.count_rows()
+        vector_dims = table.schema.field("vector").type.list_size
         v0 = table.version
 
         # Phase 1 keeps a week of versions so the pre-optimize version is
@@ -1268,7 +1377,17 @@ def compact_index(workspace: Path) -> dict:
         for r in rows:
             r.pop("_distance", None)
         db.drop_table(_TABLE_NAME)
-        rebuilt = db.create_table(_TABLE_NAME, data=rows)
+        # A table predating a schema addition (e.g. `entities`, B1) yields
+        # rows missing that key; `pa.Table.from_pylist(rows, schema=...)`
+        # fills it with null the way `create_table(data=rows, schema=...)`
+        # itself does not (it requires the row dicts' key count to already
+        # match the schema's column count).
+        import pyarrow as pa
+
+        rebuilt = db.create_table(
+            _TABLE_NAME,
+            data=pa.Table.from_pylist(rows, schema=_table_schema(vector_dims)),
+        )
         if not _vector_search_ok(rebuilt) or rebuilt.count_rows() != rows_before:
             return _done({
                 "compacted": False, "reason": "rebuild_verify_failed",

@@ -322,6 +322,135 @@ def test_rebuild_skips_malformed_files(
 
 
 # ---------------------------------------------------------------------------
+# explicit schema (F-A) + migrate_schema
+# ---------------------------------------------------------------------------
+
+
+def _hand_create_legacy_table(
+    workspace: Path, provider: _FakeEmbeddingProvider,
+) -> None:
+    """Simulate a table created before the explicit schema: a raw
+    ``create_table(data=[record])`` call (no ``schema=``) whose only
+    record carries ``entities: []`` — the shape every table created
+    before this fix has, since LanceDB infers the column from that
+    first empty list as ``list<null>``."""
+    import lancedb
+
+    from durin.memory.vector_index import _INDEX_PATH, _TABLE_NAME
+
+    uri = str(workspace.joinpath(*_INDEX_PATH))
+    Path(uri).mkdir(parents=True, exist_ok=True)
+    db = lancedb.connect(uri)
+    db.create_table(_TABLE_NAME, data=[{
+        "id": "legacy-1",
+        "class_name": "entity_page",
+        "summary": "Legacy Page",
+        "headline": "Legacy",
+        "path": "memory/entities/person/legacy.md",
+        "valid_from": "",
+        "body_length": 0,
+        "vector": [1.0] + [0.0] * (provider.DIM - 1),
+        "entities": [],
+    }])
+
+
+def test_upsert_creates_table_with_typed_entities_column(
+    tmp_path: Path, provider: _FakeEmbeddingProvider
+) -> None:
+    """The first row written to a fresh table is often an entity page
+    (always ``entities: []``) — without an explicit schema, LanceDB would
+    infer ``list<null>`` from that first empty list, and a later entry
+    with populated entities could never upsert into the table."""
+    import pyarrow as pa
+
+    from durin.memory.storage import load_entry
+    from durin.memory.vector_index import _TABLE_NAME
+
+    workspace = tmp_path
+    index = VectorIndex(workspace, provider)
+    index.upsert_entity_page(
+        entity_ref="person:ada", name="Ada", aliases=[], body="x",
+        path=workspace / "memory" / "entities" / "person" / "ada.md",
+    )
+    table = index._connect().open_table(_TABLE_NAME)
+    assert pa.types.is_string(table.schema.field("entities").type.value_type)
+
+    r = store_memory(workspace, content="body about ada", headline="H",
+                      entities=["person:ada"])
+    entry = load_entry(Path(r["path"]))
+    index.upsert(entry, r["class"], Path(r["path"]))
+
+    hits = index.search("body", top_k=5)
+    assert any(
+        h["id"] == entry.id and h["entities"] == ["person:ada"] for h in hits
+    )
+
+
+def test_migrate_schema_repairs_list_null_entities_and_preserves_rows(
+    tmp_path: Path, provider: _FakeEmbeddingProvider
+) -> None:
+    import pyarrow as pa
+
+    from durin.memory.storage import load_entry
+    from durin.memory.vector_index import _TABLE_NAME
+
+    workspace = tmp_path
+    _hand_create_legacy_table(workspace, provider)
+    index = VectorIndex(workspace, provider)
+    table = index._connect().open_table(_TABLE_NAME)
+    assert pa.types.is_null(table.schema.field("entities").type.value_type)
+
+    assert index.migrate_schema() is True
+
+    table = index._connect().open_table(_TABLE_NAME)
+    assert pa.types.is_string(table.schema.field("entities").type.value_type)
+    rows = table.to_arrow().to_pylist()
+    assert len(rows) == 1
+    assert rows[0]["id"] == "legacy-1"
+    assert rows[0]["entities"] == []
+    assert rows[0]["vector"] == pytest.approx([1.0] + [0.0] * (provider.DIM - 1))
+
+    # A later entry with populated entities must upsert cleanly.
+    r = store_memory(workspace, content="body about ada", headline="H",
+                      entities=["person:ada"])
+    entry = load_entry(Path(r["path"]))
+    index.upsert(entry, r["class"], Path(r["path"]))
+    hits = index.search("body", top_k=5)
+    assert any(
+        h["id"] == entry.id and h["entities"] == ["person:ada"] for h in hits
+    )
+
+
+def test_migrate_schema_on_healthy_table_returns_false_and_changes_nothing(
+    tmp_path: Path, provider: _FakeEmbeddingProvider
+) -> None:
+    from durin.memory.vector_index import _TABLE_NAME
+
+    workspace = tmp_path
+    index = VectorIndex(workspace, provider)
+    index.upsert_entity_page(
+        entity_ref="person:ada", name="Ada", aliases=[], body="x",
+        path=workspace / "memory" / "entities" / "person" / "ada.md",
+    )
+    table = index._connect().open_table(_TABLE_NAME)
+    before = table.to_arrow().to_pylist()
+    version_before = table.version
+
+    assert index.migrate_schema() is False
+
+    table = index._connect().open_table(_TABLE_NAME)
+    assert table.version == version_before
+    assert table.to_arrow().to_pylist() == before
+
+
+def test_migrate_schema_no_table_returns_false(
+    tmp_path: Path, provider: _FakeEmbeddingProvider
+) -> None:
+    index = VectorIndex(tmp_path, provider)
+    assert index.migrate_schema() is False
+
+
+# ---------------------------------------------------------------------------
 # embed_text composition rule
 # ---------------------------------------------------------------------------
 
@@ -662,3 +791,75 @@ def test_compact_index_prunes_versions(tmp_path):
 
     missing = compact_index(tmp_path / "empty-ws")
     assert missing == {"compacted": False, "reason": "no_index"}
+
+
+@pytest.mark.skipif(
+    not vector_index_available(), reason="lancedb not installed",
+)
+def test_compact_index_rebuild_fallback_keeps_the_table_searchable_and_typed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When vector search fails after optimize, the fallback rebuilds the
+    table from current rows. Verify the rebuilt table is searchable and
+    the entities column remains typed list<string>."""
+    import pyarrow as pa
+
+    from durin.memory.vector_index import _TABLE_NAME, compact_index
+
+    workspace = tmp_path / "ws"
+    provider = _FakeEmbeddingProvider()
+    index = VectorIndex(workspace, provider)
+
+    # Build a table with both entity page (entities=[]) and memory entry
+    # (entities=[...]) to test schema type preservation.
+    index.upsert_entity_page(
+        entity_ref="person:ada", name="Ada", aliases=[], body="mathematician",
+        path=workspace / "memory" / "entities" / "person" / "ada.md",
+    )
+    r = store_memory(
+        workspace, content="computing pioneer", headline="Ada Lovelace",
+        entities=["person:ada"],
+    )
+    entry_path = Path(r["path"])
+    from durin.memory.storage import load_entry
+
+    entry = load_entry(entry_path)
+    index.upsert(entry, r["class"], entry_path)
+
+    # Verify preconditions: table is searchable and typed.
+    table = index._connect().open_table(_TABLE_NAME)
+    rows_before = table.count_rows()
+    assert rows_before == 2
+    assert pa.types.is_string(table.schema.field("entities").type.value_type)
+
+    # Monkeypatch _vector_search_ok to fail the first probe (triggering the
+    # fallback rebuild path) and pass all subsequent checks (restore, rebuild
+    # verify). A real scenario: optimize corrupted the vector path but the
+    # row data survives; rebuild restores searchability.
+    from durin.memory import vector_index
+
+    call_count = [0]
+
+    def _patched_search_ok(tbl):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return False  # First check (line 1351): fail to enter fallback
+        return True  # Restore and rebuild checks: pass
+
+    monkeypatch.setattr(
+        vector_index, "_vector_search_ok", _patched_search_ok,
+    )
+
+    # Run compact_index; should rebuild.
+    stats = compact_index(workspace)
+    assert stats["compacted"] is True
+    assert stats["mode"] == "rebuilt"
+
+    # Verify the rebuilt table is searchable, row count preserved, and
+    # entities remains typed list<string>.
+    table = index._connect().open_table(_TABLE_NAME)
+    assert table.count_rows() == rows_before
+    hits = index.search("Ada", top_k=5)
+    assert len(hits) >= 1, "rebuilt table must be searchable"
+    assert pa.types.is_string(table.schema.field("entities").type.value_type), \
+        "entities column must remain typed list<string>"

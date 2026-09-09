@@ -201,40 +201,60 @@ class MemoryFileWatcher:
                 )
 
     def _worker_loop(self) -> None:
-        """Drains the event queue. One thread, FIFO, serial."""
-        while True:
-            try:
-                item = self._queue.get(timeout=0.5)
-            except Empty:
-                continue
-            if item is _STOP_SENTINEL:
-                return
-            with self._processing_lock:
-                self._processing = True
-            try:
-                if item is _BACKFILL:
-                    self._run_backfill()
-                    continue
-                path_str = str(item)
-                if not path_str.endswith(".md"):
-                    continue
-                path = Path(path_str)
-                # Honour the same exclusion contract as `walk_memory`:
-                # archive/ and pending/ are off-limits.
+        """Drains the event queue. One thread, FIFO, serial.
+
+        A fresh thread has no bound telemetry logger, so
+        `emit_tool_event` silently drops every `memory.index.write` /
+        `memory.index.backfill` row this thread would otherwise produce
+        (`reindex_one_file`, `reindex_one_file_vector`,
+        `backfill_missing_vectors`). Bind the gateway's own session
+        logger for the thread's lifetime, mirroring how other
+        background threads bind their own key (`dream_supervisor` ->
+        `get_session_logger("dream_supervisor")`).
+        """
+        from durin.telemetry.logger import (
+            bind_telemetry,
+            get_session_logger,
+            reset_telemetry,
+        )
+
+        token = bind_telemetry(get_session_logger("gateway"))
+        try:
+            while True:
                 try:
-                    rel = path.relative_to(self._memory_root)
-                except ValueError:
+                    item = self._queue.get(timeout=0.5)
+                except Empty:
                     continue
-                parts = rel.parts
-                if parts and parts[0] in ("archive", "pending"):
-                    continue
-                try:
-                    self._reindex_path(path)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning(
-                        "file_watcher: reindex %s failed: %s",
-                        path, exc,
-                    )
-            finally:
+                if item is _STOP_SENTINEL:
+                    return
                 with self._processing_lock:
-                    self._processing = False
+                    self._processing = True
+                try:
+                    if item is _BACKFILL:
+                        self._run_backfill()
+                        continue
+                    path_str = str(item)
+                    if not path_str.endswith(".md"):
+                        continue
+                    path = Path(path_str)
+                    # Honour the same exclusion contract as `walk_memory`:
+                    # archive/ and pending/ are off-limits.
+                    try:
+                        rel = path.relative_to(self._memory_root)
+                    except ValueError:
+                        continue
+                    parts = rel.parts
+                    if parts and parts[0] in ("archive", "pending"):
+                        continue
+                    try:
+                        self._reindex_path(path)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "file_watcher: reindex %s failed: %s",
+                            path, exc,
+                        )
+                finally:
+                    with self._processing_lock:
+                        self._processing = False
+        finally:
+            reset_telemetry(token)

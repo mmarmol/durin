@@ -192,3 +192,38 @@ def test_the_watcher_runs_the_backfill_off_the_startup_path(
         assert seen["thread"] is not threading.current_thread()
     finally:
         watcher.stop()
+
+
+def test_worker_thread_binds_gateway_telemetry_for_the_backfill(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fresh thread has no bound telemetry logger, so `emit_tool_event`
+    silently drops `memory.index.backfill` / `memory.index.write` rows.
+    `_worker_loop` must bind the gateway's own session logger for the
+    thread's lifetime so those rows land in the gateway's telemetry file."""
+    from durin.telemetry.logger import current_telemetry
+
+    ran = threading.Event()
+    seen: dict[str, object] = {}
+
+    def fake_backfill(workspace, vi):
+        seen["logger"] = current_telemetry()
+        ran.set()
+        return {}
+
+    monkeypatch.setattr(
+        "durin.memory.indexer.backfill_missing_vectors", fake_backfill
+    )
+
+    watcher = MemoryFileWatcher(tmp_path, embedding_model="fake-model")
+    monkeypatch.setattr(watcher, "_get_vector_index", lambda: object())
+
+    watcher.start()
+    try:
+        assert ran.wait(timeout=5.0), "worker thread never ran the backfill"
+    finally:
+        watcher.stop()
+
+    tlog = seen.get("logger")
+    assert tlog is not None, "worker thread must have a bound telemetry logger"
+    assert tlog.session_key == "gateway"

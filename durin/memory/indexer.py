@@ -656,10 +656,16 @@ def backfill_missing_vectors(
     would fail the same way, and a rebuild is the actual fix. Within a
     class, ``_MAX_CONSECUTIVE_FAILURES`` consecutive non-dimension
     failures abandon just that class and move on to the next.
+
+    Repairs an older table's ``entities`` column (F-A) via
+    ``vi.migrate_schema()`` before diffing, so a workspace whose table
+    predates the explicit schema is fixed on the first watcher start —
+    otherwise the first entry with real entity tags would fail to embed.
     """
     from durin.memory.vector_index import VectorIndexDimensionMismatchError
 
     workspace = Path(workspace)
+    vi.migrate_schema()
     done: dict[str, int] = {}
     with FTSIndex.open(workspace) as idx:
         fts_uris = idx.uris_with_prefix("memory/")
