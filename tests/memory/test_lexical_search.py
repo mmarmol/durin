@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from durin.memory.fts_index import FTSIndex
-from durin.memory.lexical_search import lexical_search
+from durin.memory.lexical_search import build_fts_expression, lexical_search
 from durin.memory.query_router import decide_lexical_route
 
 
@@ -274,3 +274,45 @@ def test_a_bare_string_type_set_means_that_one_type(tmp_path: Path) -> None:
         # Test exclude_types with bare string
         hits = idx.search('"bruenor"', exclude_types="reference")
         assert [h.uri for h in hits] == ["person:bruenor"]
+
+
+# ---------------------------------------------------------------------------
+# build_fts_expression: the one FTS5 expression builder
+# ---------------------------------------------------------------------------
+
+
+def test_loose_tokens_are_or_joined():
+    e = build_fts_expression("arma preferida Bruenor")
+    assert e.text == '("arma" OR "preferida" OR "Bruenor")'
+    assert (e.required, e.optional) == (0, 3)
+
+
+def test_quoted_phrases_are_required():
+    e = build_fts_expression('"Mithral Hall" hacha regalo')
+    assert e.text == '"Mithral Hall" AND ("hacha" OR "regalo")'
+    assert (e.required, e.optional) == (1, 2)
+
+
+def test_keywords_tokens_are_required_and_quoted_groups_are_phrases():
+    e = build_fts_expression("arma regalo", keywords='Bruenor "doble filo"')
+    assert e.text == '"Bruenor" AND "doble filo" AND ("arma" OR "regalo")'
+    assert (e.required, e.optional) == (2, 2)
+
+
+def test_only_required_terms_is_a_plain_and():
+    e = build_fts_expression("", keywords="Bruenor hacha")
+    assert e.text == '"Bruenor" AND "hacha"'
+
+
+def test_unbalanced_quotes_degrade_to_tokens():
+    e = build_fts_expression('Bruenor "incomplete')
+    assert e.text == '("Bruenor")'
+
+
+def test_operators_and_punctuation_stay_literal():
+    e = build_fts_expression("NOT AND alpha*beta")
+    assert e.text == '("NOT" OR "AND" OR "alpha*beta")'
+
+
+def test_empty_query_and_keywords_yield_no_expression():
+    assert build_fts_expression("   ").text == ""

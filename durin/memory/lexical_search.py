@@ -29,12 +29,13 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import dataclass
 from typing import Optional, Sequence
 
 from durin.memory.fts_index import FTSHit, FTSIndex
 from durin.memory.query_router import LexicalRoute, RoutingDecision
 
-__all__ = ["lexical_search"]
+__all__ = ["FtsExpression", "build_fts_expression", "lexical_search"]
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +104,43 @@ def lexical_search(
 # ---------------------------------------------------------------------------
 # internals
 # ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class FtsExpression:
+    text: str
+    required: int
+    optional: int
+
+
+def _fts_term(token: str) -> str:
+    return '"' + token.replace('"', '""') + '"'
+
+
+def build_fts_expression(query: str, keywords: str | None = None) -> FtsExpression:
+    """The one FTS5 expression behind every lexical search.
+
+    Loose tokens of ``query`` are OR-joined: bm25 ranks partial matches, so
+    a sentence finds the note that shares its rare words. Balanced quoted
+    phrases in ``query`` and every token of ``keywords`` are required
+    (AND) — that is where exactness lives. Operators and punctuation are
+    quoted so they stay literal. An unbalanced quote degrades to tokens.
+    """
+    phrases, loose, balanced = _extract_phrases(query or "")
+    if not balanced:
+        loose = [tok.replace('"', "") for tok in loose]
+    required: list[str] = [_fts_term(p) for p in phrases if p.strip()]
+    if keywords and keywords.strip():
+        kw_phrases, kw_loose, kw_balanced = _extract_phrases(keywords)
+        if not kw_balanced:
+            kw_loose = [tok.replace('"', "") for tok in kw_loose]
+        required += [_fts_term(t) for t in kw_loose if t]
+        required += [_fts_term(p) for p in kw_phrases if p.strip()]
+    optional = [_fts_term(t) for t in loose if t]
+    parts: list[str] = list(required)
+    if optional:
+        parts.append("(" + " OR ".join(optional) + ")")
+    return FtsExpression(" AND ".join(parts), len(required), len(optional))
 
 
 def _quote_for_fts(query: str) -> str:
