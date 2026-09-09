@@ -346,14 +346,20 @@ class FTSIndex:
         """``AND type ...`` fragment plus its parameters; empty when unfiltered.
 
         ``type_`` (the one-type shorthand) takes precedence, then
-        ``include_types``, then ``exclude_types``.
+        ``include_types``, then ``exclude_types``. A bare string in
+        either set is normalized to a one-element tuple.
         """
         if type_ is not None:
             return " AND type = ?", [type_]
+        # Normalize bare string to one-element tuple.
         if include_types:
+            if isinstance(include_types, str):
+                include_types = (include_types,)
             marks = ", ".join("?" for _ in include_types)
             return f" AND type IN ({marks})", list(include_types)
         if exclude_types:
+            if isinstance(exclude_types, str):
+                exclude_types = (exclude_types,)
             marks = ", ".join("?" for _ in exclude_types)
             return f" AND type NOT IN ({marks})", list(exclude_types)
         return "", []

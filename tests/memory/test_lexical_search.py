@@ -252,3 +252,25 @@ def test_like_fallback_honours_the_type_set(tmp_path: Path) -> None:
             exclude_types=("reference",),
         )
         assert [h.uri for h in hits] == ["memory/episodic/n"]
+
+
+def test_a_bare_string_type_set_means_that_one_type(tmp_path: Path) -> None:
+    """A bare string for include_types or exclude_types is treated as a
+    one-element set, not iterated per character."""
+    with FTSIndex.open(tmp_path) as idx:
+        idx.upsert(
+            uri="person:bruenor", path="p.md",
+            type_="entity", entity_type="person",
+            text="bruenor", mtime=1.0,
+        )
+        idx.upsert(
+            uri="reference:doc#1", path="r.md",
+            type_="reference", entity_type="",
+            text="bruenor", mtime=2.0,
+        )
+        # Test include_types with bare string
+        hits = idx.search('"bruenor"', include_types="entity")
+        assert [h.uri for h in hits] == ["person:bruenor"]
+        # Test exclude_types with bare string
+        hits = idx.search('"bruenor"', exclude_types="reference")
+        assert [h.uri for h in hits] == ["person:bruenor"]
