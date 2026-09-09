@@ -6,6 +6,7 @@ from pathlib import Path
 
 from durin.memory.entity_page import EntityPage
 from durin.memory.indexer import rebuild_fts_index
+from durin.memory.scope import ScopePredicate
 from durin.memory.search_pipeline import (
     SearchPipelineResult,
     run_search_pipeline,
@@ -217,3 +218,50 @@ def test_vector_index_native_row_shape_is_accepted(tmp_path: Path) -> None:
     )
     assert entity_hit is not None
     assert entity_hit.type == "entity"
+
+
+# ---------------------------------------------------------------------------
+# scope predicate — carried into both index legs
+# ---------------------------------------------------------------------------
+
+
+class _RecordingIndex:
+    def __init__(self, rows):
+        self.rows = rows
+        self.where = "unset"
+
+    def search(self, query, *, top_k=10, where=None):
+        self.where = where
+        keep = self.rows
+        if where == "class_name != 'reference'":
+            keep = [r for r in keep if r["class_name"] != "reference"]
+        return keep[:top_k]
+
+
+def test_the_person_scope_reaches_the_vector_leg_as_a_prefilter(tmp_path):
+    rows = [{"id": f"ref-{i}", "class_name": "reference", "path": f"r{i}.md"} for i in range(50)]
+    rows.append({"id": "person:ada", "class_name": "entity_page", "path": "memory/entities/person/ada.md"})
+    idx = _RecordingIndex(rows)
+    result = run_search_pipeline(tmp_path, "ada", vector_index=idx, limit=3,
+                                 scope=ScopePredicate.for_search("all"))
+    assert idx.where == "class_name != 'reference'"
+    assert [h.uri for h in result.hits] == ["person:ada"]
+
+
+def test_the_lexical_leg_receives_the_type_set(tmp_path, monkeypatch):
+    seen = {}
+    import durin.memory.search_pipeline as sp
+
+    def fake_lexical(index, decision, *, limit=50, emit=True, type_=None, include_types=None, exclude_types=None):
+        seen["include"], seen["exclude"] = include_types, exclude_types
+        return []
+
+    monkeypatch.setattr(sp, "lexical_search", fake_lexical)
+    run_search_pipeline(tmp_path, "ada", scope=ScopePredicate.for_search("library"))
+    assert seen == {"include": ("reference",), "exclude": None}
+
+
+def test_no_scope_means_no_filter_anywhere(tmp_path):
+    idx = _RecordingIndex([{"id": "person:ada", "class_name": "entity_page", "path": "a.md"}])
+    run_search_pipeline(tmp_path, "ada", vector_index=idx)
+    assert idx.where is None

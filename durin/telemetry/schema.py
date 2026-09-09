@@ -848,6 +848,8 @@ class MemoryRecallVectorEvent(TypedDict):
     embedding_model: str
     hit_count: int
     duration_ms: float
+    # The prefilter applied to the vector table, empty when none.
+    predicate: str
     # Entity-aware ranking fields. NotRequired so the schema accepts older
     # events that pre-date the entity-aware wiring.
     ranking: NotRequired[str]                 # "default" | "entity_aware"

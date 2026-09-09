@@ -738,15 +738,12 @@ class MemorySearchTool(Tool):
             if scope in ("dreamed", "all", "library") else None
         )
 
-        # Library scope filter (contamination isolation): ingested reference
+        # Scope predicate (contamination isolation): ingested reference
         # documents are kept out of the default recall pool and are the sole
-        # content of an explicit `library` search.
-        if scope == "library":
-            library_mode: str | None = "only"
-        elif scope in ("all", "dreamed", "undreamed"):
-            library_mode = "exclude"
-        else:
-            library_mode = None
+        # content of an explicit `library` search. Built once here and
+        # applied inside both the vector and lexical legs of the pipeline.
+        from durin.memory.scope import ScopePredicate
+        scope_predicate = ScopePredicate.for_search(scope, kinds)
 
         # Cross-encoder rerank is opt-in via config. When
         # enabled, build a reranker lazily and pass it through. The
@@ -791,7 +788,7 @@ class MemorySearchTool(Tool):
             cross_encoder=cross_encoder,
             cross_encoder_top_n=ce_top_n,
             max_per_source=max_per_source,
-            library_mode=library_mode,
+            scope=scope_predicate,
         )
         duration_ms = (time.monotonic() - t0) * 1000.0
 
@@ -819,6 +816,7 @@ class MemorySearchTool(Tool):
                     "reordered": False,
                     "top_1_id_before": "",
                     "top_1_id_after": "",
+                    "predicate": scope_predicate.vector_where or "",
                 },
             )
 

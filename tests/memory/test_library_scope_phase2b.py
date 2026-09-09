@@ -14,15 +14,18 @@ import pytest
 
 from durin.memory.indexer import reindex_one_file
 from durin.memory.reference import ingest_reference
+from durin.memory.scope import ScopePredicate
 from durin.memory.search_pipeline import run_search_pipeline
 
 
 class _FakeVectorIndex:
     """Emits one ordinary memory row and one reference chunk row in the
-    production ``id``/``class_name`` shape the pipeline normalises."""
+    production ``id``/``class_name`` shape the pipeline normalises.
+    Applies ``where`` the same way the real ``VectorIndex`` does, so the
+    scope predicate is verified as a genuine prefilter, not a decoration."""
 
-    def search(self, query, top_k=50):  # noqa: ARG002
-        return [
+    def search(self, query, top_k=50, where=None):  # noqa: ARG002
+        rows = [
             {
                 "id": "9b6f1c81724a",
                 "class_name": "episodic",
@@ -36,6 +39,11 @@ class _FakeVectorIndex:
                 "summary": "a chunk of an ingested book",
             },
         ]
+        if where == "class_name != 'reference'":
+            rows = [r for r in rows if r["class_name"] != "reference"]
+        elif where == "class_name = 'reference'":
+            rows = [r for r in rows if r["class_name"] == "reference"]
+        return rows
 
 
 def _uris(result) -> set[str]:
@@ -45,7 +53,7 @@ def _uris(result) -> set[str]:
 def test_pipeline_exclude_drops_reference(tmp_path: Path) -> None:
     res = run_search_pipeline(
         tmp_path, "note", vector_index=_FakeVectorIndex(),
-        library_mode="exclude",
+        scope=ScopePredicate.for_search("all"),
     )
     uris = _uris(res)
     assert "memory/episodic/9b6f1c81724a" in uris
@@ -55,7 +63,7 @@ def test_pipeline_exclude_drops_reference(tmp_path: Path) -> None:
 def test_pipeline_only_keeps_reference(tmp_path: Path) -> None:
     res = run_search_pipeline(
         tmp_path, "note", vector_index=_FakeVectorIndex(),
-        library_mode="only",
+        scope=ScopePredicate.for_search("library"),
     )
     uris = _uris(res)
     assert any(u.startswith("memory/reference/") for u in uris)

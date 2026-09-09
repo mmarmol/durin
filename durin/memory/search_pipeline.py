@@ -40,6 +40,7 @@ from durin.memory.rrf_fusion import (
     apply_type_priors,
     fuse_rrf,
 )
+from durin.memory.scope import ScopePredicate
 from durin.memory.sectioned_output import (
     SectionedHit,
     apply_per_source_cap,
@@ -73,12 +74,6 @@ def _is_library_uri(uri: str) -> bool:
     return any(uri.startswith(p) for p in _LIBRARY_URI_PREFIXES)
 
 
-def _keep_for_library(uri: str, mode: str) -> bool:
-    """``mode='only'`` keeps Library uris; ``'exclude'`` drops them."""
-    lib = _is_library_uri(uri)
-    return lib if mode == "only" else not lib
-
-
 @dataclass(frozen=True)
 class SearchPipelineResult:
     """Pipeline output."""
@@ -106,13 +101,18 @@ def run_search_pipeline(
     cross_encoder: Optional[Any] = None,
     cross_encoder_top_n: int = 10,
     max_per_source: int | None = None,
-    library_mode: Optional[str] = None,
+    scope: ScopePredicate | None = None,
 ) -> SearchPipelineResult:
     """Execute the v2 search pipeline.
 
     ``vector_index`` is an optional :class:`durin.memory.vector_index.VectorIndex`
     or any object exposing ``search(query, top_k) -> [{uri, type, …}]``.
     When ``None``, the pipeline skips step 2a and runs lexical-only.
+
+    ``scope`` is a :class:`durin.memory.scope.ScopePredicate` built once by
+    the caller and applied inside both the vector and lexical legs as a
+    prefilter — ``None`` means no restriction, matching the pre-scope
+    behaviour.
 
     The result is already capped per source (corpus chunks) and ready
     to render via :func:`durin.memory.sectioned_output.render_sectioned`.
@@ -122,16 +122,20 @@ def run_search_pipeline(
     # surfaces in the result.
     recovery: dict = {"sources": set(), "ms": 0.0}
 
-    # Step 2a — vector retrieval (optional)
+    # Step 2a — vector retrieval (optional), prefiltered by the scope's
+    # vector predicate.
     vector_hits = _safe_vector_search(
         vector_index, decision.normalized_query, recovery=recovery,
+        where=scope.vector_where if scope is not None else None,
     )
     vector_uris = [h["uri"] for h in vector_hits if "uri" in h]
     vector_meta = {h["uri"]: h for h in vector_hits if "uri" in h}
 
-    # Step 2b — lexical retrieval
+    # Step 2b — lexical retrieval, restricted to the scope's type set.
     lexical_hits = _safe_lexical_search(
         workspace, decision, recovery=recovery,
+        include_types=scope.fts_include if scope is not None else None,
+        exclude_types=scope.fts_exclude if scope is not None else None,
     )
     lexical_uris = [h.uri for h in lexical_hits]
     lexical_meta = {h.uri: h for h in lexical_hits}
@@ -146,6 +150,17 @@ def run_search_pipeline(
     )
     grep_uris = [h["uri"] for h in grep_hits if "uri" in h]
     grep_meta = {h["uri"]: h for h in grep_hits if "uri" in h}
+
+    # The grep leg walks files and has no index to filter; keep its rows
+    # inside the scope the indexes already applied. Filters `grep_uris`
+    # and `grep_meta` together so the metadata dict stays consistent with
+    # the (possibly shorter) uri list.
+    if scope is not None and scope.fts_exclude and "reference" in scope.fts_exclude:
+        grep_uris = [u for u in grep_uris if not _is_library_uri(u)]
+        grep_meta = {u: m for u, m in grep_meta.items() if not _is_library_uri(u)}
+    elif scope is not None and scope.fts_include == ("reference",):
+        grep_uris = [u for u in grep_uris if _is_library_uri(u)]
+        grep_meta = {u: m for u, m in grep_meta.items() if _is_library_uri(u)}
 
     # Step 3 — cross-source RRF.
     fused = fuse_rrf(
@@ -210,14 +225,6 @@ def run_search_pipeline(
     # question's context perjudicated factual atemporal queries (the
     # LoCoMo conv-5-q20 chicken-vs-sushi case) and gave no win we
     # couldn't get from the LLM reading dates itself.
-
-    # Library scope filter. Ingested reference/corpus/artifact material is
-    # kept out of the default recall pool (``exclude``) and is the sole
-    # content of an explicit ``library`` search (``only``). Applied here,
-    # before the per-source cap and ``limit`` trim, so excluded material
-    # never consumes result slots.
-    if library_mode is not None:
-        fused = [f for f in fused if _keep_for_library(f.uri, library_mode)]
 
     # Build SectionedHit rows from the fused results, looking up
     # metadata from whichever source surfaced the uri.
@@ -549,6 +556,7 @@ def _safe_vector_search(
     vector_index: Optional[Any], query: str,
     *,
     recovery: dict,
+    where: Optional[str] = None,
 ) -> list[dict]:
     if vector_index is None or not query:
         return []
@@ -556,8 +564,13 @@ def _safe_vector_search(
     t0 = _time.perf_counter()
     try:
         # We accept either a real `VectorIndex.search` (returns a list
-        # of dicts) or any duck-typed object with the same shape.
-        rows = list(vector_index.search(query, top_k=50))
+        # of dicts) or any duck-typed object with the same shape. `where`
+        # is only forwarded when the caller supplied a scope predicate, so
+        # a duck-typed fake that doesn't declare that parameter still works.
+        kwargs: dict[str, Any] = {"top_k": 50}
+        if where is not None:
+            kwargs["where"] = where
+        rows = list(vector_index.search(query, **kwargs))
     except Exception as exc:  # noqa: BLE001
         logger.warning("search_pipeline: vector failed: %s", exc)
         recovery["sources"].add("vector")
@@ -625,12 +638,17 @@ def _safe_vector_search(
 
 def _safe_lexical_search(
     workspace: Path, decision, *, recovery: dict,
+    include_types: tuple[str, ...] | None = None,
+    exclude_types: tuple[str, ...] | None = None,
 ) -> list:
     import time as _time
     t0 = _time.perf_counter()
     try:
         with FTSIndex.open(workspace) as idx:
-            return lexical_search(idx, decision, limit=50)
+            return lexical_search(
+                idx, decision, limit=50,
+                include_types=include_types, exclude_types=exclude_types,
+            )
     except Exception as exc:  # noqa: BLE001
         logger.warning("search_pipeline: lexical failed: %s", exc)
         recovery["sources"].add("lexical")

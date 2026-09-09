@@ -274,3 +274,42 @@ async def test_search_cold_level_uses_vector_with_body_enrichment(
     assert out["total"] >= 1
     # Cold tier returns bodies — populated from disk after vector hit.
     assert any(r.get("body") for r in out["results"])
+
+
+@pytest.mark.asyncio
+async def test_search_scope_library_isolates_reference_via_vector_index(
+    tmp_path: Path,
+) -> None:
+    """The scope predicate must reach the REAL vector index as a `where`
+    prefilter: `scope="all"` excludes ingested reference chunks and
+    `scope="library"` returns only them, end to end through
+    MemorySearchTool (not a fake duck-typed index)."""
+    from durin.agent.tools.memory_search import MemorySearchTool
+    from durin.agent.tools.memory_store import MemoryStoreTool
+    from durin.memory.embedding import FastembedProvider
+    from durin.memory.reference import store_and_index_reference
+    from durin.memory.vector_index import VectorIndex
+
+    with _stub_fastembed():
+        await MemoryStoreTool(
+            workspace=tmp_path,
+            embedding_model=_TEST_MODEL,
+        ).execute(content="alpha memory body", headline="alpha-memory")
+
+        vi = VectorIndex(tmp_path, FastembedProvider(_TEST_MODEL))
+        store_and_index_reference(
+            tmp_path, "alpha-manual",
+            "alpha protocol reference content", vector_index=vi,
+        )
+
+        search = MemorySearchTool(
+            workspace=tmp_path,
+            embedding_model=_TEST_MODEL,
+        )
+        default = await search.execute(query="alpha", scope="all", level="warm")
+        library = await search.execute(query="alpha", scope="library", level="warm")
+
+    default_uris = {r["uri"] for r in default["results"]}
+    library_uris = {r["uri"] for r in library["results"]}
+    assert not any(u.startswith("memory/reference/") for u in default_uris)
+    assert any(u.startswith("memory/reference/") for u in library_uris)
