@@ -37,16 +37,5 @@ outliving it, would not be enough on its own.
 
 from __future__ import annotations
 
-import pytest
 
 
-@pytest.fixture(autouse=True, scope="session")
-def _isolate_automations_telemetry_dir(tmp_path_factory):
-    import durin.telemetry.logger as telemetry_logger
-
-    original = telemetry_logger._DEFAULT_DIR
-    telemetry_logger._DEFAULT_DIR = tmp_path_factory.mktemp("automations_telemetry")
-    try:
-        yield
-    finally:
-        telemetry_logger._DEFAULT_DIR = original

@@ -210,9 +210,9 @@ class HealthChecker:
 
         # Telemetry retention pass piggybacks on the cron tick.
         try:
-            from durin.memory.stats import DEFAULT_TELEMETRY_DIR
+            from durin.memory.stats import default_telemetry_dir
             from durin.telemetry.retention import run_retention
-            run_retention(DEFAULT_TELEMETRY_DIR)
+            run_retention(default_telemetry_dir())
         except Exception:  # pragma: no cover
             pass
 

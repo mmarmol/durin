@@ -1400,7 +1400,7 @@ class TelemetryPushConfig(Base):
 
     Default OFF. When enabled, every event emitted locally also POSTs
     to ``url`` (buffered, batched per ``batch_size``). The local JSONL
-    persistence under ``~/.cache/durin/telemetry/`` runs UNCHANGED —
+    persistence in the instance telemetry directory runs UNCHANGED —
     push is an ADDITIONAL sink, never a replacement.
 
     **Privacy**: events carry truncated user content (queries,

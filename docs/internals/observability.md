@@ -28,7 +28,9 @@ itself. Three independent surfaces cover this:
 
 **Telemetry as structured event log.** Every decision point (tool call, loop
 guard, provider timeout, memory operation) emits a JSON event to a local JSONL
-file under `~/.cache/durin/telemetry/`. Events carry `session_key` and
+file under the instance telemetry directory (`~/.cache/durin/telemetry/`, or
+`$DURIN_HOME/telemetry/` when `DURIN_HOME` is set; every writer and reader resolves
+it through `durin.config.paths.get_telemetry_dir`). Events carry `session_key` and
 `iteration` so dashboards can correlate them across a turn. The push sink is
 additive — the local JSONL always persists first; push is an extra fan-out that
 can fail without breaking the tool call. Free-text fields (`query`, `text`,
@@ -203,7 +205,7 @@ per-run `bind_telemetry` binding is already reset by the time the breakdown is
 computed.
 
 Retention runs inside the memory health-check tick: `run_retention` scans
-`~/.cache/durin/telemetry/`, gzip-compresses `.jsonl` files older than 30 days,
+the instance telemetry directory, gzip-compresses `.jsonl` files older than 30 days,
 and deletes `.jsonl.gz` files older than 90 days. These thresholds
 (`COMPRESSION_AGE_DAYS`, `DELETION_AGE_DAYS`) are hardcoded in
 `durin/telemetry/retention.py` and are not configurable via `config.json`.

@@ -58,6 +58,7 @@ def default_target_groups(workspace: Path | None = None) -> list[TargetGroup]:
     workspace_paths = (durin_home / "workspace",)
     cache_paths = (
         cache / "telemetry",
+        durin_home / "telemetry",
         cache / "models",
         cache / "archive",
     )

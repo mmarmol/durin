@@ -38,7 +38,9 @@ from durin.service.types import Command, Query, Result
 
 def _telemetry_dir() -> Path:
     """Return the telemetry JSONL directory used by the logs reader."""
-    return Path.home() / ".cache" / "durin" / "telemetry"
+    from durin.config.paths import get_telemetry_dir
+
+    return get_telemetry_dir()
 
 # ---------------------------------------------------------------------------
 # Shared result — most graph-api calls return a plain dict

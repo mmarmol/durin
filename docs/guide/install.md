@@ -339,6 +339,7 @@ you can sanity-check before committing.
 | `~/.durin/webui/` | yes | — |
 | `~/.durin/logs/` | yes | — |
 | `~/.cache/durin/telemetry/` | yes | `--keep-cache` |
+| `$DURIN_HOME/telemetry/` (instances selected with `DURIN_HOME`) | yes | `--keep-cache` |
 | `~/.cache/durin/models/` | yes | `--keep-cache` |
 | `~/.cache/durin/archive/` | yes | `--keep-cache` |
 | `~/.durin/models/stt/` | **no** (STT model cache, not enumerated) | — |

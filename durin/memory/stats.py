@@ -1,6 +1,6 @@
 """Memory telemetry aggregator.
 
-Reads JSONL events from ``~/.cache/durin/telemetry/`` and walks the
+Reads JSONL events from the instance telemetry directory and walks the
 workspace filesystem for ground-truth counts. Read-only — never mutates
 state. This is the prerequisite for the feature activation gates: each
 is an observable metric and without aggregation those gates are
@@ -20,7 +20,11 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_TELEMETRY_DIR = Path.home() / ".cache" / "durin" / "telemetry"
+def default_telemetry_dir() -> Path:
+    """Where the JSONL event log lives for the active instance."""
+    from durin.config.paths import get_telemetry_dir
+
+    return get_telemetry_dir()
 
 # Events the aggregator cares about. Other event types are skipped so
 # we don't waste cycles parsing irrelevant lines.
@@ -164,7 +168,7 @@ def compute_stats(
         ground-truth counts.
     telemetry_dir
         Where the JSONL event log lives. Defaults to
-        ``~/.cache/durin/telemetry/``. Overridable for tests.
+        the instance telemetry directory (``get_telemetry_dir``).
     days
         If set, only consider events whose ``ts`` is within the last
         ``days`` days. ``None`` = include everything.
@@ -176,7 +180,7 @@ def compute_stats(
         on missing directories the counters stay at zero.
     """
     if telemetry_dir is None:
-        telemetry_dir = DEFAULT_TELEMETRY_DIR
+        telemetry_dir = default_telemetry_dir()
 
     since: datetime | None = None
     since_ts: float | None = None

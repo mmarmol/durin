@@ -23,10 +23,9 @@ def _per_test_telemetry_dir(tmp_path, monkeypatch):
     fixture defined in a test module shadows a same-named one from a parent
     conftest for every test in that module — reusing the name would
     silently disable the suite-wide guard for this entire file."""
-    import durin.telemetry.logger as telemetry_logger
 
-    telemetry_dir = tmp_path / "_telemetry"
-    monkeypatch.setattr(telemetry_logger, "_DEFAULT_DIR", telemetry_dir)
+    telemetry_dir = tmp_path / "telemetry"
+    monkeypatch.setenv("DURIN_HOME", str(tmp_path))
     return telemetry_dir
 
 

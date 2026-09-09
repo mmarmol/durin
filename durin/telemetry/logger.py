@@ -1,6 +1,7 @@
 """Append-only JSON-lines telemetry logger.
 
-Writes one .jsonl file per session under ~/.cache/durin/telemetry/.
+Writes one .jsonl file per session under the instance telemetry directory
+(``durin.config.paths.get_telemetry_dir``).
 Each line is a self-contained event with timestamp, type, and payload.
 Zero external dependencies — pure stdlib JSON + file append.
 
@@ -24,7 +25,6 @@ from typing import Any, Protocol, TextIO
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_DIR = Path.home() / ".cache" / "durin" / "telemetry"
 _MAX_EVENTS_PER_FILE = 10_000
 
 # Persistent append-handle pool. Reopening the file per event (open+write+close)
@@ -204,7 +204,9 @@ def get_session_logger(
     import re
     from datetime import date
 
-    target_dir = base_dir or _DEFAULT_DIR
+    from durin.config.paths import get_telemetry_dir
+
+    target_dir = base_dir or get_telemetry_dir()
     safe_key = re.sub(r"[^\w\-]", "_", session_key)[:80]
     safe_key = re.sub(r"\.{2,}", "_", safe_key)
     today = date.today().isoformat()

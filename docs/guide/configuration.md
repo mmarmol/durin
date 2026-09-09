@@ -805,7 +805,9 @@ instead.
 
 ### `telemetry`
 
-Local telemetry is always written to JSONL under `~/.cache/durin/telemetry/`.
+Local telemetry is always written to JSONL under `~/.cache/durin/telemetry/`; an
+instance selected with `DURIN_HOME` keeps its own copy at `$DURIN_HOME/telemetry/`,
+so a second instance, a script or a test never writes into the live directory.
 The `push` sub-section enables optional fan-out to an HTTPS endpoint.
 
 **`telemetry.push`**:

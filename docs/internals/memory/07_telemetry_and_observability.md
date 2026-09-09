@@ -98,7 +98,7 @@ flowchart TD
 
 `TelemetryLogger` (`durin/telemetry/logger.py`) is the central emit point for a session. Tools call `emit_tool_event(event_type, data)` from `durin/agent/tools/_telemetry.py`, which resolves the current logger from a `ContextVar`, auto-injects `session_key` and `iteration` from the bound context, truncates free-text fields to 200 characters via `_truncate_freetext`, and writes the JSON record. The JSONL write happens first; any push sink is secondary. A push-sink failure never breaks the JSONL write.
 
-Storage: one `.jsonl` file per session per day under `~/.cache/durin/telemetry/`. Files older than 30 days are gzipped in place; archives older than 90 days are deleted. Retention runs on the health-check tick — no separate cron.
+Storage: one `.jsonl` file per session per day under the instance telemetry directory (`~/.cache/durin/telemetry/`, or `$DURIN_HOME/telemetry/` for an instance selected with `DURIN_HOME`). Files older than 30 days are gzipped in place; archives older than 90 days are deleted. Retention runs on the health-check tick — no separate cron.
 
 ### Hot-path events (memory_search)
 
@@ -230,7 +230,7 @@ The following events exist in the catalog without dedicated sections above — c
 
 | Command | What it emits |
 |---|---|
-| `durin memory stats [--days N] [--json]` | Reads `~/.cache/durin/telemetry/*.jsonl` and produces aggregated metrics (hot-path latency, dream counts, absorb rates). |
+| `durin memory stats [--days N] [--json]` | Reads the instance telemetry directory's `*.jsonl` and produces aggregated metrics (hot-path latency, dream counts, absorb rates). |
 | `durin memory reindex [--target fts\|lancedb\|all]` | Triggers `memory.index.rebuild`. |
 | `durin memory dream` | Runs the core consolidation passes manually; emits the `memory.dream.*` event set. |
 | `durin memory absorb-suggest` | Finds alias-overlap candidates without merging; useful when `auto_absorb.enabled=false`. |

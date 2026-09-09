@@ -205,3 +205,24 @@ def test_path_size_counts_directory_contents(tmp_path: Path) -> None:
     (d / "a.txt").write_text("hello", encoding="utf-8")
     (d / "b.txt").write_text("world!", encoding="utf-8")
     assert _path_size(d) == 11
+
+
+def test_instance_telemetry_is_collected_with_the_cache_group(fake_home: Path) -> None:
+    """An instance selected with DURIN_HOME keeps its telemetry under the
+    instance home; uninstall treats it like the cache copy — removed by
+    default, kept by ``--keep-cache``."""
+    instance_telemetry = fake_home / ".durin" / "telemetry"
+    instance_telemetry.mkdir()
+    (instance_telemetry / "cli_x_2026-09-09.jsonl").write_text("{}\n", encoding="utf-8")
+
+    removed = collect_targets(
+        keep_config=False, keep_workspace=False, keep_cache=False, workspace=None
+    )
+    assert str(instance_telemetry) in {str(p) for _g, p, _s in removed}
+
+    kept = collect_targets(
+        keep_config=False, keep_workspace=False, keep_cache=True, workspace=None
+    )
+    str_paths = {str(p) for _g, p, _s in kept}
+    assert str(instance_telemetry) not in str_paths
+    assert str(fake_home / ".cache" / "durin" / "telemetry") not in str_paths
