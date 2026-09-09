@@ -8,11 +8,18 @@
      - ``UNICODE61``      — `memory_fts` (default tokenizer)
      - ``TRIGRAM``        — `memory_fts_trigram` for CJK + substring
      - ``LIKE_SUBSTRING`` — fallback for short CJK queries that
-       trigram cannot tokenise (< 3 chars)
+       trigram cannot tokenise (< 3 chars), or for a TRIGRAM-eligible
+       query whose required term (a quoted phrase, a `keywords`
+       token/phrase, or `auto_keywords`) is itself under 3 chars —
+       trigram cannot tokenise that term either.
 
 The decision is pure (no I/O) and side-effect free. The lexical
 search layer consumes :class:`RoutingDecision` and executes the
-appropriate SQL.
+appropriate SQL. ``_split_terms``/``_extract_phrases`` live here
+(not in ``lexical_search``) because the routing decision itself
+needs to know a query's required-term lengths before any FTS5
+expression is built; ``lexical_search`` imports them back from here
+so both stay in lock-step with one parse of the query.
 """
 
 from __future__ import annotations
@@ -163,10 +170,19 @@ def decide_lexical_route(
 
     The routing thresholds match the Hermes-agent verified pattern:
 
-    - **CJK ≥ 3 + every non-operator token ≥ 3 chars** → trigram.
+    - **CJK ≥ 3 + every non-operator token ≥ 3 chars** → trigram,
+      unless a required term (see below) is itself under 3 chars, in
+      which case → LIKE fallback (trigram cannot tokenise it either).
     - **CJK > 0 with short CJK tokens** → LIKE fallback (trigram
       cannot match tokens shorter than 3 chars).
     - **Otherwise (Latin only, or short query)** → unicode61.
+
+    "Required term" is whatever `lexical_search` would AND into the
+    FTS5 expression for this query: a balanced quoted phrase in
+    *query*, plus every token/quoted group of the effective keywords
+    (*keywords* if given, else the auto-detected identifier) — the
+    same split :func:`_split_terms` performs for the expression
+    builder.
     """
     normalized = normalize_query(query)
     truncated = False
@@ -178,6 +194,7 @@ def decide_lexical_route(
         normalized = " ".join(tokens[:MAX_QUERY_TOKENS])
         truncated = True
     cjk = count_cjk_chars(normalized)
+    auto_keywords = _detect_auto_keywords(normalized)
 
     if cjk == 0:
         route = LexicalRoute.UNICODE61
@@ -186,6 +203,10 @@ def decide_lexical_route(
         non_operator = [t for t in tokens if t.upper() not in _OPERATORS]
         if cjk >= 3 and all(len(t) >= 3 for t in non_operator):
             route = LexicalRoute.TRIGRAM
+            required, _optional = _split_terms(
+                normalized, keywords or auto_keywords)
+            if any(len(t) < 3 for t in required):
+                route = LexicalRoute.LIKE_SUBSTRING
         else:
             route = LexicalRoute.LIKE_SUBSTRING
 
@@ -194,6 +215,81 @@ def decide_lexical_route(
         route=route,
         cjk_chars=cjk,
         keywords=keywords,
-        auto_keywords=_detect_auto_keywords(normalized),
+        auto_keywords=auto_keywords,
         truncated=truncated,
     )
+
+
+# ---------------------------------------------------------------------------
+# term splitting — shared by the router (short-required-term check above)
+# and lexical_search's FTS5 expression builder / LIKE fallback.
+# ---------------------------------------------------------------------------
+
+
+def _split_terms(query: str, keywords: str | None) -> tuple[list[str], list[str]]:
+    """Raw, un-quoted ``(required, optional)`` terms behind one query.
+
+    Required = balanced quoted phrases in ``query`` plus every token of
+    ``keywords``. Optional = the loose (non-phrase) tokens of ``query``.
+    Shared by :func:`decide_lexical_route` (the short-required-term
+    reroute), ``build_fts_expression`` (which quotes these for FTS5),
+    and the LIKE fallback (which interpolates them directly into
+    ``LIKE`` patterns) so all three agree on what counts as required.
+    """
+    phrases, loose, balanced = _extract_phrases(query or "")
+    if not balanced:
+        loose = [tok.replace('"', "") for tok in loose]
+    required: list[str] = [p for p in phrases if p.strip()]
+    if keywords and keywords.strip():
+        kw_phrases, kw_loose, kw_balanced = _extract_phrases(keywords)
+        if not kw_balanced:
+            kw_loose = [tok.replace('"', "") for tok in kw_loose]
+        required += [t for t in kw_loose if t]
+        required += [p for p in kw_phrases if p.strip()]
+    optional = [t for t in loose if t]
+    return required, optional
+
+
+def _extract_phrases(query: str) -> tuple[list[str], list[str], bool]:
+    """Split ``query`` into ``(phrases, loose_tokens, balanced)``.
+
+    A double-quoted substring becomes one entry in ``phrases``; the
+    remainder is whitespace-split into ``loose_tokens``. ``balanced``
+    is False when the query contains an odd number of unescaped
+    double quotes; callers degrade to token-only parsing in that
+    case.
+
+    Examples
+    --------
+    >>> _extract_phrases('"Marcelo Marmol" lives in Spain')
+    (['Marcelo Marmol'], ['lives', 'in', 'Spain'], True)
+    >>> _extract_phrases('hello world')
+    ([], ['hello', 'world'], True)
+    >>> _extract_phrases('Marcelo "incomplete')
+    ([], ['Marcelo', '"incomplete'], False)
+    """
+    phrases: list[str] = []
+    loose: list[str] = []
+    chunks: list[str] = []  # text between quoted segments
+    cursor = 0
+    open_idx: Optional[int] = None
+    for i, ch in enumerate(query):
+        if ch != '"':
+            continue
+        if open_idx is None:
+            chunks.append(query[cursor:i])
+            open_idx = i
+        else:
+            phrases.append(query[open_idx + 1:i])
+            cursor = i + 1
+            open_idx = None
+    if open_idx is not None:
+        # Unbalanced — drop everything from the dangling quote onward
+        # so the tokenless tail can't bias the AND-join. Tokens before
+        # the lone quote stay; the rest is discarded.
+        loose_tokens = query[:open_idx].split()
+        return [], loose_tokens, False
+    chunks.append(query[cursor:])
+    for chunk in chunks:
+        loose.extend(chunk.split())
+    return phrases, loose, True

@@ -30,9 +30,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
-from durin.memory.fts_index import FTSIndex
+from durin.memory.fts_index import FTSIndex, escape_like
 from durin.memory.lexical_search import (
-    _split_terms,
     build_fts_expression,
     lexical_search,
 )
@@ -773,12 +772,14 @@ def _grep_verify_boost(
     vector ranks high that literally contains the query terms — but
     sat just past that cutoff — got no lexical contribution, so a
     semantically-near distractor could outrank a literally-confirmed
-    hit. For each fused hit with a vector source and no lexical
-    source, run a per-uri FTS MATCH against the exact expression the
-    lexical leg would have run for this route — the query's loose
-    tokens OR-joined, balanced quoted phrases and ``keywords`` (or the
-    router's ``auto_keywords``) required — not a separate, stricter
-    all-terms match. Confirmed hits gain ``"lexical"`` in ``sources``
+    hit. For every fused hit with a vector source and no lexical
+    source, run ONE batched query for the whole candidate set against
+    the exact expression the lexical leg would have run for this
+    route — the query's loose tokens OR-joined, balanced quoted
+    phrases and ``keywords`` (or the router's ``auto_keywords``)
+    required — not a separate, stricter all-terms match, and not one
+    query per candidate (that used to re-stream the whole match set
+    once per uri). Confirmed hits gain ``"lexical"`` in ``sources``
     and ``W_LEXICAL / (k + rank_in_vector)``: literal presence is the
     lexical evidence the cutoff dropped, credited at the rank vector
     vouched for.
@@ -794,19 +795,15 @@ def _grep_verify_boost(
     expr = build_fts_expression(decision.normalized_query, effective_keywords)
     if not candidates or not expr.text:
         return fused
-    required, optional = _split_terms(
-        decision.normalized_query, effective_keywords)
     import time as _time
     t0 = _time.perf_counter()
-    verified: set[str] = set()
     try:
         with FTSIndex.open(workspace) as idx:
-            for h in candidates:
-                if _literal_match_for_uri(
-                    idx, decision.route, expr.text, h.uri,
-                    required=required, optional=optional,
-                ):
-                    verified.add(h.uri)
+            verified = _verified_uris(
+                idx, decision.route, expr.text,
+                [h.uri for h in candidates],
+                required=expr.required_terms, optional=expr.optional_terms,
+            )
     except Exception as exc:  # noqa: BLE001
         logger.warning("search_pipeline: grep-verify failed: %s", exc)
         return fused
@@ -826,7 +823,7 @@ def _grep_verify_boost(
             uri=h.uri,
             score=h.score + DEFAULT_W_LEXICAL / (
                 DEFAULT_K + h.ranks["vector"]),
-            sources=(*h.sources, "lexical"),
+            sources=tuple(sorted((*h.sources, "lexical"))),
             ranks=h.ranks,
         ) if h.uri in verified else h
         for h in fused
@@ -835,57 +832,74 @@ def _grep_verify_boost(
     return out
 
 
-def _literal_match_for_uri(
+# Chunk size for the `uri IN (...)` batches below. Candidates are capped at
+# ~50 by `_grep_verify_boost`'s caller in the normal case, so this is a
+# defensive ceiling — a handful of chunks, never one query per uri.
+_VERIFY_CHUNK_SIZE = 200
+
+
+def _verified_uris(
     idx: FTSIndex,
     route: LexicalRoute,
     expr_text: str,
-    uri: str,
+    uris: Sequence[str],
     *,
     required: Sequence[str] = (),
     optional: Sequence[str] = (),
-) -> bool:
-    """Does this uri's indexed text literally match the query?
+) -> set[str]:
+    """Which of ``uris`` literally match the query — one query per route.
 
     On the unicode61/trigram routes, ``expr_text`` (built once by
     :func:`_grep_verify_boost` via :func:`build_fts_expression`) runs
-    as-is — the identical FTS5 expression the lexical leg would run
+    as-is against every candidate at once — ``MATCH ? AND uri IN
+    (...)`` — the identical FTS5 expression the lexical leg would run
     for the same route. ``LIKE_SUBSTRING`` has no FTS5 table to MATCH
     against, so it rebuilds the equivalent shape as ``LIKE`` clauses
-    from ``required``/``optional`` (the same split, via
-    :func:`_split_terms`): optional tokens OR-joined, every required
-    term ANDed on top. Follows the query's lexical route so CJK
-    verifies through the trigram table and short-CJK through LIKE —
-    the same multilingual contract as the lexical tier itself.
+    from ``required``/``optional`` (the same split the expression
+    carries): optional tokens OR-joined, every required term ANDed on
+    top, ``uri IN (...)`` alongside them. Follows the query's lexical
+    route so CJK verifies through the trigram table and short-CJK
+    through LIKE — the same multilingual contract as the lexical tier
+    itself. ``uris`` is chunked at :data:`_VERIFY_CHUNK_SIZE` so a
+    candidate set beyond a few hundred doesn't build one giant IN
+    list.
     """
-    conn = idx._conn  # noqa: SLF001 — same friend access as LIKE scan
-    if route is LexicalRoute.LIKE_SUBSTRING:
-        clauses: list[str] = []
-        params: list[str] = []
-        if optional:
-            clauses.append(
-                "(" + " OR ".join("text LIKE ?" for _ in optional) + ")")
-            params.extend(f"%{t}%" for t in optional)
-        for term in required:
-            clauses.append("text LIKE ?")
-            params.append(f"%{term}%")
-        clauses.append("uri = ?")
-        params.append(uri)
-        cur = conn.execute(
-            f"SELECT 1 FROM memory_fts WHERE {' AND '.join(clauses)} "
-            f"LIMIT 1",
-            params,
-        )
-        return cur.fetchone() is not None
-    table = (
-        "memory_fts_trigram" if route is LexicalRoute.TRIGRAM
-        else "memory_fts"
-    )
-    cur = conn.execute(
-        f"SELECT 1 FROM {table} WHERE {table} MATCH ? AND uri = ? "
-        f"LIMIT 1",
-        (expr_text, uri),
-    )
-    return cur.fetchone() is not None
+    if not uris:
+        return set()
+    conn = idx._conn  # noqa: SLF001 — same friend access as the LIKE scan
+    verified: set[str] = set()
+    for start in range(0, len(uris), _VERIFY_CHUNK_SIZE):
+        chunk = uris[start:start + _VERIFY_CHUNK_SIZE]
+        placeholders = ",".join("?" for _ in chunk)
+        if route is LexicalRoute.LIKE_SUBSTRING:
+            clauses: list[str] = []
+            params: list[str] = []
+            if optional:
+                clauses.append(
+                    "(" + " OR ".join(
+                        "text LIKE ? ESCAPE '\\'" for _ in optional) + ")")
+                params.extend(f"%{escape_like(t)}%" for t in optional)
+            for term in required:
+                clauses.append("text LIKE ? ESCAPE '\\'")
+                params.append(f"%{escape_like(term)}%")
+            clauses.append(f"uri IN ({placeholders})")
+            params.extend(chunk)
+            cur = conn.execute(
+                f"SELECT uri FROM memory_fts WHERE {' AND '.join(clauses)}",
+                params,
+            )
+        else:
+            table = (
+                "memory_fts_trigram" if route is LexicalRoute.TRIGRAM
+                else "memory_fts"
+            )
+            cur = conn.execute(
+                f"SELECT uri FROM {table} WHERE {table} MATCH ? "
+                f"AND uri IN ({placeholders})",
+                (expr_text, *chunk),
+            )
+        verified.update(u for (u,) in cur.fetchall())
+    return verified
 
 
 def _resolve_meta(

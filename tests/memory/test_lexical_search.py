@@ -76,19 +76,12 @@ def test_quoting_handles_special_chars(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Audit H10 (2026-05-29): phrase matching via double-quoted substrings
+# Phrase matching via double-quoted substrings
 # ---------------------------------------------------------------------------
 #
-# Pre-H10 every token in the query was quoted independently for FTS5,
-# so a query `Marcelo Marmol` resolved to `"Marcelo" "Marmol"` — the
-# AND of two phrase-tokens, which matches a document containing both
-# words anywhere. Useful for token search but loses ordering: it also
-# matches "Marmol Marcelo lives in Spain".
-#
-# H10 lets the agent express a phrase intent with double quotes:
-# `"Marcelo Marmol" lives` is parsed as one FTS5 phrase + one token.
-# Documents must contain "Marcelo Marmol" adjacent, and the token
-# "lives" anywhere.
+# A double-quoted phrase in the query resolves to one FTS5 phrase:
+# `"Marcelo Marmol" lives` requires "Marcelo Marmol" adjacent and in
+# order, plus the loose token "lives" anywhere.
 
 
 def test_quoted_phrase_matches_exact_sequence(tmp_path: Path) -> None:
@@ -388,3 +381,37 @@ def test_the_like_fallback_ors_its_tokens(tmp_path):
         idx.upsert(uri="b", path="b.md", type_="episodic", entity_type="", text="大阪", mtime=2.0)
         hits = lexical_search(idx, decide_lexical_route("东京 大阪"), emit=False)
         assert {h.uri for h in hits} == {"a", "b"}
+
+
+# ---------------------------------------------------------------------------
+# LIKE_SUBSTRING route: `_`/`%` escaping, empty-WHERE guard
+# ---------------------------------------------------------------------------
+
+
+def test_like_route_escapes_underscore_no_over_match(tmp_path):
+    """`_` is a LIKE single-char wildcard — a literal identifier like
+    `foo_bar` must not over-match `fooXbar` on the LIKE_SUBSTRING route."""
+    from durin.memory.query_router import LexicalRoute, RoutingDecision
+
+    with FTSIndex.open(tmp_path) as idx:
+        idx.upsert(uri="a", path="a.md", type_="episodic", entity_type="",
+                   text="the foo_bar identifier", mtime=1.0)
+        idx.upsert(uri="b", path="b.md", type_="episodic", entity_type="",
+                   text="the fooXbar identifier", mtime=2.0)
+        decision = RoutingDecision(
+            normalized_query="foo_bar", route=LexicalRoute.LIKE_SUBSTRING,
+            cjk_chars=0,
+        )
+        hits = lexical_search(idx, decision, emit=False)
+        assert [h.uri for h in hits] == ["a"]
+
+
+def test_like_scan_empty_where_returns_no_rows(tmp_path):
+    """Neither optional tokens nor required terms → `[]` immediately,
+    not a full-table scan or a SQL error from a dangling `WHERE`/`AND`."""
+    from durin.memory.lexical_search import _like_substring_scan
+
+    with FTSIndex.open(tmp_path) as idx:
+        idx.upsert(uri="a", path="a.md", type_="episodic", entity_type="",
+                   text="anything at all", mtime=1.0)
+        assert _like_substring_scan(idx, [], required=[], limit=10) == []

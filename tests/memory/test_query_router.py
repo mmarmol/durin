@@ -107,6 +107,16 @@ def test_route_short_cjk_falls_back_to_like_substring() -> None:
     assert decision.route == LexicalRoute.LIKE_SUBSTRING
 
 
+def test_route_short_required_keyword_downgrades_trigram_to_like() -> None:
+    """The query alone qualifies for trigram (CJK ≥ 3, every token ≥ 3
+    chars), but a one-character `keywords` is a required term trigram
+    can't tokenise — the router must reroute to LIKE_SUBSTRING instead
+    of handing lexical_search a route that would silently match
+    nothing on that required term."""
+    decision = decide_lexical_route("马塞洛 工程师", keywords="马")
+    assert decision.route == LexicalRoute.LIKE_SUBSTRING
+
+
 def test_route_mixed_latin_cjk_with_long_cjk_tokens_uses_trigram() -> None:
     """Mixed but with ≥ 3 CJK chars AND every token ≥ 3 chars."""
     decision = decide_lexical_route("marcelo 马塞洛 engineer")

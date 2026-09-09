@@ -35,8 +35,8 @@ import time
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
-from durin.memory.fts_index import FTSHit, FTSIndex
-from durin.memory.query_router import LexicalRoute, RoutingDecision
+from durin.memory.fts_index import FTSHit, FTSIndex, escape_like
+from durin.memory.query_router import LexicalRoute, RoutingDecision, _split_terms
 
 __all__ = ["FtsExpression", "build_fts_expression", "lexical_search"]
 
@@ -93,9 +93,9 @@ def lexical_search(
             include_types=include_types, exclude_types=exclude_types,
         )
     elif decision.route is LexicalRoute.LIKE_SUBSTRING:
-        required, optional = _split_terms(decision.normalized_query, keywords)
         hits = _like_substring_scan(
-            index, optional, required=required, limit=limit, type_=type_,
+            index, expr.optional_terms, required=expr.required_terms,
+            limit=limit, type_=type_,
             include_types=include_types, exclude_types=exclude_types,
         )
 
@@ -118,6 +118,8 @@ class FtsExpression:
     text: str
     required: int
     optional: int
+    required_terms: tuple[str, ...]
+    optional_terms: tuple[str, ...]
 
 
 def _fts_term(token: str) -> str:
@@ -132,6 +134,12 @@ def build_fts_expression(query: str, keywords: str | None = None) -> FtsExpressi
     phrases in ``query`` and every token of ``keywords`` are required
     (AND) — that is where exactness lives. Operators and punctuation are
     quoted so they stay literal. An unbalanced quote degrades to tokens.
+
+    ``required_terms``/``optional_terms`` on the returned
+    :class:`FtsExpression` carry the same terms un-quoted — the LIKE
+    fallback (``_like_substring_scan``) and grep-verify's LIKE branch
+    read them straight off the expression instead of re-parsing the
+    query, so the whole pipeline does exactly one parse per call.
     """
     required_raw, optional_raw = _split_terms(query, keywords)
     required = [_fts_term(t) for t in required_raw]
@@ -139,75 +147,10 @@ def build_fts_expression(query: str, keywords: str | None = None) -> FtsExpressi
     parts: list[str] = list(required)
     if optional:
         parts.append("(" + " OR ".join(optional) + ")")
-    return FtsExpression(" AND ".join(parts), len(required), len(optional))
-
-
-def _split_terms(query: str, keywords: str | None) -> tuple[list[str], list[str]]:
-    """Raw, un-quoted ``(required, optional)`` terms behind one query.
-
-    Required = balanced quoted phrases in ``query`` plus every token of
-    ``keywords``. Optional = the loose (non-phrase) tokens of ``query``.
-    Shared by :func:`build_fts_expression` (which quotes these for FTS5)
-    and the LIKE fallback (which interpolates them directly into ``LIKE``
-    patterns) so both routes agree on what counts as required.
-    """
-    phrases, loose, balanced = _extract_phrases(query or "")
-    if not balanced:
-        loose = [tok.replace('"', "") for tok in loose]
-    required: list[str] = [p for p in phrases if p.strip()]
-    if keywords and keywords.strip():
-        kw_phrases, kw_loose, kw_balanced = _extract_phrases(keywords)
-        if not kw_balanced:
-            kw_loose = [tok.replace('"', "") for tok in kw_loose]
-        required += [t for t in kw_loose if t]
-        required += [p for p in kw_phrases if p.strip()]
-    optional = [t for t in loose if t]
-    return required, optional
-
-
-def _extract_phrases(query: str) -> tuple[list[str], list[str], bool]:
-    """Split ``query`` into ``(phrases, loose_tokens, balanced)``.
-
-    A double-quoted substring becomes one entry in ``phrases``; the
-    remainder is whitespace-split into ``loose_tokens``. ``balanced``
-    is False when the query contains an odd number of unescaped
-    double quotes; callers degrade to token-only parsing in that
-    case.
-
-    Examples
-    --------
-    >>> _extract_phrases('"Marcelo Marmol" lives in Spain')
-    (['Marcelo Marmol'], ['lives', 'in', 'Spain'], True)
-    >>> _extract_phrases('hello world')
-    ([], ['hello', 'world'], True)
-    >>> _extract_phrases('Marcelo "incomplete')
-    ([], ['Marcelo', '"incomplete'], False)
-    """
-    phrases: list[str] = []
-    loose: list[str] = []
-    chunks: list[str] = []  # text between quoted segments
-    cursor = 0
-    open_idx: Optional[int] = None
-    for i, ch in enumerate(query):
-        if ch != '"':
-            continue
-        if open_idx is None:
-            chunks.append(query[cursor:i])
-            open_idx = i
-        else:
-            phrases.append(query[open_idx + 1:i])
-            cursor = i + 1
-            open_idx = None
-    if open_idx is not None:
-        # Unbalanced — drop everything from the dangling quote onward
-        # so the tokenless tail can't bias the AND-join. Tokens before
-        # the lone quote stay; the rest is discarded.
-        loose_tokens = query[:open_idx].split()
-        return [], loose_tokens, False
-    chunks.append(query[cursor:])
-    for chunk in chunks:
-        loose.extend(chunk.split())
-    return phrases, loose, True
+    return FtsExpression(
+        " AND ".join(parts), len(required), len(optional),
+        required_terms=tuple(required_raw), optional_terms=tuple(optional_raw),
+    )
 
 
 def _like_substring_scan(
@@ -232,21 +175,32 @@ def _like_substring_scan(
     group the FTS routes use. ``required`` (quoted phrases and
     ``keywords``) are ANDed on top, one ``LIKE`` per term — with no
     loose tokens the required clauses stand alone. LIKE has no
-    ranking, so results come back in table order.
+    ranking, so results come back in table order. Each term is
+    escaped with :func:`durin.memory.fts_index.escape_like` so a
+    literal ``%``/``_`` in the term (e.g. an identifier like
+    ``foo_bar``) can't widen the match into a wildcard.
+
+    Invariant: with neither ``tokens`` nor ``required`` there is no
+    clause to run — an empty WHERE would otherwise scan every row (or,
+    combined with a type filter, raise a SQL syntax error on the
+    dangling ``AND``), so this returns ``[]`` immediately.
 
     ``type_``/``include_types``/``exclude_types`` build the same type
     clause as the FTS routes — see ``FTSIndex._type_clause`` and
     ``lexical_search``.
     """
+    if not tokens and not required:
+        return []
     conn = index._conn  # noqa: SLF001 — intentional friend access
     clauses: list[str] = []
     params: list[str] = []
     if tokens:
-        clauses.append("(" + " OR ".join("text LIKE ?" for _ in tokens) + ")")
-        params.extend(f"%{t}%" for t in tokens)
+        clauses.append(
+            "(" + " OR ".join("text LIKE ? ESCAPE '\\'" for _ in tokens) + ")")
+        params.extend(f"%{escape_like(t)}%" for t in tokens)
     for term in required:
-        clauses.append("text LIKE ?")
-        params.append(f"%{term}%")
+        clauses.append("text LIKE ? ESCAPE '\\'")
+        params.append(f"%{escape_like(term)}%")
     type_clause, type_params = index._type_clause(type_, include_types, exclude_types)  # noqa: SLF001
     where = " AND ".join(clauses)
     cur = conn.execute(

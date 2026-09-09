@@ -165,6 +165,14 @@ async def test_e2e1_memory_search_invokes_entity_aware_ranker(
             "durin.agent.tools.memory_search.emit_tool_event",
             lambda t, d: events.append((t, d)),
         )
+        # `lexical_search._emit_lexical` imports `emit_tool_event` from
+        # `_telemetry` fresh on every call (not bound at module load like
+        # memory_search's own import above), so it needs its own patch
+        # target to land in the same `events` list.
+        monkeypatch.setattr(
+            "durin.agent.tools._telemetry.emit_tool_event",
+            lambda t, d: events.append((t, d)),
+        )
 
         tool = MemorySearchTool(workspace=tmp_path, embedding_model=_TEST_MODEL)
         # Simpler query — FTS AND-tokenization needs all tokens
@@ -186,6 +194,16 @@ async def test_e2e1_memory_search_invokes_entity_aware_ranker(
     # The person-scope predicate excludes the whole Library class set —
     # reference chunks and the legacy corpus class alike.
     assert payload["predicate"] == "class_name NOT IN ('reference', 'corpus')"
+
+    lexical_events = [e for e in events if e[0] == "memory.recall.lexical"]
+    assert len(lexical_events) == 1
+    lexical_payload = lexical_events[0][1]
+    # Query "Marcelo" has no quoted phrase and no `keywords` — one loose
+    # (optional) term, nothing required.
+    assert isinstance(lexical_payload["required"], int)
+    assert isinstance(lexical_payload["optional"], int)
+    assert lexical_payload["required"] == 0
+    assert lexical_payload["optional"] == 1
 
 
 # ---------------------------------------------------------------------------

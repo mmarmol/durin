@@ -17,7 +17,7 @@ Temporal decay is intentionally not applied: the LLM receives `valid_from` on ev
 
 ## 2. Mental model
 
-**Three sources, one fused rank.** Vector search (LanceDB L2) and lexical search (FTS5) run to top-50 each; a grep fallback covers raw sessions and not-yet-indexed files. For ordinary natural-language queries, lexical search ranks documents where loose tokens are OR-joined and scored by BM25, while double-quoted phrases and all `keywords` tokens are required. This produces matches on partial literal evidence (shared rare words) as well as exact phrases, creating a ranking independent of semantic similarity. Reciprocal Rank Fusion merges all three in rank space — score-scale invariant, so BM25, L2, and grep combine cleanly — ensuring fusion is a genuine multi-source consensus rather than vector-only with lexical evidence lost past the top-50 boundary.
+**Three sources, one fused rank.** Vector search (LanceDB L2) and lexical search (FTS5) run to top-50 each; a grep fallback covers raw sessions and not-yet-indexed files. For ordinary natural-language queries, lexical search ranks documents where loose tokens are OR-joined and scored by BM25, while double-quoted phrases and all `keywords` tokens are required. This produces matches on partial literal evidence (shared rare words) as well as exact phrases, creating a ranking independent of semantic similarity. Reciprocal Rank Fusion merges all three in rank space — score-scale invariant, so BM25, L2, and grep combine cleanly — ensuring fusion is a genuine multi-source consensus.
 
 **Entity-aware nudge, not override.** When the query mentions a known alias, hits tagged with that entity receive an additional RRF contribution. Entity matching is a nudge to surface canonical pages and fresh tagged entries; it does not override semantic similarity.
 
@@ -125,7 +125,7 @@ Weights: `w_vector = 1.0`, `w_lexical = 0.7` (boosted to `2.5` when `keywords` o
 
 After fusion, two adjustments run in order:
 
-**Grep-verify boost:** For every fused hit that came from vector but not lexical, `_grep_verify_boost` runs a per-URI FTS MATCH against the exact expression `lexical_search` would have run for that route — the same required/optional split, not a separate, stricter all-terms check. A confirmed hit gains `"lexical"` in `sources` and `w_lexical / (k + rank_in_vector)` — crediting the lexical evidence the top-50 cutoff dropped.
+**Grep-verify boost:** For every fused hit that came from vector but not lexical, `_grep_verify_boost` runs one batched query per route — `MATCH ... AND uri IN (...)` (or the LIKE equivalent) — against the exact expression `lexical_search` would have run for that route — the same required/optional split, not a separate, stricter all-terms check, and not one query per candidate. A confirmed hit gains `"lexical"` in `sources` and `w_lexical / (k + rank_in_vector)` — crediting the lexical evidence the top-50 cutoff dropped.
 
 **Type prior:** `apply_type_priors` multiplies each score by a per-type multiplier. Currently: raw session turns (`type="session"`) receive `×0.85`. Curated entries and entity pages are neutral. A session hit with strong enough evidence still wins; the prior demotes, it does not suppress.
 

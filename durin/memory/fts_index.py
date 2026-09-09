@@ -29,12 +29,29 @@ from typing import Iterator, Optional, Sequence
 
 from durin.utils.sqlite_util import connect as _sqlite_connect, execute_write as _execute_write
 
-__all__ = ["FTSHit", "FTSIndex", "fts_index_path"]
+__all__ = ["FTSHit", "FTSIndex", "escape_like", "fts_index_path"]
 
 
 def fts_index_path(workspace: Path) -> Path:
     """Resolve the canonical FTS sqlite path for *workspace*."""
     return Path(workspace) / ".durin" / "index" / "fts.sqlite"
+
+
+def escape_like(value: str) -> str:
+    """Escape ``%``, ``_`` and the escape char itself for a ``LIKE`` pattern.
+
+    Same escaping :meth:`FTSIndex.uris_with_prefix` applies to its prefix
+    argument. Callers still wrap the result in their own ``%`` wildcards
+    and add ``ESCAPE '\\'`` to the SQL — this only neutralises the two
+    ``LIKE`` wildcard characters (and a literal backslash) inside the
+    term itself, so a token like ``foo_bar`` can't widen into a
+    single-character wildcard and over-match ``fooXbar``.
+    """
+    return (
+        value.replace("\\", "\\\\")
+        .replace("%", r"\%")
+        .replace("_", r"\_")
+    )
 
 
 @dataclass(frozen=True)
