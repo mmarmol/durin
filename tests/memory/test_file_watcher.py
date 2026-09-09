@@ -21,6 +21,7 @@ import pytest
 from durin.memory.entity_page import EntityPage
 from durin.memory.file_watcher import MemoryFileWatcher
 from durin.memory.fts_index import FTSIndex
+from durin.memory.indexer import Backfill
 
 
 def _flush(watcher: MemoryFileWatcher, *, timeout_s: float = 5.0) -> None:
@@ -166,11 +167,11 @@ def test_the_watcher_runs_the_backfill_off_the_startup_path(
     ran = threading.Event()
     seen: dict[str, threading.Thread] = {}
 
-    def fake_backfill(workspace, vi):
+    def fake_backfill(workspace, vi, **kwargs):
         may_proceed.wait(timeout=5.0)
         seen["thread"] = threading.current_thread()
         ran.set()
-        return {}
+        return Backfill({}, None)
 
     monkeypatch.setattr(
         "durin.memory.indexer.backfill_missing_vectors", fake_backfill
@@ -206,10 +207,10 @@ def test_worker_thread_binds_gateway_telemetry_for_the_backfill(
     ran = threading.Event()
     seen: dict[str, object] = {}
 
-    def fake_backfill(workspace, vi):
+    def fake_backfill(workspace, vi, **kwargs):
         seen["logger"] = current_telemetry()
         ran.set()
-        return {}
+        return Backfill({}, None)
 
     monkeypatch.setattr(
         "durin.memory.indexer.backfill_missing_vectors", fake_backfill
@@ -227,3 +228,77 @@ def test_worker_thread_binds_gateway_telemetry_for_the_backfill(
     tlog = seen.get("logger")
     assert tlog is not None, "worker thread must have a bound telemetry logger"
     assert tlog.session_key == "gateway"
+
+
+def test_a_live_event_is_indexed_between_backfill_chunks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A chunk that leaves entries behind re-queues itself *behind* the
+    live events that arrived while it ran, so a fresh write waits for
+    one chunk, never for the whole backlog."""
+    order: list[str] = []
+    first_chunk_started = threading.Event()
+    may_finish_first_chunk = threading.Event()
+    finished = threading.Event()
+
+    def fake_backfill(workspace, vi, *, cursor=None, limit=None):
+        order.append(f"backfill:{cursor}")
+        if cursor is None:
+            first_chunk_started.set()
+            may_finish_first_chunk.wait(timeout=5.0)
+            return Backfill({"episodic": limit}, ("episodic", "e1"))
+        finished.set()
+        return Backfill({"episodic": 1}, None)
+
+    monkeypatch.setattr(
+        "durin.memory.indexer.backfill_missing_vectors", fake_backfill
+    )
+    watcher = MemoryFileWatcher(tmp_path, embedding_model="fake-model")
+    monkeypatch.setattr(watcher, "_get_vector_index", lambda: object())
+    monkeypatch.setattr(
+        watcher, "_reindex_path", lambda path: order.append(f"live:{path.name}"),
+    )
+    live = tmp_path / "memory" / "episodic" / "fresh.md"
+
+    watcher.start()
+    try:
+        assert first_chunk_started.wait(timeout=5.0)
+        watcher._queue.put(str(live))  # arrives while chunk 1 is running
+        may_finish_first_chunk.set()
+        assert finished.wait(timeout=5.0), "the second chunk never ran"
+    finally:
+        watcher.stop()
+
+    assert order == [
+        "backfill:None", "live:fresh.md", "backfill:('episodic', 'e1')",
+    ]
+
+
+def test_stop_is_honoured_after_the_running_chunk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A backfill that never runs out of entries must not keep the worker
+    alive past `stop()`: the stop sentinel is drained after at most the
+    chunk that was already queued."""
+    calls: list[int] = []
+    started = threading.Event()
+
+    def endless_backfill(workspace, vi, *, cursor=None, limit=None):
+        calls.append(1)
+        started.set()
+        time.sleep(0.05)
+        return Backfill({"episodic": limit}, ("episodic", f"e{len(calls)}"))
+
+    monkeypatch.setattr(
+        "durin.memory.indexer.backfill_missing_vectors", endless_backfill
+    )
+    watcher = MemoryFileWatcher(tmp_path, embedding_model="fake-model")
+    monkeypatch.setattr(watcher, "_get_vector_index", lambda: object())
+
+    watcher.start()
+    worker = watcher._worker
+    assert started.wait(timeout=5.0)
+    watcher.stop()
+
+    assert worker is not None and not worker.is_alive()
+    assert len(calls) <= 3

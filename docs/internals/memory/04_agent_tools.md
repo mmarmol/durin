@@ -176,7 +176,7 @@ defaults on any load failure.
 | Param | Default | Description |
 |---|---|---|
 | `query` | required | What to look for, in the caller's own words — a phrase, a question or a name. Double-quoted text inside `query` is a required phrase (must appear adjacent, in order); words outside quotes are ranked by bm25, not required. |
-| `scope` | `all` | `all` = dreamed + undreamed sessions, **excluding ingested documents**; `dreamed` = structured memory; `undreamed` = raw sessions; `library` = ingested reference documents (the Library — kept out of default recall); `archive` = on-demand recovery walk. Together with `kinds`, builds the `ScopePredicate` (`durin/memory/scope.py`) the tool passes to `run_search_pipeline` — the population is filtered inside the vector and FTS indexes, before their top-k cut, not by the tool afterward. |
+| `scope` | `all` | `all` = dreamed + undreamed, **excluding ingested documents**; `dreamed` = the distilled memory (entries, entity pages, skills); `undreamed` = raw session turns and their session summaries; `library` = ingested reference documents (the Library — kept out of default recall); `archive` = on-demand recovery walk. Together with `kinds`, builds the `ScopePredicate` (`durin/memory/scope.py`) the tool passes to `run_search_pipeline` — the population is filtered inside the vector and FTS indexes, before their top-k cut, not by the tool afterward. |
 | `level` | `warm` | `warm` = headline + a bounded summary excerpt (for an entity page: name whole, attributes and body sharing the same bound, attributes cut first); `cold` = full body (high token cost). Exception: raw session turns keep their indexed excerpt at either level; their backing file is a transcript. |
 | `keywords` | — | Terms that must appear for a lexical match (e.g. a name or an identifier); every token is required (AND) inside that leg, and a quoted group inside `keywords` is one required phrase. A result found only by meaning (the vector leg) can still appear without them. |
 | `limit` | 10 | Final result count. Clamped to [1, 50] defensively even with schema bounds declared. |
@@ -247,7 +247,7 @@ ingest via `durin/memory/doc_convert.py`; markdown and plain text are stored
 as-is. The storage model has three steps, all in a single call:
 
 1. The verbatim original is copied to `ingested/<id>/source.<ext>` + `meta.json`
-   (always; grep-able via `scope="undreamed"`). For a converted document the
+   (always; grep-able via `scope="library"`). For a converted document the
    markdown rendering is also written alongside as `ingested/<id>/source.md`.
 2. The document (its markdown rendering) is written to
    `memory/references/<slug>.md` and FTS-indexed as one lexical unit via

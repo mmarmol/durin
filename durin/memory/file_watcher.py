@@ -29,13 +29,23 @@ __all__ = ["MemoryFileWatcher"]
 # Sentinel pushed onto the queue to signal the worker thread to exit.
 _STOP_SENTINEL = object()
 
-# Sentinel pushed onto the queue by `start()` so the worker backfills any
-# vector rows missed while the process was down (crash, upgrade, or a run
-# with no embedding model configured) before it starts draining live
-# filesystem events. Runs on the worker thread like every other queued
-# item, so `start()` returns immediately — a large backlog never delays
-# the gateway binding its port.
-_BACKFILL = object()
+# Queued by `start()` so the worker backfills any vector rows missed while
+# the process was down (crash, upgrade, or a run with no embedding model
+# configured). Runs on the worker thread like every other queued item, so
+# `start()` returns immediately — a large backlog never delays the gateway
+# binding its port. The backfill is chunked: each item embeds at most
+# `_BACKFILL_CHUNK` entries and re-queues itself with the cursor where it
+# stopped, so live filesystem events that arrived meanwhile are drained
+# between chunks (a fresh `/remember` waits for one chunk, never for the
+# whole backlog) and `stop()` is honoured after the running chunk.
+class _Backfill:
+    __slots__ = ("cursor",)
+
+    def __init__(self, cursor: tuple[str, str] | None = None) -> None:
+        self.cursor = cursor
+
+
+_BACKFILL_CHUNK = 50
 
 
 class MemoryFileWatcher:
@@ -78,7 +88,7 @@ class MemoryFileWatcher:
         self._memory_root.mkdir(parents=True, exist_ok=True)
         # Queued before the observer starts, so it's the first item the
         # worker thread drains — ahead of any live filesystem event.
-        self._queue.put(_BACKFILL)
+        self._queue.put(_Backfill())
         # Lazy import keeps watchdog out of import-time when the
         # watcher isn't wired (CLI / tests that don't need it).
         from watchdog.events import FileSystemEventHandler
@@ -176,29 +186,34 @@ class MemoryFileWatcher:
         if vi is not None:
             reindex_one_file_vector(self._workspace, path, vi)
 
-    def _run_backfill(self) -> None:
-        """Embed entries that have an FTS row but no vector row yet.
+    def _run_backfill(self, cursor: tuple[str, str] | None) -> None:
+        """Embed one chunk of entries that have an FTS row but no vector row.
 
         No-op when no embedding model is configured (`_get_vector_index`
         returns None). Best-effort — a failure here must not kill the
         worker thread, since the watcher keeps draining live events
-        after it.
+        after it. When the chunk leaves entries behind, the next chunk
+        is queued *behind* whatever live events arrived meanwhile.
         """
         vi = self._get_vector_index()
         if vi is None:
             return
         from durin.memory.indexer import backfill_missing_vectors
         try:
-            done = backfill_missing_vectors(self._workspace, vi)
+            result = backfill_missing_vectors(
+                self._workspace, vi, cursor=cursor, limit=_BACKFILL_CHUNK,
+            )
         except Exception as exc:  # noqa: BLE001
             logger.warning("file_watcher: backfill failed: %s", exc)
             return
-        for class_name, count in done.items():
+        for class_name, count in result.done.items():
             if count:
                 logger.info(
                     "file_watcher: backfilled %d vector row(s) for %s",
                     count, class_name,
                 )
+        if result.cursor is not None:
+            self._queue.put(_Backfill(result.cursor))
 
     def _worker_loop(self) -> None:
         """Drains the event queue. One thread, FIFO, serial.
@@ -230,8 +245,8 @@ class MemoryFileWatcher:
                 with self._processing_lock:
                     self._processing = True
                 try:
-                    if item is _BACKFILL:
-                        self._run_backfill()
+                    if isinstance(item, _Backfill):
+                        self._run_backfill(item.cursor)
                         continue
                     path_str = str(item)
                     if not path_str.endswith(".md"):

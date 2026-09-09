@@ -14,7 +14,7 @@ transcribes the pages stores and indexes the document when it is done.
 
 When memory is disabled, the tool falls back to just the file copy +
 meta.json placeholder — the ``ingested/`` artifact is still grep-able
-via ``memory_search(scope="undreamed")``.
+via ``memory_search(scope="library")``.
 """
 
 from __future__ import annotations

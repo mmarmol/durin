@@ -165,3 +165,36 @@ def test_library_scope_is_a_predicate_not_a_post_filter(
 
     assert seen["scope"].fts_include == ("reference", "corpus")
     assert seen["scope"].vector_where == "class_name IN ('reference', 'corpus')"
+
+
+def test_undreamed_is_a_session_predicate_with_the_vector_leg(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`scope="undreamed"` must reach the pipeline as the session-classes
+    predicate, with the vector index wired (session summaries are
+    embedded); the tool renders what the indexes returned under that
+    predicate instead of re-classifying hits by type afterwards."""
+    seen: dict[str, Any] = {}
+    hit = SectionedHit(
+        uri="memory/episodic/e1", type="episodic", path="memory/episodic/e1.md",
+        score=1.0, ts="2026-05-20", snippet="the axe", summary="the axe",
+        body_length=7, entities=(),
+    )
+
+    def fake_pipeline(*args: Any, **kw: Any) -> SearchPipelineResult:
+        seen.update(kw)
+        return SearchPipelineResult(hits=[hit], vector_count=1, lexical_count=0)
+
+    monkeypatch.setattr(
+        "durin.memory.search_pipeline.run_search_pipeline", fake_pipeline,
+    )
+    tool = MemorySearchTool(workspace=tmp_path)
+    vector_index = object()
+    monkeypatch.setattr(tool, "_get_vector_index", lambda: vector_index)
+
+    out = asyncio.run(tool.execute(query="axe", scope="undreamed"))
+
+    assert seen["scope"].vector_where == "class_name IN ('session', 'session_summary')"
+    assert seen["scope"].fts_include == ("session", "session_summary")
+    assert seen["vector_index"] is vector_index
+    assert [r["uri"] for r in out["results"]] == ["memory/episodic/e1"]

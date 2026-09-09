@@ -8,9 +8,35 @@ def test_the_persons_memory_excludes_the_library_on_both_legs():
     assert p.fts_exclude == ("reference", "corpus")
 
 
-def test_dreamed_and_undreamed_share_the_person_scope():
-    assert ScopePredicate.for_search("dreamed") == ScopePredicate.for_search("all")
-    assert ScopePredicate.for_search("undreamed") == ScopePredicate.for_search("all")
+def test_undreamed_is_only_session_material_on_both_legs():
+    p = ScopePredicate.for_search("undreamed")
+    assert p.vector_where == "class_name IN ('session', 'session_summary')"
+    assert p.fts_include == ("session", "session_summary")
+    assert p.fts_exclude is None
+
+
+def test_dreamed_excludes_the_library_and_the_sessions():
+    p = ScopePredicate.for_search("dreamed")
+    assert p.vector_where == (
+        "class_name NOT IN ('reference', 'corpus', 'session', 'session_summary')"
+    )
+    assert p.fts_include is None
+    assert p.fts_exclude == ("reference", "corpus", "session", "session_summary")
+
+
+def test_dreamed_facts_exclude_skills_as_well():
+    p = ScopePredicate.for_search("dreamed", kinds="fact")
+    assert p.fts_exclude == (
+        "reference", "corpus", "session", "session_summary", "skill",
+    )
+
+
+def test_kinds_is_ignored_under_undreamed():
+    """Session material is never a skill, so `kinds` has nothing to
+    select between; it must not turn an undreamed search into a skill
+    search (or an empty one)."""
+    assert ScopePredicate.for_search("undreamed", kinds="skill") == ScopePredicate.for_search("undreamed")
+    assert ScopePredicate.for_search("undreamed", kinds="fact") == ScopePredicate.for_search("undreamed")
 
 
 def test_library_is_only_the_library():

@@ -267,6 +267,44 @@ def test_no_scope_means_no_filter_anywhere(tmp_path):
     assert idx.where is None
 
 
+def _grep_hits_of_every_kind(workspace, query, *, recovery):
+    return [
+        {"uri": "sessions/websocket_x.md#turn-3", "type": "session",
+         "path": "sessions/websocket_x.md#turn-3", "snippet": "…"},
+        {"uri": "memory/session_summary/s1", "type": "session_summary",
+         "path": "memory/session_summary/s1", "snippet": "…"},
+        {"uri": "memory/episodic/e1", "type": "episodic",
+         "path": "memory/episodic/e1", "snippet": "…"},
+        {"uri": "person:ada", "type": "entity",
+         "path": "memory/entity_page/person:ada", "snippet": "Ada"},
+    ]
+
+
+def test_undreamed_scope_keeps_only_session_material_on_the_grep_leg(tmp_path, monkeypatch):
+    """The grep leg has no index to filter, so `scope=undreamed` keeps the
+    raw session turns and the session summaries and drops the distilled
+    entries and entity pages the walk also turned up."""
+    import durin.memory.search_pipeline as sp
+
+    monkeypatch.setattr(sp, "_safe_grep_fallback", _grep_hits_of_every_kind)
+    result = run_search_pipeline(
+        tmp_path, "ada", scope=ScopePredicate.for_search("undreamed"),
+    )
+    assert sorted(h.uri for h in result.hits) == [
+        "memory/session_summary/s1", "sessions/websocket_x.md#turn-3",
+    ]
+
+
+def test_dreamed_scope_drops_session_material_from_the_grep_leg(tmp_path, monkeypatch):
+    import durin.memory.search_pipeline as sp
+
+    monkeypatch.setattr(sp, "_safe_grep_fallback", _grep_hits_of_every_kind)
+    result = run_search_pipeline(
+        tmp_path, "ada", scope=ScopePredicate.for_search("dreamed"),
+    )
+    assert sorted(h.uri for h in result.hits) == ["memory/episodic/e1", "person:ada"]
+
+
 def test_entity_pages_scope_filters_the_grep_leg_to_entity_refs(tmp_path, monkeypatch):
     """The grep leg has no index to filter, so under `entity_pages()`
     scope it must keep only entity-ref-shaped uris (`<type>:<slug>`) and

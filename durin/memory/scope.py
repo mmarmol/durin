@@ -16,6 +16,12 @@ from dataclasses import dataclass
 # whole of an explicit library search.
 _LIBRARY_CLASSES = ("reference", "corpus")
 
+# Undreamed material: raw session turns (FTS type `session`; never in the
+# vector table) and the session summaries the dream writes from them
+# (`memory/session_summary/<id>`, both indexes). `scope="undreamed"` is
+# exactly this set; `scope="dreamed"` is the person's memory without it.
+_SESSION_CLASSES = ("session", "session_summary")
+
 
 def _sql_quote(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
@@ -35,17 +41,25 @@ class ScopePredicate:
     def for_search(cls, scope: str, kinds: str = "all") -> "ScopePredicate":
         """The predicate behind a ``memory_search`` call.
 
-        Under ``scope="library"`` ``kinds`` is ignored: library rows are
-        never skills, so there is nothing for it to select between.
+        Under ``scope="library"`` and ``scope="undreamed"`` ``kinds`` is
+        ignored: library rows and session material are never skills, so
+        there is nothing for it to select between.
         """
         if scope == "library":
             where = "class_name IN (" + ", ".join(_sql_quote(x) for x in _LIBRARY_CLASSES) + ")"
             return cls(where, _LIBRARY_CLASSES, None)
-        if scope not in ("all", "dreamed", "undreamed"):
+        if scope == "undreamed":
+            where = "class_name IN (" + ", ".join(_sql_quote(x) for x in _SESSION_CLASSES) + ")"
+            return cls(where, _SESSION_CLASSES, None)
+        if scope not in ("all", "dreamed"):
             return cls.none()
         if kinds == "skill":
             return cls("class_name = 'skill'", ("skill",), None)
-        excluded = _LIBRARY_CLASSES + ("skill",) if kinds == "fact" else _LIBRARY_CLASSES
+        excluded = _LIBRARY_CLASSES
+        if scope == "dreamed":
+            excluded += _SESSION_CLASSES
+        if kinds == "fact":
+            excluded += ("skill",)
         where = "class_name NOT IN (" + ", ".join(_sql_quote(x) for x in excluded) + ")"
         return cls(where, None, excluded)
 

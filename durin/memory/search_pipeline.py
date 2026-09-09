@@ -88,6 +88,12 @@ def _is_skill_uri(uri: str) -> bool:
     return uri.startswith("skill/")
 
 
+def _is_session_uri(uri: str) -> bool:
+    """True when ``uri`` addresses undreamed material: a raw session turn
+    (``sessions/<key>.md#turn-N``) or a session summary entry."""
+    return uri.startswith("sessions/") or uri.startswith("memory/session_summary/")
+
+
 def _is_entity_ref_uri(uri: str) -> bool:
     """True when ``uri`` is a bare entity ref (``<type>:<slug>``).
 
@@ -179,9 +185,10 @@ def run_search_pipeline(
     # The grep leg walks files and has no index to filter; keep its rows
     # inside the scope the indexes already applied. Filters `grep_uris`
     # and `grep_meta` together so the metadata dict stays consistent with
-    # the (possibly shorter) uri list. Library and skill are independent
-    # axes of the same predicate (`kinds="fact"` excludes both), so each
-    # gets its own include/exclude check rather than one combined branch.
+    # the (possibly shorter) uri list. Library, skill and session are
+    # independent axes of the same predicate (`kinds="fact"` excludes the
+    # first two, `scope="dreamed"` the first and third), so each gets its
+    # own include/exclude check rather than one combined branch.
     if scope is not None and scope.fts_exclude and "reference" in scope.fts_exclude:
         grep_uris = [u for u in grep_uris if not _is_library_uri(u)]
         grep_meta = {u: m for u, m in grep_meta.items() if not _is_library_uri(u)}
@@ -195,6 +202,13 @@ def run_search_pipeline(
     elif scope is not None and scope.fts_include and "skill" in scope.fts_include:
         grep_uris = [u for u in grep_uris if _is_skill_uri(u)]
         grep_meta = {u: m for u, m in grep_meta.items() if _is_skill_uri(u)}
+
+    if scope is not None and scope.fts_exclude and "session" in scope.fts_exclude:
+        grep_uris = [u for u in grep_uris if not _is_session_uri(u)]
+        grep_meta = {u: m for u, m in grep_meta.items() if not _is_session_uri(u)}
+    elif scope is not None and scope.fts_include and "session" in scope.fts_include:
+        grep_uris = [u for u in grep_uris if _is_session_uri(u)]
+        grep_meta = {u: m for u, m in grep_meta.items() if _is_session_uri(u)}
 
     # Entity-pages predicate (`ScopePredicate.entity_pages`): the grep leg's
     # rows for entity material are bare entity refs (`<type>:<slug>`), never
