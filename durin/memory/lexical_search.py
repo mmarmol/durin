@@ -5,15 +5,18 @@ Take a
 the corresponding FTS5 path, returning a ranked list of URIs that
 the RRF fusion step consumes.
 
-The three execution paths:
+The three execution paths run the same expression from
+:func:`build_fts_expression` — loose tokens OR-joined (bm25 ranks partial
+matches), balanced quoted phrases and every ``keywords`` token required
+(AND):
 
   - ``UNICODE61``      → ``SELECT … FROM memory_fts WHERE text MATCH ?``
   - ``TRIGRAM``        → ``SELECT … FROM memory_fts_trigram WHERE text MATCH ?``
-  - ``LIKE_SUBSTRING`` → ``SELECT … FROM memory_fts WHERE text LIKE %?%``
-    (no scoring — returned in insertion / mtime order)
+  - ``LIKE_SUBSTRING`` → the same required/optional split, expressed as
+    ``LIKE`` clauses (no bm25 ranking — returned in table order)
 
-Every query token is double-quoted before FTS5 so special characters
-(``%``, ``*``, ``:``) and — critically — the FTS5 boolean keywords
+Every term is double-quoted before FTS5 so special characters (``%``,
+``*``, ``:``) and — critically — the FTS5 boolean keywords
 (``AND``/``OR``/``NOT``/``NEAR``) are treated as literal content, not
 operators. The recall tool contract is natural language plus balanced
 double-quoted phrases (see ``memory_search``); it never exposes boolean
@@ -70,32 +73,36 @@ def lexical_search(
     """
     t0 = time.perf_counter()
     hits: list[FTSHit] = []
-    query = decision.normalized_query
-    if not query:
+    keywords = decision.keywords or decision.auto_keywords
+    expr = build_fts_expression(decision.normalized_query, keywords)
+    if not expr.text:
         if emit:
             _emit_lexical(decision=decision, hit_count=0,
+                          required=expr.required, optional=expr.optional,
                           duration_ms=(time.perf_counter() - t0) * 1000.0)
         return hits
 
     if decision.route is LexicalRoute.UNICODE61:
         hits = index.search(
-            _quote_for_fts(query), limit=limit, type_=type_,
+            expr.text, limit=limit, type_=type_,
             include_types=include_types, exclude_types=exclude_types,
         )
     elif decision.route is LexicalRoute.TRIGRAM:
         hits = index.search_trigram(
-            _quote_for_fts(query), limit=limit, type_=type_,
+            expr.text, limit=limit, type_=type_,
             include_types=include_types, exclude_types=exclude_types,
         )
     elif decision.route is LexicalRoute.LIKE_SUBSTRING:
+        required, optional = _split_terms(decision.normalized_query, keywords)
         hits = _like_substring_scan(
-            index, query, limit=limit, type_=type_,
+            index, optional, required=required, limit=limit, type_=type_,
             include_types=include_types, exclude_types=exclude_types,
         )
 
     if emit:
         _emit_lexical(
             decision=decision, hit_count=len(hits),
+            required=expr.required, optional=expr.optional,
             duration_ms=(time.perf_counter() - t0) * 1000.0,
         )
     return hits
@@ -126,21 +133,36 @@ def build_fts_expression(query: str, keywords: str | None = None) -> FtsExpressi
     (AND) — that is where exactness lives. Operators and punctuation are
     quoted so they stay literal. An unbalanced quote degrades to tokens.
     """
-    phrases, loose, balanced = _extract_phrases(query or "")
-    if not balanced:
-        loose = [tok.replace('"', "") for tok in loose]
-    required: list[str] = [_fts_term(p) for p in phrases if p.strip()]
-    if keywords and keywords.strip():
-        kw_phrases, kw_loose, kw_balanced = _extract_phrases(keywords)
-        if not kw_balanced:
-            kw_loose = [tok.replace('"', "") for tok in kw_loose]
-        required += [_fts_term(t) for t in kw_loose if t]
-        required += [_fts_term(p) for p in kw_phrases if p.strip()]
-    optional = [_fts_term(t) for t in loose if t]
+    required_raw, optional_raw = _split_terms(query, keywords)
+    required = [_fts_term(t) for t in required_raw]
+    optional = [_fts_term(t) for t in optional_raw]
     parts: list[str] = list(required)
     if optional:
         parts.append("(" + " OR ".join(optional) + ")")
     return FtsExpression(" AND ".join(parts), len(required), len(optional))
+
+
+def _split_terms(query: str, keywords: str | None) -> tuple[list[str], list[str]]:
+    """Raw, un-quoted ``(required, optional)`` terms behind one query.
+
+    Required = balanced quoted phrases in ``query`` plus every token of
+    ``keywords``. Optional = the loose (non-phrase) tokens of ``query``.
+    Shared by :func:`build_fts_expression` (which quotes these for FTS5)
+    and the LIKE fallback (which interpolates them directly into ``LIKE``
+    patterns) so both routes agree on what counts as required.
+    """
+    phrases, loose, balanced = _extract_phrases(query or "")
+    if not balanced:
+        loose = [tok.replace('"', "") for tok in loose]
+    required: list[str] = [p for p in phrases if p.strip()]
+    if keywords and keywords.strip():
+        kw_phrases, kw_loose, kw_balanced = _extract_phrases(keywords)
+        if not kw_balanced:
+            kw_loose = [tok.replace('"', "") for tok in kw_loose]
+        required += [t for t in kw_loose if t]
+        required += [p for p in kw_phrases if p.strip()]
+    optional = [t for t in loose if t]
+    return required, optional
 
 
 def _quote_for_fts(query: str) -> str:
@@ -225,8 +247,9 @@ def _extract_phrases(query: str) -> tuple[list[str], list[str], bool]:
 
 def _like_substring_scan(
     index: FTSIndex,
-    query: str,
+    tokens: Sequence[str],
     *,
+    required: Sequence[str] = (),
     limit: int,
     type_: Optional[str] = None,
     include_types: Optional[Sequence[str]] = None,
@@ -239,17 +262,32 @@ def _like_substring_scan(
     typically). LIKE is O(N) but the workspace size is small enough
     that this is fine as a fallback.
 
+    ``tokens`` (the loose, optional terms) are OR-joined — any one
+    substring match qualifies a row, mirroring the bm25-ranked OR
+    group the FTS routes use. ``required`` (quoted phrases and
+    ``keywords``) are ANDed on top, one ``LIKE`` per term — with no
+    loose tokens the required clauses stand alone. LIKE has no
+    ranking, so results come back in table order.
+
     ``type_``/``include_types``/``exclude_types`` build the same type
     clause as the FTS routes — see ``FTSIndex._type_clause`` and
     ``lexical_search``.
     """
     conn = index._conn  # noqa: SLF001 — intentional friend access
-    like = f"%{query}%"
-    clause, params = index._type_clause(type_, include_types, exclude_types)  # noqa: SLF001
+    clauses: list[str] = []
+    params: list[str] = []
+    if tokens:
+        clauses.append("(" + " OR ".join("text LIKE ?" for _ in tokens) + ")")
+        params.extend(f"%{t}%" for t in tokens)
+    for term in required:
+        clauses.append("text LIKE ?")
+        params.append(f"%{term}%")
+    type_clause, type_params = index._type_clause(type_, include_types, exclude_types)  # noqa: SLF001
+    where = " AND ".join(clauses)
     cur = conn.execute(
         f"SELECT uri, path, type, entity_type FROM memory_fts "
-        f"WHERE text LIKE ?{clause} LIMIT ?",
-        (like, *params, limit),
+        f"WHERE {where}{type_clause} LIMIT ?",
+        (*params, *type_params, limit),
     )
     return [
         FTSHit(uri=u, path=p, type=t, entity_type=et)
@@ -258,7 +296,8 @@ def _like_substring_scan(
 
 
 def _emit_lexical(
-    *, decision: RoutingDecision, hit_count: int, duration_ms: float,
+    *, decision: RoutingDecision, hit_count: int, required: int, optional: int,
+    duration_ms: float,
 ) -> None:
     """Best-effort telemetry — never raises."""
     try:
@@ -270,6 +309,8 @@ def _emit_lexical(
                 "query_chars": len(decision.normalized_query),
                 "cjk_chars": decision.cjk_chars,
                 "hit_count": hit_count,
+                "required": required,
+                "optional": optional,
                 "duration_ms": duration_ms,
             },
         )

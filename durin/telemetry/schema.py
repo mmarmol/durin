@@ -1192,6 +1192,12 @@ class MemoryRecallLexicalEvent(TypedDict):
     query_chars: int
     cjk_chars: int
     hit_count: int
+    # Count of required terms (quoted phrases + every `keywords` token) —
+    # the AND-joined part of the expression build_fts_expression built.
+    required: int
+    # Count of loose, OR-joined terms — the bm25-ranked part of the
+    # expression.
+    optional: int
     duration_ms: float
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]

@@ -316,3 +316,50 @@ def test_operators_and_punctuation_stay_literal():
 
 def test_empty_query_and_keywords_yield_no_expression():
     assert build_fts_expression("   ").text == ""
+
+
+# ---------------------------------------------------------------------------
+# Task 9: lexical_search uses the expression on every route
+# ---------------------------------------------------------------------------
+
+
+def test_a_sentence_finds_the_note_that_shares_its_rare_words(tmp_path):
+    # The distractor avoids "la"/"y"/"se" — the query's own connector words —
+    # deliberately: the lexical contract has no stopword list (see
+    # global-constraints.md), so any token the distractor shared with the
+    # query's loose OR-group would make it a real match, not a near-miss;
+    # this note isolates the "shares rare words" behaviour from that.
+    with FTSIndex.open(tmp_path) as idx:
+        idx.upsert(uri="memory/episodic/axe", path="a.md", type_="episodic", entity_type="",
+                   text="Bruenor prefiere el hacha de doble filo forjada en Mithral Hall, regalo de Thalgrim.",
+                   mtime=1.0)
+        idx.upsert(uri="memory/episodic/other", path="b.md", type_="episodic", entity_type="",
+                   text="Una panadería abre temprano; el pan de masa madre vuela pronto.",
+                   mtime=2.0)
+        decision = decide_lexical_route("¿Qué arma prefiere Bruenor y quién se la regaló?")
+        hits = lexical_search(idx, decision, emit=False)
+        assert [h.uri for h in hits] == ["memory/episodic/axe"]
+
+
+def test_a_required_phrase_excludes_the_near_miss(tmp_path):
+    with FTSIndex.open(tmp_path) as idx:
+        idx.upsert(uri="a", path="a.md", type_="episodic", entity_type="", text="doble filo forjada", mtime=1.0)
+        idx.upsert(uri="b", path="b.md", type_="episodic", entity_type="", text="filo doble forjada", mtime=2.0)
+        hits = lexical_search(idx, decide_lexical_route('"doble filo" forjada'), emit=False)
+        assert [h.uri for h in hits] == ["a"]
+
+
+def test_keywords_are_required_terms(tmp_path):
+    with FTSIndex.open(tmp_path) as idx:
+        idx.upsert(uri="a", path="a.md", type_="episodic", entity_type="", text="Bruenor hacha", mtime=1.0)
+        idx.upsert(uri="b", path="b.md", type_="episodic", entity_type="", text="Thalgrim hacha", mtime=2.0)
+        hits = lexical_search(idx, decide_lexical_route("hacha", keywords="Bruenor"), emit=False)
+        assert [h.uri for h in hits] == ["a"]
+
+
+def test_the_like_fallback_ors_its_tokens(tmp_path):
+    with FTSIndex.open(tmp_path) as idx:
+        idx.upsert(uri="a", path="a.md", type_="episodic", entity_type="", text="东京", mtime=1.0)
+        idx.upsert(uri="b", path="b.md", type_="episodic", entity_type="", text="大阪", mtime=2.0)
+        hits = lexical_search(idx, decide_lexical_route("东京 大阪"), emit=False)
+        assert {h.uri for h in hits} == {"a", "b"}
