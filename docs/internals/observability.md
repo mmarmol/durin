@@ -59,7 +59,7 @@ flowchart TD
         LR["AgentLoop._run_agent_loop\nbind_telemetry via ContextVar"]
         TE["Tool.execute\nemit_tool_event(type, data)"]
         TL["TelemetryLogger.log\nJSON appended to JSONL"]
-        JL["~/.cache/durin/telemetry/\nSESSION_KEY-YYYYMMDD.jsonl\n(max 10k events/file)"]
+        JL["<telemetry dir>/\nSESSION_KEY-YYYYMMDD.jsonl\n(max 10k events/file)"]
         PS["PushSink\nbatched HTTPS POST\n(optional, additive)"]
         RET["run_retention\ncompress 30d / delete 90d\n(piggybacks health-check tick)"]
         LC --> LR
@@ -321,11 +321,11 @@ escalates to SIGKILL if needed, then removes the PID file.
 |---|---|---|
 | `TelemetryLogger` | `durin/telemetry/logger.py` | Append-only JSONL writer for one session. Owns `session_key` and per-turn `iteration` (updated via `set_iteration`). Holds `extra_sinks` list. `log(event_type, data)` is the canonical write path. |
 | `bind_telemetry` / `current_telemetry` / `reset_telemetry` | `durin/telemetry/logger.py` | ContextVar binding so tools resolve the active logger without constructor threading. Token from `bind_telemetry` MUST be reset in a `finally` block. |
-| `get_session_logger` | `durin/telemetry/logger.py` | Returns a `TelemetryLogger` at `~/.cache/durin/telemetry/SANITIZED_KEY_YYYYMMDD.jsonl`. |
+| `get_session_logger` | `durin/telemetry/logger.py` | Returns a `TelemetryLogger` at `<telemetry dir>/SANITIZED_KEY_YYYYMMDD.jsonl` (the instance directory from `get_telemetry_dir`). |
 | `emit_tool_event` | `durin/agent/tools/_telemetry.py` | Free function tools call to emit events. Resolves ContextVar, truncates free-text fields (200 chars), auto-injects `session_key` / `iteration`, swallows all exceptions. |
 | `PushSink` | `durin/telemetry/push.py` | Optional HTTPS fan-out sink. Buffers events and POSTs in batches. Failed POSTs restore the batch for retry. Never breaks the local JSONL write. |
 | `wire_push_sink` | `durin/telemetry/wiring.py` | Constructs and attaches a `PushSink` from config + secret store at agent startup. Returns the sink so callers can `flush()` it on shutdown. |
-| `run_retention` | `durin/telemetry/retention.py` | Applies `COMPRESSION_AGE_DAYS` (30) and `DELETION_AGE_DAYS` (90) to `~/.cache/durin/telemetry/`. Returns `{compressed, deleted, errors}`. Called from the memory health-check tick. |
+| `run_retention` | `durin/telemetry/retention.py` | Applies `COMPRESSION_AGE_DAYS` (30) and `DELETION_AGE_DAYS` (90) to the instance telemetry directory. Returns `{compressed, deleted, errors}`. Called from the memory health-check tick. |
 | `EVENTS` | `durin/telemetry/schema.py` | Dict mapping every event type string to its `TypedDict`. Single source of truth for the telemetry schema catalog. |
 | `CheckResult` | `durin/cli/doctor.py` | Dataclass `(name, status, message, fix, category, extra, extras_list)`. `status ∈ {ok, warn, fail}`. Returned by every `check_*` function. |
 | `run_checks` | `durin/cli/doctor.py` | Orchestrator: calls all `check_*` functions in sequence, returns a `DoctorReport`. Supports opt-in `--ping` and `--ping-model` checks. |

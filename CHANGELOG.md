@@ -5,6 +5,69 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.10.2 — 2026-09-09
+
+### Highlights
+
+- **Search finds what you just wrote.** Memory retrieval filtered scope after a
+  global top-k, so once the library filled the window the person's own memory
+  never entered it; the lexical leg required every word of a question, so a
+  natural sentence matched nothing; and notes written with `/remember` never
+  reached the vector index. All three are fixed: scope and kind are applied
+  inside both indexes before the top-k, the lexical leg ranks partial matches
+  by bm25 with exactness on request, and every write under `memory/` is embedded
+  as it lands. (#591, #592, #593)
+
+- **The search contract, in one line.** Write what you are looking for; quote
+  what must appear exactly. `keywords` are required terms for a lexical match
+  and weigh more in the fused ranking; the webui search API accepts them too.
+  (#592)
+
+### Changes
+
+**Memory**
+
+- `ScopePredicate` maps a search's scope and kinds — and the dream's
+  "entity pages of one type" — to a LanceDB prefilter and an FTS type set,
+  applied inside the indexes; the library is `reference` plus legacy `corpus`;
+  the grep leg is filtered by uri to the same scope; `memory_search` no longer
+  post-filters `kinds`. (#591)
+- The dream's duplicate-entity checks (extraction and refine) and the manifest
+  seeding ask the index for same-type entity pages instead of scanning a crowded
+  unfiltered window. (#591)
+- One FTS5 expression behind every lexical route: loose tokens OR-joined and
+  ranked, balanced quoted phrases and `keywords` required; the LIKE fallback
+  escapes wildcards; a required term under three characters routes to the LIKE
+  fallback; grep-verify verifies with the same expression in one batched query
+  per route. (#592)
+- The file watcher embeds memory entries and session summaries as they are
+  written; an idempotent backfill on the watcher's worker thread embeds
+  entries that predate it, without delaying the gateway's start. (#593) It
+  runs in chunks of 50, live writes indexed between chunks, and `stop()` takes
+  effect after the running chunk. (#595)
+- `scope=undreamed` is the session classes on every leg and `scope=dreamed`
+  excludes them — index predicates, not a type filter after the top-k;
+  `undreamed` gets the vector leg (session summaries are embedded). (#595)
+- `memory_store` (a tool already out of the agent's toolset) is removed; its
+  provenance helper lives in `durin/memory/provenance.py`; the shell's vault
+  guidance names `memory_upsert_entity` / `memory_forget`. (#593)
+- Telemetry: `memory.recall.vector` carries `predicate`; `memory.recall.lexical`
+  carries `required` and `optional`; new `memory.index.backfill`; the two
+  `memory.store` events are gone. (#591, #592, #593)
+- The vector table's schema is explicit; an older table whose `entities` column
+  was inferred as empty is repaired on the first watcher start, keeping its
+  vectors; the watcher's index telemetry lands in the gateway's file. (#594)
+- The telemetry directory follows the instance: `$DURIN_HOME/telemetry` when
+  `DURIN_HOME` is set, `~/.cache/durin/telemetry` otherwise, for every writer
+  and reader. (#590)
+
+**Operator notes**
+
+- Existing workspaces get their missing vector rows on the first gateway start
+  after the upgrade, in the background; `memory.index.backfill` rows say how many
+  per class and chunk (sum a class's rows for its total; a chunk's `duration_ms`
+  is the longest a live write waited behind it).
+
 ## 0.10.1 — 2026-09-09
 
 ### Highlights
