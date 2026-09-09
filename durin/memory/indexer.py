@@ -40,6 +40,7 @@ from durin.memory.entity_page import EntityPage
 from durin.memory.fts_index import FTSIndex
 from durin.memory.memory_writer import git_worktree_lock_path
 from durin.memory.paths import (
+    MEMORY_CLASSES,
     skill_path_from_uri,
     skill_uri,
     skills_dir,
@@ -540,15 +541,13 @@ def reindex_one_file(
 
 
 def reindex_one_file_vector(workspace: Path, md_path: Path, vi) -> bool:
-    """Re-embed ONE entity page into the vector index.
+    """Re-embed one entity page or memory entry into the vector index.
 
-    The reactive index path (file watcher) calls this so agent/dream-authored AND
-    hand-edited entity pages become vector-searchable. Previously NOTHING embedded
-    entity pages reactively — ``memory_upsert_entity`` / the extract dream never
-    did, and ``reindex_one_file`` is FTS-only, so the only embedders were the
-    absorption merge + a full ``durin memory reindex``. References are embedded at
-    ingest time and entries are niche (``memory_store`` disabled), so this handles
-    entity pages only. ``vi`` is a caller-owned ``VectorIndex`` (reused across
+    The reactive index path (file watcher) calls this for both shapes —
+    ``memory/entities/<type>/<slug>.md`` and ``memory/<class>/<id>.md``
+    (episodic, stable, corpus, session_summary) — so agent/dream-authored
+    AND hand-edited content becomes vector-searchable the moment it lands
+    on disk. ``vi`` is a caller-owned ``VectorIndex`` (reused across
     events). Returns True if it embedded. Best-effort — never raises.
     """
     workspace = Path(workspace)
@@ -558,26 +557,41 @@ def reindex_one_file_vector(workspace: Path, md_path: Path, vi) -> bool:
     except ValueError:
         return False
     parts = rel.parts
-    # entities/<type>/<slug>.md only
-    if not (len(parts) >= 3 and parts[0] == "entities" and md_path.suffix == ".md"):
-        return False
-    if not md_path.is_file():
-        return False
-    from durin.memory.entity_page import EntityPage
-    page = EntityPage.from_file(md_path)
-    if page is None:
-        return False
-    entity_ref = f"{parts[1]}:{md_path.stem}"
-    try:
-        vi.upsert_entity_page(
-            entity_ref=entity_ref, name=page.name, aliases=page.aliases,
-            body=page.body or "", path=md_path,
-            attributes=page.attributes, relations=page.relations,
-        )
-        return True
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("indexer: vector reindex %s failed: %s", md_path, exc)
-        return False
+    # entities/<type>/<slug>.md
+    if len(parts) >= 3 and parts[0] == "entities" and md_path.suffix == ".md":
+        if not md_path.is_file():
+            return False
+        from durin.memory.entity_page import EntityPage
+        page = EntityPage.from_file(md_path)
+        if page is None:
+            return False
+        entity_ref = f"{parts[1]}:{md_path.stem}"
+        try:
+            vi.upsert_entity_page(
+                entity_ref=entity_ref, name=page.name, aliases=page.aliases,
+                body=page.body or "", path=md_path,
+                attributes=page.attributes, relations=page.relations,
+            )
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("indexer: vector reindex %s failed: %s", md_path, exc)
+            return False
+
+    # memory/<class>/<id>.md — a memory entry (episodic, stable, corpus,
+    # session_summary). The FTS half already re-indexes it; embed it here
+    # so a note is vector-searchable the moment it is written.
+    if len(parts) == 2 and parts[0] in MEMORY_CLASSES and md_path.suffix == ".md":
+        if not md_path.is_file():
+            return False
+        try:
+            entry = load_entry(md_path)
+            vi.upsert(entry, parts[0], md_path)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("indexer: vector reindex %s failed: %s", md_path, exc)
+            return False
+
+    return False
 
 
 def reindex_one_skill(
