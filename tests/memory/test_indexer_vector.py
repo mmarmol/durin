@@ -105,15 +105,17 @@ def test_pending_and_archive_entries_are_never_embedded(
     vi = VectorIndex(ws, provider)
     assert reindex_one_file_vector(ws, Path(pending_result["path"]), vi) is False
 
-    # Create an archive entry and verify it is not embedded
+    # Create an archive entry and verify it is not embedded. Real archive
+    # layout is memory/archive/<class>/<id>.md (three parts) — it never
+    # reaches the pending/archive guard, it fails the len(parts) == 2
+    # layout check first.
     archive_result = store_memory(
         ws, content="Bruenor vendió una hacha antigua al mercado.", class_name="stable"
     )
     # Move the file to archive
-    from pathlib import Path as PathlibPath
-    archive_path = ws / "memory" / "archive" / f"{archive_result['id']}.md"
+    archive_path = ws / "memory" / "archive" / "stable" / f"{archive_result['id']}.md"
     archive_path.parent.mkdir(parents=True, exist_ok=True)
-    original_path = PathlibPath(archive_result["path"])
+    original_path = Path(archive_result["path"])
     original_path.rename(archive_path)
 
     assert reindex_one_file_vector(ws, archive_path, vi) is False
@@ -197,3 +199,87 @@ def test_backfill_does_not_emit_event_when_count_is_zero(
     assert done == {"episodic": 0}
     # No backfill event should have been emitted
     assert events == []
+
+
+def test_backfill_emits_telemetry_with_class_count_and_duration(
+    tmp_path: Path, provider: _FakeEmbeddingProvider, monkeypatch
+) -> None:
+    from durin.memory.indexer import backfill_missing_vectors, reindex_one_file
+    from durin.memory.store import store_memory
+
+    ws = tmp_path / "ws"
+    r1 = store_memory(ws, content="quinta nota", class_name="episodic")
+    reindex_one_file(ws, Path(r1["path"]))
+
+    vi = VectorIndex(ws, provider)
+
+    events: list[tuple[str, dict]] = []
+    import durin.agent.tools._telemetry as _tel
+    monkeypatch.setattr(_tel, "emit_tool_event", lambda t, d: events.append((t, d)))
+
+    done = backfill_missing_vectors(ws, vi)
+
+    assert done == {"episodic": 1}
+    backfills = [e for e in events if e[0] == "memory.index.backfill"]
+    assert len(backfills) == 1
+    payload = backfills[0][1]
+    assert payload["class"] == "episodic"
+    assert payload["count"] == 1
+    assert isinstance(payload["duration_ms"], (int, float))
+
+
+def test_backfill_stops_on_dimension_mismatch(
+    tmp_path: Path, provider: _FakeEmbeddingProvider, monkeypatch
+) -> None:
+    from durin.memory.indexer import backfill_missing_vectors, reindex_one_file
+    from durin.memory.store import store_memory
+    from durin.memory.vector_index import VectorIndexDimensionMismatchError
+
+    ws = tmp_path / "ws"
+    r1 = store_memory(ws, content="nota episodic", class_name="episodic")
+    r2 = store_memory(ws, content="nota stable", class_name="stable")
+    reindex_one_file(ws, Path(r1["path"]))
+    reindex_one_file(ws, Path(r2["path"]))
+
+    vi = VectorIndex(ws, provider)
+
+    def _raise(*args, **kwargs):
+        raise VectorIndexDimensionMismatchError("dimension mismatch")
+
+    monkeypatch.setattr(vi, "upsert", _raise)
+
+    done = backfill_missing_vectors(ws, vi, classes=("episodic", "stable"))
+
+    # Stops after the first entry (episodic) with count 0; "stable" is
+    # never reached.
+    assert done == {"episodic": 0}
+
+
+def test_backfill_abandons_class_after_five_consecutive_failures(
+    tmp_path: Path, provider: _FakeEmbeddingProvider, monkeypatch
+) -> None:
+    from durin.memory.indexer import backfill_missing_vectors, reindex_one_file
+    from durin.memory.store import store_memory
+
+    ws = tmp_path / "ws"
+    results = [
+        store_memory(ws, content=f"nota {i}", class_name="episodic")
+        for i in range(6)
+    ]
+    for r in results:
+        reindex_one_file(ws, Path(r["path"]))
+
+    vi = VectorIndex(ws, provider)
+    calls: list[str] = []
+
+    def _raise(entry, class_name, path):
+        calls.append(entry.id)
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(vi, "upsert", _raise)
+
+    done = backfill_missing_vectors(ws, vi)
+
+    assert done == {"episodic": 0}
+    # Exactly five attempts, not all six missing entries.
+    assert len(calls) == 5

@@ -523,10 +523,17 @@ class VectorIndex:
         """The ``id`` of every row whose ``class_name`` is in ``class_names``.
 
         Used by :func:`durin.memory.indexer.backfill_missing_vectors` to
-        diff the FTS uris against what's already embedded. Uses the query
-        builder's column projection to fetch only ``id`` and ``class_name``
-        without reading the vector column.
+        diff the FTS uris against what's already embedded. Filters
+        ``class_name`` in the LanceDB query itself (not in Python) and
+        projects only ``id`` without reading the vector column.
+
+        ``count_rows()`` is read once, before the query runs, to size the
+        ``limit``; a row inserted between the two calls can be missed.
+        The next backfill run picks it up — embedding is idempotent, so
+        a missed row costs one extra embed, not a correctness bug.
         """
+        if not class_names:
+            return set()
         db = self._connect()
         if _TABLE_NAME not in db.list_tables().tables:
             return set()
@@ -534,9 +541,15 @@ class VectorIndex:
         total = table.count_rows()
         if total == 0:
             return set()
-        rows = table.search().select(["id", "class_name"]).limit(total).to_list()
-        wanted = set(class_names)
-        return {row["id"] for row in rows if row["class_name"] in wanted}
+        quoted = ",".join(f"'{_escape(c)}'" for c in class_names)
+        rows = (
+            table.search()
+            .where(f"class_name IN ({quoted})")
+            .select(["id"])
+            .limit(total)
+            .to_list()
+        )
+        return {row["id"] for row in rows}
 
     def delete_by_id(self, record_id: str) -> bool:
         """Drop a single row by ``id``. Returns True if the table existed.
