@@ -9,15 +9,18 @@ Two surfaces:
   - :func:`rebuild_fts_index` — wipes the index and re-derives every
     row from ``walk_memory``. Called by ``durin reindex`` and by the
     schema-version-mismatch recovery path.
-  - :func:`reindex_one_file` — synchronous re-index of a single
-    ``.md`` after a tool writes (memory_store, memory_ingest, Dream
-    apply). Skipped silently when the path is outside ``memory/`` or
-    under ``memory/archive/`` / ``memory/pending/``.
+  - :func:`reindex_one_file` and :func:`reindex_one_file_vector` — called
+    by the file watcher for every write under ``memory/`` (entity pages,
+    entries, summaries) and by ``memory_ingest`` for its own writes. The
+    health-check repair and the full rebuild cover the rest. Skipped
+    silently when the path is outside ``memory/`` or under
+    ``memory/archive/`` / ``memory/pending/``.
 
-The vector index (LanceDB) is handled separately in
-``durin.memory.vector_index``. Both stay in sync because the writes
-fan out at the tool layer (re-index-on-write hooks); this module
-focuses on the lexical side only.
+The vector index (LanceDB) itself lives in ``durin.memory.vector_index``;
+this module also drives its reactive and backfill writes —
+:func:`reindex_one_file_vector` and :func:`backfill_missing_vectors` —
+against a caller-owned ``VectorIndex``, alongside the lexical (FTS5)
+side.
 
 Text composition:
 
@@ -34,12 +37,13 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterator, Optional
+from typing import Any, Iterator, Optional, Sequence
 
 from durin.memory.entity_page import EntityPage
 from durin.memory.fts_index import FTSIndex
 from durin.memory.memory_writer import git_worktree_lock_path
 from durin.memory.paths import (
+    MEMORY_CLASSES,
     skill_path_from_uri,
     skill_uri,
     skills_dir,
@@ -362,6 +366,18 @@ def _emit_staleness(
         pass
 
 
+def _emit_backfill(*, class_name: str, count: int, duration_ms: float) -> None:
+    """Best-effort telemetry for one class's slice of a backfill run."""
+    try:
+        from durin.agent.tools._telemetry import emit_tool_event
+        emit_tool_event(
+            "memory.index.backfill",
+            {"class": class_name, "count": count, "duration_ms": duration_ms},
+        )
+    except Exception:  # pragma: no cover
+        pass
+
+
 def detect_index_staleness(workspace: Path) -> list[dict]:
     """Compare on-disk markdown to the FTS index and report drift.
 
@@ -450,8 +466,8 @@ def reindex_one_file(
       delete the row instead).
 
     ``trigger`` propagates the caller context into ``memory.index.write``
-    so dashboards can split steady-state (`watcher`) from burst
-    (`dream_apply`, `drift_repair`) writes. Default is `watcher` because
+    so dashboards can split steady-state (`watcher`) writes from
+    `forget` and `drift_repair` writes. Default is `watcher` because
     that's the most common callsite (every agent write goes through the
     file watcher).
     """
@@ -540,17 +556,21 @@ def reindex_one_file(
 
 
 def reindex_one_file_vector(workspace: Path, md_path: Path, vi) -> bool:
-    """Re-embed ONE entity page into the vector index.
+    """Re-embed one entity page or memory entry into the vector index.
 
-    The reactive index path (file watcher) calls this so agent/dream-authored AND
-    hand-edited entity pages become vector-searchable. Previously NOTHING embedded
-    entity pages reactively — ``memory_upsert_entity`` / the extract dream never
-    did, and ``reindex_one_file`` is FTS-only, so the only embedders were the
-    absorption merge + a full ``durin memory reindex``. References are embedded at
-    ingest time and entries are niche (``memory_store`` disabled), so this handles
-    entity pages only. ``vi`` is a caller-owned ``VectorIndex`` (reused across
-    events). Returns True if it embedded. Best-effort — never raises.
+    The reactive index path (file watcher) calls this for both shapes —
+    ``memory/entities/<type>/<slug>.md`` and ``memory/<class>/<id>.md``
+    (episodic, stable, corpus, session_summary) — so agent/dream-authored
+    AND hand-edited content becomes vector-searchable the moment it lands
+    on disk. ``vi`` is a caller-owned ``VectorIndex`` (reused across
+    events). Returns True if it embedded, False if skipped. Best-effort
+    for everything except :class:`VectorIndexDimensionMismatchError`
+    (``durin.memory.vector_index``), which propagates so
+    :func:`backfill_missing_vectors` can tell a table-wide condition
+    apart from a single bad entry.
     """
+    from durin.memory.vector_index import VectorIndexDimensionMismatchError
+
     workspace = Path(workspace)
     md_path = Path(md_path)
     try:
@@ -558,26 +578,137 @@ def reindex_one_file_vector(workspace: Path, md_path: Path, vi) -> bool:
     except ValueError:
         return False
     parts = rel.parts
-    # entities/<type>/<slug>.md only
-    if not (len(parts) >= 3 and parts[0] == "entities" and md_path.suffix == ".md"):
-        return False
-    if not md_path.is_file():
-        return False
-    from durin.memory.entity_page import EntityPage
-    page = EntityPage.from_file(md_path)
-    if page is None:
-        return False
-    entity_ref = f"{parts[1]}:{md_path.stem}"
-    try:
-        vi.upsert_entity_page(
-            entity_ref=entity_ref, name=page.name, aliases=page.aliases,
-            body=page.body or "", path=md_path,
-            attributes=page.attributes, relations=page.relations,
+    # entities/<type>/<slug>.md
+    if len(parts) >= 3 and parts[0] == "entities" and md_path.suffix == ".md":
+        if not md_path.is_file():
+            return False
+        from durin.memory.entity_page import EntityPage
+        page = EntityPage.from_file(md_path)
+        if page is None:
+            return False
+        entity_ref = f"{parts[1]}:{md_path.stem}"
+        try:
+            vi.upsert_entity_page(
+                entity_ref=entity_ref, name=page.name, aliases=page.aliases,
+                body=page.body or "", path=md_path,
+                attributes=page.attributes, relations=page.relations,
+            )
+            return True
+        except VectorIndexDimensionMismatchError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("indexer: vector reindex %s failed: %s", md_path, exc)
+            return False
+
+    # memory/<class>/<id>.md — a memory entry (episodic, stable, corpus,
+    # session_summary). The FTS half already re-indexes it; embed it here
+    # so a note is vector-searchable the moment it is written. Excludes
+    # pending (intake buffer, never indexed); archive can't reach this
+    # branch — its files live at memory/archive/<class>/<id>.md (three
+    # parts), which already fails the len(parts) == 2 check below.
+    if len(parts) == 2 and parts[0] in MEMORY_CLASSES and md_path.suffix == ".md":
+        if parts[0] == "pending":
+            return False
+        if not md_path.is_file():
+            return False
+        try:
+            entry = load_entry(md_path)
+            vi.upsert(entry, parts[0], md_path)
+            return True
+        except VectorIndexDimensionMismatchError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("indexer: vector reindex %s failed: %s", md_path, exc)
+            return False
+
+    return False
+
+
+# A class is abandoned for this run after this many consecutive per-entry
+# failures (e.g. a corrupt file, a flaky embed call) — a bounded retry
+# instead of grinding through the rest of a class's backlog one failure
+# at a time. The next backfill run retries from scratch.
+_MAX_CONSECUTIVE_FAILURES = 5
+
+
+def backfill_missing_vectors(
+    workspace: Path,
+    vi: Any,
+    *,
+    classes: Sequence[str] = ("stable", "episodic", "corpus", "session_summary"),
+) -> dict[str, int]:
+    """Embed memory entries that are in FTS but not in the vector table.
+
+    Covers entries that were written (and FTS-indexed) before the
+    vector index existed for this workspace, or before an embedding
+    model was configured — the reactive path in
+    :func:`reindex_one_file_vector` only fires for writes that happen
+    while a ``VectorIndex`` is wired in. Idempotent and incremental:
+    it compares ids, embeds only the missing ones, and reports the
+    count per class. Intended to run off the startup path (the
+    watcher's worker thread) so a large backlog never delays the
+    gateway binding its port.
+
+    A :class:`VectorIndexDimensionMismatchError` (the on-disk table's
+    dimension disagrees with the configured embedding model — a table
+    property, not a per-entry one) stops the whole run immediately:
+    every remaining entry, in this class and any class still queued,
+    would fail the same way, and a rebuild is the actual fix. Within a
+    class, ``_MAX_CONSECUTIVE_FAILURES`` consecutive non-dimension
+    failures abandon just that class and move on to the next.
+    """
+    from durin.memory.vector_index import VectorIndexDimensionMismatchError
+
+    workspace = Path(workspace)
+    done: dict[str, int] = {}
+    with FTSIndex.open(workspace) as idx:
+        fts_uris = idx.uris_with_prefix("memory/")
+    have = vi.ids_by_class(classes)
+    for class_name in classes:
+        prefix = f"memory/{class_name}/"
+        missing = sorted(
+            u[len(prefix):] for u in fts_uris if u.startswith(prefix)
         )
-        return True
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("indexer: vector reindex %s failed: %s", md_path, exc)
-        return False
+        missing = [entry_id for entry_id in missing if entry_id not in have]
+        if not missing:
+            continue
+        t0 = time.perf_counter()
+        count = 0
+        consecutive_failures = 0
+        for entry_id in missing:
+            path = workspace / "memory" / class_name / f"{entry_id}.md"
+            try:
+                embedded = reindex_one_file_vector(workspace, path, vi)
+            except VectorIndexDimensionMismatchError:
+                logger.warning(
+                    "indexer: backfill stopped for %s (vector table "
+                    "dimension mismatch; a rebuild will fix it)",
+                    class_name,
+                )
+                done[class_name] = count
+                duration_ms = (time.perf_counter() - t0) * 1000.0
+                if count > 0:
+                    _emit_backfill(
+                        class_name=class_name, count=count, duration_ms=duration_ms,
+                    )
+                return done
+            if embedded:
+                count += 1
+                consecutive_failures = 0
+            else:
+                consecutive_failures += 1
+                if consecutive_failures >= _MAX_CONSECUTIVE_FAILURES:
+                    logger.warning(
+                        "indexer: backfill abandoned %s after %d "
+                        "consecutive failures",
+                        class_name, consecutive_failures,
+                    )
+                    break
+        duration_ms = (time.perf_counter() - t0) * 1000.0
+        done[class_name] = count
+        if count > 0:
+            _emit_backfill(class_name=class_name, count=count, duration_ms=duration_ms)
+    return done
 
 
 def reindex_one_skill(

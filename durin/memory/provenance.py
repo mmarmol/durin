@@ -40,6 +40,7 @@ __all__ = [
     "MissingAuthorScopeError",
     "author_scope",
     "current_author",
+    "session_turn_ref",
 ]
 
 Author = Literal["user_authored", "agent_created"]
@@ -87,3 +88,27 @@ def author_scope(author: Author) -> Iterator[None]:
         yield
     finally:
         _MEMORY_AUTHOR.reset(token)
+
+
+def session_turn_ref() -> str | None:
+    """Provenance ref for the current foreground turn, or None.
+
+    Reads the per-turn telemetry binding (the same one ``emit_tool_event``
+    uses) for the active ``session_key`` + ``iteration`` and renders a
+    wiki-link in the shape ``graph.py::_SESSION_REF_RE`` parses, so the
+    stored entry links back to the session that created it. Returns None
+    outside a bound turn (dream/compaction/internal writes), so those add
+    no session ref. Never raises.
+    """
+    try:
+        from durin.telemetry.logger import current_telemetry
+
+        tl = current_telemetry()
+        if tl is None or not tl.session_key:
+            return None
+        from durin.session.manager import SessionManager
+
+        stem = SessionManager.safe_key(tl.session_key)
+        return f"[[sessions/{stem}.md#turn-{tl.iteration}]]"
+    except Exception:  # noqa: BLE001 — provenance is best-effort
+        return None

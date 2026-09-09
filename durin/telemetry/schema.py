@@ -780,17 +780,6 @@ class MemoryEagerSurfaceEvent(TypedDict):
     session_key: str
 
 
-class MemoryStoreEvent(TypedDict):
-    """memory_store invocation that successfully wrote a memory entry."""
-
-    entry_id: str
-    class_name: str
-    author: str
-    headline: str
-    iteration: NotRequired[int]
-    session_key: NotRequired[str | None]
-
-
 class MemoryIngestEvent(TypedDict):
     """memory_ingest invocation that copied an external artifact into ingested/."""
 
@@ -1008,23 +997,6 @@ class MemoryAbsorbEscalationCappedEvent(TypedDict):
     absorbed: str
 
 
-class MemoryStoreBlockedNearDuplicateEvent(TypedDict):
-    """memory_store dedup pre-persist refused a write because the embedding
-    distance to an existing entry fell below the configured threshold. The
-    model receives a warning and may re-call with ``force=True`` to bypass;
-    this event records the underlying decision so duplicate rates can be
-    measured over time.
-    """
-
-    candidate_class_name: str
-    existing_id: str
-    existing_class_name: str
-    distance: float
-    threshold: float
-    iteration: NotRequired[int]
-    session_key: NotRequired[str | None]
-
-
 class MemoryDreamPatchAppliedEvent(TypedDict):
     """The extract dream applied attributes to one entity (one emit per entity).
 
@@ -1118,20 +1090,20 @@ class MemoryIndexWriteEvent(TypedDict):
     """One upsert into the FTS5 lexical index.
 
     Fires per file written, so dashboards can detect bursty writes
-    (e.g., during dream consolidations or drift repairs) vs
+    (e.g., during a drift-repair sweep or many skill edits) vs
     steady-state agent activity. ``index`` is either ``"fts"``
     (lexical) or ``"lancedb"`` (vector); only ``"fts"`` is emitted
     today since `reindex_one_file` only writes the FTS row.
 
     ``trigger`` + ``duration_ms`` enable dashboards to measure
     index write latency and split watcher steady state from
-    dream/drift bursts.
+    `forget` / `drift_repair` / `skill_store` bursts.
     """
 
     uri: str
     index: str  # "fts" | "lancedb"
     op: str  # "upsert" | "delete"
-    trigger: str  # "watcher" | "dream_apply" | "drift_repair"
+    trigger: str  # "watcher" | "drift_repair" | "forget" | "skill_store"
     duration_ms: float
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
@@ -1176,6 +1148,29 @@ class MemoryIndexStalenessDetectedEvent(TypedDict):
     delta_seconds: NotRequired[float]
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
+
+
+MemoryIndexBackfillEvent = TypedDict(
+    "MemoryIndexBackfillEvent",
+    {
+        # ``class`` is a reserved word, hence the functional TypedDict
+        # syntax instead of the usual class-based one.
+        "class": str,
+        "count": int,
+        "duration_ms": float,
+        "iteration": NotRequired[int],
+        "session_key": NotRequired[str | None],
+    },
+)
+"""One class's slice of an incremental vector backfill.
+
+Emitted by :func:`durin.memory.indexer.backfill_missing_vectors` — run
+from the file watcher's worker thread on start — for every memory
+class where it embedded at least one entry that had an FTS row but no
+vector row yet (a gap left by upgrades or by writes that happened
+before an embedding model was configured). ``count`` is the number of
+entries embedded for ``class`` in this run.
+"""
 
 
 class MemoryRecallLexicalEvent(TypedDict):
@@ -1898,7 +1893,6 @@ EVENTS: dict[str, type] = {
     "memory.recall": MemoryRecallEvent,
     "memory.prefetch": MemoryPrefetchEvent,
     "memory.eager_surface": MemoryEagerSurfaceEvent,
-    "memory.store": MemoryStoreEvent,
     "memory.ingest": MemoryIngestEvent,
     "memory.forget": MemoryForgetEvent,
     "memory.upsert_entity": MemoryUpsertEntityEvent,
@@ -1908,7 +1902,6 @@ EVENTS: dict[str, type] = {
     "memory.embedding.load": MemoryEmbeddingLoadEvent,
     "memory.embedding.embed": MemoryEmbeddingEmbedEvent,
     "memory.recall.vector": MemoryRecallVectorEvent,
-    "memory.store.blocked_near_duplicate": MemoryStoreBlockedNearDuplicateEvent,
     "memory.dream.start": MemoryDreamStartEvent,
     "memory.dream.end": MemoryDreamEndEvent,
     "memory.dream.patch_applied": MemoryDreamPatchAppliedEvent,
@@ -1941,6 +1934,7 @@ EVENTS: dict[str, type] = {
     "memory.index.write": MemoryIndexWriteEvent,
     "memory.index.rebuild": MemoryIndexRebuildEvent,
     "memory.index.staleness_detected": MemoryIndexStalenessDetectedEvent,
+    "memory.index.backfill": MemoryIndexBackfillEvent,
     "memory.recall.lexical": MemoryRecallLexicalEvent,
     "memory.recall.rrf": MemoryRecallRRFEvent,
     "memory.recall.grep_verify": MemoryRecallGrepVerifyEvent,
@@ -2033,7 +2027,6 @@ __all__ = [
     # Memory subsystem
     "MemoryRecallEvent",
     "MemoryPrefetchEvent",
-    "MemoryStoreEvent",
     "MemoryIngestEvent",
     "MemoryEmbeddingLoadEvent",
     "MemoryEmbeddingEmbedEvent",
@@ -2056,6 +2049,7 @@ __all__ = [
     "MemoryIndexWriteEvent",
     "MemoryIndexRebuildEvent",
     "MemoryIndexStalenessDetectedEvent",
+    "MemoryIndexBackfillEvent",
     # Skill loop
     "SkillAuthoredEvent",
     "SkillUsedEvent",

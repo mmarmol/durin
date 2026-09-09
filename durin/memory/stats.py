@@ -58,10 +58,6 @@ class MemoryStats:
     recall_vector_duration_ms_total: float = 0.0
     recall_vector_hit_count_total: int = 0
 
-    # Store events
-    store_total: int = 0
-    store_blocked_near_duplicate: int = 0
-
     # Ingest events
     ingest_total: int = 0
     ingest_bytes_total: int = 0
@@ -129,10 +125,6 @@ class MemoryStats:
                 "reordered_ratio": self.reordered_ratio,
                 "entity_aware_ratio": self.entity_aware_ratio,
                 "vector_strategy_ratio": self.vector_strategy_ratio,
-            },
-            "store": {
-                "total": self.store_total,
-                "blocked_near_duplicate": self.store_blocked_near_duplicate,
             },
             "ingest": {
                 "total": self.ingest_total,
@@ -323,10 +315,6 @@ def _apply_event(etype: str, data: dict[str, Any], stats: MemoryStats) -> None:
         hits = data.get("hit_count")
         if isinstance(hits, int):
             stats.recall_vector_hit_count_total += hits
-    elif etype == "memory.store":
-        stats.store_total += 1
-    elif etype == "memory.store.blocked_near_duplicate":
-        stats.store_blocked_near_duplicate += 1
     elif etype == "memory.ingest":
         stats.ingest_total += 1
         size = data.get("size_bytes")

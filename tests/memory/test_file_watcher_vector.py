@@ -3,6 +3,7 @@ vector index. Previously NOTHING embedded them reactively (memory_upsert_entity 
 the extract dream never did; reindex_one_file is FTS-only), so new/edited entities
 were vector-stale until a merge or full reindex."""
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -61,3 +62,31 @@ def test_watcher_vector_disabled_without_model(tmp_path):
     w = MemoryFileWatcher(tmp_path)  # no embedding_model
     w._reindex_path(tmp_path / "memory/entities/person/zoe.md")
     assert w._get_vector_index() is None
+
+
+def test_watcher_embeds_stored_memory_entry(tmp_path):
+    from durin.memory.store import store_memory
+
+    result = store_memory(
+        tmp_path, content="Bruenor prefers his double-bladed battle-axe.",
+        class_name="episodic",
+    )
+    md = Path(result["path"])
+    query = "what weapon does Bruenor carry"
+    assert not _vector_has(tmp_path, query, result["id"])
+    MemoryFileWatcher(tmp_path, embedding_model=MODEL)._reindex_path(md)
+    assert _vector_has(tmp_path, query, result["id"])
+
+
+def test_watcher_embeds_session_summary(tmp_path):
+    from durin.memory.session_summary_store import write_session_summary
+    from durin.memory.storage import load_entry
+
+    path = write_session_summary(
+        tmp_path, "session-1", "The team decided to migrate the database to Postgres.",
+    )
+    entry_id = load_entry(path).id
+    query = "which database did the team migrate to"
+    assert not _vector_has(tmp_path, query, entry_id)
+    MemoryFileWatcher(tmp_path, embedding_model=MODEL)._reindex_path(path)
+    assert _vector_has(tmp_path, query, entry_id)

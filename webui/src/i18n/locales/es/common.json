@@ -1891,7 +1891,6 @@
       "longTask": "{{summary}}",
       "longTaskDefault": "tarea larga",
       "planMode": "modo plan",
-      "memorySaved": "memoria guardada",
       "entityUpdated": "{{ref}}",
       "entityUpdatedDefault": "entidad actualizada",
       "memoryForgot": "olvidado {{uri}}",

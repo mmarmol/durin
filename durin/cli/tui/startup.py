@@ -96,7 +96,6 @@ _TOOL_CATEGORY: dict[str, str] = {
     "exec": "shell",
     # memory
     "memory_search": "memory",
-    "memory_store": "memory",
     "memory_ingest": "memory",
     "memory_drill": "memory",
     "session_search": "memory",

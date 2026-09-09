@@ -103,6 +103,13 @@ def test_discover_excludes_abstract_and_mcp():
     assert "MCPPromptWrapper" not in class_names
 
 
+def test_discover_excludes_removed_memory_store():
+    loader = ToolLoader()
+    discovered = loader.discover()
+    class_names = {cls.__name__ for cls in discovered}
+    assert "MemoryStoreTool" not in class_names
+
+
 def test_discover_skips_private_classes():
     loader = ToolLoader()
     discovered = loader.discover()

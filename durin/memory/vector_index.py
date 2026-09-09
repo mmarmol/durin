@@ -9,9 +9,10 @@ in V1).
 
 Two write paths:
 
-- :meth:`VectorIndex.upsert` — incremental, called by ``memory_store``
-  after a single entry is written. Deletes any prior row with the same
-  ``id`` and inserts the new one.
+- :meth:`VectorIndex.upsert` — incremental, called by
+  ``indexer.reindex_one_file_vector`` after a single entry's file is
+  written (file watcher, health-check repair). Deletes any prior row
+  with the same ``id`` and inserts the new one.
 - :meth:`VectorIndex.rebuild_from_workspace` — full rebuild by walking
   ``memory/<class>/*.md``. Used at install time or when the index is
   out of sync.
@@ -30,7 +31,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from durin.memory.embedding import EmbeddingProvider
 from durin.memory.paths import MEMORY_CLASSES, skill_uri, walk_class
@@ -486,22 +487,6 @@ class VectorIndex:
         _add(body)
         return "\n\n".join(parts) or name or "entity page"
 
-    def embed_text(self, text: str) -> list[float]:
-        """Compute the embedding vector for *text* using this index's provider.
-
-        Convenience for callers (e.g. ``memory_store`` dedup check) that
-        need to reuse the same embedding for both search and upsert
-        (G5). Returns a single vector. ``text`` must be non-empty.
-
-        Uses passage-style embedding (E5 prefix when applicable) since
-        the primary caller (memory_store dedup) embeds content that is
-        about to be stored — passage-vs-passage similarity is the right
-        comparison for "is this content already in the index?".
-        """
-        if not text:
-            raise ValueError("embed_text: text must be non-empty")
-        return self._provider.embed_passages([text])[0]
-
     def search_by_vector(
         self,
         vector: list[float],
@@ -514,9 +499,8 @@ class VectorIndex:
         ``where`` is a LanceDB filter over the row columns (``class_name``,
         ``id``), applied before the top-k.
 
-        Used by callers (e.g. ``memory_store`` dedup check) that have
-        already computed the query embedding and want to reuse it for
-        both dedup search AND upsert.
+        Used by callers that have already computed the query embedding
+        and want to reuse it rather than re-embed via :meth:`search`.
         """
         if top_k <= 0:
             return []
@@ -535,31 +519,37 @@ class VectorIndex:
             row.pop("vector", None)
         return rows
 
-    def upsert_with_vector(
-        self,
-        entry: MemoryEntry,
-        class_name: str,
-        path: Path,
-        *,
-        precomputed_vector: list[float],
-    ) -> None:
-        """Variant of :meth:`upsert` that reuses a precomputed embedding.
+    def ids_by_class(self, class_names: Sequence[str]) -> set[str]:
+        """The ``id`` of every row whose ``class_name`` is in ``class_names``.
 
-        The write path is ``compute_embedding → search (dedup) → upsert``.
-        Without this
-        method, ``upsert`` would recompute the embedding internally,
-        doubling the embed cost per write. Pass the same vector that
-        was used for the dedup check.
+        Used by :func:`durin.memory.indexer.backfill_missing_vectors` to
+        diff the FTS uris against what's already embedded. Filters
+        ``class_name`` in the LanceDB query itself (not in Python) and
+        projects only ``id`` without reading the vector column.
+
+        ``count_rows()`` is read once, before the query runs, to size the
+        ``limit``; a row inserted between the two calls can be missed.
+        The next backfill run picks it up — embedding is idempotent, so
+        a missed row costs one extra embed, not a correctness bug.
         """
-        record = self._record_with_vector(entry, class_name, path, precomputed_vector)
+        if not class_names:
+            return set()
         db = self._connect()
-        names = db.list_tables().tables
-        if _TABLE_NAME in names:
-            table = db.open_table(_TABLE_NAME)
-            self._guard_dim_match(table, len(precomputed_vector))
-            self._atomic_upsert(table, record)
-        else:
-            db.create_table(_TABLE_NAME, data=[record])
+        if _TABLE_NAME not in db.list_tables().tables:
+            return set()
+        table = db.open_table(_TABLE_NAME)
+        total = table.count_rows()
+        if total == 0:
+            return set()
+        quoted = ",".join(f"'{_escape(c)}'" for c in class_names)
+        rows = (
+            table.search()
+            .where(f"class_name IN ({quoted})")
+            .select(["id"])
+            .limit(total)
+            .to_list()
+        )
+        return {row["id"] for row in rows}
 
     def delete_by_id(self, record_id: str) -> bool:
         """Drop a single row by ``id``. Returns True if the table existed.
@@ -854,7 +844,7 @@ class VectorIndex:
             # The .md on disk keeps ``summary: ''`` as a legitimate
             # pre-Dream state; the index always carries triage content
             # so the renderer never hands the LLM a 60-char truncated
-            # headline as the only signal. When Dream / memory_store
+            # headline as the only signal. When Dream / `/remember`
             # later populates the source's real summary, the next
             # upsert overwrites the fallback with the authoritative
             # value.
@@ -969,7 +959,7 @@ class VectorIndex:
         # it AS WELL AS body would weight those tokens twice and shrink
         # the budget available to unique body content. Skip the summary
         # slot when it matches the leading slice of the body.
-        # Authoritative summaries (Dream output, memory_store explicit)
+        # Authoritative summaries (Dream output, `/remember` explicit)
         # survive intact because they describe the entry differently
         # from its body prefix.
         if not _is_body_prefix(entry.summary, entry.body):

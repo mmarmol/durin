@@ -182,7 +182,7 @@ class ExecTool(Tool, ContextAware):
         "/dev/tty",
     })
 
-    # Mutations of the `memory/` vault must go through the memory_store /
+    # Mutations of the `memory/` vault must go through the memory_upsert_entity /
     # memory_forget tools — a raw rm/mv/redirect/sed leaves the FTS +
     # vector index pointing at a missing file (orphan rows the auto-repair
     # can't reconstruct). Reads (cat/ls/grep) stay allowed. `memory/` is
@@ -533,7 +533,7 @@ class ExecTool(Tool, ContextAware):
             if re.search(pattern, lowered_cmd):
                 return (
                     "Error: refusing to mutate the memory/ vault from the "
-                    "shell — use the memory_store / memory_forget tools. A "
+                    "shell — use the memory_upsert_entity / memory_forget tools. A "
                     "raw rm/mv/redirect leaves the search index pointing at "
                     "a missing file."
                 )

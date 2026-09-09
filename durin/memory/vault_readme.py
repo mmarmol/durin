@@ -155,8 +155,9 @@ breaking edits will confuse the agent.
 If you want to browse / explore / consult: yes, open this folder in
 any markdown reader. Recommended setup further down.
 
-If you want to delete: use `durin memory forget <uri>` or edit through
-the agent's `memory_store` tool. Don't `rm` individual files.
+If you want to delete: use `durin memory forget <uri>`, or write over an
+entry with `/remember` or ask the agent to update an entity page with
+`memory_upsert_entity`. Don't `rm` individual files.
 
 ## Recommended viewers
 

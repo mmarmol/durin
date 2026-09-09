@@ -2070,7 +2070,6 @@
       "longTask": "{{summary}}",
       "longTaskDefault": "長時間タスク",
       "planMode": "プランモード",
-      "memorySaved": "メモリ保存",
       "entityUpdated": "{{ref}}",
       "entityUpdatedDefault": "エンティティ更新",
       "memoryForgot": "削除 {{uri}}",

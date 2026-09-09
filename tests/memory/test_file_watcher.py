@@ -12,6 +12,7 @@ to flush events, and stop. Production wiring lives in
 
 from __future__ import annotations
 
+import threading
 import time
 from pathlib import Path
 
@@ -153,5 +154,41 @@ def test_pending_events_counter(workspace_with_entity: Path) -> None:
         # Give watcher a moment to enqueue, then flush.
         _flush(watcher)
         assert watcher.pending_events() == 0
+    finally:
+        watcher.stop()
+
+
+def test_the_watcher_runs_the_backfill_off_the_startup_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`start()` returns before the backfill runs; the worker thread runs it once."""
+    may_proceed = threading.Event()
+    ran = threading.Event()
+    seen: dict[str, threading.Thread] = {}
+
+    def fake_backfill(workspace, vi):
+        may_proceed.wait(timeout=5.0)
+        seen["thread"] = threading.current_thread()
+        ran.set()
+        return {}
+
+    monkeypatch.setattr(
+        "durin.memory.indexer.backfill_missing_vectors", fake_backfill
+    )
+
+    watcher = MemoryFileWatcher(tmp_path, embedding_model="fake-model")
+    monkeypatch.setattr(watcher, "_get_vector_index", lambda: object())
+
+    watcher.start()
+    try:
+        # start() must return without waiting for the backfill: it's
+        # still blocked on `may_proceed` at this point.
+        assert watcher._running is True
+        assert not ran.is_set(), "start() waited for the backfill to finish"
+
+        may_proceed.set()
+        assert ran.wait(timeout=5.0), "worker thread never ran the backfill"
+        assert seen["thread"] is watcher._worker
+        assert seen["thread"] is not threading.current_thread()
     finally:
         watcher.stop()

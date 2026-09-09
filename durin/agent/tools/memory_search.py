@@ -579,7 +579,7 @@ class MemorySearchTool(Tool):
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
-        # Vector retrieval is opt-in (memory.enabled); see memory_store.
+        # Vector retrieval is opt-in (memory.enabled).
         # ``ctx.config`` carries ``tools`` only — the memory section lives
         # on ``ctx.app_config`` (full DurinConfig). Tests that bypass
         # AgentLoop and build a bare ToolContext leave ``app_config=None``,

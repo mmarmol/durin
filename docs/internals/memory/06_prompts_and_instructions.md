@@ -54,24 +54,7 @@ When sources disagree, more recent fragments may reflect updates that have not y
 State the source of any fact you cite (uri or section marker) in parentheses. Do not claim facts that are not in the search results.
 ```
 
-### 3.2 `memory_store`
-
-```
-Persist an observation to memory. Use this when you learn a fact the user is likely to need again — preferences, decisions, facts about people/projects/ tasks, etc.
-
-Storage class (default: episodic):
-- `episodic`: working memory; short atomic observation. Most uses.
-- `stable`: durable, identity-level. Use sparingly — only when the user has explicitly said "remember this" or the fact is clearly identity-level.
-- `corpus`: chunks of inline reference text. For files on disk use memory_ingest instead — it preserves the original artifact and handles chunking.
-
-Always populate `entities` with the URIs this observation mentions (format: `<type>:<value>`, e.g., `person:marcelo`, `project:durin`). This enables entity-aware retrieval later.
-
-Keep `headline` short and specific — it can be omitted and the system will auto-generate one from the first ~10 words of `content`. `content` is the full body of the observation; don't truncate.
-
-If the user is restating something already known, do NOT call this tool — it creates duplicates. The Dream consolidation process will eventually fold duplicates but in the meantime they pollute results. A near-duplicate (cosine ≥ 0.95 of an existing entry) returns a warning instead of persisting; pass `force=true` only when you intentionally want to re-affirm an existing fact.
-```
-
-### 3.3 `memory_ingest`
+### 3.2 `memory_ingest`
 
 ```
 Add a local document to durin's memory as a REFERENCE — coherent source material the user wants kept whole: research notes, transcripts, technical specs, exported pages, books, reports, etc.
@@ -85,7 +68,7 @@ One case returns no text and no reference: a scanned PDF with more pages than ca
 For web content, use `web_fetch(url=...)` first, then `memory_ingest` on the saved file. For a fact about a *thing* (a person, company, product, topic…), use `memory_upsert_entity` instead — `memory_ingest` is for whole documents, not individual facts. To just READ a document in this turn without saving it, use `convert_to_markdown`.
 ```
 
-### 3.4 `memory_drill`
+### 3.3 `memory_drill`
 
 ```
 Read the full content of one or more memory items by URI.
@@ -99,13 +82,13 @@ Do NOT drill when the block is marked ``complete``: the search already showed yo
 Prefer the ``uris`` form whenever 2+ URIs from one search all need follow-up. Drill on URIs never expands the candidate set — use memory_search to find new candidates.
 ```
 
-### 3.5 `memory_upsert_entity`
+### 3.4 `memory_upsert_entity`
 
 ```
 Author or update an entity (a person, company, product, topic, place, etc.) you have learned a fact about. Provide `ref` as `<type>:<slug>` (e.g. company:mxhero, person:marcelo), the display `name`, any `aliases`, `relations` to other entities ({to: '<type>:<slug>', type: 'partner'}), and prose `body` describing what you know. Merges into the existing entity if it exists, creates it otherwise. Do NOT pass structured attributes — the system extracts those from your prose. When this entity was distilled from a document you ingested, pass `derived_from` with the `reference:<slug>` ref(s) memory_ingest returned, so the entity links back to its sources. Use this for facts about a THING; use memory_ingest for documents. By default the `body` is APPENDED to what is already there (nothing is lost). Pass `body_mode: "replace"` only when you are rewriting the whole body to correct or clean it up — and only when you have the full current body in context. A replace cannot overwrite prose a user authored (it degrades to an append); git history preserves prior versions either way.
 ```
 
-### 3.6 `memory_forget`
+### 3.5 `memory_forget`
 
 ```
 Remove something you no longer want surfaced — a memory entry OR an ingested Library document. Archives it (reversible) and removes its search index rows so it stops appearing in memory_search.
@@ -115,19 +98,19 @@ This is the ONLY correct way to delete memory — never rm or move files under m
 Pass `uri` exactly as it was returned: a 'memory/<class>/<id>' entry, or a 'reference:<slug>' to forget an ingested document (the whole doc: its chunks and index rows go too). Refuses entity pages (memory/entities/...): those have their own absorb/revert lifecycle.
 ```
 
-### 3.7 `memory_read_entity`
+### 3.6 `memory_read_entity`
 
 ```
 Read one entity's COMPLETE page (frontmatter + attributes + relations + provenance + body). Reach for this after memory_search points you at an entity and you need the whole structured page, not just the search preview. (For a quick body-only follow-up on a preview hit, memory_drill is enough.)
 ```
 
-### 3.8 `memory_entity_lineage`
+### 3.7 `memory_entity_lineage`
 
 ```
 The git history of an entity: who changed it, when, and why (including absorb/merge commits). Use to gauge an entity before you rely on or edit it — is it long-established or freshly created, has it been merged from others.
 ```
 
-### 3.9 `memory_source_session`
+### 3.8 `memory_source_session`
 
 ```
 Read the original conversation turns an entity was distilled from (its provenance source_refs + derived_from). Use when a fact looks off, or when you need the exact wording and context that produced it, not the summary.
@@ -191,7 +174,6 @@ The active memory tools and their descriptions:
 | `memory_read_entity` | Active | Full page of one entity (attributes + relations + provenance + body) when the search preview isn't enough |
 | `memory_entity_lineage` | Active | Git history of an entity — established vs fresh, prior merges |
 | `memory_source_session` | Active | The conversation turns an entity was distilled from |
-| `memory_store` | Disabled | `MemoryStoreTool.enabled()` returns False; description kept in sync but LLM never sees it |
 
 ### 5.3 Dream pass prompts
 

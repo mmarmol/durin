@@ -367,7 +367,8 @@ class HealthChecker:
         lance_dir = self._workspace.joinpath(*_INDEX_PATH)
         if not lance_dir.is_dir():
             # No index present — nothing to rebuild. The lazy-create
-            # path on next memory_store will handle it.
+            # path on the next indexed write (file watcher, /remember)
+            # will handle it.
             return False
         from durin.config.loader import load_config
         from durin.memory.embedding import provider_from_config

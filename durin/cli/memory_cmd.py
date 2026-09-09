@@ -746,17 +746,12 @@ def cmd_stats(
     console.print(recall_table)
 
     write_table = Table(
-        title=f"Store + ingest events ({window})",
+        title=f"Ingest events ({window})",
         show_header=True,
         header_style="bold cyan",
     )
     write_table.add_column("Metric")
     write_table.add_column("Value", justify="right")
-    write_table.add_row("Store writes (successful)", str(stats.store_total))
-    write_table.add_row(
-        "Store blocked as near-duplicate",
-        str(stats.store_blocked_near_duplicate),
-    )
     write_table.add_row("Ingest events", str(stats.ingest_total))
     write_table.add_row("Ingest bytes total", f"{stats.ingest_bytes_total:,}")
     console.print(write_table)

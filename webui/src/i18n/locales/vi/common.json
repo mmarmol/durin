@@ -2070,7 +2070,6 @@
       "longTask": "{{summary}}",
       "longTaskDefault": "tác vụ dài",
       "planMode": "chế độ kế hoạch",
-      "memorySaved": "trí nhớ đã lưu",
       "entityUpdated": "{{ref}}",
       "entityUpdatedDefault": "thực thể đã cập nhật",
       "memoryForgot": "quên {{uri}}",

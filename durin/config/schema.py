@@ -533,8 +533,11 @@ class MemoryFileWatcherConfig(Base):
     reindex`` manually.
 
     Disable to skip the watcher (one less background thread + no
-    watchdog Observer). Indices stay in sync via the per-tool
-    re-index-on-write hooks (memory_store / memory_ingest / Dream).
+    watchdog Observer). Disabling the watcher stops the reactive
+    indexing of entity pages, memory entries and session summaries;
+    only ``memory_ingest`` indexes its own writes synchronously; a
+    full reindex (``durin memory reindex``) or the health-check repair
+    catches up.
     """
 
     enabled: bool = Field(default=True, description="Watch memory/*.md for manual edits and re-index changed files automatically; disable for one less background thread")

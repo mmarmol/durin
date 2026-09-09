@@ -25,8 +25,8 @@ surfaced by the discover pass.
 
 Validation policy:
 
-- ``memory_store`` write-path: **strict**. Invalid refs → error
-  returned to the model so it can rewrite.
+- ``store_memory`` write-path (``/remember``, Dream): **strict**.
+  Invalid refs → error returned to the caller so it can rewrite.
 - ``consolidator_tags`` read-path: **lenient**. Invalid refs are
   dropped with a log warning; the entry survives.
 - Direct Python paths: raise ``InvalidEntityRefError``.
