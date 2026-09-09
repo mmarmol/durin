@@ -74,6 +74,17 @@ def _is_library_uri(uri: str) -> bool:
     return any(uri.startswith(p) for p in _LIBRARY_URI_PREFIXES)
 
 
+def _is_skill_uri(uri: str) -> bool:
+    """True when ``uri`` addresses a skill procedure.
+
+    The grep leg's skill hits (`search.search_skills`) always carry the
+    bare `skill/<slug>` form (`durin.memory.paths.skill_uri`), never the
+    drillable `skills/<slug>/SKILL.md` display path — that translation
+    happens later, at the tool boundary.
+    """
+    return uri.startswith("skill/")
+
+
 @dataclass(frozen=True)
 class SearchPipelineResult:
     """Pipeline output."""
@@ -154,13 +165,22 @@ def run_search_pipeline(
     # The grep leg walks files and has no index to filter; keep its rows
     # inside the scope the indexes already applied. Filters `grep_uris`
     # and `grep_meta` together so the metadata dict stays consistent with
-    # the (possibly shorter) uri list.
+    # the (possibly shorter) uri list. Library and skill are independent
+    # axes of the same predicate (`kinds="fact"` excludes both), so each
+    # gets its own include/exclude check rather than one combined branch.
     if scope is not None and scope.fts_exclude and "reference" in scope.fts_exclude:
         grep_uris = [u for u in grep_uris if not _is_library_uri(u)]
         grep_meta = {u: m for u, m in grep_meta.items() if not _is_library_uri(u)}
     elif scope is not None and scope.fts_include == ("reference",):
         grep_uris = [u for u in grep_uris if _is_library_uri(u)]
         grep_meta = {u: m for u, m in grep_meta.items() if _is_library_uri(u)}
+
+    if scope is not None and scope.fts_exclude and "skill" in scope.fts_exclude:
+        grep_uris = [u for u in grep_uris if not _is_skill_uri(u)]
+        grep_meta = {u: m for u, m in grep_meta.items() if not _is_skill_uri(u)}
+    elif scope is not None and scope.fts_include == ("skill",):
+        grep_uris = [u for u in grep_uris if _is_skill_uri(u)]
+        grep_meta = {u: m for u, m in grep_meta.items() if _is_skill_uri(u)}
 
     # Step 3 — cross-source RRF.
     fused = fuse_rrf(

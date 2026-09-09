@@ -823,7 +823,7 @@ class MemorySearchTool(Tool):
         # `scope=undreamed` mode is a v1 niche — the orchestrator's grep step
         # mixes sessions with dreamed memory hits. When the caller wants ONLY
         # undreamed, filter down to raw session material (ingested Library
-        # content was already excluded by the pipeline's library filter).
+        # content was already excluded by the scope predicate).
         hits = pipeline_result.hits
         if scope == "undreamed":
             hits = [
@@ -841,14 +841,6 @@ class MemorySearchTool(Tool):
         # sits BEFORE both the `results` conversion and `render_sectioned`,
         # so neither the payload nor the rendered text leaks a skill.
         if not skills_indexing_enabled():
-            hits = [h for h in hits if h.type != "skill"]
-
-        # `kinds` post-filter: 'skill' keeps only skill procedures,
-        # 'fact' drops them (facts/entities/sessions/ingested), 'all'
-        # (default) is a no-op. Skill hits carry `type == "skill"`.
-        if kinds == "skill":
-            hits = [h for h in hits if h.type == "skill"]
-        elif kinds == "fact":
             hits = [h for h in hits if h.type != "skill"]
 
         # Convert :class:`SectionedHit` rows into the legacy `Result`
