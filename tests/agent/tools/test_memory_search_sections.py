@@ -163,5 +163,5 @@ def test_library_scope_is_a_predicate_not_a_post_filter(
     tool = MemorySearchTool(workspace=tmp_path)
     asyncio.run(tool.execute(query="axe", scope="library"))
 
-    assert seen["scope"].fts_include == ("reference",)
-    assert seen["scope"].vector_where == "class_name = 'reference'"
+    assert seen["scope"].fts_include == ("reference", "corpus")
+    assert seen["scope"].vector_where == "class_name IN ('reference', 'corpus')"

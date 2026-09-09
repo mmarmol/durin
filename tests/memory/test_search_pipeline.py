@@ -233,8 +233,8 @@ class _RecordingIndex:
     def search(self, query, *, top_k=10, where=None):
         self.where = where
         keep = self.rows
-        if where == "class_name != 'reference'":
-            keep = [r for r in keep if r["class_name"] != "reference"]
+        if where == "class_name NOT IN ('reference', 'corpus')":
+            keep = [r for r in keep if r["class_name"] not in ("reference", "corpus")]
         return keep[:top_k]
 
 
@@ -244,7 +244,7 @@ def test_the_person_scope_reaches_the_vector_leg_as_a_prefilter(tmp_path):
     idx = _RecordingIndex(rows)
     result = run_search_pipeline(tmp_path, "ada", vector_index=idx, limit=3,
                                  scope=ScopePredicate.for_search("all"))
-    assert idx.where == "class_name != 'reference'"
+    assert idx.where == "class_name NOT IN ('reference', 'corpus')"
     assert [h.uri for h in result.hits] == ["person:ada"]
 
 
@@ -258,10 +258,29 @@ def test_the_lexical_leg_receives_the_type_set(tmp_path, monkeypatch):
 
     monkeypatch.setattr(sp, "lexical_search", fake_lexical)
     run_search_pipeline(tmp_path, "ada", scope=ScopePredicate.for_search("library"))
-    assert seen == {"include": ("reference",), "exclude": None}
+    assert seen == {"include": ("reference", "corpus"), "exclude": None}
 
 
 def test_no_scope_means_no_filter_anywhere(tmp_path):
     idx = _RecordingIndex([{"id": "person:ada", "class_name": "entity_page", "path": "a.md"}])
     run_search_pipeline(tmp_path, "ada", vector_index=idx)
     assert idx.where is None
+
+
+def test_entity_pages_scope_filters_the_grep_leg_to_entity_refs(tmp_path, monkeypatch):
+    """The grep leg has no index to filter, so under `entity_pages()`
+    scope it must keep only entity-ref-shaped uris (`<type>:<slug>`) and
+    drop anything else the walk turned up, such as a session hit."""
+    import durin.memory.search_pipeline as sp
+
+    def fake_grep(workspace, query, *, recovery):
+        return [
+            {"uri": "sessions/websocket_x.md#turn-3", "type": "session",
+             "path": "sessions/websocket_x.md#turn-3", "snippet": "…"},
+            {"uri": "person:ada", "type": "entity",
+             "path": "memory/entity_page/person:ada", "snippet": "Ada"},
+        ]
+
+    monkeypatch.setattr(sp, "_safe_grep_fallback", fake_grep)
+    result = run_search_pipeline(tmp_path, "ada", scope=ScopePredicate.entity_pages())
+    assert [h.uri for h in result.hits] == ["person:ada"]

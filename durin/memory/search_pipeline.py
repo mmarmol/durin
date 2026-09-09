@@ -85,6 +85,17 @@ def _is_skill_uri(uri: str) -> bool:
     return uri.startswith("skill/")
 
 
+def _is_entity_ref_uri(uri: str) -> bool:
+    """True when ``uri`` is a bare entity ref (``<type>:<slug>``).
+
+    The grep leg's entity hits carry this fusion-URI shape directly (see
+    the fusion-URI table); a session path (``sessions/<key>.md#turn-N``)
+    or a memory path (``memory/<class>/<id>``) never matches all three
+    conditions at once.
+    """
+    return ":" in uri and "/" not in uri and "#" not in uri
+
+
 @dataclass(frozen=True)
 class SearchPipelineResult:
     """Pipeline output."""
@@ -171,16 +182,23 @@ def run_search_pipeline(
     if scope is not None and scope.fts_exclude and "reference" in scope.fts_exclude:
         grep_uris = [u for u in grep_uris if not _is_library_uri(u)]
         grep_meta = {u: m for u, m in grep_meta.items() if not _is_library_uri(u)}
-    elif scope is not None and scope.fts_include == ("reference",):
+    elif scope is not None and scope.fts_include and "reference" in scope.fts_include:
         grep_uris = [u for u in grep_uris if _is_library_uri(u)]
         grep_meta = {u: m for u, m in grep_meta.items() if _is_library_uri(u)}
 
     if scope is not None and scope.fts_exclude and "skill" in scope.fts_exclude:
         grep_uris = [u for u in grep_uris if not _is_skill_uri(u)]
         grep_meta = {u: m for u, m in grep_meta.items() if not _is_skill_uri(u)}
-    elif scope is not None and scope.fts_include == ("skill",):
+    elif scope is not None and scope.fts_include and "skill" in scope.fts_include:
         grep_uris = [u for u in grep_uris if _is_skill_uri(u)]
         grep_meta = {u: m for u, m in grep_meta.items() if _is_skill_uri(u)}
+
+    # Entity-pages predicate (`ScopePredicate.entity_pages`): the grep leg's
+    # rows for entity material are bare entity refs (`<type>:<slug>`), never
+    # a session or memory path — reject anything shaped like one.
+    if scope is not None and scope.fts_include and "entity" in scope.fts_include:
+        grep_uris = [u for u in grep_uris if _is_entity_ref_uri(u)]
+        grep_meta = {u: m for u, m in grep_meta.items() if _is_entity_ref_uri(u)}
 
     # Step 3 — cross-source RRF.
     fused = fuse_rrf(

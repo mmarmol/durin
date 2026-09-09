@@ -39,10 +39,10 @@ class _FakeVectorIndex:
                 "summary": "a chunk of an ingested book",
             },
         ]
-        if where == "class_name != 'reference'":
-            rows = [r for r in rows if r["class_name"] != "reference"]
-        elif where == "class_name = 'reference'":
-            rows = [r for r in rows if r["class_name"] == "reference"]
+        if where == "class_name NOT IN ('reference', 'corpus')":
+            rows = [r for r in rows if r["class_name"] not in ("reference", "corpus")]
+        elif where == "class_name IN ('reference', 'corpus')":
+            rows = [r for r in rows if r["class_name"] in ("reference", "corpus")]
         return rows
 
 

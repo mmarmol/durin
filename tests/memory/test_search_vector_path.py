@@ -285,18 +285,17 @@ async def test_search_scope_library_isolates_reference_via_vector_index(
     `scope="library"` returns only them, end to end through
     MemorySearchTool (not a fake duck-typed index)."""
     from durin.agent.tools.memory_search import MemorySearchTool
-    from durin.agent.tools.memory_store import MemoryStoreTool
     from durin.memory.embedding import FastembedProvider
     from durin.memory.reference import store_and_index_reference
+    from durin.memory.storage import load_entry
+    from durin.memory.store import store_memory
     from durin.memory.vector_index import VectorIndex
 
     with _stub_fastembed():
-        await MemoryStoreTool(
-            workspace=tmp_path,
-            embedding_model=_TEST_MODEL,
-        ).execute(content="alpha memory body", headline="alpha-memory")
-
         vi = VectorIndex(tmp_path, FastembedProvider(_TEST_MODEL))
+        stored = store_memory(tmp_path, content="alpha memory body", headline="alpha-memory")
+        vi.upsert(load_entry(Path(stored["path"])), stored["class"], Path(stored["path"]))
+
         store_and_index_reference(
             tmp_path, "alpha-manual",
             "alpha protocol reference content", vector_index=vi,

@@ -3,9 +3,9 @@ from durin.memory.scope import ScopePredicate
 
 def test_the_persons_memory_excludes_the_library_on_both_legs():
     p = ScopePredicate.for_search("all")
-    assert p.vector_where == "class_name != 'reference'"
+    assert p.vector_where == "class_name NOT IN ('reference', 'corpus')"
     assert p.fts_include is None
-    assert p.fts_exclude == ("reference",)
+    assert p.fts_exclude == ("reference", "corpus")
 
 
 def test_dreamed_and_undreamed_share_the_person_scope():
@@ -15,9 +15,21 @@ def test_dreamed_and_undreamed_share_the_person_scope():
 
 def test_library_is_only_the_library():
     p = ScopePredicate.for_search("library")
-    assert p.vector_where == "class_name = 'reference'"
-    assert p.fts_include == ("reference",)
+    assert p.vector_where == "class_name IN ('reference', 'corpus')"
+    assert p.fts_include == ("reference", "corpus")
     assert p.fts_exclude is None
+
+
+def test_legacy_corpus_counts_as_library():
+    """The library predicate is a class set, not one string: the legacy
+    `corpus` class (pre-dating the reference/ingest split) is Library
+    material on every leg, same as `reference`."""
+    p = ScopePredicate.for_search("library")
+    assert "corpus" in p.vector_where
+    assert "corpus" in p.fts_include
+    person = ScopePredicate.for_search("all")
+    assert "corpus" in person.vector_where
+    assert "corpus" in person.fts_exclude
 
 
 def test_skills_narrow_the_person_scope_to_skill_rows():
@@ -28,8 +40,8 @@ def test_skills_narrow_the_person_scope_to_skill_rows():
 
 def test_facts_keep_the_person_scope_without_skills():
     p = ScopePredicate.for_search("all", kinds="fact")
-    assert p.vector_where == "class_name NOT IN ('reference', 'skill')"
-    assert p.fts_exclude == ("reference", "skill")
+    assert p.vector_where == "class_name NOT IN ('reference', 'corpus', 'skill')"
+    assert p.fts_exclude == ("reference", "corpus", "skill")
 
 
 def test_entity_pages_of_one_type():

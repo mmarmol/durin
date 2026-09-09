@@ -294,6 +294,8 @@ def _resolve_semantic_ref(
     from durin.memory.scope import ScopePredicate
     from durin.memory.vector_index import VectorIndex
     type_ = proposed_ref.split(":", 1)[0]
+    if not type_:
+        return None  # no type to build the entity-pages predicate from
     query = VectorIndex._compose_entity_page_text(
         name=name, aliases=[], body="", attributes=attributes, relations=[])
     try:

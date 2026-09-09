@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 from durin.memory.entity_page import EntityPage
 from durin.memory.field_patch import FieldPatch
-from durin.memory.extract_dream import discover_entities
+from durin.memory.extract_dream import _resolve_semantic_ref, discover_entities
 from durin.memory.memory_writer import write_entity
 
 NOW = datetime(2026, 6, 5, tzinfo=timezone.utc)
@@ -113,6 +113,27 @@ def test_discover_semantic_finds_twin_past_crowded_window(tmp_path):
             '[{"ref":"person:robert_smith","name":"Robert Smith",'
             '"attributes":{"role":"sales"}}]', _judge("same", 97)))
     assert out == [{"ref": "person:bob_smith", "committed": True}]
+
+
+def test_resolve_semantic_ref_skips_a_ref_with_no_type(tmp_path):
+    """A malformed ref with an empty type segment (e.g. ':slug') has no
+    type to build the entity-pages predicate from — resolve to None
+    without querying the index."""
+    class _CountingVI:
+        def __init__(self):
+            self.calls = 0
+
+        def search(self, query, *, top_k=10, where=None):
+            self.calls += 1
+            return []
+
+    vi = _CountingVI()
+    result = _resolve_semantic_ref(
+        tmp_path, vi, ":noType", "Someone", {},
+        llm_invoke=_stub("unused"), model=None,
+        confidence_threshold=95, distance_threshold=0.30)
+    assert result is None
+    assert vi.calls == 0
 
 
 def test_discover_no_vector_index_is_lexical_only(tmp_path):

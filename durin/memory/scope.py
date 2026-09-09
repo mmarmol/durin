@@ -9,9 +9,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-# Library material: ingested reference chunks. Excluded from the person's
-# memory by default, the whole of an explicit library search.
-_LIBRARY_CLASS = "reference"
+# Library material: ingested reference chunks, plus the legacy `corpus`
+# class (`memory/corpus/<id>`, FTS type `corpus`, vector `class_name`
+# `corpus`) that predates the reference/ingest split and still lives in
+# older workspaces. Excluded from the person's memory by default, the
+# whole of an explicit library search.
+_LIBRARY_CLASSES = ("reference", "corpus")
 
 
 def _sql_quote(value: str) -> str:
@@ -30,18 +33,20 @@ class ScopePredicate:
 
     @classmethod
     def for_search(cls, scope: str, kinds: str = "all") -> "ScopePredicate":
-        """The predicate behind a ``memory_search`` call."""
+        """The predicate behind a ``memory_search`` call.
+
+        Under ``scope="library"`` ``kinds`` is ignored: library rows are
+        never skills, so there is nothing for it to select between.
+        """
         if scope == "library":
-            return cls(f"class_name = {_sql_quote(_LIBRARY_CLASS)}", (_LIBRARY_CLASS,), None)
+            where = "class_name IN (" + ", ".join(_sql_quote(x) for x in _LIBRARY_CLASSES) + ")"
+            return cls(where, _LIBRARY_CLASSES, None)
         if scope not in ("all", "dreamed", "undreamed"):
             return cls.none()
         if kinds == "skill":
             return cls("class_name = 'skill'", ("skill",), None)
-        excluded = (_LIBRARY_CLASS, "skill") if kinds == "fact" else (_LIBRARY_CLASS,)
-        if len(excluded) == 1:
-            where = f"class_name != {_sql_quote(excluded[0])}"
-        else:
-            where = "class_name NOT IN (" + ", ".join(_sql_quote(x) for x in excluded) + ")"
+        excluded = _LIBRARY_CLASSES + ("skill",) if kinds == "fact" else _LIBRARY_CLASSES
+        where = "class_name NOT IN (" + ", ".join(_sql_quote(x) for x in excluded) + ")"
         return cls(where, None, excluded)
 
     @classmethod

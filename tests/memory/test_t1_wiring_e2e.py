@@ -183,6 +183,9 @@ async def test_e2e1_memory_search_invokes_entity_aware_ranker(
     payload = vector_events[0][1]
     assert payload["ranking"] == "entity_aware"
     assert payload["query_entities_count"] >= 1
+    # The person-scope predicate excludes the whole Library class set —
+    # reference chunks and the legacy corpus class alike.
+    assert payload["predicate"] == "class_name NOT IN ('reference', 'corpus')"
 
 
 # ---------------------------------------------------------------------------
