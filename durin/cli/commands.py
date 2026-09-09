@@ -163,7 +163,7 @@ app = typer.Typer(
     # Hide the auto-injected `--install-completion` / `--show-completion`
     # flags. They're Typer boilerplate, not durin functionality —
     # power users who want tab-completion can still set it up manually
-    # via their shell (see docs/guide/install.md).
+    # via their shell.
     add_completion=False,
 )
 

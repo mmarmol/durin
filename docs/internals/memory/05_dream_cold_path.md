@@ -697,9 +697,9 @@ on the default provider (see `docs/internals/providers.md`).
   (`durin/memory/dream_runs.py` — a `record_dream_run` per run), so they survive
   the telemetry window and retention; the per-item activity feed (merges,
   discoveries, and each applied skill-curation action, naming the skill and the
-  verb) is mapped from the telemetry JSONL. The run summaries used to be
-  re-derived from telemetry, where a busy refine pass flooded the read window and
-  the "Last run" card silently vanished.
+  verb) is mapped from the telemetry JSONL. The run summaries come from the
+  durable run store, so a busy refine pass that floods the telemetry read window
+  cannot make the "Last run" card vanish.
 
   **Inbox tab** (the `BandejaTab` component) — surfaces two categories of items
   that need human attention, with a badge on the tab when items are present.

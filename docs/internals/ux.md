@@ -405,9 +405,9 @@ retired graph canvas) falls back to Table rather than being honored.
 **Main-pane states.** Exactly one message occupies the main pane at a
 time, and the presentations only mount once the payload holds at least one
 entity. That ordering is what keeps the pane from ever showing two
-explanations at once — previously the loading and empty-workspace overlays
-sat on top of the still-mounted grid, whose own "nothing matches your
-filters" text showed through underneath. The states, in precedence order: a
+explanations at once: the loading and empty-workspace overlays never sit on
+top of a mounted grid whose own "nothing matches your filters" text could show
+through underneath. The states, in precedence order: a
 load error with a retry; the loading message while nothing has been loaded
 yet (a refresh over an already-loaded list keeps the list on screen and only
 spins the refresh button); the teaching empty state when the payload holds
