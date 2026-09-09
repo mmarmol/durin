@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pytest
 
-import durin.telemetry.logger as telemetry_logger
 from durin.agent.tools.workflow_runs import WorkflowRunsTool
 from durin.workflow import provenance
 
@@ -487,7 +486,7 @@ def _cost_manifest(run_id: str, workflow: str, *, parent_run_id: str | None, run
 @pytest.fixture
 def cost_workspace(tmp_path: Path, monkeypatch) -> Path:
     tel_dir = tmp_path / "telemetry"
-    monkeypatch.setattr(telemetry_logger, "_DEFAULT_DIR", tel_dir)
+    monkeypatch.setenv("DURIN_HOME", str(tel_dir.parent))
 
     _write_manifest(tmp_path, "cost-workflow", COST_RUN, _cost_manifest(
         COST_RUN, "cost-workflow", parent_run_id=None,
@@ -600,7 +599,7 @@ async def test_cost_requires_run_id(tool: WorkflowRunsTool):
 @pytest.mark.asyncio
 async def test_cost_caps_at_30_nodes_with_overflow(tmp_path: Path, monkeypatch):
     tel_dir = tmp_path / "telemetry"
-    monkeypatch.setattr(telemetry_logger, "_DEFAULT_DIR", tel_dir)
+    monkeypatch.setenv("DURIN_HOME", str(tel_dir.parent))
     run_id = "eeeeee123456"
     runs = [
         {"node_id": f"node{i:02d}", "iteration": 1, "status": "ok",
@@ -636,7 +635,7 @@ async def test_cost_caps_at_30_nodes_with_overflow(tmp_path: Path, monkeypatch):
 async def test_cost_no_telemetry_says_so_explicitly(tmp_path: Path, monkeypatch):
     # A real manifest, but the telemetry directory has nothing for it -- must
     # say so plainly rather than rendering an all-zeros table.
-    monkeypatch.setattr(telemetry_logger, "_DEFAULT_DIR", tmp_path / "telemetry")
+    monkeypatch.setenv("DURIN_HOME", str(tmp_path))
     run_id = "ffffff777777"
     _write_manifest(tmp_path, "cost-workflow", run_id, _cost_manifest(
         run_id, "cost-workflow", parent_run_id=None,
@@ -662,7 +661,7 @@ async def test_cost_filename_match_is_anchored_not_substring(tmp_path: Path, mon
     # separator (today's fixed-length hex ids can't collide, but the check
     # itself must not depend on that).
     tel_dir = tmp_path / "telemetry"
-    monkeypatch.setattr(telemetry_logger, "_DEFAULT_DIR", tel_dir)
+    monkeypatch.setenv("DURIN_HOME", str(tel_dir.parent))
     run_id = "aaaaaa111111"
     _write_manifest(tmp_path, "cost-workflow", run_id, _cost_manifest(
         run_id, "cost-workflow", parent_run_id=None,
@@ -696,7 +695,7 @@ async def test_cost_sums_telemetry_spanning_midnight(tmp_path: Path, monkeypatch
     # both be found and summed (this is exactly what the +-1 day tolerance
     # in `_candidate_telemetry_dates` exists for).
     tel_dir = tmp_path / "telemetry"
-    monkeypatch.setattr(telemetry_logger, "_DEFAULT_DIR", tel_dir)
+    monkeypatch.setenv("DURIN_HOME", str(tel_dir.parent))
     run_id = "bbbbbb222222"
     started_at = datetime(2024, 3, 5, 23, 50, 0, tzinfo=timezone.utc).timestamp()
     finished_at = datetime(2024, 3, 6, 0, 10, 0, tzinfo=timezone.utc).timestamp()
@@ -737,7 +736,7 @@ async def test_cost_includes_grandchild_run(tmp_path: Path, monkeypatch):
     # IMMEDIATE parent -- the grandchild's telemetry must still reach the
     # top-level run's cost, proving the descendant walk isn't one level deep.
     tel_dir = tmp_path / "telemetry"
-    monkeypatch.setattr(telemetry_logger, "_DEFAULT_DIR", tel_dir)
+    monkeypatch.setenv("DURIN_HOME", str(tel_dir.parent))
     parent_id = "aaaaaa000001"
     child_id = "bbbbbb000002"
     grandchild_id = "cccccc000003"

@@ -355,13 +355,14 @@ class HealthService:
         self, query: LogsListQuery, principal: Principal
     ) -> LogsListResult:
         principal.require(Scope.SYSTEM_READ)
-        from pathlib import Path
 
         from durin.cli.gateway_daemon import daemon_logs_path
         from durin.logs.reader import LogQuery, compute_facets, read_page
 
         if query.source == "telemetry":
-            directory = Path.home() / ".cache" / "durin" / "telemetry"
+            from durin.config.paths import get_telemetry_dir
+
+            directory = get_telemetry_dir()
         else:
             directory = daemon_logs_path().parent
 

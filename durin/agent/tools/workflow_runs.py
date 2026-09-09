@@ -26,7 +26,6 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-import durin.telemetry.logger as telemetry_logger
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.schema import IntegerSchema, StringSchema, tool_parameters_schema
 from durin.workflow import provenance, run_log
@@ -630,7 +629,9 @@ class WorkflowRunsTool(Tool):
                         m_run_id, r.get("node_id") or "?",
                     )
 
-        tel_dir = telemetry_logger._DEFAULT_DIR
+        from durin.config.paths import get_telemetry_dir
+
+        tel_dir = get_telemetry_dir()
         buckets: dict[tuple[str, str], dict[str, Any]] = {}
         any_calls = False
 

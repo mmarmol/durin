@@ -69,6 +69,7 @@ def default_target_groups(workspace: Path | None = None) -> list[TargetGroup]:
         durin_home / "bridge",
         durin_home / "webui",
         durin_home / "logs",
+        durin_home / "telemetry",
     )
 
     groups = [

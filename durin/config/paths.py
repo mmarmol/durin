@@ -65,6 +65,24 @@ def is_default_workspace(workspace: str | Path | None) -> bool:
     return current.resolve(strict=False) == default.resolve(strict=False)
 
 
+def get_telemetry_dir() -> Path:
+    """Telemetry JSONL directory for the active instance.
+
+    An explicit ``$DURIN_HOME`` selects a self-contained instance, and
+    telemetry is instance data, so it lives at ``$DURIN_HOME/telemetry``.
+    Without ``DURIN_HOME`` the default install keeps
+    ``~/.cache/durin/telemetry``. Every writer and reader resolves the
+    directory here, so a test, a script or a second instance never lands
+    in the live directory.
+    """
+    import os
+
+    instance = os.environ.get("DURIN_HOME")
+    if instance:
+        return Path(instance).expanduser() / "telemetry"
+    return Path.home() / ".cache" / "durin" / "telemetry"
+
+
 def get_cli_history_path() -> Path:
     """CLI history file, under the active instance home (``DURIN_HOME``)."""
     from durin.config.home import durin_home

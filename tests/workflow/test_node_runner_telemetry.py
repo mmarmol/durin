@@ -12,8 +12,7 @@ import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-import durin.telemetry.logger as telemetry_logger
-from durin.agent.runner import AgentRunResult, AgentRunner
+from durin.agent.runner import AgentRunner, AgentRunResult
 from durin.providers.base import LLMProvider
 from durin.session.manager import SessionManager
 from durin.telemetry.logger import current_telemetry
@@ -65,7 +64,7 @@ def _runner(tmp_path, deliver_responses=None, on_run=None):
 
 
 def test_node_execution_binds_the_node_session_logger(tmp_path, monkeypatch):
-    monkeypatch.setattr(telemetry_logger, "_DEFAULT_DIR", tmp_path / "telemetry")
+    monkeypatch.setenv("DURIN_HOME", str(tmp_path))
     seen: list = []
     nr, _ = _runner(tmp_path, on_run=lambda: seen.append(current_telemetry()))
     node = _node()
@@ -81,7 +80,7 @@ def test_node_execution_binds_the_node_session_logger(tmp_path, monkeypatch):
 
 def test_node_events_land_in_a_workflow_telemetry_file(tmp_path, monkeypatch):
     tel_dir = tmp_path / "telemetry"
-    monkeypatch.setattr(telemetry_logger, "_DEFAULT_DIR", tel_dir)
+    monkeypatch.setenv("DURIN_HOME", str(tel_dir.parent))
 
     def _emit_from_work_loop():
         current_telemetry().log("tool.read_file", {"path": "x", "offset": 1, "limit": 1,
@@ -98,7 +97,7 @@ def test_node_events_land_in_a_workflow_telemetry_file(tmp_path, monkeypatch):
 def test_structured_output_goes_through_the_retry_wrapper(tmp_path, monkeypatch):
     """Deliver calls ride chat_with_retry: transport retries, generation-resolved
     max_tokens, and provider.call telemetry emitted by the wrapper itself."""
-    monkeypatch.setattr(telemetry_logger, "_DEFAULT_DIR", tmp_path / "telemetry")
+    monkeypatch.setenv("DURIN_HOME", str(tmp_path))
     nr, provider = _runner(tmp_path, deliver_responses=[{"queries": ["a"]}])
     nr(_req(_node(schema=SCHEMA)))
     provider.chat_with_retry.assert_awaited_once()

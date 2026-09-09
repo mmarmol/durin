@@ -672,7 +672,7 @@ def cmd_stats(
 ) -> None:
     """Aggregate memory telemetry + filesystem counts.
 
-    Reads JSONL events from ``~/.cache/durin/telemetry/`` and walks the
+    Reads JSONL events from the instance telemetry directory and walks the
     workspace's ``memory/`` tree for ground-truth counters. Used to
     measure long-term memory health trends.
 
