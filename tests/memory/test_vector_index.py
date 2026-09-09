@@ -791,3 +791,75 @@ def test_compact_index_prunes_versions(tmp_path):
 
     missing = compact_index(tmp_path / "empty-ws")
     assert missing == {"compacted": False, "reason": "no_index"}
+
+
+@pytest.mark.skipif(
+    not vector_index_available(), reason="lancedb not installed",
+)
+def test_compact_index_rebuild_fallback_keeps_the_table_searchable_and_typed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When vector search fails after optimize, the fallback rebuilds the
+    table from current rows. Verify the rebuilt table is searchable and
+    the entities column remains typed list<string>."""
+    import pyarrow as pa
+
+    from durin.memory.vector_index import _TABLE_NAME, compact_index
+
+    workspace = tmp_path / "ws"
+    provider = _FakeEmbeddingProvider()
+    index = VectorIndex(workspace, provider)
+
+    # Build a table with both entity page (entities=[]) and memory entry
+    # (entities=[...]) to test schema type preservation.
+    index.upsert_entity_page(
+        entity_ref="person:ada", name="Ada", aliases=[], body="mathematician",
+        path=workspace / "memory" / "entities" / "person" / "ada.md",
+    )
+    r = store_memory(
+        workspace, content="computing pioneer", headline="Ada Lovelace",
+        entities=["person:ada"],
+    )
+    entry_path = Path(r["path"])
+    from durin.memory.storage import load_entry
+
+    entry = load_entry(entry_path)
+    index.upsert(entry, r["class"], entry_path)
+
+    # Verify preconditions: table is searchable and typed.
+    table = index._connect().open_table(_TABLE_NAME)
+    rows_before = table.count_rows()
+    assert rows_before == 2
+    assert pa.types.is_string(table.schema.field("entities").type.value_type)
+
+    # Monkeypatch _vector_search_ok to fail the first probe (triggering the
+    # fallback rebuild path) and pass all subsequent checks (restore, rebuild
+    # verify). A real scenario: optimize corrupted the vector path but the
+    # row data survives; rebuild restores searchability.
+    from durin.memory import vector_index
+
+    call_count = [0]
+
+    def _patched_search_ok(tbl):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return False  # First check (line 1351): fail to enter fallback
+        return True  # Restore and rebuild checks: pass
+
+    monkeypatch.setattr(
+        vector_index, "_vector_search_ok", _patched_search_ok,
+    )
+
+    # Run compact_index; should rebuild.
+    stats = compact_index(workspace)
+    assert stats["compacted"] is True
+    assert stats["mode"] == "rebuilt"
+
+    # Verify the rebuilt table is searchable, row count preserved, and
+    # entities remains typed list<string>.
+    table = index._connect().open_table(_TABLE_NAME)
+    assert table.count_rows() == rows_before
+    hits = index.search("Ada", top_k=5)
+    assert len(hits) >= 1, "rebuilt table must be searchable"
+    assert pa.types.is_string(table.schema.field("entities").type.value_type), \
+        "entities column must remain typed list<string>"
