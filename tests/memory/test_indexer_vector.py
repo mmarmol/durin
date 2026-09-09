@@ -150,6 +150,47 @@ def test_backfill_embeds_entries_that_have_an_fts_row_and_no_vector_row(
     assert vi.ids_by_class(["episodic"]) == {r1["id"], r2["id"]}
 
 
+def test_backfill_migrates_a_legacy_entities_column_before_embedding(
+    tmp_path: Path, provider: _FakeEmbeddingProvider
+) -> None:
+    """A workspace whose vector table predates the explicit schema
+    (``entities`` typed ``list<null>``) must be repaired by the very
+    first backfill run, so an entry carrying real entity tags can be
+    embedded into it (F-A)."""
+    import lancedb
+
+    from durin.memory.indexer import backfill_missing_vectors, reindex_one_file
+    from durin.memory.store import store_memory
+    from durin.memory.vector_index import _INDEX_PATH, _TABLE_NAME
+
+    ws = tmp_path / "ws"
+    r1 = store_memory(
+        ws, content="nota con entidad", class_name="episodic",
+        entities=["person:ada"],
+    )
+    reindex_one_file(ws, Path(r1["path"]))
+
+    # Hand-create a legacy table: entities: [] on the only record, so
+    # LanceDB infers list<null> -- the pre-fix shape.
+    uri = str(ws.joinpath(*_INDEX_PATH))
+    Path(uri).mkdir(parents=True, exist_ok=True)
+    db = lancedb.connect(uri)
+    db.create_table(_TABLE_NAME, data=[{
+        "id": "legacy-1", "class_name": "entity_page", "summary": "s",
+        "headline": "h", "path": "p", "valid_from": "", "body_length": 0,
+        "vector": [1.0] + [0.0] * (provider.DIM - 1), "entities": [],
+    }])
+
+    vi = VectorIndex(ws, provider)
+    done = backfill_missing_vectors(ws, vi)
+
+    assert done == {"episodic": 1}
+    hits = vi.search("entidad", top_k=5)
+    assert any(
+        h["id"] == r1["id"] and h["entities"] == ["person:ada"] for h in hits
+    )
+
+
 def test_backfill_is_idempotent(
     tmp_path: Path, provider: _FakeEmbeddingProvider
 ) -> None:
