@@ -8,6 +8,10 @@ token as its `api_key`.
 This is the surface to use when **another agent** should be able to ask durin
 for things: durin keeps the conversation, runs its own tools, and answers.
 
+It is served on the websocket channel's host and port (`channels.websocket`,
+default `127.0.0.1:8765` — the same address as the dashboard), not on
+`gateway.port`, which only answers `/health`.
+
 Start the gateway first — the API lives inside it, there is no separate server
 process:
 
@@ -62,7 +66,7 @@ The API is OpenAI-shaped but **session-oriented**, and that difference matters:
 ### curl
 
 ```bash
-curl http://127.0.0.1:18790/v1/chat/completions -H "Authorization: Bearer $DURIN_TOKEN" -H "Content-Type: application/json" -d '{"messages":[{"role":"user","content":"summarize my open tickets"}],"session_id":"agent-billing"}'
+curl http://127.0.0.1:8765/v1/chat/completions -H "Authorization: Bearer $DURIN_TOKEN" -H "Content-Type: application/json" -d '{"messages":[{"role":"user","content":"summarize my open tickets"}],"session_id":"agent-billing"}'
 ```
 
 ### Python (official OpenAI SDK)
@@ -70,7 +74,7 @@ curl http://127.0.0.1:18790/v1/chat/completions -H "Authorization: Bearer $DURIN
 ```python
 from openai import OpenAI
 
-client = OpenAI(base_url="http://127.0.0.1:18790/v1", api_key=DURIN_TOKEN)
+client = OpenAI(base_url="http://127.0.0.1:8765/v1", api_key=DURIN_TOKEN)
 
 reply = client.chat.completions.create(
     model="durin",
