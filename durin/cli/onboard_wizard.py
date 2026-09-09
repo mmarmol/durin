@@ -983,7 +983,7 @@ def _maybe_warm_embedding_model(model: str, size_label: str) -> None:
     in first-onboard with extras not yet present; boot warmup in
     ``AgentLoop`` will handle this case on next start). When fastembed
     is available, runs a synchronous warmup so the user sees the cost
-    here — far better than the first ``memory_upsert_entity`` blocking for
+    here — far better than the first ``memory_search`` blocking for
     ~18 seconds mid-conversation.
     """
     try:

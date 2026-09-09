@@ -9,15 +9,16 @@ Two surfaces:
   - :func:`rebuild_fts_index` — wipes the index and re-derives every
     row from ``walk_memory``. Called by ``durin reindex`` and by the
     schema-version-mismatch recovery path.
-  - :func:`reindex_one_file` — synchronous re-index of a single
-    ``.md`` after a tool writes (memory_upsert_entity, memory_ingest,
-    /remember, Dream apply). Skipped silently when the path is outside
-    ``memory/`` or under ``memory/archive/`` / ``memory/pending/``.
+  - :func:`reindex_one_file` and :func:`reindex_one_file_vector` — called
+    by the file watcher for every write under ``memory/`` (entity pages,
+    entries, summaries) and by ``memory_ingest`` for its own writes. The
+    health-check repair and the full rebuild cover the rest. Skipped
+    silently when the path is outside ``memory/`` or under
+    ``memory/archive/`` / ``memory/pending/``.
 
 The vector index (LanceDB) is handled separately in
-``durin.memory.vector_index``. Both stay in sync because the writes
-fan out at the tool layer (re-index-on-write hooks); this module
-focuses on the lexical side only.
+``durin.memory.vector_index``; this module focuses on the lexical side
+only.
 
 Text composition:
 
