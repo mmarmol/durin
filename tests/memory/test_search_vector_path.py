@@ -1,12 +1,13 @@
 """Tests for the wired vector path in MemorySearchTool.
 
 Memory entries land in the VectorIndex via ``store_memory`` (the write) plus
-an explicit ``VectorIndex.upsert`` (the index side-effect that a live write
-path — ``/remember``, ``memory_upsert_entity``, the dream — performs after
-the file write); ``memory_search`` prefers the vector index for warm-tier
-dreamed queries with grep as fallback. The lazy VectorIndex construction
-inside the search tool depends on both lancedb being available AND an
-embedding model name being passed in (``embedding_model`` kw).
+an explicit ``VectorIndex.upsert`` (the index side-effect the file watcher
+performs reactively after the file write — not ``/remember``,
+``memory_upsert_entity``, or the dream directly); ``memory_search`` prefers
+the vector index for warm-tier dreamed queries with grep as fallback. The
+lazy VectorIndex construction inside the search tool depends on both
+lancedb being available AND an embedding model name being passed in
+(``embedding_model`` kw).
 
 These tests stub fastembed via ``sys.modules`` so we don't pull the real
 2 GB model; lancedb itself runs against a real on-disk DB in ``tmp_path``.

@@ -1090,20 +1090,20 @@ class MemoryIndexWriteEvent(TypedDict):
     """One upsert into the FTS5 lexical index.
 
     Fires per file written, so dashboards can detect bursty writes
-    (e.g., during dream consolidations or drift repairs) vs
+    (e.g., during a drift-repair sweep or many skill edits) vs
     steady-state agent activity. ``index`` is either ``"fts"``
     (lexical) or ``"lancedb"`` (vector); only ``"fts"`` is emitted
     today since `reindex_one_file` only writes the FTS row.
 
     ``trigger`` + ``duration_ms`` enable dashboards to measure
     index write latency and split watcher steady state from
-    dream/drift bursts.
+    `forget` / `drift_repair` / `skill_store` bursts.
     """
 
     uri: str
     index: str  # "fts" | "lancedb"
     op: str  # "upsert" | "delete"
-    trigger: str  # "watcher" | "dream_apply" | "drift_repair"
+    trigger: str  # "watcher" | "drift_repair" | "forget" | "skill_store"
     duration_ms: float
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]

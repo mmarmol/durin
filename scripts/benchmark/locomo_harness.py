@@ -457,10 +457,11 @@ def _extract_session_index(key: str) -> int | None:
 def _build_vector_index(workspace: Path) -> None:
     """Embed every seeded ``memory/<class>/*.md`` so vector search works.
 
-    Bulk-seeded entries (`store_memory`) skip the index by design —
-    only the tool path (`memory_store`) embeds at write time. For the
-    bench we want vector retrieval active, so we rebuild over the whole
-    workspace once after the seed.
+    Bulk-seeded entries (`store_memory`) skip the index by design — only
+    the file watcher (reacting to a real filesystem write) embeds at
+    write time, and bulk seeding bypasses it. For the bench we want
+    vector retrieval active, so we rebuild over the whole workspace once
+    after the seed.
 
     Silent no-op when ``lancedb`` is unavailable in the env — the agent
     still has the grep fallback. The first call triggers the embedding
@@ -620,11 +621,11 @@ async def _ask_agent(
     # Ablation mode: strip every memory tool so the agent has zero
     # read/write access to the memory layer — not just an empty workspace.
     # This is a stricter baseline than --no-memory seeding alone: the LLM
-    # never sees memory_search / memory_store / memory_drill / memory_ingest
-    # in its tool list, so it cannot self-seed or bias its reasoning around
-    # the memory API surface.
+    # never sees memory_search / memory_drill / memory_ingest in its tool
+    # list, so it cannot self-seed or bias its reasoning around the
+    # memory API surface.
     if not enable_memory:
-        for tool_name in ("memory_search", "memory_store", "memory_drill", "memory_ingest"):
+        for tool_name in ("memory_search", "memory_drill", "memory_ingest"):
             loop_agent.tools.unregister(tool_name)
 
     session_key = f"bench:{qa.qa_id}"

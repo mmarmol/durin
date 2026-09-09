@@ -378,6 +378,10 @@ LanceDB row) is rejected for the same reason: it would make a disposable cache
 co-authoritative with the source, and an optimisation that breaks that principle
 has to be justified by measurement, not intuition.
 
+Both indexes deliberately exclude `memory/pending/**`: `pending` is the intake
+buffer for content that hasn't been reviewed or promoted into a real class yet,
+so it stays invisible to retrieval until it moves out of that directory.
+
 ---
 
 ## 7. Cross-references
