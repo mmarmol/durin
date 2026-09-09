@@ -88,3 +88,39 @@ def test_a_session_summary_is_embedded_too(
     rows = vi.search("hachas", top_k=3)
     assert rows and rows[0]["class_name"] == "session_summary"
     assert rows[0]["id"] == load_entry(path).id
+
+
+def test_pending_and_archive_entries_are_never_embedded(
+    tmp_path: Path, provider: _FakeEmbeddingProvider
+) -> None:
+    from durin.memory.indexer import reindex_one_file_vector
+    from durin.memory.store import store_memory
+
+    ws = tmp_path / "ws"
+
+    # Create a pending entry and verify it is not embedded
+    pending_result = store_memory(
+        ws, content="Bruenor tiene un hacha mágica guardada.", class_name="pending"
+    )
+    vi = VectorIndex(ws, provider)
+    assert reindex_one_file_vector(ws, Path(pending_result["path"]), vi) is False
+
+    # Create an archive entry and verify it is not embedded
+    archive_result = store_memory(
+        ws, content="Bruenor vendió una hacha antigua al mercado.", class_name="stable"
+    )
+    # Move the file to archive
+    from pathlib import Path as PathlibPath
+    archive_path = ws / "memory" / "archive" / f"{archive_result['id']}.md"
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    original_path = PathlibPath(archive_result["path"])
+    original_path.rename(archive_path)
+
+    assert reindex_one_file_vector(ws, archive_path, vi) is False
+
+    # Verify the vector index contains no rows for either text
+    rows_hacha_magica = vi.search("hacha mágica", top_k=3)
+    assert not rows_hacha_magica or all(r["id"] != pending_result["id"] for r in rows_hacha_magica)
+
+    rows_hacha_antigua = vi.search("hacha antigua", top_k=3)
+    assert not rows_hacha_antigua or all(r["id"] != archive_result["id"] for r in rows_hacha_antigua)

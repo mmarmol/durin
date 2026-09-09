@@ -579,8 +579,11 @@ def reindex_one_file_vector(workspace: Path, md_path: Path, vi) -> bool:
 
     # memory/<class>/<id>.md — a memory entry (episodic, stable, corpus,
     # session_summary). The FTS half already re-indexes it; embed it here
-    # so a note is vector-searchable the moment it is written.
+    # so a note is vector-searchable the moment it is written. Excludes
+    # pending (intake buffer, never indexed) and archive (off the hot path).
     if len(parts) == 2 and parts[0] in MEMORY_CLASSES and md_path.suffix == ".md":
+        if parts[0] in ("pending", "archive"):
+            return False
         if not md_path.is_file():
             return False
         try:
