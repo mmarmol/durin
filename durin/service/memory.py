@@ -166,6 +166,7 @@ class MemorySearchQuery(Query):
     scope: str = "all"
     level: str = "warm"
     kinds: str = "all"
+    keywords: str = ""
 
 
 class MemoryDocumentsQuery(Query):
@@ -579,6 +580,7 @@ class MemoryService:
             scope=query.scope,
             level=query.level,
             kinds=query.kinds,
+            keywords=query.keywords,
             embedding_model=embedding_model,
         )
         return MemoryResult(data=payload)

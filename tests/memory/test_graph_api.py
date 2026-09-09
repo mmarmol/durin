@@ -339,6 +339,28 @@ def test_search_results_carry_kind(tmp_path: Path) -> None:
         assert r["kind"] in {"canonical", "fragment", "session", "ingested"}
 
 
+def test_search_forwards_keywords_to_tool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The webui request's `keywords` field must reach `MemorySearchTool.execute`
+    — it is not just accepted and dropped."""
+    captured = {}
+
+    class _StubTool:
+        def __init__(self, *, workspace, embedding_model=None) -> None:
+            pass
+
+        async def execute(self, **kwargs):
+            captured.update(kwargs)
+            return {"results": [], "total": 0, "strategy": "noop", "ranking": "default"}
+
+    monkeypatch.setattr(
+        "durin.agent.tools.memory_search.MemorySearchTool", _StubTool
+    )
+    asyncio.run(search_memory_api(tmp_path, "marcelo", keywords="mmarmol@mxhero.com"))
+    assert captured["keywords"] == "mmarmol@mxhero.com"
+
+
 # ---------------------------------------------------------------------------
 # edge detail
 # ---------------------------------------------------------------------------

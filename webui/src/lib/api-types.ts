@@ -4319,6 +4319,11 @@ export interface components {
         /** MemorySearchQuery */
         MemorySearchQuery: {
             /**
+             * Keywords
+             * @default
+             */
+            keywords: string;
+            /**
              * Kinds
              * @default all
              */

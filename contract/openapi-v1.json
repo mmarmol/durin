@@ -3697,6 +3697,11 @@
       "MemorySearchQuery": {
         "additionalProperties": false,
         "properties": {
+          "keywords": {
+            "default": "",
+            "title": "Keywords",
+            "type": "string"
+          },
           "kinds": {
             "default": "all",
             "title": "Kinds",

@@ -160,6 +160,29 @@ async def test_search_calls_api(tmp_path: Path) -> None:
     assert result.data == fake_payload
 
 
+@pytest.mark.asyncio
+async def test_search_forwards_keywords(tmp_path: Path) -> None:
+    """`MemorySearchQuery` accepts `keywords` and `svc.search` forwards it
+    to `search_memory_api` — not just accepted and dropped."""
+    fake_cfg = SimpleNamespace(
+        workspace_path=tmp_path,
+        memory=SimpleNamespace(enabled=False, embedding=SimpleNamespace(model="")),
+    )
+    with (
+        patch("durin.config.loader.load_config", return_value=fake_cfg),
+        patch(
+            "durin.memory.graph_api.search_memory_api",
+            new=AsyncMock(return_value={"results": []}),
+        ) as mock_search,
+    ):
+        svc = _service(tmp_path)
+        await svc.search(
+            MemorySearchQuery(q="Alice", keywords="mmarmol@mxhero.com"),
+            Principal.local(),
+        )
+    assert mock_search.await_args.kwargs["keywords"] == "mmarmol@mxhero.com"
+
+
 # ---------------------------------------------------------------------------
 # Path-seg route: entity 404
 # ---------------------------------------------------------------------------

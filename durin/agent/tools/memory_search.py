@@ -168,11 +168,10 @@ def _entity_composition(page: "EntityPage", *, excerpt_chars: int | None) -> str
 
 _PARAMETERS = tool_parameters_schema(
     query=StringSchema(
-        "What to look for. Use a short topical phrase or natural question "
-        "(2-6 words, e.g. 'Calvin Japan stay plans', 'API outage November'). "
-        "For exact identifiers (email, UUID, key, file path), pass them "
-        "verbatim. Avoid full sentences — the search is keyword/semantic, "
-        "not Q&A."
+        "What to look for, in your own words — a phrase, a question or a "
+        "name. Wrap in double quotes what must appear exactly (a title, "
+        "an identifier, a distinctive phrase). For exact identifiers "
+        "(email, UUID, key, file path) pass them verbatim."
     ),
     scope=StringSchema(
         "Where to search. 'all' (default) covers dreamed memory entries and "
@@ -190,10 +189,9 @@ _PARAMETERS = tool_parameters_schema(
         enum=["warm", "cold"],
     ),
     keywords=StringSchema(
-        "Optional literal string that MUST appear in results "
-        "(e.g. an email, UUID, exact phrase). When supplied, lexical "
-        "matches against this string are weighted heavily so the exact "
-        "hit surfaces robustly. Leave empty for purely semantic queries."
+        "Optional terms that MUST appear in every result, e.g. a name or "
+        "an identifier; quoted groups are exact phrases. Leave empty when "
+        "nothing is required."
     ),
     limit=IntegerSchema(
         10,
@@ -226,12 +224,13 @@ _PARAMETERS = tool_parameters_schema(
         "rather than one long query.\n"
         "- For literal-match queries (emails, IDs, URLs), pass the literal "
         "string in `keywords` in addition to a natural-language `query`. "
-        "This biases the search toward exact matches.\n"
+        "Every `keywords` token must appear in every result; quote a "
+        "group inside `keywords` to require it as one phrase.\n"
         "- For exact phrase matching, wrap the phrase in double quotes "
         "inside `query` — e.g. `\"shooting percentage\" basketball` "
         "requires the two words to appear adjacent and in order, while "
-        "`basketball` matches anywhere. Words outside quotes stay as "
-        "loose tokens. An unbalanced quote is treated as a typo and "
+        "`basketball` matches anywhere. Words outside quotes are ranked, "
+        "not required. An unbalanced quote is treated as a typo and "
         "discarded.\n"
         "- Use `level: \"cold\"` only when you need full body content "
         "(verbose; consumes many tokens). `warm` (default) returns "

@@ -2311,12 +2311,19 @@ export interface MemorySearchPayload {
 export async function searchMemoryApi(
   token: string,
   query: string,
-  opts: { scope?: string; level?: string; kinds?: string; base?: string } = {},
+  opts: {
+    scope?: string;
+    level?: string;
+    kinds?: string;
+    keywords?: string;
+    base?: string;
+  } = {},
 ): Promise<MemorySearchPayload> {
   const params = new URLSearchParams({ q: query });
   if (opts.scope) params.set("scope", opts.scope);
   if (opts.level) params.set("level", opts.level);
   if (opts.kinds) params.set("kinds", opts.kinds);
+  if (opts.keywords) params.set("keywords", opts.keywords);
   const base = opts.base ?? "";
   const res = await request<{ data: MemorySearchPayload }>(
     `${base}/api/v1/memory/search?${params}`,

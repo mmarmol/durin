@@ -180,10 +180,10 @@ defaults on any load failure.
 
 | Param | Default | Description |
 |---|---|---|
-| `query` | required | Natural-language or exact-identifier query. Short topical phrase preferred. |
+| `query` | required | What to look for, in the caller's own words — a phrase, a question or a name. Double-quoted text inside `query` is a required phrase (must appear adjacent, in order); words outside quotes are ranked by bm25, not required. |
 | `scope` | `all` | `all` = dreamed + undreamed sessions, **excluding ingested documents**; `dreamed` = structured memory; `undreamed` = raw sessions; `library` = ingested reference documents (the Library — kept out of default recall); `archive` = on-demand recovery walk. Together with `kinds`, builds the `ScopePredicate` (`durin/memory/scope.py`) the tool passes to `run_search_pipeline` — the population is filtered inside the vector and FTS indexes, before their top-k cut, not by the tool afterward. |
 | `level` | `warm` | `warm` = headline + a bounded summary excerpt (for an entity page: name whole, attributes and body sharing the same bound, attributes cut first); `cold` = full body (high token cost). Exception: raw session turns keep their indexed excerpt at either level; their backing file is a transcript. |
-| `keywords` | — | Literal string for exact-match boost (email, UUID, path). Biases RRF toward lexical. |
+| `keywords` | — | Optional terms that MUST appear in every result (e.g. a name or an identifier); every token is required (AND), and a quoted group inside `keywords` is one required phrase. |
 | `limit` | 10 | Final result count. Clamped to [1, 50] defensively even with schema bounds declared. |
 | `kinds` | `all` | `all` = everything; `skill` = skill procedures only; `fact` = everything except skills. Folded into the same `ScopePredicate` as `scope`, so the indexes apply it before the top-k cut rather than the tool dropping hits afterward. |
 

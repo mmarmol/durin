@@ -402,6 +402,14 @@ thing a visitor sees. The preference persists; a stored value naming a
 presentation the browser no longer offers (older installs could store the
 retired graph canvas) falls back to Table rather than being honored.
 
+**Search filter.** The `Search memory…` box above the entity list is one
+free-text field — no separate control for an exact phrase or a must-include
+term. It needs none: nothing in the input constrains or reinterprets a
+double quote, so it already carries the same convention `memory_search`'s
+`query` parameter uses — a quoted term is a required phrase, words outside
+quotes are ranked, not required — through to whatever consumes the typed
+text verbatim.
+
 **Main-pane states.** Exactly one message occupies the main pane at a
 time, and the presentations only mount once the payload holds at least one
 entity. That ordering is what keeps the pane from ever showing two

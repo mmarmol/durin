@@ -32,8 +32,8 @@ Search durin's memory for content relevant to your question. Searches across can
 Usage:
 - For most queries, use a single call with a natural-language `query`.
 - For multi-part questions, issue 2-3 calls with different phrasings rather than one long query.
-- For literal-match queries (emails, IDs, URLs), pass the literal string in `keywords` in addition to a natural-language `query`. This biases the search toward exact matches.
-- For exact phrase matching, wrap the phrase in double quotes inside `query` — e.g. `"shooting percentage" basketball` requires the two words to appear adjacent and in order, while `basketball` matches anywhere. Words outside quotes stay as loose tokens. An unbalanced quote is treated as a typo and discarded.
+- For literal-match queries (emails, IDs, URLs), pass the literal string in `keywords` in addition to a natural-language `query`. Every `keywords` token must appear in every result; quote a group inside `keywords` to require it as one phrase.
+- For exact phrase matching, wrap the phrase in double quotes inside `query` — e.g. `"shooting percentage" basketball` requires the two words to appear adjacent and in order, while `basketball` matches anywhere. Words outside quotes are ranked, not required. An unbalanced quote is treated as a typo and discarded.
 - Use `level: "cold"` only when you need full body content (verbose; consumes many tokens). `warm` (default) returns headline + summary, enough for most tasks.
 - `limit` defaults to 10. Reduce to 3-5 for chat-style short answers, raise to 20-30 for audit / investigative queries that need to see every relevant hit. Hard cap 50.
 
