@@ -291,21 +291,24 @@ def _resolve_semantic_ref(
     variants are caught by the nightly refine pass instead."""
     from durin.memory.absorb_judge import JudgeError, judge_pair
     from durin.memory.deletion import is_deleted
+    from durin.memory.scope import ScopePredicate
     from durin.memory.vector_index import VectorIndex
     type_ = proposed_ref.split(":", 1)[0]
+    if not type_:
+        return None  # no type to build the entity-pages predicate from
     query = VectorIndex._compose_entity_page_text(
         name=name, aliases=[], body="", attributes=attributes, relations=[])
     try:
-        # top_k=5: the nearest few neighbours; type-filtered below. A few extra
-        # covers the case where closer neighbours are a different type.
-        rows = vector_index.search(query, top_k=5)
+        # top_k=5: the nearest few same-type entity-page neighbours (the
+        # predicate below asks the index directly, so no in-Python filter
+        # is needed to keep those five meaningful).
+        rows = vector_index.search(
+            query, top_k=5, where=ScopePredicate.entity_pages(type_).vector_where)
     except Exception:  # noqa: BLE001
         return None
     for row in rows:
         ref = row.get("id")
-        if (not isinstance(ref, str) or ref == proposed_ref
-                or row.get("class_name") != "entity_page"
-                or ref.split(":", 1)[0] != type_):
+        if not isinstance(ref, str) or ref == proposed_ref:
             continue
         if float(row.get("_distance", 1.0)) > distance_threshold:
             return None  # nearest same-type neighbour already too far

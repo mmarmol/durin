@@ -92,7 +92,8 @@ def memory_notes_for_path(workspace: Path, rel_path: str, *, limit: int | None =
         with FTSIndex.open(workspace) as index:
             hits = lexical_search(
                 index, decide_lexical_route(rel_path, keywords=rel_path),
-                limit=effective_limit * 4,
+                limit=effective_limit,
+                include_types=_NOTE_CLASSES,
                 # This is a side effect of a file read, not a memory search:
                 # emitting would inflate the search count and dilute the
                 # latency series with sub-millisecond lookups.
@@ -111,8 +112,6 @@ def memory_notes_for_path(workspace: Path, rel_path: str, *, limit: int | None =
     )
     out: list[str] = []
     for hit in hits:
-        if hit.type not in _NOTE_CLASSES:
-            continue
         try:
             entry = load_entry(Path(workspace) / hit.path)
         except Exception:  # noqa: BLE001

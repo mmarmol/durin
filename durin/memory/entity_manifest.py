@@ -82,9 +82,11 @@ def build_entity_manifest(
         return "\n".join(lines[:limit])
 
     if query and query.strip():
+        from durin.memory.scope import ScopePredicate
         from durin.memory.search_pipeline import run_search_pipeline
         result = run_search_pipeline(
             Path(workspace), query, vector_index=vector_index, limit=limit,
+            scope=ScopePredicate.entity_pages(),
         )
         seen: set[str] = set()
         for hit in result.hits:

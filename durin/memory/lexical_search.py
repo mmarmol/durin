@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Optional
+from typing import Optional, Sequence
 
 from durin.memory.fts_index import FTSHit, FTSIndex
 from durin.memory.query_router import LexicalRoute, RoutingDecision
@@ -46,6 +46,8 @@ def lexical_search(
     limit: int = 50,
     emit: bool = True,
     type_: Optional[str] = None,
+    include_types: Optional[Sequence[str]] = None,
+    exclude_types: Optional[Sequence[str]] = None,
 ) -> list[FTSHit]:
     """Execute the lexical part of the search pipeline.
 
@@ -57,10 +59,13 @@ def lexical_search(
     number of searches, and its duration series is the search latency, so a
     lookup that is a side effect of some other tool would dilute both.
 
-    ``type_``, when given, restricts every route to rows of that stored
-    ``type`` — a caller that wants only one row shape (e.g. entity pages)
-    gets ``limit`` spent on that shape, not truncated by unrelated rows that
-    also match the query text.
+    ``type_`` is the one-type shorthand used by ``artifact_recall`` — when
+    given, it restricts every route to rows of that stored ``type``, so a
+    caller that wants only one row shape (e.g. entity pages) gets ``limit``
+    spent on that shape, not truncated by unrelated rows that also match the
+    query text. ``include_types``/``exclude_types`` are the set forms used
+    by the search pipeline's scope; see ``FTSIndex._type_clause`` for
+    precedence.
     """
     t0 = time.perf_counter()
     hits: list[FTSHit] = []
@@ -72,11 +77,20 @@ def lexical_search(
         return hits
 
     if decision.route is LexicalRoute.UNICODE61:
-        hits = index.search(_quote_for_fts(query), limit=limit, type_=type_)
+        hits = index.search(
+            _quote_for_fts(query), limit=limit, type_=type_,
+            include_types=include_types, exclude_types=exclude_types,
+        )
     elif decision.route is LexicalRoute.TRIGRAM:
-        hits = index.search_trigram(_quote_for_fts(query), limit=limit, type_=type_)
+        hits = index.search_trigram(
+            _quote_for_fts(query), limit=limit, type_=type_,
+            include_types=include_types, exclude_types=exclude_types,
+        )
     elif decision.route is LexicalRoute.LIKE_SUBSTRING:
-        hits = _like_substring_scan(index, query, limit=limit, type_=type_)
+        hits = _like_substring_scan(
+            index, query, limit=limit, type_=type_,
+            include_types=include_types, exclude_types=exclude_types,
+        )
 
     if emit:
         _emit_lexical(
@@ -172,7 +186,13 @@ def _extract_phrases(query: str) -> tuple[list[str], list[str], bool]:
 
 
 def _like_substring_scan(
-    index: FTSIndex, query: str, *, limit: int, type_: Optional[str] = None,
+    index: FTSIndex,
+    query: str,
+    *,
+    limit: int,
+    type_: Optional[str] = None,
+    include_types: Optional[Sequence[str]] = None,
+    exclude_types: Optional[Sequence[str]] = None,
 ) -> list[FTSHit]:
     """Direct LIKE scan on the unicode61 table for short CJK queries.
 
@@ -181,22 +201,18 @@ def _like_substring_scan(
     typically). LIKE is O(N) but the workspace size is small enough
     that this is fine as a fallback.
 
-    ``type_``, when given, adds ``AND type = ?`` — see ``lexical_search``.
+    ``type_``/``include_types``/``exclude_types`` build the same type
+    clause as the FTS routes — see ``FTSIndex._type_clause`` and
+    ``lexical_search``.
     """
     conn = index._conn  # noqa: SLF001 — intentional friend access
     like = f"%{query}%"
-    if type_ is None:
-        cur = conn.execute(
-            "SELECT uri, path, type, entity_type FROM memory_fts "
-            "WHERE text LIKE ? LIMIT ?",
-            (like, limit),
-        )
-    else:
-        cur = conn.execute(
-            "SELECT uri, path, type, entity_type FROM memory_fts "
-            "WHERE text LIKE ? AND type = ? LIMIT ?",
-            (like, type_, limit),
-        )
+    clause, params = index._type_clause(type_, include_types, exclude_types)  # noqa: SLF001
+    cur = conn.execute(
+        f"SELECT uri, path, type, entity_type FROM memory_fts "
+        f"WHERE text LIKE ?{clause} LIMIT ?",
+        (like, *params, limit),
+    )
     return [
         FTSHit(uri=u, path=p, type=t, entity_type=et)
         for (u, p, t, et) in cur.fetchall()

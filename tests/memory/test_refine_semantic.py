@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from durin.memory.entity_page import EntityPage
+from durin.memory.absorption import EntityAbsorption
 from durin.memory.field_patch import FieldPatch
 from durin.memory.memory_writer import write_entity
 from durin.memory.refine_dream import run_refine
@@ -21,7 +21,7 @@ class _FakeVI:
     def __init__(self, rows_by_substr):
         self._rows = rows_by_substr
 
-    def search(self, query, *, top_k=10):
+    def search(self, query, *, top_k=10, where=None):
         for substr, rows in self._rows.items():
             if substr.lower() in query.lower():
                 return rows[:top_k]
@@ -36,6 +36,20 @@ class _FakeVI:
     def upsert_entity_page(self, **kw):
         self.upserted = getattr(self, "upserted", [])
         self.upserted.append(kw.get("entity_ref"))
+
+
+class _CrowdedIndex:
+    """A same-type twin buried behind 50 unfiltered reference rows — only
+    reachable when the caller asks the index for entity pages via `where`."""
+    def __init__(self, twin_id, twin_type):
+        self.twin = {"id": twin_id, "class_name": "entity_page", "_distance": 0.05,
+                     "path": f"memory/entities/{twin_type}/{twin_id.split(':')[1]}.md"}
+        self.noise = [{"id": f"reference:doc#{i}", "class_name": "reference", "_distance": 0.01 + i / 1000}
+                      for i in range(50)]
+
+    def search(self, query, *, top_k=10, where=None):
+        rows = [self.twin] if where and "entity_page" in where else self.noise + [self.twin]
+        return rows[:top_k]
 
 
 def _mk(ws, ref, name):
@@ -86,6 +100,17 @@ def test_refine_semantic_skips_cross_type(tmp_path):
     out = run_refine(tmp_path, llm_invoke=_judge_stub("same", 99), vector_index=vi)
     # cross-type pair filtered (in find_semantic_candidates and/or run_refine)
     assert not out["merged"]
+
+
+def test_find_semantic_candidates_finds_twin_past_crowded_window(tmp_path):
+    # 50 unfiltered reference rows would push the same-type twin out of a
+    # plain top-k window; find_semantic_candidates must ask the index
+    # directly for entity pages instead of relying on a Python filter.
+    _mk(tmp_path, "person:bob_smith", "Bob Smith")
+    vi = _CrowdedIndex("person:robert_smith", "person")
+    absorber = EntityAbsorption(tmp_path)
+    out = absorber.find_semantic_candidates(vi, distance_threshold=0.30)
+    assert out and set(out[0].refs) == {"person:bob_smith", "person:robert_smith"}
 
 
 def test_refine_no_vector_index_is_alias_only(tmp_path):

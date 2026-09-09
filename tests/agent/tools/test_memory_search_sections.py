@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -117,3 +118,50 @@ def test_raw_session_turn_cold_level_never_shows_less_than_warm(
 
     assert summary in warm
     assert summary in cold
+
+
+def _stub_pipeline_capturing_scope(
+    monkeypatch: pytest.MonkeyPatch, seen: dict[str, Any],
+) -> None:
+    """Patch ``run_search_pipeline`` at its source module (same seam as
+    ``_stub_pipeline``) and record the ``scope`` kwarg the tool passed
+    through, so the test can assert on the predicate itself rather than
+    on post-filtered hits."""
+    def fake_pipeline(*args: Any, **kw: Any) -> SearchPipelineResult:
+        seen["scope"] = kw.get("scope")
+        return SearchPipelineResult(hits=[], vector_count=0, lexical_count=0)
+
+    monkeypatch.setattr(
+        "durin.memory.search_pipeline.run_search_pipeline", fake_pipeline,
+    )
+
+
+def test_kinds_skill_reaches_the_indexes_as_a_predicate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`kinds="skill"` must reach the pipeline as a scope predicate — the
+    indexes filter `class_name` before the top-k; the tool no longer
+    post-filters hits in Python."""
+    seen: dict[str, Any] = {}
+    _stub_pipeline_capturing_scope(monkeypatch, seen)
+
+    tool = MemorySearchTool(workspace=tmp_path)
+    asyncio.run(tool.execute(query="axe", kinds="skill"))
+
+    assert seen["scope"].vector_where == "class_name = 'skill'"
+
+
+def test_library_scope_is_a_predicate_not_a_post_filter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`scope="library"` must reach the pipeline as a scope predicate too —
+    the reference class is what the indexes filter on, not a post-hoc
+    Python filter over the pipeline's hits."""
+    seen: dict[str, Any] = {}
+    _stub_pipeline_capturing_scope(monkeypatch, seen)
+
+    tool = MemorySearchTool(workspace=tmp_path)
+    asyncio.run(tool.execute(query="axe", scope="library"))
+
+    assert seen["scope"].fts_include == ("reference", "corpus")
+    assert seen["scope"].vector_where == "class_name IN ('reference', 'corpus')"

@@ -79,13 +79,13 @@ The output is a frozen `RoutingDecision` dataclass.
 
 ### Step 2a — Vector search
 
-`VectorIndex.search(query, top_k=50)` embeds the query with the E5 `"query: "` prefix (multilingual-e5-small, 384-dim by default) and runs an L2 distance search over the `memory_entries` LanceDB table. The pipeline normalizes raw vector rows to a unified `memory/<class>/<id>` URI shape so the RRF step can fuse them with FTS rows for the same document.
+`VectorIndex.search(query, top_k=50, where=...)` embeds the query with the E5 `"query: "` prefix (multilingual-e5-small, 384-dim by default) and runs an L2 distance search over the `memory_entries` LanceDB table. The scope predicate's `vector_where` clause, when the caller supplies one, prefilters the table before the top-k cut — the excluded population never competes for a slot. The pipeline normalizes raw vector rows to a unified `memory/<class>/<id>` URI shape so the RRF step can fuse them with FTS rows for the same document.
 
 Entity-page rows use their entity-ref URI directly (e.g. `person:deborah`); skill rows use the bare `skill/<slug>` fusion URI. Sessions are not vector-indexed; `session_summary` entries cover the semantic layer.
 
 ### Step 2b — Lexical search
 
-`lexical_search(idx, decision, limit=50)` executes the route chosen in Step 1 against the FTS5 database:
+`lexical_search(idx, decision, limit=50, include_types=..., exclude_types=...)` executes the route chosen in Step 1 against the FTS5 database, restricted to the scope predicate's type set when the caller supplies one:
 - `UNICODE61` and `TRIGRAM` paths use `ORDER BY rank` (BM25) — the clause is load-bearing; without it SQLite returns rowid order, not relevance order.
 - `LIKE_SUBSTRING` returns in table order (no scoring).
 
@@ -167,7 +167,7 @@ The pipeline returns `SearchPipelineResult` with the capped `hits`, source count
 
 | Symbol | File | Role |
 |--------|------|------|
-| `run_search_pipeline` | `durin/memory/search_pipeline.py` | Pipeline orchestrator. Takes `workspace`, `query`, optional `keywords`, `vector_index`, `cross_encoder`. Returns `SearchPipelineResult`. Each step wrapped in try/except for graceful degradation. |
+| `run_search_pipeline` | `durin/memory/search_pipeline.py` | Pipeline orchestrator. Takes `workspace`, `query`, optional `keywords`, `vector_index`, `cross_encoder`, `scope`. Returns `SearchPipelineResult`. Each step wrapped in try/except for graceful degradation. |
 | `SearchPipelineResult` | `durin/memory/search_pipeline.py` | Frozen dataclass: `hits: list[SectionedHit]`, `vector_count`, `lexical_count`, `recovered_from`, `recovery_duration_ms`. |
 | `decide_lexical_route` | `durin/memory/query_router.py` | Pure function: NFC-normalize, CJK-count, pick FTS5 route, detect auto-keywords. Returns `RoutingDecision`. No I/O. |
 | `RoutingDecision` | `durin/memory/query_router.py` | Frozen dataclass: `normalized_query`, `route` (`UNICODE61` / `TRIGRAM` / `LIKE_SUBSTRING`), `cjk_chars`, `keywords`, `auto_keywords`. |
@@ -201,7 +201,7 @@ The pipeline returns `SearchPipelineResult` with the capped `hits`, source count
 
 The pipeline is invoked by the `memory_search` tool (`04_agent_tools.md`). The tool wraps scope/level/limit logic around `run_search_pipeline`:
 
-- **Library scope filter (`library_mode`).** Ingested reference material — reference documents, their chunks, legacy corpus, and raw ingested artifacts (matched by uri: `reference:…`, `memory/reference/…`, `memory/corpus/…`, `ingested/…`) — is kept out of the default recall pool. `scope=all/dreamed/undreamed` pass `library_mode="exclude"` (Library material dropped); `scope=library` passes `library_mode="only"` (Library material is the sole content) and gets the vector index. The filter runs on the fused list before the per-source cap and `limit`, so excluded material never consumes result slots.
+- **Scope.** The tool builds one `ScopePredicate` from `scope` and `kinds` (`durin/memory/scope.py`) and passes it into `run_search_pipeline` as `scope=`. The predicate carries a `vector_where` clause and an FTS type set; the pipeline applies it inside both the vector leg (Step 2a) and the lexical leg (Step 2b) as a genuine prefilter, before either index's top-k cut. Library is a class set, not a single class: `reference` (ingested documents and their chunks) plus the legacy `corpus` class that predates the reference/ingest split — both `class_name`s on the vector leg, both FTS `type`s on the lexical leg. The grep leg walks files and has no index to filter, so it is filtered by uri instead, independently for each axis the predicate carries: Library material (both classes) by the `reference:…` / `memory/reference/…` / `memory/corpus/…` / `ingested/…` prefixes, skills by the `skill/…` prefix, and — for the dream's entity-pages predicate — entity material by uri shape (a bare `<type>:<slug>` ref, never a session or memory path) — all applied before RRF fusion so excluded material never enters the fused list. `scope=all/dreamed/undreamed` excludes the whole Library class set; `scope=library` makes it the sole content and gets the vector index; `kinds="skill"`/`"fact"` narrow further to skills-only or skills-excluded, across all three legs.
 - **Reference-hit content preview (`_attach_reference_bodies`).** A reference chunk's indexed `summary` is the head of its raw text — for scraped web/PDF docs that is the metadata header (title, URL, author, date), so the agent's preview would show page chrome, not substance. Before rendering, `memory_search` reads the actual chunk from the `.chunks.jsonl` sidecar and strips that leading boilerplate (`reference.strip_scraped_boilerplate`), so the preview leads with content; `body_length` stays the raw length so the block still shows `preview N/M` and the agent knows to drill for the rest. The embedding is left untouched — stripping the header from it measured neutral (the boilerplate does not move vector rank).
 - `scope=undreamed` passes `vector_index=None` and restricts remaining hits to session types.
 - `scope=dreamed` / `all` pass the vector index; grep fallback runs but the tool keeps all non-Library hit types.

@@ -6,6 +6,7 @@ from durin.memory.artifact_recall import entities_derived_from, memory_notes_for
 from durin.memory.field_patch import FieldPatch
 from durin.memory.indexer import rebuild_fts_index
 from durin.memory.memory_writer import write_entity
+from durin.memory.reference import ingest_reference
 from durin.memory.session_summary_store import write_session_summary
 
 
@@ -23,6 +24,25 @@ def test_notes_list_entries_that_mention_the_path(tmp_path: Path) -> None:
     assert len(notes) == 1
     assert notes[0].startswith("- memory/session_summary/websocket_old")
     assert "fixed the retry loop" in notes[0]
+
+
+def test_a_matching_reference_row_never_consumes_the_limit(tmp_path: Path) -> None:
+    """The lexical query is restricted to note classes at the SQL level, so
+    Library reference rows that also mention the path can never occupy a
+    limit slot ahead of the actual note — however many of them match."""
+    for i in range(10):
+        ingest_reference(tmp_path, f"manual-{i}", "durin/agent/loop.py")
+    write_session_summary(
+        tmp_path, "websocket:old",
+        "- fixed the retry loop\nWe reviewed durin/agent/loop.py.",
+        last_active=date(2026, 9, 1),
+    )
+    rebuild_fts_index(tmp_path)
+
+    notes = memory_notes_for_path(tmp_path, "durin/agent/loop.py", limit=1)
+
+    assert len(notes) == 1
+    assert notes[0].startswith("- memory/session_summary/websocket_old")
 
 
 def test_notes_are_empty_without_an_index_or_a_mention(tmp_path: Path) -> None:
