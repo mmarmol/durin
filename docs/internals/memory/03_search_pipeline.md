@@ -17,7 +17,7 @@ Temporal decay is intentionally not applied: the LLM receives `valid_from` on ev
 
 ## 2. Mental model
 
-**Three sources, one fused rank.** Vector search (LanceDB L2) and lexical search (FTS5) run to top-50 each; a grep fallback covers raw sessions and not-yet-indexed files. Reciprocal Rank Fusion merges all three in rank space — score-scale invariant, so BM25, L2, and grep all combine cleanly.
+**Three sources, one fused rank.** Vector search (LanceDB L2) and lexical search (FTS5) run to top-50 each; a grep fallback covers raw sessions and not-yet-indexed files. For ordinary natural-language queries, lexical search ranks documents where loose tokens are OR-joined and scored by BM25, while double-quoted phrases and all `keywords` tokens are required. This produces matches on partial literal evidence (shared rare words) as well as exact phrases, creating a ranking independent of semantic similarity. Reciprocal Rank Fusion merges all three in rank space — score-scale invariant, so BM25, L2, and grep combine cleanly — ensuring fusion is a genuine multi-source consensus rather than vector-only with lexical evidence lost past the top-50 boundary.
 
 **Entity-aware nudge, not override.** When the query mentions a known alias, hits tagged with that entity receive an additional RRF contribution. Entity matching is a nudge to surface canonical pages and fresh tagged entries; it does not override semantic similarity.
 
