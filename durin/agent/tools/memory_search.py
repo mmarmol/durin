@@ -189,8 +189,9 @@ _PARAMETERS = tool_parameters_schema(
         enum=["warm", "cold"],
     ),
     keywords=StringSchema(
-        "Optional terms that MUST appear in every result, e.g. a name or "
-        "an identifier; quoted groups are exact phrases. Leave empty when "
+        "Terms that must appear for a lexical match, e.g. a name or an "
+        "identifier; quoted groups are exact phrases. Results found only "
+        "by meaning can still appear without them. Leave empty when "
         "nothing is required."
     ),
     limit=IntegerSchema(
@@ -224,7 +225,8 @@ _PARAMETERS = tool_parameters_schema(
         "rather than one long query.\n"
         "- For literal-match queries (emails, IDs, URLs), pass the literal "
         "string in `keywords` in addition to a natural-language `query`. "
-        "Every `keywords` token must appear in every result; quote a "
+        "Every `keywords` token must appear in every result, and lexical "
+        "evidence for them weighs more in the fused ranking; quote a "
         "group inside `keywords` to require it as one phrase.\n"
         "- For exact phrase matching, wrap the phrase in double quotes "
         "inside `query` — e.g. `\"shooting percentage\" basketball` "
