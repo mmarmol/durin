@@ -204,15 +204,17 @@ skill_signals)` iterates every `sessions/*.jsonl` and calls
    (via the alias index): a **unique** match updates that entity in place instead
    of minting a new slug; an **ambiguous** match (more than one candidate) creates
    a new page, deferring disambiguation to the refine pass. When lexical matching
-   yields **no** match, discovery additionally consults the vector index for an
-   **embedding-near same-type entity** (L2 distance within
-   `semantic_distance_threshold`) and runs the LLM judge to confirm whether the
-   proposal is the same entity under a variant name; a confirmed match reuses the
-   existing entity instead of minting a new slug, preventing variant-name
-   duplicates at birth. This semantic step is a no-op when the vector index is
-   unavailable. The discover prompt is **seeded with an `EXISTING ENTITIES`
-   manifest** (up to 20 entries, retrieved by a query-mode search using the
-   conversation turns): the LLM is instructed to reuse the exact ref of a known
+   yields **no** match, discovery additionally queries the vector index —
+   scoped to entity pages of the proposal's type via
+   `ScopePredicate.entity_pages` — for an **embedding-near same-type entity**
+   (L2 distance within `semantic_distance_threshold`) and runs the LLM judge to
+   confirm whether the proposal is the same entity under a variant name; a
+   confirmed match reuses the existing entity instead of minting a new slug,
+   preventing variant-name duplicates at birth. This semantic step is a no-op
+   when the vector index is unavailable. The discover prompt is **seeded with
+   an `EXISTING ENTITIES` manifest** (up to 20 entries, retrieved by a
+   query-mode search scoped to entity pages using the conversation turns): the
+   LLM is instructed to reuse the exact ref of a known
    entity when the fact is about it, and to mint a new ref only for genuinely new
    entities. This prompt-level seeding is a first-pass guard that reduces
    duplicate slugs before any post-write resolution is attempted. The discovered
@@ -397,10 +399,12 @@ threaded through; it is `None` when the vector index is unavailable.
 1. `EntityAbsorption.find_candidates` (`durin/memory/absorption.py`) returns
    pairs that share at least one alias, strongest signal first.
 2. When `vector_index` is provided, `EntityAbsorption.find_semantic_candidates`
-   supplements the set with **embedding-near same-type pairs** whose L2 distance
-   falls within `semantic_distance_threshold` (default 0.30), deduped against the
-   alias pairs. This catches duplicates that share no alias — same entity,
-   different name — and feeds them through the same judge. When the vector index is
+   queries the vector index — scoped to entity pages of each page's own type
+   via `ScopePredicate.entity_pages` — and supplements the set with
+   **embedding-near same-type pairs** whose L2 distance falls within
+   `semantic_distance_threshold` (default 0.30), deduped against the alias
+   pairs. This catches duplicates that share no alias — same entity, different
+   name — and feeds them through the same judge. When the vector index is
    unavailable this step is a no-op.
 3. Each pair is filtered out (with a `memory.absorb.skipped` reason) when:
    `cross_type` (different entity types), `tombstoned` (the user previously

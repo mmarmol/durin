@@ -23,8 +23,22 @@ class _FakeVI:
     def __init__(self, rows):
         self._rows = rows
 
-    def search(self, query, *, top_k=10):
+    def search(self, query, *, top_k=10, where=None):
         return self._rows[:top_k]
+
+
+class _CrowdedIndex:
+    """A same-type twin buried behind 50 unfiltered reference rows — only
+    reachable when the caller asks the index for entity pages via `where`."""
+    def __init__(self, twin_id, twin_type):
+        self.twin = {"id": twin_id, "class_name": "entity_page", "_distance": 0.05,
+                     "path": f"memory/entities/{twin_type}/{twin_id.split(':')[1]}.md"}
+        self.noise = [{"id": f"reference:doc#{i}", "class_name": "reference", "_distance": 0.01 + i / 1000}
+                      for i in range(50)]
+
+    def search(self, query, *, top_k=10, where=None):
+        rows = [self.twin] if where and "entity_page" in where else self.noise + [self.twin]
+        return rows[:top_k]
 
 
 def _page_path(ws, ref):
@@ -84,6 +98,21 @@ def test_discover_semantic_skips_beyond_threshold(tmp_path):
         llm_invoke=_stub('[{"ref":"person:robert_jones","name":"Robert Jones","attributes":{}}]'))
     # too far -> no judge, create new
     assert out == [{"ref": "person:robert_jones", "committed": True}]
+
+
+def test_discover_semantic_finds_twin_past_crowded_window(tmp_path):
+    # 50 unfiltered reference rows would push the same-type twin out of a
+    # plain top-5 window; the entity-pages predicate must ask the index
+    # directly instead of relying on a Python class_name/type filter.
+    _mk(tmp_path, "person:bob_smith", "Bob Smith")
+    vi = _CrowdedIndex("person:bob_smith", "person")
+    out = discover_entities(
+        tmp_path, "Robert Smith leads sales",
+        vector_index=vi,
+        llm_invoke=_stub_for_discover_and_judge(
+            '[{"ref":"person:robert_smith","name":"Robert Smith",'
+            '"attributes":{"role":"sales"}}]', _judge("same", 97)))
+    assert out == [{"ref": "person:bob_smith", "committed": True}]
 
 
 def test_discover_no_vector_index_is_lexical_only(tmp_path):

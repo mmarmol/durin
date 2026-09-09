@@ -16,6 +16,20 @@ def _seed(ws: Path, ref: str, name: str, body: str) -> None:
                  create=True, name=name)
 
 
+class _CrowdedIndex:
+    """A same-type twin buried behind 50 unfiltered reference rows — only
+    reachable when the caller asks the index for entity pages via `where`."""
+    def __init__(self, twin_id, twin_type):
+        self.twin = {"id": twin_id, "class_name": "entity_page", "_distance": 0.05,
+                     "path": f"memory/entities/{twin_type}/{twin_id.split(':')[1]}.md"}
+        self.noise = [{"id": f"reference:doc#{i}", "class_name": "reference", "_distance": 0.01 + i / 1000}
+                      for i in range(50)]
+
+    def search(self, query, *, top_k=10, where=None):
+        rows = [self.twin] if where and "entity_page" in where else self.noise + [self.twin]
+        return rows[:top_k]
+
+
 def test_types_mode_lists_all_entities_of_those_types(tmp_path):
     ws = tmp_path / "ws"
     _seed(ws, "feedback:spanish", "Spanish replies", "User wants Spanish.")
@@ -68,6 +82,17 @@ def test_query_mode_returns_relevant_entity(tmp_path, monkeypatch):
     assert Path(call_args[0]) == Path(ws), "first positional arg must be the workspace path"
     # Query is passed as the second positional arg.
     assert call_args[1] == query, "second positional arg must be the query string"
+
+
+def test_query_mode_finds_twin_past_crowded_window(tmp_path):
+    # 50 unfiltered reference rows would push the same-type twin out of a
+    # plain top-k window; the manifest's query mode must ask the index
+    # directly for entity pages via the scope predicate.
+    ws = tmp_path / "ws"
+    _seed(ws, "person:bob_smith", "Bob Smith", "The sales lead.")
+    vi = _CrowdedIndex("person:bob_smith", "person")
+    out = build_entity_manifest(ws, query="Robert Smith leads sales", vector_index=vi, limit=5)
+    assert "person:bob_smith" in out
 
 
 def test_query_mode_skips_bogus_and_missing_refs(tmp_path, monkeypatch):

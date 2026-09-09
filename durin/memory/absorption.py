@@ -117,6 +117,7 @@ class EntityAbsorption:
         entity's composed text; keeps same-type neighbors within
         ``distance_threshold``; returns deduped pairs (closest distance kept)."""
         from durin.memory.entity_page import EntityPage
+        from durin.memory.scope import ScopePredicate
         from durin.memory.vector_index import VectorIndex
 
         pairs: dict[tuple[str, str], float] = {}
@@ -135,15 +136,14 @@ class EntityAbsorption:
             try:
                 # +1: the entity itself is its own nearest neighbour (distance
                 # ~0); request one extra so self-exclusion still leaves top_k.
-                rows = vector_index.search(query, top_k=top_k + 1)
+                rows = vector_index.search(
+                    query, top_k=top_k + 1,
+                    where=ScopePredicate.entity_pages(page.type).vector_where)
             except Exception:  # noqa: BLE001 — semantic recall is best-effort
                 continue
             for row in rows:
                 ref = row.get("id")
-                if (not isinstance(ref, str) or ref == self_ref
-                        or row.get("class_name") != "entity_page"):
-                    continue
-                if ref.split(":", 1)[0] != page.type:   # same-type only
+                if not isinstance(ref, str) or ref == self_ref:
                     continue
                 dist = float(row.get("_distance", 1.0))
                 if dist > distance_threshold:
