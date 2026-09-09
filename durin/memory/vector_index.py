@@ -539,18 +539,20 @@ class VectorIndex:
         """The ``id`` of every row whose ``class_name`` is in ``class_names``.
 
         Used by :func:`durin.memory.indexer.backfill_missing_vectors` to
-        diff the FTS uris against what's already embedded, without
-        pulling the vector column over the wire.
+        diff the FTS uris against what's already embedded. Uses the query
+        builder's column projection to fetch only ``id`` and ``class_name``
+        without reading the vector column.
         """
         db = self._connect()
         if _TABLE_NAME not in db.list_tables().tables:
             return set()
-        table = db.open_table(_TABLE_NAME).to_arrow().select(["id", "class_name"])
+        table = db.open_table(_TABLE_NAME)
+        total = table.count_rows()
+        if total == 0:
+            return set()
+        rows = table.search().select(["id", "class_name"]).limit(total).to_list()
         wanted = set(class_names)
-        return {
-            i for i, c in zip(table.column("id").to_pylist(), table.column("class_name").to_pylist())
-            if c in wanted
-        }
+        return {row["id"] for row in rows if row["class_name"] in wanted}
 
     def upsert_with_vector(
         self,

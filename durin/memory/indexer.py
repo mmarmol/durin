@@ -648,7 +648,8 @@ def backfill_missing_vectors(
                 count += 1
         duration_ms = (time.perf_counter() - t0) * 1000.0
         done[class_name] = count
-        _emit_backfill(class_name=class_name, count=count, duration_ms=duration_ms)
+        if count > 0:
+            _emit_backfill(class_name=class_name, count=count, duration_ms=duration_ms)
     return done
 
 

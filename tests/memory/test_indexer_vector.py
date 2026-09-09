@@ -165,3 +165,35 @@ def test_backfill_is_idempotent(
     second = backfill_missing_vectors(ws, vi)
     assert second == {}
     assert vi.ids_by_class(["episodic"]) == {r1["id"]}
+
+
+def test_backfill_does_not_emit_event_when_count_is_zero(
+    tmp_path: Path, provider: _FakeEmbeddingProvider, monkeypatch
+) -> None:
+    import durin.memory.indexer as indexer_mod
+    from durin.memory.indexer import backfill_missing_vectors, reindex_one_file
+    from durin.memory.store import store_memory
+
+    ws = tmp_path / "ws"
+    r1 = store_memory(ws, content="cuarta nota", class_name="episodic")
+    reindex_one_file(ws, Path(r1["path"]))
+
+    vi = VectorIndex(ws, provider)
+    # Patch reindex_one_file_vector to return False for all entries,
+    # so count stays 0.
+    events: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        indexer_mod, "reindex_one_file_vector",
+        lambda workspace, path, vi: False,
+    )
+    monkeypatch.setattr(
+        indexer_mod, "_emit_backfill",
+        lambda class_name, count, duration_ms: events.append(("backfill", {"class": class_name, "count": count})),
+    )
+
+    done = backfill_missing_vectors(ws, vi)
+
+    # count is 0 because reindex_one_file_vector returned False
+    assert done == {"episodic": 0}
+    # No backfill event should have been emitted
+    assert events == []
