@@ -343,3 +343,24 @@ def test_grep_leg_reads_only_files_the_index_does_not_hold(tmp_path):
     result = run_search_pipeline(tmp_path, "yunque nuevo")
     assert (result.grep_scanned, result.grep_skipped) == (1, 1)
     assert [h.uri for h in result.hits] == [f"memory/episodic/{fresh['id']}"]
+
+
+def test_a_lexical_only_hit_carries_the_entry_display_fields(tmp_path):
+    """An FTS row holds only uri, path and type. A hit the lexical leg
+    alone surfaced (no vector index here) must still carry the entry's
+    headline, summary and body length, or its block renders empty — the
+    grep leg used to paper over this by re-reading every indexed file."""
+    from durin.memory.indexer import reindex_one_file
+    from durin.memory.store import store_memory
+
+    r = store_memory(tmp_path, content="marcelo prefers pytest over unittest", class_name="episodic")
+    reindex_one_file(tmp_path, Path(r["path"]))
+
+    result = run_search_pipeline(tmp_path, "pytest")
+
+    assert (result.grep_scanned, result.grep_skipped) == (0, 1)
+    [hit] = result.hits
+    assert hit.uri == f"memory/episodic/{r['id']}"
+    assert hit.snippet == "marcelo prefers pytest over unittest"  # the headline, no grep snippet
+    assert "pytest" in hit.summary
+    assert hit.body_length > 0

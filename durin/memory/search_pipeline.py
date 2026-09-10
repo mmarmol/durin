@@ -35,6 +35,7 @@ from durin.memory.lexical_search import (
     build_fts_expression,
     lexical_search,
 )
+from durin.memory.paths import MEMORY_CLASSES
 from durin.memory.query_router import LexicalRoute, decide_lexical_route
 from durin.memory.rrf_fusion import (
     DEFAULT_K,
@@ -49,6 +50,7 @@ from durin.memory.sectioned_output import (
     SectionedHit,
     apply_per_source_cap,
 )
+from durin.memory.storage import load_entry
 
 __all__ = ["SearchPipelineResult", "run_search_pipeline"]
 
@@ -295,6 +297,8 @@ def run_search_pipeline(
         meta = _resolve_meta(
             f.uri, vector_meta, lexical_meta, grep_meta=grep_meta,
         )
+        if _is_entry_uri(f.uri) and not (meta.get("headline") or meta.get("summary")):
+            meta.update(_entry_meta_from_disk(workspace, f.uri))
         section_hits.append(SectionedHit(
             uri=f.uri,
             type=meta.get("type", "episodic"),
@@ -923,6 +927,41 @@ def _verified_uris(
             )
         verified.update(u for (u,) in cur.fetchall())
     return verified
+
+
+def _is_entry_uri(uri: str) -> bool:
+    """True for a memory entry (``memory/<class>/<id>``, any indexed class)."""
+    parts = uri.split("/")
+    return len(parts) == 3 and parts[0] == "memory" and parts[1] in MEMORY_CLASSES
+
+
+def _entry_meta_from_disk(workspace: Path, uri: str) -> dict:
+    """Display fields for a memory entry no source carried.
+
+    An FTS row holds only uri, path and type; headline, summary and body
+    length ride on the vector row. A hit the lexical leg alone surfaced —
+    no embedding model, no vector row yet, or a row outside the vector
+    top-k — would render as an empty block, so read them from the entry
+    itself, with the same summary rule the vector upsert materialises.
+    One file per such hit; a missing or malformed entry yields nothing.
+    """
+    from durin.memory.vector_index import _effective_summary
+
+    try:
+        _, class_name, entry_id = uri.split("/", 2)
+        entry = load_entry(workspace / "memory" / class_name / f"{entry_id}.md")
+    except Exception:  # noqa: BLE001
+        return {}
+    meta: dict = {
+        "headline": entry.headline or "",
+        "summary": _effective_summary(entry),
+        "body_length": len(entry.body or ""),
+    }
+    if entry.valid_from:
+        meta["valid_from"] = entry.valid_from.isoformat()
+    if entry.entities:
+        meta["entities"] = list(entry.entities)
+    return meta
 
 
 def _resolve_meta(
