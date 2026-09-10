@@ -419,10 +419,28 @@ def detect_index_staleness(workspace: Path) -> list[dict]:
             uri = skill_uri(skill_md.parent.name)
             fs_files[uri] = skill_md.stat().st_mtime
 
+    # Session index stats gathered while iterating the rows below.
+    # Sessions are turn-indexed (`sessions/<key>.md#turn-N`), so coverage
+    # is per file: how many turns are indexed and the newest turn's mtime.
+    session_stats: dict[str, list] = {}  # `sessions/<key>.md` -> [count, max_mtime]
     with FTSIndex.open(workspace) as idx:
         seen_in_index: set[str] = set()
         for uri, indexed_mtime in idx.known_uris():
             seen_in_index.add(uri)
+            if uri.startswith("sessions/") and "#" in uri:
+                # A turn row is an orphan only when its session FILE is
+                # gone — never because the per-turn uri is absent from the
+                # memory walk (`fs_files` covers memory/ + skills only).
+                key_file = uri.split("#", 1)[0]
+                st = session_stats.setdefault(key_file, [0, 0.0])
+                st[0] += 1
+                st[1] = max(st[1], indexed_mtime)
+                if not (workspace / key_file).is_file():
+                    _emit_staleness(uri=uri, reason="row_for_missing_file")
+                    issues.append(
+                        {"uri": uri, "reason": "row_for_missing_file"}
+                    )
+                continue
             current = fs_files.get(uri)
             if current is None:
                 _emit_staleness(uri=uri, reason="row_for_missing_file")
@@ -447,6 +465,41 @@ def detect_index_staleness(workspace: Path) -> list[dict]:
         if uri not in seen_in_index:
             _emit_staleness(uri=uri, reason="missing_row")
             issues.append({"uri": uri, "reason": "missing_row"})
+    # Sessions live outside `memory/` (walk_memory does not reach them) and
+    # are indexed reactively per turn; a session written before the
+    # reactive indexer, or on an install whose full rebuild never ran, has
+    # no rows. Flag the file for a per-file repair (`reindex_session_file`).
+    sessions_dir = workspace / "sessions"
+    if sessions_dir.is_dir():
+        for md_path in sorted(sessions_dir.glob("*.md")):
+            key_file = f"sessions/{md_path.stem}.md"
+            st = session_stats.get(key_file)
+            try:
+                file_mtime = md_path.stat().st_mtime
+            except OSError:
+                continue
+            if st is None:
+                # A session with no rows is only missing if it has turns
+                # to index: a header-only file (created, never messaged)
+                # yields no payloads and must not be re-flagged every tick.
+                if any(True for _ in _turn_payloads_for_md(md_path)):
+                    _emit_staleness(uri=key_file, reason="missing_row")
+                    issues.append({"uri": key_file, "reason": "missing_row"})
+            elif file_mtime > st[1]:
+                # mtime is only a candidate signal: a consolidation
+                # annotation bumps mtime without adding a turn, and the
+                # annotation is never searched. Confirm with the on-disk
+                # turn count so a pure touch does not re-flag every tick.
+                disk_turns = sum(1 for _ in _turn_payloads_for_md(md_path))
+                if disk_turns > st[0]:
+                    delta = file_mtime - st[1]
+                    _emit_staleness(
+                        uri=key_file, reason="mtime_lag", delta_seconds=delta,
+                    )
+                    issues.append({
+                        "uri": key_file, "reason": "mtime_lag",
+                        "delta_seconds": delta,
+                    })
 
     return issues
 
@@ -1057,6 +1110,12 @@ def _uri_for(workspace: Path, md_path: Path) -> Optional[str]:
         type_ = parts[1]
         slug = md_path.stem
         return f"{type_}:{slug}"
+    # References index under `reference:<slug>` (see `_payload_for`), NOT
+    # `memory/references/<slug>`: the drift detector and the delete path
+    # derive the uri here, so returning the path form left every
+    # reference perpetually `missing_row` and its row un-deletable.
+    if parts[0] == "references":
+        return f"reference:{md_path.stem}"
     # Entries: the canonical uri is `memory/<class>/<id>` — the SAME form
     # `_payload_for` indexes under (line ~553) and `fts_meta` stores. The
     # id == the filename stem by convention (see durin.memory.storage).
