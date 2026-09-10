@@ -441,6 +441,38 @@ class HealthChecker:
         # re-index via reindex_one_skill (not reindex_one_file). Handle
         # them before the bare-id else, which only scans entry classes
         # and would never reconstruct a skill path.
+        if uri.startswith("sessions/"):
+            # Turn-indexed; reindex_session_file adds the turns the index
+            # is missing (O(new turns)) and is a no-op when up to date.
+            from durin.memory.indexer import reindex_session_file
+
+            md = self._workspace / uri
+            if md.is_file():
+                try:
+                    reindex_session_file(self._workspace, md)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "health_check: drift repair %s failed: %s", md, exc,
+                    )
+            return
+        if uri.startswith("reference:"):
+            # References index under `reference:<slug>`; the backing file
+            # is `memory/references/<slug>.md`, not the entities path the
+            # generic `:`-in-uri branch below would build.
+            ref = (
+                self._workspace / "memory" / "references"
+                / f"{uri.split(':', 1)[1]}.md"
+            )
+            if ref.is_file():
+                try:
+                    reindex_one_file(
+                        self._workspace, ref, trigger="drift_repair",
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "health_check: drift repair %s failed: %s", ref, exc,
+                    )
+            return
         if uri.startswith("skill/"):
             from durin.memory.indexer import reindex_one_skill
             from durin.memory.paths import skill_path_from_uri
@@ -584,19 +616,34 @@ class HealthCheckScheduler:
             self._thread = None
 
     def _loop(self) -> None:
-        # First tick fires immediately so a fresh process has a
-        # health probe in its first interval window, not after.
-        # Subsequent ticks wait `interval_seconds`.
-        while not self._stop_event.is_set():
-            try:
-                self._checker.run_tick()
-                self._tick_count += 1
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "health_check tick raised; thread keeps running: %s",
-                    exc,
-                )
-            # `wait` returns True on .set() — short-circuits the sleep
-            # so `stop()` is responsive.
-            if self._stop_event.wait(timeout=self._interval):
-                break
+        # A fresh thread has no bound telemetry logger, so every
+        # `memory.health_check` / `staleness_detected` row run_tick emits
+        # would be silently dropped (seen on home and box: zero rows).
+        # Bind the gateway's session logger for the thread's lifetime,
+        # mirroring the file watcher's worker thread.
+        from durin.telemetry.logger import (
+            bind_telemetry,
+            get_session_logger,
+            reset_telemetry,
+        )
+
+        token = bind_telemetry(get_session_logger("gateway"))
+        try:
+            # First tick fires immediately so a fresh process has a
+            # health probe in its first interval window, not after.
+            # Subsequent ticks wait `interval_seconds`.
+            while not self._stop_event.is_set():
+                try:
+                    self._checker.run_tick()
+                    self._tick_count += 1
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "health_check tick raised; thread keeps running: %s",
+                        exc,
+                    )
+                # `wait` returns True on .set() — short-circuits the sleep
+                # so `stop()` is responsive.
+                if self._stop_event.wait(timeout=self._interval):
+                    break
+        finally:
+            reset_telemetry(token)
