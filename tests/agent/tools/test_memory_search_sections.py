@@ -198,3 +198,29 @@ def test_undreamed_is_a_session_predicate_with_the_vector_leg(
     assert seen["scope"].fts_include == ("session", "session_summary")
     assert seen["vector_index"] is vector_index
     assert [r["uri"] for r in out["results"]] == ["memory/episodic/e1"]
+
+
+def test_recall_row_reports_what_the_grep_leg_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The `memory.recall` row says how many files the grep walk read
+    (not held by the FTS index, or newer on disk) and how many it skipped
+    as covered — the number to read when a workspace's search is slow."""
+    import durin.agent.tools.memory_search as ms
+
+    monkeypatch.setattr(
+        "durin.memory.search_pipeline.run_search_pipeline",
+        lambda *a, **kw: SearchPipelineResult(
+            hits=[], vector_count=0, lexical_count=0,
+            grep_scanned=3, grep_skipped=2175,
+        ),
+    )
+    events: list[tuple[str, dict]] = []
+    monkeypatch.setattr(ms, "emit_tool_event", lambda t, d: events.append((t, d)))
+
+    tool = MemorySearchTool(workspace=tmp_path)
+    asyncio.run(tool.execute(query="axe"))
+
+    recall = [d for t, d in events if t == "memory.recall"]
+    assert len(recall) == 1
+    assert (recall[0]["grep_scanned"], recall[0]["grep_skipped"]) == (3, 2175)

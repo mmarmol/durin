@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
@@ -131,25 +131,76 @@ class Result:
     # `sectioned_rendered` from the tool response for the marker output.
 
 
+@dataclass
+class IndexCoverage:
+    """What the FTS index already holds, so a file walk can skip it.
+
+    ``mtimes`` maps a workspace-relative path to the file mtime recorded
+    when its newest row was indexed. A file is covered when the index has
+    it and it has not changed since; everything else — no row, or newer
+    on disk — is what the grep leg exists to catch. ``scanned`` and
+    ``skipped`` count the files that went through :meth:`needs_scan`.
+    """
+
+    mtimes: dict[str, float] = field(default_factory=dict)
+    scanned: int = 0
+    skipped: int = 0
+
+    @classmethod
+    def load(cls, workspace: Path) -> "IndexCoverage":
+        """Read the index; with no usable index nothing is covered."""
+        from durin.memory.fts_index import FTSIndex
+
+        try:
+            with FTSIndex.open(workspace) as idx:
+                return cls(idx.indexed_paths())
+        except Exception:  # noqa: BLE001
+            return cls()
+
+    def needs_scan(self, workspace: Path, path: Path) -> bool:
+        try:
+            rel = path.relative_to(workspace).as_posix()
+        except ValueError:
+            rel = None
+        indexed = self.mtimes.get(rel) if rel is not None else None
+        if indexed is not None:
+            try:
+                current = path.stat().st_mtime
+            except OSError:
+                current = None
+            if current is None or current <= indexed:
+                self.skipped += 1
+                return False
+        self.scanned += 1
+        return True
+
+
 def search_memory(
     workspace: Path,
     query: str,
     *,
     scope: Scope = "all",
     level: Level = "warm",
+    coverage: IndexCoverage | None = None,
 ) -> list[Result]:
-    """Public dispatcher. Empty query returns empty results."""
+    """Public dispatcher. Empty query returns empty results.
+
+    With ``coverage`` the walk reads only files the FTS index does not
+    hold, or holds older than they are on disk — the grep leg's recovery
+    role; without it every file is read (the full literal scan).
+    Ingested artifacts are read either way: no index holds them.
+    """
     if not query or not query.strip():
         return []
     needle = query.strip().lower()
     if scope == "dreamed":
-        return search_dreamed(workspace, needle, level=level)
+        return search_dreamed(workspace, needle, level=level, coverage=coverage)
     if scope == "undreamed":
-        return search_undreamed(workspace, needle)
+        return search_undreamed(workspace, needle, coverage=coverage)
     # "all"
-    return search_dreamed(workspace, needle, level=level) + search_undreamed(
-        workspace, needle
-    )
+    return search_dreamed(
+        workspace, needle, level=level, coverage=coverage,
+    ) + search_undreamed(workspace, needle, coverage=coverage)
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +213,7 @@ def search_dreamed(
     needle: str,
     *,
     level: Level = "warm",
+    coverage: IndexCoverage | None = None,
 ) -> list[Result]:
     """Grep over ``memory/<class>/*.md`` plus ``memory/entities/<type>/*.md``.
 
@@ -178,6 +230,8 @@ def search_dreamed(
         return results
     for class_name in MEMORY_CLASSES:
         for path in walk_class(workspace, class_name):
+            if coverage is not None and not coverage.needs_scan(workspace, path):
+                continue
             try:
                 entry = load_entry(path)
             except (FrontmatterError, Exception):
@@ -208,10 +262,10 @@ def search_dreamed(
     # Also walk canonical entity pages — these are the "main memory"
     # that fragments above amend. Skip the `archive/` subfolders
     # (absorbed pages stay reachable via expand only).
-    results.extend(_search_entity_pages(memory_root, needle_low, level))
+    results.extend(_search_entity_pages(memory_root, needle_low, level, coverage=coverage))
     # G2: coherent reference docs (memory/references/) are authoritative
     # consolidated knowledge — surface them in the dreamed tier too.
-    results.extend(_search_reference_pages(memory_root, needle_low, level))
+    results.extend(_search_reference_pages(memory_root, needle_low, level, coverage=coverage))
     # Skills live outside `memory/` (under `skills/<slug>/SKILL.md`) but
     # belong to the same lazy-retrieval contract: when the vector index
     # is cold/absent the grep fallback must still surface a cold skill.
@@ -221,7 +275,7 @@ def search_dreamed(
     from durin.memory.index_meta import skills_indexing_enabled
 
     if skills_indexing_enabled():
-        results.extend(search_skills(workspace, needle_low, level=level))
+        results.extend(search_skills(workspace, needle_low, level=level, coverage=coverage))
     return results
 
 
@@ -229,6 +283,7 @@ def _search_entity_pages(
     memory_root: Path,
     needle_low: str,
     level: Level,
+    coverage: IndexCoverage | None = None,
 ) -> list[Result]:
     """Grep over ``memory/entities/<type>/<slug>.md`` (canonical pages).
 
@@ -240,6 +295,8 @@ def _search_entity_pages(
     workspace = memory_root.parent
     out: list[Result] = []
     for page_path in walk_class(workspace, "entities"):
+        if coverage is not None and not coverage.needs_scan(workspace, page_path):
+            continue
         page = EntityPage.from_file(page_path)
         if page is None:
             continue
@@ -282,6 +339,7 @@ def _search_reference_pages(
     memory_root: Path,
     needle_low: str,
     level: Level,
+    coverage: IndexCoverage | None = None,
 ) -> list[Result]:
     """Grep over ``memory/references/<slug>.md`` (coherent reference docs).
 
@@ -296,6 +354,8 @@ def _search_reference_pages(
     if not refs_dir.is_dir():
         return out
     for page_path in sorted(refs_dir.glob("*.md")):
+        if coverage is not None and not coverage.needs_scan(memory_root.parent, page_path):
+            continue
         title, body = _reference_title_body(page_path.read_text(encoding="utf-8"))
         title = title or page_path.stem
         if needle_low not in f"{title} {body}".lower():
@@ -323,6 +383,7 @@ def search_skills(
     needle: str,
     *,
     level: Level = "warm",
+    coverage: IndexCoverage | None = None,
 ) -> list[Result]:
     """Grep over ``skills/<slug>/SKILL.md`` (cold-skill fallback).
 
@@ -342,6 +403,8 @@ def search_skills(
     needle_low = needle.lower()
     out: list[Result] = []
     for skill_md in walk_skills(workspace):
+        if coverage is not None and not coverage.needs_scan(workspace, skill_md):
+            continue
         page = SkillPage.from_file(skill_md)
         if page is None or page.disabled:
             continue
@@ -403,21 +466,37 @@ def _entry_snippet(entry: MemoryEntry, needle_low: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def search_undreamed(workspace: Path, needle: str) -> list[Result]:
-    """Grep over rendered session views and ingested artifacts."""
+def search_undreamed(
+    workspace: Path,
+    needle: str,
+    *,
+    coverage: IndexCoverage | None = None,
+) -> list[Result]:
+    """Grep over rendered session views and ingested artifacts.
+
+    Ingested artifacts are always read: no index holds them.
+    """
     needle_low = needle.lower()
     return [
-        *_search_sessions(workspace, needle_low),
+        *_search_sessions(workspace, needle_low, coverage=coverage),
         *_search_ingested(workspace, needle_low),
     ]
 
 
-def _search_sessions(workspace: Path, needle_low: str) -> list[Result]:
+def _search_sessions(
+    workspace: Path,
+    needle_low: str,
+    coverage: IndexCoverage | None = None,
+) -> list[Result]:
     sessions_dir = workspace / "sessions"
     if not sessions_dir.is_dir():
         return []
     results: list[Result] = []
     for md_path in sorted(sessions_dir.glob("*.md")):
+        # A session file is indexed one turn at a time; a file newer than
+        # its last indexed turn has turns the index has not seen.
+        if coverage is not None and not coverage.needs_scan(workspace, md_path):
+            continue
         # Filter 1: check tags in sibling meta.json::derived.tags
         meta_path = sessions_dir / f"{md_path.stem}.meta.json"
         tag_hit = _tag_match(meta_path, needle_low)

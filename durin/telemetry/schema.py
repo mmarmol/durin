@@ -727,6 +727,10 @@ class MemoryRecallEvent(TypedDict):
     in_context_deduped: NotRequired[int]
     recovered_from: NotRequired[list[str]]
     recovery_duration_ms: NotRequired[float]
+    # The grep leg's walk: files it read (not held by the FTS index, or
+    # newer on disk than indexed) and files it skipped as covered.
+    grep_scanned: NotRequired[int]
+    grep_skipped: NotRequired[int]
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
     # True when the automatic per-turn memory prefetch's own search produced

@@ -267,7 +267,7 @@ def test_no_scope_means_no_filter_anywhere(tmp_path):
     assert idx.where is None
 
 
-def _grep_hits_of_every_kind(workspace, query, *, recovery):
+def _grep_hits_of_every_kind(workspace, query, *, recovery, **kwargs):
     return [
         {"uri": "sessions/websocket_x.md#turn-3", "type": "session",
          "path": "sessions/websocket_x.md#turn-3", "snippet": "…"},
@@ -311,7 +311,7 @@ def test_entity_pages_scope_filters_the_grep_leg_to_entity_refs(tmp_path, monkey
     drop anything else the walk turned up, such as a session hit."""
     import durin.memory.search_pipeline as sp
 
-    def fake_grep(workspace, query, *, recovery):
+    def fake_grep(workspace, query, *, recovery, **kwargs):
         return [
             {"uri": "sessions/websocket_x.md#turn-3", "type": "session",
              "path": "sessions/websocket_x.md#turn-3", "snippet": "…"},
@@ -322,3 +322,24 @@ def test_entity_pages_scope_filters_the_grep_leg_to_entity_refs(tmp_path, monkey
     monkeypatch.setattr(sp, "_safe_grep_fallback", fake_grep)
     result = run_search_pipeline(tmp_path, "ada", scope=ScopePredicate.entity_pages())
     assert [h.uri for h in result.hits] == ["person:ada"]
+
+
+def test_grep_leg_reads_only_files_the_index_does_not_hold(tmp_path):
+    """The grep leg is the recovery path for what the indexes have not
+    caught up with; a file the FTS index holds unchanged is not read
+    again (the lexical leg already finds it), and the pipeline reports
+    what the walk actually read."""
+    from durin.memory.indexer import reindex_one_file
+    from durin.memory.store import store_memory
+
+    indexed = store_memory(tmp_path, content="la forja vieja de Mithral Hall", class_name="episodic")
+    reindex_one_file(tmp_path, Path(indexed["path"]))
+
+    result = run_search_pipeline(tmp_path, "forja vieja")
+    assert (result.grep_scanned, result.grep_skipped) == (0, 1)
+    assert [h.uri for h in result.hits] == [f"memory/episodic/{indexed['id']}"]
+
+    fresh = store_memory(tmp_path, content="el yunque nuevo del herrero", class_name="episodic")
+    result = run_search_pipeline(tmp_path, "yunque nuevo")
+    assert (result.grep_scanned, result.grep_skipped) == (1, 1)
+    assert [h.uri for h in result.hits] == [f"memory/episodic/{fresh['id']}"]

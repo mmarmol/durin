@@ -240,3 +240,92 @@ async def test_tool_invalid_scope_error(tmp_path: Path) -> None:
     out = await tool.execute(query="x", scope="bogus")
     assert "error" in out
     assert "scope" in out["error"]
+
+
+# ---------------------------------------------------------------------------
+# index coverage: the grep leg reads only what the FTS index does not hold
+# ---------------------------------------------------------------------------
+
+
+def _bump_mtime(path: Path, seconds: float) -> None:
+    import os
+    st = path.stat()
+    os.utime(path, (st.st_atime + seconds, st.st_mtime + seconds))
+
+
+def test_coverage_skips_an_entry_the_index_holds_and_reads_it_again_once_edited(tmp_path: Path) -> None:
+    from durin.memory.indexer import reindex_one_file
+    from durin.memory.search import IndexCoverage
+    from durin.memory.store import store_memory
+
+    r = store_memory(tmp_path, content="la forja vieja de Mithral Hall", class_name="episodic")
+    path = Path(r["path"])
+    uri = f"memory/episodic/{r['id']}"
+
+    cov = IndexCoverage.load(tmp_path)  # nothing indexed yet: read it
+    assert [x.uri for x in search_memory(tmp_path, "forja vieja", coverage=cov)] == [uri]
+    assert (cov.scanned, cov.skipped) == (1, 0)
+
+    reindex_one_file(tmp_path, path)
+    cov = IndexCoverage.load(tmp_path)  # indexed and unchanged: skip it
+    assert search_memory(tmp_path, "forja vieja", coverage=cov) == []
+    assert (cov.scanned, cov.skipped) == (0, 1)
+
+    _bump_mtime(path, 5)
+    cov = IndexCoverage.load(tmp_path)  # newer on disk than indexed: read it
+    assert [x.uri for x in search_memory(tmp_path, "forja vieja", coverage=cov)] == [uri]
+    assert (cov.scanned, cov.skipped) == (1, 0)
+
+    # No coverage = the full walk, unchanged for callers that want it.
+    assert [x.uri for x in search_memory(tmp_path, "forja vieja")] == [uri]
+
+
+def test_coverage_applies_to_entity_pages_skills_references_and_sessions(tmp_path: Path) -> None:
+    from durin.memory.entity_page import EntityPage
+    from durin.memory.fts_index import FTSIndex
+    from durin.memory.indexer import reindex_one_file
+    from durin.memory.search import IndexCoverage
+
+    page_path = tmp_path / "memory" / "entities" / "person" / "bruenor.md"
+    EntityPage(type="person", name="Bruenor", aliases=[], body="lleva un hacha rúnica").save(page_path)
+    ref_path = tmp_path / "memory" / "references" / "forja.md"
+    ref_path.parent.mkdir(parents=True, exist_ok=True)
+    ref_path.write_text("# La forja\n\nun hacha rúnica se templa aquí\n", encoding="utf-8")
+    session_path = tmp_path / "sessions" / "websocket_x.md"
+    session_path.parent.mkdir(parents=True, exist_ok=True)
+    session_path.write_text("## turn-1\n\nuser: hacha rúnica\n", encoding="utf-8")
+
+    cov = IndexCoverage.load(tmp_path)
+    found = {x.uri for x in search_memory(tmp_path, "hacha rúnica", coverage=cov)}
+    assert {"memory/entity_page/person:bruenor", "sessions/websocket_x.md#turn-1"} <= found
+    assert any(u.startswith("memory/reference") or u.startswith("reference:") for u in found)
+    assert cov.scanned == 3
+
+    reindex_one_file(tmp_path, page_path)
+    reindex_one_file(tmp_path, ref_path)
+    with FTSIndex.open(tmp_path) as idx:
+        idx.upsert(uri="sessions/websocket_x.md#turn-1", path="sessions/websocket_x.md",
+                   type_="session", entity_type=None, text="user: hacha rúnica",
+                   mtime=session_path.stat().st_mtime)
+    cov = IndexCoverage.load(tmp_path)
+    assert search_memory(tmp_path, "hacha rúnica", coverage=cov) == []
+    assert (cov.scanned, cov.skipped) == (0, 3)
+
+    # A session that received a new turn is newer than its indexed turns.
+    session_path.write_text(session_path.read_text() + "\n## turn-2\n\nuser: hacha rúnica otra vez\n", encoding="utf-8")
+    _bump_mtime(session_path, 5)
+    cov = IndexCoverage.load(tmp_path)
+    assert {x.uri for x in search_memory(tmp_path, "hacha rúnica", coverage=cov)} == {
+        "sessions/websocket_x.md#turn-1", "sessions/websocket_x.md#turn-2",
+    }
+    assert (cov.scanned, cov.skipped) == (1, 2)
+
+
+def test_coverage_without_an_index_reads_everything(tmp_path: Path) -> None:
+    from durin.memory.search import IndexCoverage
+    from durin.memory.store import store_memory
+
+    r = store_memory(tmp_path, content="yunque nuevo", class_name="episodic")
+    cov = IndexCoverage.load(tmp_path)
+    assert [x.uri for x in search_memory(tmp_path, "yunque", coverage=cov)] == [f"memory/episodic/{r['id']}"]
+    assert cov.scanned == 1

@@ -44,6 +44,7 @@ from durin.memory.rrf_fusion import (
     fuse_rrf,
 )
 from durin.memory.scope import ScopePredicate
+from durin.memory.search import IndexCoverage
 from durin.memory.sectioned_output import (
     SectionedHit,
     apply_per_source_cap,
@@ -120,6 +121,10 @@ class SearchPipelineResult:
     # on clean runs.
     recovered_from: tuple[str, ...] = ()
     recovery_duration_ms: float = 0.0
+    # What the grep leg actually read: files not held by the FTS index
+    # (or newer on disk than indexed) versus files it skipped as covered.
+    grep_scanned: int = 0
+    grep_skipped: int = 0
 
 
 def run_search_pipeline(
@@ -176,8 +181,10 @@ def run_search_pipeline(
     # remains their literal-scan source and the only path for raw
     # ingested artifacts and not-yet-indexed files. Best-effort: a
     # failure here logs and degrades that source to empty.
+    coverage = IndexCoverage.load(workspace)
     grep_hits = _safe_grep_fallback(
         workspace, decision.normalized_query, recovery=recovery,
+        coverage=coverage,
     )
     grep_uris = [h["uri"] for h in grep_hits if "uri" in h]
     grep_meta = {h["uri"]: h for h in grep_hits if "uri" in h}
@@ -320,6 +327,8 @@ def run_search_pipeline(
             section_hits, max_per_source=max_per_source,
         )
     result = SearchPipelineResult(
+        grep_scanned=coverage.scanned,
+        grep_skipped=coverage.skipped,
         hits=capped[:limit],
         vector_count=len(vector_uris),
         lexical_count=len(lexical_uris),
@@ -713,19 +722,19 @@ def _safe_lexical_search(
 
 def _safe_grep_fallback(
     workspace: Path, query: str, *, recovery: dict,
+    coverage: IndexCoverage | None = None,
 ) -> list[dict]:
-    """Run the v1 grep fallback over memory/, sessions/, ingested/.
+    """Run the grep leg over memory/, sessions/, ingested/.
 
     Covers two complementary cases:
     - Raw ingested artifacts, which are not indexed by LanceDB/FTS5 —
-      only reachable via grep. (Sessions ARE FTS-indexed since schema
-      v6; grep stays
-      their literal-substring source and the recovery path when the
-      index hasn't caught up.)
-    - Memory entries written by callers that bypass the tool layer
-      (tests, scripts) and therefore have no FTS row yet — grep
-      over `memory/` recovers them so the search doesn't return
-      empty just because the indexer never ran.
+      only reachable via grep.
+    - Files the FTS index has not caught up with: no row yet (a write
+      that bypassed the indexer, a watcher still draining) or newer on
+      disk than the row (a session with turns since its last indexing,
+      an edited page). With ``coverage`` the walk reads only those;
+      what the index holds unchanged is the lexical leg's job, and
+      re-reading it made this leg cost seconds on a large workspace.
     """
     if not query:
         return []
@@ -736,7 +745,7 @@ def _safe_grep_fallback(
         # `search_memory(scope='all', level='warm')` walks both
         # dreamed (memory/<class>/*) and undreamed (sessions, ingested).
         results = search_memory(
-            workspace, query, scope="all", level="warm",
+            workspace, query, scope="all", level="warm", coverage=coverage,
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("search_pipeline: grep fallback failed: %s", exc)

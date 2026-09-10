@@ -354,3 +354,21 @@ def test_search_without_type_filter_returns_every_row_type(tmp_path: Path) -> No
         )
         hits = idx.search('"reference:thinking-fast-and-slow"')
     assert {h.uri for h in hits} == {"topic:two-systems", "memory/episodic/e1"}
+
+
+def test_indexed_paths_reports_the_newest_mtime_per_file(tmp_path):
+    """One row per file for entries and pages, one row per turn for a
+    session file: the map carries the file mtime recorded when its newest
+    row was indexed, so a walker can tell "indexed and unchanged" from
+    "newer on disk"."""
+    with FTSIndex.open(tmp_path) as idx:
+        idx.upsert(uri="sessions/s.md#turn-1", path="sessions/s.md", type_="session",
+                   entity_type=None, text="primer turno", mtime=10.0)
+        idx.upsert(uri="sessions/s.md#turn-2", path="sessions/s.md", type_="session",
+                   entity_type=None, text="segundo turno", mtime=25.0)
+        idx.upsert(uri="person:ada", path="memory/entities/person/ada.md", type_="entity",
+                   entity_type="person", text="Ada", mtime=7.5)
+        assert idx.indexed_paths() == {
+            "sessions/s.md": 25.0,
+            "memory/entities/person/ada.md": 7.5,
+        }
