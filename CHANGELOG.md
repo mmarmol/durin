@@ -5,6 +5,59 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.10.3 — 2026-09-10
+
+### Highlights
+
+- **Every search on a large workspace was paying for a full file walk.** The
+  grep leg of memory retrieval re-read every entity page, entry, reference and
+  session on every search — seconds per search on a workspace with thousands
+  of entity pages, which kept the per-turn memory prefetch from ever landing
+  inside its budget there. The walk now reads only what the FTS index does not
+  hold or holds stale; everything indexed is the lexical leg's job. Measured on
+  a 2 700-file workspace: 7 s → under 0.5 s per search. (#598)
+- **The health tick was deleting what the index had just written.** Drift
+  detection walked `memory/` only, so every raw session turn row — written on
+  each save — looked like an orphan and was pruned within fifteen minutes, and
+  reference documents were compared under a uri the indexer never writes. No
+  install ever accumulated session rows, and library documents synced into the
+  workspace stayed invisible to lexical search. Detection now covers references
+  and sessions under their indexed uris and repairs them; a header-only session
+  is left alone. On the box this backfilled 254 references and 8 235 session
+  turns on the first tick. (#599)
+
+### Changes
+
+**Memory**
+
+- `IndexCoverage` (`FTSIndex.indexed_paths()`) tells the grep walk which files
+  the index already holds unchanged; `memory.recall` reports `grep_scanned` /
+  `grep_skipped`. Ingested artifacts are always read; the CLI's literal search
+  keeps the full walk. (#598)
+- A memory entry only the lexical leg surfaced now carries its headline,
+  summary and body length read from the entry (the full walk had been hiding
+  that such hits rendered as empty blocks). (#598)
+- `_uri_for` derives `reference:<slug>` for a reference document, matching the
+  indexer; drift repair maps `reference:` and `sessions/` uris to their files;
+  a session is stale when it has turns on disk the index lacks (mtime alone
+  does not re-flag a consolidation touch); a turn row is an orphan only when
+  its session file is gone. (#599)
+- The health-check scheduler thread binds the gateway session logger, so
+  `memory.health_check` and `memory.index.staleness_detected` rows land in the
+  gateway's telemetry file instead of being dropped. (#599)
+
+**Docs**
+
+- The OpenAI-compatible API examples name the websocket channel's port, where
+  the API is served, not `gateway.port`. (#597)
+
+**Operator notes**
+
+- The first health tick after the upgrade backfills references and sessions
+  the index lacked; on a large workspace that tick can take minutes (the box:
+  187 s for 330 files). Later ticks are sub-second. `memory.health_check.drift_count`
+  in the gateway telemetry file shows it: high once, then zero.
+
 ## 0.10.2 — 2026-09-09
 
 ### Highlights

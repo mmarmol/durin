@@ -219,7 +219,7 @@ This is the migration mechanism for the composed text itself: a change to what `
 | `reindex_one_skill` | `durin/memory/indexer.py` | Synchronous per-skill FTS upsert called by `skills_store` after create/edit/delete. |
 | `reindex_session_file` | `durin/memory/indexer.py` | Incremental session FTS indexing: inserts only turns whose URIs are absent from `fts_meta`. Internal — not in `__all__`. |
 | `ensure_index_fresh` | `durin/memory/indexer.py` | Startup gate: compares on-disk `schema_version` and `embedding_model_id` to current code; triggers rebuild on mismatch. Idempotent within one process via `_FRESHNESS_CHECKED` cache. |
-| `detect_index_staleness` | `durin/memory/indexer.py` | Compares `fts_meta` to filesystem: reports `missing_row`, `mtime_lag`, and `row_for_missing_file` issues. Used by the health-check cron. |
+| `detect_index_staleness` | `durin/memory/indexer.py` | Compares `fts_meta` to the filesystem — memory entries, entity pages, references (under `reference:<slug>`), skills, and session files (per file, turn-count confirmed) — and reports `missing_row`, `mtime_lag`, and `row_for_missing_file` issues. Used by the health-check tick, whose repair routes each uri to the matching re-indexer. |
 | `IndexStats` | `durin/memory/indexer.py` | Frozen dataclass: `indexed` count, `errors` count. Returned by `rebuild_fts_index`. |
 
 ---
