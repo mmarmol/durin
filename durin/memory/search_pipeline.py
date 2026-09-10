@@ -35,6 +35,7 @@ from durin.memory.lexical_search import (
     build_fts_expression,
     lexical_search,
 )
+from durin.memory.paths import MEMORY_CLASSES
 from durin.memory.query_router import LexicalRoute, decide_lexical_route
 from durin.memory.rrf_fusion import (
     DEFAULT_K,
@@ -44,10 +45,12 @@ from durin.memory.rrf_fusion import (
     fuse_rrf,
 )
 from durin.memory.scope import ScopePredicate
+from durin.memory.search import IndexCoverage
 from durin.memory.sectioned_output import (
     SectionedHit,
     apply_per_source_cap,
 )
+from durin.memory.storage import load_entry
 
 __all__ = ["SearchPipelineResult", "run_search_pipeline"]
 
@@ -120,6 +123,10 @@ class SearchPipelineResult:
     # on clean runs.
     recovered_from: tuple[str, ...] = ()
     recovery_duration_ms: float = 0.0
+    # What the grep leg actually read: files not held by the FTS index
+    # (or newer on disk than indexed) versus files it skipped as covered.
+    grep_scanned: int = 0
+    grep_skipped: int = 0
 
 
 def run_search_pipeline(
@@ -176,8 +183,10 @@ def run_search_pipeline(
     # remains their literal-scan source and the only path for raw
     # ingested artifacts and not-yet-indexed files. Best-effort: a
     # failure here logs and degrades that source to empty.
+    coverage = IndexCoverage.load(workspace)
     grep_hits = _safe_grep_fallback(
         workspace, decision.normalized_query, recovery=recovery,
+        coverage=coverage,
     )
     grep_uris = [h["uri"] for h in grep_hits if "uri" in h]
     grep_meta = {h["uri"]: h for h in grep_hits if "uri" in h}
@@ -288,6 +297,8 @@ def run_search_pipeline(
         meta = _resolve_meta(
             f.uri, vector_meta, lexical_meta, grep_meta=grep_meta,
         )
+        if _is_entry_uri(f.uri) and not (meta.get("headline") or meta.get("summary")):
+            meta.update(_entry_meta_from_disk(workspace, f.uri))
         section_hits.append(SectionedHit(
             uri=f.uri,
             type=meta.get("type", "episodic"),
@@ -320,6 +331,8 @@ def run_search_pipeline(
             section_hits, max_per_source=max_per_source,
         )
     result = SearchPipelineResult(
+        grep_scanned=coverage.scanned,
+        grep_skipped=coverage.skipped,
         hits=capped[:limit],
         vector_count=len(vector_uris),
         lexical_count=len(lexical_uris),
@@ -713,19 +726,19 @@ def _safe_lexical_search(
 
 def _safe_grep_fallback(
     workspace: Path, query: str, *, recovery: dict,
+    coverage: IndexCoverage | None = None,
 ) -> list[dict]:
-    """Run the v1 grep fallback over memory/, sessions/, ingested/.
+    """Run the grep leg over memory/, sessions/, ingested/.
 
     Covers two complementary cases:
     - Raw ingested artifacts, which are not indexed by LanceDB/FTS5 —
-      only reachable via grep. (Sessions ARE FTS-indexed since schema
-      v6; grep stays
-      their literal-substring source and the recovery path when the
-      index hasn't caught up.)
-    - Memory entries written by callers that bypass the tool layer
-      (tests, scripts) and therefore have no FTS row yet — grep
-      over `memory/` recovers them so the search doesn't return
-      empty just because the indexer never ran.
+      only reachable via grep.
+    - Files the FTS index has not caught up with: no row yet (a write
+      that bypassed the indexer, a watcher still draining) or newer on
+      disk than the row (a session with turns since its last indexing,
+      an edited page). With ``coverage`` the walk reads only those;
+      what the index holds unchanged is the lexical leg's job, and
+      re-reading it made this leg cost seconds on a large workspace.
     """
     if not query:
         return []
@@ -736,7 +749,7 @@ def _safe_grep_fallback(
         # `search_memory(scope='all', level='warm')` walks both
         # dreamed (memory/<class>/*) and undreamed (sessions, ingested).
         results = search_memory(
-            workspace, query, scope="all", level="warm",
+            workspace, query, scope="all", level="warm", coverage=coverage,
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("search_pipeline: grep fallback failed: %s", exc)
@@ -914,6 +927,41 @@ def _verified_uris(
             )
         verified.update(u for (u,) in cur.fetchall())
     return verified
+
+
+def _is_entry_uri(uri: str) -> bool:
+    """True for a memory entry (``memory/<class>/<id>``, any indexed class)."""
+    parts = uri.split("/")
+    return len(parts) == 3 and parts[0] == "memory" and parts[1] in MEMORY_CLASSES
+
+
+def _entry_meta_from_disk(workspace: Path, uri: str) -> dict:
+    """Display fields for a memory entry no source carried.
+
+    An FTS row holds only uri, path and type; headline, summary and body
+    length ride on the vector row. A hit the lexical leg alone surfaced —
+    no embedding model, no vector row yet, or a row outside the vector
+    top-k — would render as an empty block, so read them from the entry
+    itself, with the same summary rule the vector upsert materialises.
+    One file per such hit; a missing or malformed entry yields nothing.
+    """
+    from durin.memory.vector_index import _effective_summary
+
+    try:
+        _, class_name, entry_id = uri.split("/", 2)
+        entry = load_entry(workspace / "memory" / class_name / f"{entry_id}.md")
+    except Exception:  # noqa: BLE001
+        return {}
+    meta: dict = {
+        "headline": entry.headline or "",
+        "summary": _effective_summary(entry),
+        "body_length": len(entry.body or ""),
+    }
+    if entry.valid_from:
+        meta["valid_from"] = entry.valid_from.isoformat()
+    if entry.entities:
+        meta["entities"] = list(entry.entities)
+    return meta
 
 
 def _resolve_meta(

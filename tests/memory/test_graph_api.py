@@ -323,6 +323,10 @@ def test_search_empty_query_returns_noop(tmp_path: Path) -> None:
 
 
 def test_search_grep_path_finds_entry(tmp_path: Path) -> None:
+    """An entry the FTS index does not hold yet is found by the grep leg,
+    with the literal match as its snippet. The first search builds the
+    index on the empty workspace; the entry stored after it has no row."""
+    asyncio.run(search_memory_api(tmp_path, "pytest"))
     _store(tmp_path, "marcelo prefers pytest", ["person:marcelo"])
     payload = asyncio.run(search_memory_api(tmp_path, "pytest"))
     assert payload["total"] >= 1

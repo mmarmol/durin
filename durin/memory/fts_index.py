@@ -306,6 +306,21 @@ class FTSIndex:
         )
         return {u for (u,) in cur.fetchall()}
 
+    def indexed_paths(self) -> dict[str, float]:
+        """``{path: mtime}`` for every file the index holds.
+
+        The value is the file mtime recorded when its newest row was
+        indexed — an entry or page has one row, a session file one per
+        turn, so the max is the mtime the last indexed turn saw. Lets a
+        file walk tell "indexed and unchanged" from "newer on disk".
+        """
+        cur = self._conn.execute(
+            "SELECT f.path, MAX(m.mtime) FROM memory_fts f "
+            "JOIN fts_meta m ON m.uri = f.uri "
+            "WHERE f.path != '' GROUP BY f.path"
+        )
+        return {path: float(mtime) for path, mtime in cur.fetchall()}
+
     def known_uris(self) -> Iterator[tuple[str, float]]:
         """Iterate ``(uri, mtime)`` for every indexed row.
 

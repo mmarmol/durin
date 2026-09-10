@@ -997,6 +997,8 @@ class MemorySearchTool(Tool):
             "keywords": keywords,
             "in_context_deduped": len(in_context_hits),
             "rendered_chars": len(sectioned_rendered),
+            "grep_scanned": pipeline_result.grep_scanned,
+            "grep_skipped": pipeline_result.grep_skipped,
         }
         if pipeline_result.recovered_from:
             recall_payload["recovered_from"] = list(
