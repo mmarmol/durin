@@ -56,6 +56,10 @@ class LLMResponse:
     text: str
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    # The provider's finish reason. ``"error"`` means the provider's own
+    # retry policy gave up and ``text`` is its error message, not a model
+    # answer — consumers that parse the text must not mistake it for one.
+    finish_reason: str = "stop"
 
 
 class LLMInvoke(Protocol):
@@ -96,7 +100,7 @@ def _run_blocking(make_coro):
 
 def _retry_mode(config) -> str:
     try:
-        return config.defaults.provider_retry_mode
+        return config.agents.defaults.provider_retry_mode
     except Exception:  # noqa: BLE001 — config optional; default to standard
         return "standard"
 
@@ -131,6 +135,7 @@ def aux_llm_invoke(prompt, *, preset, config, temperature: float = 0.1) -> LLMRe
         text=content or "",
         prompt_tokens=int(usage.get("prompt_tokens", 0) or 0),
         completion_tokens=int(usage.get("completion_tokens", 0) or 0),
+        finish_reason=str(getattr(resp, "finish_reason", "stop") or "stop"),
     )
 
 

@@ -56,6 +56,41 @@ class MergeCandidate:
     refs: tuple[str, str]
     shared_aliases: list[str] = field(default_factory=list)
     distance: float | None = None
+    # For a semantic candidate: whether the two names show structural
+    # overlap (see ``names_overlap``); None for alias-overlap pairs.
+    name_overlap: bool | None = None
+
+
+def name_forms(ref: str, page: "EntityPage") -> list[str]:
+    """The ways an entity is written — slug, name, aliases — each reduced by
+    :func:`slugify_name` (NFC, transliteration, lowercase, one separator),
+    so accents, scripts and punctuation do not hide an overlap."""
+    from durin.memory.entities import slugify_name
+
+    raw = [ref.split(":", 1)[1] if ":" in ref else ref, page.name or "", *(page.aliases or [])]
+    return [slugify_name(f) for f in raw if f and slugify_name(f)]
+
+
+def names_overlap(forms_a: list[str], forms_b: list[str]) -> bool:
+    """Structural name evidence between two entities.
+
+    True when they share a name token (a separator-delimited piece of any
+    form, two or more characters — an acronym counts), or one compact form
+    (a form with its separators removed, three or more characters) contains
+    the other: ``email-flow`` / ``emailflow``, ``auto-filling`` /
+    ``mxhero-autofilling-system``, ``hp`` / ``hp-inc``. No vocabulary list.
+    """
+    def toks(forms: list[str]) -> set[str]:
+        return {t for f in forms for t in f.split("_") if len(t) >= 2}
+
+    if toks(forms_a) & toks(forms_b):
+        return True
+    ca = {f.replace("_", "") for f in forms_a}
+    cb = {f.replace("_", "") for f in forms_b}
+    return any(
+        len(x) >= 3 and len(y) >= 3 and (x in y or y in x)
+        for x in ca for y in cb
+    )
 
 
 class EntityAbsorption:
@@ -111,16 +146,31 @@ class EntityAbsorption:
         *,
         distance_threshold: float,
         top_k: int = 5,
+        name_gate: str = "off",
     ) -> list[MergeCandidate]:
         """Embedding-near same-type entity pairs, for pairs that alias overlap
         misses (same thing, different name). Queries the vector index with each
         entity's composed text; keeps same-type neighbors within
-        ``distance_threshold``; returns deduped pairs (closest distance kept)."""
+        ``distance_threshold``; returns deduped pairs (closest distance kept).
+
+        ``name_gate`` uses the structural name signal (:func:`names_overlap`,
+        computed from the pages this walk already parsed, so it costs no
+        extra I/O): ``"off"`` orders by distance only; ``"prioritize"`` puts
+        pairs whose names overlap first, then the rest by distance, so a
+        budgeted consumer spends its judge calls on the likelier duplicates
+        first without ever excluding a different-name duplicate;
+        ``"require"`` drops pairs without name overlap. Every candidate
+        carries ``name_overlap`` so the signal can be measured against the
+        judge's verdicts.
+        """
         from durin.memory.entity_page import EntityPage
         from durin.memory.scope import ScopePredicate
         from durin.memory.vector_index import VectorIndex
 
+        if name_gate not in ("off", "prioritize", "require"):
+            raise ValueError(f"name_gate must be off, prioritize or require, not {name_gate!r}")
         pairs: dict[tuple[str, str], float] = {}
+        forms: dict[str, list[str]] = {}
         if not self.entities_root.is_dir():
             return []
         for md in sorted(self.entities_root.rglob("*.md")):
@@ -130,6 +180,7 @@ class EntityAbsorption:
             if page is None:
                 continue
             self_ref = f"{page.type}:{EntityPage.slug_from_path(md)}"
+            forms[self_ref] = name_forms(self_ref, page)
             query = VectorIndex._compose_entity_page_text(
                 name=page.name, aliases=list(page.aliases), body=page.body or "",
                 attributes=page.attributes, relations=page.relations)
@@ -151,9 +202,21 @@ class EntityAbsorption:
                 key = tuple(sorted([self_ref, ref]))
                 if key not in pairs or dist < pairs[key]:
                     pairs[key] = dist
-        out = [MergeCandidate(refs=k, shared_aliases=[], distance=d)
-               for k, d in pairs.items()]
-        out.sort(key=lambda c: (c.distance if c.distance is not None else 1.0, c.refs))
+        out: list[MergeCandidate] = []
+        for k, d in pairs.items():
+            overlap = None
+            if name_gate != "off":
+                fa, fb = forms.get(k[0]), forms.get(k[1])
+                overlap = bool(fa and fb and names_overlap(fa, fb))
+                if name_gate == "require" and not overlap:
+                    continue
+            out.append(MergeCandidate(refs=k, shared_aliases=[], distance=d,
+                                      name_overlap=overlap))
+        if name_gate == "prioritize":
+            out.sort(key=lambda c: (0 if c.name_overlap else 1,
+                                    c.distance if c.distance is not None else 1.0, c.refs))
+        else:
+            out.sort(key=lambda c: (c.distance if c.distance is not None else 1.0, c.refs))
         return out
 
     # ------------------------------------------------------------------

@@ -250,3 +250,47 @@ def test_a_retry_tells_the_model_what_could_not_be_parsed():
     assert "could not be parsed" not in prompts[0]
     assert "could not be parsed" in prompts[1] and "===VERDICT===" in prompts[1]
     assert prompts[1].startswith(prompts[0])
+
+
+@pytest.mark.parametrize("raw", [
+    "Sure, here is my assessment.\n===VERDICT===\n**different**\n===CONFIDENCE===\n82%\n===REASONING===\nA is a product feature, B a config object.\n===END===",
+    "===VERDICT===\ndifferent\n\nI am fairly sure.\n===CONFIDENCE===\n0.82\n===REASONING===\nA is a product feature, B a config object.\n===END===\nHope this helps!",
+    "```\n===VERDICT=== different ===CONFIDENCE=== 82 ===REASONING=== A is a product feature, B a config object.",
+])
+def test_parse_tolerates_the_observed_format_drift(raw: str) -> None:
+    """Prose between blocks, emphasis, a percent or fractional confidence,
+    fences and a missing closing marker are how a judge model drifts; each
+    used to cost a retry call, or three."""
+    from durin.memory.absorb_judge import _parse_response
+    r = _parse_response(raw)
+    assert r.verdict == "different" and r.confidence == 82
+    assert "product feature" in r.reasoning
+
+
+def test_parse_still_refuses_a_missing_or_wrong_verdict() -> None:
+    from durin.memory.absorb_judge import JudgeError, _parse_response
+    with pytest.raises(JudgeError):
+        _parse_response("===VERDICT===\nmaybe\n===CONFIDENCE===\n50\n===REASONING===\nx\n===END===")
+    with pytest.raises(JudgeError):
+        _parse_response("===CONFIDENCE===\n50\n===REASONING===\nx\n===END===")
+
+
+def test_a_provider_error_response_is_a_provider_failure_not_a_parse_failure() -> None:
+    """The provider reports an outage as a response whose text is the error;
+    the judge must classify it so the caller does not remember it against
+    the pair, and must not burn retries on it."""
+    from durin.memory.absorb_judge import JudgeError, judge_pair
+    from durin.memory.entity_page import EntityPage
+    from durin.memory.llm_invoke import LLMResponse
+
+    calls: list[str] = []
+
+    def inv(prompt, **kw):
+        calls.append(prompt)
+        return LLMResponse(text="Error calling LLM: 401 invalid api key", finish_reason="error")
+
+    a = EntityPage(type="company", name="Acme", aliases=["acme"])
+    b = EntityPage(type="company", name="Acme Corp", aliases=["acme"])
+    with pytest.raises(JudgeError) as info:
+        judge_pair(a, b, ["acme"], llm_invoke=inv)
+    assert info.value.kind == "provider" and len(calls) == 1

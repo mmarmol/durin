@@ -1,10 +1,12 @@
 """The refine pass is bounded, incremental and cheap where it can be.
 
-A wall-clock budget like every other dream pass, a verdict cache saved as it
-grows (an interrupted run keeps what it judged), a cooldown for pairs whose
-judge call failed (they are not re-judged every night), a name-overlap gate on
-embedding-near candidates (the judge is spent on pairs that can plausibly be
-the same thing), and concurrent judge calls with merges applied in order.
+A wall-clock budget like every other dream pass, a verdict cache flushed as
+it grows (an interrupted run keeps what it judged), a recheck cooldown for
+pairs without a settled verdict (the scan advances instead of re-answering
+them every night), provider failures that stop the run instead of poisoning
+the cache, a name signal that orders embedding-near candidates, and
+concurrent judge calls — in the caller's telemetry context, chunks free of
+shared pages — with merges applied in order.
 """
 from __future__ import annotations
 
@@ -16,6 +18,7 @@ from pathlib import Path
 
 from durin.memory import refine_dream
 from durin.memory.field_patch import FieldPatch
+from durin.memory.llm_invoke import LLMResponse
 from durin.memory.memory_writer import write_entity
 from durin.memory.refine_dream import _verdicts_path, run_refine
 
@@ -82,15 +85,35 @@ def test_the_budget_stops_the_pass_and_the_rest_waits_for_the_next_run(tmp_path,
 
     out = run_refine(tmp_path, llm_invoke=stub, max_seconds=0.01)
 
-    assert out["budget_hit"] is True
+    assert out["yielded"] is True and out["stop_reason"] == "max_seconds"
     assert 1 <= out["judged"] < 4
     assert out["candidates"] == 4
     reached = [d for e, d in events if e == "memory.dream.max_seconds_reached"]
     assert reached and reached[0]["kind"] == "refine" and reached[0]["remaining"] >= 1
 
 
-def test_the_verdict_cache_is_saved_as_the_pass_goes(tmp_path):
-    """After a kill or a budget stop the verdicts already judged survive."""
+def test_the_budget_covers_candidate_generation(tmp_path, monkeypatch):
+    """The clock starts before the candidate walk (the phase that scales
+    with the workspace), and is checked before every pair, so a run whose
+    generation alone exhausted the budget judges nothing and yields."""
+    from durin.memory import absorption
+    _alias_pairs(tmp_path, 3)
+    original = absorption.EntityAbsorption.find_candidates
+
+    def slow_find(self):
+        time.sleep(0.03)
+        return original(self)
+
+    monkeypatch.setattr(absorption.EntityAbsorption, "find_candidates", slow_find)
+    stub = _Stub()
+    out = run_refine(tmp_path, llm_invoke=stub, max_seconds=0.01)
+    assert out["yielded"] is True and out["judged"] == 0 and stub.prompts == []
+
+
+def test_the_verdict_cache_is_flushed_as_the_pass_goes(tmp_path, monkeypatch):
+    """After a kill or a budget stop the verdicts already judged survive:
+    the cache is flushed every few pairs (here: every pair) and on exit."""
+    monkeypatch.setattr(refine_dream, "_CACHE_FLUSH_EVERY", 1)
     _alias_pairs(tmp_path, 3)
     seen: dict[str, int] = {}
 
@@ -104,32 +127,109 @@ def test_the_verdict_cache_is_saved_as_the_pass_goes(tmp_path):
     assert seen["entries"] == 2
 
 
-def test_a_failed_judge_call_is_cached_with_a_cooldown(tmp_path, monkeypatch):
+def test_the_cache_is_flushed_on_exit_even_when_the_pass_raises(tmp_path, monkeypatch):
+    _alias_pairs(tmp_path, 2)
+    calls = {"n": 0}
+
+    def boom(*a, **kw):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("absorb exploded")
+        return "===VERDICT===\ndifferent\n===CONFIDENCE===\n90\n===REASONING===\nok\n===END==="
+
+    # Make the second pair's application raise from a step outside the judge.
+    monkeypatch.setattr(refine_dream, "_emit", lambda event, **d: (_ for _ in ()).throw(RuntimeError("emit exploded")) if event == "memory.absorb.judged" and calls["n"] == 2 else None)
+    try:
+        run_refine(tmp_path, llm_invoke=boom, judge_concurrency=1)
+    except RuntimeError:
+        pass
+    assert _verdicts_path(tmp_path).exists()
+    assert len(json.loads(_verdicts_path(tmp_path).read_text())) >= 1
+
+
+def test_an_unparseable_reply_is_remembered_with_a_recheck_cooldown(tmp_path, monkeypatch):
     _alias_pairs(tmp_path, 1)
     first = _Stub(fail_first=99)
-    out = run_refine(tmp_path, llm_invoke=first, error_cooldown_s=3600)
+    out = run_refine(tmp_path, llm_invoke=first, recheck_cooldown_s=3600)
     assert [s["reason"].split(":")[0] for s in out["skipped"]] == ["judge_error"]
-    assert len(first.prompts) == 3  # the judge's own retries
+    assert len(first.prompts) == 3  # the judge's own retries, with feedback
     entry = next(iter(json.loads(_verdicts_path(tmp_path).read_text()).values()))
     assert entry["verdict"] == "error" and entry["until"] > time.time()
 
     second = _Stub()
-    out = run_refine(tmp_path, llm_invoke=second, error_cooldown_s=3600)
+    out = run_refine(tmp_path, llm_invoke=second, recheck_cooldown_s=3600)
     assert [s["reason"] for s in out["skipped"]] == ["cached_error"]
     assert second.prompts == []
 
     third = _Stub()
     monkeypatch.setattr(refine_dream, "_now", lambda: time.time() + 7200)
-    out = run_refine(tmp_path, llm_invoke=third, error_cooldown_s=3600)
+    out = run_refine(tmp_path, llm_invoke=third, recheck_cooldown_s=3600)
     assert out["judged"] == 1 and third.prompts
 
 
-def test_a_zero_cooldown_retries_failed_pairs_every_run(tmp_path):
+def test_a_zero_recheck_cooldown_ignores_remembered_errors(tmp_path):
+    """An operator recovering from a bad night sets the cooldown to 0: entries
+    already on disk must not keep the pairs skipped."""
     _alias_pairs(tmp_path, 1)
-    run_refine(tmp_path, llm_invoke=_Stub(fail_first=99), error_cooldown_s=0)
+    run_refine(tmp_path, llm_invoke=_Stub(fail_first=99), recheck_cooldown_s=3600)
     second = _Stub()
-    out = run_refine(tmp_path, llm_invoke=second, error_cooldown_s=0)
+    out = run_refine(tmp_path, llm_invoke=second, recheck_cooldown_s=0)
     assert out["judged"] == 1 and second.prompts
+
+
+def test_a_corrupt_until_value_does_not_abort_the_pass(tmp_path):
+    _alias_pairs(tmp_path, 1)
+    run_refine(tmp_path, llm_invoke=_Stub(fail_first=99), recheck_cooldown_s=3600)
+    p = _verdicts_path(tmp_path)
+    data = json.loads(p.read_text())
+    for v in data.values():
+        v["until"] = "2026-09-20"
+    p.write_text(json.dumps(data))
+    out = run_refine(tmp_path, llm_invoke=_Stub(), recheck_cooldown_s=3600)
+    assert out["judged"] == 1
+
+
+def test_unsettled_verdicts_are_remembered_so_the_scan_advances(tmp_path):
+    """`unclear` and a below-threshold `same` are not settled, but re-judging
+    them every run would starve the tail under a budget; they are remembered
+    with the recheck cooldown and skipped until it expires."""
+    _alias_pairs(tmp_path, 2)
+    out = run_refine(tmp_path, llm_invoke=_Stub("unclear", 50), recheck_cooldown_s=3600)
+    assert out["judged"] == 2
+    again = _Stub("unclear", 50)
+    out = run_refine(tmp_path, llm_invoke=again, recheck_cooldown_s=3600)
+    assert again.prompts == [] and [s["reason"] for s in out["skipped"]] == ["cached_verdict"] * 2
+
+
+def test_a_provider_failure_is_not_remembered_and_stops_the_run(tmp_path, monkeypatch):
+    """A dead key or an outage is a property of the moment: nothing is cached
+    against the pairs, and after a few failures in a row the pass stops so
+    the remaining candidates are judged on a later run."""
+    _alias_pairs(tmp_path, 6)
+    events = _events(monkeypatch)
+    calls = {"n": 0}
+
+    def provider_down(prompt, **kw):
+        calls["n"] += 1
+        return LLMResponse(text="Error calling LLM: 401 invalid api key", finish_reason="error")
+
+    out = run_refine(tmp_path, llm_invoke=provider_down, recheck_cooldown_s=3600, judge_concurrency=1)
+
+    assert out["yielded"] is True and out["stop_reason"] == "judge_unavailable"
+    assert calls["n"] == 3  # one attempt per pair, three pairs, then stop
+    assert not _verdicts_path(tmp_path).exists()
+    assert any(e == "memory.absorb.judge_unavailable" for e, _ in events)
+
+
+def test_a_transport_exception_counts_as_a_provider_failure(tmp_path):
+    _alias_pairs(tmp_path, 1)
+
+    def raises(prompt, **kw):
+        raise ConnectionError("provider down")
+
+    out = run_refine(tmp_path, llm_invoke=raises, recheck_cooldown_s=3600)
+    assert [s["reason"].split(":")[0] for s in out["skipped"]] == ["judge_error"]
+    assert not _verdicts_path(tmp_path).exists()
 
 
 class _FakeVI:
@@ -163,36 +263,62 @@ def _semantic_workspace(ws: Path) -> _FakeVI:
     _entity(ws, "project:mxhero-autofilling-system", "mxHERO Autofilling System", "u4")
     _entity(ws, "topic:kinesis-events", "Kinesis Events", "u5")
     _entity(ws, "topic:onedrive-share", "OneDrive Share", "u6")
+    _entity(ws, "company:hp", "HP", "u7")
+    _entity(ws, "company:hp-inc", "HP Inc", "u8")
+    _entity(ws, "topic:configuracion", "Configuración", "u9")
+    _entity(ws, "topic:configuracion-avanzada", "Configuracion avanzada", "u10")
     return _FakeVI({
-        "Email Flow": [_near("topic:emailflow")],
-        "Auto Filling": [_near("project:mxhero-autofilling-system")],
-        "Kinesis Events": [_near("topic:onedrive-share")],
+        "Email Flow": [_near("topic:emailflow", 0.24)],
+        "Auto Filling": [_near("project:mxhero-autofilling-system", 0.23)],
+        "Kinesis Events": [_near("topic:onedrive-share", 0.10)],   # nearest of all, no name overlap
+        "HP Inc": [_near("company:hp", 0.22)],
+        "Configuración": [_near("topic:configuracion-avanzada", 0.21)],
     })
 
 
-def test_embedding_near_pairs_are_judged_only_with_a_name_overlap(tmp_path):
-    ws = tmp_path / "gated"
+def test_the_name_signal_orders_embedding_near_pairs(tmp_path):
+    """`prioritize` (the default) judges pairs whose names overlap first —
+    accents, hyphenation and acronyms included — and the rest after, by
+    distance; nothing is excluded."""
+    from durin.memory.absorption import EntityAbsorption
+    ws = tmp_path / "prio"
     vi = _semantic_workspace(ws)
-    out = run_refine(ws, llm_invoke=_Stub(), vector_index=vi, require_name_overlap=True)
-    judged = {tuple(sorted(k["pair"])) for k in out["kept_separate"]}
-    assert judged == {
-        ("topic:email-flow", "topic:emailflow"),                        # hyphenation variant
-        ("project:auto-filling", "project:mxhero-autofilling-system"),  # one name inside the other
-    }
-    assert [s["reason"] for s in out["skipped"]] == ["no_name_overlap"]
+    cands = EntityAbsorption(workspace=ws, vector_index=vi).find_semantic_candidates(
+        vi, distance_threshold=0.30, name_gate="prioritize")
+    order = [tuple(sorted(c.refs)) for c in cands]
+    assert order[-1] == ("topic:kinesis-events", "topic:onedrive-share")  # closest, but last
+    assert all(c.name_overlap for c in cands[:-1]) and cands[-1].name_overlap is False
+    assert ("company:hp", "company:hp-inc") in order
+    assert ("topic:configuracion", "topic:configuracion-avanzada") in order[:-1]
 
 
-def test_the_name_gate_can_be_switched_off(tmp_path):
-    ws = tmp_path / "open"
+def test_the_name_signal_can_require_or_be_switched_off(tmp_path):
+    from durin.memory.absorption import EntityAbsorption
+    ws = tmp_path / "modes"
     vi = _semantic_workspace(ws)
-    out = run_refine(ws, llm_invoke=_Stub(), vector_index=vi, require_name_overlap=False)
-    assert out["judged"] == 3 and out["skipped"] == []
+    ab = EntityAbsorption(workspace=ws, vector_index=vi)
+    required = ab.find_semantic_candidates(vi, distance_threshold=0.30, name_gate="require")
+    assert ("topic:kinesis-events", "topic:onedrive-share") not in [tuple(sorted(c.refs)) for c in required]
+    assert len(required) == 4
+    off = ab.find_semantic_candidates(vi, distance_threshold=0.30, name_gate="off")
+    assert [tuple(sorted(c.refs)) for c in off][0] == ("topic:kinesis-events", "topic:onedrive-share")
+    assert all(c.name_overlap is None for c in off)
+
+
+def test_run_refine_reports_the_name_signal_on_judged_pairs(tmp_path, monkeypatch):
+    ws = tmp_path / "judged"
+    vi = _semantic_workspace(ws)
+    events = _events(monkeypatch)
+    out = run_refine(ws, llm_invoke=_Stub(), vector_index=vi, semantic_name_gate="prioritize")
+    assert out["judged"] == 5
+    judged = [d for e, d in events if e == "memory.absorb.judged"]
+    assert sorted(d["name_overlap"] for d in judged) == [False, True, True, True, True]
 
 
 def test_alias_pairs_are_never_gated_by_name_overlap(tmp_path):
     _entity(tmp_path, "company:acme", "Acme", "the-firm")
     _entity(tmp_path, "company:zeta", "Zeta", "the-firm")
-    out = run_refine(tmp_path, llm_invoke=_Stub(), require_name_overlap=True)
+    out = run_refine(tmp_path, llm_invoke=_Stub(), semantic_name_gate="require")
     assert out["judged"] == 1
 
 
@@ -204,29 +330,84 @@ def test_judge_calls_run_concurrently_while_merges_stay_serial(tmp_path):
     assert stub.max_inflight == 4
 
 
-def test_two_pairs_sharing_an_entity_in_one_chunk_merge_once(tmp_path):
-    """x~y and y~z judged together, both 'same': the first merge absorbs y;
-    the second must see that and skip instead of merging a vanished page."""
+def test_judge_workers_keep_the_callers_telemetry_context(tmp_path):
+    """The provider emits its cost rows through a ContextVar-bound sink; a
+    bare thread pool would run the judge without it and the refine pass's
+    token accounting would vanish."""
+    from durin.telemetry.logger import bind_telemetry, current_telemetry, reset_telemetry
+
+    class _Sink:
+        session_key = "test-refine"
+
+    _alias_pairs(tmp_path, 3)
+    seen: list = []
+
+    def inv(prompt, **kw):
+        seen.append(current_telemetry())
+        time.sleep(0.02)
+        return VERDICT.format(v="different", c=90)
+
+    token = bind_telemetry(_Sink())
+    try:
+        run_refine(tmp_path, llm_invoke=inv, judge_concurrency=3)
+    finally:
+        reset_telemetry(token)
+    assert len(seen) == 3 and all(isinstance(s, _Sink) for s in seen)
+
+
+def test_two_pairs_sharing_an_entity_are_never_judged_in_one_chunk(tmp_path):
+    """x~y and y~z: the second pair waits for the next chunk, so the merge of
+    the first is visible (y absorbed) before the second is even judged."""
     _entity(tmp_path, "company:x", "X", "s1")
     _entity(tmp_path, "company:y", "Y", "s1", "s2")
     _entity(tmp_path, "company:z", "Z", "s2")
-    out = run_refine(tmp_path, llm_invoke=_Stub("same", 99), judge_concurrency=2, confidence_threshold=95)
+    stub = _Stub("same", 99, sleep=0.05)
+    out = run_refine(tmp_path, llm_invoke=stub, judge_concurrency=2, confidence_threshold=95)
     assert len(out["merged"]) == 1
-    assert any(s["reason"] == "merged_earlier" for s in out["skipped"])
+    assert stub.max_inflight == 1
+    assert out["judged"] == 1 and any(s["reason"] in ("load_failed", "tombstoned") for s in out["skipped"])
     remaining = sorted(p.stem for p in (tmp_path / "memory" / "entities" / "company").glob("*.md"))
     assert len(remaining) == 2
+
+
+def test_a_page_that_cannot_be_rendered_costs_one_pair_not_the_pass(tmp_path):
+    _alias_pairs(tmp_path, 3)
+    calls = {"n": 0}
+
+    def inv(prompt, **kw):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise KeyError("template placeholder")  # not a JudgeError, not a provider failure
+        return VERDICT.format(v="different", c=90)
+
+    out = run_refine(tmp_path, llm_invoke=inv, judge_concurrency=1)
+    assert out["judged"] == 2 and out["yielded"] is False
+    assert sum(1 for s in out["skipped"] if s["reason"].startswith("judge_error")) == 1
 
 
 def test_run_refine_pass_forwards_the_bounds(tmp_path, monkeypatch):
     from durin.memory import dream_passes
     seen: dict = {}
-    monkeypatch.setattr(dream_passes, "run_refine", lambda ws, **kw: seen.update(kw) or {"merged": [], "kept_separate": [], "skipped": [], "candidates": 0, "judged": 0, "budget_hit": False})
-    dream_passes.run_refine_pass(tmp_path, max_seconds=5, judge_concurrency=2, error_cooldown_days=3, require_name_overlap=False)
+
+    def fake_run_refine(ws, **kw):
+        seen.update(kw)
+        return {"merged": [], "kept_separate": [], "skipped": [], "candidates": 0,
+                "judged": 0, "yielded": False, "stop_reason": None}
+
+    monkeypatch.setattr(dream_passes, "run_refine", fake_run_refine)
+    dream_passes.run_refine_pass(tmp_path, max_seconds=5, judge_concurrency=2, recheck_days=3, semantic_name_gate="off")
     assert seen["max_seconds"] == 5 and seen["judge_concurrency"] == 2
-    assert seen["error_cooldown_s"] == 3 * 86400 and seen["require_name_overlap"] is False
+    assert seen["recheck_cooldown_s"] == 3 * 86400 and seen["semantic_name_gate"] == "off"
 
 
 def test_auto_absorb_config_carries_the_new_knobs():
     from durin.config.schema import AutoAbsorbConfig
     c = AutoAbsorbConfig()
-    assert c.judge_concurrency == 3 and c.error_cooldown_days == 7 and c.require_name_overlap is True
+    assert c.judge_concurrency == 3 and c.recheck_days == 7 and c.semantic_name_gate == "prioritize"
+
+
+def test_aux_retry_mode_reads_the_agent_defaults():
+    from durin.config.schema import Config
+    from durin.memory.llm_invoke import _retry_mode
+    cfg = Config()
+    assert _retry_mode(cfg) == cfg.agents.defaults.provider_retry_mode

@@ -882,7 +882,7 @@ class MemoryDreamEndEvent(TypedDict):
 
     kind: str
     judged: NotRequired[int]  # refine: pairs the judge answered this run
-    budget_hit: NotRequired[bool]  # refine: stopped by max_seconds_per_run
+    stop_reason: NotRequired[str | None]  # refine: "max_seconds" | "judge_unavailable" when yielded
     duration_ms: int
     entities_consolidated: NotRequired[int]
     entities_discovered: NotRequired[int]  # extract: pages the discovery stage wrote for entities the agent never upserted
@@ -912,6 +912,10 @@ class MemoryAbsorbJudgedEvent(TypedDict):
     absorbed: str   # ref of the page that would be absorbed
     verdict: str    # "same" | "different" | "unclear"
     confidence: int  # 0-100
+    # Semantic candidates only: whether the two names show structural overlap
+    # (a shared token, or one compact name inside the other); None for
+    # alias-overlap pairs. Lets the name signal be measured against verdicts.
+    name_overlap: NotRequired[bool | None]
     duration_ms: float
     entity_type: NotRequired[str]  # both pages share the type (cross-type pairs are filtered)
     iteration: NotRequired[int]
@@ -936,6 +940,18 @@ class MemoryAbsorbAutoMergedEvent(TypedDict):
     session_key: NotRequired[str | None]
 
 
+class MemoryAbsorbJudgeUnavailableEvent(TypedDict):
+    """The refine pass stopped for this run because the judge's provider
+    failed several calls in a row (a dead key, an outage, a rate-limit
+    storm) — a property of the moment, so nothing is cached and the
+    remaining candidates wait for the next run."""
+
+    consecutive_failures: int
+    error_head: str
+    judged: int
+    remaining: int
+
+
 class MemoryAbsorbSkippedEvent(TypedDict):
     """Auto-absorb considered a candidate but did not merge.
 
@@ -951,14 +967,9 @@ class MemoryAbsorbSkippedEvent(TypedDict):
       (the run never merges its own fresh output).
     - ``"judge_error"``: the judge raised ``JudgeError`` (unparseable verdict
       after all retries) and the pair was skipped for this run.
-    - ``"cached_verdict"``: a settled "different" verdict for these exact
-      page contents and judge is memoised in ``.refine_verdicts.json``.
-    - ``"cached_error"``: the pair's judge call failed on an earlier run and
-      its cooldown (``auto_absorb.error_cooldown_days``) has not expired.
-    - ``"no_name_overlap"``: an embedding-near pair whose names share no
-      token and neither contains the other (``auto_absorb.require_name_overlap``).
-    - ``"merged_earlier"``: judged "same", but a merge earlier in the same
-      chunk already absorbed one of the pages.
+    - ``"cached_error"``: the pair's judge reply could not be parsed on an
+      earlier run and its recheck cooldown (``auto_absorb.recheck_days``)
+      has not expired.
     - ``"cached_verdict"``: an earlier run judged this exact pair "different"
       and neither page's judgment-bearing content (nor the judge template or
       model) has changed since — the verdict cache answers instead of the LLM.
@@ -1944,6 +1955,7 @@ EVENTS: dict[str, type] = {
     "memory.absorb.judged": MemoryAbsorbJudgedEvent,
     "memory.absorb.auto_merged": MemoryAbsorbAutoMergedEvent,
     "memory.absorb.skipped": MemoryAbsorbSkippedEvent,
+    "memory.absorb.judge_unavailable": MemoryAbsorbJudgeUnavailableEvent,
     "memory.absorb.reverted": MemoryAbsorbRevertedEvent,
     "memory.absorb.escalated": MemoryAbsorbEscalatedEvent,
     "memory.absorb.escalation_capped": MemoryAbsorbEscalationCappedEvent,

@@ -464,16 +464,16 @@ class AutoAbsorbConfig(Base):
         validation_alias=AliasChoices("judgeConcurrency", "judge_concurrency"),
         description="Judge calls in flight at once during the refine pass; merges are applied one at a time, in candidate order",
     )
-    error_cooldown_days: int = Field(
+    recheck_days: int = Field(
         default=7,
         ge=0,
-        validation_alias=AliasChoices("errorCooldownDays", "error_cooldown_days"),
-        description="Days before a pair whose judge call failed (unparseable reply or provider error) is judged again; 0 retries it every run",
+        validation_alias=AliasChoices("recheckDays", "recheck_days"),
+        description="Days before a pair without a settled verdict — an unparseable reply, an 'unclear', a 'same' below the merge threshold — is judged again; 0 re-judges it every run",
     )
-    require_name_overlap: bool = Field(
-        default=True,
-        validation_alias=AliasChoices("requireNameOverlap", "require_name_overlap"),
-        description="Judge an embedding-near pair only when the two entities share a name token or one name contains the other (slug, name and aliases compared); alias-overlap pairs are always judged",
+    semantic_name_gate: Literal["prioritize", "require", "off"] = Field(
+        default="prioritize",
+        validation_alias=AliasChoices("semanticNameGate", "semantic_name_gate"),
+        description="How the name signal steers embedding-near candidates: 'prioritize' judges pairs whose names share a token or contain each other first, then the rest by distance; 'require' judges only those; 'off' orders by distance alone. Alias-overlap pairs are always judged",
     )
 
 

@@ -373,8 +373,8 @@ passes (extract/refine/skill), background file watching, and health checks. See
 | `semantic_distance_threshold` | `0.30` | L2² distance below which an embedding-near entity becomes a dedup candidate (refine + discovery); the judge decides the merge, so a looser value trades judge calls for better duplicate recall |
 | `escalate_floor` | `0` | **Opt-in.** When `> 0`, borderline pairs (Tier 1 verdict `unclear`, or `same` with confidence in `[escalate_floor, confidence_threshold)`) escalate to a bounded sub-agent that investigates with read-only entity/lineage/session tools. `0` disables Tier 2 entirely. |
 | `judge_concurrency` | `3` | Judge calls in flight at once during the refine pass (1–8); merges stay one at a time, in candidate order |
-| `error_cooldown_days` | `7` | Days before a pair whose judge call failed is judged again; `0` retries it every run |
-| `require_name_overlap` | `true` | Judge an embedding-near pair only when the two names share a token or one contains the other (slug, name, aliases); alias pairs are always judged |
+| `recheck_days` | `7` | Days before a pair without a settled verdict (an unparseable reply, an `unclear`, a `same` below the merge threshold) is judged again; `0` re-judges it every run. Provider failures are never remembered |
+| `semantic_name_gate` | `prioritize` | How the name signal steers embedding-near candidates: `prioritize` judges pairs whose names share a token or contain each other first, then the rest by distance; `require` judges only those; `off` orders by distance alone. Alias pairs are always judged |
 
 **`memory.search`** — search pipeline configuration:
 

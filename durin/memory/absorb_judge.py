@@ -55,20 +55,29 @@ _TEMPLATE_PATH = (
     Path(__file__).parent.parent / "templates" / "dream" / "absorb_judge.md"
 )
 
-# Markdown-marker block extraction. Tolerant to whitespace and to extra
-# prose the model may add before / after the envelope.
-_RE_VERDICT = re.compile(
-    r"===VERDICT===\s*(?P<verdict>\S+)\s*===CONFIDENCE===",
-    re.IGNORECASE | re.DOTALL,
-)
-_RE_CONFIDENCE = re.compile(
-    r"===CONFIDENCE===\s*(?P<confidence>\d+)\s*===REASONING===",
-    re.IGNORECASE | re.DOTALL,
-)
-_RE_REASONING = re.compile(
-    r"===REASONING===\s*(?P<reasoning>.*?)\s*===END===",
-    re.IGNORECASE | re.DOTALL,
-)
+# Envelope extraction. Each block is the text between its marker and the
+# next marker (or the end of the reply), so prose between blocks, emphasis
+# around a word, a fenced reply, a percent sign or a decimal confidence
+# and a missing closing marker all still parse — the model's drift costs
+# no extra call. A block that is absent or holds no usable value is still
+# an error: the judge never guesses a verdict.
+_MARKERS = ("===VERDICT===", "===CONFIDENCE===", "===REASONING===", "===END===")
+_RE_MARKER = re.compile("|".join(re.escape(m) for m in _MARKERS), re.IGNORECASE)
+_RE_VERDICT_WORD = re.compile(r"\b(same|different|unclear)\b", re.IGNORECASE)
+_RE_NUMBER = re.compile(r"(\d+(?:\.\d+)?)\s*%?")
+
+
+def _blocks(raw: str) -> dict[str, str]:
+    """``{marker: text after it up to the next marker}`` (markers upper-cased)."""
+    found = list(_RE_MARKER.finditer(raw))
+    out: dict[str, str] = {}
+    for k, m in enumerate(found):
+        end = found[k + 1].start() if k + 1 < len(found) else len(raw)
+        name = m.group(0).upper()
+        out.setdefault(name, raw[m.end():end])
+    return out
+
+
 
 _VALID_VERDICTS = frozenset({"same", "different", "unclear"})
 
@@ -79,7 +88,18 @@ _PAGE_BUDGET_CHARS = 6000
 
 
 class JudgeError(Exception):
-    """Raised when the judge LLM call or output parsing fails after retries."""
+    """Raised when the judge LLM call or output parsing fails after retries.
+
+    ``kind`` tells the caller what failed: ``"parse"`` — the model answered
+    but not in the envelope (a property of this pair and prompt, worth
+    remembering); ``"provider"`` — the call itself failed or the provider
+    returned an error after its own retries (a property of the moment, not
+    of the pair).
+    """
+
+    def __init__(self, message: str, *, kind: str = "parse") -> None:
+        super().__init__(message)
+        self.kind = kind
 
 
 @dataclass(frozen=True)
@@ -151,17 +171,32 @@ def judge_pair(
     from durin.memory.llm_invoke import LLMResponse as _LLMResponse
 
     last_error: Exception | None = None
+    kind = "parse"
     attempt_prompt = prompt
+    attempts = 0
     for attempt in range(max_retries + 1):
+        attempts = attempt + 1
         try:
             response = llm_invoke(attempt_prompt, model=model)
         except Exception as exc:  # noqa: BLE001
-            last_error = exc
+            # The provider already applied its own retry policy; repeating
+            # the call here would only multiply a dead key or an outage.
+            last_error, kind = exc, "provider"
             logger.warning(
                 "absorb_judge LLM call failed (attempt %d/%d): %s",
-                attempt + 1, max_retries + 1, exc,
+                attempts, max_retries + 1, exc,
             )
-            continue
+            break
+        if getattr(response, "finish_reason", "stop") == "error":
+            # The provider reports failure as a response whose text is its
+            # error message; parsing it would look like format drift.
+            text = response.text if isinstance(response, _LLMResponse) else str(response)
+            last_error, kind = JudgeError(f"provider error: {text[:200]}", kind="provider"), "provider"
+            logger.warning(
+                "absorb_judge provider error (attempt %d/%d): %s",
+                attempts, max_retries + 1, text[:200],
+            )
+            break
         raw = response.text if isinstance(response, _LLMResponse) else str(response)
         try:
             return _parse_response(raw)
@@ -169,7 +204,7 @@ def judge_pair(
             last_error = exc
             logger.warning(
                 "absorb_judge parse failed (attempt %d/%d): %s",
-                attempt + 1, max_retries + 1, exc,
+                attempts, max_retries + 1, exc,
             )
             # Tell the model what could not be parsed instead of re-sending
             # the same prompt blind: most parse failures are format drift
@@ -180,7 +215,7 @@ def judge_pair(
             attempt_prompt = prompt + _RETRY_FEEDBACK.format(error=exc)
 
     raise JudgeError(
-        f"absorb_judge failed after {max_retries + 1} attempts: {last_error}"
+        f"absorb_judge failed after {attempts} attempt(s): {last_error}", kind=kind,
     )
 
 
@@ -252,35 +287,43 @@ def _parse_response(raw: str) -> JudgeResult:
     """Extract verdict / confidence / reasoning from the markdown markers.
 
     Raises :class:`JudgeError` if any block is missing or malformed.
-    Tolerates: extra prose around the envelope, case variation in the
-    verdict, surrounding whitespace.
+    Tolerates: extra prose around and between the blocks, case variation,
+    emphasis or code fences around a value, a confidence written as a
+    percentage or as a fraction of one, and a missing ``===END===`` after
+    the reasoning.
     """
     if not raw or not isinstance(raw, str):
         raise JudgeError("empty or non-string LLM response")
+    blocks = _blocks(raw)
 
-    verdict_match = _RE_VERDICT.search(raw)
-    if verdict_match is None:
+    verdict_block = blocks.get("===VERDICT===")
+    if verdict_block is None:
         raise JudgeError("missing ===VERDICT=== block")
-    verdict = verdict_match.group("verdict").strip().lower()
-    if verdict not in _VALID_VERDICTS:
+    verdict_match = _RE_VERDICT_WORD.search(verdict_block)
+    if verdict_match is None:
+        head = verdict_block.strip().split()[0] if verdict_block.strip() else ""
         raise JudgeError(
-            f"invalid verdict {verdict!r}; expected one of {sorted(_VALID_VERDICTS)}"
+            f"invalid verdict {head!r}; expected one of {sorted(_VALID_VERDICTS)}"
         )
+    verdict = verdict_match.group(1).lower()
 
-    confidence_match = _RE_CONFIDENCE.search(raw)
-    if confidence_match is None:
+    confidence_block = blocks.get("===CONFIDENCE===")
+    if confidence_block is None:
         raise JudgeError("missing ===CONFIDENCE=== block")
-    try:
-        confidence = int(confidence_match.group("confidence").strip())
-    except ValueError as exc:
-        raise JudgeError(f"non-integer confidence: {exc}") from None
+    number = _RE_NUMBER.search(confidence_block)
+    if number is None:
+        raise JudgeError("non-integer confidence: no number in the block")
+    value = float(number.group(1))
+    if "." in number.group(1) and value <= 1.0:
+        value *= 100.0
+    confidence = int(round(value))
     if not 0 <= confidence <= 100:
         raise JudgeError(f"confidence {confidence} out of [0, 100]")
 
-    reasoning_match = _RE_REASONING.search(raw)
-    if reasoning_match is None:
+    reasoning_block = blocks.get("===REASONING===")
+    if reasoning_block is None:
         raise JudgeError("missing ===REASONING=== / ===END=== block")
-    reasoning = reasoning_match.group("reasoning").strip()
+    reasoning = reasoning_block.strip().strip("`").strip()
     if not reasoning:
         raise JudgeError("empty reasoning block")
 
