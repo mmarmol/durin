@@ -239,7 +239,11 @@ def cmd_dream(
                          escalate_floor=_absorb.escalate_floor,
                          semantic_distance_threshold=_absorb.semantic_distance_threshold,
                          run_started_at=_run_started,
-                         vector_index=_vi)
+                         vector_index=_vi,
+                         max_seconds=cfg.memory.dream.max_seconds_per_run,
+                         judge_concurrency=_absorb.judge_concurrency,
+                         error_cooldown_days=_absorb.error_cooldown_days,
+                         require_name_overlap=_absorb.require_name_overlap)
     console.print("[dim]Always-on pass (distil pinned guidance)…[/dim]")
     ao = run_always_on_pass(workspace, model=model,
                             token_budget=cfg.memory.dream.always_on_token_budget)

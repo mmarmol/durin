@@ -66,7 +66,7 @@ flowchart TD
 
     subgraph AbsorbPath["Refine / absorb (within dream)"]
         AB[Alias-overlap candidate]
-        AB --> AS[memory.absorb.skipped\ncross_type / tombstoned / load_failed /\nuser_managed / quarantine / judge_error]
+        AB --> AS[memory.absorb.skipped\ncross_type / tombstoned / load_failed /\nuser_managed / quarantine / no_name_overlap /\ncached_verdict / cached_error / judge_error / merged_earlier]
         AB --> AJ[memory.absorb.judged]
         AJ --> AM[memory.absorb.auto_merged]
         AM --> AR[memory.absorb.reverted\non durin memory revert]
@@ -131,6 +131,7 @@ Four dream passes are wrapped with a `memory.dream.start` / `memory.dream.end` p
 - **Extract** (`kind="extract"`) — `dream.end` carries `entities_consolidated`, `entities_discovered`, `skill_signals`, `entities_failed`, `sessions`, and `yielded` (true when `max_seconds_per_run` cut the pass short). Within the pass: `memory.dream.patch_applied` per entity written (Stage 1); `memory.dream.discover` per session processed (Stage 2: mention discovery, carries `proposed` / `written` / `skipped`); `memory.dream.learnings` per session processed by Stage 4 (learnings sweep, carries `proposed` / `written` / `refs`). `entities_consolidated` counts Stage-1 attribute writes only; learnings writes are tracked separately via `memory.dream.learnings`.
 - **Derived-from** (`kind="derived_from"`) — no dedicated event beyond the `dream.start/end` pair; attribute writes emit `memory.dream.patch_applied`. `dream.end` carries `links`, `sessions`, `errors`, `yielded`.
 - **Session summary** (`kind="session_summary"`) — `dream.end` carries `sessions` walked, `written`, `skipped` (idle gate, too-short span, or nothing to say), `errors` and `yielded`. One bad session is logged and skipped, with no per-session sub-event.
+- **Refine** (`kind="refine"`) — `dream.end` carries `merged`, `kept`, `candidates`, `judged` (pairs the judge answered this run) and `budget_hit` (true when `max_seconds_per_run` stopped the pass; the rest is judged on later runs). Per pair: `memory.absorb.skipped` with its reason, `memory.absorb.judged`, `memory.absorb.auto_merged`.
 - **Refine** (`kind="refine"`) — `dream.end` carries `merged`, `kept`, `candidates`. Produces the absorb-judge events (see below).
 
 **Passes that emit a single named event (no start/end):**
@@ -141,7 +142,7 @@ Four dream passes are wrapped with a `memory.dream.start` / `memory.dream.end` p
 Additional dream events:
 
 - **`memory.dream.run_summary`** — one rollup per run (cron and reactive), emitted after all passes complete. Carries `sessions`, `entities`, `merged`, `skills_created` (new skills authored by the skill-extract pass) and `skills_improved` (existing skills edited by the curation pass). Drives the Dream feed's per-run entry so that an empty run still shows "ran — no new changes" rather than silently updating only the last-run timestamp.
-- **`memory.dream.max_seconds_reached`** — extract pass hit its wall-clock cap and yielded. `sessions_done` gives progress before yielding; the per-session cursor resumes on the next trigger.
+- **`memory.dream.max_seconds_reached`** — a pass hit its wall-clock cap and yielded. `kind` is `extract` (`sessions_done` gives progress; the per-session cursor resumes on the next trigger) or `refine` (`judged` so far and `remaining` candidates; the verdict cache resumes on the next run).
 - **`memory.dream.throttled`** — a reactive trigger (`post_compaction` or `session_close`) was skipped by the in-process gate. `reason` is `locked` or `throttled`.
 - **`memory.dream.parse_failure`** — a pass's LLM response was unparseable (fence-strip + repair still failed, or wrong top-level type). `stage` is `extract | discover | learnings | derived_from | curation | suggestions` (the last two fire when the skill-curation judge returns unparseable output — that run stamps nothing and re-enters next time); `source` is the entity ref or session stem; `raw_head` carries the first 200 chars for diagnosis. Valid-but-empty responses do not fire this. Surfaces in the webui Dream feed as a `warning` item via the shared digest mapping.
 - **`memory.dream.vector_unavailable`** — the run started with `memory.enabled = true` but the vector backend was unavailable, so semantic dedup degraded to alias matching. Emitted once per run by `dream_vector_index`; silent when vector memory is deliberately disabled. Also surfaces as a Dream-feed `warning` item.
@@ -151,7 +152,7 @@ Additional dream events:
 
 These fire during the refine pass and via the manual `durin memory` commands:
 
-- **`memory.absorb.judged`** — a candidate pair reached the LLM judge. `verdict` is `same | different | unclear`; `confidence` is 0–100. `entity_type` supports per-class duplicate-churn analysis (e.g. feedback/stance/practice). Emitted for every pair that survived the cross-type filter and quarantine check.
+- **`memory.absorb.judged`** — a candidate pair reached the LLM judge. `verdict` is `same | different | unclear`; `confidence` is 0–100. `entity_type` supports per-class duplicate-churn analysis (e.g. feedback/stance/practice). Emitted for every pair that survived the pre-judge filters (cross-type, tombstone, quarantine, the name gate, the verdict cache).
 - **`memory.absorb.auto_merged`** — pair was auto-merged (`verdict == same` and `confidence >= threshold`). `sha` is the merge commit. `entity_type` (same field as `memory.absorb.judged`) is carried here too.
 - **`memory.absorb.skipped`** — pair was never judged (fires instead of `memory.absorb.judged`, not after it). `reason` is one of: `cross_type`, `tombstoned`, `load_failed`, `user_managed`, `quarantine`, `judge_error`.
 - **`memory.absorb.reverted`** — a prior auto-merge was undone via `durin memory revert`. This is the regret-rate signal: a high revert count indicates the confidence threshold is too low.

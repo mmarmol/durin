@@ -15,8 +15,12 @@ user's revert.
 from __future__ import annotations
 
 import json
+import re
+import time
 from pathlib import Path
 from typing import Any, Callable
+
+from loguru import logger
 
 from durin.memory.absorb_judge import (
     JudgeError,
@@ -102,6 +106,40 @@ def _judge_content_fingerprint(page: "EntityPage") -> str:
         "body": page.body or "",
     }, sort_keys=True, ensure_ascii=False, default=str)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+_now = time.time  # module-level so tests can move the clock
+
+_NAME_TOKEN_RE = re.compile(r"[\W_]+")
+
+
+def _name_forms(ref: str, page: "EntityPage") -> list[str]:
+    forms = [ref.split(":", 1)[1], page.name or "", *(page.aliases or [])]
+    return [f.lower() for f in forms if f]
+
+
+def _names_overlap(ref_a: str, page_a: "EntityPage", ref_b: str, page_b: "EntityPage") -> bool:
+    """Structural name evidence for an embedding-near pair.
+
+    True when the two entities share a name token (slug, name or alias,
+    tokens of three or more characters) or one compact form — the name
+    with separators stripped — contains the other (``email-flow`` /
+    ``emailflow``, ``auto-filling`` / ``mxhero-autofilling-system``). No
+    vocabulary, no language assumptions: purely how the two are written.
+    """
+    fa, fb = _name_forms(ref_a, page_a), _name_forms(ref_b, page_b)
+
+    def toks(forms: list[str]) -> set[str]:
+        return {t for f in forms for t in _NAME_TOKEN_RE.split(f) if len(t) >= 3}
+
+    if toks(fa) & toks(fb):
+        return True
+    ca = {_NAME_TOKEN_RE.sub("", f) for f in fa}
+    cb = {_NAME_TOKEN_RE.sub("", f) for f in fb}
+    return any(
+        len(x) >= 4 and len(y) >= 4 and (x in y or y in x)
+        for x in ca for y in cb
+    )
 
 
 def _pair_fingerprint(
@@ -277,6 +315,10 @@ def run_refine(
     run_started_at: "datetime | None" = None,
     vector_index: object | None = None,
     semantic_distance_threshold: float = 0.30,
+    max_seconds: float = 0,
+    judge_concurrency: int = 1,
+    error_cooldown_s: float = 7 * 86400,
+    require_name_overlap: bool = True,
 ) -> dict:
     """Dedup pass: judge alias-overlap candidate pairs and merge the same ones.
 
@@ -287,7 +329,21 @@ def run_refine(
 
     When ``vector_index`` is provided, embedding-near same-type pairs within
     ``semantic_distance_threshold`` (L2) are added to the candidate set,
-    catching same-thing-different-name duplicates that share no alias.
+    catching same-thing-different-name duplicates that share no alias. With
+    ``require_name_overlap`` those pairs are judged only when the two names
+    show structural overlap (see :func:`_names_overlap`); alias pairs always
+    are.
+
+    ``max_seconds`` (0 = unbounded) is a wall-clock cap: when crossed the pass
+    stops before the next chunk, emits ``memory.dream.max_seconds_reached``
+    and leaves the rest to the next run — the verdict cache makes that
+    incremental. ``judge_concurrency`` judge calls run at once; merges,
+    tombstone checks and cache writes are applied one at a time in candidate
+    order after each chunk, and a merge earlier in the chunk is re-checked
+    before a later one touches the same page. The cache is saved after every
+    chunk, so an interrupted run keeps what it judged. A pair whose judge call
+    failed is cached with ``error_cooldown_s`` and not re-judged until it
+    expires (0 = retry every run).
 
     When ``escalate_floor > 0``, pairs the cheap judge can't settle — verdict
     ``"unclear"``, or ``"same"`` with confidence in ``[escalate_floor,
@@ -310,124 +366,199 @@ def run_refine(
                 candidates.append(sc)
                 seen.add(tuple(sorted(sc.refs)))
 
+    t0 = time.perf_counter()
     merged: list[dict] = []
     kept: list[dict] = []
     skipped: list[dict] = []
     escalations = 0
+    judged_n = 0
+    budget_hit = False
     verdict_cache = _load_verdict_cache(workspace)
     # Judge identity: template + model. Either changing re-judges everything.
     judge_id = f"{judge_template_fingerprint()}|{model or ''}"
     cache_dirty = False
+    concurrency = max(1, int(judge_concurrency))
 
-    for cand in candidates:
+    def _skip(ref_a: str, ref_b: str, reason: str) -> None:
+        skipped.append({"pair": [ref_a, ref_b], "reason": reason})
+        _emit("memory.absorb.skipped", canonical=ref_a, absorbed=ref_b, reason=reason)
+
+    def _prepare(cand) -> dict | None:
+        """The pre-judge filters, in candidate order; None = skipped."""
         ref_a, ref_b = cand.refs
         if ref_a.split(":", 1)[0] != ref_b.split(":", 1)[0]:
-            skipped.append({"pair": [ref_a, ref_b], "reason": "cross_type"})
-            _emit("memory.absorb.skipped", canonical=ref_a, absorbed=ref_b, reason="cross_type")
-            continue
+            _skip(ref_a, ref_b, "cross_type")
+            return None
         if is_tombstoned(workspace, ref_a, ref_b):
-            skipped.append({"pair": [ref_a, ref_b], "reason": "tombstoned"})
-            _emit("memory.absorb.skipped", canonical=ref_a, absorbed=ref_b, reason="tombstoned")
-            continue
+            _skip(ref_a, ref_b, "tombstoned")
+            return None
         page_a = _load_page(workspace, ref_a)
         page_b = _load_page(workspace, ref_b)
         if page_a is None or page_b is None:
-            skipped.append({"pair": [ref_a, ref_b], "reason": "load_failed"})
-            _emit("memory.absorb.skipped", canonical=ref_a, absorbed=ref_b, reason="load_failed")
-            continue
+            _skip(ref_a, ref_b, "load_failed")
+            return None
         if page_a.author == "user_authored" or page_b.author == "user_authored":
-            skipped.append({"pair": [ref_a, ref_b], "reason": "user_managed"})
-            _emit("memory.absorb.skipped", canonical=ref_a, absorbed=ref_b, reason="user_managed")
-            continue
+            _skip(ref_a, ref_b, "user_managed")
+            return None
         if run_started_at is not None and (
                 _created_this_run(page_a, run_started_at)
                 or _created_this_run(page_b, run_started_at)):
-            skipped.append({"pair": [ref_a, ref_b], "reason": "quarantine"})
-            _emit("memory.absorb.skipped", canonical=ref_a, absorbed=ref_b, reason="quarantine")
-            continue
+            _skip(ref_a, ref_b, "quarantine")
+            return None
+        if (require_name_overlap and cand.distance is not None
+                and not cand.shared_aliases
+                and not _names_overlap(ref_a, page_a, ref_b, page_b)):
+            _skip(ref_a, ref_b, "no_name_overlap")
+            return None
         pair_fp = _pair_fingerprint(ref_a, page_a, ref_b, page_b)
         cached = verdict_cache.get(_pair_key(ref_a, ref_b))
         if (cached and cached.get("fp") == pair_fp
                 and cached.get("judge") == judge_id):
-            skipped.append({"pair": [ref_a, ref_b], "reason": "cached_verdict"})
-            _emit("memory.absorb.skipped", canonical=ref_a, absorbed=ref_b,
-                  reason="cached_verdict")
-            continue
+            if cached.get("verdict") == "error":
+                if float(cached.get("until") or 0) > _now():
+                    _skip(ref_a, ref_b, "cached_error")
+                    return None
+            else:
+                _skip(ref_a, ref_b, "cached_verdict")
+                return None
+        return {"cand": cand, "a": ref_a, "b": ref_b,
+                "page_a": page_a, "page_b": page_b, "fp": pair_fp}
+
+    def _judge_one(item: dict):
         try:
-            judged = judge_pair(
-                page_a, page_b, cand.shared_aliases,
+            return judge_pair(
+                item["page_a"], item["page_b"], item["cand"].shared_aliases,
                 llm_invoke=llm_invoke, model=model,
-                canonical_ref=ref_a, absorbed_ref=ref_b,
-                canonical_mtime=_page_mtime(workspace, ref_a),
-                absorbed_mtime=_page_mtime(workspace, ref_b),
+                canonical_ref=item["a"], absorbed_ref=item["b"],
+                canonical_mtime=_page_mtime(workspace, item["a"]),
+                absorbed_mtime=_page_mtime(workspace, item["b"]),
             )
         except JudgeError as exc:
-            skipped.append({"pair": [ref_a, ref_b], "reason": f"judge_error:{exc}"})
-            _emit("memory.absorb.skipped", canonical=ref_a, absorbed=ref_b,
-                  reason="judge_error")
-            continue
-        _emit("memory.absorb.judged", canonical=ref_a, absorbed=ref_b,
-              verdict=judged.verdict, confidence=judged.confidence,
-              entity_type=page_a.type,
-              distance=cand.distance)
-        decision = judged
-        escalated = False
-        borderline = (
-            judged.verdict == "unclear"
-            or (judged.verdict == "same"
-                and escalate_floor <= judged.confidence < confidence_threshold)
-        )
-        if escalate_floor and borderline:
-            if escalations >= _MAX_ESCALATIONS_PER_RUN:
-                _emit("memory.absorb.escalation_capped",
-                      canonical=ref_a, absorbed=ref_b)
-                add_flagged(workspace, ref_a, ref_b,
-                            verdict=judged.verdict,
-                            confidence=judged.confidence,
-                            reasoning=("escalation cap reached this run; "
-                                       "Tier-1 verdict kept — review manually"))
-            else:
-                escalations += 1
-                try:
-                    decision = _escalate_judge(workspace, ref_a, ref_b, model=model)
-                    escalated = True
-                    _emit("memory.absorb.escalated", canonical=ref_a, absorbed=ref_b,
-                          verdict=decision.verdict, confidence=decision.confidence)
-                except Exception as exc:  # noqa: BLE001 — agent best-effort
-                    kept.append({"pair": [ref_a, ref_b], "reason": f"tier2_error:{exc}"})
-                    continue
-        if decision.verdict == "same" and decision.confidence >= confidence_threshold:
-            absorber.absorb(
-                ref_a, ref_b, reason="refine",
-                judge_reasoning=decision.reasoning,
-                judge_confidence=decision.confidence,
-            )
-            merged.append({"canonical": ref_a, "absorbed": ref_b,
-                           "confidence": decision.confidence})
-            _emit("memory.absorb.auto_merged", canonical=ref_a, absorbed=ref_b,
-                  confidence=decision.confidence, entity_type=page_a.type)
-        else:
-            if escalated:
-                add_flagged(workspace, ref_a, ref_b,
-                            verdict=decision.verdict,
-                            confidence=decision.confidence,
-                            reasoning=decision.reasoning)
-            kept.append({"pair": [ref_a, ref_b], "verdict": decision.verdict,
-                         "confidence": decision.confidence})
-            if decision.verdict == "different" and not escalated:
-                verdict_cache[_pair_key(ref_a, ref_b)] = {
-                    "verdict": decision.verdict,
-                    "confidence": decision.confidence,
-                    "fp": pair_fp,
-                    "judge": judge_id,
-                }
-                cache_dirty = True
+            return exc
 
-    if cache_dirty:
-        _save_verdict_cache(workspace, verdict_cache)
+    def _judge_chunk(chunk: list[dict]) -> list:
+        if len(chunk) == 1:
+            return [_judge_one(chunk[0])]
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=len(chunk)) as pool:
+            return list(pool.map(_judge_one, chunk))
+
+    pos = 0
+    try:
+        while pos < len(candidates):
+            if max_seconds and (time.perf_counter() - t0) >= max_seconds:
+                budget_hit = True
+                elapsed_ms = int((time.perf_counter() - t0) * 1000)
+                _emit("memory.dream.max_seconds_reached", kind="refine",
+                      max_seconds=max_seconds, elapsed_ms=elapsed_ms,
+                      judged=judged_n, remaining=len(candidates) - pos)
+                logger.info(
+                    "refine dream hit max_seconds_per_run ({}s) after {} judged "
+                    "pair(s) ({}ms); {} candidate(s) wait for the next run",
+                    max_seconds, judged_n, elapsed_ms, len(candidates) - pos)
+                break
+            chunk: list[dict] = []
+            while pos < len(candidates) and len(chunk) < concurrency:
+                item = _prepare(candidates[pos])
+                pos += 1
+                if item is not None:
+                    chunk.append(item)
+            if not chunk:
+                continue
+            for item, outcome in zip(chunk, _judge_chunk(chunk)):
+                ref_a, ref_b, page_a, pair_fp = item["a"], item["b"], item["page_a"], item["fp"]
+                cand = item["cand"]
+                if isinstance(outcome, JudgeError):
+                    skipped.append({"pair": [ref_a, ref_b], "reason": f"judge_error:{outcome}"})
+                    _emit("memory.absorb.skipped", canonical=ref_a, absorbed=ref_b,
+                          reason="judge_error")
+                    if error_cooldown_s > 0:
+                        verdict_cache[_pair_key(ref_a, ref_b)] = {
+                            "verdict": "error",
+                            "error": str(outcome)[:200],
+                            "fp": pair_fp,
+                            "judge": judge_id,
+                            "until": _now() + float(error_cooldown_s),
+                        }
+                        cache_dirty = True
+                    continue
+                judged = outcome
+                judged_n += 1
+                _emit("memory.absorb.judged", canonical=ref_a, absorbed=ref_b,
+                      verdict=judged.verdict, confidence=judged.confidence,
+                      entity_type=page_a.type,
+                      distance=cand.distance)
+                decision = judged
+                escalated = False
+                borderline = (
+                    judged.verdict == "unclear"
+                    or (judged.verdict == "same"
+                        and escalate_floor <= judged.confidence < confidence_threshold)
+                )
+                if escalate_floor and borderline:
+                    if escalations >= _MAX_ESCALATIONS_PER_RUN:
+                        _emit("memory.absorb.escalation_capped",
+                              canonical=ref_a, absorbed=ref_b)
+                        add_flagged(workspace, ref_a, ref_b,
+                                    verdict=judged.verdict,
+                                    confidence=judged.confidence,
+                                    reasoning=("escalation cap reached this run; "
+                                               "Tier-1 verdict kept — review manually"))
+                    else:
+                        escalations += 1
+                        try:
+                            decision = _escalate_judge(workspace, ref_a, ref_b, model=model)
+                            escalated = True
+                            _emit("memory.absorb.escalated", canonical=ref_a, absorbed=ref_b,
+                                  verdict=decision.verdict, confidence=decision.confidence)
+                        except Exception as exc:  # noqa: BLE001 — agent best-effort
+                            kept.append({"pair": [ref_a, ref_b], "reason": f"tier2_error:{exc}"})
+                            continue
+                if decision.verdict == "same" and decision.confidence >= confidence_threshold:
+                    # A merge earlier in this chunk may have absorbed one of
+                    # these pages after it was judged: re-check before merging.
+                    if (is_tombstoned(workspace, ref_a, ref_b)
+                            or _load_page(workspace, ref_a) is None
+                            or _load_page(workspace, ref_b) is None):
+                        _skip(ref_a, ref_b, "merged_earlier")
+                        continue
+                    absorber.absorb(
+                        ref_a, ref_b, reason="refine",
+                        judge_reasoning=decision.reasoning,
+                        judge_confidence=decision.confidence,
+                    )
+                    merged.append({"canonical": ref_a, "absorbed": ref_b,
+                                   "confidence": decision.confidence})
+                    _emit("memory.absorb.auto_merged", canonical=ref_a, absorbed=ref_b,
+                          confidence=decision.confidence, entity_type=page_a.type)
+                else:
+                    if escalated:
+                        add_flagged(workspace, ref_a, ref_b,
+                                    verdict=decision.verdict,
+                                    confidence=decision.confidence,
+                                    reasoning=decision.reasoning)
+                    kept.append({"pair": [ref_a, ref_b], "verdict": decision.verdict,
+                                 "confidence": decision.confidence})
+                    if decision.verdict == "different" and not escalated:
+                        verdict_cache[_pair_key(ref_a, ref_b)] = {
+                            "verdict": decision.verdict,
+                            "confidence": decision.confidence,
+                            "fp": pair_fp,
+                            "judge": judge_id,
+                        }
+                        cache_dirty = True
+            if cache_dirty:
+                _save_verdict_cache(workspace, verdict_cache)
+                cache_dirty = False
+    finally:
+        if cache_dirty:
+            _save_verdict_cache(workspace, verdict_cache)
+
     return {
         "merged": merged,
         "kept_separate": kept,
         "skipped": skipped,
         "candidates": len(candidates),
+        "judged": judged_n,
+        "budget_hit": budget_hit,
     }

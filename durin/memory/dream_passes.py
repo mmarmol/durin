@@ -222,6 +222,10 @@ def run_refine_pass(
     semantic_distance_threshold: float = 0.30,
     run_started_at: "datetime | None" = None,
     vector_index: object | None = None,
+    max_seconds: int = 0,
+    judge_concurrency: int = 1,
+    error_cooldown_days: int = 7,
+    require_name_overlap: bool = True,
 ) -> dict:
     """Run the refine dream (dedup duplicate entities). The daily cron entry.
 
@@ -250,11 +254,16 @@ def run_refine_pass(
                      escalate_floor=escalate_floor,
                      semantic_distance_threshold=semantic_distance_threshold,
                      run_started_at=run_started_at,
-                     vector_index=vector_index)
+                     vector_index=vector_index,
+                     max_seconds=max_seconds,
+                     judge_concurrency=judge_concurrency,
+                     error_cooldown_s=error_cooldown_days * 86400,
+                     require_name_overlap=require_name_overlap)
     out["duration_ms"] = int((time.perf_counter() - t0) * 1000)
     _emit("memory.dream.end", kind="refine",
           merged=len(out.get("merged", [])), kept=len(out.get("kept_separate", [])),
           candidates=out.get("candidates", 0),
+          judged=out.get("judged", 0), budget_hit=bool(out.get("budget_hit")),
           duration_ms=out["duration_ms"])
     return out
 

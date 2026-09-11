@@ -881,6 +881,8 @@ class MemoryDreamEndEvent(TypedDict):
     """
 
     kind: str
+    judged: NotRequired[int]  # refine: pairs the judge answered this run
+    budget_hit: NotRequired[bool]  # refine: stopped by max_seconds_per_run
     duration_ms: int
     entities_consolidated: NotRequired[int]
     entities_discovered: NotRequired[int]  # extract: pages the discovery stage wrote for entities the agent never upserted
@@ -949,6 +951,14 @@ class MemoryAbsorbSkippedEvent(TypedDict):
       (the run never merges its own fresh output).
     - ``"judge_error"``: the judge raised ``JudgeError`` (unparseable verdict
       after all retries) and the pair was skipped for this run.
+    - ``"cached_verdict"``: a settled "different" verdict for these exact
+      page contents and judge is memoised in ``.refine_verdicts.json``.
+    - ``"cached_error"``: the pair's judge call failed on an earlier run and
+      its cooldown (``auto_absorb.error_cooldown_days``) has not expired.
+    - ``"no_name_overlap"``: an embedding-near pair whose names share no
+      token and neither contains the other (``auto_absorb.require_name_overlap``).
+    - ``"merged_earlier"``: judged "same", but a merge earlier in the same
+      chunk already absorbed one of the pages.
     - ``"cached_verdict"``: an earlier run judged this exact pair "different"
       and neither page's judgment-bearing content (nor the judge template or
       model) has changed since — the verdict cache answers instead of the LLM.
@@ -1416,13 +1426,16 @@ class MemoryDreamSkillSignalsEvent(TypedDict):
 
 
 class MemoryDreamMaxSecondsReachedEvent(TypedDict):
-    """An extract pass hit ``memory.dream.max_seconds_per_run`` and yielded;
-    the per-session cursor resumes the remainder on the next trigger."""
+    """A pass hit ``memory.dream.max_seconds_per_run`` and yielded. The
+    extract pass resumes by per-session cursor; the refine pass by its
+    verdict cache (``judged`` so far, ``remaining`` candidates)."""
 
-    kind: str  # "extract"
+    kind: str  # "extract" | "refine"
     max_seconds: int
     elapsed_ms: int
-    sessions_done: int
+    sessions_done: NotRequired[int]
+    judged: NotRequired[int]
+    remaining: NotRequired[int]
 
 
 class MemoryDreamThrottledEvent(TypedDict):

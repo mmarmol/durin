@@ -385,7 +385,8 @@ is a sync wrapper over the async runner so the cron can call it in a thread.
 ### Pass 4 — refine: dedup duplicate entities
 
 `run_refine_pass(workspace, *, llm_invoke, model, enabled, confidence_threshold,
-run_started_at, vector_index=None, escalate_floor=0)` is the graph-hygiene pass,
+run_started_at, vector_index=None, escalate_floor=0, max_seconds=0,
+judge_concurrency=1, error_cooldown_days=7, require_name_overlap=True)` is the graph-hygiene pass,
 gated by `enabled` (wired from `memory.dream.auto_absorb.enabled`, **ON by
 default**). When disabled it short-circuits — **no judge, no merge** — and logs
 the manual path (`durin memory absorb-suggest` to surface, `durin memory absorb`
@@ -413,7 +414,9 @@ threaded through; it is `None` when the vector index is unavailable.
    (`run_started_at` is set and either page was created at or after the run
    started, checked via `created_at` then `updated_at`; no timestamp = treated
    as old, fail-open) — the run never merges its own fresh output; cross-run
-   duplicates converge on the next pass — or `cached_verdict` (see the verdict
+   duplicates converge on the next pass — `no_name_overlap` (an embedding-near
+   pair whose names share no token and neither contains the other, see the
+   name gate below), or `cached_verdict` / `cached_error` (see the verdict
    cache below).
 4. For survivors, `judge_pair` (`durin/memory/absorb_judge.py`) — the
    **Tier 1 cheap judge** — renders **the whole entity page** via
@@ -443,6 +446,39 @@ threaded through; it is `None` when the vector index is unavailable.
    Inbox surface these so the operator can inspect and merge or dismiss them
    manually.
 
+**Bounds.** The pass is budgeted like every other dream pass: `max_seconds`
+(wired from `memory.dream.max_seconds_per_run`) is checked before each chunk of
+candidates; when crossed the pass emits `memory.dream.max_seconds_reached`
+(`kind="refine"`, with `judged` so far and `remaining` candidates) and stops —
+the rest waits for the next run, which the verdict cache makes incremental.
+Judge calls run `judge_concurrency` at a time (`auto_absorb.judge_concurrency`)
+in a thread pool; everything that changes state — tombstone checks, merges, cache
+writes, telemetry — is applied one pair at a time in candidate order after each
+chunk, and a `same` verdict re-checks that neither page was absorbed by an
+earlier merge in the same chunk before merging (skipped as `merged_earlier`
+otherwise). The verdict cache is saved after every chunk, so an interrupted run
+— a kill, a deploy, a budget stop — keeps every verdict it produced. On a
+workspace with thousands of entity pages the unbounded, serial version of this
+pass ran for a day and lost its work when interrupted.
+
+**Name gate.** The typed semantic window returns, for every page, its nearest
+same-type neighbours — on a large workspace thousands of embedding-near pairs
+of which one or two per hundred are the same entity. With
+`auto_absorb.require_name_overlap` (default on) an embedding-near pair reaches
+the judge only when the two names show structural overlap: a shared token of
+three or more characters across slug, name and aliases, or one compact form (the
+name with separators stripped) contained in the other — `email-flow` /
+`emailflow`, `auto-filling` / `mxhero-autofilling-system`. Measured on a night of
+judged pairs, the gate kept every `same` verdict and dropped about seventy
+percent of the `different` ones. Alias-overlap pairs are never gated: sharing an
+alias is already the evidence. No vocabulary or language list is involved.
+
+**Retry with feedback.** `judge_pair` parses the `===VERDICT=== … ===END===`
+envelope; when a reply cannot be parsed the retry appends the parser's complaint
+to the prompt (the envelope is restated), instead of re-sending the same prompt
+blind. The template fingerprint the cache keys on does not include the appended
+note.
+
 **Verdict cache.** A standing candidate pair whose members haven't changed
 re-emerges every run (alias overlap and embedding distance are deterministic),
 and a "different" verdict changes nothing on disk — so without memory of the
@@ -453,9 +489,13 @@ aliases, attributes, relations, body — deliberately excluding provenance,
 `derived_from`, and timestamps, so source accrual does not reopen a settled
 pair) plus the judge identity (prompt-template hash + model). A cache hit
 skips the pair with reason `cached_verdict`; a change to either page's
-content, the template, or the model re-judges. Merged pairs disappear on
-their own, and borderline outcomes (`unclear`, below-threshold `same`) are
-never cached — they must stay re-examinable. The user's tombstones are a
+content, the template, or the model re-judges. A pair whose judge call failed
+(unparseable after the retries, or a provider error) is cached as `error` with
+an expiry `auto_absorb.error_cooldown_days` ahead and skipped as
+`cached_error` until then — otherwise a pair the model persistently cannot
+answer costs three calls every night; `0` retries it every run. Merged pairs
+disappear on their own, and borderline outcomes (`unclear`, below-threshold
+`same`) are never cached — they must stay re-examinable. The user's tombstones are a
 separate, permanent mechanism checked before the cache.
 
 `EntityAbsorption.absorb` does a deterministic structural merge (union of

@@ -151,9 +151,10 @@ def judge_pair(
     from durin.memory.llm_invoke import LLMResponse as _LLMResponse
 
     last_error: Exception | None = None
+    attempt_prompt = prompt
     for attempt in range(max_retries + 1):
         try:
-            response = llm_invoke(prompt, model=model)
+            response = llm_invoke(attempt_prompt, model=model)
         except Exception as exc:  # noqa: BLE001
             last_error = exc
             logger.warning(
@@ -170,6 +171,13 @@ def judge_pair(
                 "absorb_judge parse failed (attempt %d/%d): %s",
                 attempt + 1, max_retries + 1, exc,
             )
+            # Tell the model what could not be parsed instead of re-sending
+            # the same prompt blind: most parse failures are format drift
+            # (prose around the envelope, a float confidence, a missing
+            # closing marker), which the model corrects when told. Appended
+            # at call time, so the template fingerprint — the judge
+            # identity the verdict cache keys on — is unchanged.
+            attempt_prompt = prompt + _RETRY_FEEDBACK.format(error=exc)
 
     raise JudgeError(
         f"absorb_judge failed after {max_retries + 1} attempts: {last_error}"
@@ -281,6 +289,14 @@ def _parse_response(raw: str) -> JudgeResult:
         confidence=confidence,
         reasoning=reasoning,
     )
+
+
+_RETRY_FEEDBACK = (
+    "\n\nYour previous reply could not be parsed ({error}). Reply again using "
+    "exactly this envelope and nothing else:\n"
+    "===VERDICT===\n<same|different|unclear>\n===CONFIDENCE===\n<integer 0-100>\n"
+    "===REASONING===\n<your reasoning>\n===END===\n"
+)
 
 
 def judge_template_fingerprint() -> str:

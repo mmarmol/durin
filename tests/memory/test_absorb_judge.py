@@ -223,3 +223,30 @@ def test_build_prompt_renders_whole_page(tmp_path) -> None:
     assert "warning_zone" in prompt and "Litoral norte de Valencia" in prompt
     assert "place:valencia" in prompt          # relation
     assert "country" in prompt and "Spain" in prompt
+
+
+def test_a_retry_tells_the_model_what_could_not_be_parsed():
+    """The first reply lacks the envelope; the retry must carry the parser's
+    complaint so the model can correct the format, instead of re-sending the
+    same prompt blind."""
+    from durin.memory.absorb_judge import judge_pair
+    from durin.memory.entity_page import EntityPage
+
+    prompts: list[str] = []
+
+    def inv(prompt, **kw):
+        prompts.append(prompt)
+        if len(prompts) == 1:
+            return "Sure! They look different to me."
+        return ("===VERDICT===\ndifferent\n===CONFIDENCE===\n80\n"
+                "===REASONING===\nok\n===END===")
+
+    a = EntityPage(type="company", name="Acme", aliases=["acme"])
+    b = EntityPage(type="company", name="Acme Corp", aliases=["acme"])
+    result = judge_pair(a, b, ["acme"], llm_invoke=inv)
+
+    assert result.verdict == "different"
+    assert len(prompts) == 2
+    assert "could not be parsed" not in prompts[0]
+    assert "could not be parsed" in prompts[1] and "===VERDICT===" in prompts[1]
+    assert prompts[1].startswith(prompts[0])
