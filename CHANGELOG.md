@@ -5,6 +5,66 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.10.4 — 2026-09-11
+
+### Highlights
+
+- **The nightly dream no longer runs for a day.** The refine pass — the judge
+  that decides whether two entity pages are the same thing — was the one dream
+  pass without a wall-clock budget, judged candidates one provider call at a
+  time, and saved its verdict cache only at the very end. On a workspace with
+  thousands of entity pages the typed duplicate window of 0.10.2 handed it
+  thousands of pairs a night; it ran past the next nightly trigger and every
+  interruption threw the night away. It now stops at `max_seconds_per_run`
+  like every other pass, judges several pairs at once while applying merges one
+  at a time, saves the cache as it goes, remembers pairs without a settled
+  verdict so the scan advances, stops for the night when the judge's provider
+  keeps failing instead of marking pairs unanswerable, parses the judge's
+  answer tolerantly, and sends embedding-near pairs whose names overlap to the
+  judge first. (#601)
+
+### Changes
+
+**Memory**
+
+- `run_refine` takes `max_seconds`, `judge_concurrency`, `recheck_cooldown_s`
+  and `semantic_name_gate`; `run_refine_pass`, the cron orchestrator and
+  `durin memory dream` wire them from `memory.dream.max_seconds_per_run` and
+  the new `memory.dream.auto_absorb` keys `judge_concurrency` (3),
+  `recheck_days` (7), `semantic_name_gate` (`prioritize`). The budget covers
+  candidate generation; judge workers run in the pass's telemetry context;
+  a chunk never holds two pairs that share a page. (#601)
+- The verdict cache (`memory/.refine_verdicts.json`) is flushed every few
+  pairs, on a timer and on exit; unsettled outcomes (unparseable reply,
+  `unclear`, below-threshold `same`) are remembered with a recheck expiry.
+  `JudgeError.kind` tells parse from provider failures; the latter are never
+  cached and stop the run after a few in a row (`memory.absorb.judge_unavailable`).
+  New `memory.absorb.skipped` reason `cached_error`; `memory.absorb.judged`
+  carries `name_overlap`; `memory.dream.max_seconds_reached` also fires with
+  `kind=refine`; the refine `memory.dream.end` carries `judged`, `yielded` and
+  `stop_reason`. (#601)
+- The judge parses the envelope block by block (prose between blocks,
+  emphasis, a percent or fractional confidence, a missing closing marker all
+  parse on the first call) and, when a reply still cannot be parsed, retries
+  with the parser's complaint instead of re-sending the same prompt. (#601)
+- `find_semantic_candidates` orders (or filters) embedding-near pairs by a
+  structural name signal computed with `slugify_name`; the aux invoke carries
+  the provider's `finish_reason`, and the aux retry mode reads
+  `agents.defaults.provider_retry_mode` (it read a field that never existed
+  and always fell back to `standard`). (#601)
+
+**Operator notes**
+
+- A changed judge model or template invalidates the verdict cache by design;
+  the first runs after such a change re-judge the candidate set under the
+  budget, likelier duplicates first. To drain a large backlog faster for a few
+  nights, raise `memory.dream.max_seconds_per_run` or `judge_concurrency`
+  temporarily, or run `durin memory dream` by hand off-peak. `durin memory
+  dream` now says when the refine pass stopped at the budget.
+- Never upgrade or restart an install while a dream worker is running: the
+  worker's next import fails against the replaced package. Check
+  `ps -C python -o cmd | grep dream-worker` first.
+
 ## 0.10.3 — 2026-09-10
 
 ### Highlights
