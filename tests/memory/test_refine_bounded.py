@@ -81,12 +81,14 @@ def _events(monkeypatch) -> list[tuple[str, dict]]:
 def test_the_budget_stops_the_pass_and_the_rest_waits_for_the_next_run(tmp_path, monkeypatch):
     _alias_pairs(tmp_path, 4)
     events = _events(monkeypatch)
-    stub = _Stub(sleep=0.05)
+    stub = _Stub(sleep=0.3)
 
-    out = run_refine(tmp_path, llm_invoke=stub, max_seconds=0.01)
+    out = run_refine(tmp_path, llm_invoke=stub, max_seconds=0.1)
 
     assert out["yielded"] is True and out["stop_reason"] == "max_seconds"
-    assert 1 <= out["judged"] < 4
+    assert out["judged"] == 1  # the chunk in flight completes; no new chunk starts
+    reached = [d for e, d in events if e == "memory.dream.max_seconds_reached"]
+    assert reached and reached[0]["remaining"] == out["candidates"] - out["judged"] - len(out["skipped"])
     assert out["candidates"] == 4
     reached = [d for e, d in events if e == "memory.dream.max_seconds_reached"]
     assert reached and reached[0]["kind"] == "refine" and reached[0]["remaining"] >= 1
@@ -101,13 +103,14 @@ def test_the_budget_covers_candidate_generation(tmp_path, monkeypatch):
     original = absorption.EntityAbsorption.find_candidates
 
     def slow_find(self):
-        time.sleep(0.03)
+        time.sleep(0.3)
         return original(self)
 
     monkeypatch.setattr(absorption.EntityAbsorption, "find_candidates", slow_find)
     stub = _Stub()
-    out = run_refine(tmp_path, llm_invoke=stub, max_seconds=0.01)
+    out = run_refine(tmp_path, llm_invoke=stub, max_seconds=0.1)
     assert out["yielded"] is True and out["judged"] == 0 and stub.prompts == []
+    assert out["stop_reason"] == "max_seconds"
 
 
 def test_the_verdict_cache_is_flushed_as_the_pass_goes(tmp_path, monkeypatch):
@@ -175,6 +178,24 @@ def test_a_zero_recheck_cooldown_ignores_remembered_errors(tmp_path):
     second = _Stub()
     out = run_refine(tmp_path, llm_invoke=second, recheck_cooldown_s=0)
     assert out["judged"] == 1 and second.prompts
+
+
+def test_lowering_the_recheck_cooldown_shortens_remembered_entries(tmp_path):
+    """The expiry stored on disk is clamped by the cooldown configured now,
+    so an operator who lowers the knob is not stuck with the old window."""
+    _alias_pairs(tmp_path, 1)
+    run_refine(tmp_path, llm_invoke=_Stub("unclear", 50), recheck_cooldown_s=30 * 86400)
+    again = _Stub("unclear", 50)
+    out = run_refine(tmp_path, llm_invoke=again, recheck_cooldown_s=30 * 86400)
+    assert again.prompts == [] and out["skipped"][0]["reason"] == "cached_verdict"
+    lowered = _Stub("unclear", 50)
+    real_now = refine_dream._now
+    try:
+        refine_dream._now = lambda: real_now() + 2  # two seconds later, cooldown now 1 s
+        out = run_refine(tmp_path, llm_invoke=lowered, recheck_cooldown_s=1)
+    finally:
+        refine_dream._now = real_now
+    assert out["judged"] == 1 and lowered.prompts
 
 
 def test_a_corrupt_until_value_does_not_abort_the_pass(tmp_path):
@@ -290,6 +311,25 @@ def test_the_name_signal_orders_embedding_near_pairs(tmp_path):
     assert all(c.name_overlap for c in cands[:-1]) and cands[-1].name_overlap is False
     assert ("company:hp", "company:hp-inc") in order
     assert ("topic:configuracion", "topic:configuracion-avanzada") in order[:-1]
+
+
+def test_names_overlap_is_structural_not_a_substring_or_a_stopword():
+    from durin.memory.absorption import names_overlap
+    ok = lambda a, b: names_overlap(a, b)  # noqa: E731
+    assert ok(["email_flow", "email flow"], ["emailflow"])            # hyphenation
+    assert ok(["auto_filling"], ["mxhero_autofilling_system"])         # a run of tokens
+    assert ok(["hp"], ["hp_inc"]) and ok(["s3"], ["aws_s3"])          # acronym = whole name
+    assert ok(["configuracion"], ["configuracion_avanzada"])          # shared long token
+    assert not ok(["configuracion_de_correo"], ["reglas_de_flujo"])   # a two-letter word is not evidence
+    assert not ok(["ana"], ["banana_bread"])                           # substring across a boundary
+    assert not ok(["kinesis_events"], ["onedrive_share"])
+
+
+def test_name_forms_drop_the_unnamed_sentinel():
+    from durin.memory.absorption import name_forms
+    from durin.memory.entity_page import EntityPage
+    page = EntityPage(type="topic", name="🚀", aliases=["—"])
+    assert name_forms("topic:rocket", page) == ["rocket"]
 
 
 def test_the_name_signal_can_require_or_be_switched_off(tmp_path):

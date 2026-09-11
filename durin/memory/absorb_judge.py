@@ -63,18 +63,21 @@ _TEMPLATE_PATH = (
 # an error: the judge never guesses a verdict.
 _MARKERS = ("===VERDICT===", "===CONFIDENCE===", "===REASONING===", "===END===")
 _RE_MARKER = re.compile("|".join(re.escape(m) for m in _MARKERS), re.IGNORECASE)
-_RE_VERDICT_WORD = re.compile(r"\b(same|different|unclear)\b", re.IGNORECASE)
 _RE_NUMBER = re.compile(r"(\d+(?:\.\d+)?)\s*%?")
 
 
 def _blocks(raw: str) -> dict[str, str]:
-    """``{marker: text after it up to the next marker}`` (markers upper-cased)."""
+    """``{marker: text after it up to the next marker}`` (markers upper-cased).
+
+    The LAST occurrence of a marker wins: a model that restates the envelope
+    (the retry note shows it) answers after the restatement, and reading the
+    placeholder instead of the answer would be worse than a parse error.
+    """
     found = list(_RE_MARKER.finditer(raw))
     out: dict[str, str] = {}
     for k, m in enumerate(found):
         end = found[k + 1].start() if k + 1 < len(found) else len(raw)
-        name = m.group(0).upper()
-        out.setdefault(name, raw[m.end():end])
+        out[m.group(0).upper()] = raw[m.end():end]
     return out
 
 
@@ -299,13 +302,16 @@ def _parse_response(raw: str) -> JudgeResult:
     verdict_block = blocks.get("===VERDICT===")
     if verdict_block is None:
         raise JudgeError("missing ===VERDICT=== block")
-    verdict_match = _RE_VERDICT_WORD.search(verdict_block)
-    if verdict_match is None:
-        head = verdict_block.strip().split()[0] if verdict_block.strip() else ""
+    # The verdict is the block's first line reduced to its letters: emphasis
+    # and a trailing period are tolerated, prose is not — "not the same,
+    # different" or an echoed "same | different | unclear" must fail rather
+    # than read as ``same`` and merge two entities.
+    first_line = next((ln for ln in verdict_block.splitlines() if ln.strip()), "")
+    verdict = re.sub(r"[^a-z]", "", first_line.lower())
+    if verdict not in _VALID_VERDICTS:
         raise JudgeError(
-            f"invalid verdict {head!r}; expected one of {sorted(_VALID_VERDICTS)}"
+            f"invalid verdict {first_line.strip()!r}; expected one of {sorted(_VALID_VERDICTS)}"
         )
-    verdict = verdict_match.group(1).lower()
 
     confidence_block = blocks.get("===CONFIDENCE===")
     if confidence_block is None:

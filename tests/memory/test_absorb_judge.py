@@ -294,3 +294,25 @@ def test_a_provider_error_response_is_a_provider_failure_not_a_parse_failure() -
     with pytest.raises(JudgeError) as info:
         judge_pair(a, b, ["acme"], llm_invoke=inv)
     assert info.value.kind == "provider" and len(calls) == 1
+
+
+def test_parse_never_reads_prose_or_an_echoed_placeholder_as_a_verdict() -> None:
+    """A verdict is the block's first line reduced to letters; a sentence
+    that happens to contain 'same', or the template's own placeholder line,
+    must fail rather than parse — a false 'same' merges two entities."""
+    from durin.memory.absorb_judge import JudgeError, _parse_response
+    for bad in (
+        "===VERDICT===\nnot the same, they are different\n===CONFIDENCE===\n96\n===REASONING===\nx\n===END===",
+        "===VERDICT===\nsame | different | unclear\n===CONFIDENCE===\n<integer 0-100>\n===REASONING===\nx\n===END===",
+    ):
+        with pytest.raises(JudgeError):
+            _parse_response(bad)
+
+
+def test_parse_reads_the_last_envelope_when_the_model_restates_it() -> None:
+    from durin.memory.absorb_judge import _parse_response
+    raw = ("Using this envelope:\n===VERDICT===\n<same|different|unclear>\n===CONFIDENCE===\n<integer 0-100>\n"
+           "===REASONING===\n<your reasoning>\n===END===\n\nMy answer:\n===VERDICT===\ndifferent.\n"
+           "===CONFIDENCE===\n77\n===REASONING===\nThey are two products.\n===END===")
+    r = _parse_response(raw)
+    assert r.verdict == "different" and r.confidence == 77 and "two products" in r.reasoning

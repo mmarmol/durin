@@ -64,33 +64,51 @@ class MergeCandidate:
 def name_forms(ref: str, page: "EntityPage") -> list[str]:
     """The ways an entity is written — slug, name, aliases — each reduced by
     :func:`slugify_name` (NFC, transliteration, lowercase, one separator),
-    so accents, scripts and punctuation do not hide an overlap."""
+    so accents, scripts and punctuation do not hide an overlap. A form that
+    reduces to nothing (an emoji alias, punctuation) is dropped —
+    ``slugify_name`` returns its ``"unnamed"`` sentinel for those."""
     from durin.memory.entities import slugify_name
 
     raw = [ref.split(":", 1)[1] if ":" in ref else ref, page.name or "", *(page.aliases or [])]
-    return [slugify_name(f) for f in raw if f and slugify_name(f)]
+    out: list[str] = []
+    for f in raw:
+        if not f:
+            continue
+        s = slugify_name(f)
+        if s and s != "unnamed":
+            out.append(s)
+    return out
 
 
 def names_overlap(forms_a: list[str], forms_b: list[str]) -> bool:
     """Structural name evidence between two entities.
 
-    True when they share a name token (a separator-delimited piece of any
-    form, two or more characters — an acronym counts), or one compact form
-    (a form with its separators removed, three or more characters) contains
-    the other: ``email-flow`` / ``emailflow``, ``auto-filling`` /
-    ``mxhero-autofilling-system``, ``hp`` / ``hp-inc``. No vocabulary list.
+    True when they share a name token of three or more characters, or a
+    token that is the whole of one side's name (an acronym: ``hp`` /
+    ``hp-inc``, ``s3`` / ``aws-s3``), or one side's compact form is a
+    contiguous run of the other side's tokens (``email-flow`` /
+    ``emailflow``, ``auto-filling`` / ``mxhero-autofilling-system``). A
+    two-letter word shared between two longer names, or a substring that
+    crosses token boundaries, is not evidence. No vocabulary list.
     """
-    def toks(forms: list[str]) -> set[str]:
-        return {t for f in forms for t in f.split("_") if len(t) >= 2}
-
-    if toks(forms_a) & toks(forms_b):
+    ta = [f.split("_") for f in forms_a]
+    tb = [f.split("_") for f in forms_b]
+    whole_a = {f for f in forms_a if "_" not in f}
+    whole_b = {f for f in forms_b if "_" not in f}
+    toks_a = {t for ts in ta for t in ts if t}
+    toks_b = {t for ts in tb for t in ts if t}
+    shared = toks_a & toks_b
+    if any(len(t) >= 3 or t in whole_a or t in whole_b for t in shared):
         return True
-    ca = {f.replace("_", "") for f in forms_a}
-    cb = {f.replace("_", "") for f in forms_b}
-    return any(
-        len(x) >= 3 and len(y) >= 3 and (x in y or y in x)
-        for x in ca for y in cb
-    )
+
+    def runs(tokens: list[str]) -> set[str]:
+        return {"".join(tokens[i:j]) for i in range(len(tokens)) for j in range(i + 1, len(tokens) + 1)}
+
+    compact_a = {f.replace("_", "") for f in forms_a if len(f.replace("_", "")) >= 3}
+    compact_b = {f.replace("_", "") for f in forms_b if len(f.replace("_", "")) >= 3}
+    runs_a = set().union(*(runs(ts) for ts in ta)) if ta else set()
+    runs_b = set().union(*(runs(ts) for ts in tb)) if tb else set()
+    return bool(compact_a & runs_b) or bool(compact_b & runs_a)
 
 
 class EntityAbsorption:

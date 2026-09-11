@@ -107,7 +107,8 @@ def _judge_content_fingerprint(page: "EntityPage") -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
-_now = time.time  # module-level so tests can move the clock
+_now = time.time  # module-level so tests can move the wall clock
+_clock = time.perf_counter  # module-level so tests can move the budget clock
 
 # Provider failures in a row before the pass stops for this run: an expired
 # key or an outage is a property of the moment, not of any pair, and every
@@ -354,13 +355,13 @@ def run_refine(
     from concurrent.futures import ThreadPoolExecutor
 
     llm_invoke = llm_invoke or default_llm_invoke
-    t0 = time.perf_counter()
+    t0 = _clock()
 
     def _elapsed_ms() -> int:
-        return int((time.perf_counter() - t0) * 1000)
+        return int((_clock() - t0) * 1000)
 
     def _over_budget() -> bool:
-        return bool(max_seconds) and (time.perf_counter() - t0) >= max_seconds
+        return bool(max_seconds) and (_clock() - t0) >= max_seconds
 
     # Pass the vector index so absorb() keeps it current (drops the absorbed
     # row, re-upserts the canonical) — semantic recall READS this index next
@@ -388,7 +389,7 @@ def run_refine(
     # Judge identity: template + model. Either changing re-judges everything.
     judge_id = f"{judge_template_fingerprint()}|{model or ''}"
     unsaved = 0
-    last_save = time.perf_counter()
+    last_save = _clock()
     concurrency = max(1, int(judge_concurrency))
     pool = ThreadPoolExecutor(max_workers=concurrency) if concurrency > 1 else None
 
@@ -400,14 +401,14 @@ def run_refine(
         nonlocal unsaved, last_save
         if not unsaved:
             return
-        if force or unsaved >= _CACHE_FLUSH_EVERY or time.perf_counter() - last_save >= _CACHE_FLUSH_SECONDS:
+        if force or unsaved >= _CACHE_FLUSH_EVERY or _clock() - last_save >= _CACHE_FLUSH_SECONDS:
             _save_verdict_cache(workspace, verdict_cache)
             unsaved = 0
-            last_save = time.perf_counter()
+            last_save = _clock()
 
     def _remember(ref_a: str, ref_b: str, pair_fp: str, **fields) -> None:
         nonlocal unsaved
-        verdict_cache[_pair_key(ref_a, ref_b)] = {"fp": pair_fp, "judge": judge_id, **fields}
+        verdict_cache[_pair_key(ref_a, ref_b)] = {"fp": pair_fp, "judge": judge_id, "at": _now(), **fields}
         unsaved += 1
 
     def _prepare(cand) -> dict | None:
@@ -441,9 +442,14 @@ def run_refine(
                 _skip(ref_a, ref_b, "cached_verdict")
                 return None
             # An entry with an expiry is a verdict still worth re-examining;
-            # honour it only while the cooldown is on and not yet elapsed.
+            # honour it only while the cooldown is on and not yet elapsed —
+            # under the cooldown configured NOW, so lowering the knob
+            # shortens what an earlier run remembered.
             try:
                 until = float(until)
+                at = cached.get("at")
+                if at is not None:
+                    until = min(until, float(at) + float(recheck_cooldown_s))
             except (TypeError, ValueError):
                 until = 0.0
             if recheck_cooldown_s > 0 and until > _now():
@@ -571,15 +577,16 @@ def run_refine(
                 if item is not None:
                     chunk.append(item)
                     in_chunk.update((ref_a, ref_b))
+            # A budget trip stops new work, not work already prepared: the
+            # assembled chunk is judged so every candidate consumed by `pos`
+            # is accounted for in merged / kept / skipped.
+            if chunk:
+                for item, outcome in zip(chunk, _judge_chunk(chunk)):
+                    _apply(item, outcome)
+                _flush()
+                if provider_failures >= _MAX_CONSECUTIVE_PROVIDER_FAILURES:
+                    stop_reason = "judge_unavailable"
             if stop_reason:
-                break
-            if not chunk:
-                continue
-            for item, outcome in zip(chunk, _judge_chunk(chunk)):
-                _apply(item, outcome)
-            _flush()
-            if provider_failures >= _MAX_CONSECUTIVE_PROVIDER_FAILURES:
-                stop_reason = "judge_unavailable"
                 break
         if stop_reason == "max_seconds":
             _emit("memory.dream.max_seconds_reached", kind="refine",
