@@ -222,6 +222,10 @@ def run_refine_pass(
     semantic_distance_threshold: float = 0.30,
     run_started_at: "datetime | None" = None,
     vector_index: object | None = None,
+    max_seconds: int = 0,
+    judge_concurrency: int = 1,
+    recheck_days: int = 7,
+    semantic_name_gate: str = "prioritize",
 ) -> dict:
     """Run the refine dream (dedup duplicate entities). The daily cron entry.
 
@@ -234,6 +238,13 @@ def run_refine_pass(
     the cron / manual callers. ``vector_index`` enables semantic recall for
     same-thing-different-name pairs. ``escalate_floor`` enables the Tier-2
     sub-agent for borderline pairs (0 = disabled).
+
+    ``max_seconds`` caps the pass (``memory.dream.max_seconds_per_run``; the
+    pass yields and resumes next run), ``judge_concurrency`` is how many judge
+    calls run at once, ``recheck_days`` how long an unsettled verdict is
+    remembered before the pair is judged again (converted to seconds for
+    :func:`run_refine`), and ``semantic_name_gate`` how the name signal
+    orders or filters embedding-near candidates.
     """
     import time
     t0 = time.perf_counter()
@@ -250,11 +261,17 @@ def run_refine_pass(
                      escalate_floor=escalate_floor,
                      semantic_distance_threshold=semantic_distance_threshold,
                      run_started_at=run_started_at,
-                     vector_index=vector_index)
+                     vector_index=vector_index,
+                     max_seconds=max_seconds,
+                     judge_concurrency=judge_concurrency,
+                     recheck_cooldown_s=recheck_days * 86400,
+                     semantic_name_gate=semantic_name_gate)
     out["duration_ms"] = int((time.perf_counter() - t0) * 1000)
     _emit("memory.dream.end", kind="refine",
           merged=len(out.get("merged", [])), kept=len(out.get("kept_separate", [])),
           candidates=out.get("candidates", 0),
+          judged=out.get("judged", 0), yielded=bool(out.get("yielded")),
+          stop_reason=out.get("stop_reason"),
           duration_ms=out["duration_ms"])
     return out
 

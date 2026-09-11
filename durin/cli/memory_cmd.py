@@ -239,17 +239,26 @@ def cmd_dream(
                          escalate_floor=_absorb.escalate_floor,
                          semantic_distance_threshold=_absorb.semantic_distance_threshold,
                          run_started_at=_run_started,
-                         vector_index=_vi)
+                         vector_index=_vi,
+                         max_seconds=cfg.memory.dream.max_seconds_per_run,
+                         judge_concurrency=_absorb.judge_concurrency,
+                         recheck_days=_absorb.recheck_days,
+                         semantic_name_gate=_absorb.semantic_name_gate)
     console.print("[dim]Always-on pass (distil pinned guidance)…[/dim]")
     ao = run_always_on_pass(workspace, model=model,
                             token_budget=cfg.memory.dream.always_on_token_budget)
     merged = len(rf.get("merged", []))
+    refine_note = ""
+    if rf.get("stop_reason") == "max_seconds":
+        refine_note = f", stopped at the time budget ({rf.get('candidates', 0)} candidate(s) total, resumes next run)"
+    elif rf.get("stop_reason") == "judge_unavailable":
+        refine_note = ", stopped: the judge's provider kept failing"
     console.print(
         f"\n[green]✓[/green] extract: {ex['entities']} attribute update(s) across "
         f"{ex['sessions']} session(s); "
         f"derived_from: {df.get('links', 0)} link(s); "
         f"skills: {sk.get('skills_touched', 0)}; "
-        f"refine: {merged} merge(s); "
+        f"refine: {merged} merge(s), {rf.get('judged', 0)} judged{refine_note}; "
         f"always_on: {ao.get('selected', 0)} pinned ({ao.get('tokens', 0)} tok)"
     )
     if ex.get("errors"):

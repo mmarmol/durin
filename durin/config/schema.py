@@ -353,7 +353,7 @@ class MemoryDreamConfig(Base):
         default=600,
         ge=0,
         validation_alias=AliasChoices("maxSecondsPerRun", "max_seconds_per_run"),
-        description="Wall-clock cap in seconds per extract pass; the pass yields after the current session when crossed; 0 = run to completion",
+        description="Wall-clock cap in seconds per extract and refine pass; the pass yields when crossed (extract after the current session, refine after the current chunk) and resumes on the next run; 0 = run to completion",
     )
 
     session_summaries_enabled: bool = Field(
@@ -456,6 +456,24 @@ class AutoAbsorbConfig(Base):
         le=100,
         validation_alias=AliasChoices("escalateFloor", "escalate_floor"),
         description="Confidence floor above which pairs the cheap judge can't settle (verdict 'unclear', or 'same' below confidence_threshold) escalate to a bounded investigating sub-agent; 0 disables escalation",
+    )
+    judge_concurrency: int = Field(
+        default=3,
+        ge=1,
+        le=8,
+        validation_alias=AliasChoices("judgeConcurrency", "judge_concurrency"),
+        description="Judge calls in flight at once during the refine pass; merges are applied one at a time, in candidate order",
+    )
+    recheck_days: int = Field(
+        default=7,
+        ge=0,
+        validation_alias=AliasChoices("recheckDays", "recheck_days"),
+        description="Days before a pair without a settled verdict — an unparseable reply, an 'unclear', a 'same' below the merge threshold — is judged again; 0 re-judges it every run",
+    )
+    semantic_name_gate: Literal["prioritize", "require", "off"] = Field(
+        default="prioritize",
+        validation_alias=AliasChoices("semanticNameGate", "semantic_name_gate"),
+        description="How the name signal steers embedding-near candidates: 'prioritize' judges pairs whose names share a token or contain each other first, then the rest by distance; 'require' judges only those; 'off' orders by distance alone. Alias-overlap pairs are always judged",
     )
 
 

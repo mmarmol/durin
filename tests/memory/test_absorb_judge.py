@@ -223,3 +223,96 @@ def test_build_prompt_renders_whole_page(tmp_path) -> None:
     assert "warning_zone" in prompt and "Litoral norte de Valencia" in prompt
     assert "place:valencia" in prompt          # relation
     assert "country" in prompt and "Spain" in prompt
+
+
+def test_a_retry_tells_the_model_what_could_not_be_parsed():
+    """The first reply lacks the envelope; the retry must carry the parser's
+    complaint so the model can correct the format, instead of re-sending the
+    same prompt blind."""
+    from durin.memory.absorb_judge import judge_pair
+    from durin.memory.entity_page import EntityPage
+
+    prompts: list[str] = []
+
+    def inv(prompt, **kw):
+        prompts.append(prompt)
+        if len(prompts) == 1:
+            return "Sure! They look different to me."
+        return ("===VERDICT===\ndifferent\n===CONFIDENCE===\n80\n"
+                "===REASONING===\nok\n===END===")
+
+    a = EntityPage(type="company", name="Acme", aliases=["acme"])
+    b = EntityPage(type="company", name="Acme Corp", aliases=["acme"])
+    result = judge_pair(a, b, ["acme"], llm_invoke=inv)
+
+    assert result.verdict == "different"
+    assert len(prompts) == 2
+    assert "could not be parsed" not in prompts[0]
+    assert "could not be parsed" in prompts[1] and "===VERDICT===" in prompts[1]
+    assert prompts[1].startswith(prompts[0])
+
+
+@pytest.mark.parametrize("raw", [
+    "Sure, here is my assessment.\n===VERDICT===\n**different**\n===CONFIDENCE===\n82%\n===REASONING===\nA is a product feature, B a config object.\n===END===",
+    "===VERDICT===\ndifferent\n\nI am fairly sure.\n===CONFIDENCE===\n0.82\n===REASONING===\nA is a product feature, B a config object.\n===END===\nHope this helps!",
+    "```\n===VERDICT=== different ===CONFIDENCE=== 82 ===REASONING=== A is a product feature, B a config object.",
+])
+def test_parse_tolerates_the_observed_format_drift(raw: str) -> None:
+    """Prose between blocks, emphasis, a percent or fractional confidence,
+    fences and a missing closing marker are how a judge model drifts; each
+    used to cost a retry call, or three."""
+    from durin.memory.absorb_judge import _parse_response
+    r = _parse_response(raw)
+    assert r.verdict == "different" and r.confidence == 82
+    assert "product feature" in r.reasoning
+
+
+def test_parse_still_refuses_a_missing_or_wrong_verdict() -> None:
+    from durin.memory.absorb_judge import JudgeError, _parse_response
+    with pytest.raises(JudgeError):
+        _parse_response("===VERDICT===\nmaybe\n===CONFIDENCE===\n50\n===REASONING===\nx\n===END===")
+    with pytest.raises(JudgeError):
+        _parse_response("===CONFIDENCE===\n50\n===REASONING===\nx\n===END===")
+
+
+def test_a_provider_error_response_is_a_provider_failure_not_a_parse_failure() -> None:
+    """The provider reports an outage as a response whose text is the error;
+    the judge must classify it so the caller does not remember it against
+    the pair, and must not burn retries on it."""
+    from durin.memory.absorb_judge import JudgeError, judge_pair
+    from durin.memory.entity_page import EntityPage
+    from durin.memory.llm_invoke import LLMResponse
+
+    calls: list[str] = []
+
+    def inv(prompt, **kw):
+        calls.append(prompt)
+        return LLMResponse(text="Error calling LLM: 401 invalid api key", finish_reason="error")
+
+    a = EntityPage(type="company", name="Acme", aliases=["acme"])
+    b = EntityPage(type="company", name="Acme Corp", aliases=["acme"])
+    with pytest.raises(JudgeError) as info:
+        judge_pair(a, b, ["acme"], llm_invoke=inv)
+    assert info.value.kind == "provider" and len(calls) == 1
+
+
+def test_parse_never_reads_prose_or_an_echoed_placeholder_as_a_verdict() -> None:
+    """A verdict is the block's first line reduced to letters; a sentence
+    that happens to contain 'same', or the template's own placeholder line,
+    must fail rather than parse — a false 'same' merges two entities."""
+    from durin.memory.absorb_judge import JudgeError, _parse_response
+    for bad in (
+        "===VERDICT===\nnot the same, they are different\n===CONFIDENCE===\n96\n===REASONING===\nx\n===END===",
+        "===VERDICT===\nsame | different | unclear\n===CONFIDENCE===\n<integer 0-100>\n===REASONING===\nx\n===END===",
+    ):
+        with pytest.raises(JudgeError):
+            _parse_response(bad)
+
+
+def test_parse_reads_the_last_envelope_when_the_model_restates_it() -> None:
+    from durin.memory.absorb_judge import _parse_response
+    raw = ("Using this envelope:\n===VERDICT===\n<same|different|unclear>\n===CONFIDENCE===\n<integer 0-100>\n"
+           "===REASONING===\n<your reasoning>\n===END===\n\nMy answer:\n===VERDICT===\ndifferent.\n"
+           "===CONFIDENCE===\n77\n===REASONING===\nThey are two products.\n===END===")
+    r = _parse_response(raw)
+    assert r.verdict == "different" and r.confidence == 77 and "two products" in r.reasoning

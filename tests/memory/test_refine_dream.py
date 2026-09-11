@@ -471,14 +471,21 @@ def test_refine_metadata_accrual_keeps_cached_verdict(tmp_path):
     assert counter["n"] == 1
 
 
-def test_refine_below_threshold_same_is_not_cached(tmp_path):
-    # A borderline unmerged "same" is not a settled verdict — it must be
-    # re-examined (or escalated) on the next run, not frozen by the cache.
+def test_refine_below_threshold_same_is_remembered_only_for_the_recheck_cooldown(tmp_path):
+    """A borderline unmerged "same" is not a settled verdict. It is remembered
+    for the recheck cooldown — re-judging it every run would starve the rest
+    of the candidates under a budget — and re-examined once that expires;
+    with the cooldown at 0 it is re-judged every run."""
     _two_dupes(tmp_path)
     counter = {"n": 0}
-    run_refine(tmp_path, llm_invoke=_judge_stub("same", 50, counter))
-    run_refine(tmp_path, llm_invoke=_judge_stub("same", 50, counter))
+    run_refine(tmp_path, llm_invoke=_judge_stub("same", 50, counter), recheck_cooldown_s=0)
+    run_refine(tmp_path, llm_invoke=_judge_stub("same", 50, counter), recheck_cooldown_s=0)
     assert counter["n"] == 2
+    counter = {"n": 0}
+    run_refine(tmp_path, llm_invoke=_judge_stub("same", 50, counter), recheck_cooldown_s=3600)
+    out = run_refine(tmp_path, llm_invoke=_judge_stub("same", 50, counter), recheck_cooldown_s=3600)
+    assert counter["n"] == 1
+    assert any(sk["reason"] == "cached_verdict" for sk in out["skipped"])
 
 
 def test_refine_always_on_flip_keeps_cached_verdict(tmp_path):

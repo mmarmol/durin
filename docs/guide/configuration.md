@@ -359,7 +359,7 @@ passes (extract/refine/skill), background file watching, and health checks. See
 | `skill_suggestions_enabled` | `true` | Also evaluate manual workspace skills in the daily curation and enqueue proposed edits as suggestions (never auto-applied) |
 | `model_override` | `null` | Dream model (deprecated — prefer `agents.aux_models.memory`); `null` falls through to the bundled default (resolution order: `agents.aux_models.memory` → `memory.dream.model_override` → bundled default) |
 | `min_seconds_between_runs` | `300` | Throttle for reactive triggers; `0` disables throttle (daily cron is never throttled) |
-| `max_seconds_per_run` | `600` | Wall-clock cap per extract pass; `0` = run to completion |
+| `max_seconds_per_run` | `600` | Wall-clock cap per extract and refine pass; the pass yields and resumes on the next run; `0` = run to completion |
 | `session_summaries_enabled` | `true` | Nightly pass that writes a session summary for conversations that went idle without compacting or `/new`, so every conversation leaves a searchable record |
 | `session_summary_idle_hours` | `6` | Hours a conversation must have been idle before the nightly pass summarizes it; a live session is left to the compactor |
 | `always_on_token_budget` | `1500` | Token budget for the always-on guidance pin injected into every prompt; `0` disables |
@@ -372,6 +372,9 @@ passes (extract/refine/skill), background file watching, and health checks. See
 | `confidence_threshold` | `95` | LLM-judge confidence floor (0-100) for an auto-merge |
 | `semantic_distance_threshold` | `0.30` | L2² distance below which an embedding-near entity becomes a dedup candidate (refine + discovery); the judge decides the merge, so a looser value trades judge calls for better duplicate recall |
 | `escalate_floor` | `0` | **Opt-in.** When `> 0`, borderline pairs (Tier 1 verdict `unclear`, or `same` with confidence in `[escalate_floor, confidence_threshold)`) escalate to a bounded sub-agent that investigates with read-only entity/lineage/session tools. `0` disables Tier 2 entirely. |
+| `judge_concurrency` | `3` | Judge calls in flight at once during the refine pass (1–8); merges stay one at a time, in candidate order |
+| `recheck_days` | `7` | Days before a pair without a settled verdict (an unparseable reply, an `unclear`, a `same` below the merge threshold) is judged again; `0` re-judges it every run. Provider failures are never remembered |
+| `semantic_name_gate` | `prioritize` | How the name signal steers embedding-near candidates: `prioritize` judges pairs whose names share a token or contain each other first, then the rest by distance; `require` judges only those; `off` orders by distance alone. Alias pairs are always judged |
 
 **`memory.search`** — search pipeline configuration:
 
