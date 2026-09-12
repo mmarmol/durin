@@ -26,7 +26,7 @@ classifiers = [
 
 dependencies = [
     "typer>=0.20.0,<1.0.0",
-    "anthropic>=0.45.0,<1.0.0",
+    "anthropic>=0.45.0,<2.0.0",
     "openai>=2.8.0",
     "pydantic>=2.12.0,<3.0.0",
     "pydantic-settings>=2.12.0,<3.0.0",
@@ -100,7 +100,7 @@ mcp = [
     # a real in-process server to talk to. Lifting this ceiling means porting
     # that harness first — to the standalone `fastmcp` package or to the
     # low-level server API — not just widening the range.
-    "mcp>=1.26.0,<2.0.0",
+    "mcp>=1.26.0,<3.0.0",
 ]
 web = [
     "ddgs>=9.5.5,<10.0.0",
@@ -170,7 +170,7 @@ cross-encoder = [
     #
     # sentence-transformers pulls in torch (~1 GB) — large dep, hence
     # gated behind the extra rather than in `memory`.
-    "sentence-transformers>=3.0,<6.0",
+    "sentence-transformers>=3.0,<7.0",
 ]
 ocr = [
     # Local on-CPU OCR for PDF pages with no text layer. The built-in ONNX
