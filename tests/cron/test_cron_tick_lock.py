@@ -54,6 +54,7 @@ def _call_on_timer(home: str, jobs_dir: str, result_path: str) -> None:
 
     async def run():
         await svc._on_timer()
+        await svc.wait_for_jobs()
 
     asyncio.run(run())
     Path(result_path).write_text(json.dumps(executed))

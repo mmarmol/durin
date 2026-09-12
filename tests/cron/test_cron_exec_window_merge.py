@@ -69,11 +69,12 @@ async def test_exec_window_external_add_survives(tmp_path) -> None:
         )
         external_add_done.append(True)
         # Also call the original to record proper run-state deltas
-        await original_execute(j)
+        return await original_execute(j)
 
     service._execute_job = _execute_with_external_add
 
     await service._on_timer()
+    await service.wait_for_jobs()
 
     # --- Assertions ---
     assert executed_jobs == [job.id], "primary job must have executed"
@@ -126,16 +127,18 @@ async def test_exec_window_externally_removed_job_not_resurrected(tmp_path) -> N
     original_execute = service._execute_job
 
     async def _execute_then_remove(j):
-        await original_execute(j)
+        ran = await original_execute(j)
         # External writer removes the job while execution is still "in flight"
         external = CronService(store_path)
         external._running = True
         external._arm_timer = lambda: None
         external.remove_job(j.id)
+        return ran
 
     service._execute_job = _execute_then_remove
 
     await service._on_timer()
+    await service.wait_for_jobs()
 
     reader = CronService(store_path)
     all_jobs = reader.list_jobs(include_disabled=True)

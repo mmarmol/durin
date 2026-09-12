@@ -1158,6 +1158,7 @@ class CronConfig(Base):
 
     run_history_max: int = Field(default=50, ge=1, le=1000, description="Maximum run-history entries kept per cron job")
     run_session_retention_hours: int = Field(default=48, ge=0, le=8760, description="Hours a cron run's session data is retained; 0 deletes immediately after the run")
+    max_concurrent_jobs: int = Field(default=4, ge=1, le=64, description="How many cron jobs may execute at the same time; a job never overlaps its own previous run, and a due job waits for a free slot")
 
 
 class WorkflowConfig(Base):

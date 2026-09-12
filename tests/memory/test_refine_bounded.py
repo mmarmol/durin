@@ -254,16 +254,17 @@ def test_a_transport_exception_counts_as_a_provider_failure(tmp_path):
 
 
 class _FakeVI:
-    """Neighbours keyed by a substring of the composed entity text."""
+    """The index surface the semantic walk reads: every stored entity vector
+    in one call. Pages missing from the index would be embedded; none are."""
 
-    def __init__(self, rows_by_substr):
-        self._rows = rows_by_substr
+    def __init__(self, vectors):
+        self.vectors = dict(vectors)
 
-    def search(self, query, *, top_k=10, where=None):
-        for substr, rows in self._rows.items():
-            if substr.lower() in query.lower():
-                return rows[:top_k]
-        return []
+    def entity_page_vectors(self):
+        return dict(self.vectors)
+
+    def embed_passages(self, texts):
+        raise AssertionError(f"walk tried to embed {len(texts)} page(s); all were indexed")
 
     def delete_by_id(self, ref):
         pass
@@ -272,9 +273,14 @@ class _FakeVI:
         pass
 
 
-def _near(ref, dist=0.2):
-    t, s = ref.split(":", 1)
-    return {"id": ref, "class_name": "entity_page", "_distance": dist, "path": f"memory/entities/{t}/{s}.md"}
+def _pair(axis: int, dist: float, dim: int = 12) -> tuple[list[float], list[float]]:
+    """Two vectors ``dist`` apart in squared L2, alone on their own axes so
+    they are far (2.0) from every other pair."""
+    a = [0.0] * dim
+    a[axis] = 1.0
+    b = list(a)
+    b[axis + 1] = dist ** 0.5
+    return a, b
 
 
 def _semantic_workspace(ws: Path) -> _FakeVI:
@@ -288,13 +294,16 @@ def _semantic_workspace(ws: Path) -> _FakeVI:
     _entity(ws, "company:hp-inc", "HP Inc", "u8")
     _entity(ws, "topic:configuracion", "Configuración", "u9")
     _entity(ws, "topic:configuracion-avanzada", "Configuracion avanzada", "u10")
-    return _FakeVI({
-        "Email Flow": [_near("topic:emailflow", 0.24)],
-        "Auto Filling": [_near("project:mxhero-autofilling-system", 0.23)],
-        "Kinesis Events": [_near("topic:onedrive-share", 0.10)],   # nearest of all, no name overlap
-        "HP Inc": [_near("company:hp", 0.22)],
-        "Configuración": [_near("topic:configuracion-avanzada", 0.21)],
-    })
+    vectors = {}
+    for axis, (a, b, dist) in enumerate((
+        ("topic:email-flow", "topic:emailflow", 0.24),
+        ("project:auto-filling", "project:mxhero-autofilling-system", 0.23),
+        ("topic:kinesis-events", "topic:onedrive-share", 0.10),   # nearest of all, no name overlap
+        ("company:hp", "company:hp-inc", 0.22),
+        ("topic:configuracion", "topic:configuracion-avanzada", 0.21),
+    )):
+        vectors[a], vectors[b] = _pair(axis * 2, dist)
+    return _FakeVI(vectors)
 
 
 def test_the_name_signal_orders_embedding_near_pairs(tmp_path):
