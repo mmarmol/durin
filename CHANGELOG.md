@@ -5,6 +5,32 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.10.6 — 2026-09-12
+
+### Highlights
+
+- **A long cron job no longer holds the scheduler.** Every due job now runs
+  in its own task through a bounded pool (`cron.max_concurrent_jobs`, default
+  4), so the nightly dream neither delays the other scheduled jobs nor makes
+  them all fire at once when it ends. A job never overlaps itself, and
+  re-arming the timer never cancels a running job.
+- **The dream's duplicate walk stopped re-embedding every page.** The
+  semantic candidate walk reads the stored vectors in one pass and finds
+  neighbours in memory: on a 2 175-entity workspace the walk takes well under
+  a second instead of 204 s of the nightly budget.
+
+### Memory
+
+- `VectorIndex.entity_page_vectors` / `embed_passages` back the semantic walk;
+  pages are compared passage-to-passage under the same squared-L2 measure
+  LanceDB reports, so the candidate population at the default threshold grows
+  slightly (measured +18 % on the box).
+
+### Cron
+
+- New config key `cron.max_concurrent_jobs` (default 4).
+- `CronService.stop()` cancels in-flight job tasks; `wait_for_jobs()` awaits them.
+
 ## 0.10.4 — 2026-09-11
 
 ### Highlights
