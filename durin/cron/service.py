@@ -105,6 +105,7 @@ class CronService:
         on_job: Callable[[CronJob], Coroutine[Any, Any, str | None]] | None = None,
         max_sleep_ms: int = 300_000,  # 5 minutes
         run_history_max: int = 50,
+        max_concurrent_jobs: int = 4,
     ):
         self.store_path = store_path
         self._action_path = store_path.parent / "action.jsonl"
@@ -126,6 +127,12 @@ class CronService:
         # long job (e.g. dream). In-process is sufficient: a single gateway
         # owns the scheduler.
         self._executing: set[str] = set()
+        # Every job execution runs in its own task; the pool bounds how many
+        # run at once, so one long job (the nightly dream) neither delays the
+        # others nor holds the timer. Tasks are tracked so stop() can cancel
+        # them and tests can wait for them.
+        self._job_slots = asyncio.Semaphore(max(1, max_concurrent_jobs))
+        self._job_tasks: set[asyncio.Task] = set()
         self.max_sleep_ms = max_sleep_ms
 
     def is_executing(self, job_id: str) -> bool:
@@ -409,11 +416,19 @@ class CronService:
         logger.info("Cron service started with {} jobs", len(self._store.jobs if self._store else []))
 
     def stop(self) -> None:
-        """Stop the cron service."""
+        """Stop the cron service: the timer and every in-flight job task."""
         self._running = False
         if self._timer_task:
             self._timer_task.cancel()
             self._timer_task = None
+        for task in list(self._job_tasks):
+            task.cancel()
+
+    async def wait_for_jobs(self) -> None:
+        """Wait until every job task spawned so far has finished (tests and
+        orderly shutdown; the scheduler itself never waits on a job)."""
+        while self._job_tasks:
+            await asyncio.gather(*list(self._job_tasks), return_exceptions=True)
 
     def _recompute_next_runs(self) -> None:
         """Recompute next run times for enabled jobs, preserving still-future ones.
@@ -467,21 +482,20 @@ class CronService:
         self._timer_task = asyncio.create_task(tick())
 
     async def _on_timer(self) -> None:
-        """Handle timer tick - run due jobs.
+        """Handle timer tick — advance every due job and spawn its execution.
 
         Lock ordering (outermost → innermost, never reversed):
           1. _tick_lock  — non-blocking; skips the tick if another scheduler
              process is already ticking (cross-process at-most-once guard).
           2. self._lock  — serialises the load/save RMW within the tick.
 
-        _tick_lock is held for the FULL tick (load → advance next_run →
-        execute → save) so that a concurrent scheduler can never pick up the
-        same due job during our execution window.
-
-        self._lock is released before _execute_job to avoid a cross-instance
-        FileLock deadlock: if on_job creates a second CronService and calls a
-        mutator, that mutator also tries to acquire self._lock — both objects
-        point to the same path and FileLock is NOT reentrant across instances.
+        The tick itself is short: load, advance ``next_run_at_ms`` for the
+        due jobs, save, release both locks. Advancing before releasing is the
+        at-most-once guard — a second scheduler process loads the advanced
+        value and finds nothing due. Execution then happens in one task per
+        job (bounded by the pool, see :meth:`_spawn_job`), so a job that runs
+        for hours neither delays the other due jobs nor holds the timer: the
+        next tick is armed right away.
         """
         try:
             self._tick_lock.acquire(timeout=0)
@@ -489,6 +503,7 @@ class CronService:
             logger.debug("cron: tick skipped — another scheduler is ticking")
             return
 
+        due_jobs: list[CronJob] = []
         try:
             with self._lock:
                 self._load_store()
@@ -498,111 +513,115 @@ class CronService:
                 if not self._store:
                     self._arm_timer()
                     return
-
                 self._timer_active = True
-                now = _now_ms()
-                due_jobs = [
-                    j for j in self._store.jobs
-                    if j.enabled and j.state.next_run_at_ms and now >= j.state.next_run_at_ms
-                ]
-                # Advance next_run_at_ms for all due jobs NOW, before releasing
-                # the lock and executing.  This is the at-most-once guard: even
-                # if two scheduler processes race through the tick lock check at
-                # the same instant, the first one to reach here under self._lock
-                # will push next_run into the future, so the second process
-                # loads an already-advanced value and finds no due jobs.
-                for job in due_jobs:
-                    if job.schedule.kind == "at":
-                        # One-shot jobs: disable immediately so a concurrent
-                        # scheduler cannot also fire them.
-                        if job.delete_after_run:
-                            self._store.jobs = [j for j in self._store.jobs if j.id != job.id]
+                try:
+                    now = _now_ms()
+                    due_jobs = [
+                        j for j in self._store.jobs
+                        if j.enabled and j.state.next_run_at_ms and now >= j.state.next_run_at_ms
+                    ]
+                    # Advance next_run_at_ms for all due jobs NOW, before releasing
+                    # the lock and executing.  This is the at-most-once guard: even
+                    # if two scheduler processes race through the tick lock check at
+                    # the same instant, the first one to reach here under self._lock
+                    # will push next_run into the future, so the second process
+                    # loads an already-advanced value and finds no due jobs.
+                    for job in due_jobs:
+                        if job.schedule.kind == "at":
+                            # One-shot jobs: disable immediately so a concurrent
+                            # scheduler cannot also fire them.
+                            if job.delete_after_run:
+                                self._store.jobs = [j for j in self._store.jobs if j.id != job.id]
+                            else:
+                                job.enabled = False
+                                job.state.next_run_at_ms = None
                         else:
-                            job.enabled = False
-                            job.state.next_run_at_ms = None
-                    else:
-                        job.state.next_run_at_ms = _compute_next_run(job.schedule, now)
-                self._save_store()
-
-            # Execute jobs outside the lock so on_job callbacks can call other
-            # CronService mutators (e.g. add_job from a second service instance)
-            # without hitting a cross-instance FileLock deadlock.
-            try:
-                for job in due_jobs:
-                    await self._execute_job(job)
-            finally:
-                self._timer_active = False
-
-            with self._lock:
-                # Reload from disk before saving so that external writes made
-                # during the execution window (add_job / remove_job / update_job
-                # from another process) are not clobbered.  We then re-apply
-                # only the run-state deltas produced by _execute_job onto the
-                # freshly-reloaded store.
-                # _timer_active is already False (set in the finally above),
-                # so _load_store will read from disk rather than the cache.
-                self._load_store()
-                if self._store:
-                    # Build a map of the post-execution job objects by id so we
-                    # can look up the deltas quickly.
-                    executed_map = {j.id: j for j in due_jobs}
-                    # Determine which job ids were removed by delete_after_run
-                    # inside _execute_job (they will no longer be in self._store
-                    # after the reload, which is the desired state, but they
-                    # might have been re-added externally — unlikely but we
-                    # follow spec: delete_after_run takes precedence over an
-                    # external add of the same id).
-                    delete_after_ids = {
-                        j.id for j in due_jobs
-                        if j.schedule.kind == "at" and j.delete_after_run
-                    }
-                    reloaded_map = {j.id: j for j in self._store.jobs}
-                    for job_id, executed_job in executed_map.items():
-                        if job_id in delete_after_ids:
-                            # One-shot delete: remove from the reloaded store
-                            # (may already be absent if the external reload
-                            # reflects the pre-execution advance-and-save that
-                            # already removed it).
-                            reloaded_map.pop(job_id, None)
-                            continue
-                        fresh = reloaded_map.get(job_id)
-                        if fresh is None:
-                            # Externally removed during the window — do not
-                            # resurrect (spec requirement 3).
-                            continue
-                        # Re-apply run-state deltas only; all non-run-state
-                        # fields (name, schedule, payload, enabled for repeating
-                        # jobs) come from the reloaded store, preserving any
-                        # concurrent external edit.
-                        fresh.state.last_status = executed_job.state.last_status
-                        fresh.state.last_error = executed_job.state.last_error
-                        fresh.state.last_run_at_ms = executed_job.state.last_run_at_ms
-                        fresh.state.run_history = executed_job.state.run_history
-                        fresh.state.next_run_at_ms = executed_job.state.next_run_at_ms
-                        fresh.updated_at_ms = executed_job.updated_at_ms
-                        # For one-shot (at) jobs that should be disabled (not
-                        # deleted): apply disable to the reloaded entry.
-                        if executed_job.schedule.kind == "at" and not executed_job.enabled:
-                            fresh.enabled = False
-                    self._store.jobs = list(reloaded_map.values())
-                self._save_store()
-            self._arm_timer()
+                            job.state.next_run_at_ms = _compute_next_run(job.schedule, now)
+                    self._save_store()
+                finally:
+                    self._timer_active = False
         finally:
             self._tick_lock.release()
 
-    async def _execute_job(self, job: CronJob) -> None:
-        """Execute a single job.
+        for job in due_jobs:
+            self._spawn_job(job)
+        self._arm_timer()
+
+    def _spawn_job(self, job: CronJob) -> None:
+        """Run ``job`` in its own task: wait for a pool slot, execute, then
+        persist its run state. The task is independent of the timer task, so
+        re-arming the timer (a job added or toggled meanwhile) never cancels a
+        running job — before, execution lived inside the tick task and any
+        ``_arm_timer`` call cancelled it mid-flight."""
+        task = asyncio.create_task(self._run_job_task(job), name=f"cron-job:{job.id}")
+        self._job_tasks.add(task)
+        task.add_done_callback(self._job_tasks.discard)
+
+    async def _run_job_task(self, job: CronJob) -> None:
+        if job.id in self._executing:
+            # Still running from an earlier tick (a job longer than its own
+            # period). Skip without taking a slot; the state on disk already
+            # carries the advanced next run.
+            logger.warning(
+                "Cron: job '{}' ({}) already running; skipping overlapping run",
+                job.name, job.id,
+            )
+            return
+        try:
+            async with self._job_slots:
+                if not await self._execute_job(job):
+                    return
+                with self._lock:
+                    self._persist_run_state(job)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — one job's failure never takes the scheduler down
+            logger.exception("Cron: job '{}' ({}) task failed", job.name, job.id)
+
+    def _persist_run_state(self, job: CronJob) -> None:
+        """Re-apply ``job``'s run-state deltas onto a freshly reloaded store and
+        save. Caller holds ``self._lock``.
+
+        Reloading first keeps external writes made during the execution
+        window (add_job / remove_job / update_job from another process, a
+        toggle from the API) — only run-state fields (last status, run
+        history, next fire time) come from the executed job; name, schedule,
+        payload and, for repeating jobs, ``enabled`` come from disk. A job
+        removed externally during the run is not resurrected; a one-shot job
+        with ``delete_after_run`` is removed even if it was re-added.
+        """
+        self._load_store()
+        if not self._store:
+            return
+        if job.schedule.kind == "at" and job.delete_after_run:
+            self._store.jobs = [j for j in self._store.jobs if j.id != job.id]
+        else:
+            fresh = next((j for j in self._store.jobs if j.id == job.id), None)
+            if fresh is not None:
+                fresh.state.last_status = job.state.last_status
+                fresh.state.last_error = job.state.last_error
+                fresh.state.last_run_at_ms = job.state.last_run_at_ms
+                fresh.state.run_history = job.state.run_history
+                fresh.state.next_run_at_ms = job.state.next_run_at_ms
+                fresh.updated_at_ms = job.updated_at_ms
+                if job.schedule.kind == "at" and not job.enabled:
+                    fresh.enabled = False
+        self._save_store()
+
+    async def _execute_job(self, job: CronJob) -> bool:
+        """Execute a single job. Returns ``False`` when nothing ran.
 
         Re-entrancy guard: if this job id is already mid-execution (a
         scheduled run still in flight, or a concurrent manual run-now), the
-        call returns immediately instead of starting an overlapping run.
+        call returns immediately instead of starting an overlapping run — a
+        job never overlaps itself, whatever the pool size.
         """
         if job.id in self._executing:
             logger.warning(
                 "Cron: job '{}' ({}) already running; skipping overlapping run",
                 job.name, job.id,
             )
-            return
+            return False
         self._executing.add(job.id)
         try:
             start_ms = _now_ms()
@@ -649,6 +668,7 @@ class CronService:
             else:
                 # Compute next run
                 job.state.next_run_at_ms = _compute_next_run(job.schedule, _now_ms())
+            return True
         finally:
             self._executing.discard(job.id)
 
@@ -959,32 +979,12 @@ class CronService:
 
             # Execute OUTSIDE the lock (see docstring): a long job must not
             # block concurrent cron-store readers or deadlock a fresh instance.
-            await self._execute_job(job)
-
-            with self._lock:
-                # Reload from disk so external writes during the execution
-                # window are not clobbered, then re-apply only the run-state
-                # deltas — the same merge _on_timer performs.
-                self._load_store()
-                if self._store:
-                    if job.schedule.kind == "at" and job.delete_after_run:
-                        self._store.jobs = [
-                            j for j in self._store.jobs if j.id != job.id
-                        ]
-                    else:
-                        fresh = next(
-                            (j for j in self._store.jobs if j.id == job.id), None
-                        )
-                        if fresh is not None:
-                            fresh.state.last_status = job.state.last_status
-                            fresh.state.last_error = job.state.last_error
-                            fresh.state.last_run_at_ms = job.state.last_run_at_ms
-                            fresh.state.run_history = job.state.run_history
-                            fresh.state.next_run_at_ms = job.state.next_run_at_ms
-                            fresh.updated_at_ms = job.updated_at_ms
-                            if job.schedule.kind == "at" and not job.enabled:
-                                fresh.enabled = False
-                    self._save_store()
+            # A manual run takes a pool slot like a scheduled one.
+            async with self._job_slots:
+                if not await self._execute_job(job):
+                    return False
+                with self._lock:
+                    self._persist_run_state(job)
             return True
         finally:
             self._running = was_running

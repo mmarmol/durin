@@ -400,13 +400,17 @@ threaded through; it is `None` when the vector index is unavailable.
 1. `EntityAbsorption.find_candidates` (`durin/memory/absorption.py`) returns
    pairs that share at least one alias, strongest signal first.
 2. When `vector_index` is provided, `EntityAbsorption.find_semantic_candidates`
-   queries the vector index — scoped to entity pages of each page's own type
-   via `ScopePredicate.entity_pages` — and supplements the set with
-   **embedding-near same-type pairs** whose L2 distance falls within
+   reads the stored vector of every entity page from the index in one bulk
+   call (`VectorIndex.entity_page_vectors`) — nothing is re-embedded for a
+   page the index already holds; a page the index lacks is embedded once, as
+   a passage — and computes each page's nearest same-type neighbours in
+   memory. It supplements the set with **embedding-near same-type pairs**
+   whose squared L2 distance (the `_distance` LanceDB reports) falls within
    `semantic_distance_threshold` (default 0.30), deduped against the alias
-   pairs. This catches duplicates that share no alias — same entity, different
-   name — and feeds them through the same judge. When the vector index is
-   unavailable this step is a no-op.
+   pairs. Pages are compared passage-to-passage, the symmetric measure for
+   "are these two pages the same thing". This catches duplicates that share
+   no alias — same entity, different name — and feeds them through the same
+   judge. When the vector index is unavailable this step is a no-op.
 3. Each pair is filtered out (with a `memory.absorb.skipped` reason) when:
    `cross_type` (different entity types), `tombstoned` (the user previously
    rejected the merge — recorded in `.refine_tombstones.json`), `load_failed`,

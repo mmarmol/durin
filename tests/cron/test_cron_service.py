@@ -504,6 +504,7 @@ async def test_timer_execution_is_not_rolled_back_by_list_jobs_reload(tmp_path):
 
     await service._on_timer()
     await service._on_timer()
+    await service.wait_for_jobs()
 
     assert calls == [job.id]
     loaded = service.get_job(job.id)

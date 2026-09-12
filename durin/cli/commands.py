@@ -1289,7 +1289,11 @@ def _run_gateway(
 
     # Create cron service with workspace-scoped store
     cron_store_path = config.workspace_path / "cron" / "jobs.json"
-    cron = CronService(cron_store_path, run_history_max=config.cron.run_history_max)
+    cron = CronService(
+        cron_store_path,
+        run_history_max=config.cron.run_history_max,
+        max_concurrent_jobs=config.cron.max_concurrent_jobs,
+    )
 
     # Create agent with cron service
     agent = AgentLoop.from_config(
@@ -2279,7 +2283,11 @@ def agent(
 
     # Create cron service with workspace-scoped store
     cron_store_path = config.workspace_path / "cron" / "jobs.json"
-    cron = CronService(cron_store_path, run_history_max=config.cron.run_history_max)
+    cron = CronService(
+        cron_store_path,
+        run_history_max=config.cron.run_history_max,
+        max_concurrent_jobs=config.cron.max_concurrent_jobs,
+    )
 
     if logs:
         logger.enable("durin")

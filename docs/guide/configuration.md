@@ -768,6 +768,7 @@ Scheduled-work (cron) lifecycle settings.
 |---|---|---|
 | `run_history_max` | `50` | Maximum run-history entries kept per job |
 | `run_session_retention_hours` | `48` | How long run-session data is retained |
+| `max_concurrent_jobs` | `4` | How many jobs may run at the same time; a job never overlaps its own previous run |
 
 ---
 

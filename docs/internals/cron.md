@@ -12,10 +12,10 @@ Every job runs in a fresh, isolated session with its own session key, so cron ex
 A `CronJob` is a plain dataclass persisted in `$DURIN_HOME/cron/jobs.json`. Each job carries an id, a name, an enabled flag, a `CronSchedule` (one of `at`, `every`, or `cron`), a `CronPayload` describing what to run, and a `CronJobState` recording the next and last run times with a capped run history. `at` jobs are one-shot; they disable (or delete) themselves after firing. `every` jobs repeat on a fixed millisecond interval. `cron` jobs fire on a standard cron expression with an optional IANA timezone.
 
 **The scheduler is a timer-driven loop protected by two file locks.**
-`CronService.start()` arms an async timer that wakes at the earliest `next_run_at_ms` across all enabled jobs (capped at `max_sleep_ms`, default five minutes). On each tick, the service acquires `_tick_lock` (non-blocking, cross-process at-most-once guard) and then `_lock` (serialised RMW), advances `next_run_at_ms` for every due job while the lock is held, saves the store, releases the lock, and only then executes the jobs. Advancing the timestamp before releasing the lock prevents a second scheduler process from seeing the same due job and double-firing it.
+`CronService.start()` arms an async timer that wakes at the earliest `next_run_at_ms` across all enabled jobs (capped at `max_sleep_ms`, default five minutes). On each tick, the service acquires `_tick_lock` (non-blocking, cross-process at-most-once guard) and then `_lock` (serialised RMW), advances `next_run_at_ms` for every due job while the lock is held, saves the store, and releases both locks. Advancing the timestamp before releasing the lock prevents a second scheduler process from seeing the same due job and double-firing it. The tick is short: it never waits on a job.
 
-**Execution happens outside the lock in an isolated session.**
-`_execute_job` invokes the `on_job` callback (wired in the gateway) with the `CronJob` value. For `agent_turn` jobs the gateway creates a fresh session keyed `cron:{id}:run:{timestamp_ms}` and dispatches the payload message through the agent loop using `build_cron_turn_prompt`. After all due jobs finish, the service reloads the store from disk and re-applies only the run-state deltas (last status, run history, next fire time) onto the freshly-loaded jobs, preserving any concurrent external edits to name, schedule, or payload.
+**Each job runs in its own task, through a bounded pool, in an isolated session.**
+Every due job is spawned as an `asyncio` task that waits for one of `cron.max_concurrent_jobs` slots, runs `_execute_job`, and persists its own run state. A job that takes hours (the nightly `memory_dream`) therefore neither delays the other due jobs nor holds the timer, and a job never overlaps itself: the `_executing` guard skips a scheduled or manual run of a job whose previous run is still in flight, whatever the pool size. `_execute_job` invokes the `on_job` callback (wired in the gateway) with the `CronJob` value. For `agent_turn` jobs the gateway creates a fresh session keyed `cron:{id}:run:{timestamp_ms}` and dispatches the payload message through the agent loop using `build_cron_turn_prompt`. When the job finishes, the task reloads the store from disk and re-applies only the run-state deltas (last status, run history, next fire time) onto the freshly-loaded job, preserving any concurrent external edits to name, schedule, payload or enabled flag.
 
 ## 3. Diagram
 
@@ -28,12 +28,12 @@ flowchart TD
     D --> E[Find due jobs\nenabled AND now >= next_run_at_ms]
     E --> F[Advance next_run_at_ms\nfor ALL due jobs\nat: disable / delete\nevery: now + interval\ncron: croniter next]
     F --> G[_save_store atomic write]
-    G --> H[Release _lock]
-    H --> I[Execute due jobs OUTSIDE lock]
-    I --> J{_execute_job}
-    J --> K{job.id in _executing?}
-    K -->|yes| L([skip: overlap guard])
-    K -->|no| M[Add to _executing set]
+    G --> H[Release _lock and _tick_lock]
+    H --> I[Spawn one task per due job]
+    I --> AA([Arm next timer])
+    I --> J{job.id in _executing?}
+    J -->|yes| L([skip: a job never overlaps itself])
+    J -->|no| M[Wait for a pool slot\ncron.max_concurrent_jobs]
     M --> N[on_job callback\nfresh session\nbuild_cron_turn_prompt]
     N --> O[Record last_run_at\nlast_status\nrun_history cap]
     O --> P{at job?}
@@ -43,10 +43,8 @@ flowchart TD
     Q & R & S --> T[Discard from _executing]
     T --> U[Acquire _lock]
     U --> V[Reload store from disk]
-    V --> W[Re-apply run-state deltas\nskip externally deleted jobs\npreserve external schedule edits]
-    W --> X[_save_store]
-    X --> Y[Release _tick_lock]
-    Y --> AA([Arm next timer])
+    V --> W[Re-apply this job's run-state deltas\nskip if externally deleted\npreserve external edits]
+    W --> X[_save_store, release _lock]
 ```
 
 ## 4. How it works
@@ -65,11 +63,11 @@ When `CronService` is constructed without calling `start()` — as the webui and
 
 `_arm_timer` cancels any existing timer task and creates a new `asyncio.Task` that sleeps for `min(max_sleep_ms, ms_until_earliest_due_job)` seconds and then calls `_on_timer`.
 
-`_on_timer` tries to acquire `_tick_lock` with `timeout=0` (non-blocking). If it fails, another scheduler process is already ticking and this tick is silently dropped. Once acquired, the method takes `_lock`, reloads the store, and finds all due jobs: those that are `enabled` and have `now >= next_run_at_ms`. For each due job, `next_run_at_ms` is advanced atomically (under `_lock`) before execution starts. This is the at-most-once guard: the second scheduler to look under `_lock` will find no due jobs. The store is saved. Then `_lock` is released.
+`_on_timer` tries to acquire `_tick_lock` with `timeout=0` (non-blocking). If it fails, another scheduler process is already ticking and this tick is silently dropped. Once acquired, the method takes `_lock`, reloads the store, and finds all due jobs: those that are `enabled` and have `now >= next_run_at_ms`. For each due job, `next_run_at_ms` is advanced atomically (under `_lock`) before execution starts. This is the at-most-once guard: the second scheduler to look under `_lock` will find no due jobs. The store is saved, both locks are released, each due job is handed to `_spawn_job`, and the next timer is armed at once. Because execution lives in its own task rather than inside the timer task, re-arming the timer (a job added or toggled meanwhile) never cancels a running job.
 
 ### Execution
 
-Each due job passes through `_execute_job`. The `_executing` set provides an in-process re-entrancy guard: if a `run_job` (manual trigger) fires the same job while a scheduled run is still in flight, the second call returns immediately. The `on_job` callback is awaited; the gateway implementation:
+`_spawn_job` creates one task per due job (`_run_job_task`): it skips immediately when the job is still executing from an earlier tick, otherwise waits for a slot of the pool sized by `cron.max_concurrent_jobs`, runs `_execute_job`, and then persists the run state. The `_executing` set is the in-process re-entrancy guard behind "a job never overlaps itself": a scheduled tick or a `run_job` (manual trigger) that fires a job whose previous run is still in flight returns immediately. A manual run takes a pool slot like a scheduled one. `stop()` cancels the in-flight job tasks together with the timer; `wait_for_jobs()` awaits them (tests and orderly shutdown). The `on_job` callback is awaited; the gateway implementation:
 
 1. Sets `job.payload.session_key` to a fresh `cron:{id}:run:{timestamp_ms}` key.
 2. Wraps `job.payload.message` with `build_cron_turn_prompt(mode, message)`. In `reminder` mode the prompt instructs the agent to deliver a brief user-facing message; in `task` mode the raw message is passed as-is and the agent executes it with full tools.
@@ -81,7 +79,7 @@ After `on_job` completes (or raises), `_execute_job` records `last_run_at_ms`, `
 
 ### Post-execution merge
 
-After all due jobs finish, `_on_timer` acquires `_lock` again, reloads the store from disk (now with `_timer_active=False` so `_load_store` performs a real disk read), and re-merges the run-state deltas from the just-executed job objects onto the freshly-loaded store. Only state fields (`last_status`, `last_error`, `last_run_at_ms`, `run_history`, `next_run_at_ms`, `updated_at_ms`) are re-applied; all other fields come from the reloaded store so that any external schedule or payload edits made during execution are preserved. Jobs that were externally deleted during execution are not resurrected. One-shot deletions (`delete_after_run`) are re-applied on the reloaded store to handle the edge case where the job was re-added externally.
+When a job finishes, its task acquires `_lock`, reloads the store from disk, and re-merges that job's run-state deltas onto the freshly-loaded store (`_persist_run_state`, shared with the manual `run_job` path). Only state fields (`last_status`, `last_error`, `last_run_at_ms`, `run_history`, `next_run_at_ms`, `updated_at_ms`) are re-applied; all other fields come from the reloaded store so that any external schedule, payload or enabled-flag edits made during execution are preserved. A job externally deleted during its run is not resurrected. One-shot deletions (`delete_after_run`) are re-applied on the reloaded store to handle the edge case where the job was re-added externally.
 
 ### Store durability
 
@@ -165,10 +163,11 @@ Every `agent_turn` execution creates a session keyed `cron:{id}:run:{timestamp_m
 | `CronJobState` | `durin/cron/types.py` | Run state: `next_run_at_ms`, `last_run_at_ms`, `last_status`, `last_error`, `run_history` |
 | `CronRunRecord` | `durin/cron/types.py` | One execution record: `run_at_ms`, status, `duration_ms`, error, `session_key`, model, persona, summary |
 | `CronStore` | `durin/cron/types.py` | Persistent container: version, jobs list. Serialized to JSON at `store_path` |
-| `CronService` | `durin/cron/service.py` | Main scheduler: lifecycle (`start`/`stop`), job CRUD, timer loop, two-lock tick, `on_job` callback wiring |
+| `CronService` | `durin/cron/service.py` | Main scheduler: lifecycle (`start`/`stop`/`wait_for_jobs`), job CRUD, timer loop, two-lock tick, per-job execution tasks bounded by a pool, `on_job` callback wiring |
 | `_compute_next_run` | `durin/cron/service.py` | Pure function: given a schedule and reference time, returns the next fire timestamp in ms (or `None` for expired one-shots and invalid expressions) |
 | `_validate_schedule_for_add` | `durin/cron/service.py` | Rejects invalid schedules at add-time (bad cron expr, unknown tz) so jobs never silently fail to fire |
-| `_execute_job` | `durin/cron/service.py` | Runs a single job: overlap guard, `on_job` call, run record, one-shot handling |
+| `_spawn_job` / `_run_job_task` | `durin/cron/service.py` | One task per due job: overlap skip, pool slot, `_execute_job`, then `_persist_run_state` (reload + re-apply this job's run-state deltas) |
+| `_execute_job` | `durin/cron/service.py` | Runs a single job: overlap guard, `on_job` call, run record, one-shot handling; returns whether it ran |
 | `register_system_job` | `durin/cron/service.py` | Idempotent upsert of system jobs; preserves run state and future `next_run_at_ms` across restarts |
 | `prune_orphaned_system_jobs` | `durin/cron/service.py` | Removes persisted system jobs whose id is no longer in the registered set |
 | `CronTool` | `durin/agent/tools/cron.py` | Agent-facing tool exposing `add`/`list`/`remove`/`update` actions; enforces `_in_cron_context` guard and schedule validation |
@@ -184,6 +183,7 @@ Every `agent_turn` execution creates a session keyed `cron:{id}:run:{timestamp_m
 |---|---|---|
 | `cron.run_history_max` | `50` | Maximum run records kept per job (oldest are dropped) |
 | `cron.run_session_retention_hours` | `48` | How long per-run cron sessions are kept before the reaper deletes them; `0` disables reaping |
+| `cron.max_concurrent_jobs` | `4` | How many cron jobs may execute at the same time; a due job waits for a free slot, and a job never overlaps its own previous run |
 | `memory.dream.enabled` | `true` | Controls whether the `memory_dream` system job is registered on gateway start |
 | `memory.dream.cron` | `"0 3 * * *"` | Cron expression for the daily Dream pass (evaluated in `agents.defaults.timezone`) |
 | `memory.dream.model_override` | `null` | Deprecated — prefer `agents.aux_models.memory`. Dream LLM calls resolve `agents.aux_models.memory` first, then this key, then the default preset. |

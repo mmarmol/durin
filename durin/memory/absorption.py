@@ -40,6 +40,9 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
+# Row-block size for the in-memory neighbour search of the semantic walk.
+_WALK_BLOCK_ROWS = 256
+
 
 class AbsorptionError(Exception):
     """Raised when absorption can't proceed (missing files, conflicting state)."""
@@ -167,9 +170,18 @@ class EntityAbsorption:
         name_gate: str = "off",
     ) -> list[MergeCandidate]:
         """Embedding-near same-type entity pairs, for pairs that alias overlap
-        misses (same thing, different name). Queries the vector index with each
-        entity's composed text; keeps same-type neighbors within
-        ``distance_threshold``; returns deduped pairs (closest distance kept).
+        misses (same thing, different name).
+
+        The vectors come from the index in one bulk read
+        (``entity_page_vectors``: the passage embedding stored for every
+        entity page), so nothing is re-embedded for a page the index already
+        holds; a page the index lacks (written since the last index pass) is
+        embedded now, as a passage, so the walk stays complete. Nearest
+        neighbours are then computed in memory, per entity type: each page's
+        ``top_k`` closest same-type pages within ``distance_threshold``
+        (squared L2 — the ``_distance`` LanceDB reports), deduped so a pair
+        keeps its closest distance. Pages are compared passage-to-passage,
+        the symmetric measure for "are these two pages the same thing".
 
         ``name_gate`` uses the structural name signal (:func:`names_overlap`,
         computed from the pages this walk already parsed, so it costs no
@@ -181,16 +193,17 @@ class EntityAbsorption:
         carries ``name_overlap`` so the signal can be measured against the
         judge's verdicts.
         """
+        import numpy as np
+
         from durin.memory.entity_page import EntityPage
-        from durin.memory.scope import ScopePredicate
         from durin.memory.vector_index import VectorIndex
 
         if name_gate not in ("off", "prioritize", "require"):
             raise ValueError(f"name_gate must be off, prioritize or require, not {name_gate!r}")
-        pairs: dict[tuple[str, str], float] = {}
-        forms: dict[str, list[str]] = {}
         if not self.entities_root.is_dir():
             return []
+        pages: list[tuple[str, EntityPage]] = []
+        forms: dict[str, list[str]] = {}
         for md in sorted(self.entities_root.rglob("*.md")):
             if "archive" in md.relative_to(self.entities_root).parts:
                 continue
@@ -199,36 +212,70 @@ class EntityAbsorption:
                 continue
             self_ref = f"{page.type}:{EntityPage.slug_from_path(md)}"
             forms[self_ref] = name_forms(self_ref, page)
-            query = VectorIndex._compose_entity_page_text(
-                name=page.name, aliases=list(page.aliases), body=page.body or "",
-                attributes=page.attributes, relations=page.relations)
-            try:
-                # +1: the entity itself is its own nearest neighbour (distance
-                # ~0); request one extra so self-exclusion still leaves top_k.
-                rows = vector_index.search(
-                    query, top_k=top_k + 1,
-                    where=ScopePredicate.entity_pages(page.type).vector_where)
-            except Exception:  # noqa: BLE001 — semantic recall is best-effort
+            pages.append((self_ref, page))
+        if len(pages) < 2:
+            return []
+        try:
+            vectors: dict[str, list[float]] = dict(vector_index.entity_page_vectors())
+            missing = [(ref, page) for ref, page in pages if ref not in vectors]
+            if missing:
+                texts = [
+                    VectorIndex._compose_entity_page_text(
+                        name=page.name, aliases=list(page.aliases), body=page.body or "",
+                        attributes=page.attributes, relations=page.relations)
+                    for _, page in missing
+                ]
+                for (ref, _), vec in zip(missing, vector_index.embed_passages(texts)):
+                    vectors[ref] = vec
+        except Exception as exc:  # noqa: BLE001 — semantic recall is best-effort
+            logger.warning("semantic candidate walk skipped: %s", exc)
+            return []
+
+        pairs: dict[tuple[str, str], float] = {}
+        by_type: dict[str, list[str]] = {}
+        for ref, _ in pages:
+            if ref in vectors:
+                by_type.setdefault(ref.split(":", 1)[0], []).append(ref)
+        for refs in by_type.values():
+            if len(refs) < 2:
                 continue
-            for row in rows:
-                ref = row.get("id")
-                if not isinstance(ref, str) or ref == self_ref:
-                    continue
-                dist = float(row.get("_distance", 1.0))
-                if dist > distance_threshold:
-                    continue
-                key = tuple(sorted([self_ref, ref]))
-                if key not in pairs or dist < pairs[key]:
-                    pairs[key] = dist
+            try:
+                matrix = np.asarray([vectors[r] for r in refs], dtype=np.float32)
+            except ValueError:
+                # Ragged rows: a freshly embedded page's dimension differs from
+                # the stored ones (provider changed under the index). The
+                # index's own guard reports that on the next write; skip here.
+                continue
+            if matrix.ndim != 2:
+                continue
+            k = min(top_k, len(refs) - 1)
+            norms = np.einsum("ij,ij->i", matrix, matrix)
+            # Row blocks bound the distance matrix to block × n floats, so a
+            # type with thousands of pages never materialises n × n at once.
+            for start in range(0, len(refs), _WALK_BLOCK_ROWS):
+                block = matrix[start:start + _WALK_BLOCK_ROWS]
+                dist = norms[start:start + _WALK_BLOCK_ROWS, None] + norms[None, :] - 2.0 * (block @ matrix.T)
+                np.maximum(dist, 0.0, out=dist)
+                for offset in range(dist.shape[0]):
+                    i = start + offset
+                    row = dist[offset]
+                    row[i] = np.inf  # a page is its own nearest neighbour
+                    for j in np.argpartition(row, k - 1)[:k]:
+                        d = float(row[j])
+                        if d > distance_threshold:
+                            continue
+                        key = tuple(sorted((refs[i], refs[j])))
+                        if key not in pairs or d < pairs[key]:
+                            pairs[key] = d
         out: list[MergeCandidate] = []
-        for k, d in pairs.items():
+        for key, d in pairs.items():
             overlap = None
             if name_gate != "off":
-                fa, fb = forms.get(k[0]), forms.get(k[1])
+                fa, fb = forms.get(key[0]), forms.get(key[1])
                 overlap = bool(fa and fb and names_overlap(fa, fb))
                 if name_gate == "require" and not overlap:
                     continue
-            out.append(MergeCandidate(refs=k, shared_aliases=[], distance=d,
+            out.append(MergeCandidate(refs=key, shared_aliases=[], distance=d,
                                       name_overlap=overlap))
         if name_gate == "prioritize":
             out.sort(key=lambda c: (0 if c.name_overlap else 1,

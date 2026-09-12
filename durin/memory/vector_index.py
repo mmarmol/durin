@@ -593,6 +593,44 @@ class VectorIndex:
         )
         return {row["id"] for row in rows}
 
+    def entity_page_vectors(self) -> dict[str, list[float]]:
+        """The stored vector of every entity page keyed by its ``<type>:<slug>``
+        id, in one scan of the table — no embedding.
+
+        Backs the dream's semantic duplicate walk: the stored vector is the
+        passage embedding of the page's composed text, so the walk compares
+        passages with passages instead of re-embedding every page as a query.
+        Sized like :meth:`ids_by_class` (``count_rows()`` once for the limit);
+        a row inserted in between is picked up on the next run.
+        """
+        db = self._connect()
+        if _TABLE_NAME not in db.list_tables().tables:
+            return {}
+        table = db.open_table(_TABLE_NAME)
+        total = table.count_rows()
+        if total == 0:
+            return {}
+        rows = (
+            table.search()
+            .where("class_name = 'entity_page'")
+            .select(["id", "vector"])
+            .limit(total)
+            .to_list()
+        )
+        return {
+            row["id"]: [float(x) for x in row["vector"]]
+            for row in rows
+            if isinstance(row.get("id"), str) and row.get("vector") is not None
+        }
+
+    def embed_passages(self, texts: list[str]) -> list[list[float]]:
+        """Passage embeddings for ``texts`` through the index's own provider —
+        the same embedding every stored row carries, so a caller mixing fresh
+        vectors with :meth:`entity_page_vectors` compares like with like."""
+        if not texts:
+            return []
+        return [list(vec) for vec in self._provider.embed_passages(texts)]
+
     def delete_by_id(self, record_id: str) -> bool:
         """Drop a single row by ``id``. Returns True if the table existed.
 
