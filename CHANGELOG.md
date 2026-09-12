@@ -5,7 +5,7 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
-## 0.10.5 — 2026-09-12
+## 0.10.6 — 2026-09-12
 
 ### Highlights
 
