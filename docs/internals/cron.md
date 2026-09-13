@@ -188,7 +188,7 @@ Every `agent_turn` execution creates a session keyed `cron:{id}:run:{timestamp_m
 | `memory.dream.cron` | `"0 3 * * *"` | Cron expression for the daily Dream pass (evaluated in `agents.defaults.timezone`) |
 | `memory.dream.model_override` | `null` | Deprecated — prefer `agents.aux_models.memory`. Dream LLM calls resolve `agents.aux_models.memory` first, then this key, then the default preset. |
 | `memory.dream.min_seconds_between_runs` | `300` | Throttle window for reactive Dream triggers (post-compaction, session-close); independent of the cron schedule |
-| `memory.dream.max_seconds_per_run` | `600` | Wall-clock cap for the Dream extract pass; the pass yields after the current session if exceeded |
+| `memory.dream.max_seconds_per_run` | `3600` | Wall-clock cap per Dream extract and refine pass; the pass yields and resumes on the next run |
 
 ### Agent tool (`cron`)
 

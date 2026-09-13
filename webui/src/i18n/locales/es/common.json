@@ -518,9 +518,19 @@
         "dreamAbsorbSemanticThreshold": "Qué tan cerca (distancia de embedding, ~0–1; 0.20 ≈ 90% de parecido) deben estar dos entidades del mismo tipo para que el judge las considere la misma. Menor = más estricto. El judge decide la fusión real.",
         "dreamThrottle": "Segundos mínimos entre pasadas reactivas de dream (post-compactación / cierre de sesión). Absorbe ráfagas para que no se apilen pasadas solapadas; 0 desactiva. El cron diario nunca se limita.",
         "dreamMaxSeconds": "Cota wall-clock por pasada de extract. Al alcanzarla, la pasada cede tras la sesión actual y el cursor por-sesión reanuda el resto en el siguiente disparador. 0 = sin límite.",
+        "dreamEscalateFloor": "Escalar al juez investigador desde",
+        "dreamTier2Confidence": "Confianza para fusión investigada",
+        "dreamJudgeConcurrency": "Llamadas al juez en paralelo",
+        "dreamRecheckDays": "Re-juzgar pares sin veredicto tras (días)",
+        "dreamNameGate": "Señal de nombre en candidatos semánticos",
         "dreamAlwaysOnBudget": "Presupuesto de tokens para la guía 'always-on' que se pinea en cada prompt. El dream rankea el feedback (stance/practice), descarta contradicciones y mete los de mayor prioridad en este presupuesto. 0 desactiva el pin."
       },
       "loadError": "No se pudieron cargar los ajustes de memoria.",
+      "nameGate": {
+        "prioritize": "Priorizar",
+        "require": "Exigir",
+        "off": "Apagado"
+      },
       "rows": {
         "crossEncoderEnabled": "Reranker cross-encoder",
         "crossEncoderModel": "Modelo del reranker",
@@ -533,7 +543,12 @@
         "dreamAbsorbConfidence": "Confianza de auto-absorción",
         "dreamAbsorbSemanticThreshold": "Distancia de coincidencia semántica",
         "dreamThrottle": "Throttle reactivo (s)",
-        "dreamMaxSeconds": "Máx. segundos por pasada",
+        "dreamMaxSeconds": "Cota wall-clock por pasada de extract y de refine. Al alcanzarla, la pasada cede (extract tras la sesión actual, refine tras el chunk actual) y reanuda el resto en la siguiente corrida. 0 = sin límite.",
+        "dreamEscalateFloor": "Confianza (0-100) desde la cual un par que el juez barato no pudo resolver — 'unclear', o 'same' por debajo de la confianza de fusión — pasa a un sub-agente investigador acotado que lee ambas entidades antes de responder. 0 desactiva la escalación.",
+        "dreamTier2Confidence": "Confianza mínima (0-100) que necesita un veredicto investigado para fusionar. Lee las páginas y su linaje antes de decidir, por eso merece un listón más bajo que el juez barato; por debajo, el par queda en la Bandeja para vos.",
+        "dreamJudgeConcurrency": "Cuántas llamadas al juez corren a la vez durante la pasada de refine (1-8). Las fusiones siguen aplicándose de a una, en orden de candidatos.",
+        "dreamRecheckDays": "Días antes de volver a juzgar un par sin veredicto asentado (respuesta no parseable, un 'unclear', un 'same' bajo el listón de fusión). 0 lo re-juzga en cada corrida.",
+        "dreamNameGate": "Cómo la señal de nombre ordena los candidatos cercanos por embedding: 'prioritize' juzga primero los pares cuyos nombres comparten un token o se contienen, luego el resto por distancia; 'require' juzga solo esos; 'off' ordena solo por distancia. Los pares por alias se juzgan siempre.",
         "dreamAlwaysOnBudget": "Presupuesto always-on (tokens)"
       },
       "saveError": "No se pudo guardar {{path}}.",
