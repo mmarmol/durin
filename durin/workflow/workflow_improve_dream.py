@@ -496,6 +496,23 @@ def _script_path_exists(workspace, name: str) -> bool:
         return False
 
 
+def _reply_text(resp) -> str:
+    """The model's answer out of whatever the invoke returned.
+
+    The dream's invoke (``durin.memory.llm_invoke.LLMResponse``) carries it as
+    ``text``; a provider-shaped response carries ``content``; a bare string is
+    the answer itself. Reading only ``content`` made every real dream reply
+    look empty, so the pass never saw a proposal outside tests.
+    """
+    if isinstance(resp, str):
+        return resp
+    text = getattr(resp, "text", None)
+    if isinstance(text, str):
+        return text
+    content = getattr(resp, "content", None)
+    return content if isinstance(content, str) else ""
+
+
 def run_workflow_improve_pass(workspace, *, llm_invoke=None, model=None) -> dict:
     """Observe workflows with new runs; recommend (manual), apply (auto), or
     escalate structural ideas to the user. Best-effort per workflow: one failing
@@ -537,14 +554,16 @@ def run_workflow_improve_pass(workspace, *, llm_invoke=None, model=None) -> dict
             history = history_for_dream(workspace, name)
             prompt = f"{_SYSTEM}\n\n{_build_prompt(name, wf_json, diag, history, wf, workspace)}"
             resp = llm_invoke(prompt, model=model)
-            content = getattr(resp, "content", resp if isinstance(resp, str) else "")
-            if not (content or "").strip():
-                # An empty reply is a transport/provider failure, not "nothing to
+            content = _reply_text(resp)
+            if getattr(resp, "finish_reason", "stop") == "error" or not content.strip():
+                # A provider failure (the invoke's retry policy gave up and the
+                # text is its error message) or an empty reply is not "nothing to
                 # propose": leave the cursor unadvanced so the same evidence is
                 # retried next pass instead of being silently consumed. (Non-empty
                 # unparseable prose still advances — the model DID answer.)
-                logger.warning("workflow improve pass got an empty LLM reply for {}; "
-                               "keeping records for the next pass", name)
+                logger.warning("workflow improve pass got no usable LLM reply for {} "
+                               "(finish_reason={}); keeping records for the next pass",
+                               name, getattr(resp, "finish_reason", "stop"))
                 continue
             proposal = _parse_proposal(content) or {}
             verdict, payload = _classify_proposal(
