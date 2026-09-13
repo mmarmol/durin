@@ -3,6 +3,7 @@
 import json
 from types import SimpleNamespace
 
+from durin.memory.llm_invoke import LLMResponse
 from durin.workflow import run_log
 from durin.workflow import workflow_recommendations as wr
 from durin.workflow.loader import workflows_dir
@@ -43,9 +44,12 @@ def _seed_runs(tmp_path, name="wf", n=2):
         run_log.write_run(tmp_path, name, _looping_run(f"r{i}"), ts=float(i + 1))
 
 
-def _fake_invoke(payload):
+def _fake_invoke(payload, finish_reason="stop"):
+    """The dream's real reply type (``LLMResponse.text``), so the pass is tested
+    against what ``default_llm_invoke`` actually returns."""
     def invoke(prompt, *, model=None):
-        return SimpleNamespace(content=json.dumps(payload) if isinstance(payload, dict) else payload)
+        return LLMResponse(text=json.dumps(payload) if isinstance(payload, dict) else payload,
+                           finish_reason=finish_reason)
     return invoke
 
 
@@ -797,3 +801,33 @@ def test_empty_llm_reply_keeps_cursor_for_retry(tmp_path):
         return SimpleNamespace(content="")
     run_workflow_improve_pass(tmp_path, llm_invoke=capture)
     assert calls, "second pass saw no records — the empty reply consumed the cursor"
+
+
+def test_pass_reads_the_dream_invoke_reply_and_tolerates_other_shapes(tmp_path):
+    """Regression: the real dream reply carries the answer as ``text``; the pass
+    used to read ``content`` only and treated every nightly reply as empty."""
+    from durin.workflow.workflow_improve_dream import _reply_text
+    assert _reply_text(LLMResponse(text='{"a": 1}')) == '{"a": 1}'
+    assert _reply_text(SimpleNamespace(content='{"b": 2}')) == '{"b": 2}'
+    assert _reply_text('{"c": 3}') == '{"c": 3}'
+    assert _reply_text(SimpleNamespace(other=1)) == ""
+    _write_wf(tmp_path)
+    _seed_runs(tmp_path, n=2)
+    invoke = _fake_invoke({
+        "target_id": "a", "field": "prompt", "current": "do it",
+        "proposed": "do it carefully, validating each step", "reason": "node a keeps looping",
+    })
+    summary = run_workflow_improve_pass(tmp_path, llm_invoke=invoke)
+    assert summary["proposals"] == 1
+    assert run_log.read_cursor(tmp_path, "wf") > 0
+
+
+def test_pass_keeps_the_records_on_a_provider_error_reply(tmp_path):
+    """finish_reason == "error" means the text is the provider's error, not an
+    answer: nothing is proposed and the cursor stays so the evidence is retried."""
+    _write_wf(tmp_path)
+    _seed_runs(tmp_path, n=2)
+    invoke = _fake_invoke("Error calling LLM: request timed out", finish_reason="error")
+    summary = run_workflow_improve_pass(tmp_path, llm_invoke=invoke)
+    assert summary["proposals"] == 0
+    assert run_log.read_cursor(tmp_path, "wf") == 0
