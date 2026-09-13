@@ -5,6 +5,42 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.10.7 — 2026-09-13
+
+### Highlights
+
+- **Investigated duplicates now merge on their own.** The dream's second
+  judge — the sub-agent that reads both entity pages and their lineage
+  before answering — gets its own merge floor
+  (`memory.dream.auto_absorb.tier2_confidence_threshold`, default 80). Until
+  now its verdicts were held to the cheap judge's 95, so every pair it
+  confirmed landed in the Inbox for a person to approve; on a real
+  workspace 11 of 14 investigated pairs would have merged unattended, and
+  the three genuine judgment calls still wait for you.
+- **Defaults that match the measured runs.** Escalation to the second judge
+  is on by default (`escalate_floor` 70) and each extract/refine pass gets an
+  hour (`max_seconds_per_run` 3600) instead of ten minutes, which yielded
+  after a handful of pairs.
+- **Every auto-absorb knob in the webui.** Memory settings expose the
+  escalation floor, the investigated-merge confidence, judge concurrency,
+  the re-judge window and the name signal, in English and Spanish.
+
+### Memory
+
+- `tier2_confidence_threshold` applies only to verdicts the investigating
+  judge returned; the cheap judge's verdicts keep using
+  `confidence_threshold`. A verdict below its floor is flagged as before.
+
+### Fixes
+
+- **The nightly workflow-improve pass never saw the model's answer.** It read
+  `content` off the dream's reply object, whose field is `text`, so every
+  reply looked empty, no proposal was ever made and the same runs were
+  re-sent night after night (four calls and roughly 40k output tokens on a
+  workspace with the ticket pipeline). The pass now reads the reply the
+  invoke actually returns and treats a provider error as "retry next pass"
+  instead of parsing the error text.
+
 ## 0.10.6 — 2026-09-12
 
 ### Highlights
