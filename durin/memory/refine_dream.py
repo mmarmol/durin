@@ -306,6 +306,7 @@ def run_refine(
     model: str | None = None,
     confidence_threshold: int = 95,
     escalate_floor: int = 0,
+    tier2_confidence_threshold: int | None = None,
     run_started_at: "datetime | None" = None,
     vector_index: object | None = None,
     semantic_distance_threshold: float = 0.30,
@@ -350,6 +351,8 @@ def run_refine(
     investigates with the lineage/source tools. Escalation is best-effort: a
     Tier-2 exception keeps the pair rather than aborting the pass.
     ``escalate_floor=0`` disables escalation entirely (old behavior preserved).
+    ``tier2_confidence_threshold`` is the merge floor for a verdict the
+    investigating judge returned; ``None`` reuses ``confidence_threshold``.
     """
     import contextvars
     from concurrent.futures import ThreadPoolExecutor
@@ -529,7 +532,12 @@ def run_refine(
                 except Exception as exc:  # noqa: BLE001 — agent best-effort
                     kept.append({"pair": [ref_a, ref_b], "reason": f"tier2_error:{exc}"})
                     return
-        if decision.verdict == "same" and decision.confidence >= confidence_threshold:
+        # The investigating judge reads both pages and their lineage before it
+        # answers, so its "same" carries more evidence than the cheap judge's and
+        # gets its own merge floor; None keeps one floor for both tiers.
+        merge_floor = (tier2_confidence_threshold if escalated and tier2_confidence_threshold is not None
+                       else confidence_threshold)
+        if decision.verdict == "same" and decision.confidence >= merge_floor:
             absorber.absorb(
                 ref_a, ref_b, reason="refine",
                 judge_reasoning=decision.reasoning,

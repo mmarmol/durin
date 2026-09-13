@@ -58,7 +58,16 @@ interface MemoryConfigShape {
     min_seconds_between_runs?: number;
     max_seconds_per_run?: number;
     always_on_token_budget?: number;
-    auto_absorb?: { enabled?: boolean; confidence_threshold?: number; semantic_distance_threshold?: number };
+    auto_absorb?: {
+      enabled?: boolean;
+      confidence_threshold?: number;
+      semantic_distance_threshold?: number;
+      escalate_floor?: number;
+      tier2_confidence_threshold?: number;
+      judge_concurrency?: number;
+      recheck_days?: number;
+      semantic_name_gate?: string;
+    };
   };
 }
 
@@ -74,7 +83,15 @@ interface DreamState {
   autoAbsorb: boolean;
   autoAbsorbConfidence: number;
   autoAbsorbSemanticThreshold: number;
+  escalateFloor: number;
+  tier2Confidence: number;
+  judgeConcurrency: number;
+  recheckDays: number;
+  nameGate: NameGate;
 }
+
+type NameGate = "prioritize" | "require" | "off";
+const NAME_GATES: NameGate[] = ["prioritize", "require", "off"];
 
 function readCrossEncoder(config: Record<string, unknown> | null): CrossEncoderState {
   const memory = config?.memory as MemoryConfigShape | undefined;
@@ -97,7 +114,7 @@ function readDream(config: Record<string, unknown> | null): DreamState {
     minSecondsBetweenRuns:
       typeof d.min_seconds_between_runs === "number" ? d.min_seconds_between_runs : 300,
     maxSecondsPerRun:
-      typeof d.max_seconds_per_run === "number" ? d.max_seconds_per_run : 600,
+      typeof d.max_seconds_per_run === "number" ? d.max_seconds_per_run : 3600,
     alwaysOnTokenBudget:
       typeof d.always_on_token_budget === "number" ? d.always_on_token_budget : 1500,
     autoAbsorb:
@@ -105,7 +122,18 @@ function readDream(config: Record<string, unknown> | null): DreamState {
     autoAbsorbConfidence:
       typeof d.auto_absorb?.confidence_threshold === "number" ? d.auto_absorb.confidence_threshold : 95,
     autoAbsorbSemanticThreshold:
-      typeof d.auto_absorb?.semantic_distance_threshold === "number" ? d.auto_absorb.semantic_distance_threshold : 0.20,
+      typeof d.auto_absorb?.semantic_distance_threshold === "number" ? d.auto_absorb.semantic_distance_threshold : 0.30,
+    escalateFloor:
+      typeof d.auto_absorb?.escalate_floor === "number" ? d.auto_absorb.escalate_floor : 70,
+    tier2Confidence:
+      typeof d.auto_absorb?.tier2_confidence_threshold === "number" ? d.auto_absorb.tier2_confidence_threshold : 80,
+    judgeConcurrency:
+      typeof d.auto_absorb?.judge_concurrency === "number" ? d.auto_absorb.judge_concurrency : 3,
+    recheckDays:
+      typeof d.auto_absorb?.recheck_days === "number" ? d.auto_absorb.recheck_days : 7,
+    nameGate: NAME_GATES.includes(d.auto_absorb?.semantic_name_gate as NameGate)
+      ? (d.auto_absorb?.semantic_name_gate as NameGate)
+      : "prioritize",
   };
 }
 
@@ -322,6 +350,47 @@ export function MemorySettings({ token }: { token: string }) {
             onSave={(n) => void onSave("memory.dream.auto_absorb.semantic_distance_threshold", n)}
           />
           <DreamNumberRow
+            title={t("settings.memory.rows.dreamEscalateFloor")}
+            description={t("settings.memory.help.dreamEscalateFloor")}
+            value={dream.escalateFloor}
+            disabled={!dream.enabled || !dream.autoAbsorb}
+            saving={savingPath === "memory.dream.auto_absorb.escalate_floor"}
+            onSave={(n) => void onSave("memory.dream.auto_absorb.escalate_floor", n)}
+          />
+          <DreamNumberRow
+            title={t("settings.memory.rows.dreamTier2Confidence")}
+            description={t("settings.memory.help.dreamTier2Confidence")}
+            value={dream.tier2Confidence}
+            disabled={!dream.enabled || !dream.autoAbsorb || dream.escalateFloor === 0}
+            saving={savingPath === "memory.dream.auto_absorb.tier2_confidence_threshold"}
+            onSave={(n) => void onSave("memory.dream.auto_absorb.tier2_confidence_threshold", n)}
+          />
+          <DreamNumberRow
+            title={t("settings.memory.rows.dreamJudgeConcurrency")}
+            description={t("settings.memory.help.dreamJudgeConcurrency")}
+            value={dream.judgeConcurrency}
+            disabled={!dream.enabled || !dream.autoAbsorb}
+            saving={savingPath === "memory.dream.auto_absorb.judge_concurrency"}
+            onSave={(n) => void onSave("memory.dream.auto_absorb.judge_concurrency", n)}
+          />
+          <DreamNumberRow
+            title={t("settings.memory.rows.dreamRecheckDays")}
+            description={t("settings.memory.help.dreamRecheckDays")}
+            value={dream.recheckDays}
+            disabled={!dream.enabled || !dream.autoAbsorb}
+            saving={savingPath === "memory.dream.auto_absorb.recheck_days"}
+            onSave={(n) => void onSave("memory.dream.auto_absorb.recheck_days", n)}
+          />
+          <DreamChoiceRow
+            title={t("settings.memory.rows.dreamNameGate")}
+            description={t("settings.memory.help.dreamNameGate")}
+            value={dream.nameGate}
+            options={NAME_GATES.map((g) => ({ value: g, label: t(`settings.memory.nameGate.${g}`) }))}
+            disabled={!dream.enabled || !dream.autoAbsorb}
+            saving={savingPath === "memory.dream.auto_absorb.semantic_name_gate"}
+            onSelect={(g) => void onSave("memory.dream.auto_absorb.semantic_name_gate", g)}
+          />
+          <DreamNumberRow
             title={t("settings.memory.rows.dreamThrottle")}
             description={t("settings.memory.help.dreamThrottle")}
             value={dream.minSecondsBetweenRuns}
@@ -485,6 +554,44 @@ function DreamNumberRow({
         >
           {t("settings.config.save")}
         </Button>
+      </div>
+    </SettingsRow>
+  );
+}
+
+/** One-of-N choice row (pill buttons) for enum-valued dream knobs. */
+function DreamChoiceRow({
+  title,
+  description,
+  value,
+  options,
+  disabled,
+  saving,
+  onSelect,
+}: {
+  title: string;
+  description: string;
+  value: string;
+  options: { value: string; label: string }[];
+  disabled: boolean;
+  saving: boolean;
+  onSelect: (value: string) => void;
+}) {
+  return (
+    <SettingsRow title={title} description={description}>
+      <div className="flex items-center gap-1">
+        {options.map((o) => (
+          <Button
+            key={o.value}
+            size="sm"
+            variant={o.value === value ? "default" : "outline"}
+            disabled={disabled || saving || o.value === value}
+            onClick={() => onSelect(o.value)}
+            className="rounded-full"
+          >
+            {o.label}
+          </Button>
+        ))}
       </div>
     </SettingsRow>
   );

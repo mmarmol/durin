@@ -199,6 +199,7 @@ def run_full_dream(
                 enabled=absorb.enabled,
                 confidence_threshold=absorb.confidence_threshold,
                 escalate_floor=absorb.escalate_floor,
+                tier2_confidence_threshold=absorb.tier2_confidence_threshold,
                 semantic_distance_threshold=absorb.semantic_distance_threshold,
                 run_started_at=run_started_at,
                 vector_index=vi,

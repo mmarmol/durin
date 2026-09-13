@@ -350,7 +350,7 @@ class MemoryDreamConfig(Base):
 
     # The per-session cursor makes the remainder resume on the next trigger.
     max_seconds_per_run: int = Field(
-        default=600,
+        default=3600,
         ge=0,
         validation_alias=AliasChoices("maxSecondsPerRun", "max_seconds_per_run"),
         description="Wall-clock cap in seconds per extract and refine pass; the pass yields when crossed (extract after the current session, refine after the current chunk) and resumes on the next run; 0 = run to completion",
@@ -451,11 +451,18 @@ class AutoAbsorbConfig(Base):
     )
 
     escalate_floor: int = Field(
-        default=0,
+        default=70,
         ge=0,
         le=100,
         validation_alias=AliasChoices("escalateFloor", "escalate_floor"),
         description="Confidence floor above which pairs the cheap judge can't settle (verdict 'unclear', or 'same' below confidence_threshold) escalate to a bounded investigating sub-agent; 0 disables escalation",
+    )
+    tier2_confidence_threshold: int = Field(
+        default=80,
+        ge=0,
+        le=100,
+        validation_alias=AliasChoices("tier2ConfidenceThreshold", "tier2_confidence_threshold"),
+        description="Confidence floor (0-100) for a merge decided by the investigating sub-agent after an escalation; below it the pair is flagged for review instead. The cheap judge's own verdicts keep using confidence_threshold",
     )
     judge_concurrency: int = Field(
         default=3,

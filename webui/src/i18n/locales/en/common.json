@@ -542,6 +542,11 @@
         "rerank": "Search reranking",
         "dream": "Dream (memory consolidation)"
       },
+      "nameGate": {
+        "prioritize": "Prioritize",
+        "require": "Require",
+        "off": "Off"
+      },
       "rows": {
         "crossEncoderEnabled": "Cross-encoder reranker",
         "crossEncoderModel": "Reranker model",
@@ -555,6 +560,11 @@
         "dreamAbsorbSemanticThreshold": "Semantic match distance",
         "dreamThrottle": "Reactive throttle (s)",
         "dreamMaxSeconds": "Max seconds per run",
+        "dreamEscalateFloor": "Escalate to the investigating judge from",
+        "dreamTier2Confidence": "Investigated-merge confidence",
+        "dreamJudgeConcurrency": "Judge calls in flight",
+        "dreamRecheckDays": "Re-judge unsettled pairs after (days)",
+        "dreamNameGate": "Name signal on semantic candidates",
         "dreamAlwaysOnBudget": "Always-on budget (tokens)"
       },
       "help": {
@@ -569,7 +579,12 @@
         "dreamAbsorbConfidence": "Minimum confidence (0-100) the judge requires to merge two entities. 95 = high precision. Only applies when auto-absorb is on.",
         "dreamAbsorbSemanticThreshold": "How close (embedding distance, ~0–1; 0.20 ≈ 90% similar) two same-type entities must be for the judge to consider them the same. Lower = stricter. The judge still decides the actual merge.",
         "dreamThrottle": "Minimum seconds between reactive dream runs (post-compaction / session-close). Absorbs bursts so overlapping passes don't pile up; 0 disables. The daily cron is never throttled.",
-        "dreamMaxSeconds": "Hard wall-clock cap per extract pass. When reached, the pass yields after the current session and the per-session cursor resumes the remainder on the next trigger. 0 = unbounded.",
+        "dreamMaxSeconds": "Hard wall-clock cap per extract and refine pass. When reached, the pass yields (extract after the current session, refine after the current chunk) and resumes the remainder on the next run. 0 = unbounded.",
+        "dreamEscalateFloor": "Confidence (0-100) from which a pair the cheap judge could not settle — 'unclear', or 'same' below the merge confidence — is handed to a bounded investigating sub-agent that reads both entities before answering. 0 turns escalation off.",
+        "dreamTier2Confidence": "Minimum confidence (0-100) an investigated verdict needs to merge. It reads the pages and their lineage first, so it earns a lower bar than the cheap judge; below it the pair lands in the Inbox for you.",
+        "dreamJudgeConcurrency": "How many judge calls run at the same time during the refine pass (1-8). Merges are still applied one at a time, in candidate order.",
+        "dreamRecheckDays": "Days before a pair without a settled verdict (an unparseable reply, an 'unclear', a 'same' below the merge bar) is judged again. 0 re-judges it every run.",
+        "dreamNameGate": "How the name signal steers embedding-near candidates: 'prioritize' judges pairs whose names share a token or contain each other first, then the rest by distance; 'require' judges only those; 'off' orders by distance alone. Alias pairs are always judged.",
         "dreamAlwaysOnBudget": "Token budget for the 'always-on' guidance pinned into every prompt. The dream ranks feedback (stance/practice), drops contradictions, and fits the highest-priority items into this budget. 0 disables the pin."
       },
       "crossEncoderModelPlaceholder": "model id (e.g. BAAI/bge-reranker-base)",

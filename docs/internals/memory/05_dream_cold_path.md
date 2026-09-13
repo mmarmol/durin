@@ -385,7 +385,7 @@ is a sync wrapper over the async runner so the cron can call it in a thread.
 ### Pass 4 — refine: dedup duplicate entities
 
 `run_refine_pass(workspace, *, llm_invoke, model, enabled, confidence_threshold,
-run_started_at, vector_index=None, escalate_floor=0, max_seconds=0,
+run_started_at, vector_index=None, escalate_floor=0, tier2_confidence_threshold=None, max_seconds=0,
 judge_concurrency=1, recheck_days=7, semantic_name_gate="prioritize")` is the graph-hygiene pass,
 gated by `enabled` (wired from `memory.dream.auto_absorb.enabled`, **ON by
 default**). When disabled it short-circuits — **no judge, no merge** — and logs
@@ -428,7 +428,7 @@ threaded through; it is `None` when the vector index is unavailable.
    new field is visible to the judge by default: the failure mode is an extra line
    of context, not a silent blind spot. The judge returns `same`, `different`, or
    `unclear` plus a confidence.
-5. **Tier 2 escalation (opt-in):** when `escalate_floor > 0`, a pair the
+5. **Tier 2 escalation:** when `escalate_floor > 0` (the default is 70), a pair the
    Tier 1 judge cannot settle — verdict `"unclear"`, or verdict `"same"` with
    confidence in `[escalate_floor, confidence_threshold)` — is handed to a
    **bounded sub-agent** (`durin/memory/tier2_judge.py`). The sub-agent
@@ -436,11 +436,12 @@ threaded through; it is `None` when the vector index is unavailable.
    `memory_read_entity`, `memory_entity_lineage`, `memory_source_session`, and
    `memory_search` — and a fixed iteration ceiling. It investigates both entities
    in depth and returns the same `JudgeResult` envelope as the Tier 1 judge.
-   `escalate_floor=0` (the default) leaves this path disabled; escalation must be
-   opted in explicitly.
+   `escalate_floor=0` disables this path.
 6. The pair is merged only when the deciding judge returns `verdict == "same"`
-   **and** `confidence >= confidence_threshold`. Every other outcome keeps the
-   pair separate.
+   **and** its confidence reaches the floor for its tier: `confidence_threshold`
+   for the Tier 1 judge, `tier2_confidence_threshold` for the investigating
+   sub-agent — it has read both pages and their lineage before answering, so
+   its "same" earns a lower bar. Every other outcome keeps the pair separate.
 7. **Flag surface:** when the Tier 2 sub-agent investigated a pair and did not
    confirm it as `"same"`, or a borderline pair hit the per-run escalation cap
    before it could be investigated, the pair is recorded in
@@ -709,12 +710,13 @@ All knobs live under `memory.dream.*` in `durin/config/schema.py`
 | `memory.dream.learnings_sweep_enabled` | `true` | Enable Stage 4 of the extract pass: mine each session's new turns for durable learnings and write them as `feedback`/`stance`/`practice` entities (`author="dream"`). Dedup is delegated to the refine pass. |
 | `memory.dream.model_override` | `null` | DEPRECATED — prefer `agents.aux_models.memory` (model + provider). A bare name here is placed by provider auto-detection from the name. |
 | `memory.dream.min_seconds_between_runs` | `300` | Throttle window for `ReactiveDreamGate`. 0 disables. The cron is never throttled. |
-| `memory.dream.max_seconds_per_run` | `600` | Hard wall-clock cap; the pass yields after the current session and the cursor resumes. 0 = run to completion. |
+| `memory.dream.max_seconds_per_run` | `3600` | Hard wall-clock cap per extract and refine pass; the pass yields (extract after the current session, refine after the current chunk) and resumes on the next run. 0 = run to completion. |
 | `memory.dream.always_on_token_budget` | `1500` | Token ceiling for the always-on pin. 0 disables the pin. |
 | `memory.dream.auto_absorb.enabled` | `true` | ON by default; the refine pass auto-merges judged duplicates (recoverable via git revert + tombstone). |
 | `memory.dream.auto_absorb.confidence_threshold` | `95` | LLM-judge confidence floor (0–100) for an auto-merge. |
 | `memory.dream.auto_absorb.semantic_distance_threshold` | `0.30` | Embedding L2² distance below which a same-type entity is a semantic dedup candidate (refine + discovery); ≈ cosine 0.85; lower = stricter — the judge still decides the merge. |
-| `memory.dream.auto_absorb.escalate_floor` | `0` | **Opt-in.** Confidence floor (0–100) below which the Tier 1 judge's borderline verdicts escalate to a bounded sub-agent for deeper investigation. `0` (the default) disables Tier 2 entirely. Set to e.g. `60` to escalate pairs the cheap judge rated same at 60–94 confidence or returned `unclear`. |
+| `memory.dream.auto_absorb.escalate_floor` | `70` | Confidence floor (0–100) from which the Tier 1 judge's borderline verdicts (`unclear`, or `same` below the merge floor) escalate to a bounded sub-agent for deeper investigation. `0` disables Tier 2 entirely. |
+| `memory.dream.auto_absorb.tier2_confidence_threshold` | `80` | Merge floor for a verdict the investigating sub-agent returned; below it the pair is flagged for review. |
 
 The (provider, model) preset every pass uses is resolved by
 `resolve_aux_preset(config, purpose="memory")` (`durin/memory/model_resolve.py`):

@@ -222,6 +222,65 @@ def test_refine_tier2_no_escalation_same_above_threshold(tmp_path, monkeypatch):
     assert out["merged"]
 
 
+def test_refine_tier2_same_merges_at_its_own_floor(tmp_path, monkeypatch):
+    """Tier-1 same@75 → escalate → same@85: below the cheap judge's 95 but at
+    or above the investigating judge's own floor (80) → merged."""
+    import durin.memory.refine_dream as rd
+    _two_dupes(tmp_path)
+    from durin.memory.absorb_judge import JudgeResult
+    monkeypatch.setattr(rd, "_escalate_judge",
+                        lambda ws, a, b, **kw: JudgeResult("same", 85, "investigated: same"))
+    out = run_refine(tmp_path, llm_invoke=_judge_stub("same", 75),
+                     confidence_threshold=95, escalate_floor=70,
+                     tier2_confidence_threshold=80)
+    assert out["merged"] and out["merged"][0]["confidence"] == 85
+    assert rd.read_flagged(tmp_path) == []
+
+
+def test_refine_tier2_same_below_its_floor_is_flagged(tmp_path, monkeypatch):
+    """Tier-2 same@75 with the Tier-2 floor at 80 → not merged, flagged for review."""
+    import durin.memory.refine_dream as rd
+    _two_dupes(tmp_path)
+    from durin.memory.absorb_judge import JudgeResult
+    monkeypatch.setattr(rd, "_escalate_judge",
+                        lambda ws, a, b, **kw: JudgeResult("same", 75, "leaning same"))
+    out = run_refine(tmp_path, llm_invoke=_judge_stub("same", 72),
+                     confidence_threshold=95, escalate_floor=70,
+                     tier2_confidence_threshold=80)
+    assert not out["merged"]
+    flagged = rd.read_flagged(tmp_path)
+    assert len(flagged) == 1 and flagged[0]["verdict"] == "same" and flagged[0]["confidence"] == 75
+
+
+def test_refine_tier2_floor_defaults_to_the_cheap_judge_floor(tmp_path, monkeypatch):
+    """Without a Tier-2 floor, an investigated same@85 stays below 95 → flagged (old behavior)."""
+    import durin.memory.refine_dream as rd
+    _two_dupes(tmp_path)
+    from durin.memory.absorb_judge import JudgeResult
+    monkeypatch.setattr(rd, "_escalate_judge",
+                        lambda ws, a, b, **kw: JudgeResult("same", 85, "investigated: same"))
+    out = run_refine(tmp_path, llm_invoke=_judge_stub("same", 75),
+                     confidence_threshold=95, escalate_floor=70)
+    assert not out["merged"]
+    assert len(rd.read_flagged(tmp_path)) == 1
+
+
+def test_refine_tier2_floor_never_lowers_the_cheap_judge_bar(tmp_path, monkeypatch):
+    """A cheap-judge same@90 is not merged by the Tier-2 floor (80): only an
+    investigated verdict earns the lower bar. 90 sits in the escalation window,
+    so the pair escalates; the investigating judge says different → kept."""
+    import durin.memory.refine_dream as rd
+    _two_dupes(tmp_path)
+    from durin.memory.absorb_judge import JudgeResult
+    monkeypatch.setattr(rd, "_escalate_judge",
+                        lambda ws, a, b, **kw: JudgeResult("different", 88, "not the same"))
+    out = run_refine(tmp_path, llm_invoke=_judge_stub("same", 90),
+                     confidence_threshold=95, escalate_floor=70,
+                     tier2_confidence_threshold=80)
+    assert not out["merged"]
+    assert out["kept_separate"]
+
+
 def test_refine_tier2_best_effort_on_error(tmp_path, monkeypatch):
     """Tier-2 exception → pair kept (best-effort; never aborts pass)."""
     import durin.memory.refine_dream as rd
