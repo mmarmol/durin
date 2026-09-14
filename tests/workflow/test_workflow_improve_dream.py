@@ -831,3 +831,27 @@ def test_pass_keeps_the_records_on_a_provider_error_reply(tmp_path):
     summary = run_workflow_improve_pass(tmp_path, llm_invoke=invoke)
     assert summary["proposals"] == 0
     assert run_log.read_cursor(tmp_path, "wf") == 0
+
+
+def test_a_fragment_proposal_is_escalated_not_applied(tmp_path):
+    """The model answers with the bullet it wants to add instead of the whole
+    prompt: the pass records a structural suggestion (visible, never applicable)
+    and leaves the long prompt untouched."""
+    from durin.workflow.workflow_improve_dream import _looks_like_a_fragment
+    long_prompt = "You are the analyst.\n" + "\n".join(f"- rule {i}: keep the evidence verbatim" for i in range(30))
+    assert _looks_like_a_fragment(long_prompt, "- CRITICAL: write note.json before finishing")
+    assert not _looks_like_a_fragment(long_prompt, long_prompt[: len(long_prompt) * 3 // 4])   # a real trim
+    assert not _looks_like_a_fragment("short prompt", "new")                                    # short fields are never fragments
+    data = json.loads(json.dumps(_WF))
+    data["nodes"][0]["prompt"] = long_prompt
+    _write_wf(tmp_path, data=data)
+    _seed_runs(tmp_path, n=2)
+    invoke = _fake_invoke({"target_id": "a", "field": "prompt", "current": long_prompt,
+                           "proposed": "- CRITICAL: write note.json before finishing", "reason": "gate keeps failing"})
+    summary = run_workflow_improve_pass(tmp_path, llm_invoke=invoke)
+    assert summary["proposals"] == 0 and summary["structural"] == 1
+    recs = wr.open_recommendations(tmp_path, "wf")
+    assert len(recs) == 1 and recs[0].get("kind") == "structural"
+    assert "fragment" in (recs[0].get("why_rejected") or recs[0].get("reason") or "")
+    wf_json = json.loads((workflows_dir(tmp_path) / "wf.json").read_text())
+    assert next(n["prompt"] for n in wf_json["nodes"] if n["id"] == "a") == long_prompt
