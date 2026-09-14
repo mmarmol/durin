@@ -5,6 +5,23 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.10.8 — 2026-09-14
+
+### Highlights
+
+- **A workflow-improve proposal that is only a fragment can no longer
+  replace a whole prompt.** Asked for the complete new text of a long node
+  prompt, a model sometimes answers with just the bullet it wants to change;
+  such a reply is now escalated to the Inbox as a structural suggestion
+  instead of being queued as an applicable edit, and the pass tells the model
+  explicitly that `proposed` is the full text of the field.
+
+### Memory
+
+- The dream's LLM reply exposes `content` as an alias of `text`, so a pass
+  written against either name reads the answer; the reply contract is
+  documented in the dream internals.
+
 ## 0.10.7 — 2026-09-13
 
 ### Highlights
