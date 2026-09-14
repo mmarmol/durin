@@ -95,7 +95,9 @@ _SYSTEM = (
     "a node explicitly listed under 'Failing scripts' below; a healthy script must never "
     "be touched speculatively. "
     "Do NOT add or remove nodes or edges. Do NOT re-propose an edit the history shows was "
-    "already tried. Reply with ONLY the JSON object for the ONE shape you are proposing."
+    "already tried. In every shape, 'proposed' is the COMPLETE new text of the field as it should "
+    "read after the edit — the whole prompt, command or file — never just the lines you are adding "
+    "or changing. Reply with ONLY the JSON object for the ONE shape you are proposing."
 )
 
 
@@ -321,6 +323,24 @@ def _failing_script_nodes(wf, diag) -> list[str]:
     )
 
 
+_FRAGMENT_MIN_CURRENT_CHARS = 400
+_FRAGMENT_MAX_RATIO = 0.5
+
+
+def _looks_like_a_fragment(current: str, proposed: str) -> bool:
+    """A 'proposed' text that is a small piece of a long current field.
+
+    A model asked for the full new text of a prompt sometimes returns only
+    the bullet it wants to add or change. Applied as-is that stub would
+    replace the whole prompt, so a proposal shorter than half of a
+    substantial current field is treated as a fragment. A genuine rewrite
+    that trims a prompt stays applicable as long as it keeps at least half
+    of the original length.
+    """
+    cur, new = len(current.strip()), len(proposed.strip())
+    return cur >= _FRAGMENT_MIN_CURRENT_CHARS and new < cur * _FRAGMENT_MAX_RATIO
+
+
 def _classify_proposal(proposal: dict | None, wf, diag, script_exists: Callable[[str], bool],
                        script_referenced_elsewhere: Callable[[str], bool],
                        script_path_exists: Callable[[str], bool]):
@@ -349,6 +369,14 @@ def _classify_proposal(proposal: dict | None, wf, diag, script_exists: Callable[
             return "skip", None
         if proposed.strip() == (node.prompt or "").strip():
             return "skip", None            # no-op: nothing to escalate
+        if _looks_like_a_fragment(node.prompt or "", str(proposed)):
+            # The model answered with the lines it wanted to add or change
+            # instead of the whole field; applying it would replace a long
+            # prompt with a stub. Surface it for a person, never as applicable.
+            return "structural", (
+                f"the reply is a fragment ({len(str(proposed))} chars for a "
+                f"{len(node.prompt or '')}-char prompt): 'proposed' must be the "
+                "complete new text of the field")
         return "ok", _Proposal(kind="prompt", target_id=target, proposed=proposed, manual_only=False)
 
     if field == "command" and target and target in wf.nodes and isinstance(wf.nodes[target], ScriptNode) \

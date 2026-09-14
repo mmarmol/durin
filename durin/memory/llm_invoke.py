@@ -61,6 +61,18 @@ class LLMResponse:
     # answer — consumers that parse the text must not mistake it for one.
     finish_reason: str = "stop"
 
+    @property
+    def content(self) -> str:
+        """The answer under the name the provider layer's response uses.
+
+        Two response shapes cross the memory boundary: this one (``text``)
+        and ``durin.providers.base.LLMResponse`` (``content``). A consumer
+        written against either name reads the same string here, so a pass
+        that takes ``.content`` off a dream reply no longer sees nothing —
+        the mismatch that silenced the workflow-improve pass for months.
+        """
+        return self.text
+
 
 class LLMInvoke(Protocol):
     """Any callable taking ``prompt`` + ``model`` → :class:`LLMResponse`."""
