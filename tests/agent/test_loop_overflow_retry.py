@@ -33,6 +33,11 @@ def _ctx(loop: AgentLoop) -> TurnContext:
     msg = InboundMessage(channel="websocket", sender_id="u", chat_id="c", content="hi")
     ctx = TurnContext(msg=msg, session_key="c", state=TurnState.RUN, turn_id="t1")
     ctx.session = MagicMock()
+    # The retry re-reads the archived summary for the session, which needs a
+    # real key and metadata; a bare mock's attributes are not strings.
+    ctx.session.key = "websocket:c"
+    ctx.session.metadata = {}
+    ctx.session.messages = []
     ctx.session.get_history.return_value = []
     return ctx
 
@@ -44,9 +49,18 @@ _OVERFLOW_WITH_TOOLS = ("Error: prompt overflow.", ["exec"], [], "mid_turn_prech
 
 @pytest.mark.asyncio
 async def test_iteration0_overflow_forces_consolidation_and_recovers(tmp_path, monkeypatch):
+    from datetime import date
+
+    from durin.memory.session_summary_store import write_session_summary
+
     loop = _make_loop(tmp_path)
     loop._run_agent_loop = AsyncMock(side_effect=[_OVERFLOW_NO_TOOLS, _SUCCESS])
-    loop.consolidator.maybe_consolidate_by_tokens = AsyncMock()
+
+    async def _consolidate(session, **kwargs):
+        # The forced consolidation archives turns and writes their summary.
+        write_session_summary(tmp_path, session.key, "- archived by the retry", last_active=date(2026, 9, 21))
+
+    loop.consolidator.maybe_consolidate_by_tokens = AsyncMock(side_effect=_consolidate)
     loop._build_initial_messages = MagicMock(return_value=[])
     monkeypatch.setattr("durin.agent.loop.publish_turn_run_status", AsyncMock())
 
@@ -57,6 +71,10 @@ async def test_iteration0_overflow_forces_consolidation_and_recovers(tmp_path, m
     loop.consolidator.maybe_consolidate_by_tokens.assert_awaited_once()
     assert ctx.stop_reason == "completed"
     assert ctx.final_content == "Done."
+    # The rebuilt prompt carries the summary the forced consolidation just
+    # wrote, not the one read before the turn started.
+    rebuilt_summary = loop._build_initial_messages.call_args.args[3]
+    assert rebuilt_summary is not None and "- archived by the retry" in rebuilt_summary
 
 
 @pytest.mark.asyncio

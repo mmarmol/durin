@@ -144,6 +144,31 @@ class ToolsParallelismEvent(TypedDict):
 # ===========================================================================
 
 
+class SubagentRunEvent(TypedDict):
+    """One finished subagent run, written to the telemetry of the session
+    that spawned it (the child task inherits the parent's binding), so it
+    sits next to the child's own ``provider.call`` rows, which carry no
+    subagent identity of their own. ``prompt_tokens`` / ``completion_tokens``
+    are summed over the child's iterations. ``model`` and
+    ``context_window_tokens`` are what the child actually ran under — the aux
+    subagent model's when one is configured, the parent's otherwise — so a
+    child that ended in ``stop_reason="error"`` on a context-length refusal
+    can be told from one that overran its own budget. ``stop_reason`` is the
+    runner's, or ``error`` when the run raised, or ``cancelled`` when the
+    task was stopped."""
+    session_key: str | None
+    task_id: str
+    label: str
+    model: str
+    stop_reason: str
+    error: str | None
+    iterations: int
+    prompt_tokens: int
+    completion_tokens: int
+    duration_ms: float
+    context_window_tokens: int | None
+
+
 class CompactionPreemptiveTriggerEvent(TypedDict):
     """Consolidation fired BEFORE the input budget ceiling because the
     pre-emptive ratio kicked in."""
@@ -1876,6 +1901,7 @@ EVENTS: dict[str, type] = {
     "post_compaction_loop.tripped": PostCompactionLoopTrippedEvent,
     "turn_budget.enforced": TurnBudgetEnforcedEvent,
     "tools.parallelism": ToolsParallelismEvent,
+    "subagent.run": SubagentRunEvent,
     # Compaction
     "compaction.preemptive_trigger": CompactionPreemptiveTriggerEvent,
     "compaction.deferred": CompactionDeferredEvent,

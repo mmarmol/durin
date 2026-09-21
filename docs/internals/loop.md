@@ -225,6 +225,20 @@ to the next spawn without a restart. Resolution failure (bad preset, missing
 key) logs a warning and falls back to the inherited session model — spawning
 must never break on a misconfigured aux model.
 
+A child runs under the context window of the model it actually uses. The loop
+hands `SubagentManager` its own `context_window_tokens` / `context_block_limit`
+at construction and re-points the window on every provider snapshot swap; a
+configured aux subagent model overrides it per spawn with that model's window
+(capped by its fallbacks' windows, as the main loop's snapshot is). The window
+goes on the child's `AgentRunSpec`, which is what turns on the runner's
+mid-turn precheck, history snip and pressure-gated microcompact for the child —
+without it the child had no input budget at all and a long research task ended
+in the provider's context-length error instead of durin's own compaction. Each
+finished child writes one `subagent.run` telemetry row (task id, label, model,
+window, stop reason, iterations, summed prompt/completion tokens, duration) into
+the spawning session's telemetry file, where the child's `provider.call` rows
+already land; see [Observability](observability.md).
+
 It then runs `_process_message`, publishes the result, and in a `finally` block
 releases the lease and re-publishes any messages still sitting in the pending
 queue back onto `bus.inbound` so a late follow-up is processed as a fresh turn
@@ -265,7 +279,12 @@ The handlers, in order:
   `_restore_runtime_checkpoint` / `_restore_pending_user_turn` fold those into
   history so the conversation is consistent before the new turn.
 - **`_state_compact`** — reads the consolidator's archived-summary marker
-  (`_format_pending_summary`) so the build step can prepend it.
+  (`_format_pending_summary`) so the build step can prepend it. BUILD re-reads
+  it after its own consolidation: when that consolidation archives turns it
+  also writes or extends the summary, and the history is re-derived without
+  those turns, so the compacting turn's prompt must carry the summary of what
+  it no longer sees rather than the one read here (`None` on a first
+  compaction). The overflow-retry rebuild re-reads it for the same reason.
 - **`_state_command`** — runs `commands.dispatch`. If a handler matches it
   persists the user message (`_persist_user_message_early`) plus the command's
   reply (both tagged `_command` so they are filtered out of LLM history),

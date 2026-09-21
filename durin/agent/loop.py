@@ -589,6 +589,8 @@ class AgentLoop:
             ceiling=self._ceiling,
             on_concurrency_change=self.mark_concurrency_dirty,
             app_config_getter=lambda: self.app_config,
+            context_window_tokens=self.context_window_tokens,
+            context_block_limit=self.context_block_limit,
         )
         self._unified_session = unified_session
         self._max_messages = max_messages if max_messages > 0 else 480
@@ -1119,7 +1121,7 @@ class AgentLoop:
         self.model = model
         self.context_window_tokens = context_window_tokens
         self.runner.provider = provider
-        self.subagents.set_provider(provider, model)
+        self.subagents.set_provider(provider, model, context_window_tokens=context_window_tokens)
         self.consolidator.set_provider(
             provider,
             model,
@@ -3391,6 +3393,12 @@ class AgentLoop:
             ctx.session,
             replay_max_messages=self._max_messages,
         )
+        # COMPACT read the summary before this consolidation ran. When it
+        # archived turns it also wrote or extended the summary, and the
+        # history below is re-derived without those turns — so the prompt
+        # must carry the summary of what it no longer sees, not the one read
+        # earlier (None on a first compaction).
+        ctx.pending_summary = self._format_pending_summary(ctx.session)
         self._set_tool_context(
             ctx.msg.channel,
             ctx.msg.chat_id,
@@ -3586,6 +3594,7 @@ class AgentLoop:
                 await self.consolidator.maybe_consolidate_by_tokens(
                     ctx.session, replay_max_messages=self._max_messages,
                 )
+                ctx.pending_summary = self._format_pending_summary(ctx.session)
                 ctx.history = ctx.session.get_history(
                     max_messages=self._max_messages,
                     max_tokens=self._replay_token_budget(),
@@ -3982,10 +3991,18 @@ class AgentLoop:
         header = "consolidator"
         if last_active:
             header = f"consolidator, last active {last_active}"
+        # The footer is the only prompt surface that says the archived turns
+        # are still reachable and how: the tool's own description is a weak
+        # signal, and a model that needs a value the summary dropped has no
+        # other way to learn where it went. It is static text, so it stays
+        # inside the prefix cache between compactions.
         return (
             f"=== ARCHIVED SUMMARY ({header}) ===\n"
             f"{text}\n"
-            f"=== END ARCHIVED SUMMARY ==="
+            f"=== END ARCHIVED SUMMARY ===\n"
+            "The turns summarized above are archived, not lost: "
+            "session_search(query=<exact word, path, id or error text>) returns "
+            "their full text as [archived <time>] matches."
         )
 
     def _continuity_config(self):

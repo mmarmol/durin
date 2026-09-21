@@ -24,14 +24,20 @@ from durin.providers.base import LLMProvider
 from durin.utils.prompt_templates import render_template
 
 
-def _resolve_subagent_provider(app_config: Any) -> tuple[LLMProvider, str] | None:
-    """Resolve ``agents.aux_models.subagents`` to a ``(provider, model)`` pair.
+def _resolve_subagent_provider(app_config: Any) -> tuple[LLMProvider, str, int] | None:
+    """Resolve ``agents.aux_models.subagents`` to ``(provider, model,
+    context_window_tokens)``.
 
     Mirrors the vision/audio/memory aux bridges (:func:`durin.agent.aux_bridges.build_aux_providers`):
     a preset reference wins over an inline ``model``/``provider`` pair. Returns
     ``None`` when the aux model is unset or app_config is unavailable, so the
     caller falls back to the inherited session provider — resolved fresh on
     every spawn so a hot-reloaded config change takes effect without a restart.
+    The window is the aux model's own (capped by its fallbacks' windows, as
+    the main loop's snapshot is), so the child's budget follows the model it
+    actually runs on rather than the parent's. An inline pair resolves the
+    way the picker's ``provider model`` ref does: the user's per-model entry,
+    then the catalog, then the schema default.
     """
     if app_config is None:
         return None
@@ -41,17 +47,19 @@ def _resolve_subagent_provider(app_config: Any) -> tuple[LLMProvider, str] | Non
         return None
 
     from durin.config.schema import ModelPresetConfig
-    from durin.providers.factory import make_provider
+    from durin.providers.factory import build_provider_snapshot
 
     preset: ModelPresetConfig
     if entry.preset:
         preset = app_config.resolve_preset(entry.preset)
     elif entry.model:
-        preset = ModelPresetConfig(model=entry.model, provider=entry.provider or "auto")
+        from durin.command.builtin import adhoc_preset_config
+
+        preset = adhoc_preset_config(app_config, entry.provider or "auto", entry.model)
     else:
         return None
-    provider = make_provider(app_config, preset=preset)
-    return provider, preset.model
+    snapshot = build_provider_snapshot(app_config, preset=preset)
+    return snapshot.provider, snapshot.model, snapshot.context_window_tokens
 
 
 @dataclass(slots=True)
@@ -163,8 +171,18 @@ class SubagentManager:
         ceiling: Any | None = None,
         on_concurrency_change: Callable[[], None] | None = None,
         app_config_getter: Callable[[], Any] | None = None,
+        context_window_tokens: int | None = None,
+        context_block_limit: int | None = None,
     ):
         defaults = AgentDefaults()
+        # The child's input budget. Without it the runner skips the mid-turn
+        # precheck and the history snip and collapses every stale tool result
+        # on every iteration; with it the child gets the same governance as
+        # the parent turn. The loop passes its own window and re-points it on
+        # every model swap; a configured aux subagent model overrides it per
+        # spawn with that model's window.
+        self.context_window_tokens = context_window_tokens
+        self.context_block_limit = context_block_limit
         self.provider = provider
         self.workspace = workspace
         self.bus = bus
@@ -257,10 +275,17 @@ class SubagentManager:
         ToolLoader().load(ctx, registry, scope="subagent")
         return registry
 
-    def set_provider(self, provider: LLMProvider, model: str) -> None:
+    def set_provider(
+        self,
+        provider: LLMProvider,
+        model: str,
+        context_window_tokens: int | None = None,
+    ) -> None:
         self.provider = provider
         self.model = model
         self.runner.provider = provider
+        if context_window_tokens is not None:
+            self.context_window_tokens = context_window_tokens
 
     async def spawn(
         self,
@@ -310,13 +335,11 @@ class SubagentManager:
             "I'll notify you when it completes. To check on it meanwhile call "
             f"tasks(action='status', id='{task_id}'), or tasks(action='stop', "
             f"id='{task_id}') to cancel it.\n\n"
-            "IMPORTANT: subagents always run in EXPLORE MODE (read-only). "
-            "The subagent CAN: read_file, list_dir, grep, repo_overview, "
-            "web_fetch, web_search. The subagent CANNOT: edit_file, "
-            "write_file, exec, or any state-changing tool. "
-            "If your task requires modifications, do them yourself "
-            "(when you're in build mode) or adjust the subagent's task to "
-            "investigation only. If you are in PLAN MODE, neither you nor "
+            "The subagent runs in this session's same mode with the background "
+            "tool set: in build mode it can read, search, browse, write files "
+            "and exec; in plan or explore mode it is read-only, like you. It "
+            "cannot spawn, message the user, or ask the user a question — "
+            "keep those with you. If you are in PLAN MODE, neither you nor "
             "the subagent can modify — call exit_plan_mode(plan=...) and "
             "wait for the user to /build."
         )
@@ -337,6 +360,14 @@ class SubagentManager:
             status.phase = payload.get("phase", status.phase)
             status.iteration = payload.get("iteration", status.iteration)
 
+        # What the run ends up costing and how it ends, for the telemetry row
+        # written in ``finally`` — so a crashed or cancelled child is recorded
+        # too, not only one that returned normally.
+        subagent_model = self.model
+        subagent_window = self.context_window_tokens
+        run_usage: dict[str, int] = {}
+        run_stop_reason = "cancelled"
+        run_error: str | None = None
         try:
             tools = self._build_tools()
             system_prompt = self._build_subagent_prompt()
@@ -375,7 +406,6 @@ class SubagentManager:
             # the provider here makes this in-flight subagent turn immune to
             # that mutation, symmetric with the AgentLoop fix.
             subagent_provider = self.runner.provider
-            subagent_model = self.model
             # Resolve the optional aux subagent model fresh on every spawn
             # (not cached) so a hot-reloaded config change takes effect on
             # the next spawn without a restart. A misconfigured aux model
@@ -392,7 +422,7 @@ class SubagentManager:
                     )
                 else:
                     if resolved is not None:
-                        subagent_provider, subagent_model = resolved
+                        subagent_provider, subagent_model, subagent_window = resolved
             # Subagents are fire-and-forget background tasks (spawned via
             # asyncio.create_task, never awaited by the parent turn), so
             # acquiring the shared ceiling here cannot deadlock a parent that's
@@ -406,6 +436,8 @@ class SubagentManager:
                     provider=subagent_provider,
                     max_iterations=self.max_iterations,
                     max_tool_result_chars=self.max_tool_result_chars,
+                    context_window_tokens=subagent_window,
+                    context_block_limit=self.context_block_limit,
                     hook=_SubagentHook(task_id, status, bus=self.bus, origin=origin),
                     max_iterations_message="Task completed but no final response was generated.",
                     error_message=None,
@@ -419,6 +451,9 @@ class SubagentManager:
                     # the main loop; the runner keeps mutations serial.
                     concurrent_tools=True,
                 ))
+            run_usage = dict(result.usage)
+            run_stop_reason = result.stop_reason
+            run_error = result.error
             status.phase = "done"
             status.stop_reason = result.stop_reason
             status.ended_at = time.monotonic()
@@ -446,12 +481,66 @@ class SubagentManager:
                 await self._announce_result(task_id, label, task, final_result, origin, "ok", origin_message_id)
 
         except Exception as e:
+            run_stop_reason = "error"
+            run_error = str(e)
             status.phase = "error"
             status.error = str(e)
             status.ended_at = time.monotonic()
             status.final_content = f"Error: {e}"
             logger.exception("Subagent [{}] failed", task_id)
             await self._announce_result(task_id, label, task, f"Error: {e}", origin, "error", origin_message_id)
+        finally:
+            self._record_run(
+                status,
+                session_key=origin.get("session_key"),
+                model=subagent_model,
+                context_window_tokens=subagent_window,
+                usage=run_usage,
+                stop_reason=run_stop_reason,
+                error=run_error,
+            )
+
+    @staticmethod
+    def _record_run(
+        status: SubagentStatus,
+        *,
+        session_key: str | None,
+        model: str,
+        context_window_tokens: int | None,
+        usage: dict[str, int],
+        stop_reason: str,
+        error: str | None,
+    ) -> None:
+        """Write one ``subagent.run`` telemetry row for a finished child.
+
+        The child task is created inside the parent's turn, so it inherits the
+        parent's telemetry binding: the row lands in the spawning session's
+        file, next to the child's own ``provider.call`` rows, which otherwise
+        carry no subagent identity. Without a bound logger the row is dropped
+        rather than written to a file picked from the session key — the same
+        rule the tool events follow. Never raises.
+        """
+        from durin.telemetry.logger import current_telemetry
+
+        sink = current_telemetry()
+        if sink is None:
+            return
+        try:
+            sink.log("subagent.run", {
+                "session_key": session_key,
+                "task_id": status.task_id,
+                "label": status.label,
+                "model": model,
+                "stop_reason": stop_reason,
+                "error": (error or "")[:200] or None,
+                "iterations": status.iteration,
+                "prompt_tokens": int(usage.get("prompt_tokens", 0) or 0),
+                "completion_tokens": int(usage.get("completion_tokens", 0) or 0),
+                "duration_ms": round((time.monotonic() - status.started_at) * 1000.0, 1),
+                "context_window_tokens": context_window_tokens,
+            })
+        except Exception:  # noqa: BLE001
+            logger.debug("Subagent [{}] telemetry row not written", status.task_id)
 
     def _persist_subagent_session(
         self, task_id: str, parent_key: str | None, result: AgentRunResult, label: str
