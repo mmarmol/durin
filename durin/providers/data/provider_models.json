@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-09-07T12:48:32+00:00",
+  "generated_at": "2026-09-21T13:03:27+00:00",
   "providers": {
     "aihubmix": [
       {
@@ -40,6 +40,16 @@
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "claude-fable-5-1",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
         "supports_reasoning": true,
         "supports_function_calling": true
       },
@@ -244,10 +254,30 @@
         "supports_function_calling": true
       },
       {
+        "id": "deepseek-v4-flash-vision-exp",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 384000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
         "id": "deepseek-v4-pro-0813",
         "max_input_tokens": 1000000,
         "max_output_tokens": 384000,
         "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "deepseek-v4.1-flash",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 384000,
+        "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
         "supports_reasoning": true,
@@ -644,6 +674,16 @@
         "supports_function_calling": true
       },
       {
+        "id": "ox-alpha",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 131072,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
         "id": "qwen3.6-flash",
         "max_input_tokens": 991000,
         "max_output_tokens": 64000,
@@ -707,6 +747,16 @@
         "id": "qwen3.8-2.4t-a95b",
         "max_input_tokens": 262000,
         "max_output_tokens": 262000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "qwen3.8-flash",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 131072,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -1156,6 +1206,16 @@
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "glm-5-3-flash-260828",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 131072,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
         "supports_reasoning": true,
         "supports_function_calling": true
       }
@@ -1736,6 +1796,46 @@
         "supports_function_calling": true
       },
       {
+        "id": "deepseek-ai/DeepSeek-V4.1-Flash",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 384000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "google/gemma-3-12b-it",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": false,
+        "supports_function_calling": true
+      },
+      {
+        "id": "google/gemma-3-27b-it",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": false,
+        "supports_function_calling": true
+      },
+      {
+        "id": "google/gemma-3-4b-it",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": false,
+        "supports_function_calling": true
+      },
+      {
         "id": "google/gemma-4-26B-A4B-it",
         "max_input_tokens": 262144,
         "max_output_tokens": 32768,
@@ -2124,6 +2224,16 @@
         "max_input_tokens": 1000000,
         "max_output_tokens": 131072,
         "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "kimi-k3",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
         "supports_reasoning": true,
@@ -2732,26 +2842,6 @@
         "supports_function_calling": false
       },
       {
-        "id": "deepseek-ai/deepseek-v4-flash-0731",
-        "max_input_tokens": 1000000,
-        "max_output_tokens": 384000,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": true,
-        "supports_function_calling": true
-      },
-      {
-        "id": "deepseek-ai/deepseek-v4-pro-0813",
-        "max_input_tokens": 1000000,
-        "max_output_tokens": 384000,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": true,
-        "supports_function_calling": true
-      },
-      {
         "id": "google/codegemma-1.1-7b",
         "max_input_tokens": null,
         "max_output_tokens": null,
@@ -2970,16 +3060,6 @@
         "supports_pdf_input": false,
         "supports_reasoning": false,
         "supports_function_calling": false
-      },
-      {
-        "id": "minimaxai/minimax-m3",
-        "max_input_tokens": 1000000,
-        "max_output_tokens": 16384,
-        "supports_vision": true,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": true,
-        "supports_function_calling": true
       },
       {
         "id": "mistralai/codestral-22b-instruct-v0.1",
@@ -3322,6 +3402,16 @@
         "supports_function_calling": false
       },
       {
+        "id": "nvidia/nemotron-parse-2.0",
+        "max_input_tokens": null,
+        "max_output_tokens": null,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": false,
+        "supports_function_calling": false
+      },
+      {
         "id": "nvidia/neva-22b",
         "max_input_tokens": null,
         "max_output_tokens": null,
@@ -3460,6 +3550,26 @@
         "supports_pdf_input": false,
         "supports_reasoning": false,
         "supports_function_calling": false
+      },
+      {
+        "id": "z-ai/glm-5.3",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 131072,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "z-ai/glm-5.3-flash",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 131072,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true
       },
       {
         "id": "zyphra/zamba2-7b-instruct",
@@ -4430,6 +4540,16 @@
         "supports_function_calling": true
       },
       {
+        "id": "glm-5.3-flashx",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 131072,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
         "id": "glm-5v-turbo",
         "max_input_tokens": 200000,
         "max_output_tokens": 131072,
@@ -5084,6 +5204,26 @@
         "supports_function_calling": false
       },
       {
+        "id": "gpt-image-2.5-flare",
+        "max_input_tokens": 0,
+        "max_output_tokens": 0,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": false,
+        "supports_function_calling": false
+      },
+      {
+        "id": "gpt-image-2.5-sunburst",
+        "max_input_tokens": 0,
+        "max_output_tokens": 0,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": false,
+        "supports_function_calling": false
+      },
+      {
         "id": "grok-4-1-fast-non-reasoning",
         "max_input_tokens": 128000,
         "max_output_tokens": 8192,
@@ -5367,28 +5507,28 @@
     "bedrock": [
       {
         "id": "amazon.nova-2-lite-v1:0",
-        "max_input_tokens": 128000,
-        "max_output_tokens": 4096,
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 65535,
         "supports_vision": true,
         "supports_audio_input": false,
-        "supports_pdf_input": false,
+        "supports_pdf_input": true,
         "supports_reasoning": true,
         "supports_function_calling": true
       },
       {
         "id": "amazon.nova-lite-v1:0",
         "max_input_tokens": 300000,
-        "max_output_tokens": 8192,
+        "max_output_tokens": 10000,
         "supports_vision": true,
         "supports_audio_input": false,
-        "supports_pdf_input": false,
+        "supports_pdf_input": true,
         "supports_reasoning": false,
         "supports_function_calling": true
       },
       {
         "id": "amazon.nova-micro-v1:0",
         "max_input_tokens": 128000,
-        "max_output_tokens": 8192,
+        "max_output_tokens": 10000,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -5398,10 +5538,10 @@
       {
         "id": "amazon.nova-pro-v1:0",
         "max_input_tokens": 300000,
-        "max_output_tokens": 8192,
+        "max_output_tokens": 10000,
         "supports_vision": true,
         "supports_audio_input": false,
-        "supports_pdf_input": false,
+        "supports_pdf_input": true,
         "supports_reasoning": false,
         "supports_function_calling": true
       },
@@ -5508,7 +5648,7 @@
       {
         "id": "anthropic.claude-sonnet-4-6",
         "max_input_tokens": 1000000,
-        "max_output_tokens": 64000,
+        "max_output_tokens": 128000,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": true,
@@ -5519,6 +5659,46 @@
         "id": "anthropic.claude-sonnet-5",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "apac.amazon.nova-lite-v1:0",
+        "max_input_tokens": 300000,
+        "max_output_tokens": 10000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": false,
+        "supports_function_calling": true
+      },
+      {
+        "id": "apac.amazon.nova-micro-v1:0",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 10000,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": false,
+        "supports_function_calling": true
+      },
+      {
+        "id": "apac.amazon.nova-pro-v1:0",
+        "max_input_tokens": 300000,
+        "max_output_tokens": 10000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": false,
+        "supports_function_calling": true
+      },
+      {
+        "id": "apac.anthropic.claude-sonnet-4-20250514-v1:0",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 64000,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": true,
@@ -5537,6 +5717,16 @@
       },
       {
         "id": "au.anthropic.claude-opus-4-6-v1",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "au.anthropic.claude-opus-4-7",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
         "supports_vision": true,
@@ -5596,6 +5786,16 @@
         "supports_function_calling": true
       },
       {
+        "id": "ca.amazon.nova-lite-v1:0",
+        "max_input_tokens": 300000,
+        "max_output_tokens": 10000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": false,
+        "supports_function_calling": true
+      },
+      {
         "id": "deepseek.r1-v1:0",
         "max_input_tokens": 128000,
         "max_output_tokens": 32768,
@@ -5603,7 +5803,7 @@
         "supports_audio_input": false,
         "supports_pdf_input": false,
         "supports_reasoning": true,
-        "supports_function_calling": true
+        "supports_function_calling": false
       },
       {
         "id": "deepseek.v3-v1:0",
@@ -5623,6 +5823,46 @@
         "supports_audio_input": false,
         "supports_pdf_input": false,
         "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "eu.amazon.nova-2-lite-v1:0",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 65535,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "eu.amazon.nova-lite-v1:0",
+        "max_input_tokens": 300000,
+        "max_output_tokens": 10000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": false,
+        "supports_function_calling": true
+      },
+      {
+        "id": "eu.amazon.nova-micro-v1:0",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 10000,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": false,
+        "supports_function_calling": true
+      },
+      {
+        "id": "eu.amazon.nova-pro-v1:0",
+        "max_input_tokens": 300000,
+        "max_output_tokens": 10000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": false,
         "supports_function_calling": true
       },
       {
@@ -5696,6 +5936,16 @@
         "supports_function_calling": true
       },
       {
+        "id": "eu.anthropic.claude-sonnet-4-20250514-v1:0",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 64000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
         "id": "eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
@@ -5708,7 +5958,7 @@
       {
         "id": "eu.anthropic.claude-sonnet-4-6",
         "max_input_tokens": 1000000,
-        "max_output_tokens": 64000,
+        "max_output_tokens": 128000,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": true,
@@ -5719,6 +5969,26 @@
         "id": "eu.anthropic.claude-sonnet-5",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "eu.mistral.pixtral-large-2502-v1:0",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": false,
+        "supports_function_calling": true
+      },
+      {
+        "id": "global.amazon.nova-2-lite-v1:0",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 65535,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": true,
@@ -5806,6 +6076,16 @@
         "supports_function_calling": true
       },
       {
+        "id": "global.anthropic.claude-sonnet-4-20250514-v1:0",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 64000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
         "id": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
@@ -5818,7 +6098,7 @@
       {
         "id": "global.anthropic.claude-sonnet-4-6",
         "max_input_tokens": 1000000,
-        "max_output_tokens": 64000,
+        "max_output_tokens": 128000,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": true,
@@ -5841,7 +6121,7 @@
         "max_output_tokens": 128000,
         "supports_vision": true,
         "supports_audio_input": false,
-        "supports_pdf_input": true,
+        "supports_pdf_input": false,
         "supports_reasoning": true,
         "supports_function_calling": true
       },
@@ -5851,7 +6131,7 @@
         "max_output_tokens": 128000,
         "supports_vision": true,
         "supports_audio_input": false,
-        "supports_pdf_input": true,
+        "supports_pdf_input": false,
         "supports_reasoning": true,
         "supports_function_calling": true
       },
@@ -5861,7 +6141,17 @@
         "max_output_tokens": 128000,
         "supports_vision": true,
         "supports_audio_input": false,
-        "supports_pdf_input": true,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "global.openai.gpt-6-astra",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
         "supports_reasoning": true,
         "supports_function_calling": true
       },
@@ -5893,16 +6183,76 @@
         "supports_audio_input": false,
         "supports_pdf_input": false,
         "supports_reasoning": false,
-        "supports_function_calling": true
+        "supports_function_calling": false
       },
       {
         "id": "google.gemma-3-4b-it",
-        "max_input_tokens": 128000,
+        "max_input_tokens": 131072,
         "max_output_tokens": 4096,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
         "supports_reasoning": false,
+        "supports_function_calling": false
+      },
+      {
+        "id": "google.gemma-4-26b-a4b",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 32768,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "google.gemma-4-31b",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 32768,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "google.gemma-4-e2b",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 8192,
+        "supports_vision": true,
+        "supports_audio_input": true,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "in.openai.gpt-5.6-luna",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "in.openai.gpt-5.6-terra",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "jp.amazon.nova-2-lite-v1:0",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 65535,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
         "supports_function_calling": true
       },
       {
@@ -5958,7 +6308,7 @@
       {
         "id": "jp.anthropic.claude-sonnet-4-6",
         "max_input_tokens": 1000000,
-        "max_output_tokens": 64000,
+        "max_output_tokens": 128000,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": true,
@@ -6008,7 +6358,7 @@
       {
         "id": "meta.llama4-maverick-17b-instruct-v1:0",
         "max_input_tokens": 1000000,
-        "max_output_tokens": 16384,
+        "max_output_tokens": 8192,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -6017,8 +6367,8 @@
       },
       {
         "id": "meta.llama4-scout-17b-instruct-v1:0",
-        "max_input_tokens": 3500000,
-        "max_output_tokens": 16384,
+        "max_input_tokens": 10000000,
+        "max_output_tokens": 8192,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -6079,7 +6429,7 @@
         "id": "mistral.ministral-3-14b-instruct",
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
-        "supports_vision": false,
+        "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
         "supports_reasoning": false,
@@ -6099,7 +6449,7 @@
         "id": "mistral.ministral-3-8b-instruct",
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
-        "supports_vision": false,
+        "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
         "supports_reasoning": false,
@@ -6127,7 +6477,7 @@
       },
       {
         "id": "mistral.voxtral-mini-3b-2507",
-        "max_input_tokens": 128000,
+        "max_input_tokens": 32768,
         "max_output_tokens": 4096,
         "supports_vision": false,
         "supports_audio_input": true,
@@ -6137,7 +6487,7 @@
       },
       {
         "id": "mistral.voxtral-small-24b-2507",
-        "max_input_tokens": 32000,
+        "max_input_tokens": 32768,
         "max_output_tokens": 8192,
         "supports_vision": false,
         "supports_audio_input": true,
@@ -6158,7 +6508,7 @@
       {
         "id": "moonshotai.kimi-k2.5",
         "max_input_tokens": 262143,
-        "max_output_tokens": 16000,
+        "max_output_tokens": 16384,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -6168,7 +6518,7 @@
       {
         "id": "nvidia.nemotron-nano-12b-v2",
         "max_input_tokens": 128000,
-        "max_output_tokens": 4096,
+        "max_output_tokens": 8192,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -6177,8 +6527,8 @@
       },
       {
         "id": "nvidia.nemotron-nano-3-30b",
-        "max_input_tokens": 128000,
-        "max_output_tokens": 4096,
+        "max_input_tokens": 262144,
+        "max_output_tokens": 8192,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -6187,8 +6537,8 @@
       },
       {
         "id": "nvidia.nemotron-nano-9b-v2",
-        "max_input_tokens": 128000,
-        "max_output_tokens": 4096,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 8192,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -6256,6 +6606,16 @@
         "supports_function_calling": true
       },
       {
+        "id": "openai.gpt-6-astra",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
         "id": "openai.gpt-oss-120b",
         "max_input_tokens": 128000,
         "max_output_tokens": 16384,
@@ -6302,7 +6662,7 @@
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
-        "supports_reasoning": false,
+        "supports_reasoning": true,
         "supports_function_calling": true
       },
       {
@@ -6312,7 +6672,7 @@
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
-        "supports_reasoning": false,
+        "supports_reasoning": true,
         "supports_function_calling": true
       },
       {
@@ -6327,7 +6687,7 @@
       },
       {
         "id": "qwen.qwen3-32b-v1:0",
-        "max_input_tokens": 16384,
+        "max_input_tokens": 32768,
         "max_output_tokens": 16384,
         "supports_vision": false,
         "supports_audio_input": false,
@@ -6357,17 +6717,17 @@
       },
       {
         "id": "qwen.qwen3-coder-next",
-        "max_input_tokens": 131072,
+        "max_input_tokens": 262144,
         "max_output_tokens": 65536,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
-        "supports_reasoning": true,
+        "supports_reasoning": false,
         "supports_function_calling": true
       },
       {
         "id": "qwen.qwen3-next-80b-a3b",
-        "max_input_tokens": 262000,
+        "max_input_tokens": 262144,
         "max_output_tokens": 262000,
         "supports_vision": false,
         "supports_audio_input": false,
@@ -6377,11 +6737,81 @@
       },
       {
         "id": "qwen.qwen3-vl-235b-a22b",
-        "max_input_tokens": 262000,
+        "max_input_tokens": 262144,
         "max_output_tokens": 262000,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
+        "supports_reasoning": false,
+        "supports_function_calling": true
+      },
+      {
+        "id": "us-gov.openai.gpt-oss-120b-1:0",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 16384,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "us-gov.openai.gpt-oss-20b-1:0",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 16384,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "us.amazon.nova-2-lite-v1:0",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 65535,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "us.amazon.nova-lite-v1:0",
+        "max_input_tokens": 300000,
+        "max_output_tokens": 10000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": false,
+        "supports_function_calling": true
+      },
+      {
+        "id": "us.amazon.nova-micro-v1:0",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 10000,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": false,
+        "supports_function_calling": true
+      },
+      {
+        "id": "us.amazon.nova-premier-v1:0",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 10000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": false,
+        "supports_function_calling": true
+      },
+      {
+        "id": "us.amazon.nova-pro-v1:0",
+        "max_input_tokens": 300000,
+        "max_output_tokens": 10000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
         "supports_reasoning": false,
         "supports_function_calling": true
       },
@@ -6476,6 +6906,16 @@
         "supports_function_calling": true
       },
       {
+        "id": "us.anthropic.claude-sonnet-4-20250514-v1:0",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 64000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
         "id": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
@@ -6488,7 +6928,7 @@
       {
         "id": "us.anthropic.claude-sonnet-4-6",
         "max_input_tokens": 1000000,
-        "max_output_tokens": 64000,
+        "max_output_tokens": 128000,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": true,
@@ -6513,12 +6953,42 @@
         "supports_audio_input": false,
         "supports_pdf_input": false,
         "supports_reasoning": true,
+        "supports_function_calling": false
+      },
+      {
+        "id": "us.meta.llama3-1-70b-instruct-v1:0",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": false,
+        "supports_function_calling": true
+      },
+      {
+        "id": "us.meta.llama3-1-8b-instruct-v1:0",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": false,
+        "supports_function_calling": true
+      },
+      {
+        "id": "us.meta.llama3-3-70b-instruct-v1:0",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": false,
         "supports_function_calling": true
       },
       {
         "id": "us.meta.llama4-maverick-17b-instruct-v1:0",
         "max_input_tokens": 1000000,
-        "max_output_tokens": 16384,
+        "max_output_tokens": 8192,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -6527,12 +6997,82 @@
       },
       {
         "id": "us.meta.llama4-scout-17b-instruct-v1:0",
-        "max_input_tokens": 3500000,
-        "max_output_tokens": 16384,
+        "max_input_tokens": 10000000,
+        "max_output_tokens": 8192,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
         "supports_reasoning": false,
+        "supports_function_calling": true
+      },
+      {
+        "id": "us.mistral.pixtral-large-2502-v1:0",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": false,
+        "supports_function_calling": true
+      },
+      {
+        "id": "us.openai.gpt-5.6-luna",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "us.openai.gpt-5.6-sol",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "us.openai.gpt-5.6-terra",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "us.openai.gpt-6-astra",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "us.writer.palmyra-x4-v1:0",
+        "max_input_tokens": 122880,
+        "max_output_tokens": 8192,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "us.writer.palmyra-x5-v1:0",
+        "max_input_tokens": 1040000,
+        "max_output_tokens": 8192,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
         "supports_function_calling": true
       },
       {
@@ -6608,7 +7148,7 @@
       {
         "id": "zai.glm-5",
         "max_input_tokens": 202752,
-        "max_output_tokens": 101376,
+        "max_output_tokens": 131072,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -6618,10 +7158,20 @@
     ],
     "deepseek": [
       {
+        "id": "deepseek-flash",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 384000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
         "id": "deepseek-v4-flash",
         "max_input_tokens": 1000000,
         "max_output_tokens": 384000,
-        "supports_vision": false,
+        "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
         "supports_reasoning": true,
@@ -7072,7 +7622,7 @@
       {
         "id": "deepseek/deepseek-chat-v3.1",
         "max_input_tokens": 163840,
-        "max_output_tokens": 144900,
+        "max_output_tokens": 32768,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -7152,7 +7702,7 @@
       {
         "id": "deepseek/deepseek-v4-flash-0731",
         "max_input_tokens": 1310720,
-        "max_output_tokens": 131072,
+        "max_output_tokens": 943718,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -7162,7 +7712,7 @@
       {
         "id": "deepseek/deepseek-v4-flash-vision-exp",
         "max_input_tokens": 1048576,
-        "max_output_tokens": 384000,
+        "max_output_tokens": 943718,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -7184,6 +7734,16 @@
         "max_input_tokens": 1048576,
         "max_output_tokens": 384000,
         "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "deepseek/deepseek-v4.1-flash",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 384000,
+        "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
         "supports_reasoning": true,
@@ -7243,16 +7803,6 @@
         "id": "google/gemini-2.5-pro-preview",
         "max_input_tokens": 1048576,
         "max_output_tokens": 65536,
-        "supports_vision": true,
-        "supports_audio_input": true,
-        "supports_pdf_input": true,
-        "supports_reasoning": true,
-        "supports_function_calling": true
-      },
-      {
-        "id": "google/gemini-2.5-pro-preview-05-06",
-        "max_input_tokens": 1048576,
-        "max_output_tokens": 65535,
         "supports_vision": true,
         "supports_audio_input": true,
         "supports_pdf_input": true,
@@ -7452,7 +8002,7 @@
       {
         "id": "google/gemma-4-26b-a4b-it",
         "max_input_tokens": 262144,
-        "max_output_tokens": 16384,
+        "max_output_tokens": 235929,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -7550,7 +8100,7 @@
         "supports_function_calling": true
       },
       {
-        "id": "inception/mercury-2.5-preview",
+        "id": "inception/mercury-2.5",
         "max_input_tokens": 260000,
         "max_output_tokens": 65536,
         "supports_vision": false,
@@ -7598,6 +8148,46 @@
         "supports_pdf_input": false,
         "supports_reasoning": true,
         "supports_function_calling": true
+      },
+      {
+        "id": "inclusionai/ling-3.0-flash-vl",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 32768,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "inclusionai/ling-3.0-flash-vl:free",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 32768,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "inference-net/schematron-v2-small",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": false,
+        "supports_function_calling": false
+      },
+      {
+        "id": "inference-net/schematron-v2-turbo",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": false,
+        "supports_function_calling": false
       },
       {
         "id": "kwaipilot/kat-coder-pro-v2",
@@ -7652,7 +8242,7 @@
       {
         "id": "meta-llama/llama-3.1-70b-instruct",
         "max_input_tokens": 131072,
-        "max_output_tokens": 16384,
+        "max_output_tokens": 8192,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -7702,7 +8292,7 @@
       {
         "id": "meta-llama/llama-4-maverick",
         "max_input_tokens": 1048576,
-        "max_output_tokens": 115200,
+        "max_output_tokens": 16384,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -7732,7 +8322,7 @@
       {
         "id": "meta/muse-glimmer-30b",
         "max_input_tokens": 131072,
-        "max_output_tokens": 117964,
+        "max_output_tokens": 16384,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -7880,29 +8470,9 @@
         "supports_function_calling": true
       },
       {
-        "id": "minimax/minimax-m2.7:free",
-        "max_input_tokens": 196608,
-        "max_output_tokens": 176947,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": true,
-        "supports_function_calling": true
-      },
-      {
         "id": "minimax/minimax-m3",
         "max_input_tokens": 1048576,
         "max_output_tokens": 512000,
-        "supports_vision": true,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": true,
-        "supports_function_calling": true
-      },
-      {
-        "id": "minimax/minimax-m3:free",
-        "max_input_tokens": 1048576,
-        "max_output_tokens": 943718,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -7974,16 +8544,6 @@
         "max_input_tokens": 131072,
         "max_output_tokens": 104857,
         "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": true,
-        "supports_reasoning": false,
-        "supports_function_calling": true
-      },
-      {
-        "id": "mistralai/mistral-large-2512",
-        "max_input_tokens": 262144,
-        "max_output_tokens": 209715,
-        "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": true,
         "supports_reasoning": false,
@@ -8067,11 +8627,11 @@
         "supports_audio_input": false,
         "supports_pdf_input": false,
         "supports_reasoning": false,
-        "supports_function_calling": false
+        "supports_function_calling": true
       },
       {
         "id": "mistralai/mistral-small-3.2-24b-instruct",
-        "max_input_tokens": 131072,
+        "max_input_tokens": 256000,
         "max_output_tokens": 16384,
         "supports_vision": true,
         "supports_audio_input": false,
@@ -8102,7 +8662,7 @@
       {
         "id": "moonshotai/kimi-k2",
         "max_input_tokens": 131072,
-        "max_output_tokens": 100352,
+        "max_output_tokens": 98304,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -8112,7 +8672,7 @@
       {
         "id": "moonshotai/kimi-k2-0905",
         "max_input_tokens": 262144,
-        "max_output_tokens": 100352,
+        "max_output_tokens": 98304,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -8122,7 +8682,7 @@
       {
         "id": "moonshotai/kimi-k2-thinking",
         "max_input_tokens": 262144,
-        "max_output_tokens": 100352,
+        "max_output_tokens": 98304,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -8190,7 +8750,7 @@
         "supports_function_calling": false
       },
       {
-        "id": "nex-agi/nex-n2-mini",
+        "id": "nex-agi/nex-n2.5-mini:free",
         "max_input_tokens": 262144,
         "max_output_tokens": 235929,
         "supports_vision": true,
@@ -8200,7 +8760,7 @@
         "supports_function_calling": true
       },
       {
-        "id": "nex-agi/nex-n2-pro",
+        "id": "nex-agi/nex-n2.5-pro:free",
         "max_input_tokens": 262144,
         "max_output_tokens": 235929,
         "supports_vision": true,
@@ -8240,16 +8800,6 @@
         "supports_function_calling": false
       },
       {
-        "id": "nousresearch/hermes-4-70b",
-        "max_input_tokens": 131072,
-        "max_output_tokens": 117964,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": true,
-        "supports_function_calling": false
-      },
-      {
         "id": "nvidia/nemotron-3-nano-30b-a3b",
         "max_input_tokens": 262144,
         "max_output_tokens": 235929,
@@ -8271,8 +8821,8 @@
       },
       {
         "id": "nvidia/nemotron-3-super-120b-a12b",
-        "max_input_tokens": 1000000,
-        "max_output_tokens": 16384,
+        "max_input_tokens": 262144,
+        "max_output_tokens": 235929,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -8292,7 +8842,7 @@
       {
         "id": "nvidia/nemotron-3-ultra-550b-a55b",
         "max_input_tokens": 262144,
-        "max_output_tokens": 32768,
+        "max_output_tokens": 182520,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -8332,7 +8882,7 @@
       {
         "id": "nvidia/nemotron-3.5-lightning",
         "max_input_tokens": 262144,
-        "max_output_tokens": 131072,
+        "max_output_tokens": 235929,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -8404,16 +8954,6 @@
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
         "supports_vision": true,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": false,
-        "supports_function_calling": true
-      },
-      {
-        "id": "openai/gpt-4-turbo-preview",
-        "max_input_tokens": 128000,
-        "max_output_tokens": 4096,
-        "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
         "supports_reasoning": false,
@@ -8842,7 +9382,7 @@
       {
         "id": "openai/gpt-oss-120b",
         "max_input_tokens": 131072,
-        "max_output_tokens": 117964,
+        "max_output_tokens": 65536,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -9100,6 +9640,16 @@
         "supports_function_calling": true
       },
       {
+        "id": "prism-ml/ternary-bonsai-2-27b",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 32768,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
         "id": "qwen/qwen-2.5-72b-instruct",
         "max_input_tokens": 32768,
         "max_output_tokens": 16384,
@@ -9182,7 +9732,7 @@
       {
         "id": "qwen/qwen3-235b-a22b-2507",
         "max_input_tokens": 262144,
-        "max_output_tokens": 16384,
+        "max_output_tokens": 235929,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -9322,7 +9872,7 @@
       {
         "id": "qwen/qwen3-next-80b-a3b-instruct",
         "max_input_tokens": 262144,
-        "max_output_tokens": 235929,
+        "max_output_tokens": 16384,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -9332,7 +9882,7 @@
       {
         "id": "qwen/qwen3-next-80b-a3b-thinking",
         "max_input_tokens": 262144,
-        "max_output_tokens": 235929,
+        "max_output_tokens": 32768,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -9362,7 +9912,7 @@
       {
         "id": "qwen/qwen3-vl-30b-a3b-instruct",
         "max_input_tokens": 262144,
-        "max_output_tokens": 16384,
+        "max_output_tokens": 32768,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -9412,7 +9962,7 @@
       {
         "id": "qwen/qwen3.5-122b-a10b",
         "max_input_tokens": 262144,
-        "max_output_tokens": 81920,
+        "max_output_tokens": 65536,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -9442,7 +9992,7 @@
       {
         "id": "qwen/qwen3.5-397b-a17b",
         "max_input_tokens": 262144,
-        "max_output_tokens": 65536,
+        "max_output_tokens": 235929,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -9452,7 +10002,7 @@
       {
         "id": "qwen/qwen3.5-9b",
         "max_input_tokens": 262144,
-        "max_output_tokens": 235929,
+        "max_output_tokens": 32768,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -9572,7 +10122,7 @@
       {
         "id": "qwen/qwen3.8-2.4t-a95b",
         "max_input_tokens": 1048576,
-        "max_output_tokens": 262144,
+        "max_output_tokens": 131072,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -9583,6 +10133,16 @@
         "id": "qwen/qwen3.8-27b",
         "max_input_tokens": 1000000,
         "max_output_tokens": 131072,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "qwen/qwen3.8-27b:free",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 235929,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -9650,12 +10210,32 @@
         "supports_function_calling": true
       },
       {
+        "id": "sakana/fugu-max",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
         "id": "sakana/fugu-ultra",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "sakana/fugu-ultra-v2",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
         "supports_reasoning": true,
         "supports_function_calling": true
       },
@@ -9817,7 +10397,7 @@
         "supports_audio_input": false,
         "supports_pdf_input": false,
         "supports_reasoning": false,
-        "supports_function_calling": true
+        "supports_function_calling": false
       },
       {
         "id": "thinkingmachines/inkling",
@@ -9857,6 +10437,16 @@
         "supports_audio_input": true,
         "supports_pdf_input": false,
         "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "unbiased/pareto",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 131072,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": false,
         "supports_function_calling": true
       },
       {
@@ -10041,8 +10631,8 @@
       },
       {
         "id": "z-ai/glm-4.7-flash",
-        "max_input_tokens": 202752,
-        "max_output_tokens": 16384,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 117964,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -10090,9 +10680,19 @@
         "supports_function_calling": true
       },
       {
+        "id": "z-ai/glm-5.2:free",
+        "max_input_tokens": 32768,
+        "max_output_tokens": 29491,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": false
+      },
+      {
         "id": "z-ai/glm-5.3",
         "max_input_tokens": 1310720,
-        "max_output_tokens": 943718,
+        "max_output_tokens": 131072,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -10102,6 +10702,16 @@
       {
         "id": "z-ai/glm-5.3-flash",
         "max_input_tokens": 1310720,
+        "max_output_tokens": 131072,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "z-ai/glm-5.3-flashx",
+        "max_input_tokens": 1048576,
         "max_output_tokens": 131072,
         "supports_vision": true,
         "supports_audio_input": false,
@@ -10160,9 +10770,29 @@
         "supports_function_calling": true
       },
       {
+        "id": "~deepseek/deepseek-flash-latest",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 943718,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "~deepseek/deepseek-pro-latest",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 384000,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
         "id": "~deepseek/deepseek-v4-flash-latest",
         "max_input_tokens": 1310720,
-        "max_output_tokens": 393216,
+        "max_output_tokens": 943718,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -10200,7 +10830,17 @@
         "supports_function_calling": true
       },
       {
-        "id": "~openai/gpt-latest",
+        "id": "~openai/gpt-astra-latest",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "~openai/gpt-luna-latest",
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "supports_vision": true,
@@ -10212,6 +10852,26 @@
       {
         "id": "~openai/gpt-mini-latest",
         "max_input_tokens": 400000,
+        "max_output_tokens": 128000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "~openai/gpt-sol-latest",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "~openai/gpt-terra-latest",
+        "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "supports_vision": true,
         "supports_audio_input": false,
@@ -10232,7 +10892,7 @@
       {
         "id": "~z-ai/glm-flash-latest",
         "max_input_tokens": 1310720,
-        "max_output_tokens": 131072,
+        "max_output_tokens": 943718,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -11599,6 +12259,16 @@
       },
       {
         "id": "zai-glm-5-2",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 131072,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "zai-glm-5-3",
         "max_input_tokens": 1000000,
         "max_output_tokens": 131072,
         "supports_vision": false,

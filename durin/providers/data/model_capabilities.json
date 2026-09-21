@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "generated_at": "2026-09-07T12:48:32+00:00",
+  "generated_at": "2026-09-21T13:03:27+00:00",
   "sources": {
     "litellm": {
       "url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
@@ -125,7 +125,7 @@
       ],
       "_conflicts": [
         "supports_response_schema(litellm:cerebras/gpt-oss-120b=True, openrouter:openai/gpt-oss-120b=True, models.dev:nvidia/openai/gpt-oss-120b=False, models.dev:cerebras/gpt-oss-120b=False)",
-        "max_output_tokens(litellm:cerebras/gpt-oss-120b=32768, openrouter:openai/gpt-oss-120b=117964, models.dev:nvidia/openai/gpt-oss-120b=8192, models.dev:cerebras/gpt-oss-120b=40960)"
+        "max_output_tokens(litellm:cerebras/gpt-oss-120b=32768, openrouter:openai/gpt-oss-120b=65536, models.dev:nvidia/openai/gpt-oss-120b=8192, models.dev:cerebras/gpt-oss-120b=40960)"
       ],
       "_authority": "merge"
     },
@@ -183,6 +183,29 @@
       "supports_response_schema": false,
       "_sources": [
         "litellm:cerebras/zai-glm-4.7"
+      ],
+      "_authority": "merge"
+    },
+    "qwen-3.8-27b": {
+      "max_input_tokens": 65536,
+      "max_output_tokens": 32768,
+      "mode": "chat",
+      "supports_vision": true,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": true,
+      "supports_reasoning": true,
+      "supports_prompt_caching": false,
+      "supports_response_schema": true,
+      "_sources": [
+        "litellm:cerebras/qwen-3.8-27b",
+        "models.dev:cerebras/qwen-3.8-27b"
+      ],
+      "_conflicts": [
+        "supports_response_schema(litellm:cerebras/qwen-3.8-27b=True, models.dev:cerebras/qwen-3.8-27b=False)"
       ],
       "_authority": "merge"
     },
@@ -372,7 +395,7 @@
       "_authority": "merge"
     },
     "claude-sonnet-4-5": {
-      "max_input_tokens": 600000,
+      "max_input_tokens": 1000000,
       "max_output_tokens": 64000,
       "mode": "chat",
       "supports_vision": true,
@@ -395,13 +418,12 @@
         "supports_pdf_input(litellm:claude-sonnet-4-5=True, litellm:perplexity/anthropic/claude-sonnet-4-5=False, models.dev:anthropic/claude-sonnet-4-5=True)",
         "supports_reasoning(litellm:claude-sonnet-4-5=True, litellm:perplexity/anthropic/claude-sonnet-4-5=False, models.dev:anthropic/claude-sonnet-4-5=True)",
         "supports_prompt_caching(litellm:claude-sonnet-4-5=True, litellm:perplexity/anthropic/claude-sonnet-4-5=False, models.dev:anthropic/claude-sonnet-4-5=False)",
-        "supports_response_schema(litellm:claude-sonnet-4-5=True, litellm:perplexity/anthropic/claude-sonnet-4-5=False, models.dev:anthropic/claude-sonnet-4-5=False)",
-        "max_input_tokens(litellm:claude-sonnet-4-5=200000, models.dev:anthropic/claude-sonnet-4-5=1000000)"
+        "supports_response_schema(litellm:claude-sonnet-4-5=True, litellm:perplexity/anthropic/claude-sonnet-4-5=False, models.dev:anthropic/claude-sonnet-4-5=False)"
       ],
       "_authority": "merge"
     },
     "claude-sonnet-4-5-20250929": {
-      "max_input_tokens": 600000,
+      "max_input_tokens": 1000000,
       "max_output_tokens": 64000,
       "mode": "chat",
       "supports_vision": true,
@@ -420,8 +442,7 @@
       ],
       "_conflicts": [
         "supports_prompt_caching(litellm:claude-sonnet-4-5-20250929=True, models.dev:anthropic/claude-sonnet-4-5-20250929=False)",
-        "supports_response_schema(litellm:claude-sonnet-4-5-20250929=True, models.dev:anthropic/claude-sonnet-4-5-20250929=False)",
-        "max_input_tokens(litellm:claude-sonnet-4-5-20250929=200000, models.dev:anthropic/claude-sonnet-4-5-20250929=1000000)"
+        "supports_response_schema(litellm:claude-sonnet-4-5-20250929=True, models.dev:anthropic/claude-sonnet-4-5-20250929=False)"
       ],
       "_authority": "merge"
     },
@@ -909,6 +930,25 @@
       ],
       "_authority": "merge"
     },
+    "computer-use-preview": {
+      "max_input_tokens": 8192,
+      "max_output_tokens": 1024,
+      "mode": "chat",
+      "supports_vision": true,
+      "supports_audio_input": false,
+      "supports_pdf_input": true,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": true,
+      "supports_reasoning": true,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "litellm:computer-use-preview"
+      ],
+      "_authority": "merge"
+    },
     "dall-e-3": {
       "max_input_tokens": null,
       "max_output_tokens": null,
@@ -1390,14 +1430,14 @@
       "max_input_tokens": 1048576,
       "max_output_tokens": 65535,
       "mode": "chat",
-      "supports_vision": false,
-      "supports_audio_input": false,
+      "supports_vision": true,
+      "supports_audio_input": true,
       "supports_pdf_input": false,
-      "supports_video_input": false,
+      "supports_video_input": true,
       "supports_audio_output": false,
       "supports_image_output": false,
       "supports_function_calling": true,
-      "supports_reasoning": false,
+      "supports_reasoning": true,
       "supports_prompt_caching": true,
       "supports_response_schema": false,
       "_sources": [
@@ -1405,11 +1445,7 @@
         "models.dev:databricks/databricks-gemini-2-5-flash"
       ],
       "_conflicts": [
-        "supports_vision(litellm:databricks/databricks-gemini-2-5-flash=False, models.dev:databricks/databricks-gemini-2-5-flash=True)",
-        "supports_audio_input(litellm:databricks/databricks-gemini-2-5-flash=False, models.dev:databricks/databricks-gemini-2-5-flash=True)",
         "supports_pdf_input(litellm:databricks/databricks-gemini-2-5-flash=False, models.dev:databricks/databricks-gemini-2-5-flash=True)",
-        "supports_video_input(litellm:databricks/databricks-gemini-2-5-flash=False, models.dev:databricks/databricks-gemini-2-5-flash=True)",
-        "supports_reasoning(litellm:databricks/databricks-gemini-2-5-flash=False, models.dev:databricks/databricks-gemini-2-5-flash=True)",
         "supports_prompt_caching(litellm:databricks/databricks-gemini-2-5-flash=True, models.dev:databricks/databricks-gemini-2-5-flash=False)"
       ],
       "_authority": "merge"
@@ -1418,14 +1454,14 @@
       "max_input_tokens": 1048576,
       "max_output_tokens": 65536,
       "mode": "chat",
-      "supports_vision": false,
-      "supports_audio_input": false,
+      "supports_vision": true,
+      "supports_audio_input": true,
       "supports_pdf_input": false,
-      "supports_video_input": false,
+      "supports_video_input": true,
       "supports_audio_output": false,
       "supports_image_output": false,
       "supports_function_calling": true,
-      "supports_reasoning": false,
+      "supports_reasoning": true,
       "supports_prompt_caching": true,
       "supports_response_schema": false,
       "_sources": [
@@ -1433,11 +1469,7 @@
         "models.dev:databricks/databricks-gemini-2-5-pro"
       ],
       "_conflicts": [
-        "supports_vision(litellm:databricks/databricks-gemini-2-5-pro=False, models.dev:databricks/databricks-gemini-2-5-pro=True)",
-        "supports_audio_input(litellm:databricks/databricks-gemini-2-5-pro=False, models.dev:databricks/databricks-gemini-2-5-pro=True)",
         "supports_pdf_input(litellm:databricks/databricks-gemini-2-5-pro=False, models.dev:databricks/databricks-gemini-2-5-pro=True)",
-        "supports_video_input(litellm:databricks/databricks-gemini-2-5-pro=False, models.dev:databricks/databricks-gemini-2-5-pro=True)",
-        "supports_reasoning(litellm:databricks/databricks-gemini-2-5-pro=False, models.dev:databricks/databricks-gemini-2-5-pro=True)",
         "supports_prompt_caching(litellm:databricks/databricks-gemini-2-5-pro=True, models.dev:databricks/databricks-gemini-2-5-pro=False)"
       ],
       "_authority": "merge"
@@ -1446,10 +1478,10 @@
       "max_input_tokens": 1048576,
       "max_output_tokens": 65536,
       "mode": "chat",
-      "supports_vision": false,
-      "supports_audio_input": false,
+      "supports_vision": true,
+      "supports_audio_input": true,
       "supports_pdf_input": false,
-      "supports_video_input": false,
+      "supports_video_input": true,
       "supports_audio_output": false,
       "supports_image_output": false,
       "supports_function_calling": true,
@@ -1461,10 +1493,7 @@
         "models.dev:databricks/databricks-gemini-3-1-flash-lite"
       ],
       "_conflicts": [
-        "supports_vision(litellm:databricks/databricks-gemini-3-1-flash-lite=False, models.dev:databricks/databricks-gemini-3-1-flash-lite=True)",
-        "supports_audio_input(litellm:databricks/databricks-gemini-3-1-flash-lite=False, models.dev:databricks/databricks-gemini-3-1-flash-lite=True)",
         "supports_pdf_input(litellm:databricks/databricks-gemini-3-1-flash-lite=False, models.dev:databricks/databricks-gemini-3-1-flash-lite=True)",
-        "supports_video_input(litellm:databricks/databricks-gemini-3-1-flash-lite=False, models.dev:databricks/databricks-gemini-3-1-flash-lite=True)",
         "supports_reasoning(litellm:databricks/databricks-gemini-3-1-flash-lite=False, models.dev:databricks/databricks-gemini-3-1-flash-lite=True)",
         "supports_prompt_caching(litellm:databricks/databricks-gemini-3-1-flash-lite=True, models.dev:databricks/databricks-gemini-3-1-flash-lite=False)"
       ],
@@ -1512,14 +1541,14 @@
       "max_input_tokens": 1048576,
       "max_output_tokens": 65536,
       "mode": "chat",
-      "supports_vision": false,
-      "supports_audio_input": false,
+      "supports_vision": true,
+      "supports_audio_input": true,
       "supports_pdf_input": false,
-      "supports_video_input": false,
+      "supports_video_input": true,
       "supports_audio_output": false,
       "supports_image_output": false,
       "supports_function_calling": true,
-      "supports_reasoning": false,
+      "supports_reasoning": true,
       "supports_prompt_caching": true,
       "supports_response_schema": false,
       "_sources": [
@@ -1527,11 +1556,7 @@
         "models.dev:databricks/databricks-gemini-3-1-pro"
       ],
       "_conflicts": [
-        "supports_vision(litellm:databricks/databricks-gemini-3-1-pro=False, models.dev:databricks/databricks-gemini-3-1-pro=True)",
-        "supports_audio_input(litellm:databricks/databricks-gemini-3-1-pro=False, models.dev:databricks/databricks-gemini-3-1-pro=True)",
         "supports_pdf_input(litellm:databricks/databricks-gemini-3-1-pro=False, models.dev:databricks/databricks-gemini-3-1-pro=True)",
-        "supports_video_input(litellm:databricks/databricks-gemini-3-1-pro=False, models.dev:databricks/databricks-gemini-3-1-pro=True)",
-        "supports_reasoning(litellm:databricks/databricks-gemini-3-1-pro=False, models.dev:databricks/databricks-gemini-3-1-pro=True)",
         "supports_prompt_caching(litellm:databricks/databricks-gemini-3-1-pro=True, models.dev:databricks/databricks-gemini-3-1-pro=False)"
       ],
       "_authority": "merge"
@@ -1540,10 +1565,10 @@
       "max_input_tokens": 1048576,
       "max_output_tokens": 65536,
       "mode": "chat",
-      "supports_vision": false,
-      "supports_audio_input": false,
+      "supports_vision": true,
+      "supports_audio_input": true,
       "supports_pdf_input": false,
-      "supports_video_input": false,
+      "supports_video_input": true,
       "supports_audio_output": false,
       "supports_image_output": false,
       "supports_function_calling": true,
@@ -1555,10 +1580,7 @@
         "models.dev:databricks/databricks-gemini-3-flash"
       ],
       "_conflicts": [
-        "supports_vision(litellm:databricks/databricks-gemini-3-flash=False, models.dev:databricks/databricks-gemini-3-flash=True)",
-        "supports_audio_input(litellm:databricks/databricks-gemini-3-flash=False, models.dev:databricks/databricks-gemini-3-flash=True)",
         "supports_pdf_input(litellm:databricks/databricks-gemini-3-flash=False, models.dev:databricks/databricks-gemini-3-flash=True)",
-        "supports_video_input(litellm:databricks/databricks-gemini-3-flash=False, models.dev:databricks/databricks-gemini-3-flash=True)",
         "supports_reasoning(litellm:databricks/databricks-gemini-3-flash=False, models.dev:databricks/databricks-gemini-3-flash=True)",
         "supports_prompt_caching(litellm:databricks/databricks-gemini-3-flash=True, models.dev:databricks/databricks-gemini-3-flash=False)"
       ],
@@ -2634,8 +2656,8 @@
       "_authority": "merge"
     },
     "embed-english-light-v3.0": {
-      "max_input_tokens": 1024,
-      "max_output_tokens": 1024,
+      "max_input_tokens": 512,
+      "max_output_tokens": 512,
       "mode": "chat",
       "supports_vision": false,
       "supports_audio_input": false,
@@ -2672,8 +2694,8 @@
       "_authority": "merge"
     },
     "embed-english-v3.0": {
-      "max_input_tokens": 1024,
-      "max_output_tokens": 1024,
+      "max_input_tokens": 512,
+      "max_output_tokens": 512,
       "mode": "chat",
       "supports_vision": false,
       "supports_audio_input": false,
@@ -2710,8 +2732,8 @@
       "_authority": "merge"
     },
     "embed-multilingual-v3.0": {
-      "max_input_tokens": 1024,
-      "max_output_tokens": 1024,
+      "max_input_tokens": 512,
+      "max_output_tokens": 512,
       "mode": "chat",
       "supports_vision": false,
       "supports_audio_input": false,
@@ -2729,8 +2751,8 @@
       "_authority": "merge"
     },
     "embed-multilingual-light-v3.0": {
-      "max_input_tokens": 1024,
-      "max_output_tokens": 1024,
+      "max_input_tokens": 512,
+      "max_output_tokens": 512,
       "mode": "chat",
       "supports_vision": false,
       "supports_audio_input": false,
@@ -3097,8 +3119,8 @@
       "max_input_tokens": 8192,
       "max_output_tokens": 4096,
       "mode": "chat",
-      "supports_vision": false,
-      "supports_audio_input": false,
+      "supports_vision": true,
+      "supports_audio_input": true,
       "supports_pdf_input": false,
       "supports_video_input": false,
       "supports_audio_output": false,
@@ -3112,8 +3134,6 @@
         "models.dev:google/gemini-embedding-2"
       ],
       "_conflicts": [
-        "supports_vision(litellm:gemini/gemini-embedding-2=False, models.dev:google/gemini-embedding-2=True)",
-        "supports_audio_input(litellm:gemini/gemini-embedding-2=False, models.dev:google/gemini-embedding-2=True)",
         "supports_pdf_input(litellm:gemini/gemini-embedding-2=False, models.dev:google/gemini-embedding-2=True)",
         "supports_video_input(litellm:gemini/gemini-embedding-2=False, models.dev:google/gemini-embedding-2=True)",
         "max_output_tokens(litellm:gemini/gemini-embedding-2=8192, models.dev:google/gemini-embedding-2=1)"
@@ -3198,7 +3218,7 @@
     },
     "gemini-2.5-flash": {
       "max_input_tokens": 1048576,
-      "max_output_tokens": 65535,
+      "max_output_tokens": 65536,
       "mode": "chat",
       "supports_vision": true,
       "supports_audio_input": true,
@@ -3240,7 +3260,7 @@
       "supports_function_calling": false,
       "supports_reasoning": false,
       "supports_prompt_caching": false,
-      "supports_response_schema": true,
+      "supports_response_schema": false,
       "_sources": [
         "litellm:gemini/gemini-2.5-flash-image",
         "openrouter:google/gemini-2.5-flash-image",
@@ -3250,10 +3270,9 @@
         "supports_audio_input(litellm:gemini/gemini-2.5-flash-image=True, openrouter:google/gemini-2.5-flash-image=False, models.dev:google/gemini-2.5-flash-image=False)",
         "supports_pdf_input(litellm:gemini/gemini-2.5-flash-image=True, openrouter:google/gemini-2.5-flash-image=False, models.dev:google/gemini-2.5-flash-image=False)",
         "supports_video_input(litellm:gemini/gemini-2.5-flash-image=True, openrouter:google/gemini-2.5-flash-image=False, models.dev:google/gemini-2.5-flash-image=False)",
-        "supports_function_calling(litellm:gemini/gemini-2.5-flash-image=True, openrouter:google/gemini-2.5-flash-image=False, models.dev:google/gemini-2.5-flash-image=False)",
         "supports_reasoning(litellm:gemini/gemini-2.5-flash-image=False, openrouter:google/gemini-2.5-flash-image=False, models.dev:google/gemini-2.5-flash-image=True)",
         "supports_prompt_caching(litellm:gemini/gemini-2.5-flash-image=True, openrouter:google/gemini-2.5-flash-image=False, models.dev:google/gemini-2.5-flash-image=False)",
-        "supports_response_schema(litellm:gemini/gemini-2.5-flash-image=True, openrouter:google/gemini-2.5-flash-image=True, models.dev:google/gemini-2.5-flash-image=False)",
+        "supports_response_schema(litellm:gemini/gemini-2.5-flash-image=False, openrouter:google/gemini-2.5-flash-image=True, models.dev:google/gemini-2.5-flash-image=False)",
         "max_output_tokens(litellm:gemini/gemini-2.5-flash-image=32768, openrouter:google/gemini-2.5-flash-image=8192, models.dev:google/gemini-2.5-flash-image=32768)"
       ],
       "_authority": "merge"
@@ -3271,7 +3290,7 @@
       "supports_function_calling": false,
       "supports_reasoning": true,
       "supports_prompt_caching": false,
-      "supports_response_schema": true,
+      "supports_response_schema": false,
       "_sources": [
         "litellm:gemini/gemini-3-pro-image",
         "openrouter:google/gemini-3-pro-image",
@@ -3281,7 +3300,7 @@
         "supports_function_calling(litellm:gemini/gemini-3-pro-image=False, openrouter:google/gemini-3-pro-image=True, models.dev:google/gemini-3-pro-image=False)",
         "supports_reasoning(litellm:gemini/gemini-3-pro-image=False, openrouter:google/gemini-3-pro-image=True, models.dev:google/gemini-3-pro-image=True)",
         "supports_prompt_caching(litellm:gemini/gemini-3-pro-image=True, openrouter:google/gemini-3-pro-image=False, models.dev:google/gemini-3-pro-image=False)",
-        "supports_response_schema(litellm:gemini/gemini-3-pro-image=True, openrouter:google/gemini-3-pro-image=True, models.dev:google/gemini-3-pro-image=False)"
+        "supports_response_schema(litellm:gemini/gemini-3-pro-image=False, openrouter:google/gemini-3-pro-image=True, models.dev:google/gemini-3-pro-image=False)"
       ],
       "_authority": "merge"
     },
@@ -3331,7 +3350,7 @@
       "_authority": "merge"
     },
     "gemini-3.1-flash-image": {
-      "max_input_tokens": 65536,
+      "max_input_tokens": 131072,
       "max_output_tokens": 32768,
       "mode": "chat",
       "supports_vision": true,
@@ -3343,7 +3362,7 @@
       "supports_function_calling": false,
       "supports_reasoning": true,
       "supports_prompt_caching": false,
-      "supports_response_schema": true,
+      "supports_response_schema": false,
       "_sources": [
         "litellm:gemini/gemini-3.1-flash-image",
         "openrouter:google/gemini-3.1-flash-image",
@@ -3354,7 +3373,7 @@
         "supports_video_input(litellm:gemini/gemini-3.1-flash-image=False, openrouter:google/gemini-3.1-flash-image=False, models.dev:google/gemini-3.1-flash-image=True)",
         "supports_reasoning(litellm:gemini/gemini-3.1-flash-image=False, openrouter:google/gemini-3.1-flash-image=True, models.dev:google/gemini-3.1-flash-image=True)",
         "supports_prompt_caching(litellm:gemini/gemini-3.1-flash-image=True, openrouter:google/gemini-3.1-flash-image=False, models.dev:google/gemini-3.1-flash-image=False)",
-        "supports_response_schema(litellm:gemini/gemini-3.1-flash-image=True, openrouter:google/gemini-3.1-flash-image=True, models.dev:google/gemini-3.1-flash-image=False)"
+        "supports_response_schema(litellm:gemini/gemini-3.1-flash-image=False, openrouter:google/gemini-3.1-flash-image=True, models.dev:google/gemini-3.1-flash-image=False)"
       ],
       "_authority": "merge"
     },
@@ -3395,7 +3414,7 @@
       "supports_video_input": false,
       "supports_audio_output": false,
       "supports_image_output": true,
-      "supports_function_calling": true,
+      "supports_function_calling": false,
       "supports_reasoning": true,
       "supports_prompt_caching": false,
       "supports_response_schema": false,
@@ -3405,7 +3424,7 @@
         "models.dev:google/gemini-3.1-flash-lite-image"
       ],
       "_conflicts": [
-        "supports_function_calling(litellm:gemini/gemini-3.1-flash-lite-image=True, openrouter:google/gemini-3.1-flash-lite-image=False, models.dev:google/gemini-3.1-flash-lite-image=True)",
+        "supports_function_calling(litellm:gemini/gemini-3.1-flash-lite-image=False, openrouter:google/gemini-3.1-flash-lite-image=False, models.dev:google/gemini-3.1-flash-lite-image=True)",
         "supports_reasoning(litellm:gemini/gemini-3.1-flash-lite-image=False, openrouter:google/gemini-3.1-flash-lite-image=True, models.dev:google/gemini-3.1-flash-lite-image=True)",
         "supports_response_schema(litellm:gemini/gemini-3.1-flash-lite-image=False, openrouter:google/gemini-3.1-flash-lite-image=True, models.dev:google/gemini-3.1-flash-lite-image=False)",
         "max_output_tokens(litellm:gemini/gemini-3.1-flash-lite-image=4096, openrouter:google/gemini-3.1-flash-lite-image=58982, models.dev:google/gemini-3.1-flash-lite-image=65536)"
@@ -3433,7 +3452,7 @@
     },
     "gemini-2.5-flash-lite": {
       "max_input_tokens": 1048576,
-      "max_output_tokens": 65535,
+      "max_output_tokens": 65536,
       "mode": "chat",
       "supports_vision": true,
       "supports_audio_input": true,
@@ -3496,7 +3515,7 @@
     },
     "gemini-flash-latest": {
       "max_input_tokens": 1048576,
-      "max_output_tokens": 65535,
+      "max_output_tokens": 65536,
       "mode": "chat",
       "supports_vision": true,
       "supports_audio_input": true,
@@ -3521,7 +3540,7 @@
     },
     "gemini-flash-lite-latest": {
       "max_input_tokens": 1048576,
-      "max_output_tokens": 65535,
+      "max_output_tokens": 65536,
       "mode": "chat",
       "supports_vision": true,
       "supports_audio_input": true,
@@ -3986,30 +4005,25 @@
       "_authority": "merge"
     },
     "gemini-2.5-pro-preview-tts": {
-      "max_input_tokens": 528384,
-      "max_output_tokens": 40959,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 16384,
       "mode": "chat",
-      "supports_vision": true,
+      "supports_vision": false,
       "supports_audio_input": false,
       "supports_pdf_input": false,
       "supports_video_input": false,
       "supports_audio_output": true,
       "supports_image_output": false,
-      "supports_function_calling": true,
+      "supports_function_calling": false,
       "supports_reasoning": false,
       "supports_prompt_caching": true,
-      "supports_response_schema": true,
+      "supports_response_schema": false,
       "_sources": [
         "litellm:gemini/gemini-2.5-pro-preview-tts",
         "models.dev:google/gemini-2.5-pro-preview-tts"
       ],
       "_conflicts": [
-        "supports_vision(litellm:gemini/gemini-2.5-pro-preview-tts=True, models.dev:google/gemini-2.5-pro-preview-tts=False)",
-        "supports_function_calling(litellm:gemini/gemini-2.5-pro-preview-tts=True, models.dev:google/gemini-2.5-pro-preview-tts=False)",
-        "supports_prompt_caching(litellm:gemini/gemini-2.5-pro-preview-tts=True, models.dev:google/gemini-2.5-pro-preview-tts=False)",
-        "supports_response_schema(litellm:gemini/gemini-2.5-pro-preview-tts=True, models.dev:google/gemini-2.5-pro-preview-tts=False)",
-        "max_input_tokens(litellm:gemini/gemini-2.5-pro-preview-tts=1048576, models.dev:google/gemini-2.5-pro-preview-tts=8192)",
-        "max_output_tokens(litellm:gemini/gemini-2.5-pro-preview-tts=65535, models.dev:google/gemini-2.5-pro-preview-tts=16384)"
+        "supports_prompt_caching(litellm:gemini/gemini-2.5-pro-preview-tts=True, models.dev:google/gemini-2.5-pro-preview-tts=False)"
       ],
       "_authority": "merge"
     },
@@ -4142,7 +4156,8 @@
       ],
       "_conflicts": [
         "supports_video_input(litellm:gemini/gemma-4-26b-a4b-it=False, openrouter:google/gemma-4-26b-a4b-it=True, models.dev:google/gemma-4-26b-a4b-it=False)",
-        "supports_response_schema(litellm:gemini/gemma-4-26b-a4b-it=True, openrouter:google/gemma-4-26b-a4b-it=True, models.dev:google/gemma-4-26b-a4b-it=False)"
+        "supports_response_schema(litellm:gemini/gemma-4-26b-a4b-it=True, openrouter:google/gemma-4-26b-a4b-it=True, models.dev:google/gemma-4-26b-a4b-it=False)",
+        "max_output_tokens(litellm:gemini/gemma-4-26b-a4b-it=32768, openrouter:google/gemma-4-26b-a4b-it=235929, models.dev:google/gemma-4-26b-a4b-it=32768)"
       ],
       "_authority": "merge"
     },
@@ -4742,13 +4757,7 @@
       "supports_prompt_caching": true,
       "supports_response_schema": false,
       "_sources": [
-        "litellm:gpt-4-turbo-preview",
-        "openrouter:openai/gpt-4-turbo-preview"
-      ],
-      "_conflicts": [
-        "supports_pdf_input(litellm:gpt-4-turbo-preview=True, openrouter:openai/gpt-4-turbo-preview=False)",
-        "supports_prompt_caching(litellm:gpt-4-turbo-preview=True, openrouter:openai/gpt-4-turbo-preview=False)",
-        "supports_response_schema(litellm:gpt-4-turbo-preview=False, openrouter:openai/gpt-4-turbo-preview=True)"
+        "litellm:gpt-4-turbo-preview"
       ],
       "_authority": "merge"
     },
@@ -5597,6 +5606,82 @@
       ],
       "_authority": "merge"
     },
+    "gpt-image-2.5-flare": {
+      "max_input_tokens": null,
+      "max_output_tokens": null,
+      "mode": "chat",
+      "supports_vision": true,
+      "supports_audio_input": false,
+      "supports_pdf_input": true,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": false,
+      "supports_reasoning": false,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "litellm:gpt-image-2.5-flare"
+      ],
+      "_authority": "merge"
+    },
+    "gpt-image-2.5-flare-2026-09-08": {
+      "max_input_tokens": null,
+      "max_output_tokens": null,
+      "mode": "chat",
+      "supports_vision": true,
+      "supports_audio_input": false,
+      "supports_pdf_input": true,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": false,
+      "supports_reasoning": false,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "litellm:gpt-image-2.5-flare-2026-09-08"
+      ],
+      "_authority": "merge"
+    },
+    "gpt-image-2.5-sunburst": {
+      "max_input_tokens": null,
+      "max_output_tokens": null,
+      "mode": "chat",
+      "supports_vision": true,
+      "supports_audio_input": false,
+      "supports_pdf_input": true,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": false,
+      "supports_reasoning": false,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "litellm:gpt-image-2.5-sunburst"
+      ],
+      "_authority": "merge"
+    },
+    "gpt-image-2.5-sunburst-2026-09-08": {
+      "max_input_tokens": null,
+      "max_output_tokens": null,
+      "mode": "chat",
+      "supports_vision": true,
+      "supports_audio_input": false,
+      "supports_pdf_input": true,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": false,
+      "supports_reasoning": false,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "litellm:gpt-image-2.5-sunburst-2026-09-08"
+      ],
+      "_authority": "merge"
+    },
     "gpt-5": {
       "max_input_tokens": 400000,
       "max_output_tokens": 128000,
@@ -6032,7 +6117,7 @@
       "_authority": "merge"
     },
     "daybreak-blue-latest": {
-      "max_input_tokens": 1050000,
+      "max_input_tokens": 922000,
       "max_output_tokens": 128000,
       "mode": "chat",
       "supports_vision": true,
@@ -6051,7 +6136,7 @@
       "_authority": "merge"
     },
     "gpt-daybreak-blue-latest": {
-      "max_input_tokens": 1050000,
+      "max_input_tokens": 922000,
       "max_output_tokens": 128000,
       "mode": "chat",
       "supports_vision": true,
@@ -6080,7 +6165,7 @@
       "supports_audio_output": false,
       "supports_image_output": false,
       "supports_function_calling": true,
-      "supports_reasoning": false,
+      "supports_reasoning": true,
       "supports_prompt_caching": true,
       "supports_response_schema": true,
       "_sources": [
@@ -7268,6 +7353,25 @@
       ],
       "_authority": "merge"
     },
+    "muse-voice-transcribe-1.0": {
+      "max_input_tokens": null,
+      "max_output_tokens": null,
+      "mode": "chat",
+      "supports_vision": false,
+      "supports_audio_input": true,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": false,
+      "supports_reasoning": false,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "litellm:meta/muse-voice-transcribe-1.0"
+      ],
+      "_authority": "merge"
+    },
     "speech-02-hd": {
       "max_input_tokens": null,
       "max_output_tokens": null,
@@ -7990,6 +8094,68 @@
       ],
       "_authority": "merge"
     },
+    "zai-glm-5-3": {
+      "max_input_tokens": 1024288,
+      "max_output_tokens": 131072,
+      "mode": "chat",
+      "supports_vision": false,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": true,
+      "supports_reasoning": true,
+      "supports_prompt_caching": true,
+      "supports_response_schema": true,
+      "_sources": [
+        "litellm:mistral/zai-glm-5-3",
+        "models.dev:mistral/zai-glm-5-3"
+      ],
+      "_conflicts": [
+        "supports_prompt_caching(litellm:mistral/zai-glm-5-3=True, models.dev:mistral/zai-glm-5-3=False)",
+        "supports_response_schema(litellm:mistral/zai-glm-5-3=True, models.dev:mistral/zai-glm-5-3=False)"
+      ],
+      "_authority": "merge"
+    },
+    "zai-glm-5": {
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 131072,
+      "mode": "chat",
+      "supports_vision": false,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": true,
+      "supports_reasoning": true,
+      "supports_prompt_caching": true,
+      "supports_response_schema": true,
+      "_sources": [
+        "litellm:mistral/zai-glm-5"
+      ],
+      "_authority": "merge"
+    },
+    "zai-glm-latest": {
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 131072,
+      "mode": "chat",
+      "supports_vision": false,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": true,
+      "supports_reasoning": true,
+      "supports_prompt_caching": true,
+      "supports_response_schema": true,
+      "_sources": [
+        "litellm:mistral/zai-glm-latest"
+      ],
+      "_authority": "merge"
+    },
     "glm-5-2": {
       "max_input_tokens": 1048576,
       "max_output_tokens": 131072,
@@ -8435,12 +8601,10 @@
       "supports_response_schema": true,
       "_sources": [
         "litellm:mistral/mistral-large-2512",
-        "openrouter:mistralai/mistral-large-2512",
         "models.dev:mistral/mistral-large-2512"
       ],
       "_conflicts": [
-        "supports_pdf_input(litellm:mistral/mistral-large-2512=False, openrouter:mistralai/mistral-large-2512=True, models.dev:mistral/mistral-large-2512=False)",
-        "supports_response_schema(litellm:mistral/mistral-large-2512=True, openrouter:mistralai/mistral-large-2512=True, models.dev:mistral/mistral-large-2512=False)"
+        "supports_response_schema(litellm:mistral/mistral-large-2512=True, models.dev:mistral/mistral-large-2512=False)"
       ],
       "_authority": "merge"
     },
@@ -9125,7 +9289,7 @@
     },
     "kimi-k3": {
       "max_input_tokens": 1048576,
-      "max_output_tokens": 589824,
+      "max_output_tokens": 1048576,
       "mode": "chat",
       "supports_vision": true,
       "supports_audio_input": false,
@@ -9140,13 +9304,14 @@
       "_sources": [
         "litellm:moonshot/kimi-k3",
         "litellm:perplexity/perplexity/kimi-k3",
+        "models.dev:alibaba/kimi-k3",
         "models.dev:nvidia/moonshotai/kimi-k3"
       ],
       "_conflicts": [
-        "supports_vision(litellm:moonshot/kimi-k3=True, litellm:perplexity/perplexity/kimi-k3=False, models.dev:nvidia/moonshotai/kimi-k3=True)",
-        "supports_video_input(litellm:moonshot/kimi-k3=False, litellm:perplexity/perplexity/kimi-k3=False, models.dev:nvidia/moonshotai/kimi-k3=True)",
-        "supports_response_schema(litellm:moonshot/kimi-k3=True, litellm:perplexity/perplexity/kimi-k3=False, models.dev:nvidia/moonshotai/kimi-k3=False)",
-        "max_output_tokens(litellm:moonshot/kimi-k3=1048576, models.dev:nvidia/moonshotai/kimi-k3=131072)"
+        "supports_vision(litellm:moonshot/kimi-k3=True, litellm:perplexity/perplexity/kimi-k3=False, models.dev:alibaba/kimi-k3=True, models.dev:nvidia/moonshotai/kimi-k3=True)",
+        "supports_video_input(litellm:moonshot/kimi-k3=False, litellm:perplexity/perplexity/kimi-k3=False, models.dev:alibaba/kimi-k3=False, models.dev:nvidia/moonshotai/kimi-k3=True)",
+        "supports_response_schema(litellm:moonshot/kimi-k3=True, litellm:perplexity/perplexity/kimi-k3=False, models.dev:alibaba/kimi-k3=False, models.dev:nvidia/moonshotai/kimi-k3=False)",
+        "max_output_tokens(litellm:moonshot/kimi-k3=1048576, models.dev:alibaba/kimi-k3=1048576, models.dev:nvidia/moonshotai/kimi-k3=131072)"
       ],
       "_authority": "merge"
     },
@@ -9618,7 +9783,7 @@
       "supports_audio_output": false,
       "supports_image_output": false,
       "supports_function_calling": true,
-      "supports_reasoning": false,
+      "supports_reasoning": true,
       "supports_prompt_caching": true,
       "supports_response_schema": true,
       "_sources": [
@@ -9637,7 +9802,7 @@
       "supports_audio_output": false,
       "supports_image_output": false,
       "supports_function_calling": true,
-      "supports_reasoning": false,
+      "supports_reasoning": true,
       "supports_prompt_caching": true,
       "supports_response_schema": true,
       "_sources": [
@@ -9791,7 +9956,7 @@
       "supports_audio_output": false,
       "supports_image_output": false,
       "supports_function_calling": true,
-      "supports_reasoning": false,
+      "supports_reasoning": true,
       "supports_prompt_caching": true,
       "supports_response_schema": true,
       "_sources": [
@@ -9810,7 +9975,7 @@
       "supports_audio_output": false,
       "supports_image_output": false,
       "supports_function_calling": true,
-      "supports_reasoning": false,
+      "supports_reasoning": true,
       "supports_prompt_caching": true,
       "supports_response_schema": true,
       "_sources": [
@@ -9915,7 +10080,7 @@
     },
     "llama-3.1-70b-instruct": {
       "max_input_tokens": 131072,
-      "max_output_tokens": 16384,
+      "max_output_tokens": 8192,
       "mode": "chat",
       "supports_vision": false,
       "supports_audio_input": false,
@@ -9935,7 +10100,7 @@
       "_conflicts": [
         "supports_function_calling(litellm:perplexity/llama-3.1-70b-instruct=False, openrouter:meta-llama/llama-3.1-70b-instruct=True, models.dev:nvidia/meta/llama-3.1-70b-instruct=True)",
         "supports_response_schema(litellm:perplexity/llama-3.1-70b-instruct=False, openrouter:meta-llama/llama-3.1-70b-instruct=True, models.dev:nvidia/meta/llama-3.1-70b-instruct=False)",
-        "max_output_tokens(litellm:perplexity/llama-3.1-70b-instruct=131072, openrouter:meta-llama/llama-3.1-70b-instruct=16384, models.dev:nvidia/meta/llama-3.1-70b-instruct=4096)"
+        "max_output_tokens(litellm:perplexity/llama-3.1-70b-instruct=131072, openrouter:meta-llama/llama-3.1-70b-instruct=8192, models.dev:nvidia/meta/llama-3.1-70b-instruct=4096)"
       ],
       "_authority": "merge"
     },
@@ -10405,7 +10570,7 @@
       ],
       "_conflicts": [
         "supports_response_schema(litellm:perplexity/perplexity/deepseek-v4-flash-0731=False, openrouter:deepseek/deepseek-v4-flash-0731=True, models.dev:alibaba/deepseek-v4-flash-0731=False, models.dev:nvidia/deepseek-ai/deepseek-v4-flash-0731=False)",
-        "max_output_tokens(openrouter:deepseek/deepseek-v4-flash-0731=131072, models.dev:alibaba/deepseek-v4-flash-0731=384000, models.dev:nvidia/deepseek-ai/deepseek-v4-flash-0731=384000)"
+        "max_output_tokens(openrouter:deepseek/deepseek-v4-flash-0731=943718, models.dev:alibaba/deepseek-v4-flash-0731=384000, models.dev:nvidia/deepseek-ai/deepseek-v4-flash-0731=384000)"
       ],
       "_authority": "merge"
     },
@@ -10568,6 +10733,44 @@
       "supports_response_schema": false,
       "_sources": [
         "litellm:rerank-v3.5"
+      ],
+      "_authority": "merge"
+    },
+    "rerank-v4.0-fast": {
+      "max_input_tokens": 32768,
+      "max_output_tokens": 32768,
+      "mode": "chat",
+      "supports_vision": false,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": false,
+      "supports_reasoning": false,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "litellm:rerank-v4.0-fast"
+      ],
+      "_authority": "merge"
+    },
+    "rerank-v4.0-pro": {
+      "max_input_tokens": 32768,
+      "max_output_tokens": 32768,
+      "mode": "chat",
+      "supports_vision": false,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": false,
+      "supports_reasoning": false,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "litellm:rerank-v4.0-pro"
       ],
       "_authority": "merge"
     },
@@ -10903,6 +11106,25 @@
       "supports_response_schema": false,
       "_sources": [
         "litellm:voyage/voyage-3"
+      ],
+      "_authority": "merge"
+    },
+    "voyage-multilingual-2": {
+      "max_input_tokens": 32000,
+      "max_output_tokens": 32000,
+      "mode": "chat",
+      "supports_vision": false,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": false,
+      "supports_reasoning": false,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "litellm:voyage/voyage-multilingual-2"
       ],
       "_authority": "merge"
     },
@@ -11878,19 +12100,19 @@
         "litellm:zai/glm-5.3",
         "litellm:perplexity/perplexity/glm-5.3",
         "openrouter:z-ai/glm-5.3",
+        "models.dev:nvidia/z-ai/glm-5.3",
         "models.dev:zhipuai/glm-5.3",
         "models.dev:zai/glm-5.3"
       ],
       "_conflicts": [
-        "supports_reasoning(litellm:zai/glm-5.3=True, litellm:perplexity/perplexity/glm-5.3=False, openrouter:z-ai/glm-5.3=True, models.dev:zhipuai/glm-5.3=True, models.dev:zai/glm-5.3=True)",
-        "supports_prompt_caching(litellm:zai/glm-5.3=True, litellm:perplexity/perplexity/glm-5.3=False, openrouter:z-ai/glm-5.3=False, models.dev:zhipuai/glm-5.3=False, models.dev:zai/glm-5.3=False)",
-        "supports_response_schema(litellm:zai/glm-5.3=False, litellm:perplexity/perplexity/glm-5.3=False, openrouter:z-ai/glm-5.3=True, models.dev:zhipuai/glm-5.3=False, models.dev:zai/glm-5.3=False)",
-        "max_output_tokens(litellm:zai/glm-5.3=128000, openrouter:z-ai/glm-5.3=943718, models.dev:zhipuai/glm-5.3=131072, models.dev:zai/glm-5.3=131072)"
+        "supports_reasoning(litellm:zai/glm-5.3=True, litellm:perplexity/perplexity/glm-5.3=False, openrouter:z-ai/glm-5.3=True, models.dev:nvidia/z-ai/glm-5.3=True, models.dev:zhipuai/glm-5.3=True, models.dev:zai/glm-5.3=True)",
+        "supports_prompt_caching(litellm:zai/glm-5.3=True, litellm:perplexity/perplexity/glm-5.3=False, openrouter:z-ai/glm-5.3=False, models.dev:nvidia/z-ai/glm-5.3=False, models.dev:zhipuai/glm-5.3=False, models.dev:zai/glm-5.3=False)",
+        "supports_response_schema(litellm:zai/glm-5.3=False, litellm:perplexity/perplexity/glm-5.3=False, openrouter:z-ai/glm-5.3=True, models.dev:nvidia/z-ai/glm-5.3=False, models.dev:zhipuai/glm-5.3=False, models.dev:zai/glm-5.3=False)"
       ],
       "_authority": "merge"
     },
     "glm-5.3-flash": {
-      "max_input_tokens": 1024288,
+      "max_input_tokens": 1000000,
       "max_output_tokens": 131072,
       "mode": "chat",
       "supports_vision": true,
@@ -11907,16 +12129,17 @@
         "litellm:zai/glm-5.3-flash",
         "litellm:perplexity/perplexity/glm-5.3-flash",
         "openrouter:z-ai/glm-5.3-flash",
+        "models.dev:nvidia/z-ai/glm-5.3-flash",
         "models.dev:zhipuai/glm-5.3-flash",
         "models.dev:zai/glm-5.3-flash"
       ],
       "_conflicts": [
-        "supports_vision(litellm:zai/glm-5.3-flash=True, litellm:perplexity/perplexity/glm-5.3-flash=False, openrouter:z-ai/glm-5.3-flash=True, models.dev:zhipuai/glm-5.3-flash=True, models.dev:zai/glm-5.3-flash=True)",
-        "supports_pdf_input(litellm:zai/glm-5.3-flash=False, litellm:perplexity/perplexity/glm-5.3-flash=False, openrouter:z-ai/glm-5.3-flash=False, models.dev:zhipuai/glm-5.3-flash=True, models.dev:zai/glm-5.3-flash=True)",
-        "supports_video_input(litellm:zai/glm-5.3-flash=False, litellm:perplexity/perplexity/glm-5.3-flash=False, openrouter:z-ai/glm-5.3-flash=True, models.dev:zhipuai/glm-5.3-flash=True, models.dev:zai/glm-5.3-flash=True)",
-        "supports_reasoning(litellm:zai/glm-5.3-flash=True, litellm:perplexity/perplexity/glm-5.3-flash=False, openrouter:z-ai/glm-5.3-flash=True, models.dev:zhipuai/glm-5.3-flash=True, models.dev:zai/glm-5.3-flash=True)",
-        "supports_prompt_caching(litellm:zai/glm-5.3-flash=True, litellm:perplexity/perplexity/glm-5.3-flash=False, openrouter:z-ai/glm-5.3-flash=False, models.dev:zhipuai/glm-5.3-flash=False, models.dev:zai/glm-5.3-flash=False)",
-        "supports_response_schema(litellm:zai/glm-5.3-flash=False, litellm:perplexity/perplexity/glm-5.3-flash=False, openrouter:z-ai/glm-5.3-flash=True, models.dev:zhipuai/glm-5.3-flash=False, models.dev:zai/glm-5.3-flash=False)"
+        "supports_vision(litellm:zai/glm-5.3-flash=True, litellm:perplexity/perplexity/glm-5.3-flash=False, openrouter:z-ai/glm-5.3-flash=True, models.dev:nvidia/z-ai/glm-5.3-flash=True, models.dev:zhipuai/glm-5.3-flash=True, models.dev:zai/glm-5.3-flash=True)",
+        "supports_pdf_input(litellm:zai/glm-5.3-flash=False, litellm:perplexity/perplexity/glm-5.3-flash=False, openrouter:z-ai/glm-5.3-flash=False, models.dev:nvidia/z-ai/glm-5.3-flash=True, models.dev:zhipuai/glm-5.3-flash=True, models.dev:zai/glm-5.3-flash=True)",
+        "supports_video_input(litellm:zai/glm-5.3-flash=False, litellm:perplexity/perplexity/glm-5.3-flash=False, openrouter:z-ai/glm-5.3-flash=True, models.dev:nvidia/z-ai/glm-5.3-flash=True, models.dev:zhipuai/glm-5.3-flash=True, models.dev:zai/glm-5.3-flash=True)",
+        "supports_reasoning(litellm:zai/glm-5.3-flash=True, litellm:perplexity/perplexity/glm-5.3-flash=False, openrouter:z-ai/glm-5.3-flash=True, models.dev:nvidia/z-ai/glm-5.3-flash=True, models.dev:zhipuai/glm-5.3-flash=True, models.dev:zai/glm-5.3-flash=True)",
+        "supports_prompt_caching(litellm:zai/glm-5.3-flash=True, litellm:perplexity/perplexity/glm-5.3-flash=False, openrouter:z-ai/glm-5.3-flash=False, models.dev:nvidia/z-ai/glm-5.3-flash=False, models.dev:zhipuai/glm-5.3-flash=False, models.dev:zai/glm-5.3-flash=False)",
+        "supports_response_schema(litellm:zai/glm-5.3-flash=False, litellm:perplexity/perplexity/glm-5.3-flash=False, openrouter:z-ai/glm-5.3-flash=True, models.dev:nvidia/z-ai/glm-5.3-flash=False, models.dev:zhipuai/glm-5.3-flash=False, models.dev:zai/glm-5.3-flash=False)"
       ],
       "_authority": "merge"
     },
@@ -12013,8 +12236,7 @@
       ],
       "_conflicts": [
         "supports_prompt_caching(litellm:zai/glm-4.7-flash=True, openrouter:z-ai/glm-4.7-flash=False, models.dev:zhipuai/glm-4.7-flash=False, models.dev:zai/glm-4.7-flash=False)",
-        "supports_response_schema(litellm:zai/glm-4.7-flash=False, openrouter:z-ai/glm-4.7-flash=True, models.dev:zhipuai/glm-4.7-flash=False, models.dev:zai/glm-4.7-flash=False)",
-        "max_output_tokens(litellm:zai/glm-4.7-flash=128000, openrouter:z-ai/glm-4.7-flash=16384, models.dev:zhipuai/glm-4.7-flash=131072, models.dev:zai/glm-4.7-flash=131072)"
+        "supports_response_schema(litellm:zai/glm-4.7-flash=False, openrouter:z-ai/glm-4.7-flash=True, models.dev:zhipuai/glm-4.7-flash=False, models.dev:zai/glm-4.7-flash=False)"
       ],
       "_authority": "merge"
     },
@@ -12599,16 +12821,16 @@
       "_authority": "merge"
     },
     "gemini-2.5-flash-native-audio-preview-12-2025": {
-      "max_input_tokens": 1048576,
+      "max_input_tokens": 131072,
       "max_output_tokens": 8192,
       "mode": "chat",
-      "supports_vision": false,
+      "supports_vision": true,
       "supports_audio_input": true,
       "supports_pdf_input": false,
       "supports_video_input": false,
       "supports_audio_output": true,
       "supports_image_output": false,
-      "supports_function_calling": false,
+      "supports_function_calling": true,
       "supports_reasoning": false,
       "supports_prompt_caching": false,
       "supports_response_schema": false,
@@ -12642,6 +12864,55 @@
       ],
       "_authority": "merge"
     },
+    "gemini-3.8-live": {
+      "max_input_tokens": 131072,
+      "max_output_tokens": 65536,
+      "mode": "chat",
+      "supports_vision": true,
+      "supports_audio_input": true,
+      "supports_pdf_input": false,
+      "supports_video_input": true,
+      "supports_audio_output": true,
+      "supports_image_output": false,
+      "supports_function_calling": true,
+      "supports_reasoning": false,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "litellm:gemini-3.8-live",
+        "litellm:gemini/gemini-3.8-live"
+      ],
+      "_conflicts": [
+        "supports_video_input(litellm:gemini-3.8-live=True, litellm:gemini/gemini-3.8-live=False)",
+        "supports_audio_output(litellm:gemini-3.8-live=True, litellm:gemini/gemini-3.8-live=False)"
+      ],
+      "_authority": "merge"
+    },
+    "gemini-3.8-live-extended-thinking": {
+      "max_input_tokens": 131072,
+      "max_output_tokens": 65536,
+      "mode": "chat",
+      "supports_vision": true,
+      "supports_audio_input": true,
+      "supports_pdf_input": false,
+      "supports_video_input": true,
+      "supports_audio_output": true,
+      "supports_image_output": false,
+      "supports_function_calling": true,
+      "supports_reasoning": true,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "litellm:gemini-3.8-live-extended-thinking",
+        "litellm:gemini/gemini-3.8-live-extended-thinking"
+      ],
+      "_conflicts": [
+        "supports_video_input(litellm:gemini-3.8-live-extended-thinking=True, litellm:gemini/gemini-3.8-live-extended-thinking=False)",
+        "supports_audio_output(litellm:gemini-3.8-live-extended-thinking=True, litellm:gemini/gemini-3.8-live-extended-thinking=False)",
+        "supports_reasoning(litellm:gemini-3.8-live-extended-thinking=True, litellm:gemini/gemini-3.8-live-extended-thinking=False)"
+      ],
+      "_authority": "merge"
+    },
     "gemini-3.1-flash-tts-preview": {
       "max_input_tokens": 8192,
       "max_output_tokens": 16384,
@@ -12668,7 +12939,7 @@
     },
     "gemini-pro-latest": {
       "max_input_tokens": 1048576,
-      "max_output_tokens": 65535,
+      "max_output_tokens": 65536,
       "mode": "chat",
       "supports_vision": true,
       "supports_audio_input": true,
@@ -12686,11 +12957,36 @@
       ],
       "_authority": "merge"
     },
+    "deepseek-flash": {
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 393216,
+      "mode": "chat",
+      "supports_vision": true,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": true,
+      "supports_reasoning": true,
+      "supports_prompt_caching": true,
+      "supports_response_schema": true,
+      "_sources": [
+        "litellm:deepseek-flash",
+        "litellm:deepseek/deepseek-flash",
+        "models.dev:deepseek/deepseek-flash"
+      ],
+      "_conflicts": [
+        "supports_prompt_caching(litellm:deepseek-flash=True, litellm:deepseek/deepseek-flash=True, models.dev:deepseek/deepseek-flash=False)",
+        "supports_response_schema(litellm:deepseek-flash=True, litellm:deepseek/deepseek-flash=True, models.dev:deepseek/deepseek-flash=False)"
+      ],
+      "_authority": "merge"
+    },
     "deepseek-v4-flash": {
       "max_input_tokens": 1000000,
       "max_output_tokens": 393216,
       "mode": "chat",
-      "supports_vision": false,
+      "supports_vision": true,
       "supports_audio_input": false,
       "supports_pdf_input": false,
       "supports_video_input": false,
@@ -12708,6 +13004,7 @@
         "models.dev:deepseek/deepseek-v4-flash"
       ],
       "_conflicts": [
+        "supports_vision(litellm:deepseek-v4-flash=True, litellm:deepseek/deepseek-v4-flash=True, openrouter:deepseek/deepseek-v4-flash=False, models.dev:nvidia/deepseek-ai/deepseek-v4-flash=False, models.dev:deepseek/deepseek-v4-flash=True)",
         "supports_prompt_caching(litellm:deepseek-v4-flash=True, litellm:deepseek/deepseek-v4-flash=True, openrouter:deepseek/deepseek-v4-flash=False, models.dev:nvidia/deepseek-ai/deepseek-v4-flash=False, models.dev:deepseek/deepseek-v4-flash=False)",
         "supports_response_schema(litellm:deepseek-v4-flash=True, litellm:deepseek/deepseek-v4-flash=True, openrouter:deepseek/deepseek-v4-flash=True, models.dev:nvidia/deepseek-ai/deepseek-v4-flash=False, models.dev:deepseek/deepseek-v4-flash=False)"
       ],
@@ -12715,7 +13012,7 @@
     },
     "deepseek-v4-flash-vision-exp": {
       "max_input_tokens": 1000000,
-      "max_output_tokens": 388608,
+      "max_output_tokens": 393216,
       "mode": "chat",
       "supports_vision": true,
       "supports_audio_input": false,
@@ -12735,7 +13032,8 @@
       ],
       "_conflicts": [
         "supports_prompt_caching(litellm:deepseek-v4-flash-vision-exp=True, litellm:deepseek/deepseek-v4-flash-vision-exp=True, openrouter:deepseek/deepseek-v4-flash-vision-exp=False, models.dev:deepseek/deepseek-v4-flash-vision-exp=False)",
-        "supports_response_schema(litellm:deepseek-v4-flash-vision-exp=True, litellm:deepseek/deepseek-v4-flash-vision-exp=True, openrouter:deepseek/deepseek-v4-flash-vision-exp=True, models.dev:deepseek/deepseek-v4-flash-vision-exp=False)"
+        "supports_response_schema(litellm:deepseek-v4-flash-vision-exp=True, litellm:deepseek/deepseek-v4-flash-vision-exp=True, openrouter:deepseek/deepseek-v4-flash-vision-exp=True, models.dev:deepseek/deepseek-v4-flash-vision-exp=False)",
+        "max_output_tokens(litellm:deepseek-v4-flash-vision-exp=393216, litellm:deepseek/deepseek-v4-flash-vision-exp=393216, openrouter:deepseek/deepseek-v4-flash-vision-exp=943718, models.dev:deepseek/deepseek-v4-flash-vision-exp=384000)"
       ],
       "_authority": "merge"
     },
@@ -12878,6 +13176,25 @@
       "supports_response_schema": false,
       "_sources": [
         "litellm:gpt-live-transcribe"
+      ],
+      "_authority": "merge"
+    },
+    "gpt-live-1": {
+      "max_input_tokens": null,
+      "max_output_tokens": null,
+      "mode": "chat",
+      "supports_vision": false,
+      "supports_audio_input": true,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": true,
+      "supports_image_output": false,
+      "supports_function_calling": true,
+      "supports_reasoning": false,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "litellm:gpt-live-1"
       ],
       "_authority": "merge"
     },
@@ -13309,7 +13626,7 @@
       "_authority": "merge"
     },
     "gemini-omni-1.1-flash": {
-      "max_input_tokens": 131072,
+      "max_input_tokens": 1048576,
       "max_output_tokens": 65536,
       "mode": "chat",
       "supports_vision": true,
@@ -13434,7 +13751,7 @@
       "_authority": "merge"
     },
     "grok-imagine-image-quality": {
-      "max_input_tokens": 16000,
+      "max_input_tokens": null,
       "max_output_tokens": null,
       "mode": "chat",
       "supports_vision": true,
@@ -13448,11 +13765,7 @@
       "supports_prompt_caching": false,
       "supports_response_schema": false,
       "_sources": [
-        "litellm:xai/grok-imagine-image-quality",
-        "models.dev:xai/grok-imagine-image-quality"
-      ],
-      "_conflicts": [
-        "supports_pdf_input(litellm:xai/grok-imagine-image-quality=False, models.dev:xai/grok-imagine-image-quality=True)"
+        "litellm:xai/grok-imagine-image-quality"
       ],
       "_authority": "merge"
     },
@@ -13514,7 +13827,7 @@
       "_authority": "merge"
     },
     "grok-imagine-image-2.0": {
-      "max_input_tokens": 64000,
+      "max_input_tokens": null,
       "max_output_tokens": null,
       "mode": "chat",
       "supports_vision": true,
@@ -13529,11 +13842,129 @@
       "supports_response_schema": false,
       "_sources": [
         "litellm:xai/grok-imagine-image-2.0",
-        "litellm:low/1024-x-1024/grok-imagine-image-2.0",
-        "models.dev:xai/grok-imagine-image-2.0"
+        "litellm:low/1024-x-1024/grok-imagine-image-2.0"
+      ],
+      "_authority": "merge"
+    },
+    "grok-imagine-video": {
+      "max_input_tokens": 1024,
+      "max_output_tokens": null,
+      "mode": "chat",
+      "supports_vision": true,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_video_input": true,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": false,
+      "supports_reasoning": false,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "litellm:xai/grok-imagine-video",
+        "models.dev:xai/grok-imagine-video"
       ],
       "_conflicts": [
-        "supports_pdf_input(litellm:xai/grok-imagine-image-2.0=False, litellm:low/1024-x-1024/grok-imagine-image-2.0=False, models.dev:xai/grok-imagine-image-2.0=True)"
+        "supports_pdf_input(litellm:xai/grok-imagine-video=False, models.dev:xai/grok-imagine-video=True)"
+      ],
+      "_authority": "merge"
+    },
+    "grok-imagine-video-1.5": {
+      "max_input_tokens": 1024,
+      "max_output_tokens": null,
+      "mode": "chat",
+      "supports_vision": true,
+      "supports_audio_input": true,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": false,
+      "supports_reasoning": false,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "litellm:xai/grok-imagine-video-1.5",
+        "models.dev:xai/grok-imagine-video-1.5"
+      ],
+      "_conflicts": [
+        "supports_pdf_input(litellm:xai/grok-imagine-video-1.5=False, models.dev:xai/grok-imagine-video-1.5=True)"
+      ],
+      "_authority": "merge"
+    },
+    "grok-imagine-video-1.5-2026-05-30": {
+      "max_input_tokens": null,
+      "max_output_tokens": null,
+      "mode": "chat",
+      "supports_vision": true,
+      "supports_audio_input": true,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": false,
+      "supports_reasoning": false,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "litellm:xai/grok-imagine-video-1.5-2026-05-30"
+      ],
+      "_authority": "merge"
+    },
+    "grok-imagine-video-1.5-preview": {
+      "max_input_tokens": null,
+      "max_output_tokens": null,
+      "mode": "chat",
+      "supports_vision": true,
+      "supports_audio_input": true,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": false,
+      "supports_reasoning": false,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "litellm:xai/grok-imagine-video-1.5-preview"
+      ],
+      "_authority": "merge"
+    },
+    "grok-voice-transcribe-1.0": {
+      "max_input_tokens": null,
+      "max_output_tokens": null,
+      "mode": "chat",
+      "supports_vision": false,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": false,
+      "supports_reasoning": false,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "litellm:xai/grok-voice-transcribe-1.0"
+      ],
+      "_authority": "merge"
+    },
+    "grok-voice-transcribe-2.0": {
+      "max_input_tokens": null,
+      "max_output_tokens": null,
+      "mode": "chat",
+      "supports_vision": false,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": false,
+      "supports_reasoning": false,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "litellm:xai/grok-voice-transcribe-2.0"
       ],
       "_authority": "merge"
     },
@@ -13951,6 +14382,25 @@
       ],
       "_authority": "merge"
     },
+    "lyria-3.5": {
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 65536,
+      "mode": "chat",
+      "supports_vision": false,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": true,
+      "supports_image_output": false,
+      "supports_function_calling": false,
+      "supports_reasoning": false,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "litellm:gemini/lyria-3.5"
+      ],
+      "_authority": "merge"
+    },
     "nemotron-3.5-lightning-30b-a3b": {
       "max_input_tokens": 262144,
       "max_output_tokens": 262144,
@@ -13962,21 +14412,18 @@
       "supports_audio_output": false,
       "supports_image_output": false,
       "supports_function_calling": true,
-      "supports_reasoning": false,
+      "supports_reasoning": true,
       "supports_prompt_caching": false,
       "supports_response_schema": false,
       "_sources": [
         "litellm:perplexity/perplexity/nemotron-3.5-lightning-30b-a3b",
         "models.dev:nvidia/nvidia/nemotron-3.5-lightning-30b-a3b"
       ],
-      "_conflicts": [
-        "supports_reasoning(litellm:perplexity/perplexity/nemotron-3.5-lightning-30b-a3b=False, models.dev:nvidia/nvidia/nemotron-3.5-lightning-30b-a3b=True)"
-      ],
       "_authority": "merge"
     },
     "nemotron-3-ultra-550b-a55b": {
       "max_input_tokens": 631072,
-      "max_output_tokens": 49152,
+      "max_output_tokens": 124028,
       "mode": "chat",
       "supports_vision": false,
       "supports_audio_input": false,
@@ -13994,9 +14441,91 @@
         "models.dev:nvidia/nvidia/nemotron-3-ultra-550b-a55b"
       ],
       "_conflicts": [
-        "supports_reasoning(litellm:perplexity/perplexity/nemotron-3-ultra-550b-a55b=False, openrouter:nvidia/nemotron-3-ultra-550b-a55b=True, models.dev:nvidia/nvidia/nemotron-3-ultra-550b-a55b=True)",
         "supports_response_schema(litellm:perplexity/perplexity/nemotron-3-ultra-550b-a55b=False, openrouter:nvidia/nemotron-3-ultra-550b-a55b=True, models.dev:nvidia/nvidia/nemotron-3-ultra-550b-a55b=False)",
-        "max_input_tokens(openrouter:nvidia/nemotron-3-ultra-550b-a55b=262144, models.dev:nvidia/nvidia/nemotron-3-ultra-550b-a55b=1000000)"
+        "max_input_tokens(openrouter:nvidia/nemotron-3-ultra-550b-a55b=262144, models.dev:nvidia/nvidia/nemotron-3-ultra-550b-a55b=1000000)",
+        "max_output_tokens(openrouter:nvidia/nemotron-3-ultra-550b-a55b=182520, models.dev:nvidia/nvidia/nemotron-3-ultra-550b-a55b=65536)"
+      ],
+      "_authority": "merge"
+    },
+    "gpt-5.5-cyber": {
+      "max_input_tokens": null,
+      "max_output_tokens": null,
+      "mode": "chat",
+      "supports_vision": false,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": false,
+      "supports_reasoning": true,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "litellm:gpt-5.5-cyber"
+      ],
+      "_authority": "merge"
+    },
+    "gpt-rosalind-research": {
+      "max_input_tokens": null,
+      "max_output_tokens": null,
+      "mode": "chat",
+      "supports_vision": false,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": false,
+      "supports_reasoning": false,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "litellm:gpt-rosalind-research"
+      ],
+      "_authority": "merge"
+    },
+    "glm-5.3-flashx": {
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 131072,
+      "mode": "chat",
+      "supports_vision": true,
+      "supports_audio_input": false,
+      "supports_pdf_input": true,
+      "supports_video_input": true,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": true,
+      "supports_reasoning": true,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "openrouter:z-ai/glm-5.3-flashx",
+        "models.dev:zhipuai/glm-5.3-flashx",
+        "models.dev:zai/glm-5.3-flashx"
+      ],
+      "_conflicts": [
+        "supports_pdf_input(openrouter:z-ai/glm-5.3-flashx=False, models.dev:zhipuai/glm-5.3-flashx=True, models.dev:zai/glm-5.3-flashx=True)",
+        "supports_response_schema(openrouter:z-ai/glm-5.3-flashx=True, models.dev:zhipuai/glm-5.3-flashx=False, models.dev:zai/glm-5.3-flashx=False)"
+      ],
+      "_authority": "merge"
+    },
+    "deepseek-v4.1-flash": {
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 384000,
+      "mode": "chat",
+      "supports_vision": true,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": true,
+      "supports_reasoning": true,
+      "supports_prompt_caching": false,
+      "supports_response_schema": true,
+      "_sources": [
+        "openrouter:deepseek/deepseek-v4.1-flash"
       ],
       "_authority": "merge"
     },
@@ -14157,8 +14686,8 @@
       "_authority": "merge"
     },
     "glm-5.3-flash:batch": {
-      "max_input_tokens": 1048575,
-      "max_output_tokens": 943717,
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 943718,
       "mode": "chat",
       "supports_vision": true,
       "supports_audio_input": false,
@@ -14172,6 +14701,44 @@
       "supports_response_schema": true,
       "_sources": [
         "openrouter:z-ai/glm-5.3-flash:batch"
+      ],
+      "_authority": "merge"
+    },
+    "deepseek-v4-flash-vision-exp:batch": {
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 943718,
+      "mode": "chat",
+      "supports_vision": true,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": true,
+      "supports_reasoning": true,
+      "supports_prompt_caching": false,
+      "supports_response_schema": true,
+      "_sources": [
+        "openrouter:deepseek/deepseek-v4-flash-vision-exp:batch"
+      ],
+      "_authority": "merge"
+    },
+    "glm-5.3:batch": {
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 943718,
+      "mode": "chat",
+      "supports_vision": false,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": true,
+      "supports_reasoning": true,
+      "supports_prompt_caching": false,
+      "supports_response_schema": true,
+      "_sources": [
+        "openrouter:z-ai/glm-5.3:batch"
       ],
       "_authority": "merge"
     },
@@ -14191,6 +14758,25 @@
       "supports_response_schema": true,
       "_sources": [
         "openrouter:qwen/qwen3.8-27b"
+      ],
+      "_authority": "merge"
+    },
+    "qwen3.8-27b:free": {
+      "max_input_tokens": 262144,
+      "max_output_tokens": 235929,
+      "mode": "chat",
+      "supports_vision": true,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_video_input": true,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": true,
+      "supports_reasoning": true,
+      "supports_prompt_caching": false,
+      "supports_response_schema": true,
+      "_sources": [
+        "openrouter:qwen/qwen3.8-27b:free"
       ],
       "_authority": "merge"
     },
@@ -14215,7 +14801,7 @@
     },
     "qwen3.8-2.4t-a95b": {
       "max_input_tokens": 1048576,
-      "max_output_tokens": 262144,
+      "max_output_tokens": 131072,
       "mode": "chat",
       "supports_vision": false,
       "supports_audio_input": false,
@@ -14295,7 +14881,7 @@
     },
     "nemotron-3.5-lightning": {
       "max_input_tokens": 262144,
-      "max_output_tokens": 131072,
+      "max_output_tokens": 235929,
       "mode": "chat",
       "supports_vision": false,
       "supports_audio_input": false,
@@ -14333,7 +14919,7 @@
     },
     "muse-glimmer-30b": {
       "max_input_tokens": 131072,
-      "max_output_tokens": 124518,
+      "max_output_tokens": 73728,
       "mode": "chat",
       "supports_vision": true,
       "supports_audio_input": false,
@@ -14350,7 +14936,8 @@
         "models.dev:nvidia/meta/muse-glimmer-30b"
       ],
       "_conflicts": [
-        "supports_response_schema(openrouter:meta/muse-glimmer-30b=True, models.dev:nvidia/meta/muse-glimmer-30b=False)"
+        "supports_response_schema(openrouter:meta/muse-glimmer-30b=True, models.dev:nvidia/meta/muse-glimmer-30b=False)",
+        "max_output_tokens(openrouter:meta/muse-glimmer-30b=16384, models.dev:nvidia/meta/muse-glimmer-30b=131072)"
       ],
       "_authority": "merge"
     },
@@ -14677,6 +15264,44 @@
       ],
       "_authority": "merge"
     },
+    "glm-5.2:batch": {
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 943718,
+      "mode": "chat",
+      "supports_vision": false,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": true,
+      "supports_reasoning": true,
+      "supports_prompt_caching": false,
+      "supports_response_schema": true,
+      "_sources": [
+        "openrouter:z-ai/glm-5.2:batch"
+      ],
+      "_authority": "merge"
+    },
+    "glm-5.2:free": {
+      "max_input_tokens": 32768,
+      "max_output_tokens": 29491,
+      "mode": "chat",
+      "supports_vision": false,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": false,
+      "supports_reasoning": true,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "openrouter:z-ai/glm-5.2:free"
+      ],
+      "_authority": "merge"
+    },
     "claude-fable-5:batch": {
       "max_input_tokens": 1000000,
       "max_output_tokens": 128000,
@@ -14709,7 +15334,7 @@
       "supports_function_calling": false,
       "supports_reasoning": true,
       "supports_prompt_caching": false,
-      "supports_response_schema": true,
+      "supports_response_schema": false,
       "_sources": [
         "openrouter:nvidia/nemotron-3.5-content-safety"
       ],
@@ -14793,25 +15418,6 @@
       "supports_response_schema": true,
       "_sources": [
         "openrouter:minimax/minimax-m3:batch"
-      ],
-      "_authority": "merge"
-    },
-    "minimax-m3:free": {
-      "max_input_tokens": 1048576,
-      "max_output_tokens": 943718,
-      "mode": "chat",
-      "supports_vision": true,
-      "supports_audio_input": false,
-      "supports_pdf_input": false,
-      "supports_video_input": true,
-      "supports_audio_output": false,
-      "supports_image_output": false,
-      "supports_function_calling": true,
-      "supports_reasoning": true,
-      "supports_prompt_caching": false,
-      "supports_response_schema": true,
-      "_sources": [
-        "openrouter:minimax/minimax-m3:free"
       ],
       "_authority": "merge"
     },
@@ -15225,25 +15831,6 @@
       ],
       "_authority": "merge"
     },
-    "gemma-4-31b-it:batch": {
-      "max_input_tokens": 262144,
-      "max_output_tokens": 235929,
-      "mode": "chat",
-      "supports_vision": true,
-      "supports_audio_input": false,
-      "supports_pdf_input": false,
-      "supports_video_input": true,
-      "supports_audio_output": false,
-      "supports_image_output": false,
-      "supports_function_calling": true,
-      "supports_reasoning": true,
-      "supports_prompt_caching": false,
-      "supports_response_schema": true,
-      "_sources": [
-        "openrouter:google/gemma-4-31b-it:batch"
-      ],
-      "_authority": "merge"
-    },
     "gemma-4-31b-it:free": {
       "max_input_tokens": 262144,
       "max_output_tokens": 32768,
@@ -15335,25 +15922,6 @@
       ],
       "_authority": "merge"
     },
-    "minimax-m2.7:free": {
-      "max_input_tokens": 196608,
-      "max_output_tokens": 176947,
-      "mode": "chat",
-      "supports_vision": false,
-      "supports_audio_input": false,
-      "supports_pdf_input": false,
-      "supports_video_input": false,
-      "supports_audio_output": false,
-      "supports_image_output": false,
-      "supports_function_calling": true,
-      "supports_reasoning": true,
-      "supports_prompt_caching": false,
-      "supports_response_schema": true,
-      "_sources": [
-        "openrouter:minimax/minimax-m2.7:free"
-      ],
-      "_authority": "merge"
-    },
     "gpt-5.4-nano:batch": {
       "max_input_tokens": 400000,
       "max_output_tokens": 128000,
@@ -15392,6 +15960,25 @@
       ],
       "_authority": "merge"
     },
+    "mistral-small-2603:batch": {
+      "max_input_tokens": 262144,
+      "max_output_tokens": 209715,
+      "mode": "chat",
+      "supports_vision": true,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": true,
+      "supports_reasoning": true,
+      "supports_prompt_caching": false,
+      "supports_response_schema": true,
+      "_sources": [
+        "openrouter:mistralai/mistral-small-2603:batch"
+      ],
+      "_authority": "merge"
+    },
     "glm-5-turbo": {
       "max_input_tokens": 201376,
       "max_output_tokens": 131072,
@@ -15416,8 +16003,8 @@
       "_authority": "merge"
     },
     "nemotron-3-super-120b-a12b": {
-      "max_input_tokens": 631072,
-      "max_output_tokens": 139264,
+      "max_input_tokens": 262144,
+      "max_output_tokens": 249036,
       "mode": "chat",
       "supports_vision": false,
       "supports_audio_input": false,
@@ -15434,9 +16021,7 @@
         "models.dev:nvidia/nvidia/nemotron-3-super-120b-a12b"
       ],
       "_conflicts": [
-        "supports_response_schema(openrouter:nvidia/nemotron-3-super-120b-a12b=True, models.dev:nvidia/nvidia/nemotron-3-super-120b-a12b=False)",
-        "max_input_tokens(openrouter:nvidia/nemotron-3-super-120b-a12b=1000000, models.dev:nvidia/nvidia/nemotron-3-super-120b-a12b=262144)",
-        "max_output_tokens(openrouter:nvidia/nemotron-3-super-120b-a12b=16384, models.dev:nvidia/nvidia/nemotron-3-super-120b-a12b=262144)"
+        "supports_response_schema(openrouter:nvidia/nemotron-3-super-120b-a12b=True, models.dev:nvidia/nvidia/nemotron-3-super-120b-a12b=False)"
       ],
       "_authority": "merge"
     },
@@ -15461,7 +16046,7 @@
     },
     "qwen3.5-9b": {
       "max_input_tokens": 262144,
-      "max_output_tokens": 235929,
+      "max_output_tokens": 32768,
       "mode": "chat",
       "supports_vision": true,
       "supports_audio_input": false,
@@ -15727,7 +16312,7 @@
         "supports_audio_input(openrouter:qwen/qwen3.5-397b-a17b=False, models.dev:alibaba/qwen3.5-397b-a17b=True, models.dev:nvidia/qwen/qwen3.5-397b-a17b=False)",
         "supports_video_input(openrouter:qwen/qwen3.5-397b-a17b=True, models.dev:alibaba/qwen3.5-397b-a17b=True, models.dev:nvidia/qwen/qwen3.5-397b-a17b=False)",
         "supports_response_schema(openrouter:qwen/qwen3.5-397b-a17b=True, models.dev:alibaba/qwen3.5-397b-a17b=False, models.dev:nvidia/qwen/qwen3.5-397b-a17b=False)",
-        "max_output_tokens(openrouter:qwen/qwen3.5-397b-a17b=65536, models.dev:alibaba/qwen3.5-397b-a17b=65536, models.dev:nvidia/qwen/qwen3.5-397b-a17b=8192)"
+        "max_output_tokens(openrouter:qwen/qwen3.5-397b-a17b=235929, models.dev:alibaba/qwen3.5-397b-a17b=65536, models.dev:nvidia/qwen/qwen3.5-397b-a17b=8192)"
       ],
       "_authority": "merge"
     },
@@ -16008,6 +16593,44 @@
       "supports_response_schema": false,
       "_sources": [
         "openrouter:amazon/nova-2-lite-v1"
+      ],
+      "_authority": "merge"
+    },
+    "ministral-8b-2512:batch": {
+      "max_input_tokens": 262144,
+      "max_output_tokens": 209715,
+      "mode": "chat",
+      "supports_vision": true,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": true,
+      "supports_reasoning": false,
+      "supports_prompt_caching": false,
+      "supports_response_schema": true,
+      "_sources": [
+        "openrouter:mistralai/ministral-8b-2512:batch"
+      ],
+      "_authority": "merge"
+    },
+    "mistral-large-2512:batch": {
+      "max_input_tokens": 262144,
+      "max_output_tokens": 209715,
+      "mode": "chat",
+      "supports_vision": true,
+      "supports_audio_input": false,
+      "supports_pdf_input": true,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": true,
+      "supports_reasoning": false,
+      "supports_prompt_caching": false,
+      "supports_response_schema": true,
+      "_sources": [
+        "openrouter:mistralai/mistral-large-2512:batch"
       ],
       "_authority": "merge"
     },
@@ -16298,7 +16921,7 @@
     },
     "qwen3-vl-30b-a3b-instruct": {
       "max_input_tokens": 262144,
-      "max_output_tokens": 16384,
+      "max_output_tokens": 32768,
       "mode": "chat",
       "supports_vision": true,
       "supports_audio_input": false,
@@ -16519,7 +17142,7 @@
     },
     "qwen3-next-80b-a3b-thinking": {
       "max_input_tokens": 196608,
-      "max_output_tokens": 134348,
+      "max_output_tokens": 32768,
       "mode": "chat",
       "supports_vision": false,
       "supports_audio_input": false,
@@ -16536,14 +17159,13 @@
         "models.dev:alibaba/qwen3-next-80b-a3b-thinking"
       ],
       "_conflicts": [
-        "supports_response_schema(openrouter:qwen/qwen3-next-80b-a3b-thinking=True, models.dev:alibaba/qwen3-next-80b-a3b-thinking=False)",
-        "max_output_tokens(openrouter:qwen/qwen3-next-80b-a3b-thinking=235929, models.dev:alibaba/qwen3-next-80b-a3b-thinking=32768)"
+        "supports_response_schema(openrouter:qwen/qwen3-next-80b-a3b-thinking=True, models.dev:alibaba/qwen3-next-80b-a3b-thinking=False)"
       ],
       "_authority": "merge"
     },
     "qwen3-next-80b-a3b-instruct": {
       "max_input_tokens": 262144,
-      "max_output_tokens": 32768,
+      "max_output_tokens": 16384,
       "mode": "chat",
       "supports_vision": false,
       "supports_audio_input": false,
@@ -16561,8 +17183,7 @@
         "models.dev:nvidia/qwen/qwen3-next-80b-a3b-instruct"
       ],
       "_conflicts": [
-        "supports_response_schema(openrouter:qwen/qwen3-next-80b-a3b-instruct=True, models.dev:alibaba/qwen3-next-80b-a3b-instruct=False, models.dev:nvidia/qwen/qwen3-next-80b-a3b-instruct=False)",
-        "max_output_tokens(openrouter:qwen/qwen3-next-80b-a3b-instruct=235929, models.dev:alibaba/qwen3-next-80b-a3b-instruct=32768, models.dev:nvidia/qwen/qwen3-next-80b-a3b-instruct=16384)"
+        "supports_response_schema(openrouter:qwen/qwen3-next-80b-a3b-instruct=True, models.dev:alibaba/qwen3-next-80b-a3b-instruct=False, models.dev:nvidia/qwen/qwen3-next-80b-a3b-instruct=False)"
       ],
       "_authority": "merge"
     },
@@ -16606,7 +17227,7 @@
     },
     "deepseek-chat-v3.1": {
       "max_input_tokens": 163840,
-      "max_output_tokens": 144900,
+      "max_output_tokens": 32768,
       "mode": "chat",
       "supports_vision": false,
       "supports_audio_input": false,
@@ -16639,6 +17260,25 @@
       "supports_response_schema": true,
       "_sources": [
         "openrouter:mistralai/mistral-medium-3.1"
+      ],
+      "_authority": "merge"
+    },
+    "mistral-medium-3.1:batch": {
+      "max_input_tokens": 131072,
+      "max_output_tokens": 104857,
+      "mode": "chat",
+      "supports_vision": true,
+      "supports_audio_input": false,
+      "supports_pdf_input": true,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": true,
+      "supports_reasoning": false,
+      "supports_prompt_caching": false,
+      "supports_response_schema": true,
+      "_sources": [
+        "openrouter:mistralai/mistral-medium-3.1:batch"
       ],
       "_authority": "merge"
     },
@@ -16742,25 +17382,6 @@
       ],
       "_authority": "merge"
     },
-    "gpt-oss-20b:batch": {
-      "max_input_tokens": 131072,
-      "max_output_tokens": 117964,
-      "mode": "chat",
-      "supports_vision": false,
-      "supports_audio_input": false,
-      "supports_pdf_input": false,
-      "supports_video_input": false,
-      "supports_audio_output": false,
-      "supports_image_output": false,
-      "supports_function_calling": false,
-      "supports_reasoning": true,
-      "supports_prompt_caching": false,
-      "supports_response_schema": true,
-      "_sources": [
-        "openrouter:openai/gpt-oss-20b:batch"
-      ],
-      "_authority": "merge"
-    },
     "claude-opus-4.1": {
       "max_input_tokens": 200000,
       "max_output_tokens": 32000,
@@ -16796,6 +17417,25 @@
       "supports_response_schema": true,
       "_sources": [
         "openrouter:anthropic/claude-opus-4.1:batch"
+      ],
+      "_authority": "merge"
+    },
+    "codestral-2508:batch": {
+      "max_input_tokens": 256000,
+      "max_output_tokens": 204800,
+      "mode": "chat",
+      "supports_vision": false,
+      "supports_audio_input": false,
+      "supports_pdf_input": true,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": true,
+      "supports_reasoning": false,
+      "supports_prompt_caching": false,
+      "supports_response_schema": true,
+      "_sources": [
+        "openrouter:mistralai/codestral-2508:batch"
       ],
       "_authority": "merge"
     },
@@ -16901,7 +17541,7 @@
     },
     "qwen3-235b-a22b-2507": {
       "max_input_tokens": 262144,
-      "max_output_tokens": 16384,
+      "max_output_tokens": 235929,
       "mode": "chat",
       "supports_vision": false,
       "supports_audio_input": false,
@@ -16919,7 +17559,7 @@
       "_authority": "merge"
     },
     "mistral-small-3.2-24b-instruct": {
-      "max_input_tokens": 131072,
+      "max_input_tokens": 256000,
       "max_output_tokens": 16384,
       "mode": "chat",
       "supports_vision": true,
@@ -17070,25 +17710,6 @@
       ],
       "_authority": "merge"
     },
-    "gemini-2.5-pro-preview-05-06": {
-      "max_input_tokens": 1048576,
-      "max_output_tokens": 65535,
-      "mode": "chat",
-      "supports_vision": true,
-      "supports_audio_input": true,
-      "supports_pdf_input": true,
-      "supports_video_input": true,
-      "supports_audio_output": false,
-      "supports_image_output": false,
-      "supports_function_calling": true,
-      "supports_reasoning": true,
-      "supports_prompt_caching": false,
-      "supports_response_schema": true,
-      "_sources": [
-        "openrouter:google/gemini-2.5-pro-preview-05-06"
-      ],
-      "_authority": "merge"
-    },
     "llama-guard-4-12b": {
       "max_input_tokens": 145920,
       "max_output_tokens": 16384,
@@ -17106,9 +17727,6 @@
       "_sources": [
         "openrouter:meta-llama/llama-guard-4-12b",
         "models.dev:nvidia/meta/llama-guard-4-12b"
-      ],
-      "_conflicts": [
-        "supports_response_schema(openrouter:meta-llama/llama-guard-4-12b=True, models.dev:nvidia/meta/llama-guard-4-12b=False)"
       ],
       "_authority": "merge"
     },
@@ -17339,7 +17957,7 @@
     },
     "llama-4-maverick": {
       "max_input_tokens": 1048576,
-      "max_output_tokens": 115200,
+      "max_output_tokens": 16384,
       "mode": "chat",
       "supports_vision": true,
       "supports_audio_input": false,
@@ -17404,7 +18022,7 @@
       "supports_video_input": false,
       "supports_audio_output": false,
       "supports_image_output": false,
-      "supports_function_calling": false,
+      "supports_function_calling": true,
       "supports_reasoning": false,
       "supports_prompt_caching": false,
       "supports_response_schema": false,
@@ -17754,7 +18372,7 @@
       "supports_function_calling": false,
       "supports_reasoning": false,
       "supports_prompt_caching": false,
-      "supports_response_schema": false,
+      "supports_response_schema": true,
       "_sources": [
         "openrouter:qwen/qwen-2.5-coder-32b-instruct"
       ],
@@ -20453,44 +21071,6 @@
       ],
       "_authority": "merge"
     },
-    "grok-imagine-video": {
-      "max_input_tokens": 1024,
-      "max_output_tokens": null,
-      "mode": "chat",
-      "supports_vision": true,
-      "supports_audio_input": false,
-      "supports_pdf_input": true,
-      "supports_video_input": true,
-      "supports_audio_output": false,
-      "supports_image_output": false,
-      "supports_function_calling": false,
-      "supports_reasoning": false,
-      "supports_prompt_caching": false,
-      "supports_response_schema": false,
-      "_sources": [
-        "models.dev:xai/grok-imagine-video"
-      ],
-      "_authority": "merge"
-    },
-    "grok-imagine-video-1.5": {
-      "max_input_tokens": 1024,
-      "max_output_tokens": null,
-      "mode": "chat",
-      "supports_vision": true,
-      "supports_audio_input": true,
-      "supports_pdf_input": true,
-      "supports_video_input": false,
-      "supports_audio_output": false,
-      "supports_image_output": false,
-      "supports_function_calling": false,
-      "supports_reasoning": false,
-      "supports_prompt_caching": false,
-      "supports_response_schema": false,
-      "_sources": [
-        "models.dev:xai/grok-imagine-video-1.5"
-      ],
-      "_authority": "merge"
-    },
     "pixtral-12b": {
       "max_input_tokens": 128000,
       "max_output_tokens": 128000,
@@ -20548,22 +21128,41 @@
       ],
       "_authority": "merge"
     },
-    "qwen-3.8-27b": {
-      "max_input_tokens": 65536,
-      "max_output_tokens": 32768,
+    "jamba-large": {
+      "max_input_tokens": 256000,
+      "max_output_tokens": 4096,
       "mode": "chat",
-      "supports_vision": true,
+      "supports_vision": false,
       "supports_audio_input": false,
       "supports_pdf_input": false,
       "supports_video_input": false,
       "supports_audio_output": false,
       "supports_image_output": false,
       "supports_function_calling": true,
-      "supports_reasoning": true,
+      "supports_reasoning": false,
       "supports_prompt_caching": false,
       "supports_response_schema": false,
       "_sources": [
-        "models.dev:cerebras/qwen-3.8-27b"
+        "models.dev:ai21/jamba-large"
+      ],
+      "_authority": "merge"
+    },
+    "jamba-mini": {
+      "max_input_tokens": 256000,
+      "max_output_tokens": 4096,
+      "mode": "chat",
+      "supports_vision": false,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": true,
+      "supports_reasoning": false,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "models.dev:ai21/jamba-mini"
       ],
       "_authority": "merge"
     }
