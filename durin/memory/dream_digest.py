@@ -176,7 +176,8 @@ def map_dream_event(event_type: str, data: dict[str, Any], at_ms: int) -> list[d
         # is exactly the signal the operator needs.
         stage = data.get("stage", "?")
         source = data.get("source") or ""
-        is_entity_ref = ":" in source and "/" not in source
+        # A pair reported by the absorb judge (`a|b`) is not one entity ref.
+        is_entity_ref = ":" in source and "/" not in source and "|" not in source
         summary = f"Dream output unparseable during {stage}"
         if source:
             summary += f" ({source})"

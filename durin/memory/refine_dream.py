@@ -530,7 +530,29 @@ def run_refine(
                     _emit("memory.absorb.escalated", canonical=ref_a, absorbed=ref_b,
                           verdict=decision.verdict, confidence=decision.confidence)
                 except Exception as exc:  # noqa: BLE001 — agent best-effort
+                    # The investigating judge failed — most often it spent its
+                    # iterations on tools and never produced the envelope. This
+                    # used to leave no trace: not flagged, not remembered, not
+                    # logged — so the pair was re-judged and re-escalated on
+                    # every run of every night. Now it is visible, it reaches
+                    # the review surface with the Tier-1 verdict, and the
+                    # cache holds it for the recheck cooldown.
+                    error = str(exc)[:200]
+                    logger.warning("absorb tier-2 judge failed for {} | {}: {}",
+                                   ref_a, ref_b, error)
+                    _emit("memory.absorb.escalation_failed", canonical=ref_a, absorbed=ref_b,
+                          verdict=judged.verdict, confidence=judged.confidence,
+                          error=error)
+                    add_flagged(workspace, ref_a, ref_b,
+                                verdict=judged.verdict,
+                                confidence=judged.confidence,
+                                reasoning=(f"Tier-2 judge failed ({error}); "
+                                           "Tier-1 verdict kept — review manually"))
                     kept.append({"pair": [ref_a, ref_b], "reason": f"tier2_error:{exc}"})
+                    if recheck_cooldown_s > 0:
+                        _remember(ref_a, ref_b, pair_fp, verdict=judged.verdict,
+                                  confidence=judged.confidence, error=error,
+                                  until=_now() + float(recheck_cooldown_s))
                     return
         # The investigating judge reads both pages and their lineage before it
         # answers, so its "same" carries more evidence than the cheap judge's and

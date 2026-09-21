@@ -7,7 +7,7 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
-from durin.memory.absorb_judge import JudgeResult, _parse_response
+from durin.memory.absorb_judge import JudgeError, JudgeResult, _parse_response
 
 AgentRunner = None  # late-bound; patched in tests
 
@@ -21,6 +21,60 @@ _TASK = (
     "===VERDICT===\nsame|different|unclear\n===CONFIDENCE===\n0-100\n"
     "===REASONING===\n<2-3 sentences>\n===END==="
 )
+
+# The reserved final-answer step. Live, an investigation that needed more than
+# `max_iterations` tool rounds ended with the runner's max-iterations text —
+# no envelope, so every such escalation failed and the pair was re-judged on
+# every run. This brief hands the model its own investigation notes and asks
+# for the verdict with no tools on offer, so the budget always ends in an answer.
+_FINAL_BRIEF = (
+    "Your investigation budget for this pair is spent. Decide NOW from the notes "
+    "below — no more tools are available — and answer ONLY in this envelope:\n"
+    "===VERDICT===\nsame|different|unclear\n===CONFIDENCE===\n0-100\n"
+    "===REASONING===\n<2-3 sentences>\n===END===\n\n"
+    "Entity A: {a}\nEntity B: {b}\n\n"
+    "Investigation notes (→ a tool call, ← what it returned):\n{notes}"
+)
+# Per tool result and overall, so a wide investigation still fits one call.
+_NOTE_RESULT_CHARS = 1500
+_NOTES_MAX_CHARS = 24_000
+
+
+def _text_of(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(
+            b.get("text", "") for b in content if isinstance(b, dict) and b.get("type", "text") == "text"
+        )
+    return "" if content is None else str(content)
+
+
+def _investigation_notes(messages: list, stop_reason: str) -> str:
+    """The transcript of the investigation as plain notes: the tool calls the
+    agent made and what came back, plus any text it wrote — minus the task
+    message and, when the run hit its ceiling, the runner's own stop text."""
+    lines: list[str] = []
+    last = len(messages) - 1
+    for i, m in enumerate(messages):
+        if i == 0 and m.get("role") == "user":
+            continue
+        role = m.get("role")
+        if role == "assistant":
+            for tc in m.get("tool_calls") or []:
+                fn = tc.get("function") or tc
+                name = fn.get("name") or tc.get("name")
+                args = fn.get("arguments") if "function" in tc else tc.get("arguments")
+                lines.append(f"→ {name}({_text_of(args)[:300]})")
+            text = _text_of(m.get("content")).strip()
+            if text and not (i == last and stop_reason == "max_iterations"):
+                lines.append(f"note: {text[:_NOTE_RESULT_CHARS]}")
+        elif role == "tool":
+            lines.append(f"← {_text_of(m.get('content'))[:_NOTE_RESULT_CHARS]}")
+    out = "\n".join(lines)
+    if len(out) > _NOTES_MAX_CHARS:
+        out = out[:_NOTES_MAX_CHARS] + "\n…(notes truncated)"
+    return out or "(the investigation returned nothing)"
 
 
 def _resolve_provider_model() -> tuple[Any, str]:
@@ -83,7 +137,30 @@ async def _escalate_async(
         workspace=Path(workspace),
     )
     result = await AgentRunner(provider).run(spec)
-    return _parse_response(result.final_content or "")
+    try:
+        return _parse_response(result.final_content or "")
+    except JudgeError:
+        pass
+    # One more call, no tools: the agent must answer from what it has read.
+    from durin.agent.tools.registry import ToolRegistry
+    brief = _FINAL_BRIEF.format(
+        a=ref_a, b=ref_b,
+        notes=_investigation_notes(
+            list(getattr(result, "messages", None) or []),
+            str(getattr(result, "stop_reason", "") or ""),
+        ),
+    )
+    final_spec = AgentRunSpec(
+        initial_messages=[{"role": "user", "content": brief}],
+        tools=ToolRegistry(),
+        model=model,
+        max_iterations=1,
+        max_tool_result_chars=8000,
+        fail_on_tool_error=False,
+        workspace=Path(workspace),
+    )
+    final = await AgentRunner(provider).run(final_spec)
+    return _parse_response(final.final_content or "")
 
 
 def escalate_judge(

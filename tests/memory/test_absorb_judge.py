@@ -316,3 +316,29 @@ def test_parse_reads_the_last_envelope_when_the_model_restates_it() -> None:
            "===CONFIDENCE===\n77\n===REASONING===\nThey are two products.\n===END===")
     r = _parse_response(raw)
     assert r.verdict == "different" and r.confidence == 77 and "two products" in r.reasoning
+
+
+def test_a_parse_failure_is_reported_to_telemetry(monkeypatch) -> None:
+    """Three nights of ~1,500 envelope failures per night left nothing but log
+    warnings. Each failed attempt must reach the `memory.dream.parse_failure`
+    event the other dream passes already emit, with the raw head so the
+    format drift can be read off the dashboard."""
+    import durin.memory.llm_invoke as llm_invoke
+    seen: list[tuple[str, dict]] = []
+    monkeypatch.setattr(llm_invoke, "emit_parse_failure",
+                        lambda stage, **kw: seen.append((stage, kw)))
+    a, b = _make_pages()
+    attempts: list[str] = []
+    def stub(prompt: str, *, model: str) -> str:
+        attempts.append("call")
+        if len(attempts) < 2:
+            return "Same person, I am fairly sure."
+        return (
+            "===VERDICT===\nsame\n===CONFIDENCE===\n90\n"
+            "===REASONING===\nSame email.\n===END===\n"
+        )
+    judge_pair(a, b, ["Marcelo"], llm_invoke=stub, max_retries=2,
+               canonical_ref="person:marcelo", absorbed_ref="person:marcelo-m")
+    assert [s for s, _ in seen] == ["absorb_judge"]
+    assert seen[0][1]["source"] == "person:marcelo|person:marcelo-m"
+    assert seen[0][1]["raw"].startswith("Same person")

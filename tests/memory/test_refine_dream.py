@@ -560,3 +560,45 @@ def test_refine_always_on_flip_keeps_cached_verdict(tmp_path):
     mark_always_on(tmp_path, "company:mxhero", True)
     run_refine(tmp_path, llm_invoke=_judge_stub("different", 90, counter))
     assert counter["n"] == 1, "an always_on flip must not reopen a settled pair"
+
+
+def test_refine_tier2_failure_is_flagged_remembered_and_reported(tmp_path, monkeypatch):
+    """Tier-1 same@75 → escalate → the sub-agent raises. Live, the pair then
+    left no trace at all — not flagged, not remembered, not logged — and was
+    re-judged (and re-escalated, ~90 s each) on every run of every night. The
+    failure must be visible, the pair must reach the review surface, and the
+    verdict cache must hold it for the recheck cooldown like any other
+    unsettled pair."""
+    import durin.memory.refine_dream as rd
+
+    _two_dupes(tmp_path)
+    events = []
+    monkeypatch.setattr(rd, "_emit", lambda event, **d: events.append((event, d)))
+
+    def _boom(ws, a, b, **kw):
+        raise RuntimeError("missing ===VERDICT=== block")
+    monkeypatch.setattr(rd, "_escalate_judge", _boom)
+
+    first = {"n": 0}
+    out = run_refine(tmp_path, llm_invoke=_judge_stub("same", 75, first),
+                     confidence_threshold=95, escalate_floor=70, recheck_cooldown_s=3600)
+    assert not out["merged"]
+    assert first["n"] == 1
+    assert any(k.get("reason", "").startswith("tier2_error") for k in out["kept_separate"])
+
+    failed = [d for e, d in events if e == "memory.absorb.escalation_failed"]
+    assert len(failed) == 1
+    assert failed[0]["canonical"] and failed[0]["absorbed"]
+    assert failed[0]["verdict"] == "same" and failed[0]["confidence"] == 75
+    assert "VERDICT" in failed[0]["error"]
+
+    flagged = read_flagged(tmp_path)
+    assert len(flagged) == 1
+    assert flagged[0]["verdict"] == "same" and flagged[0]["confidence"] == 75
+    assert "tier-2" in flagged[0]["reasoning"].lower()
+
+    second = {"n": 0}
+    out = run_refine(tmp_path, llm_invoke=_judge_stub("same", 75, second),
+                     confidence_threshold=95, escalate_floor=70, recheck_cooldown_s=3600)
+    assert second["n"] == 0, "the pair is held for the cooldown, not re-judged"
+    assert [s["reason"] for s in out["skipped"]] == ["cached_verdict"]

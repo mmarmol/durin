@@ -436,18 +436,29 @@ threaded through; it is `None` when the vector index is unavailable.
    `memory_read_entity`, `memory_entity_lineage`, `memory_source_session`, and
    `memory_search` — and a fixed iteration ceiling. It investigates both entities
    in depth and returns the same `JudgeResult` envelope as the Tier 1 judge.
-   `escalate_floor=0` disables this path.
+   The ceiling always ends in an answer: when the agent spends every iteration
+   on tools (its final text is then the runner's stop message, not a verdict)
+   or answers without the envelope, the judge spends **one more call with no
+   tools** — a brief carrying the agent's own investigation notes (the tool
+   calls it made and what they returned) and the envelope contract — and reads
+   the verdict from that. Only if that answer still has no envelope does the
+   escalation fail. `escalate_floor=0` disables this path.
 6. The pair is merged only when the deciding judge returns `verdict == "same"`
    **and** its confidence reaches the floor for its tier: `confidence_threshold`
    for the Tier 1 judge, `tier2_confidence_threshold` for the investigating
    sub-agent — it has read both pages and their lineage before answering, so
    its "same" earns a lower bar. Every other outcome keeps the pair separate.
 7. **Flag surface:** when the Tier 2 sub-agent investigated a pair and did not
-   confirm it as `"same"`, or a borderline pair hit the per-run escalation cap
-   before it could be investigated, the pair is recorded in
-   `memory/.flagged_pairs.json`. `durin memory absorb-suggest` and the webui
-   Inbox surface these so the operator can inspect and merge or dismiss them
-   manually.
+   confirm it as `"same"`, a borderline pair hit the per-run escalation cap
+   before it could be investigated, or the sub-agent failed outright (no
+   verdict came back), the pair is recorded in `memory/.flagged_pairs.json`
+   with the verdict that stands — the Tier 1 one when Tier 2 produced none.
+   `durin memory absorb-suggest` and the webui Inbox surface these so the
+   operator can inspect and merge or dismiss them manually. A Tier 2 failure
+   also emits `memory.absorb.escalation_failed` and is remembered by the
+   verdict cache for the recheck cooldown like any other unsettled pair, so a
+   pair the investigating judge cannot settle is not re-judged and re-escalated
+   on every run.
 
 **Bounds.** The pass is budgeted like every other dream pass: `max_seconds`
 (wired from `memory.dream.max_seconds_per_run`) runs from the start of the pass,
@@ -681,7 +692,7 @@ cross-process lock `SessionManager` uses for that session's sidecar.
 | `run_refine` | `durin/memory/refine_dream.py` | Dedup engine: alias-overlap + optional embedding-near candidate recall, filters, judge, merge via absorb; tombstone bookkeeping. |
 | `dream_vector_index` | `durin/memory/dream_passes.py` | Builds a `VectorIndex` (or returns `None` when unavailable) for the refine semantic recall step; called once per run by the cron and CLI callers. |
 | `judge_pair` | `durin/memory/absorb_judge.py` | Tier 1 LLM identity judge: renders the whole entity page via `to_markdown()` (body-capped), returns `same` / `different` / `unclear` + confidence. |
-| `escalate_judge` | `durin/memory/tier2_judge.py` | Tier 2 sub-agent: spins up a bounded `AgentRunner` with 4 read-only tools to investigate a borderline pair; returns the same `JudgeResult` envelope. On by default (`escalate_floor` 70); `0` disables it. |
+| `escalate_judge` | `durin/memory/tier2_judge.py` | Tier 2 sub-agent: spins up a bounded `AgentRunner` with 4 read-only tools to investigate a borderline pair, then forces one tool-free final-answer call when the investigation ends without the envelope; returns the same `JudgeResult` envelope. On by default (`escalate_floor` 70); `0` disables it. |
 | `default_llm_invoke` / `LLMResponse` | `durin/memory/llm_invoke.py` | The one-prompt invoke every pass uses (resolves `agents.aux_models.memory`, runs the provider's retry policy). Its reply carries the answer as `text` — and as `content`, the name the provider layer's own response uses — plus token counts and `finish_reason`; `"error"` means the text is the provider's error message, not an answer. A pass that takes its own `llm_invoke` must accept this shape. |
 | `add_flagged` / `read_flagged` / `remove_flagged` | `durin/memory/refine_dream.py` | Write / read / delete entries in the `memory/.flagged_pairs.json` flag store: pairs the Tier 2 agent investigated but did not confirm as same. `remove_flagged` is called after the user resolves a pair (merge or separate) so it no longer appears in the Inbox. |
 | `run_always_on_pass` | `durin/memory/always_on_dream.py` | Pinned-guidance curation: rank feedback entities, fit budget, flip `always_on` flags. |

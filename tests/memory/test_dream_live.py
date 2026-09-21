@@ -258,3 +258,19 @@ def test_dream_vector_index_silent_when_memory_disabled(monkeypatch, tmp_path) -
 
     assert dp.dream_vector_index(tmp_path, _Cfg) is None
     assert events == []
+
+
+def test_parse_failure_with_a_pair_source_deep_links_to_neither_entity() -> None:
+    """The absorb judge reports the pair it was judging as `a|b`; that is not
+    one entity ref, so the feed item must not deep-link to a page named
+    `person:ana|person:anna`."""
+    from durin.memory.dream_digest import map_dream_event
+
+    items = map_dream_event(
+        "memory.dream.parse_failure",
+        {"stage": "absorb_judge", "source": "person:ana|person:anna", "raw_head": "prose"}, 5)
+    assert len(items) == 1
+    assert items[0]["kind"] == "warning"
+    assert "absorb_judge" in items[0]["summary"] and "person:ana|person:anna" in items[0]["summary"]
+    assert items[0]["ref"] is None
+    assert items[0]["ref_kind"] is None

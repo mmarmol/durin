@@ -209,6 +209,16 @@ def judge_pair(
                 "absorb_judge parse failed (attempt %d/%d): %s",
                 attempts, max_retries + 1, exc,
             )
+            # The same event the other dream passes emit on format drift, so
+            # a night of failing envelopes shows up in telemetry, not only in
+            # a log file nobody reads.
+            from durin.memory.llm_invoke import emit_parse_failure
+            emit_parse_failure(
+                "absorb_judge",
+                source=(f"{canonical_ref or f'{canonical.type}:{canonical.name}'}|"
+                        f"{absorbed_ref or f'{absorbed.type}:{absorbed.name}'}"),
+                raw=raw,
+            )
             # Tell the model what could not be parsed instead of re-sending
             # the same prompt blind: most parse failures are format drift
             # (prose around the envelope, a float confidence, a missing
