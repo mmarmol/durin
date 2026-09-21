@@ -180,6 +180,17 @@ Once `start_all` is called, a dedicated asyncio task is created for
 `_dispatch_outbound`, and one task per channel runs under a supervision loop
 (`ChannelManager._start_channel`) that calls `channel.start()`.
 
+**Stopping the dispatcher.** The dispatcher waits on `bus.outbound` under
+`asyncio.timeout(1.0)`, not `asyncio.wait_for`: on Python 3.11 `wait_for`
+returns the finished queue get instead of raising a cancellation that arrives
+once the get has completed but before the task resumes, which is exactly the
+window shutdown hits (the gateway cancels the turns in flight before it stops
+the channels, and their `finally` publishes status frames as `stop_all` cancels
+this task). A swallowed cancellation left the dispatcher looping with its one
+cancellation consumed and the gateway hung on every SIGTERM with a turn in
+flight. `stop_all` also bounds its wait on the dispatcher to five seconds and
+logs a warning rather than hanging the process on a task that does not stop.
+
 **Channel crash supervision.** An exception raised out of `channel.start()` is
 treated as a transient crash: the supervisor restarts the channel with a
 capped exponential backoff, and the backoff resets once the channel has run
