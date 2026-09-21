@@ -53,7 +53,9 @@ flowchart TD
 
 `CronService.__init__` accepts a `store_path` (pointing to `$DURIN_HOME/cron/jobs.json`), an `on_job` async callback, `max_sleep_ms` (default `300_000` ms), and `run_history_max` (driven by `config.cron.run_history_max`, default `50`). Two `filelock.FileLock` instances are created: `_lock` guarding all store reads and writes, and `_tick_lock` guarding the timer tick itself. `_tick_lock` lives inside the store's parent directory; `_lock` is a sibling of that directory (`<parent>.lock`).
 
-`start()` acquires `_lock`, loads the store (or raises on an unrecoverable corrupt store — see below), calls `_recompute_next_runs()` to recover jobs that fired while the service was down (jobs with a still-future `next_run_at_ms` are left untouched to preserve elapsed interval progress), saves, releases, and calls `_arm_timer()`.
+`start()` acquires `_lock`, loads the store (or raises on an unrecoverable corrupt store — see below), calls `_recompute_next_runs()`, saves, releases, and calls `_arm_timer()`.
+
+`_recompute_next_runs` settles every enabled job whose `next_run_at_ms` is missing or already in the past; a still-future `next_run_at_ms` is left untouched so an interval job keeps its elapsed progress across restarts. An occurrence that fell into the downtime is never dropped silently. A recurring job's miss is written to its `run_history` as a `skipped` record whose `error` names the missed instant (the webui's history table lists it; `last_status` keeps describing the job's last real run), and the next run is recomputed from now — the missed occurrence is not caught up. A one-shot `at` job within `cron.missed_oneshot_grace_s` of its time stays due, so the first tick fires it late; one past the grace is retired the way a run one-shot is (disabled, or deleted under `delete_after_run`) with the same `skipped` record, and since nothing ever ran, `last_status`/`last_error` carry the miss so `durin cron list` and the webui show it. Recomputing an `at` schedule that lies in the past yields `None`, which used to leave the job enabled with no next run and nothing said.
 
 ### Offline mutations and the action log
 
@@ -70,12 +72,14 @@ When `CronService` is constructed without calling `start()` — as the webui and
 `_spawn_job` creates one task per due job (`_run_job_task`): it skips immediately when the job is still executing from an earlier tick, otherwise waits for a slot of the pool sized by `cron.max_concurrent_jobs`, runs `_execute_job`, and then persists the run state. The `_executing` set is the in-process re-entrancy guard behind "a job never overlaps itself": a scheduled tick or a `run_job` (manual trigger) that fires a job whose previous run is still in flight returns immediately. A manual run takes a pool slot like a scheduled one. `stop()` cancels the in-flight job tasks together with the timer; `wait_for_jobs()` awaits them (tests and orderly shutdown). The `on_job` callback is awaited; the gateway implementation:
 
 1. Sets `job.payload.session_key` to a fresh `cron:{id}:run:{timestamp_ms}` key.
-2. Wraps `job.payload.message` with `build_cron_turn_prompt(mode, message)`. In `reminder` mode the prompt instructs the agent to deliver a brief user-facing message; in `task` mode the raw message is passed as-is and the agent executes it with full tools.
+2. Wraps `job.payload.message` with `build_cron_turn_prompt(mode, message)`. In `reminder` mode the prompt instructs the agent to deliver a brief user-facing message; in `task` mode the raw message is passed as-is and the agent executes it with full tools. For a one-shot job the scheduled time is passed too: a run starting more than two minutes after it (a reminder that came due while the gateway was not running and fires late on the first tick) gets a note saying how late it is, so the delivered reminder can say so instead of pretending to be on time.
 3. Marks the `cron` tool's `_in_cron_context` ContextVar so the agent cannot schedule new jobs from within an execution.
 4. Dispatches through the agent loop with an optional per-job persona (`job.payload.persona`) and/or model override (`job.payload.model`) — if both are set, the explicit model wins (nothing rejects setting both). The persona is threaded as the cron-level persona, which wins over any conversation or global default.
 5. If `job.payload.deliver` is true, delivers the result to the configured channel and recipient.
 
 After `on_job` completes (or raises), `_execute_job` records `last_run_at_ms`, `last_status`, `last_error`, and appends a `CronRunRecord` to `run_history`. The history list is trimmed to `_run_history_max` (the newest entries are kept). For one-shot `at` jobs, `delete_after_run=True` removes the job from the store; `delete_after_run=False` sets `enabled=False`.
+
+A run is `error` only when the callback raises, and the agent loop never raises for a failed model call: it delivers the failure as reply text ("Sorry, I encountered an error calling the AI model.") and returns it like an answer, with the runner's stop reason riding the outbound metadata as `_stop_reason`. The gateway callback therefore checks that reason after the delivery step (so the user is still told, per the evaluator's decision) and raises `CronTurnFailedError` when the turn never produced an answer — `durin/cron/outcome.py` owns which stop reasons count (a provider error, an overflow the emergency trim could not recover, an empty reply after the retry budget). The run is then recorded `error` with the reply text as `last_error`, instead of `ok`.
 
 ### Post-execution merge
 
@@ -184,6 +188,7 @@ Every `agent_turn` execution creates a session keyed `cron:{id}:run:{timestamp_m
 | `cron.run_history_max` | `50` | Maximum run records kept per job (oldest are dropped) |
 | `cron.run_session_retention_hours` | `48` | How long per-run cron sessions are kept before the reaper deletes them; `0` disables reaping |
 | `cron.max_concurrent_jobs` | `4` | How many cron jobs may execute at the same time; a due job waits for a free slot, and a job never overlaps its own previous run |
+| `cron.missed_oneshot_grace_s` | `3600` | How long after its time a one-shot that came due while the gateway was not running still fires (late) on the first tick; past it the job is retired with a `skipped` run record |
 | `memory.dream.enabled` | `true` | Controls whether the `memory_dream` system job is registered on gateway start |
 | `memory.dream.cron` | `"0 3 * * *"` | Cron expression for the daily Dream pass (evaluated in `agents.defaults.timezone`) |
 | `memory.dream.model_override` | `null` | Deprecated — prefer `agents.aux_models.memory`. Dream LLM calls resolve `agents.aux_models.memory` first, then this key, then the default preset. |

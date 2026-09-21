@@ -361,3 +361,154 @@ def test_run_history_cap_respected(tmp_path: Path) -> None:
         job.state.run_history = job.state.run_history[-service._run_history_max:]
 
     assert len(job.state.run_history) == 3
+
+
+# ---------------------------------------------------------------------------
+# Missed occurrences at restart
+# ---------------------------------------------------------------------------
+
+
+def _oneshot_service(tmp_path: Path, at_ms: int, *, delete_after_run: bool = False, **kwargs):
+    """A service whose single one-shot job is due at ``at_ms`` (set after
+    ``add_job`` so add-time validation is unaffected)."""
+    from durin.cron.service import _now_ms
+
+    service = CronService(tmp_path / "cron" / "jobs.json", **kwargs)
+    service.add_job(
+        name="remind",
+        schedule=CronSchedule(kind="at", at_ms=_now_ms() + 3_600_000),
+        message="stretch",
+        delete_after_run=delete_after_run,
+    )
+    service._load_store()
+    # ``add_job`` on a service that is not running goes through the offline
+    # action log, which only a running scheduler clears after merging; empty
+    # it here so a later reload does not re-apply the original add over the
+    # mutated job.
+    service._action_path.write_text("", encoding="utf-8")
+    job = service._store.jobs[0]
+    job.schedule.at_ms = at_ms
+    job.state.next_run_at_ms = at_ms
+    return service, job
+
+
+def test_recompute_keeps_oneshot_within_grace_so_it_fires_late(tmp_path: Path) -> None:
+    """A reminder that came due while the gateway was down for a few minutes
+    stays due: the first tick fires it late instead of losing it."""
+    from durin.cron.service import _now_ms
+
+    due = _now_ms() - 5 * 60 * 1000
+    service, job = _oneshot_service(tmp_path, due)
+
+    service._recompute_next_runs()
+
+    assert job.enabled is True
+    assert job.state.next_run_at_ms == due
+    assert job.state.run_history == []
+
+
+def test_recompute_retires_oneshot_missed_past_grace_with_a_skipped_record(tmp_path: Path) -> None:
+    """Pre-fix an overdue one-shot was recomputed to ``None`` and left
+    enabled: it never fired and nothing said so. Past the grace window it is
+    retired like a run one-shot, with a ``skipped`` record naming the miss."""
+    from durin.cron.service import _now_ms
+
+    due = _now_ms() - 2 * 3_600_000
+    service, job = _oneshot_service(tmp_path, due)
+
+    service._recompute_next_runs()
+
+    assert job.enabled is False
+    assert job.state.next_run_at_ms is None
+    assert job.state.last_status == "skipped"
+    assert job.state.last_run_at_ms is None, "nothing ran"
+    record = job.state.run_history[-1]
+    assert record.status == "skipped"
+    assert "missed" in (record.error or "")
+
+
+def test_recompute_retires_never_armed_oneshot_whose_time_passed(tmp_path: Path) -> None:
+    """A one-shot with no persisted next-run (added offline, never ticked)
+    whose ``at`` time already passed is a miss too, not a job that silently
+    stays enabled with ``next_run_at_ms=None``."""
+    from durin.cron.service import _now_ms
+
+    due = _now_ms() - 2 * 3_600_000
+    service, job = _oneshot_service(tmp_path, due)
+    job.state.next_run_at_ms = None
+
+    service._recompute_next_runs()
+
+    assert job.enabled is False
+    assert job.state.last_status == "skipped"
+
+
+def test_recompute_deletes_missed_oneshot_marked_delete_after_run(tmp_path: Path) -> None:
+    from durin.cron.service import _now_ms
+
+    due = _now_ms() - 2 * 3_600_000
+    service, job = _oneshot_service(tmp_path, due, delete_after_run=True)
+
+    service._recompute_next_runs()
+
+    assert all(j.id != job.id for j in service._store.jobs)
+
+
+def test_recompute_oneshot_grace_is_configurable(tmp_path: Path) -> None:
+    from durin.cron.service import _now_ms
+
+    due = _now_ms() - 5 * 60 * 1000
+    service, job = _oneshot_service(tmp_path, due, missed_oneshot_grace_ms=60_000)
+
+    service._recompute_next_runs()
+
+    assert job.enabled is False
+    assert job.state.last_status == "skipped"
+
+
+def test_recompute_records_a_skipped_run_for_a_missed_recurring_occurrence(tmp_path: Path) -> None:
+    """A recurring job's occurrence that fell into the downtime is still
+    recomputed from now, but the miss is written down instead of vanishing."""
+    from durin.cron.service import _now_ms
+
+    service = CronService(tmp_path / "cron" / "jobs.json")
+    service.add_job(
+        name="dream",
+        schedule=CronSchedule(kind="every", every_ms=3_600_000),
+        message="x",
+    )
+    service._load_store()
+    job = service._store.jobs[0]
+    job.state.next_run_at_ms = _now_ms() - 1000
+
+    service._recompute_next_runs()
+
+    assert job.state.next_run_at_ms is not None and job.state.next_run_at_ms > _now_ms()
+    assert job.enabled is True
+    record = job.state.run_history[-1]
+    assert record.status == "skipped"
+    assert "missed" in (record.error or "")
+    # The job's last real run is still what ``last_status`` describes.
+    assert job.state.last_status is None
+    assert job.state.last_run_at_ms is None
+
+
+def test_skipped_record_is_persisted_across_a_restart(tmp_path: Path) -> None:
+    from durin.cron.service import _now_ms
+
+    due = _now_ms() - 2 * 3_600_000
+    service, job = _oneshot_service(tmp_path, due)
+    service._recompute_next_runs()
+    service._save_store()
+
+    fresh = CronService(tmp_path / "cron" / "jobs.json")
+    fresh._load_store()
+    reloaded = next(j for j in fresh._store.jobs if j.id == job.id)
+    assert reloaded.enabled is False
+    assert reloaded.state.run_history[-1].status == "skipped"
+
+
+def test_cron_config_exposes_missed_oneshot_grace() -> None:
+    from durin.config.schema import CronConfig
+
+    assert CronConfig().missed_oneshot_grace_s == 3600

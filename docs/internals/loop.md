@@ -159,8 +159,12 @@ sequenceDiagram
 ### The consumer: `run()`
 
 `AgentLoop.run()` is one `while`-loop that consumes `bus.inbound`. On startup it
-connects configured MCP servers (lazily, once) and warms the memory embedding
-model in the background. For each message it decides the routing in order:
+connects configured MCP servers (lazily, once), warms the memory embedding
+model in the background, and puts back on the bus the messages the previous
+gateway journaled at shutdown (`sessions/.inbound_journal.jsonl`, see
+`_dispatch` below); they re-enter the queue directly, not through
+`publish_inbound`, because they already passed the authorizer and the
+automation interceptors once. For each message it decides the routing in order:
 
 - **Priority command?** `commands.is_priority(raw)` matches the exact-match,
   no-lock tier (`/stop`, `/restart`, `/status`). These are dispatched
@@ -225,6 +229,23 @@ It then runs `_process_message`, publishes the result, and in a `finally` block
 releases the lease and re-publishes any messages still sitting in the pending
 queue back onto `bus.inbound` so a late follow-up is processed as a fresh turn
 rather than lost.
+
+That hand-off only helps while the process keeps consuming the bus. The bus
+and the pending queues are in-memory, a stopping gateway never reads the bus
+again, and no channel redelivers (Telegram confirms its offset before the
+handler runs, Slack acks the envelope before publishing, email marks the
+message seen inside the fetch), so every restart with a turn in flight used
+to discard the follow-ups queued behind it. The gateway's shutdown now calls
+`drain_inbound_for_shutdown()`: it cancels and awaits the turns in flight (so
+their `finally` hands their queues to the bus), collects what is on the bus
+plus any queue no task handed back, drops trigger-only messages (published
+for automation triggers, never a conversation), and writes the rest to
+`sessions/.inbound_journal.jsonl` (`durin/bus/journal.py`). The next start
+replays the journal into the bus, in order, once — a message older than a
+day at replay time is dropped with a log line rather than answered out of
+the blue. The turn that was in flight itself is not replayed: its user
+message is already in the session history, and `pending_user_turn` closes
+it as interrupted at the session's next turn.
 
 ### The state loop: `_process_message`
 
@@ -707,7 +728,9 @@ Once the state machine returns, `_dispatch` publishes the outbound message,
 serializes any pending interactive payloads for channels that cannot render
 structured tool output, and for websocket clients emits a `_turn_end` signal
 (carrying turn latency and goal state) and, for the webui, schedules background
-title generation. A `turn.latency` breakdown is emitted by the state-machine
+title generation. The outbound's metadata carries `_stop_reason` (the
+runner's stop reason) so a direct caller such as the cron runner can tell a
+provider failure delivered as reply text from an answer. A `turn.latency` breakdown is emitted by the state-machine
 driver as soon as the machine reaches DONE — total wall-clock split into
 `llm_ms` (model round-trips, accumulated in the runner and handed off via
 `_pending_llm_ms`), `tools_ms`, and `local_ms` (everything else), plus the

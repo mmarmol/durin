@@ -1166,6 +1166,7 @@ class CronConfig(Base):
     run_history_max: int = Field(default=50, ge=1, le=1000, description="Maximum run-history entries kept per cron job")
     run_session_retention_hours: int = Field(default=48, ge=0, le=8760, description="Hours a cron run's session data is retained; 0 deletes immediately after the run")
     max_concurrent_jobs: int = Field(default=4, ge=1, le=64, description="How many cron jobs may execute at the same time; a job never overlaps its own previous run, and a due job waits for a free slot")
+    missed_oneshot_grace_s: int = Field(default=3600, ge=0, le=86400, description="Seconds after its time a one-shot job that came due while the gateway was not running still fires (late) on the first tick; past this it is retired with a skipped run record")
 
 
 class WorkflowConfig(Base):
