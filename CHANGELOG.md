@@ -5,6 +5,35 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.10.9 — 2026-09-21
+
+### Highlights
+
+- **A duplicate pair the investigating judge cannot settle no longer comes
+  back every night.** When the dream's second judge — the sub-agent that reads
+  both entity pages and their lineage — spent its whole tool budget without
+  producing a verdict, the pair left no trace: not flagged, not remembered,
+  not logged. It was judged and investigated again on every run of every
+  night; on a production workspace one pair was judged ten times in eight
+  days, at roughly 90 seconds and 30–40k tokens per investigation. The
+  investigating judge now always ends in an answer: when its investigation
+  runs out, it spends one last call without tools, on its own notes, and reads
+  the verdict from that. If even that fails, the pair is flagged for review
+  with the cheap judge's verdict, remembered for the re-judge window, and
+  reported.
+
+### Memory
+
+- New telemetry: `memory.absorb.escalation_failed` fires when the
+  investigating judge returns no verdict, and `memory.dream.parse_failure`
+  now also fires (stage `absorb_judge`) for every duplicate-judge reply that
+  misses the verdict envelope — a night of format drift shows up in the Dream
+  feed instead of only in a log file.
+
+### Dependencies
+
+- anyio 4.14.2, soupsieve 2.9.
+
 ## 0.10.8 — 2026-09-14
 
 ### Highlights
