@@ -1013,6 +1013,21 @@ class MemoryAbsorbEscalatedEvent(TypedDict):
     confidence: int  # 0-100
 
 
+class MemoryAbsorbEscalationFailedEvent(TypedDict):
+    """The Tier-2 sub-agent judge raised for a borderline pair — no verdict
+    came back (the usual cause: the envelope was missing after the agent's
+    iteration budget). The pair keeps its Tier-1 verdict, is flagged for
+    review and is held by the verdict cache for the recheck cooldown.
+    Use to measure how often escalation produces nothing.
+    """
+
+    canonical: str
+    absorbed: str
+    verdict: str   # the Tier-1 verdict kept: "same" | "unclear"
+    confidence: int  # the Tier-1 confidence, 0-100
+    error: str  # head of the exception message
+
+
 class MemoryAbsorbEscalationCappedEvent(TypedDict):
     """A borderline pair was NOT escalated because the run hit its per-run
     Tier-2 ceiling. The pair keeps the cheap verdict. Use to detect a run
@@ -1959,6 +1974,7 @@ EVENTS: dict[str, type] = {
     "memory.absorb.reverted": MemoryAbsorbRevertedEvent,
     "memory.absorb.escalated": MemoryAbsorbEscalatedEvent,
     "memory.absorb.escalation_capped": MemoryAbsorbEscalationCappedEvent,
+    "memory.absorb.escalation_failed": MemoryAbsorbEscalationFailedEvent,
     "memory.hot_layer.failure": MemoryHotLayerFailureEvent,
     "memory.index.write": MemoryIndexWriteEvent,
     "memory.index.rebuild": MemoryIndexRebuildEvent,
