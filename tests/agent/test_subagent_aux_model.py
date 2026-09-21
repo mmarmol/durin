@@ -17,7 +17,7 @@ from durin.agent.runner import AgentRunResult
 from durin.agent.subagent import SubagentManager, _resolve_subagent_provider
 from durin.bus.queue import MessageBus
 from durin.config.loader import get_config_path, load_config
-from durin.config.schema import AuxModelConfig, ModelPresetConfig
+from durin.config.schema import AuxModelConfig, ModelEntry, ModelPresetConfig
 from durin.providers.base import LLMProvider
 
 
@@ -51,9 +51,10 @@ def test_resolve_via_preset(tmp_path, monkeypatch):
         result = _resolve_subagent_provider(cfg)
 
     assert result is not None
-    provider, model = result
+    provider, model, window = result
     assert provider is sentinel_provider
     assert model == "cheap-model"
+    assert window == ModelPresetConfig(model="x").context_window_tokens
     # resolved through the preset, not an inline ModelPresetConfig
     _, kwargs = m.call_args
     assert kwargs["preset"].model == "cheap-model"
@@ -68,10 +69,36 @@ def test_resolve_via_inline_model_and_provider(tmp_path, monkeypatch):
     with patch("durin.providers.factory.make_provider", return_value=sentinel_provider) as m:
         result = _resolve_subagent_provider(cfg)
 
-    assert result == (sentinel_provider, "inline-model")
+    assert result[:2] == (sentinel_provider, "inline-model")
     _, kwargs = m.call_args
     assert kwargs["preset"].model == "inline-model"
     assert kwargs["preset"].provider == "ollama"
+
+
+def test_resolve_via_preset_carries_the_presets_window(tmp_path, monkeypatch):
+    """The child's context budget must follow the aux model, not the parent's:
+    a 16K local model spawned from a 200K session would otherwise run with
+    the parent's window and hit the provider's context error first."""
+    cfg = _config(tmp_path, monkeypatch)
+    cfg.model_presets["cheap"] = ModelPresetConfig(
+        model="cheap-model", provider="ollama", context_window_tokens=16_000,
+    )
+    cfg.agents.aux_models.subagents = AuxModelConfig(preset="cheap")
+    with patch("durin.providers.factory.make_provider", return_value=MagicMock(spec=LLMProvider)):
+        _, _, window = _resolve_subagent_provider(cfg)
+    assert window == 16_000
+
+
+def test_resolve_via_inline_model_takes_the_users_model_entry_window(tmp_path, monkeypatch):
+    """An inline ``model``/``provider`` pair resolves like the picker's
+    ``provider model`` ref: the user's per-model entry wins over the schema
+    default, so a configured 8K local model is not run as a 64K one."""
+    cfg = _config(tmp_path, monkeypatch)
+    cfg.providers.ollama.models["inline-model"] = ModelEntry(context_window_tokens=8_192)
+    cfg.agents.aux_models.subagents = AuxModelConfig(model="inline-model", provider="ollama")
+    with patch("durin.providers.factory.make_provider", return_value=MagicMock(spec=LLMProvider)):
+        _, _, window = _resolve_subagent_provider(cfg)
+    assert window == 8_192
 
 
 def test_resolve_bad_preset_raises_to_caller(tmp_path, monkeypatch):
@@ -139,6 +166,27 @@ async def test_spawn_uses_aux_model_via_preset(tmp_path, monkeypatch):
     spec = sm.runner.run.await_args.args[0]
     assert spec.provider is aux_provider
     assert spec.model == "cheap-model"
+
+
+@pytest.mark.asyncio
+async def test_spawn_on_aux_model_runs_under_the_aux_models_window(tmp_path, monkeypatch):
+    cfg = _config(tmp_path, monkeypatch)
+    cfg.model_presets["cheap"] = ModelPresetConfig(
+        model="cheap-model", provider="ollama", context_window_tokens=16_000,
+    )
+    cfg.agents.aux_models.subagents = AuxModelConfig(preset="cheap")
+    parent_provider = MagicMock(spec=LLMProvider)
+    parent_provider.get_default_model.return_value = "parent-model"
+    sm = _manager(tmp_path, parent_provider, app_config_getter=lambda: cfg)
+    sm.context_window_tokens = 200_000
+    with patch("durin.providers.factory.make_provider", return_value=MagicMock(spec=LLMProvider)):
+        await sm.spawn("do something")
+        import asyncio
+        await asyncio.sleep(0.05)
+
+    spec = sm.runner.run.await_args.args[0]
+    assert spec.model == "cheap-model"
+    assert spec.context_window_tokens == 16_000
 
 
 @pytest.mark.asyncio

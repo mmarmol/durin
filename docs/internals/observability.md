@@ -136,6 +136,17 @@ remains the agent-loop-only cache-ratio view. Sink resolution: the
 ContextVar-bound session logger wins, falling back to the `set_telemetry()`
 logger; with no sink the event is dropped.
 
+A spawned subagent's `provider.call` rows carry no subagent identity: the child
+task is created inside the parent's turn and inherits its telemetry binding, so
+they land in the spawning session's file indistinguishable from the parent's
+own calls. `SubagentManager` therefore writes one `subagent.run` row per
+finished child into that same file — task id, label, the model and context
+window the child ran under, its stop reason (`error` when the run raised,
+`cancelled` when it was stopped), iteration count, summed prompt/completion
+tokens and wall-clock duration — so "what did the children cost" and "did a
+child hit its window" are answerable from telemetry alone. With no bound
+logger the row is dropped, like every other tool event.
+
 `AgentNodeRunner.__call__` binds `get_session_logger(<node session key>)`
 around the entire node execution (reset in `finally` — nodes run on pooled
 executor threads), so each workflow node writes its own
