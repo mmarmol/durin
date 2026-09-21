@@ -2204,7 +2204,13 @@ class AgentLoop:
 
         while self._running:
             try:
-                msg = await asyncio.wait_for(self.bus.consume_inbound(), timeout=1.0)
+                # asyncio.timeout, not wait_for: on Python 3.11 wait_for can
+                # return the finished get instead of raising a cancellation
+                # that arrives in the same loop iterations, which would keep
+                # this consumer alive past shutdown (the outbound dispatcher
+                # hung the gateway that way).
+                async with asyncio.timeout(1.0):
+                    msg = await self.bus.consume_inbound()
             except asyncio.TimeoutError:
                 continue
             except asyncio.CancelledError:

@@ -529,8 +529,15 @@ class ChannelManager:
         # Stop dispatcher
         if self._dispatch_task:
             self._dispatch_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await self._dispatch_task
+            # Bounded: the dispatcher honours its cancellation (see the
+            # timeout-based wait in _dispatch_outbound), but shutdown must
+            # never hang on a task that does not, so the wait is capped and
+            # a late dispatcher is left to die with the process.
+            try:
+                with suppress(asyncio.CancelledError):
+                    await asyncio.wait_for(asyncio.shield(self._dispatch_task), timeout=5)
+            except asyncio.TimeoutError:
+                logger.warning("Outbound dispatcher did not stop within 5s of its cancellation")
 
         # Stop all channels
         for name, channel in self.channels.items():
@@ -673,10 +680,16 @@ class ChannelManager:
                 if pending:
                     msg = pending.pop(0)
                 else:
-                    msg = await asyncio.wait_for(
-                        self.bus.consume_outbound(),
-                        timeout=1.0
-                    )
+                    # asyncio.timeout, not wait_for: on Python 3.11 wait_for
+                    # returns the finished inner result instead of raising a
+                    # cancellation that arrives once the queue get has
+                    # completed but before this task resumes. Shutdown hits
+                    # exactly that window (the cancelled turns' status frames
+                    # land here as stop_all cancels this task), and a
+                    # swallowed cancellation left the dispatcher running and
+                    # the gateway hung on every SIGTERM with a turn in flight.
+                    async with asyncio.timeout(1.0):
+                        msg = await self.bus.consume_outbound()
 
                 if (
                     msg.metadata.get("_reasoning_delta")
