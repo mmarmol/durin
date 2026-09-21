@@ -106,8 +106,13 @@ class CronService:
         max_sleep_ms: int = 300_000,  # 5 minutes
         run_history_max: int = 50,
         max_concurrent_jobs: int = 4,
+        missed_oneshot_grace_ms: int = 3_600_000,
     ):
         self.store_path = store_path
+        # How long after its time a one-shot that came due while the
+        # scheduler was not running still fires (late) on the first tick;
+        # past this it is retired with a ``skipped`` run record.
+        self._missed_oneshot_grace_ms = max(0, int(missed_oneshot_grace_ms))
         self._action_path = store_path.parent / "action.jsonl"
         self._lock = FileLock(str(self._action_path.parent) + ".lock")
         # Separate lock for timer ticks — distinct path and distinct instance
@@ -439,17 +444,78 @@ class CronService:
         reinstall-triggered restart), so a 2h job 10 minutes from firing is
         pushed back to 2h from boot and effectively never fires under
         frequent restarts. Only (re)compute when the time is missing or
-        already due — that recovers jobs missed during downtime.
+        already due.
+
+        An occurrence that fell into the downtime is never dropped silently.
+        A recurring job's miss is written to its run history as ``skipped``
+        before its next run is recomputed from now. A one-shot within
+        ``missed_oneshot_grace_ms`` of its time stays due, so the first tick
+        fires it late; one past the grace is retired the way a run one-shot
+        is (disabled, or deleted under ``delete_after_run``) with the same
+        ``skipped`` record. Recomputing an ``at`` schedule that lies in the
+        past yields ``None``, which used to leave the job enabled, never
+        firing, with nothing said.
         """
         if not self._store:
             return
         now = _now_ms()
+        kept: list[CronJob] = []
         for job in self._store.jobs:
             if not job.enabled:
+                kept.append(job)
+                continue
+            if job.schedule.kind == "at":
+                due = job.schedule.at_ms
+                if not due:
+                    # Unrunnable by construction; add-time validation owns it.
+                    kept.append(job)
+                    continue
+                if due > now or now - due <= self._missed_oneshot_grace_ms:
+                    job.state.next_run_at_ms = due
+                else:
+                    reason = self._record_missed_occurrence(job, due, now)
+                    if job.delete_after_run:
+                        continue
+                    # Nothing ever ran, so the miss is the job's last word:
+                    # `durin cron list` and the webui show it as such.
+                    job.state.last_status = "skipped"
+                    job.state.last_error = reason
+                    job.enabled = False
+                    job.state.next_run_at_ms = None
+                kept.append(job)
                 continue
             existing = job.state.next_run_at_ms
+            if existing is not None and existing <= now:
+                self._record_missed_occurrence(job, existing, now)
             if existing is None or existing <= now:
                 job.state.next_run_at_ms = _compute_next_run(job.schedule, now)
+            kept.append(job)
+        self._store.jobs = kept
+
+    def _record_missed_occurrence(self, job: CronJob, due_ms: int, now_ms: int) -> str:
+        """Append a ``skipped`` run record for an occurrence that came due while
+        the scheduler was not running, and return its reason text. Nothing
+        ran, so ``last_run_at_ms``, ``last_status`` and ``last_error`` — which
+        describe the job's last real run — are left alone; the miss lives in
+        the run history, where the webui's history table lists it."""
+        when = datetime.fromtimestamp(due_ms / 1000).astimezone().isoformat(timespec="minutes")
+        reason = f"missed: scheduled for {when}; the scheduler was not running"
+        job.state.run_history.append(CronRunRecord(
+            run_at_ms=now_ms,
+            status="skipped",
+            duration_ms=0,
+            error=reason,
+            session_key=None,
+            model=job.payload.model,
+            persona=job.payload.persona,
+        ))
+        job.state.run_history = job.state.run_history[-self._run_history_max:]
+        job.updated_at_ms = now_ms
+        logger.warning(
+            "Cron: job '{}' ({}) missed its run scheduled for {}; the scheduler was not running",
+            job.name, job.id, when,
+        )
+        return reason
 
     def _get_next_wake_ms(self) -> int | None:
         """Get the earliest next run time across all jobs."""

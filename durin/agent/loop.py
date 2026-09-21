@@ -38,6 +38,7 @@ from durin.agent.user_payloads import (
     undelivered_interactions,
 )
 from durin.bus.events import OUTBOUND_META_AGENT_UI, InboundMessage, OutboundMessage
+from durin.bus.journal import InboundJournal
 from durin.bus.queue import MessageBus
 from durin.command import CommandContext, CommandRouter, register_builtin_commands
 from durin.config.schema import AgentDefaults, ModelPresetConfig
@@ -616,6 +617,14 @@ class AgentLoop:
         # are routed here instead of creating a new task: steers and system
         # results into ``inject``, plain user messages into ``deferred``.
         self._pending_queues: dict[str, PendingQueues] = {}
+        # Where the messages still owed a turn are written at shutdown and
+        # read back at the next start; the bus and the queues above are
+        # in-memory and no channel redelivers. None for a non-filesystem
+        # workspace (test doubles), which disables the journal.
+        self._inbound_journal: InboundJournal | None = (
+            InboundJournal(workspace / "sessions" / ".inbound_journal.jsonl")
+            if isinstance(workspace, Path) else None
+        )
         # Coalesced background session reindex (regen .md + FTS off the loop).
         # A save marks the key dirty; one drainer per key runs reindex_session
         # via a worker thread until no longer dirty, collapsing rapid successive
@@ -2190,6 +2199,7 @@ class AgentLoop:
         # Blocking ask_user may only wait while this consumer is alive to
         # resolve answers (pending_answers.can_block).
         pending_answers.set_consumer_active(True)
+        await self._replay_inbound_journal()
         logger.info("Agent loop started")
 
         while self._running:
@@ -2535,6 +2545,64 @@ class AgentLoop:
         self._stop_job_sweep()
         logger.info("Agent loop stopping")
 
+    async def drain_inbound_for_shutdown(self) -> int:
+        """Journal every inbound message the gateway still owes a turn to, so
+        the next start replays it instead of dropping it.
+
+        The turns in flight are cancelled and awaited first: a turn's own
+        ``finally`` is what hands its pending queues back to the bus, and the
+        bus is where they are collected from. Queues no task handed back
+        (their turn died before its ``finally``) are collected directly.
+        Trigger-only messages are not journaled: they were published for
+        automation triggers to see, never to become a conversation, and a
+        stale alert replayed later would fire out of time. Returns the number
+        of messages written.
+        """
+        if self._inbound_journal is None:
+            return 0
+        for key in list(self._active_tasks):
+            tasks = self._active_tasks.pop(key, [])
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            for task in tasks:
+                with suppress(asyncio.CancelledError, Exception):
+                    await asyncio.wait_for(task, timeout=10)
+        owed: list[InboundMessage] = []
+        while True:
+            try:
+                owed.append(self.bus.inbound.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+        for queues in list(self._pending_queues.values()):
+            for queue in (queues.inject, queues.deferred):
+                while True:
+                    try:
+                        owed.append(queue.get_nowait())
+                    except asyncio.QueueEmpty:
+                        break
+        self._pending_queues.clear()
+        owed = [m for m in owed if not m.trigger_only]
+        count = self._inbound_journal.append(owed)
+        if count:
+            logger.info("Shutdown: journaled {} inbound message(s) for the next start", count)
+        return count
+
+    async def _replay_inbound_journal(self) -> int:
+        """Put the messages journaled at the last shutdown back on the bus,
+        in order. They already passed the inbound authorizer and interceptors
+        once (that is how they reached the bus or a pending queue), so they
+        re-enter the queue directly rather than through ``publish_inbound``,
+        which would run the automation matchers a second time."""
+        if self._inbound_journal is None:
+            return 0
+        messages = self._inbound_journal.drain()
+        for msg in messages:
+            self.bus.inbound.put_nowait(msg)
+        if messages:
+            logger.info("Replayed {} inbound message(s) journaled at the last shutdown", len(messages))
+        return len(messages)
+
     async def _process_system_message(
         self,
         msg: InboundMessage,
@@ -2843,6 +2911,10 @@ class AgentLoop:
         logger.info("Response to {}:{}: {}", msg.channel, msg.sender_id, preview)
 
         meta = dict(msg.metadata or {})
+        # Why the turn ended, for callers that only see the outbound (the cron
+        # runner): a provider failure is delivered as reply text, and without
+        # this the caller cannot tell it from an answer.
+        meta["_stop_reason"] = stop_reason
         if on_stream is not None and stop_reason not in _NON_STREAMED_STOP_REASONS:
             meta["_streamed"] = True
         if turn_latency_ms is not None:

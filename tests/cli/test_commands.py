@@ -1512,6 +1512,216 @@ def test_gateway_cron_job_passes_none_on_progress_for_bus_callback(
     bus.publish_outbound.assert_not_awaited()
 
 
+def test_gateway_cron_job_failed_turn_raises_so_the_run_records_error(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A cron agent turn whose model call failed used to be recorded as ``ok``:
+    the loop turns a provider failure into the reply text and returns it, and
+    ``_execute_job`` only records ``error`` when the callback raises. The
+    callback must raise after the delivery step so the run history tells the
+    truth while the user still gets the notice the evaluator decides on."""
+    config_file = tmp_path / "instance" / "config.json"
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text("{}")
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path / "config-workspace")
+    bus = MagicMock()
+    bus.publish_outbound = AsyncMock()
+    seen: dict[str, object] = {}
+
+    monkeypatch.setattr("durin.config.loader.set_config_path", lambda _path: None)
+    monkeypatch.setattr("durin.config.loader.load_config", lambda _path=None: config)
+    monkeypatch.setattr("durin.cli.commands.sync_workspace_templates", lambda _path: None)
+    monkeypatch.setattr("durin.providers.factory.make_provider", lambda _config: _fake_provider())
+    monkeypatch.setattr(
+        "durin.providers.factory.build_provider_snapshot",
+        lambda _config: _test_provider_snapshot(object(), _config),
+    )
+    monkeypatch.setattr(
+        "durin.providers.factory.load_provider_snapshot",
+        lambda _config_path=None: _test_provider_snapshot(object(), config),
+    )
+    monkeypatch.setattr("durin.bus.queue.MessageBus", lambda: bus)
+    monkeypatch.setattr("durin.session.manager.SessionManager", lambda _workspace: object())
+
+    class _FakeCron:
+        def __init__(self, _store_path: Path, **_kwargs) -> None:
+            self.on_job = None
+            seen["cron"] = self
+
+    class _FakeAgentLoop:
+        @classmethod
+        def from_config(cls, config, bus=None, **extra):
+            return cls(**extra)
+
+        def __init__(self, *args, **kwargs) -> None:
+            self.model = "test-model"
+            self.provider = object()
+            self.tools = {}
+
+        def build_concurrency_snapshot(self):
+            return {"lanes": {}, "queued": 0, "work": []}
+
+        def register_automations_tool(self, runtime) -> None:
+            return None
+
+        async def process_direct(self, *_args, **_kwargs):
+            return OutboundMessage(
+                channel="telegram",
+                chat_id="user-1",
+                content="Sorry, I encountered an error calling the AI model.",
+                metadata={"_stop_reason": "error"},
+            )
+
+        async def close_mcp(self) -> None:
+            return None
+
+        async def run(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+    class _StopAfterCronSetup:
+        def __init__(self, *_args, **_kwargs) -> None:
+            raise _StopGatewayError("stop")
+
+    async def _record_and_reject(response: str, *_args, **_kwargs) -> bool:
+        seen["evaluated"] = response
+        return False
+
+    monkeypatch.setattr("durin.cron.service.CronService", _FakeCron)
+    monkeypatch.setattr("durin.cli.commands.AgentLoop", _FakeAgentLoop)
+    monkeypatch.setattr("durin.channels.manager.ChannelManager", _StopAfterCronSetup)
+    monkeypatch.setattr("durin.utils.evaluator.evaluate_response", _record_and_reject)
+
+    result = runner.invoke(app, ["gateway", "--config", str(config_file)])
+    assert isinstance(result.exception, _StopGatewayError)
+
+    from durin.cron.outcome import CronTurnFailedError
+
+    cron = seen["cron"]
+    job = CronJob(
+        id="cron-failed-turn",
+        name="test-failed-turn",
+        payload=CronPayload(
+            message="Run something.",
+            deliver=True,
+            channel="telegram",
+            to="user-1",
+        ),
+    )
+    with pytest.raises(CronTurnFailedError) as excinfo:
+        asyncio.run(cron.on_job(job))
+
+    assert excinfo.value.stop_reason == "error"
+    # The delivery decision still ran before the failure was raised: a failed
+    # run is reported to the user the same way it was before.
+    assert seen["evaluated"] == "Sorry, I encountered an error calling the AI model."
+
+
+def test_gateway_cron_late_oneshot_gets_a_late_note_and_grace_is_wired(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A one-shot that fires after the gateway came back late tells the model
+    it is late (so the reminder can say so), and the configured grace window
+    reaches the CronService constructor."""
+    config_file = tmp_path / "instance" / "config.json"
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text("{}")
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path / "config-workspace")
+    config.cron.missed_oneshot_grace_s = 1800
+    bus = MagicMock()
+    bus.publish_outbound = AsyncMock()
+    seen: dict[str, object] = {}
+
+    monkeypatch.setattr("durin.config.loader.set_config_path", lambda _path: None)
+    monkeypatch.setattr("durin.config.loader.load_config", lambda _path=None: config)
+    monkeypatch.setattr("durin.cli.commands.sync_workspace_templates", lambda _path: None)
+    monkeypatch.setattr("durin.providers.factory.make_provider", lambda _config: _fake_provider())
+    monkeypatch.setattr(
+        "durin.providers.factory.build_provider_snapshot",
+        lambda _config: _test_provider_snapshot(object(), _config),
+    )
+    monkeypatch.setattr(
+        "durin.providers.factory.load_provider_snapshot",
+        lambda _config_path=None: _test_provider_snapshot(object(), config),
+    )
+    monkeypatch.setattr("durin.bus.queue.MessageBus", lambda: bus)
+    monkeypatch.setattr("durin.session.manager.SessionManager", lambda _workspace: object())
+
+    class _FakeCron:
+        def __init__(self, _store_path: Path, **kwargs) -> None:
+            self.on_job = None
+            seen["cron"] = self
+            seen["cron_kwargs"] = kwargs
+
+    class _FakeAgentLoop:
+        @classmethod
+        def from_config(cls, config, bus=None, **extra):
+            return cls(**extra)
+
+        def __init__(self, *args, **kwargs) -> None:
+            self.model = "test-model"
+            self.provider = object()
+            self.tools = {}
+
+        def build_concurrency_snapshot(self):
+            return {"lanes": {}, "queued": 0, "work": []}
+
+        def register_automations_tool(self, runtime) -> None:
+            return None
+
+        async def process_direct(self, prompt, *_args, **_kwargs):
+            seen["prompt"] = prompt
+            return OutboundMessage(channel="telegram", chat_id="user-1", content="Done.")
+
+        async def close_mcp(self) -> None:
+            return None
+
+        async def run(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+    class _StopAfterCronSetup:
+        def __init__(self, *_args, **_kwargs) -> None:
+            raise _StopGatewayError("stop")
+
+    async def _always_reject(*_args, **_kwargs) -> bool:
+        return False
+
+    monkeypatch.setattr("durin.cron.service.CronService", _FakeCron)
+    monkeypatch.setattr("durin.cli.commands.AgentLoop", _FakeAgentLoop)
+    monkeypatch.setattr("durin.channels.manager.ChannelManager", _StopAfterCronSetup)
+    monkeypatch.setattr("durin.utils.evaluator.evaluate_response", _always_reject)
+
+    result = runner.invoke(app, ["gateway", "--config", str(config_file)])
+    assert isinstance(result.exception, _StopGatewayError)
+
+    assert seen["cron_kwargs"]["missed_oneshot_grace_ms"] == 1800 * 1000
+
+    import time as _time
+
+    from durin.cron.types import CronSchedule
+
+    cron = seen["cron"]
+    job = CronJob(
+        id="cron-late-oneshot",
+        name="late-reminder",
+        schedule=CronSchedule(kind="at", at_ms=int(_time.time() * 1000) - 30 * 60 * 1000),
+        payload=CronPayload(message="Stretch.", deliver=True, channel="telegram", to="user-1"),
+    )
+    asyncio.run(cron.on_job(job))
+
+    assert "Stretch." in seen["prompt"]
+    assert "late" in seen["prompt"].lower()
+
+
 def _setup_automations_wiring_test(monkeypatch, tmp_path: Path, *, config_overrides=None):
     """Shared scaffold for the automation_trigger/loop_trigger cron-dispatch
     tests below: a real gateway boot up through cron + automations wiring,

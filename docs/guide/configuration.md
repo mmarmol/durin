@@ -770,6 +770,7 @@ Scheduled-work (cron) lifecycle settings.
 | `run_history_max` | `50` | Maximum run-history entries kept per job |
 | `run_session_retention_hours` | `48` | How long run-session data is retained |
 | `max_concurrent_jobs` | `4` | How many jobs may run at the same time; a job never overlaps its own previous run |
+| `missed_oneshot_grace_s` | `3600` | A one-shot job that came due while the gateway was not running still fires, late, if it is within this many seconds of its time; past it the job is retired with a `skipped` run record instead of silently never firing |
 
 ---
 

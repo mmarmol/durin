@@ -1293,6 +1293,7 @@ def _run_gateway(
         cron_store_path,
         run_history_max=config.cron.run_history_max,
         max_concurrent_jobs=config.cron.max_concurrent_jobs,
+        missed_oneshot_grace_ms=config.cron.missed_oneshot_grace_s * 1000,
     )
 
     # Create agent with cron service
@@ -1445,10 +1446,17 @@ def _run_gateway(
                 job.payload.automation, source="schedule", task=job.payload.message or None)
             return None
 
+        from durin.cron.outcome import CronTurnFailedError, turn_failed
         from durin.cron.prompting import build_cron_turn_prompt
         from durin.utils.evaluator import evaluate_response
 
-        prompt = build_cron_turn_prompt(job.payload.mode, job.payload.message)
+        prompt = build_cron_turn_prompt(
+            job.payload.mode,
+            job.payload.message,
+            # A one-shot that fires after the gateway came back late is told
+            # so; recurring jobs always run at their own tick.
+            scheduled_at_ms=job.schedule.at_ms if job.schedule.kind == "at" else None,
+        )
         session_key = job.payload.session_key or f"cron:{job.id}"
 
         cron_tool = agent.tools.get("cron")
@@ -1478,10 +1486,12 @@ def _run_gateway(
 
         response = resp.content if resp else ""
 
-        if job.payload.deliver and isinstance(message_tool, MessageTool) and message_tool._sent_in_turn:
-            return response
-
-        if job.payload.deliver and job.payload.to and response:
+        sent_in_turn = (
+            job.payload.deliver
+            and isinstance(message_tool, MessageTool)
+            and message_tool._sent_in_turn
+        )
+        if not sent_in_turn and job.payload.deliver and job.payload.to and response:
             should_notify = await evaluate_response(
                 response, prompt, agent.provider, agent.model,
             )
@@ -1496,6 +1506,13 @@ def _run_gateway(
                     record=True,
                     session_key=job.payload.session_key,
                 )
+        # The loop reports a failed model call as reply text, not as an
+        # exception, so the run would be filed as ``ok``. Raise after the
+        # delivery decision above, which still tells the user, so the run
+        # history records the failure with the reply as its reason.
+        stop_reason = (resp.metadata or {}).get("_stop_reason") if resp is not None else None
+        if turn_failed(stop_reason):
+            raise CronTurnFailedError(stop_reason, response)
         return response
 
     cron.on_job = on_cron_job
@@ -2209,6 +2226,14 @@ def _run_gateway(
             await asyncio.to_thread(stop_dream_workers)
             await asyncio.to_thread(stop_embed_server)
             agent.stop()
+            # The turns in flight and the follow-ups queued behind them are
+            # journaled so the next start replays them; without this every
+            # restart with a turn in flight dropped them, and no channel
+            # redelivers.
+            try:
+                await agent.drain_inbound_for_shutdown()
+            except Exception:
+                logger.exception("Shutdown: journaling queued inbound messages failed")
             await channels.stop_all()
             # Flush all cached sessions to durable storage before exit.
             # This prevents data loss on filesystems with write-back
@@ -2287,6 +2312,7 @@ def agent(
         cron_store_path,
         run_history_max=config.cron.run_history_max,
         max_concurrent_jobs=config.cron.max_concurrent_jobs,
+        missed_oneshot_grace_ms=config.cron.missed_oneshot_grace_s * 1000,
     )
 
     if logs:
