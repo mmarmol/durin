@@ -1924,7 +1924,7 @@ def _run_gateway(
 
                 # This trigger thread emits gate/throttle events; without a
                 # bound logger emit_tool_event drops them silently.
-                bind_telemetry(get_session_logger("dream_supervisor"))
+                bind_telemetry(get_session_logger("dream_supervisor"), purpose="dream")
                 from durin.channels.websocket import publish_dream_progress
                 from durin.memory.dream_supervisor import (
                     publish_threadsafe,

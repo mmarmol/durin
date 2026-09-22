@@ -229,12 +229,66 @@ def current_telemetry() -> TelemetryLogger | None:
     return _current_logger.get()
 
 
-def bind_telemetry(logger: TelemetryLogger) -> Token[TelemetryLogger | None]:
-    """Bind a telemetry logger for the current async task."""
-    return _current_logger.set(logger)
+# What the provider calls made from the current task are for. ``provider.call``
+# rows carry it, so a session's spend splits by caller without bracketing rows
+# between other events by timestamp: a chat turn is ``chat``, a cron run
+# ``cron``, the compaction summarizer ``compaction``, a spawned child
+# ``subagent``, the nightly pass ``dream``, its escalation ``judge``, a
+# workflow node ``workflow``, the aux bridges ``vision`` / ``audio``. A
+# subsystem that binds a purpose names itself; a binding without one inherits
+# the enclosing purpose (the agent loop under a cron run stays ``cron``).
+_call_purpose: ContextVar[str | None] = ContextVar("durin_call_purpose", default=None)
 
 
-def reset_telemetry(token: Token[TelemetryLogger | None]) -> None:
+def current_call_purpose() -> str | None:
+    """The purpose bound to the current task's provider calls, or None."""
+    return _call_purpose.get()
+
+
+def bind_call_purpose(purpose: str) -> Token[str | None]:
+    """Name what the provider calls made from here are for. Nested binds
+    override; ``reset_call_purpose`` restores the enclosing value."""
+    return _call_purpose.set(purpose)
+
+
+def reset_call_purpose(token: Token[str | None]) -> None:
+    _call_purpose.reset(token)
+
+
+class TelemetryBinding:
+    """What ``bind_telemetry`` hands back when it also bound a purpose, so one
+    ``reset_telemetry`` undoes both."""
+
+    __slots__ = ("logger_token", "purpose_token")
+
+    def __init__(
+        self,
+        logger_token: Token[TelemetryLogger | None],
+        purpose_token: Token[str | None],
+    ) -> None:
+        self.logger_token = logger_token
+        self.purpose_token = purpose_token
+
+
+def bind_telemetry(
+    logger: TelemetryLogger | None,
+    *,
+    purpose: str | None = None,
+) -> Token[TelemetryLogger | None] | TelemetryBinding:
+    """Bind a telemetry logger for the current async task, and with
+    ``purpose`` also name what its provider calls are for. Without a purpose
+    the enclosing purpose, if any, stays in force."""
+    token = _current_logger.set(logger)
+    if purpose is None:
+        return token
+    return TelemetryBinding(token, _call_purpose.set(purpose))
+
+
+def reset_telemetry(token: Token[TelemetryLogger | None] | TelemetryBinding) -> None:
+    if isinstance(token, TelemetryBinding):
+        _call_purpose.reset(token.purpose_token)
+        _current_logger.reset(token.logger_token)
+        return
     _current_logger.reset(token)
 
 

@@ -1276,7 +1276,7 @@ class Consolidator:
                 get_session_logger,
                 reset_telemetry,
             )
-            token = bind_telemetry(get_session_logger(session_key))
+            token = bind_telemetry(get_session_logger(session_key), purpose="compaction")
         except Exception:  # noqa: BLE001
             # Telemetry must never break compaction.
             yield

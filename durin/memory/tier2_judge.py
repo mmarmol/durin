@@ -178,13 +178,21 @@ def escalate_judge(
     (cron uses asyncio.to_thread which starts a fresh thread with no running
     event loop).
     """
-    return asyncio.run(
-        _escalate_async(
-            workspace,
-            ref_a,
-            ref_b,
-            provider=provider,
-            model=model,
-            max_iterations=max_iterations,
+    from durin.telemetry.logger import bind_call_purpose, reset_call_purpose
+
+    # The judge runs inside the dream's telemetry binding; its own calls are
+    # billed as ``judge`` so the escalation's cost is separable from the pass.
+    token = bind_call_purpose("judge")
+    try:
+        return asyncio.run(
+            _escalate_async(
+                workspace,
+                ref_a,
+                ref_b,
+                provider=provider,
+                model=model,
+                max_iterations=max_iterations,
+            )
         )
-    )
+    finally:
+        reset_call_purpose(token)

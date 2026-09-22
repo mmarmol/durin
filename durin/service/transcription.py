@@ -145,7 +145,6 @@ class TranscriptionService:
         something was actually unloaded. ``idle_s <= 0`` disables."""
         if idle_s <= 0 or self._provider is None:
             return False
-        import time
 
         if self._last_used is not None and (
                 time.monotonic() - self._last_used) < idle_s:
@@ -183,8 +182,6 @@ class TranscriptionService:
                 )
             except (OSError, json.JSONDecodeError):
                 pass  # fall through to retranscribe
-
-        import time
 
         self._last_used = time.monotonic()
         provider = self._get_provider()

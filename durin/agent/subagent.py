@@ -368,6 +368,12 @@ class SubagentManager:
         run_usage: dict[str, int] = {}
         run_stop_reason = "cancelled"
         run_error: str | None = None
+        from durin.telemetry.logger import bind_call_purpose, reset_call_purpose
+
+        # The child inherits the parent's telemetry binding (same session
+        # file); its provider calls are billed as ``subagent``, not as the
+        # parent's chat.
+        purpose_token = bind_call_purpose("subagent")
         try:
             tools = self._build_tools()
             system_prompt = self._build_subagent_prompt()
@@ -499,6 +505,7 @@ class SubagentManager:
                 stop_reason=run_stop_reason,
                 error=run_error,
             )
+            reset_call_purpose(purpose_token)
 
     @staticmethod
     def _record_run(

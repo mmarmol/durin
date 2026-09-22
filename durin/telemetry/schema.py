@@ -294,7 +294,11 @@ class ProviderCallEvent(TypedDict):
     traffic visible — "who spent the tokens?" is answerable from telemetry
     alone. ``duration_ms`` is wall clock for the whole call, retries
     included. The sink is the ContextVar-bound session logger, falling back
-    to the logger attached via ``set_telemetry()``."""
+    to the logger attached via ``set_telemetry()``. ``purpose`` is what the
+    call was for — ``chat``, ``cron``, ``automation``, ``compaction``,
+    ``subagent``, ``dream``, ``judge``, ``workflow``, ``vision``, ``audio``,
+    ``memory_health``, ``memory_index``, ``gateway`` — as bound by the
+    subsystem that made it, or ``unknown`` when none named itself."""
     provider: str
     model: str
     prompt_tokens: int
@@ -302,6 +306,7 @@ class ProviderCallEvent(TypedDict):
     completion_tokens: int
     duration_ms: float
     finish_reason: str
+    purpose: str
 
 
 # ===========================================================================

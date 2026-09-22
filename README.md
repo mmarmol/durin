@@ -14,9 +14,6 @@ skills, and runs on adaptable workflows that make it follow the exact steps *you
 define instead of inventing its own. Reliable execution you control — local-first,
 on any model.
 
-> durin is named for Tolkien's dwarf-king of Khazad-dûm; the mark is a dwarven
-> anvil lit by a forge flame.
-
 ## Why durin
 
 ### Workflows that follow *your* steps

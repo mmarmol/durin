@@ -130,11 +130,26 @@ instrumenting each caller. The `interpret_image`/`interpret_audio` aux tools
 are the only callers left that invoke `emit_call_telemetry` directly, outside
 the retry wrappers. The event carries the provider's
 config-registry name (stamped as `provider_key` by the factory), the model,
-prompt/cached/completion token counts, `duration_ms`, and the final
-`finish_reason` — the universal "who spent the tokens" record; `cache.usage`
-remains the agent-loop-only cache-ratio view. Sink resolution: the
-ContextVar-bound session logger wins, falling back to the `set_telemetry()`
+prompt/cached/completion token counts, `duration_ms`, the final
+`finish_reason`, and `purpose` — the universal "who spent the tokens" record;
+`cache.usage` remains the agent-loop-only cache-ratio view. Sink resolution:
+the ContextVar-bound session logger wins, falling back to the `set_telemetry()`
 logger; with no sink the event is dropped.
+
+`purpose` says on whose behalf the call was made, so a session's spend splits
+by caller without bracketing rows between other events by timestamp. It is a
+ContextVar bound next to the telemetry logger (`bind_telemetry(logger,
+purpose=…)`, or `bind_call_purpose` alone): the agent loop binds `chat` for a
+turn nobody else named; the cron scheduler binds `cron` around `on_job`, and
+the loop's own per-turn binding inherits an enclosing purpose instead of
+relabelling it; the compaction summarizer binds `compaction` inside the turn;
+a spawned child binds `subagent` (it shares the parent's session file); the
+dream pass binds `dream` and its tier-2 escalation `judge`; a workflow node
+`workflow`; the automation runtime `automation`; the memory health check and
+the file watcher `memory_health` / `memory_index`; the gateway's own startup
+calls `gateway`. The vision and audio bridges emit their own row from inside
+a turn and pass `vision` / `audio` explicitly. A row nobody named carries
+`unknown`.
 
 A spawned subagent's `provider.call` rows carry no subagent identity: the child
 task is created inside the parent's turn and inherits its telemetry binding, so

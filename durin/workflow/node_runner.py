@@ -633,7 +633,7 @@ class AgentNodeRunner:
             reset_telemetry,
         )
 
-        token = bind_telemetry(get_session_logger(self._session_key(req)))
+        token = bind_telemetry(get_session_logger(self._session_key(req)), purpose="workflow")
         try:
             return self._execute(req)
         finally:

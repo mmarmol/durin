@@ -612,6 +612,10 @@ class AgentLoop:
         # worker thread per turn.
         self._prefetch_backoff_until: float = 0.0
         self._active_tasks: dict[str, list[asyncio.Task]] = {}  # session_key -> tasks
+        # The message each in-flight turn task is answering, so a graceful
+        # shutdown can journal it for the next start (see
+        # ``drain_inbound_for_shutdown``). Dropped when the task finishes.
+        self._in_flight_messages: dict[asyncio.Task, InboundMessage] = {}
         self._background_tasks: list[asyncio.Task] = []
         self._session_locks: dict[str, asyncio.Lock] = {}
         # Per-session pending queues for messages arriving mid-turn.
@@ -1830,6 +1834,7 @@ class AgentLoop:
         tasks = self._active_tasks.get(key)
         if tasks is not None and task in tasks:
             tasks.remove(task)
+        self._in_flight_messages.pop(task, None)
 
     def _effective_session_key(self, msg: InboundMessage) -> str:
         """Return the session key used for task routing and mid-turn injections."""
@@ -2055,7 +2060,11 @@ class AgentLoop:
         push_sink_for_cleanup = None
         if active_session_key:
             try:
-                from durin.telemetry.logger import bind_telemetry, get_session_logger
+                from durin.telemetry.logger import (
+                    bind_telemetry,
+                    current_call_purpose,
+                    get_session_logger,
+                )
                 session_logger = get_session_logger(active_session_key)
                 try:
                     from durin.telemetry.wiring import wire_push_sink
@@ -2071,7 +2080,13 @@ class AgentLoop:
                     # path. Log via the session_logger so the failure
                     # is itself recorded; the local sink keeps working.
                     push_sink_for_cleanup = None
-                telemetry_token = bind_telemetry(session_logger)
+                # A turn run on someone's behalf (a cron job, an automation)
+                # arrives with that purpose already bound; only a turn nobody
+                # named is billed as chat.
+                telemetry_token = bind_telemetry(
+                    session_logger,
+                    purpose=None if current_call_purpose() else "chat",
+                )
             except Exception:
                 telemetry_token = None
         # Agent-mode provider, resolved per iteration so a mid-run mode
@@ -2288,21 +2303,29 @@ class AgentLoop:
                     if not injectable:
                         await self._notify_queued(pending_msg)
                     continue
-            # Register the pending queues synchronously, *before* create_task,
-            # so a same-session message consumed before the dispatch task
-            # starts is routed here (mid-turn injection) instead of spawning a
-            # competing task (B3). `create_task` only schedules the coroutine —
-            # it does not run it — so registering inside `_dispatch` left a
-            # window the consumer could re-enter for the same session.
-            pending = PendingQueues.create()
-            self._pending_queues[effective_key] = pending
-            # Compute the effective session key before dispatching
-            # This ensures /stop command can find tasks correctly when unified session is enabled
-            task = asyncio.create_task(self._dispatch(msg, pending))
-            self._active_tasks.setdefault(effective_key, []).append(task)
-            task.add_done_callback(
-                lambda t, k=effective_key: self._drop_active_task(t, k)
-            )
+            self._start_turn_task(msg, effective_key)
+
+    def _start_turn_task(self, msg: InboundMessage, effective_key: str) -> asyncio.Task:
+        """Start the turn that answers ``msg`` as its own task and register it
+        under ``effective_key`` (the key ``/stop`` and mid-turn injection look
+        up, which differs from the message's own key under a unified session).
+
+        The pending queues are registered synchronously, *before*
+        ``create_task``, so a same-session message consumed before the task
+        starts is routed to them (mid-turn injection) instead of spawning a
+        competing task; ``create_task`` only schedules the coroutine, so
+        registering inside ``_dispatch`` left a window the consumer could
+        re-enter for the same session.
+        """
+        pending = PendingQueues.create()
+        self._pending_queues[effective_key] = pending
+        task = asyncio.create_task(self._dispatch(msg, pending))
+        self._active_tasks.setdefault(effective_key, []).append(task)
+        self._in_flight_messages[task] = msg
+        task.add_done_callback(
+            lambda t, k=effective_key: self._drop_active_task(t, k)
+        )
+        return task
 
     async def _dispatch(
         self, msg: InboundMessage, pending: PendingQueues | None = None,
@@ -2560,23 +2583,29 @@ class AgentLoop:
         The turns in flight are cancelled and awaited first: a turn's own
         ``finally`` is what hands its pending queues back to the bus, and the
         bus is where they are collected from. Queues no task handed back
-        (their turn died before its ``finally``) are collected directly.
-        Trigger-only messages are not journaled: they were published for
-        automation triggers to see, never to become a conversation, and a
+        (their turn died before its ``finally``) are collected directly. The
+        message each cancelled turn was answering goes first, ahead of the
+        follow-ups queued behind it, so the next start answers it in order
+        instead of leaving it closed as "interrupted" with no reply ever
+        given. Trigger-only messages are not journaled: they were published
+        for automation triggers to see, never to become a conversation, and a
         stale alert replayed later would fire out of time. Returns the number
         of messages written.
         """
         if self._inbound_journal is None:
             return 0
+        owed: list[InboundMessage] = []
         for key in list(self._active_tasks):
             tasks = self._active_tasks.pop(key, [])
             for task in tasks:
                 if not task.done():
+                    in_flight = self._in_flight_messages.get(task)
+                    if in_flight is not None:
+                        owed.append(in_flight)
                     task.cancel()
             for task in tasks:
                 with suppress(asyncio.CancelledError, Exception):
                     await asyncio.wait_for(task, timeout=10)
-        owed: list[InboundMessage] = []
         while True:
             try:
                 owed.append(self.bus.inbound.get_nowait())

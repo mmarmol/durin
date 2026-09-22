@@ -525,20 +525,52 @@ class CronService:
                  if j.enabled and j.state.next_run_at_ms]
         return min(times) if times else None
 
-    def _arm_timer(self) -> None:
-        """Schedule the next timer tick."""
+    def wake(self) -> None:
+        """Make the running scheduler tick now.
+
+        Schedule changes from the webui and the API go through a non-running
+        instance that appends to the offline action log; the running
+        scheduler merges that log only when its timer fires, which with
+        nothing due is ``max_sleep_ms`` away — a one-shot due in thirty
+        seconds fired minutes late. A no-op on a scheduler that is not
+        running.
+        """
+        if not self._running:
+            return
+        self._arm_timer(delay_s=0.0)
+
+    _SUMMARY_MAX_CHARS = 500
+
+    @classmethod
+    def _summarize_reply(cls, reply: object) -> str | None:
+        """The run record's ``summary``: what the job said, cut to a size the
+        history can afford (the store keeps ``run_history_max`` records per
+        job). ``None`` when the job produced no text."""
+        if not isinstance(reply, str):
+            return None
+        text = reply.strip()
+        if not text:
+            return None
+        if len(text) > cls._SUMMARY_MAX_CHARS:
+            return text[: cls._SUMMARY_MAX_CHARS - 1].rstrip() + "…"
+        return text
+
+    def _arm_timer(self, *, delay_s: float | None = None) -> None:
+        """Schedule the next timer tick, at ``delay_s`` when given, otherwise
+        at the next due job (capped by ``max_sleep_ms``)."""
         if self._timer_task:
             self._timer_task.cancel()
 
         if not self._running:
             return
 
-        next_wake = self._get_next_wake_ms()
-        if next_wake is None:
-            delay_ms = self.max_sleep_ms
-        else:
-            delay_ms = min(self.max_sleep_ms, max(0, next_wake - _now_ms()))
-        delay_s = delay_ms / 1000
+        if delay_s is None:
+            next_wake = self._get_next_wake_ms()
+            if next_wake is None:
+                delay_ms = self.max_sleep_ms
+            else:
+                delay_ms = min(self.max_sleep_ms, max(0, next_wake - _now_ms()))
+            delay_s = delay_ms / 1000
 
         async def tick():
             await asyncio.sleep(delay_s)
@@ -689,6 +721,7 @@ class CronService:
             )
             return False
         self._executing.add(job.id)
+        summary: str | None = None
         try:
             start_ms = _now_ms()
             logger.info("Cron: executing job '{}' ({})", job.name, job.id)
@@ -698,7 +731,17 @@ class CronService:
 
             try:
                 if self.on_job:
-                    await self.on_job(job)
+                    from durin.telemetry.logger import bind_call_purpose, reset_call_purpose
+
+                    # Everything the job's turn spends — the turn itself and
+                    # the deliver-or-not evaluation after it — is billed as
+                    # ``cron`` in telemetry, not as chat.
+                    purpose_token = bind_call_purpose("cron")
+                    try:
+                        reply = await self.on_job(job)
+                    finally:
+                        reset_call_purpose(purpose_token)
+                    summary = self._summarize_reply(reply)
 
                 job.state.last_status = "ok"
                 job.state.last_error = None
@@ -707,7 +750,15 @@ class CronService:
             except Exception as e:
                 job.state.last_status = "error"
                 job.state.last_error = str(e)
-                logger.exception("Cron: job '{}' failed", job.name)
+                from durin.cron.outcome import CronTurnFailedError
+
+                if isinstance(e, CronTurnFailedError):
+                    # An expected outcome — the turn's model call failed and
+                    # the reply text is the reason — recorded in the run
+                    # history; a traceback with locals here buried that line.
+                    logger.warning("Cron: job '{}' failed: {}", job.name, e)
+                else:
+                    logger.exception("Cron: job '{}' failed", job.name)
 
             end_ms = _now_ms()
             job.state.last_run_at_ms = start_ms
@@ -721,6 +772,7 @@ class CronService:
                 session_key=job.payload.session_key if job.payload.kind == "agent_turn" else None,
                 model=job.payload.model,
                 persona=job.payload.persona,
+                summary=summary,
             ))
             job.state.run_history = job.state.run_history[-self._run_history_max:]
 

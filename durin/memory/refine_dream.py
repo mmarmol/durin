@@ -17,7 +17,12 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
+
+if TYPE_CHECKING:
+    from datetime import datetime
+
+    from durin.memory.tier2_judge import JudgeResult
 
 from loguru import logger
 
