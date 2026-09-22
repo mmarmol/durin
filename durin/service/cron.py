@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from loguru import logger
+
 from durin.service.principal import Principal, Scope
 from durin.service.registry import route
 from durin.service.types import (
@@ -309,6 +311,19 @@ class CronService:
     def __init__(self, cron_scheduler: Any | None = None) -> None:
         self._cron_scheduler = cron_scheduler
 
+    def _wake_live(self) -> None:
+        """Have the live scheduler pick up a change just written through the
+        offline action log now rather than at its next tick, which with
+        nothing due is minutes away. Nothing to do without a live instance
+        (the CLI, tests); never raises."""
+        live = self._cron_scheduler
+        if live is None:
+            return
+        try:
+            live.wake()
+        except Exception:  # noqa: BLE001
+            logger.debug("cron: could not wake the live scheduler", exc_info=True)
+
     @route(
         "GET",
         "/api/v1/cron",
@@ -344,6 +359,7 @@ class CronService:
             raise NotFoundError("no such job", details={"id": cmd.id})
         if result == "protected":
             raise ForbiddenError("system job; cannot remove", details={"id": cmd.id})
+        self._wake_live()
         return CronRemoveResult(result=result)
 
     @route(
@@ -406,6 +422,7 @@ class CronService:
         job = cron.enable_job(cmd.id, enabled=cmd.enabled)
         if job is None:
             raise NotFoundError("no such job", details={"id": cmd.id})
+        self._wake_live()
         return CronToggleResult(
             job=CronJobItem(**_job_to_dict(job, cron_scheduler=self._cron_scheduler))
         )
@@ -433,6 +450,7 @@ class CronService:
             model=cmd.model,
             persona=cmd.persona,
         )
+        self._wake_live()
         return CronAddResult(
             job=CronJobItem(**_job_to_dict(job, cron_scheduler=self._cron_scheduler))
         )
@@ -465,6 +483,7 @@ class CronService:
             raise NotFoundError("no such job", details={"id": cmd.id})
         if result == "protected":
             raise ForbiddenError("system job; cannot update", details={"id": cmd.id})
+        self._wake_live()
         return CronToggleResult(
             job=CronJobItem(**_job_to_dict(result, cron_scheduler=self._cron_scheduler))
         )

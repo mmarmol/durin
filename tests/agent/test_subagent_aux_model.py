@@ -8,7 +8,6 @@ fall back to the inherited model rather than break spawning.
 
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest

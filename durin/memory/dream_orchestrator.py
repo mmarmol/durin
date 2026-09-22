@@ -129,7 +129,7 @@ def run_full_dream(
 
     tlog = get_session_logger("cron_dream")
     tlog.add_sink(DreamProgressSink(progress))
-    ttok = bind_telemetry(tlog)
+    ttok = bind_telemetry(tlog, purpose="dream")
     ex: dict = {}
     sk: dict = {}
     rf: dict = {}
@@ -360,7 +360,7 @@ def run_reactive_dream(
     t_run = time.perf_counter()
     tlog = get_session_logger("reactive_dream")
     tlog.add_sink(DreamProgressSink(progress))
-    rtok = bind_telemetry(tlog)
+    rtok = bind_telemetry(tlog, purpose="dream")
     error: Exception | None = None
     out: dict = {}
     progress({"kind": "run_started"})

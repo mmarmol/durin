@@ -190,7 +190,7 @@ def run_dream_worker(
 
         # This thread emits the rss_kill event; without a bound logger
         # emit_tool_event drops it.
-        bind_telemetry(get_session_logger("dream_supervisor"))
+        bind_telemetry(get_session_logger("dream_supervisor"), purpose="dream")
         while not watchdog_stop.wait(_WATCHDOG_INTERVAL_S):
             if proc.poll() is not None:
                 return

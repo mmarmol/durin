@@ -295,7 +295,7 @@ def start_memory_telemetry(*, period_s: float = _MEMORY_TELEMETRY_PERIOD_S) -> b
 
         # A fresh thread has no bound telemetry logger and emit_tool_event
         # drops events without one — bind the gateway's own stream.
-        bind_telemetry(get_session_logger("gateway"))
+        bind_telemetry(get_session_logger("gateway"), purpose="gateway")
         while True:
             try:
                 _emit_once()

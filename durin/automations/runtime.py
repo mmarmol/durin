@@ -80,7 +80,7 @@ def _bind_automations_telemetry(name: str):
     """
     if current_telemetry() is not None:
         return None
-    return bind_telemetry(get_session_logger(f"automation:{name}"))
+    return bind_telemetry(get_session_logger(f"automation:{name}"), purpose="automation")
 
 
 class AutomationBusy(Exception):

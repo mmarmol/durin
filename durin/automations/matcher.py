@@ -365,7 +365,9 @@ class TriggerMatcher:
     def _emit(self, automation_name: str, channel: str, action: str) -> None:
         token = None
         if current_telemetry() is None:
-            token = bind_telemetry(get_session_logger(f"automation:{automation_name}"))
+            token = bind_telemetry(
+                get_session_logger(f"automation:{automation_name}"), purpose="automation",
+            )
         try:
             emit_tool_event(
                 "automations.event_matched",

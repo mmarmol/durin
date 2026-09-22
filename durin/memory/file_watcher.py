@@ -233,7 +233,7 @@ class MemoryFileWatcher:
             reset_telemetry,
         )
 
-        token = bind_telemetry(get_session_logger("gateway"))
+        token = bind_telemetry(get_session_logger("gateway"), purpose="memory_index")
         try:
             while True:
                 try:

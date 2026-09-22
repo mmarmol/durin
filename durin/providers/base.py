@@ -261,15 +261,18 @@ class LLMProvider(ABC):
         self._telemetry = telemetry
 
     def emit_call_telemetry(self, *, model: Any, response: LLMResponse,
-                            duration_ms: float) -> None:
+                            duration_ms: float, purpose: str | None = None) -> None:
         """Log one ``provider.call`` event for a completed round-trip.
 
         Sink resolution: the ContextVar-bound session logger wins (bound per
         turn / per workflow node), falling back to the logger attached via
-        ``set_telemetry()``. No sink → the event is dropped. Telemetry must
-        never break the call, so everything is exception-suppressed."""
+        ``set_telemetry()``. No sink → the event is dropped. ``purpose`` names
+        what the call was for; a caller that knows better passes it, otherwise
+        the purpose bound to the current task is used, and ``unknown`` says no
+        one named it. Telemetry must never break the call, so everything is
+        exception-suppressed."""
         with suppress(Exception):
-            from durin.telemetry.logger import current_telemetry
+            from durin.telemetry.logger import current_call_purpose, current_telemetry
 
             sink = current_telemetry() or getattr(self, "_telemetry", None)
             if sink is None or not hasattr(sink, "log"):
@@ -286,6 +289,7 @@ class LLMProvider(ABC):
                 "completion_tokens": int(usage.get("completion_tokens", 0) or 0),
                 "duration_ms": round(float(duration_ms), 1),
                 "finish_reason": getattr(response, "finish_reason", "stop"),
+                "purpose": purpose or current_call_purpose() or "unknown",
             })
 
     @staticmethod

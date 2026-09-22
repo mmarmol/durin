@@ -178,6 +178,7 @@ class InterpretImageTool(Tool):
             self._aux.provider.emit_call_telemetry(
                 model=self._aux.model, response=response,
                 duration_ms=(time.monotonic() - _started) * 1000.0,
+                purpose="vision",
             )
         except Exception as e:
             self._emit("ask_vision.error", {

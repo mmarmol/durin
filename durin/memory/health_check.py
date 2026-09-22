@@ -627,7 +627,7 @@ class HealthCheckScheduler:
             reset_telemetry,
         )
 
-        token = bind_telemetry(get_session_logger("gateway"))
+        token = bind_telemetry(get_session_logger("gateway"), purpose="memory_health")
         try:
             # First tick fires immediately so a fresh process has a
             # health probe in its first interval window, not after.

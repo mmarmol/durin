@@ -254,12 +254,18 @@ to discard the follow-ups queued behind it. The gateway's shutdown now calls
 their `finally` hands their queues to the bus), collects what is on the bus
 plus any queue no task handed back, drops trigger-only messages (published
 for automation triggers, never a conversation), and writes the rest to
-`sessions/.inbound_journal.jsonl` (`durin/bus/journal.py`). The next start
-replays the journal into the bus, in order, once — a message older than a
-day at replay time is dropped with a log line rather than answered out of
-the blue. The turn that was in flight itself is not replayed: its user
-message is already in the session history, and `pending_user_turn` closes
-it as interrupted at the session's next turn.
+`sessions/.inbound_journal.jsonl` (`durin/bus/journal.py`). The message each
+cancelled turn was answering goes first (the loop keeps it per task from
+`_start_turn_task` until the task finishes), ahead of the follow-ups queued
+behind it. The next start replays the journal into the bus, in order, once —
+a message older than a day at replay time is dropped with a log line rather
+than answered out of the blue. The interrupted turn therefore runs again
+after the restart. Its first attempt stays visible in the session: the user
+message was persisted early with `pending_user_turn` set, and RESTORE closes
+it as "interrupted" when no runtime checkpoint materialised partial work
+first, so the history reads user message, the interruption, the same message
+replayed, the answer. That closing line is the crash path's whole recovery
+(a hard death journals nothing); the journal is what a graceful restart adds.
 
 ### The state loop: `_process_message`
 
