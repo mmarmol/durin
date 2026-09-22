@@ -5,6 +5,26 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.10.11 — 2026-09-22
+
+### Highlights
+
+- **A session the dream could not extract no longer fails every night.** On
+  a production workspace two sessions had failed the extract pass on every
+  nightly run since mid-September, each spending the same model calls again:
+  the discovery step resolved a proposal to a ghost — a display-name ref such
+  as `person:Kojiro Kubo`, carried into the alias index from a session
+  summary's `entities:` list — instead of the page `person:kojiro-kubo` that
+  owns the name; the write to the ghost raised, and the session's cursor
+  never advanced. Discovery and the learnings sweep now resolve a proposal
+  only to an entity that has a page.
+
+### Memory
+
+- The alias-index resolution behind discovery ignores refs without a page: a
+  proposal that is the page updates it in place, and one spelled as the
+  display name lands on the page.
+
 ## 0.10.10 — 2026-09-22
 
 ### Highlights
