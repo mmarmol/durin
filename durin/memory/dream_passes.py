@@ -21,7 +21,10 @@ from __future__ import annotations
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
+
+if TYPE_CHECKING:
+    from datetime import datetime
 
 from loguru import logger
 
@@ -158,6 +161,12 @@ def run_extract_pass(
                     out["skill_signals"] += len(sig)
             except Exception as exc:  # noqa: BLE001 — never abort the whole pass
                 out["errors"].append({"session": jsonl_path.stem, "error": str(exc)})
+                # The pass only counts its failures; without this line the
+                # CLI's "N session(s) errored (see logs)" pointed at nothing.
+                logger.warning(
+                    "extract dream: session {} failed: {}",
+                    jsonl_path.stem, str(exc)[:300],
+                )
     out["duration_ms"] = int((time.perf_counter() - t0) * 1000)
     _emit("memory.dream.end", kind="extract",
           entities_consolidated=out["entities"], entities_discovered=out["discovered"],
@@ -203,6 +212,10 @@ def run_derived_from_pass(
                     out["links"] += len(linked)
             except Exception as exc:  # noqa: BLE001 — never abort the whole pass
                 out["errors"].append({"session": jsonl_path.stem, "error": str(exc)})
+                logger.warning(
+                    "derived-from dream: session {} failed: {}",
+                    jsonl_path.stem, str(exc)[:300],
+                )
     out["duration_ms"] = int((time.perf_counter() - t0) * 1000)
     _emit("memory.dream.end", kind="derived_from",
           links=out["links"], sessions=out["sessions"],
