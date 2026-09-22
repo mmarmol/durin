@@ -149,7 +149,10 @@ The pass entry points live in `durin/memory/dream_passes.py`
 `durin/memory/relation_hygiene.py` (`run_consolidate_relations_pass`).
 Each pass reads from `<workspace>/sessions/*.jsonl` or from `memory/entities/`,
 writes through the shared CAS write path, and is best-effort per item: one bad
-session or pair never aborts the whole pass.
+session or pair never aborts the whole pass. A session the extract or
+derived-from pass could not process is counted in the pass result and named
+in one warning line with the error, so the CLI's "N session(s) errored" can
+be traced to a transcript.
 
 ### Pass 1 — extract: sessions to entity attributes
 
