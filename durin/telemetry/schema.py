@@ -1544,7 +1544,10 @@ class MemoryIndexCompactedEvent(TypedDict):
     """Nightly LanceDB table maintenance ran. ``mode`` is ``optimized`` (the
     normal path) or ``rebuilt`` (the fragment rewrite corrupted the vector
     read path and the table was re-created from its current rows); when
-    ``compacted`` is false, ``reason`` says why."""
+    ``compacted`` is false, ``reason`` says why. ``attempts`` counts the
+    rewrite attempts (a live writer's commit during the rewrite is retried
+    after the table goes quiet) and ``quiet_wait_ms`` the time spent waiting
+    for it to go quiet."""
 
     compacted: bool
     mode: NotRequired[str]
@@ -1552,6 +1555,8 @@ class MemoryIndexCompactedEvent(TypedDict):
     versions_after: NotRequired[int]
     reason: NotRequired[str]
     duration_ms: NotRequired[int]
+    attempts: NotRequired[int]
+    quiet_wait_ms: NotRequired[int]
 
 
 class GatewayMemoryEvent(TypedDict):
