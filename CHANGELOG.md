@@ -5,6 +5,94 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.10.10 — 2026-09-22
+
+### Highlights
+
+- **A restart no longer loses the conversation it interrupted.** Stopping the
+  gateway with a turn in flight used to drop the message being answered and
+  every follow-up typed behind it: no channel redelivers (Telegram confirms
+  its offset before the handler runs, Slack acks the envelope before
+  publishing, email marks the message seen inside the fetch), and the next
+  contact closed the interrupted message as an error with no answer ever
+  given. The gateway now journals the message in flight and the queued
+  follow-ups at shutdown and replays them, in order, at the next start. The
+  shutdown itself no longer hangs when a turn is in flight.
+- **Scheduled runs tell the truth and fire on time.** A cron turn whose model
+  call failed was recorded `ok`; a one-shot that came due while the gateway
+  was down was dropped silently, though the docs claimed the opposite; a job
+  created from the webui or the API could wait up to five minutes for the
+  scheduler's next tick. Failed turns are recorded `error` with the reply as
+  the reason; a missed one-shot within `cron.missed_oneshot_grace_s` (default
+  one hour) fires late and its prompt says so, an older one is retired with a
+  `skipped` record; API writes wake the scheduler at once.
+- **Subagents run under a context window.** A spawned child had no input
+  budget at all: no mid-turn precheck, no history snip, and an over-eager
+  microcompact, so a long research child ended in the provider's
+  context-length error. The child now inherits the parent's window, or its
+  own aux model's, and every run writes a `subagent.run` telemetry row with
+  its cost.
+- **The nightly index compaction works again on a busy workspace.** The
+  dream's LanceDB compaction lost every night to the live indexer's
+  concurrent commits — on one production workspace, every night for five
+  days, with the table back to hundreds of versions — because lance refuses
+  a rewrite over a commit it did not see. Compaction now waits for the table
+  to go quiet and retries the conflict.
+
+### Gateway
+
+- Shutdown with a turn in flight no longer hangs: the outbound dispatcher and
+  the inbound consumer wait with `asyncio.timeout`, which unlike
+  `asyncio.wait_for` on Python 3.11 does not swallow a cancellation that
+  lands as a frame arrives, and the dispatcher stop is bounded.
+- The turn in flight and its queued follow-ups survive a graceful restart
+  through `sessions/.inbound_journal.jsonl`; a message older than a day at
+  replay time is dropped rather than answered out of the blue.
+
+### Cron
+
+- Failed agent turns are recorded as `error`; each `run_history` record
+  keeps the job's reply as `summary`; missed occurrences are `skipped`
+  records; a late one-shot's prompt says it is late; a failed turn is one
+  warning line in the gateway log instead of a traceback.
+- Creating, updating, toggling or removing a job through the API wakes the
+  running scheduler instead of waiting for its next tick.
+
+### Agent
+
+- Subagents run under the context window of the model they use — the
+  parent's, or the aux subagent model's own (an inline `model`/`provider`
+  pair resolves like the picker's ref, so the configured window wins over
+  the schema default). The `spawn` reply describes mode inheritance instead
+  of claiming subagents are always read-only.
+- The archived-summary block ends with a footer naming `session_search`, so
+  a value the summary dropped can be found in the archived turns. The turn
+  that compacts now sees the summary it just wrote; it used to see neither
+  the archived turns nor their summary.
+
+### Memory
+
+- The nightly LanceDB compaction waits for the table to go quiet (no new
+  version for ten seconds, capped at three minutes), retries a live writer's
+  commit conflict up to four times, and skips rather than fails the version
+  prune if a writer commits in between.
+- A session the extract or derived-from pass could not process is named in a
+  warning with the error, so the CLI's "N session(s) errored" can be traced.
+
+### Telemetry
+
+- `provider.call` rows carry `purpose` — chat, cron, automation,
+  compaction, subagent, dream, judge, workflow, vision, audio,
+  memory_health, memory_index, gateway, or `unknown` — so a session's spend
+  splits by caller without bracketing rows by timestamp.
+- New `subagent.run` event in the spawning session's telemetry (task, label,
+  model, window, stop reason, iterations, tokens, duration);
+  `memory.index.compacted` carries `attempts` and `quiet_wait_ms`.
+
+### Catalogs
+
+- Weekly vendored refreshes of the MCP floor and the model catalog. (#612, #613)
+
 ## 0.10.9 — 2026-09-21
 
 ### Highlights
