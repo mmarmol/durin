@@ -89,7 +89,18 @@ after the fact. The nightly run also **compacts the LanceDB table**
 else prunes them. Compaction is verify-or-rollback — optimize, probe a real
 vector search, restore the pre-optimize version and rebuild the table from
 its current rows if the fragment rewrite corrupted the vector read path (a
-real lance 4.0 failure mode on tables written by older formats).
+real lance 4.0 failure mode on tables written by older formats). The worker
+compacts while the gateway's file watcher, in its own process, is still
+indexing the pages the dream just wrote, and lance refuses to commit a
+rewrite over a commit it did not see (`Retryable commit conflict`). So
+compaction first waits for the table to go quiet (no new version for ten
+seconds, capped at three minutes), takes its row count and rollback version
+only then, and when a write lands during the rewrite anyway waits again and
+retries up to four times; the version prune that follows a verified rewrite
+is skipped, not failed, if a writer commits in between. Before this the box's
+nightly compaction failed every night from 2026-09-18 and the table was back
+to hundreds of versions within days. The `memory.index.compacted` event
+carries `attempts` and `quiet_wait_ms`.
 
 **3. Per-session cursor → idempotent, lossless.** The extract pass tracks
 progress with a single integer **per-session cursor** (turns already processed).

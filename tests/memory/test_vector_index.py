@@ -768,10 +768,13 @@ def test_upsert_is_atomic_keeps_existing_row_when_insert_fails(
 @pytest.mark.skipif(
     not vector_index_available(), reason="lancedb not installed",
 )
-def test_compact_index_prunes_versions(tmp_path):
+def test_compact_index_prunes_versions(tmp_path, monkeypatch):
     """Churned tables accrete one version per write forever (2930 on the
     2026-07-18 box); the nightly compaction prunes them to a handful."""
+    from durin.memory import vector_index as _vi
     from durin.memory.vector_index import compact_index
+
+    monkeypatch.setattr(_vi, "_sleep", lambda s: None)  # no live writer here
 
     ws = tmp_path / "ws"
     vi = VectorIndex(ws, _FakeEmbeddingProvider())
@@ -804,8 +807,10 @@ def test_compact_index_rebuild_fallback_keeps_the_table_searchable_and_typed(
     the entities column remains typed list<string>."""
     import pyarrow as pa
 
+    from durin.memory import vector_index as _vi
     from durin.memory.vector_index import _TABLE_NAME, compact_index
 
+    monkeypatch.setattr(_vi, "_sleep", lambda s: None)  # no live writer here
     workspace = tmp_path / "ws"
     provider = _FakeEmbeddingProvider()
     index = VectorIndex(workspace, provider)

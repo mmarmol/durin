@@ -30,8 +30,9 @@ should guard with :func:`vector_index_available` or accept the
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from durin.memory.embedding import EmbeddingProvider
 from durin.memory.paths import MEMORY_CLASSES, skill_uri, walk_class
@@ -1325,6 +1326,52 @@ def _vector_search_ok(table: Any) -> bool:
         return False
 
 
+# The nightly compaction runs in the dream worker while the gateway's file
+# watcher, in its own process, is still indexing the pages the dream just
+# wrote. Lance refuses to commit a fragment rewrite over a commit it did not
+# see ("Retryable commit conflict"), so compaction first waits for the table
+# to go quiet — no new version for ``_QUIET_S`` — and, when a write lands
+# during the rewrite anyway, waits again and retries a bounded number of
+# times. Without this the box's nightly compaction failed every night from
+# 2026-09-18 and the table was back to hundreds of versions within days.
+_QUIET_S = 10.0
+_QUIET_MAX_S = 180.0
+_COMPACT_ATTEMPTS = 4
+_sleep = time.sleep
+
+
+def _wait_for_quiet(
+    open_table: Callable[[], Any],
+    *,
+    quiet_s: float = _QUIET_S,
+    max_wait_s: float = _QUIET_MAX_S,
+    sleep: Callable[[float], None] | None = None,
+    clock: Callable[[], float] | None = None,
+) -> Any:
+    """Return a fresh table handle once no new version has been committed for
+    ``quiet_s``, or the latest handle when ``max_wait_s`` runs out first."""
+    if sleep is None:
+        sleep = _sleep
+    if clock is None:
+        clock = time.monotonic
+    start = clock()
+    table = open_table()
+    last = table.version
+    while True:
+        sleep(quiet_s)
+        table = open_table()
+        if table.version == last:
+            return table
+        last = table.version
+        if clock() - start >= max_wait_s:
+            return table
+
+
+def _is_retryable_conflict(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return "commit conflict" in text or "retryable" in text
+
+
 def compact_index(workspace: Path) -> dict:
     """Compact the vector table and drop superseded versions (best-effort).
 
@@ -1345,10 +1392,9 @@ def compact_index(workspace: Path) -> dict:
 
     The nightly dream calls this; failure is reported, never raised.
     Returns ``{"compacted", "mode", "versions_before", "versions_after",
-    "duration_ms"}`` (plus ``"reason"`` when skipped/failed).
+    "duration_ms", "attempts", "quiet_wait_ms"}`` (plus ``"reason"`` when
+    skipped/failed).
     """
-    import time as _time
-
     try:
         import lancedb  # type: ignore[import-not-found]
     except ImportError:
@@ -1356,10 +1402,14 @@ def compact_index(workspace: Path) -> dict:
     uri = str(Path(workspace).joinpath(*_INDEX_PATH))
     if not Path(uri).is_dir():
         return {"compacted": False, "reason": "no_index"}
-    t0 = _time.perf_counter()
+    t0 = time.perf_counter()
+    attempts = 0
+    quiet_wait_ms = 0
 
     def _done(out: dict) -> dict:
-        out["duration_ms"] = int((_time.perf_counter() - t0) * 1000)
+        out["duration_ms"] = int((time.perf_counter() - t0) * 1000)
+        out["attempts"] = attempts
+        out["quiet_wait_ms"] = quiet_wait_ms
         try:
             from durin.agent.tools._telemetry import emit_tool_event
 
@@ -1374,20 +1424,48 @@ def compact_index(workspace: Path) -> dict:
             return {"compacted": False, "reason": "no_table"}
         from datetime import timedelta
 
-        table = db.open_table(_TABLE_NAME)
+        def _open() -> Any:
+            return db.open_table(_TABLE_NAME)
+
+        table = _open()
         versions_before = len(table.list_versions())
-        rows_before = table.count_rows()
         vector_dims = table.schema.field("vector").type.list_size
-        v0 = table.version
 
         # Phase 1 keeps a week of versions so the pre-optimize version is
         # still there to restore if verification fails; phase 2 prunes the
         # rest only once the compacted table has proven readable. (Old lance
         # versions have no user-facing value here — markdown is the source
         # of truth and vectors are derivable — they are pure rollback fuel.)
-        table.optimize(cleanup_older_than=timedelta(days=7))
+        # The row count and the rollback version are taken after the quiet
+        # wait, right before the rewrite, so a page the live writer indexed
+        # meanwhile is not mistaken for a row the rewrite lost.
+        while True:
+            attempts += 1
+            waited_from = time.perf_counter()
+            table = _wait_for_quiet(_open)
+            quiet_wait_ms += int((time.perf_counter() - waited_from) * 1000)
+            rows_before = table.count_rows()
+            v0 = table.version
+            try:
+                table.optimize(cleanup_older_than=timedelta(days=7))
+                break
+            except Exception as exc:  # noqa: BLE001 - only a commit conflict is retried
+                if not _is_retryable_conflict(exc) or attempts >= _COMPACT_ATTEMPTS:
+                    raise
+                logger.info(
+                    "compact_index: a live writer committed during the rewrite "
+                    "(attempt %d/%d); waiting for the table to go quiet",
+                    attempts, _COMPACT_ATTEMPTS,
+                )
         if _vector_search_ok(table) and table.count_rows() == rows_before:
-            table.optimize(cleanup_older_than=timedelta(0))
+            try:
+                table.optimize(cleanup_older_than=timedelta(0))
+            except Exception as exc:  # noqa: BLE001 - the prune is optional
+                if not _is_retryable_conflict(exc):
+                    raise
+                # The fragments are compacted; the week of old versions the
+                # first pass kept goes at the next night's run instead.
+                logger.info("compact_index: version prune skipped, a live writer committed meanwhile")
             if _vector_search_ok(table):
                 return _done({
                     "compacted": True, "mode": "optimized",
