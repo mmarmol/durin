@@ -331,19 +331,39 @@ def _resolve_semantic_ref(
     return None
 
 
-def _resolve_existing_ref(index, proposed_ref: str, name: str) -> str | None:
+def _page_exists(workspace: Path, ref: str) -> bool:
+    type_, _, slug = ref.partition(":")
+    if not type_ or not slug:
+        return False
+    return (Path(workspace) / "memory" / "entities" / type_ / f"{slug}.md").is_file()
+
+
+def _resolve_existing_ref(
+    index, proposed_ref: str, name: str, *, workspace: Path,
+) -> str | None:
     """The single existing same-type entity that already owns this name/slug,
     or None. None when there is no match OR when the match is ambiguous (>1
     existing entity shares the name) — ambiguity defers to refine + the judge,
     preserving deliberate same-name disambiguation (person:marcelo_marmol vs
-    person:marcelo_diaz)."""
+    person:marcelo_diaz).
+
+    Only a ref that owns a page counts. The alias index also carries the raw
+    ``entities:`` refs of session summaries and other entries — display-name
+    spellings the model wrote, ``person:Kojiro Kubo`` next to the page
+    ``person:kojiro-kubo`` — and such a ref has nothing to update: resolving
+    to it made the write fail, and the whole session's extract with it, on
+    every run."""
     type_, _, slug = proposed_ref.partition(":")
     matches: set[str] = set()
     for key in (name, slug):
         if not key:
             continue
         for ref in index.lookup(key):
-            if ref != proposed_ref and ref.split(":", 1)[0] == type_:
+            if (
+                ref != proposed_ref
+                and ref.split(":", 1)[0] == type_
+                and _page_exists(workspace, ref)
+            ):
                 matches.add(ref)
     return next(iter(matches)) if len(matches) == 1 else None
 
@@ -428,7 +448,7 @@ def discover_entities(
         if sig:
             patches.append(FieldPatch(kind="body_if_absent", value=sig, author="dream",
                                       source_ref=entity_src, at=now))
-        target = _resolve_existing_ref(index, ref, prop["name"])
+        target = _resolve_existing_ref(index, ref, prop["name"], workspace=workspace)
         if target is None and vector_index is not None:
             target = _resolve_semantic_ref(
                 workspace, vector_index, ref, prop["name"], prop["attributes"],
@@ -573,7 +593,7 @@ def mine_learnings(
         ref = it["ref"]
         if ref.split(":", 1)[0] not in _LEARNING_TYPES:
             continue
-        target = _resolve_existing_ref(index, ref, it["name"])
+        target = _resolve_existing_ref(index, ref, it["name"], workspace=workspace)
         if target is None and vector_index is not None:
             target = _resolve_semantic_ref(
                 workspace, vector_index, ref, it["name"], {},

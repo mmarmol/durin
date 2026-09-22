@@ -217,7 +217,12 @@ skill_signals)` iterates every `sessions/*.jsonl` and calls
    is resolved against the existing graph by name within the same entity type
    (via the alias index): a **unique** match updates that entity in place instead
    of minting a new slug; an **ambiguous** match (more than one candidate) creates
-   a new page, deferring disambiguation to the refine pass. When lexical matching
+   a new page, deferring disambiguation to the refine pass. Only refs that own a
+   page count as candidates: the alias index also carries the raw `entities:`
+   refs of session summaries and other entries — display-name spellings such as
+   `person:Kojiro Kubo` next to the page `person:kojiro-kubo` — and resolving a
+   proposal to one of those left nothing to update, failing the whole session's
+   extract on every run. When lexical matching
    yields **no** match, discovery additionally queries the vector index —
    scoped to entity pages of the proposal's type via
    `ScopePredicate.entity_pages` — for an **embedding-near same-type entity**
