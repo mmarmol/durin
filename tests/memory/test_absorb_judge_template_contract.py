@@ -2,7 +2,7 @@
 
 Verifies that ``durin/templates/dream/absorb_judge.md`` mentions the
 exact verdict labels that ``durin/memory/absorb_judge.py`` accepts
-(``same`` / ``different`` / ``unclear``) and the same markdown-marker
+(``same`` / ``different`` / ``related`` / ``unclear``) and the same markdown-marker
 envelope (``===VERDICT===`` etc.). A drift between template and code
 would make every judge call fail at parse time — so this test is the
 canary.
@@ -46,6 +46,7 @@ def test_template_uses_v2_envelope(template_text: str) -> None:
         "===VERDICT===",
         "===CONFIDENCE===",
         "===REASONING===",
+        "===RESOLUTION===",
         "===END===",
     ):
         assert marker in template_text, (
@@ -54,9 +55,9 @@ def test_template_uses_v2_envelope(template_text: str) -> None:
 
 
 def test_valid_verdicts_match_doc_06(template_text: str) -> None:
-    """The three verdicts are same/different/unclear. Lock the set so a future
-    refactor that adds/removes a verdict breaks this loudly."""
-    assert _VALID_VERDICTS == frozenset({"same", "different", "unclear"})
+    """The four verdicts are same/different/related/unclear. Lock the set so a
+    future refactor that adds/removes a verdict breaks this loudly."""
+    assert _VALID_VERDICTS == frozenset({"same", "different", "related", "unclear"})
 
 
 def test_template_keeps_peer_review_framing(template_text: str) -> None:

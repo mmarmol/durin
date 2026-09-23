@@ -376,6 +376,9 @@ passes (extract/refine/skill), background file watching, and health checks. See
 | `judge_concurrency` | `3` | Judge calls in flight at once during the refine pass (1–8); merges stay one at a time, in candidate order |
 | `recheck_days` | `7` | Days before a pair without a settled verdict (an unparseable reply, an `unclear`, a `same` below the merge threshold) is judged again; `0` re-judges it every run. Provider failures are never remembered |
 | `semantic_name_gate` | `prioritize` | How the name signal steers embedding-near candidates: `prioritize` judges pairs whose names share a token or contain each other first, then the rest by distance; `require` judges only those; `off` orders by distance alone. Alias pairs are always judged |
+| `auto_resolve` | `true` | Let the dream apply the judges' non-merge resolutions on its own — who owns a contested alias, the typed edge between related entities, a clearer key — when confident; `false` sends every proposal to the Inbox |
+| `resolve_threshold` | `85` | Judge confidence floor (0-100) for applying a non-merge resolution automatically; below it the proposal is escalated / goes to the Inbox |
+| `auto_rename` | `true` | Allow automatic resolutions and merges to give an entity a clearer key (every reference is redirected); `false` applies the rest and leaves keys unchanged |
 
 **`memory.search`** — search pipeline configuration:
 

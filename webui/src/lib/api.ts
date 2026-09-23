@@ -2383,12 +2383,37 @@ export async function fetchFlaggedPairs(
   return res.pairs;
 }
 
+/** A judge's proposed resolution for a flagged pair, as the server stores it
+ * (``durin.memory.pair_resolution.Resolution.to_dict``). */
+export interface ResolutionProposal {
+  kind: "merge" | "disambiguate" | "relate" | "keep" | string;
+  survivor?: string | null;
+  renames?: Record<string, { slug?: string | null; name?: string | null }>;
+  alias_moves?: { alias: string; keep_on: string }[];
+  relation?: { from_ref: string; type: string; to_ref: string } | null;
+  confidence?: number;
+  reasoning?: string;
+  source?: string;
+}
+
+/** Body of POST /api/v1/memory/flagged-pairs/resolve. ``accept`` applies the
+ * stored proposal; every action but ``merge`` keeps the pair apart for good. */
+export interface ResolveFlaggedBody {
+  ref_a: string;
+  ref_b: string;
+  action: "merge" | "separate" | "disambiguate" | "relate" | "accept";
+  survivor?: string;
+  renames?: Record<string, { slug?: string; name?: string }>;
+  alias_moves?: { alias: string; keep_on: string }[];
+  relation?: { from_ref: string; type: string; to_ref: string };
+}
+
 export async function resolveFlaggedPair(
   token: string,
-  body: { ref_a: string; ref_b: string; action: "merge" | "separate" },
+  body: ResolveFlaggedBody,
   base: string = "",
-): Promise<{ ok: boolean; action: string }> {
-  return post<{ ok: boolean; action: string }>(
+): Promise<{ ok: boolean; action: string; refs?: Record<string, string> }> {
+  return post<{ ok: boolean; action: string; refs?: Record<string, string> }>(
     `${base}/api/v1/memory/flagged-pairs/resolve`,
     token,
     body,

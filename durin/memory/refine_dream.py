@@ -36,7 +36,10 @@ from durin.memory.entity_page import EntityPage
 from durin.memory.llm_invoke import default_llm_invoke
 from durin.utils.atomic_write import atomic_write_text
 
-__all__ = ["is_tombstoned", "add_tombstone", "add_flagged", "read_flagged", "remove_flagged", "run_refine"]
+__all__ = [
+    "is_tombstoned", "add_tombstone", "read_tombstones", "add_flagged", "read_flagged",
+    "remove_flagged", "rekey_ref_in_stores", "run_refine",
+]
 
 LLMInvoke = Callable[..., Any]
 _TOMBSTONE_FILE = ".refine_tombstones.json"
@@ -69,6 +72,14 @@ def _created_this_run(page: "EntityPage", run_started_at: Any) -> bool:
 
 def _tombstone_path(workspace: Path) -> Path:
     return Path(workspace) / "memory" / _TOMBSTONE_FILE
+
+
+def _stores_lock(workspace: Path):
+    """Cross-process lock around the read-modify-write of the tombstone and
+    flagged-pair stores: the nightly pass, the webui and the CLI all update
+    them, and an unlocked rewrite drops a concurrent user decision."""
+    from durin.utils.file_lock import cross_process_lock
+    return cross_process_lock(Path(workspace) / "memory" / ".refine_stores")
 
 
 # --- verdict cache -----------------------------------------------------------
@@ -179,15 +190,110 @@ def is_tombstoned(workspace: Path, ref_a: str, ref_b: str) -> bool:
 def add_tombstone(workspace: Path, ref_a: str, ref_b: str) -> None:
     """Record that the user rejected merging this pair — refine never re-merges."""
     p = _tombstone_path(workspace)
-    keys: set[str] = set()
-    if p.exists():
+    with _stores_lock(workspace):
+        keys: set[str] = set()
+        if p.exists():
+            try:
+                keys = set(json.loads(p.read_text(encoding="utf-8")))
+            except Exception:
+                keys = set()
+        keys.add(_pair_key(ref_a, ref_b))
+        p.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(p, json.dumps(sorted(keys)))
+
+
+def read_tombstones(workspace: Path) -> list[tuple[str, str]]:
+    """The pairs the user ruled out as duplicates, as ``(ref_a, ref_b)``."""
+    out: list[tuple[str, str]] = []
+    for key in sorted(_load_tombstones(workspace)):
+        a, sep, b = key.partition("|")
+        if sep and a and b:
+            out.append((a, b))
+    return out
+
+
+def _rekey_proposal(prop: Any, old_ref: str, new_ref: str) -> Any:
+    """A stored proposal with every ref naming ``old_ref`` moved to ``new_ref``."""
+    if not isinstance(prop, dict):
+        return prop
+
+    def sw(v: Any) -> Any:
+        return new_ref if v == old_ref else v
+
+    out = dict(prop)
+    if "survivor" in out:
+        out["survivor"] = sw(out["survivor"])
+    if isinstance(out.get("renames"), dict):
+        out["renames"] = {sw(k): v for k, v in out["renames"].items()}
+    if isinstance(out.get("alias_moves"), list):
+        out["alias_moves"] = [
+            {**m, "keep_on": sw(m.get("keep_on"))} if isinstance(m, dict) else m
+            for m in out["alias_moves"]]
+    rel = out.get("relation")
+    if isinstance(rel, dict):
+        out["relation"] = {k: (sw(v) if k in ("from_ref", "to_ref", "from", "to") else v)
+                           for k, v in rel.items()}
+    return out
+
+
+def rekey_ref_in_stores(workspace: Path, old_ref: str, new_ref: str, *,
+                        keep_old_tombstones: bool = False) -> None:
+    """Follow a key change (rename, or a merge folding ``old_ref`` into
+    ``new_ref``) in the ref-keyed side stores.
+
+    Tombstones follow the identity to its new key — a user's "these are
+    different" still holds under the new name; a pair that would now pair
+    the entity with itself is dropped. ``keep_old_tombstones`` keeps the old
+    keys too (a merge: should the merge be undone, the absorbed page's own
+    decisions must still be there). Flagged pairs move to the new key, their
+    stored proposal included. Verdict-cache entries naming the old key are
+    dropped: the page content they fingerprinted has changed anyway.
+    Best-effort: a store error never breaks the caller."""
+    if not old_ref or old_ref == new_ref:
+        return
+
+    def _swap(ref: str) -> str:
+        return new_ref if ref == old_ref else ref
+
+    with _stores_lock(workspace):
         try:
-            keys = set(json.loads(p.read_text(encoding="utf-8")))
-        except Exception:
-            keys = set()
-    keys.add(_pair_key(ref_a, ref_b))
-    p.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_text(p, json.dumps(sorted(keys)))
+            keys = _load_tombstones(workspace)
+            if any(old_ref in k.split("|") for k in keys):
+                moved: set[str] = set(keys) if keep_old_tombstones else set()
+                for k in keys:
+                    a, _, b = k.partition("|")
+                    a, b = _swap(a), _swap(b)
+                    if a != b:
+                        moved.add(_pair_key(a, b))
+                atomic_write_text(_tombstone_path(workspace), json.dumps(sorted(moved)))
+        except Exception:  # pragma: no cover — best-effort
+            pass
+        try:
+            p = _flagged_path(workspace)
+            if p.exists():
+                recs = json.loads(p.read_text(encoding="utf-8"))
+                if any(old_ref in (r.get("pair") or []) for r in recs):
+                    by_key: dict[str, dict] = {}
+                    for r in recs:
+                        a, b = (_swap(x) for x in r["pair"])
+                        if a == b:
+                            continue
+                        r = {**r, "pair": sorted([a, b])}
+                        if "proposal" in r:
+                            r["proposal"] = _rekey_proposal(r["proposal"], old_ref, new_ref)
+                        by_key[_pair_key(a, b)] = r
+                    atomic_write_text(p, json.dumps(list(by_key.values()), indent=2))
+        except Exception:  # pragma: no cover — best-effort
+            pass
+    try:
+        cache = _load_verdict_cache(workspace)
+        stale = [k for k in cache if old_ref in k.split("|")]
+        if stale:
+            for k in stale:
+                del cache[k]
+            _save_verdict_cache(workspace, cache)
+    except Exception:  # pragma: no cover — best-effort
+        pass
 
 
 def _flagged_path(workspace: Path) -> Path:
@@ -202,16 +308,32 @@ def add_flagged(
     verdict: str,
     confidence: int,
     reasoning: str,
+    proposal: dict | None = None,
+    source: str | None = None,
 ) -> None:
     """Record a pair the Tier-2 agent investigated but did not confirm as same,
     or a borderline pair capped before Tier-2 ran (escalation budget exhausted
     for the run) and kept on its cheap Tier-1 verdict instead.
+
+    ``proposal`` is the judge's resolution (``Resolution.to_dict()``) the
+    Bandeja offers to apply; ``source`` names who produced the record
+    (``tier1`` / ``tier2`` / ``rereview``).
 
     The record is keyed by sorted pair so order does not matter. A duplicate
     pair key keeps the newest record. Write failures are swallowed so a store
     error never breaks the refine pass.
     """
     from datetime import datetime, timezone
+    with _stores_lock(workspace):
+        _add_flagged_locked(workspace, ref_a, ref_b, verdict=verdict, confidence=confidence,
+                            reasoning=reasoning, proposal=proposal, source=source,
+                            at=datetime.now(tz=timezone.utc).isoformat())
+    _emit("memory.dream.flagged", canonical=ref_a, absorbed=ref_b)
+
+
+def _add_flagged_locked(workspace: Path, ref_a: str, ref_b: str, *, verdict: str,
+                        confidence: int, reasoning: str, proposal: dict | None,
+                        source: str | None, at: str) -> None:
     p = _flagged_path(workspace)
     records: dict[str, dict] = {}
     if p.exists():
@@ -227,14 +349,17 @@ def add_flagged(
         "verdict": verdict,
         "confidence": confidence,
         "reasoning": reasoning,
-        "at": datetime.now(tz=timezone.utc).isoformat(),
+        "at": at,
     }
+    if proposal:
+        records[key]["proposal"] = proposal
+    if source:
+        records[key]["source"] = source
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_text(p, json.dumps(list(records.values()), indent=2))
     except Exception:  # pragma: no cover — write failure must not break refine
         pass
-    _emit("memory.dream.flagged", canonical=ref_a, absorbed=ref_b)
 
 
 def read_flagged(workspace: Path) -> list[dict]:
@@ -258,20 +383,21 @@ def remove_flagged(workspace: Path, ref_a: str, ref_b: str) -> None:
     p = _flagged_path(workspace)
     if not p.exists():
         return
-    try:
-        records: dict[str, dict] = {}
-        for rec in json.loads(p.read_text(encoding="utf-8")):
-            records[_pair_key(*rec["pair"])] = rec
-    except Exception:
-        return
-    target = _pair_key(ref_a, ref_b)
-    if target not in records:
-        return
-    del records[target]
-    try:
-        atomic_write_text(p, json.dumps(list(records.values()), indent=2))
-    except Exception:  # pragma: no cover — write failure must not break caller
-        pass
+    with _stores_lock(workspace):
+        try:
+            records: dict[str, dict] = {}
+            for rec in json.loads(p.read_text(encoding="utf-8")):
+                records[_pair_key(*rec["pair"])] = rec
+        except Exception:
+            return
+        target = _pair_key(ref_a, ref_b)
+        if target not in records:
+            return
+        del records[target]
+        try:
+            atomic_write_text(p, json.dumps(list(records.values()), indent=2))
+        except Exception:  # pragma: no cover — write failure must not break caller
+            pass
 
 
 def _load_page(workspace: Path, ref: str) -> EntityPage | None:
@@ -298,6 +424,46 @@ def _page_mtime(workspace: Path, ref: str):
         return None
 
 
+def _resolution_of(judged: Any, ref_a: str, ref_b: str, source: str,
+                   page_a: "EntityPage | None" = None, page_b: "EntityPage | None" = None):
+    """The resolution a judge's answer implies (None for none), validated
+    against the pages and stripped of no-op operations when they are given.
+    Never raises: a judge reply is untrusted input, and one bad proposal must
+    not end the pass."""
+    from durin.memory.pair_resolution import effective_resolution, resolution_from_judge
+
+    try:
+        res = resolution_from_judge(
+            judged.verdict, getattr(judged, "proposal", None), ref_a, ref_b,
+            confidence=judged.confidence, reasoning=judged.reasoning, source=source)
+        if page_a is not None and page_b is not None:
+            res = effective_resolution(res, ref_a, ref_b, page_a, page_b)
+        return res
+    except Exception as exc:  # noqa: BLE001
+        logger.info("refine: unusable proposal for {} | {}: {}", ref_a, ref_b, exc)
+        return None
+
+
+def _actionable(res: Any) -> bool:
+    """A non-merge resolution that would change memory (not a bare keep)."""
+    return bool(res is not None and res.kind in ("disambiguate", "relate")
+                and res.changes_anything())
+
+
+def _auto_applicable(res: Any, verdict: str, confidence: int, threshold: int,
+                     auto_rename: bool) -> bool:
+    """Whether the dream may apply ``res`` without the user: a confident
+    ``different`` / ``related`` answer (never ``unclear``) whose change does
+    not depend on a rename it is not allowed to make."""
+    if not _actionable(res) or verdict not in ("different", "related"):
+        return False
+    if confidence < threshold:
+        return False
+    if not auto_rename and res.renames:
+        return False
+    return True
+
+
 def _escalate_judge(workspace: Path, ref_a: str, ref_b: str, **kw: object) -> "JudgeResult":
     """Thin wrapper so tests can monkeypatch without importing tier2_judge at module load."""
     from durin.memory.tier2_judge import escalate_judge
@@ -319,6 +485,9 @@ def run_refine(
     judge_concurrency: int = 1,
     recheck_cooldown_s: float = 7 * 86400,
     semantic_name_gate: str = "prioritize",
+    auto_resolve: bool = True,
+    resolve_threshold: int = 85,
+    auto_rename: bool = True,
 ) -> dict:
     """Dedup pass: judge alias-overlap candidate pairs and merge the same ones.
 
@@ -358,6 +527,18 @@ def run_refine(
     ``escalate_floor=0`` disables escalation entirely (old behavior preserved).
     ``tier2_confidence_threshold`` is the merge floor for a verdict the
     investigating judge returned; ``None`` reuses ``confidence_threshold``.
+
+    Beyond merge-or-not, each judge proposes a resolution
+    (:mod:`durin.memory.pair_resolution`): which page survives a merge and
+    whether it deserves a clearer key; for pages that stay apart, who owns a
+    contested alias, a clearer key, and — verdict ``related`` — the typed edge
+    between them. A merge goes into the proposed survivor. A non-merge
+    proposal that changes something is applied by the dream itself when
+    ``auto_resolve`` is on and the deciding judge's confidence reaches
+    ``resolve_threshold`` (a less confident one is escalated like a borderline
+    merge, and flagged with the proposal when still short); ``auto_rename``
+    off keeps every key as it is. A confident ``different`` / ``related`` that
+    changes nothing is settled and not flagged, whichever tier answered.
     """
     import contextvars
     from concurrent.futures import ThreadPoolExecutor
@@ -387,6 +568,7 @@ def run_refine(
 
     merged: list[dict] = []
     kept: list[dict] = []
+    resolved: list[dict] = []
     skipped: list[dict] = []
     escalations = 0
     judged_n = 0
@@ -513,10 +695,16 @@ def run_refine(
               distance=cand.distance, name_overlap=cand.name_overlap)
         decision = judged
         escalated = False
+        page_b = item["page_b"]
+        tier1_res = _resolution_of(judged, ref_a, ref_b, "tier1", page_a, page_b)
         borderline = (
             judged.verdict == "unclear"
             or (judged.verdict == "same"
                 and escalate_floor <= judged.confidence < confidence_threshold)
+            # A proposed change the cheap judge is not sure of gets the same
+            # second look a borderline merge does.
+            or (_actionable(tier1_res)
+                and escalate_floor <= judged.confidence < resolve_threshold)
         )
         if escalate_floor and borderline:
             if escalations >= _MAX_ESCALATIONS_PER_RUN:
@@ -526,7 +714,9 @@ def run_refine(
                             verdict=judged.verdict,
                             confidence=judged.confidence,
                             reasoning=("escalation cap reached this run; "
-                                       "Tier-1 verdict kept — review manually"))
+                                       "Tier-1 verdict kept — review manually"),
+                            proposal=tier1_res.to_dict() if tier1_res else None,
+                            source="tier1")
             else:
                 escalations += 1
                 try:
@@ -552,7 +742,9 @@ def run_refine(
                                 verdict=judged.verdict,
                                 confidence=judged.confidence,
                                 reasoning=(f"Tier-2 judge failed ({error}); "
-                                           "Tier-1 verdict kept — review manually"))
+                                           "Tier-1 verdict kept — review manually"),
+                                proposal=tier1_res.to_dict() if tier1_res else None,
+                                source="tier1")
                     kept.append({"pair": [ref_a, ref_b], "reason": f"tier2_error:{exc}"})
                     if recheck_cooldown_s > 0:
                         _remember(ref_a, ref_b, pair_fp, verdict=judged.verdict,
@@ -564,34 +756,144 @@ def run_refine(
         # gets its own merge floor; None keeps one floor for both tiers.
         merge_floor = (tier2_confidence_threshold if escalated and tier2_confidence_threshold is not None
                        else confidence_threshold)
+        source = "tier2" if escalated else "tier1"
+        res = _resolution_of(decision, ref_a, ref_b, source, page_a, page_b)
         if decision.verdict == "same" and decision.confidence >= merge_floor:
-            absorber.absorb(
-                ref_a, ref_b, reason="refine",
-                judge_reasoning=decision.reasoning,
-                judge_confidence=decision.confidence,
-            )
-            merged.append({"canonical": ref_a, "absorbed": ref_b,
+            outcome = _merge(ref_a, ref_b, res, decision)
+            if outcome is None:
+                return
+            survivor, final = outcome
+            other = ref_b if survivor == ref_a else ref_a
+            merged.append({"canonical": final, "absorbed": other,
                            "confidence": decision.confidence})
-            _emit("memory.absorb.auto_merged", canonical=ref_a, absorbed=ref_b,
+            _emit("memory.absorb.auto_merged", canonical=final, absorbed=other,
                   confidence=decision.confidence, entity_type=page_a.type)
             return
-        if escalated:
+        if _actionable(res) and decision.confidence >= resolve_threshold:
+            if auto_resolve and _auto_applicable(res, decision.verdict, decision.confidence,
+                                                 resolve_threshold, auto_rename):
+                # Applied, or flagged with the error: either way this pair is done.
+                _resolve(ref_a, ref_b, res, decision)
+                return
+            else:
+                add_flagged(workspace, ref_a, ref_b, verdict=decision.verdict,
+                            confidence=decision.confidence, reasoning=decision.reasoning,
+                            proposal=res.to_dict(), source=source)
+                kept.append({"pair": [ref_a, ref_b], "verdict": decision.verdict,
+                             "confidence": decision.confidence})
+                if recheck_cooldown_s > 0:
+                    _remember(ref_a, ref_b, pair_fp, verdict=decision.verdict,
+                              confidence=decision.confidence,
+                              until=_now() + float(recheck_cooldown_s))
+                return
+        # A confident "different" (or a "related" whose edge already exists)
+        # that proposes no change is settled, whichever tier answered: the
+        # investigating judge confirming two pages are distinct is not a
+        # question for the user, so it is not flagged.
+        settled = (decision.verdict in ("different", "related")
+                   and not _actionable(res)
+                   and (not escalated or decision.confidence >= resolve_threshold))
+        if escalated and not settled:
             add_flagged(workspace, ref_a, ref_b,
                         verdict=decision.verdict,
                         confidence=decision.confidence,
-                        reasoning=decision.reasoning)
+                        reasoning=decision.reasoning,
+                        proposal=res.to_dict() if res else None,
+                        source=source)
         kept.append({"pair": [ref_a, ref_b], "verdict": decision.verdict,
                      "confidence": decision.confidence})
-        if decision.verdict == "different" and not escalated:
+        if settled:
             # Settled: the same content gets the same answer next time.
-            _remember(ref_a, ref_b, pair_fp, verdict="different",
+            _remember(ref_a, ref_b, pair_fp, verdict=decision.verdict,
                       confidence=decision.confidence)
         elif recheck_cooldown_s > 0:
-            # Not settled (unclear, below-threshold same, escalated): worth
-            # re-examining, but not every run — the scan must advance.
+            # Not settled (unclear, below-threshold same or proposal,
+            # escalated): worth re-examining, but not every run — the scan
+            # must advance.
             _remember(ref_a, ref_b, pair_fp, verdict=decision.verdict,
                       confidence=decision.confidence,
                       until=_now() + float(recheck_cooldown_s))
+
+    def _merge(ref_a: str, ref_b: str, res, decision) -> tuple[str, str] | None:
+        """Merge the pair into the judge's survivor (clearer key when it
+        proposed one and renames are allowed). ``res`` is already validated
+        (an unusable proposal degraded to a plain merge into ``ref_a``). If
+        the rename after the merge fails, the merge stands under the
+        survivor's current key. Returns (survivor, its final ref), or None
+        when nothing was merged (the pair was kept separate meanwhile, or the
+        merge itself failed) — never raises: one pair must not end the pass."""
+        from durin.memory.pair_resolution import (
+            PairKeptSeparateError,
+            Resolution,
+            apply_resolution,
+        )
+
+        if res is None or res.kind != "merge":
+            res = Resolution(kind="merge", survivor=ref_a)
+        survivor = res.survivor or ref_a
+        other = ref_b if survivor == ref_a else ref_a
+        try:
+            out = apply_resolution(workspace, res, ref_a, ref_b, actor="dream",
+                                   vector_index=vector_index, allow_rename=auto_rename)
+            tombstones.update(_load_tombstones(workspace))  # a merge moves decisions
+            return survivor, out.refs[ref_a]
+        except PairKeptSeparateError:
+            _skip(ref_a, ref_b, "tombstoned")
+            return None
+        except Exception as exc:  # noqa: BLE001 — fall back to the plain merge
+            if _load_page(workspace, other) is None:
+                logger.info("refine: merged {} into {}; follow-up failed: {}",
+                            other, survivor, exc)
+                tombstones.update(_load_tombstones(workspace))
+                return survivor, survivor
+            if is_tombstoned(workspace, ref_a, ref_b):
+                _skip(ref_a, ref_b, "tombstoned")
+                return None
+            logger.info("refine: merge proposal for {} | {} failed ({}); "
+                        "plain merge into {}", ref_a, ref_b, exc, survivor)
+        try:
+            absorber.absorb(
+                survivor, other, reason="refine",
+                judge_reasoning=decision.reasoning,
+                judge_confidence=decision.confidence,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("refine: merge of {} into {} failed: {}", other, survivor, exc)
+            _skip(ref_a, ref_b, "merge_failed", detail=str(exc)[:200])
+            return None
+        tombstones.update(_load_tombstones(workspace))
+        return survivor, survivor
+
+    def _resolve(ref_a: str, ref_b: str, res, decision):
+        """Apply a confident non-merge resolution; on failure flag it with the
+        proposal and the error so the user sees what the dream wanted."""
+        from durin.memory.pair_resolution import apply_resolution
+
+        try:
+            out = apply_resolution(workspace, res, ref_a, ref_b, actor="dream",
+                                   vector_index=vector_index, allow_rename=auto_rename)
+        except Exception as exc:  # noqa: BLE001 — one pair never ends the pass
+            logger.warning("refine: resolution for {} | {} failed: {}", ref_a, ref_b, exc)
+            add_flagged(workspace, ref_a, ref_b, verdict=decision.verdict,
+                        confidence=decision.confidence,
+                        reasoning=f"{decision.reasoning}\n\n(auto-apply failed: {str(exc)[:200]})",
+                        proposal=res.to_dict(), source=res.source)
+            kept.append({"pair": [ref_a, ref_b], "reason": f"resolve_error:{exc}"})
+            return None
+        new_a, new_b = out.refs[ref_a], out.refs[ref_b]
+        resolved.append({"pair": [ref_a, ref_b], "now": [new_a, new_b],
+                         "kind": res.kind, "confidence": decision.confidence})
+        _emit("memory.absorb.auto_resolved", canonical=ref_a, absorbed=ref_b,
+              kind=res.kind, confidence=decision.confidence,
+              renamed=sorted(r for r, n in out.refs.items() if r != n))
+        # Remember the verdict against the pages as they are now, so the same
+        # pair (still sharing, say, a legitimate homonym alias) is not judged
+        # again until one of them changes.
+        pa, pb = _load_page(workspace, new_a), _load_page(workspace, new_b)
+        if pa is not None and pb is not None:
+            _remember(new_a, new_b, _pair_fingerprint(new_a, pa, new_b, pb),
+                      verdict=decision.verdict, confidence=decision.confidence)
+        return out
 
     pos = 0
     try:
@@ -649,6 +951,7 @@ def run_refine(
     return {
         "merged": merged,
         "kept_separate": kept,
+        "resolved": resolved,
         "skipped": skipped,
         "candidates": len(candidates),
         "judged": judged_n,

@@ -342,58 +342,110 @@ class EntityAbsorption:
                 return None
             raise AbsorptionError(f"absorbed page missing: {absorbed_path}")
 
-        canonical_page = EntityPage.from_file(canonical_path)
-        absorbed_page = EntityPage.from_file(absorbed_path)
-        if canonical_page is None or absorbed_page is None:
-            raise AbsorptionError(
-                f"could not parse one or both pages "
-                f"(canonical_parsed={canonical_page is not None}, "
-                f"absorbed_parsed={absorbed_page is not None})"
-            )
-
         # Compute the merge as in-memory content
-        # (canonical merged + absorbed archived) and commit all three file ops
+        # (canonical merged + absorbed archived) and commit all file ops
         # in ONE plumbing+CAS commit — NO porcelain working-tree staging. This
         # makes the refine resilient to the ref-lock contention memory_writer's
         # CAS creates, and removes the working-tree race (memory_writer's ff vs
         # porcelain add) that was silently losing merges under concurrency.
+        # The commit carries the bytes every change was derived from, so a
+        # concurrent write to any of those files (the agent updating the
+        # canonical, a hand edit of a page that points at the absorbed one)
+        # is detected and the merge recomputed instead of overwriting it.
         from datetime import datetime, timezone
 
         from durin.memory.archive import _annotate_frontmatter
-        from durin.memory.memory_writer import write_files_cas
+        from durin.memory.entity_rename import _rewrite_page_relations, collect_ref_rewrites
+        from durin.memory.memory_writer import StaleContentError, write_files_cas
 
-        merged = _merge_pages(canonical_page, absorbed_page, absorbed_ref=absorbed)
-        archived_md = _annotate_frontmatter(
-            absorbed_path.read_text(encoding="utf-8"),
-            archived_at=datetime.now(timezone.utc).isoformat(),
-            archived_into=canonical,
-            reason=reason or None,
-        )
+        canonical_rel = f"entities/{canonical_type}/{canonical_slug}.md"
+        absorbed_rel = f"entities/{absorbed_type}/{absorbed_slug}.md"
+        archive_rel = f"archive/entities/{absorbed_type}/{absorbed_slug}.md"
+        for attempt in range(3):
+            try:
+                canonical_raw = canonical_path.read_bytes()
+                absorbed_raw = absorbed_path.read_bytes()
+            except FileNotFoundError as exc:
+                raise AbsorptionError(f"page vanished while merging: {exc}") from exc
+            canonical_page = EntityPage.from_text(canonical_raw.decode("utf-8"))
+            absorbed_page = EntityPage.from_text(absorbed_raw.decode("utf-8"))
+            if canonical_page is None or absorbed_page is None:
+                raise AbsorptionError(
+                    f"could not parse one or both pages "
+                    f"(canonical_parsed={canonical_page is not None}, "
+                    f"absorbed_parsed={absorbed_page is not None})"
+                )
 
-        # Preserve the subject / body / trailers shape so `durin memory history`
-        # still parses the absorb metadata out of the commit message.
-        msg = [f"Absorb {absorbed} into {canonical}", "",
-               f"Merged {absorbed} into {canonical}. Reason: {reason or '(unspecified)'}.",
-               f"Absorbed page moved to archive/entities/{absorbed_type}/{absorbed_slug}.md."]
-        if judge_reasoning:
-            msg += ["", "Judge reasoning:", judge_reasoning.strip()]
-        msg += ["", f"Absorbed: {absorbed}", f"Into: {canonical}",
-                f"Reason: {reason or 'alias overlap'}"]
-        if judge_confidence is not None:
-            msg.append(f"Judge-Confidence: {int(judge_confidence)}")
+            merged = _merge_pages(canonical_page, absorbed_page, absorbed_ref=absorbed)
+            # Inbound references to the absorbed key (other pages' relations,
+            # entry entity tags, earlier archives pointing at it) are redirected
+            # to the canonical in this same commit; otherwise they would point at
+            # a page that now only exists in the archive. An edge between the two
+            # merged pages becomes a self-edge and is dropped.
+            _rewrite_page_relations(merged, absorbed, canonical, canonical)
+            merged.relations = [r for r in merged.relations if r.get("to") != canonical]
+            # The archive path is not part of the expectation: archives are
+            # only written by merges, and an earlier copy there (a slug merged
+            # before, an unmerge whose restore was never committed) is replaced
+            # exactly as before.
+            expect: dict[str, bytes | None] = {
+                canonical_rel: canonical_raw, absorbed_rel: absorbed_raw,
+            }
+            redirects = collect_ref_rewrites(
+                self.workspace, absorbed, canonical,
+                skip={canonical_rel, absorbed_rel, archive_rel},
+                originals=expect,
+            )
+            archived_md = _annotate_frontmatter(
+                absorbed_raw.decode("utf-8"),
+                archived_at=datetime.now(timezone.utc).isoformat(),
+                archived_into=canonical,
+                reason=reason or None,
+            )
 
-        sha = write_files_cas(
-            self.workspace,
-            {
-                f"entities/{canonical_type}/{canonical_slug}.md":
-                    merged.to_markdown().encode("utf-8"),
-                f"entities/{absorbed_type}/{absorbed_slug}.md": None,
-                f"archive/entities/{absorbed_type}/{absorbed_slug}.md":
-                    archived_md.encode("utf-8"),
-            },
-            message="\n".join(msg),
-            author=b"durin-dream <dream@durin.local>",
-        )
+            # Preserve the subject / body / trailers shape so `durin memory history`
+            # still parses the absorb metadata out of the commit message.
+            msg = [f"Absorb {absorbed} into {canonical}", "",
+                   f"Merged {absorbed} into {canonical}. Reason: {reason or '(unspecified)'}.",
+                   f"Absorbed page moved to archive/entities/{absorbed_type}/{absorbed_slug}.md."]
+            if judge_reasoning:
+                msg += ["", "Judge reasoning:", judge_reasoning.strip()]
+            if redirects:
+                msg += ["", f"Redirected {len(redirects)} referencing file(s) to {canonical}."]
+            msg += ["", f"Absorbed: {absorbed}", f"Into: {canonical}",
+                    f"Reason: {reason or 'alias overlap'}"]
+            if judge_confidence is not None:
+                msg.append(f"Judge-Confidence: {int(judge_confidence)}")
+
+            try:
+                sha = write_files_cas(
+                    self.workspace,
+                    {
+                        **redirects,
+                        canonical_rel: merged.to_markdown().encode("utf-8"),
+                        absorbed_rel: None,
+                        archive_rel: archived_md.encode("utf-8"),
+                    },
+                    message="\n".join(msg),
+                    author=b"durin-dream <dream@durin.local>",
+                    expect=expect,
+                )
+                break
+            except StaleContentError:
+                if attempt == 2:
+                    raise
+                logger.info("absorb %s: a file changed while merging; recomputing", absorbed)
+        try:
+            from durin.memory.refine_dream import rekey_ref_in_stores
+            rekey_ref_in_stores(self.workspace, absorbed, canonical,
+                                keep_old_tombstones=True)
+        except Exception as exc:  # noqa: BLE001 — side stores are best-effort
+            logger.warning("absorb: side-store rekey failed for %s: %s", absorbed, exc)
+        try:
+            from durin.memory.entity_rename import redirect_entry_refs
+            redirect_entry_refs(self.workspace, absorbed, canonical)
+        except Exception as exc:  # noqa: BLE001 — entry tags are best-effort
+            logger.warning("absorb: entry tag redirect failed for %s: %s", absorbed, exc)
 
         # 7: alias_index — refresh canonical, drop absorbed entity_ref
         # In-memory only: no save() to disk.

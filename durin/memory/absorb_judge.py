@@ -3,8 +3,11 @@
 When auto-absorb is enabled, the refine pass (``refine_dream.run_refine``)
 calls :func:`judge_pair` on every alias-overlap candidate that survived the
 cross-type filter and the run-scoped quarantine. The judge returns a
-verdict (``"same"`` / ``"different"`` / ``"unclear"``), a confidence
-score (0-100), and free-form reasoning. Refine merges only when
+verdict (``"same"`` / ``"different"`` / ``"related"`` / ``"unclear"``), a
+confidence score (0-100), free-form reasoning, and optionally a proposed
+resolution (which page survives a merge, clearer keys, who owns a contested
+alias, the typed edge between related pages — see
+``durin.memory.pair_resolution``). Refine merges only when
 ``verdict == "same"`` AND ``confidence >= confidence_threshold``.
 
 Design notes:
@@ -61,7 +64,8 @@ _TEMPLATE_PATH = (
 # and a missing closing marker all still parse — the model's drift costs
 # no extra call. A block that is absent or holds no usable value is still
 # an error: the judge never guesses a verdict.
-_MARKERS = ("===VERDICT===", "===CONFIDENCE===", "===REASONING===", "===END===")
+_MARKERS = ("===VERDICT===", "===CONFIDENCE===", "===REASONING===",
+            "===RESOLUTION===", "===END===")
 _RE_MARKER = re.compile("|".join(re.escape(m) for m in _MARKERS), re.IGNORECASE)
 _RE_NUMBER = re.compile(r"(\d+(?:\.\d+)?)\s*%?")
 
@@ -82,7 +86,7 @@ def _blocks(raw: str) -> dict[str, str]:
 
 
 
-_VALID_VERDICTS = frozenset({"same", "different", "unclear"})
+_VALID_VERDICTS = frozenset({"same", "different", "related", "unclear"})
 
 # Maximum characters of the page's to_markdown() serialization included in
 # the judge prompt. Free-text body can grow unboundedly; attributes/relations
@@ -109,7 +113,9 @@ class JudgeError(Exception):
 class JudgeResult:
     """One LLM-judge decision for a candidate entity pair.
 
-    ``verdict`` is one of ``"same"`` / ``"different"`` / ``"unclear"``.
+    ``verdict`` is one of ``"same"`` / ``"different"`` / ``"related"`` /
+    ``"unclear"`` — ``related`` means two distinct identities where one is a
+    part, version or specialization of the other.
     ``confidence`` is the model's self-reported certainty 0-100; the
     dispatcher's threshold check is the operational gate.
     ``reasoning`` is the model's free-form justification (1-3 sentences
@@ -120,6 +126,11 @@ class JudgeResult:
     verdict: str
     confidence: int
     reasoning: str
+    # The judge's proposed resolution as parsed JSON (``survivor``,
+    # ``renames``, ``alias_moves``, ``relation``), or None when it proposed
+    # none or the block was unreadable. Never required: a verdict stands on
+    # its own, and the caller validates the proposal before using it.
+    proposal: dict | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -347,14 +358,39 @@ def _parse_response(raw: str) -> JudgeResult:
         verdict=verdict,
         confidence=confidence,
         reasoning=reasoning,
+        proposal=_parse_proposal(blocks.get("===RESOLUTION===")),
     )
+
+
+
+def _parse_proposal(block: str | None) -> dict | None:
+    """The optional ``===RESOLUTION===`` block as a dict, or None.
+
+    Tolerates a code fence and prose around the object; anything that is not
+    a JSON object (or an empty one) is None — a proposal is advisory, so an
+    unreadable one never fails the verdict."""
+    import json
+
+    if not block:
+        return None
+    start = block.find("{")
+    if start < 0:
+        return None
+    try:
+        # raw_decode reads exactly one object and ignores what follows it (a
+        # closing fence, an echoed note) instead of failing on trailing text.
+        data, _ = json.JSONDecoder().raw_decode(block[start:])
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) and data else None
 
 
 _RETRY_FEEDBACK = (
     "\n\nYour previous reply could not be parsed ({error}). Reply again using "
     "exactly this envelope and nothing else:\n"
-    "===VERDICT===\n<same|different|unclear>\n===CONFIDENCE===\n<integer 0-100>\n"
-    "===REASONING===\n<your reasoning>\n===END===\n"
+    "===VERDICT===\n<same|different|related|unclear>\n===CONFIDENCE===\n<integer 0-100>\n"
+    "===REASONING===\n<your reasoning>\n===RESOLUTION===\n<JSON object or {{}}>\n"
+    "===END===\n"
 )
 
 

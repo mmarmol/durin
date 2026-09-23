@@ -77,7 +77,8 @@ class ForgetResult(Result):
 class DreamEvent(Result):
     """One notable thing the nightly dream did.
 
-    ``kind`` is the operation: "merged" | "created" | "improved" | "flagged" |
+    ``kind`` is the operation: "merged" | "resolved" (the dream disambiguated
+    or related a colliding pair on its own) | "created" | "improved" | "flagged" |
     "warning" (degraded/unparseable — needs operator attention) | "run"
     (per-run summary line).
     ``ref`` / ``ref_kind`` let the UI deep-link to the affected entity or skill;
@@ -196,7 +197,15 @@ class MemoryDocumentForgetCommand(Command):
 
 
 class FlaggedPair(Result):
-    """One memory pair the dream escalated for human review."""
+    """One memory pair the dream escalated for human review.
+
+    ``name_*`` / ``aliases_*`` are the pages' current display name and
+    aliases (empty when a page no longer exists), so the Bandeja can offer
+    alias ownership without a round-trip per page. ``proposal`` is the
+    judge's resolution (see ``durin.memory.pair_resolution``) — ``kind``
+    merge | disambiguate | relate | keep, plus ``survivor``, ``renames``,
+    ``alias_moves`` and ``relation`` — or None when it proposed none.
+    ``source`` says who flagged it: tier1 | tier2 | rereview."""
 
     ref_a: str
     ref_b: str
@@ -204,6 +213,12 @@ class FlaggedPair(Result):
     confidence: int
     reasoning: str
     at_ms: int | None
+    name_a: str = ""
+    name_b: str = ""
+    aliases_a: list[str] = []
+    aliases_b: list[str] = []
+    proposal: dict[str, Any] | None = None
+    source: str | None = None
 
 
 class FlaggedPairs(Result):
@@ -216,19 +231,58 @@ class FlaggedPairsQuery(Query):
     """No inputs — returns the full current flagged-pairs list."""
 
 
+class AliasMoveIn(Command):
+    """Who keeps ``alias``: ``ref_a``/``ref_b`` (either ref), ``both`` or ``none``."""
+
+    alias: str
+    keep_on: str
+
+
+class RelationIn(Command):
+    """A typed edge between the two pages of the pair."""
+
+    from_ref: str
+    type: str
+    to_ref: str
+
+
+class RenameIn(Command):
+    """A clearer key (``slug``) and/or display ``name`` for one page."""
+
+    slug: str | None = None
+    name: str | None = None
+
+
 class ResolveFlaggedRequest(Command):
-    """Resolve a flagged pair: merge the two entities or keep them separate."""
+    """Resolve a flagged pair.
+
+    ``action``:
+    - ``merge`` — fold the pair into ``survivor`` (default ``ref_a``);
+      ``renames`` may give the survivor a clearer key.
+    - ``separate`` — keep both as they are (tombstones the pair).
+    - ``disambiguate`` — keep both, apply ``alias_moves`` / ``renames``.
+    - ``relate`` — ``disambiguate`` plus ``relation``.
+    - ``accept`` — apply the judge's stored proposal as is.
+    Every action except ``merge`` tombstones the pair (under the final keys),
+    so the dream never merges what the user kept apart."""
 
     ref_a: str
     ref_b: str
-    action: str  # "merge" | "separate"
+    action: str
+    survivor: str | None = None
+    renames: dict[str, RenameIn] | None = None
+    alias_moves: list[AliasMoveIn] | None = None
+    relation: RelationIn | None = None
 
 
 class ResolveResult(Result):
-    """Outcome of a resolve action."""
+    """Outcome of a resolve action. ``refs`` maps each original ref to the
+    ref it has now (a merged-away page maps to the survivor; a renamed page
+    to its new key)."""
 
     ok: bool
     action: str
+    refs: dict[str, str] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -618,6 +672,17 @@ class MemoryService:
         ws = self._workspace_resolver()
         raw = read_flagged(ws)
         pairs: list[FlaggedPair] = []
+
+        def _page_info(ref: str) -> tuple[str, list[str]]:
+            from durin.memory.entity_page import EntityPage
+            t, _, s = ref.partition(":")
+            path = Path(ws) / "memory" / "entities" / t / f"{s}.md"
+            try:
+                page = EntityPage.from_file(path) if path.exists() else None
+            except OSError:
+                page = None
+            return (page.name, list(page.aliases or [])) if page else ("", [])
+
         for rec in raw:
             ref_a, ref_b = rec["pair"][0], rec["pair"][1]
             at_ms: int | None = None
@@ -629,6 +694,9 @@ class MemoryService:
                     at_ms = int(dt.timestamp() * 1000)
                 except Exception:
                     at_ms = None
+            name_a, aliases_a = _page_info(ref_a)
+            name_b, aliases_b = _page_info(ref_b)
+            proposal = rec.get("proposal")
             pairs.append(FlaggedPair(
                 ref_a=ref_a,
                 ref_b=ref_b,
@@ -636,6 +704,12 @@ class MemoryService:
                 confidence=rec.get("confidence", 0),
                 reasoning=rec.get("reasoning", ""),
                 at_ms=at_ms,
+                name_a=name_a,
+                name_b=name_b,
+                aliases_a=aliases_a,
+                aliases_b=aliases_b,
+                proposal=proposal if isinstance(proposal, dict) else None,
+                source=rec.get("source"),
             ))
         return FlaggedPairs(pairs=pairs)
 
@@ -645,40 +719,90 @@ class MemoryService:
         scope=Scope.MEMORY_WRITE.value,
         request_model=ResolveFlaggedRequest,
         response_model=ResolveResult,
-        summary="Resolve a flagged pair: merge the entities or keep them separate",
+        summary="Resolve a flagged pair: merge, keep separate, disambiguate, relate, or accept the proposal",
     )
     async def resolve_flagged(
         self, cmd: ResolveFlaggedRequest, principal: Principal
     ) -> ResolveResult:
         principal.require(Scope.MEMORY_WRITE)
-        from durin.memory.refine_dream import add_tombstone, remove_flagged
-        from durin.service.types import ValidationFailedError
+        from durin.memory.absorption import AbsorptionError
+        from durin.memory.entity_rename import EntityRenameError
+        from durin.memory.memory_writer import StaleContentError
+        from durin.memory.pair_resolution import (
+            AliasMove,
+            PairPageMissingError,
+            RelationSpec,
+            RenameSpec,
+            Resolution,
+            ResolutionError,
+            apply_resolution,
+        )
+        from durin.memory.refine_dream import add_tombstone, read_flagged, remove_flagged
+        from durin.service.types import ConflictError, ValidationFailedError
 
-        if cmd.action not in ("merge", "separate"):
+        actions = ("merge", "separate", "disambiguate", "relate", "accept")
+        if cmd.action not in actions:
             raise ValidationFailedError(
-                f"unknown action: {cmd.action!r}; must be 'merge' or 'separate'",
+                f"unknown action: {cmd.action!r}; must be one of {', '.join(actions)}",
                 details={"action": cmd.action},
             )
 
         ws = self._workspace_resolver()
+        details = {"ref_a": cmd.ref_a, "ref_b": cmd.ref_b}
 
-        if cmd.action == "merge":
-            from durin.memory.absorption import AbsorptionError, EntityAbsorption
-            from durin.service.types import ConflictError
-            try:
-                EntityAbsorption(workspace=ws).absorb(
-                    cmd.ref_a, cmd.ref_b, reason="manual_review",
-                )
-            except AbsorptionError as exc:
-                raise ConflictError(
-                    f"could not merge: {exc}",
-                    details={"ref_a": cmd.ref_a, "ref_b": cmd.ref_b},
-                ) from exc
-        else:
+        # "Keep separate" with nothing to change stays a pure tombstone, so it
+        # works even when one of the pages has since disappeared.
+        if cmd.action == "separate" and not (cmd.renames or cmd.alias_moves):
             add_tombstone(ws, cmd.ref_a, cmd.ref_b)
+            remove_flagged(ws, cmd.ref_a, cmd.ref_b)
+            return ResolveResult(ok=True, action=cmd.action,
+                                 refs={cmd.ref_a: cmd.ref_a, cmd.ref_b: cmd.ref_b})
 
-        remove_flagged(ws, cmd.ref_a, cmd.ref_b)
-        return ResolveResult(ok=True, action=cmd.action)
+        if cmd.action == "accept":
+            key = sorted([cmd.ref_a, cmd.ref_b])
+            rec = next((r for r in read_flagged(ws) if sorted(r.get("pair") or []) == key), None)
+            if not rec or not isinstance(rec.get("proposal"), dict):
+                raise ValidationFailedError("this pair has no proposal to accept",
+                                            details=details)
+            try:
+                res = Resolution.from_dict(rec["proposal"])
+            except ResolutionError as exc:
+                raise ValidationFailedError(f"stored proposal is unusable: {exc}",
+                                            details=details) from exc
+            res.source = res.source or "bandeja"
+        else:
+            kind = {"separate": "keep"}.get(cmd.action, cmd.action)
+            res = Resolution(
+                kind=kind,
+                survivor=cmd.survivor,
+                renames={ref: RenameSpec(slug=r.slug, name=r.name)
+                         for ref, r in (cmd.renames or {}).items()},
+                alias_moves=[AliasMove(alias=m.alias, keep_on=m.keep_on)
+                             for m in (cmd.alias_moves or [])],
+                relation=(RelationSpec(from_ref=cmd.relation.from_ref, type=cmd.relation.type,
+                                       to_ref=cmd.relation.to_ref)
+                          if cmd.relation else None),
+                source="bandeja",
+            )
+            if kind == "keep" and res.changes_anything():
+                res.kind = "disambiguate"
+
+        try:
+            out = apply_resolution(ws, res, cmd.ref_a, cmd.ref_b, actor="user")
+        except PairPageMissingError as exc:
+            # Stale pair (a page was merged, renamed or deleted since it was
+            # flagged): a conflict with the current state, not a bad request.
+            raise ConflictError(str(exc), details=details) from exc
+        except (ResolutionError, EntityRenameError) as exc:
+            raise ValidationFailedError(str(exc), details=details) from exc
+        except AbsorptionError as exc:
+            raise ConflictError(f"could not merge: {exc}", details=details) from exc
+        except StaleContentError as exc:
+            # Memory kept changing under the resolution (a busy dream run):
+            # nothing was written; retrying later is safe.
+            raise ConflictError(f"memory changed while resolving: {exc}",
+                                details=details) from exc
+        return ResolveResult(ok=True, action=cmd.action, refs=out.refs)
 
     # -- writes --------------------------------------------------------------
 

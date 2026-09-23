@@ -244,7 +244,10 @@ def cmd_dream(
                          max_seconds=cfg.memory.dream.max_seconds_per_run,
                          judge_concurrency=_absorb.judge_concurrency,
                          recheck_days=_absorb.recheck_days,
-                         semantic_name_gate=_absorb.semantic_name_gate)
+                         semantic_name_gate=_absorb.semantic_name_gate,
+                         auto_resolve=_absorb.auto_resolve,
+                         resolve_threshold=_absorb.resolve_threshold,
+                         auto_rename=_absorb.auto_rename)
     console.print("[dim]Always-on pass (distil pinned guidance)…[/dim]")
     ao = run_always_on_pass(workspace, model=model,
                             token_budget=cfg.memory.dream.always_on_token_budget)
@@ -666,6 +669,128 @@ def cmd_absorb(
         )
 
 
+@memory_app.command("rename")
+def cmd_rename(
+    ref: str = typer.Argument(..., help="Entity to rename, e.g. topic:5e"),
+    new_slug: str = typer.Argument(
+        ..., help="New key (slug) within the same type, e.g. dnd-5e"),
+    name: str = typer.Option(
+        None, "--name", "-n", help="Also change the display name."),
+    reason: str = typer.Option("", "--reason", "-r", help="Recorded in the commit."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt."),
+) -> None:
+    """Give an entity a clearer key and redirect every reference to it.
+
+    One commit moves the page, keeps the old slug and old name as aliases, and
+    rewrites the relations and archive pointers that named the old key; memory
+    entries' entity tags follow right after. Merge tombstones and flagged pairs
+    follow the new key.
+    """
+    from durin.memory.entity_rename import EntityRenameError, rename_entity
+
+    if ":" not in ref:
+        raise typer.BadParameter("ref must be '<type>:<slug>' (e.g. topic:5e)")
+    workspace = _workspace_root()
+    new_ref = f"{ref.split(':', 1)[0]}:{new_slug}"
+    if not yes and not typer.confirm(f"Rename {ref} → {new_ref}?"):
+        console.print("[yellow]Cancelled[/yellow]")
+        raise typer.Exit(code=1)
+    try:
+        res = rename_entity(workspace, ref, new_slug, new_name=name, reason=reason,
+                            vector_index=_build_vector_index_optional())
+    except EntityRenameError as exc:
+        console.print(f"[red]✗[/red] {exc}")
+        raise typer.Exit(code=1) from None
+    if res.sha:
+        console.print(f"[green]✓[/green] {res.old_ref} → {res.new_ref} ({res.sha[:8]}); "
+                      f"{len(res.rewritten)} referencing file(s) redirected")
+    else:
+        console.print("[dim]= No-op (nothing to change)[/dim]")
+
+
+@memory_app.command("rereview")
+def cmd_rereview(
+    pending: bool = typer.Option(
+        True, "--pending/--no-pending",
+        help="Re-judge the pairs waiting in the Bandeja."),
+    separated: bool = typer.Option(
+        True, "--separated/--no-separated",
+        help="Re-examine the pairs you chose to keep separate."),
+    apply_separated: bool = typer.Option(
+        False, "--apply-separated",
+        help="Apply confident proposals for kept-separate pairs directly instead "
+             "of sending them to the Bandeja."),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Judge and report; write nothing."),
+    limit: int = typer.Option(0, "--limit", help="Judge at most N pairs (0 = all)."),
+    json_out: bool = typer.Option(False, "--json", help="Print the full report as JSON."),
+) -> None:
+    """Re-judge Bandeja pairs and kept-separate pairs with the resolution-aware judge.
+
+    Each pair goes to the investigating judge, which can now also propose a
+    clearer key, who owns a contested alias, and the relation between related
+    entities. Confident merges and resolutions are applied (thresholds from
+    ``memory.dream.auto_absorb``); the rest lands in the Bandeja with the
+    proposal. Kept-separate pairs are never merged, and their proposals go to
+    the Bandeja unless ``--apply-separated``.
+    """
+    import json as _json
+
+    from durin.memory.model_resolve import resolve_aux_preset
+    from durin.memory.pair_rereview import run_rereview
+
+    workspace = _workspace_root()
+    cfg = load_config()
+    absorb = cfg.memory.dream.auto_absorb
+    model = resolve_aux_preset(cfg, purpose="memory").model
+    report = run_rereview(
+        workspace, pending=pending, separated=separated,
+        apply_separated=apply_separated, dry_run=dry_run, limit=limit,
+        merge_threshold=absorb.tier2_confidence_threshold,
+        resolve_threshold=absorb.resolve_threshold,
+        auto_resolve=absorb.auto_resolve,
+        auto_rename=absorb.auto_rename,
+        model=model,
+        vector_index=None if dry_run else _build_vector_index_optional(),
+    )
+    if json_out:
+        console.print_json(_json.dumps(report, ensure_ascii=False, default=str))
+        return
+    if not report["pairs"]:
+        console.print("[green]Nothing to re-review.[/green]")
+        return
+    table = Table(title="Re-review" + (" (dry run)" if dry_run else ""), show_lines=True)
+    table.add_column("Group", style="dim")
+    table.add_column("Pair", style="cyan")
+    table.add_column("Verdict")
+    table.add_column("Outcome", style="bold")
+    table.add_column("Proposal / now")
+    for row in report["pairs"]:
+        prop = row.get("proposal") or {}
+        detail = []
+        if row.get("now"):
+            detail.append("now: " + " ↔ ".join(row["now"]))
+        if prop.get("kind"):
+            detail.append(f"kind: {prop['kind']}")
+        for ref, spec in (prop.get("renames") or {}).items():
+            detail.append(f"rename {ref} → {spec.get('slug') or ''} {spec.get('name') or ''}".rstrip())
+        for m in prop.get("alias_moves") or []:
+            detail.append(f"alias '{m['alias']}' → {m['keep_on']}")
+        rel = prop.get("relation")
+        if rel:
+            detail.append(f"{rel['from_ref']} —{rel['type']}→ {rel['to_ref']}")
+        if row.get("error") or row.get("reason"):
+            detail.append(row.get("error") or row.get("reason"))
+        verdict = f"{row['verdict']} {row['confidence']}" if "verdict" in row else ""
+        table.add_row(row["group"], "\n".join(row["pair"]), verdict, row["outcome"],
+                      "\n".join(detail))
+    console.print(table)
+    counts = ", ".join(f"{k}={v}" for k, v in sorted(report["counts"].items()))
+    console.print(f"[dim]{counts}"
+                  + (f" — stopped: {report['stopped']}" if report["stopped"] else "")
+                  + "[/dim]")
+
+
 @memory_app.command("stats")
 def cmd_stats(
     days: int = typer.Option(
@@ -825,7 +950,14 @@ def cmd_absorb_suggest() -> None:
                 f"\n  [cyan]{a}[/cyan]  vs  [cyan]{b}[/cyan]"
                 f"\n  Verdict: {rec['verdict']}  Confidence: {rec['confidence']}"
                 f"\n  Reasoning: {rec['reasoning']}"
-                f"\n  [dim]To merge: durin memory absorb {a} {b} --reason <why>[/dim]"
+            )
+            prop = rec.get("proposal") or {}
+            if prop.get("kind"):
+                console.print(f"  Proposal: {prop['kind']} "
+                              f"[dim](accept it in the webui Bandeja)[/dim]")
+            console.print(
+                f"  [dim]To merge: durin memory absorb {a} {b} --reason <why>; "
+                f"clearer key: durin memory rename <ref> <new-slug>[/dim]"
             )
 
 

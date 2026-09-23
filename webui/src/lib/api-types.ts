@@ -1199,7 +1199,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Resolve a flagged pair: merge the entities or keep them separate */
+        /** Resolve a flagged pair: merge, keep separate, disambiguate, relate, or accept the proposal */
         post: operations["memory_resolve_flagged"];
         delete?: never;
         options?: never;
@@ -2628,6 +2628,16 @@ export interface components {
             /** Id */
             id: string;
         };
+        /**
+         * AliasMoveIn
+         * @description Who keeps ``alias``: ``ref_a``/``ref_b`` (either ref), ``both`` or ``none``.
+         */
+        AliasMoveIn: {
+            /** Alias */
+            alias: string;
+            /** Keep On */
+            keep_on: string;
+        };
         /** AutomationAnswerCommand */
         AutomationAnswerCommand: {
             /**
@@ -3373,7 +3383,8 @@ export interface components {
          * DreamEvent
          * @description One notable thing the nightly dream did.
          *
-         *     ``kind`` is the operation: "merged" | "created" | "improved" | "flagged" |
+         *     ``kind`` is the operation: "merged" | "resolved" (the dream disambiguated
+         *     or related a colliding pair on its own) | "created" | "improved" | "flagged" |
          *     "warning" (degraded/unparseable — needs operator attention) | "run"
          *     (per-run summary line).
          *     ``ref`` / ``ref_kind`` let the UI deep-link to the affected entity or skill;
@@ -3471,18 +3482,58 @@ export interface components {
         /**
          * FlaggedPair
          * @description One memory pair the dream escalated for human review.
+         *
+         *     ``name_*`` / ``aliases_*`` are the pages' current display name and
+         *     aliases (empty when a page no longer exists), so the Bandeja can offer
+         *     alias ownership without a round-trip per page. ``proposal`` is the
+         *     judge's resolution (see ``durin.memory.pair_resolution``) — ``kind``
+         *     merge | disambiguate | relate | keep, plus ``survivor``, ``renames``,
+         *     ``alias_moves`` and ``relation`` — or None when it proposed none.
+         *     ``source`` says who flagged it: tier1 | tier2 | rereview.
          */
         FlaggedPair: {
+            /**
+             * Aliases A
+             * @default []
+             */
+            aliases_a: string[];
+            /**
+             * Aliases B
+             * @default []
+             */
+            aliases_b: string[];
             /** At Ms */
             at_ms: number | null;
             /** Confidence */
             confidence: number;
+            /**
+             * Name A
+             * @default
+             */
+            name_a: string;
+            /**
+             * Name B
+             * @default
+             */
+            name_b: string;
+            /**
+             * Proposal
+             * @default null
+             */
+            proposal: {
+                [key: string]: unknown;
+            } | null;
             /** Reasoning */
             reasoning: string;
             /** Ref A */
             ref_a: string;
             /** Ref B */
             ref_b: string;
+            /**
+             * Source
+             * @default null
+             */
+            source: string | null;
             /** Verdict */
             verdict: string;
         };
@@ -5043,16 +5094,73 @@ export interface components {
             id: string;
         };
         /**
+         * RelationIn
+         * @description A typed edge between the two pages of the pair.
+         */
+        RelationIn: {
+            /** From Ref */
+            from_ref: string;
+            /** To Ref */
+            to_ref: string;
+            /** Type */
+            type: string;
+        };
+        /**
+         * RenameIn
+         * @description A clearer key (``slug``) and/or display ``name`` for one page.
+         */
+        RenameIn: {
+            /**
+             * Name
+             * @default null
+             */
+            name: string | null;
+            /**
+             * Slug
+             * @default null
+             */
+            slug: string | null;
+        };
+        /**
          * ResolveFlaggedRequest
-         * @description Resolve a flagged pair: merge the two entities or keep them separate.
+         * @description Resolve a flagged pair.
+         *
+         *     ``action``:
+         *     - ``merge`` — fold the pair into ``survivor`` (default ``ref_a``);
+         *       ``renames`` may give the survivor a clearer key.
+         *     - ``separate`` — keep both as they are (tombstones the pair).
+         *     - ``disambiguate`` — keep both, apply ``alias_moves`` / ``renames``.
+         *     - ``relate`` — ``disambiguate`` plus ``relation``.
+         *     - ``accept`` — apply the judge's stored proposal as is.
+         *     Every action except ``merge`` tombstones the pair (under the final keys),
+         *     so the dream never merges what the user kept apart.
          */
         ResolveFlaggedRequest: {
             /** Action */
             action: string;
+            /**
+             * Alias Moves
+             * @default null
+             */
+            alias_moves: components["schemas"]["AliasMoveIn"][] | null;
             /** Ref A */
             ref_a: string;
             /** Ref B */
             ref_b: string;
+            /** @default null */
+            relation: components["schemas"]["RelationIn"] | null;
+            /**
+             * Renames
+             * @default null
+             */
+            renames: {
+                [key: string]: components["schemas"]["RenameIn"];
+            } | null;
+            /**
+             * Survivor
+             * @default null
+             */
+            survivor: string | null;
         };
         /**
          * ResolveObservationCommand
@@ -5069,13 +5177,22 @@ export interface components {
         };
         /**
          * ResolveResult
-         * @description Outcome of a resolve action.
+         * @description Outcome of a resolve action. ``refs`` maps each original ref to the
+         *     ref it has now (a merged-away page maps to the survivor; a renamed page
+         *     to its new key).
          */
         ResolveResult: {
             /** Action */
             action: string;
             /** Ok */
             ok: boolean;
+            /**
+             * Refs
+             * @default {}
+             */
+            refs: {
+                [key: string]: string;
+            };
         };
         /** RevokeTokenCommand */
         RevokeTokenCommand: {

@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { DreamDrawer, type DrawerTarget } from "@/components/DreamDrawer";
+import { FlaggedPairCard } from "@/components/FlaggedPairCard";
 import {
   ApiError,
   fetchDreamDigest,
@@ -19,6 +20,7 @@ import {
   type DreamLastRun,
   type FlaggedPair,
   type QuarantineRow,
+  type ResolveFlaggedBody,
   type SkillSuggestion,
 } from "@/lib/api";
 import { DiffViewer } from "./DiffViewer";
@@ -156,74 +158,6 @@ function LastRunCard({ lastRun, running }: LastRunCardProps) {
           <Stat label={t("dream.stats.sessions")} value={lastRun.sessions} />
         </div>
       ) : null}
-    </div>
-  );
-}
-
-interface FlaggedPairCardProps {
-  pair: FlaggedPair;
-  onOpen: (target: DrawerTarget) => void;
-  onResolve: (pair: FlaggedPair, action: "merge" | "separate") => void;
-  resolving: boolean;
-}
-
-function FlaggedPairCard({ pair, onOpen, onResolve, resolving }: FlaggedPairCardProps) {
-  const { t } = useTranslation();
-
-  function handleView() {
-    onOpen({
-      ref: pair.ref_a,
-      ref_kind: "entity",
-      summary: pair.reasoning,
-    });
-  }
-
-  return (
-    <div className="flex flex-col gap-2 rounded-[8px] border border-border/40 bg-card px-4 py-3">
-      <div className="flex items-start gap-2">
-        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-[12px] font-medium text-foreground">{pair.ref_a}</span>
-            <span className="text-[11px] text-muted-foreground">↔</span>
-            <span className="text-[12px] font-medium text-foreground">{pair.ref_b}</span>
-            <span className="text-[11px] text-muted-foreground/60">
-              {pair.verdict} · {pair.confidence}%
-            </span>
-          </div>
-          <p className="text-[13px] text-muted-foreground mt-1">{pair.reasoning}</p>
-        </div>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="shrink-0 text-[12px]"
-          onClick={handleView}
-        >
-          {t("dream.view")}
-        </Button>
-      </div>
-      <div className="flex items-center gap-2">
-        <Button
-          type="button"
-          variant="default"
-          size="sm"
-          className="text-[12px]"
-          disabled={resolving}
-          onClick={() => onResolve(pair, "merge")}
-        >
-          {t("dream.bandeja.merge")}
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="text-[12px]"
-          disabled={resolving}
-          onClick={() => onResolve(pair, "separate")}
-        >
-          {t("dream.bandeja.keepSeparate")}
-        </Button>
-      </div>
     </div>
   );
 }
@@ -443,19 +377,32 @@ function BandejaTab({ onOpen, onOpenSkills, onCountChange }: BandejaTabProps) {
   }, [token]);
 
   const handleResolve = useCallback(
-    async (pair: FlaggedPair, action: "merge" | "separate") => {
+    async (pair: FlaggedPair, body: ResolveFlaggedBody) => {
       const key = `${pair.ref_a}:${pair.ref_b}`;
       setResolvingKeys((prev) => new Set(prev).add(key));
       setResolveError(null);
       try {
-        await resolveFlaggedPair(token, { ref_a: pair.ref_a, ref_b: pair.ref_b, action });
-        setPairs((prev) => {
-          const next = prev.filter((p) => !(p.ref_a === pair.ref_a && p.ref_b === pair.ref_b));
-          onCountChange(next.length + quarantine.length + suggestionsCount);
-          return next;
-        });
-      } catch {
-        setResolveError(t("dream.bandeja.resolveError"));
+        const res = await resolveFlaggedPair(token, body);
+        // A merge or a rename changes keys, and the server moves other flagged
+        // pairs to the new keys — the cards on screen would act on refs that
+        // no longer exist, so reload the list instead of dropping one card.
+        const keysChanged = Object.entries(res?.refs ?? {}).some(([from, to]) => from !== to);
+        if (keysChanged) {
+          const fresh = await fetchFlaggedPairs(token);
+          setPairs(fresh);
+          onCountChange(fresh.length + quarantine.length + suggestionsCount);
+        } else {
+          setPairs((prev) => {
+            const next = prev.filter((p) => !(p.ref_a === pair.ref_a && p.ref_b === pair.ref_b));
+            onCountChange(next.length + quarantine.length + suggestionsCount);
+            return next;
+          });
+        }
+      } catch (err) {
+        // A 422 carries the server's reason (a taken key, a bad slug): show
+        // it, so the user can fix the edit instead of guessing.
+        const detail = err instanceof ApiError && err.status === 422 ? err.detail : undefined;
+        setResolveError(detail ? `${t("dream.bandeja.resolveInvalid")} ${detail}` : t("dream.bandeja.resolveError"));
       } finally {
         setResolvingKeys((prev) => {
           const next = new Set(prev);

@@ -240,6 +240,9 @@ def run_refine_pass(
     judge_concurrency: int = 1,
     recheck_days: int = 7,
     semantic_name_gate: str = "prioritize",
+    auto_resolve: bool = True,
+    resolve_threshold: int = 85,
+    auto_rename: bool = True,
 ) -> dict:
     """Run the refine dream (dedup duplicate entities). The daily cron entry.
 
@@ -258,7 +261,9 @@ def run_refine_pass(
     calls run at once, ``recheck_days`` how long an unsettled verdict is
     remembered before the pair is judged again (converted to seconds for
     :func:`run_refine`), and ``semantic_name_gate`` how the name signal
-    orders or filters embedding-near candidates.
+    orders or filters embedding-near candidates. ``auto_resolve`` /
+    ``resolve_threshold`` / ``auto_rename`` govern the non-merge resolutions
+    the judges propose (see :func:`run_refine`).
     """
     import time
     t0 = time.perf_counter()
@@ -280,10 +285,14 @@ def run_refine_pass(
                      max_seconds=max_seconds,
                      judge_concurrency=judge_concurrency,
                      recheck_cooldown_s=recheck_days * 86400,
-                     semantic_name_gate=semantic_name_gate)
+                     semantic_name_gate=semantic_name_gate,
+                     auto_resolve=auto_resolve,
+                     resolve_threshold=resolve_threshold,
+                     auto_rename=auto_rename)
     out["duration_ms"] = int((time.perf_counter() - t0) * 1000)
     _emit("memory.dream.end", kind="refine",
           merged=len(out.get("merged", [])), kept=len(out.get("kept_separate", [])),
+          resolved=len(out.get("resolved", [])),
           candidates=out.get("candidates", 0),
           judged=out.get("judged", 0), yielded=bool(out.get("yielded")),
           stop_reason=out.get("stop_reason"),

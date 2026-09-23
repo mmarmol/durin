@@ -2412,7 +2412,8 @@
       "improved": "improved",
       "flagged": "flagged",
       "run": "run",
-      "warning": "warning"
+      "warning": "warning",
+      "resolved": "resolved"
     },
     "close": "Close",
     "openFull": "Open full",
@@ -2451,6 +2452,38 @@
         "create": "proposed skill",
         "retire": "retire",
         "fuse": "merge"
+      },
+      "mergeInto": "Merge into {{ref}}",
+      "applyProposal": "Apply proposal",
+      "proposalTitle": "Proposal",
+      "edit": "Edit…",
+      "applyChanges": "Apply changes",
+      "cancel": "Cancel",
+      "aliases": "Aliases",
+      "keepBoth": "Both",
+      "keepOnly": "Only {{ref}}",
+      "keepNone": "Remove",
+      "keys": "Keys and names",
+      "slug": "Key",
+      "name": "Name",
+      "relate": "Relate them",
+      "relationType": "Relation type",
+      "relationDirection": "Relation direction",
+      "resolveInvalid": "Could not apply:",
+      "proposal": {
+        "merge": "Merge into {{survivor}}",
+        "rename": "Rename {{from}} → {{to}}",
+        "renameName": "Name of {{ref}}: {{name}}",
+        "aliasOnly": "Alias “{{alias}}” → only {{ref}}",
+        "aliasNone": "Alias “{{alias}}” → remove",
+        "aliasBoth": "Alias “{{alias}}” → keep on both",
+        "relation": "{{from}} —{{type}}→ {{to}}",
+        "keep": "Keep both as they are"
+      },
+      "source": {
+        "tier1": "quick judge",
+        "tier2": "investigated",
+        "rereview": "re-review"
       }
     }
   },

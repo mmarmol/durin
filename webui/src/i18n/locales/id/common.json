@@ -2309,7 +2309,8 @@
       "improved": "ditingkatkan",
       "flagged": "ditandai",
       "run": "dijalankan",
-      "warning": "peringatan"
+      "warning": "peringatan",
+      "resolved": "diselesaikan"
     },
     "close": "Tutup",
     "openFull": "Buka penuh",
@@ -2348,6 +2349,38 @@
         "create": "skill yang diusulkan",
         "retire": "pensiunkan",
         "fuse": "gabungkan"
+      },
+      "mergeInto": "Gabungkan ke {{ref}}",
+      "applyProposal": "Terapkan usulan",
+      "proposalTitle": "Usulan",
+      "edit": "Ubah…",
+      "applyChanges": "Terapkan perubahan",
+      "cancel": "Batal",
+      "aliases": "Alias",
+      "keepBoth": "Keduanya",
+      "keepOnly": "Hanya {{ref}}",
+      "keepNone": "Hapus",
+      "keys": "Kunci dan nama",
+      "slug": "Kunci",
+      "name": "Nama",
+      "relate": "Hubungkan",
+      "relationType": "Jenis relasi",
+      "relationDirection": "Arah relasi",
+      "resolveInvalid": "Tidak dapat diterapkan:",
+      "proposal": {
+        "merge": "Gabungkan ke {{survivor}}",
+        "rename": "Ganti nama {{from}} → {{to}}",
+        "renameName": "Nama {{ref}}: {{name}}",
+        "aliasOnly": "Alias “{{alias}}” → hanya {{ref}}",
+        "aliasNone": "Alias “{{alias}}” → hapus",
+        "aliasBoth": "Alias “{{alias}}” → tetap di keduanya",
+        "relation": "{{from}} —{{type}}→ {{to}}",
+        "keep": "Biarkan keduanya apa adanya"
+      },
+      "source": {
+        "tier1": "penilai cepat",
+        "tier2": "diselidiki",
+        "rereview": "tinjau ulang"
       }
     }
   },

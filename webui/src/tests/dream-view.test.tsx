@@ -398,6 +398,12 @@ describe("DreamView Bandeja tab", () => {
     confidence: 72,
     reasoning: "Both refs share the same name and email.",
     at_ms: Date.now() - 3_600_000,
+    name_a: "Alice",
+    name_b: "Alice Smith",
+    aliases_a: ["Alice"],
+    aliases_b: ["Alice", "A. Smith"],
+    proposal: null,
+    source: null,
   };
 
   const baseQuarantine: api.QuarantineRow = {
@@ -455,12 +461,17 @@ describe("DreamView Bandeja tab", () => {
     await user.click(screen.getByRole("button", { name: /Inbox/i }));
     expect(await screen.findByText("person:alice")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Merge" }));
+    await user.click(screen.getByRole("button", { name: "Merge into alice-smith" }));
 
     await waitFor(() => {
       expect(api.resolveFlaggedPair).toHaveBeenCalledWith(
         "tok",
-        { ref_a: "person:alice", ref_b: "person:alice-smith", action: "merge" },
+        {
+          ref_a: "person:alice",
+          ref_b: "person:alice-smith",
+          action: "merge",
+          survivor: "person:alice-smith",
+        },
       );
     });
 
@@ -508,11 +519,119 @@ describe("DreamView Bandeja tab", () => {
     await user.click(screen.getByRole("button", { name: /Inbox/i }));
     expect(await screen.findByText("person:alice")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Merge" }));
+    await user.click(screen.getByRole("button", { name: "Merge into alice" }));
 
     // Error message appears; pair row is still visible (not removed on failure)
     expect(await screen.findByText(/Could not resolve pair/)).toBeInTheDocument();
     expect(screen.getByText("person:alice")).toBeInTheDocument();
+  });
+
+  it("shows the judge's proposal and applies it with action:accept", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.fetchFlaggedPairs).mockResolvedValue([
+      {
+        ...basePair,
+        verdict: "related",
+        source: "tier2",
+        proposal: {
+          kind: "relate",
+          renames: { "person:alice": { slug: "alice-jones", name: null } },
+          alias_moves: [{ alias: "Alice", keep_on: "person:alice" }],
+          relation: { from_ref: "person:alice-smith", type: "married_name_of", to_ref: "person:alice" },
+        },
+      },
+    ]);
+    vi.mocked(api.listQuarantine).mockResolvedValue([]);
+    vi.mocked(api.resolveFlaggedPair).mockResolvedValue({ ok: true, action: "accept" });
+
+    render(wrap(<DreamView />));
+    await screen.findByText("No dream activity yet.");
+    await user.click(screen.getByRole("button", { name: /Inbox/i }));
+
+    expect(await screen.findByText("Rename person:alice → person:alice-jones")).toBeInTheDocument();
+    expect(screen.getByText("Alias “Alice” → only person:alice")).toBeInTheDocument();
+    expect(screen.getByText("person:alice-smith —married_name_of→ person:alice")).toBeInTheDocument();
+    expect(screen.getByText("investigated")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Apply proposal" }));
+    await waitFor(() => {
+      expect(api.resolveFlaggedPair).toHaveBeenCalledWith("tok", {
+        ref_a: "person:alice",
+        ref_b: "person:alice-smith",
+        action: "accept",
+      });
+    });
+  });
+
+  it("sends only what the user changed in the editor", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.fetchFlaggedPairs).mockResolvedValue([basePair]);
+    vi.mocked(api.listQuarantine).mockResolvedValue([]);
+    vi.mocked(api.resolveFlaggedPair).mockResolvedValue({ ok: true, action: "relate" });
+
+    render(wrap(<DreamView />));
+    await screen.findByText("No dream activity yet.");
+    await user.click(screen.getByRole("button", { name: /Inbox/i }));
+    await user.click(await screen.findByRole("button", { name: "Edit…" }));
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "Alice" }), "b");
+    const slug = screen.getByRole("textbox", { name: "Key person:alice" });
+    await user.clear(slug);
+    await user.type(slug, "alice-jones");
+    await user.click(screen.getByRole("checkbox", { name: "Relate them" }));
+    await user.type(screen.getByRole("textbox", { name: "Relation type" }), "sibling_of");
+    await user.click(screen.getByRole("button", { name: "Apply changes" }));
+
+    await waitFor(() => {
+      expect(api.resolveFlaggedPair).toHaveBeenCalledWith("tok", {
+        ref_a: "person:alice",
+        ref_b: "person:alice-smith",
+        action: "relate",
+        alias_moves: [{ alias: "Alice", keep_on: "person:alice-smith" }],
+        renames: { "person:alice": { slug: "alice-jones" } },
+        relation: { from_ref: "person:alice", type: "sibling_of", to_ref: "person:alice-smith" },
+      });
+    });
+  });
+
+  it("reloads the list when a resolution changed keys", async () => {
+    const user = userEvent.setup();
+    const other = { ...basePair, ref_a: "person:alice-smith", ref_b: "person:bob" };
+    vi.mocked(api.fetchFlaggedPairs)
+      .mockResolvedValueOnce([basePair, other]) // badge
+      .mockResolvedValueOnce([basePair, other]) // tab
+      .mockResolvedValue([{ ...other, ref_a: "person:alice", ref_b: "person:bob" }]);
+    vi.mocked(api.listQuarantine).mockResolvedValue([]);
+    vi.mocked(api.resolveFlaggedPair).mockResolvedValue({
+      ok: true, action: "merge",
+      refs: { "person:alice": "person:alice", "person:alice-smith": "person:alice" },
+    });
+
+    render(wrap(<DreamView />));
+    await screen.findByText("No dream activity yet.");
+    await user.click(screen.getByRole("button", { name: /Inbox/i }));
+    const merge = await screen.findAllByRole("button", { name: "Merge into alice" });
+    await user.click(merge[0]);
+
+    // The second card now names the survivor, not the merged-away page.
+    await waitFor(() => expect(screen.queryByText("person:alice-smith")).not.toBeInTheDocument());
+    expect(screen.getByText("person:bob")).toBeInTheDocument();
+  });
+
+  it("shows the server's reason when an edit is rejected", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.fetchFlaggedPairs).mockResolvedValue([basePair]);
+    vi.mocked(api.listQuarantine).mockResolvedValue([]);
+    vi.mocked(api.resolveFlaggedPair).mockRejectedValue(
+      new api.ApiError(422, "HTTP 422", "person:alice-jones already exists"),
+    );
+
+    render(wrap(<DreamView />));
+    await screen.findByText("No dream activity yet.");
+    await user.click(screen.getByRole("button", { name: /Inbox/i }));
+    await user.click(await screen.findByRole("button", { name: "Keep separate" }));
+
+    expect(await screen.findByText(/already exists/)).toBeInTheDocument();
   });
 
   it("renders a quarantined skill and calls onOpenSkills when Review in Skills is clicked", async () => {

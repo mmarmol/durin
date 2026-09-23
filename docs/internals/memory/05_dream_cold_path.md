@@ -445,11 +445,15 @@ threaded through; it is `None` when the vector index is unavailable.
    frontmatter, attributes, and relations are always included before the cap
    applies). Rendering the whole page rather than a curated field subset means a
    new field is visible to the judge by default: the failure mode is an extra line
-   of context, not a silent blind spot. The judge returns `same`, `different`, or
-   `unclear` plus a confidence.
+   of context, not a silent blind spot. The judge returns `same`, `different`,
+   `related` (two distinct identities where one is a part, version, edition or
+   specialization of the other) or `unclear` plus a confidence — and a proposed
+   **resolution** for the pair (see *Pair resolutions* below).
 5. **Tier 2 escalation:** when `escalate_floor > 0` (the default is 70), a pair the
-   Tier 1 judge cannot settle — verdict `"unclear"`, or verdict `"same"` with
-   confidence in `[escalate_floor, confidence_threshold)` — is handed to a
+   Tier 1 judge cannot settle — verdict `"unclear"`, verdict `"same"` with
+   confidence in `[escalate_floor, confidence_threshold)`, or a proposed
+   non-merge resolution with confidence in `[escalate_floor, resolve_threshold)`
+   — is handed to a
    **bounded sub-agent** (`durin/memory/tier2_judge.py`). The sub-agent
    (`escalate_judge`) spins up an `AgentRunner` with four read-only tools —
    `memory_read_entity`, `memory_entity_lineage`, `memory_source_session`, and
@@ -466,14 +470,27 @@ threaded through; it is `None` when the vector index is unavailable.
    **and** its confidence reaches the floor for its tier: `confidence_threshold`
    for the Tier 1 judge, `tier2_confidence_threshold` for the investigating
    sub-agent — it has read both pages and their lineage before answering, so
-   its "same" earns a lower bar. Every other outcome keeps the pair separate.
-7. **Flag surface:** when the Tier 2 sub-agent investigated a pair and did not
-   confirm it as `"same"`, a borderline pair hit the per-run escalation cap
-   before it could be investigated, or the sub-agent failed outright (no
-   verdict came back), the pair is recorded in `memory/.flagged_pairs.json`
-   with the verdict that stands — the Tier 1 one when Tier 2 produced none.
+   its "same" earns a lower bar. The merge goes into the survivor the judge
+   proposed (the clearer key), optionally under a clearer key still; a proposal
+   that does not fit the pair falls back to merging into the first ref. When
+   the deciding judge proposed a non-merge resolution that changes something
+   and its confidence reaches `auto_absorb.resolve_threshold` (85), the dream
+   applies it itself (`auto_resolve`, on by default) — no tombstone, the
+   verdict remembered against the pages as they are after the change — and
+   emits `memory.absorb.auto_resolved`. Every other outcome keeps the pair as is.
+7. **Flag surface:** when the Tier 2 sub-agent investigated a pair and neither
+   merged it, applied a resolution nor confidently settled it as distinct
+   (`different` / `related` with nothing to change at ≥ `resolve_threshold` is
+   settled and cached like a Tier 1 `different`, not flagged), a borderline
+   pair hit the per-run escalation cap before it could be investigated, the
+   sub-agent failed outright (no verdict came back), or a confident resolution
+   could not be applied (e.g. its new key is taken), the pair is recorded in
+   `memory/.flagged_pairs.json` with the verdict that stands — the Tier 1 one
+   when Tier 2 produced none — plus the judge's `proposal` and the `source`
+   (`tier1` / `tier2` / `rereview`). With `auto_resolve` off, confident
+   proposals are flagged instead of applied.
    `durin memory absorb-suggest` and the webui Inbox surface these so the
-   operator can inspect and merge or dismiss them manually. A Tier 2 failure
+   operator can accept the proposal, edit it, merge or keep the pair. A Tier 2 failure
    also emits `memory.absorb.escalation_failed` and is remembered by the
    verdict cache for the recheck cooldown like any other unsettled pair, so a
    pair the investigating judge cannot settle is not re-judged and re-escalated
@@ -562,12 +579,76 @@ separate, permanent mechanism checked before the cache.
 `EntityAbsorption.absorb` does a deterministic structural merge (union of
 aliases / attributes / relations / provenance; canonical wins attribute
 conflicts; the absorbed body is appended under an `## Absorbed from <ref>`
-section) and commits **three file operations in one atomic CAS commit** via
-`write_files_cas`: the canonical page updated, the absorbed page deleted, and an
-archived copy written to `memory/archive/entities/<type>/<slug>.md` with an
-`archived_into` marker. It then refreshes the alias index and the vector index
-(drop the absorbed row, re-upsert the canonical with the merged body). The
-operation is idempotent — an already-archived absorbed page is a no-op.
+section) and commits **in one atomic CAS commit** via `write_files_cas`: the
+canonical page updated, the absorbed page deleted, an archived copy written to
+`memory/archive/entities/<type>/<slug>.md` with an `archived_into` marker, and
+every inbound reference to the absorbed key redirected to the canonical —
+other pages' relations (duplicates collapse, an edge between the two merged
+pages is dropped) and earlier archives whose `archived_into` named the absorbed
+key. The commit carries the bytes each change was derived from
+(`write_files_cas(expect=…)`): if the agent or a hand edit changed one of those
+pages during the merge, the merge is recomputed on top of it instead of
+overwriting it. Memory entries are outside the memory git history, so their
+`entities:` tags are redirected in place right after the commit
+(`redirect_entry_refs`). Tombstones naming the absorbed key are copied to the
+canonical (the originals stay, for an unmerge); flagged pairs move to it
+(`rekey_ref_in_stores`). It then refreshes
+the alias index and the vector index (drop the absorbed row, re-upsert the
+canonical with the merged body). The operation is idempotent — an
+already-archived absorbed page is a no-op. `unmerge` restores the archived page
+but not the redirected references; `git revert` of the absorb commit restores
+everything.
+
+#### Pair resolutions
+
+"Merge or keep separate" does not fit most colliding pairs: often they are
+related (an edition and the game it belongs to), or one of them carries an
+alias that belongs to the other, or a key that says too little — and a plain
+tombstone leaves the shared alias in place, so lookups stay ambiguous and the
+next page with that alias re-raises the collision. `durin/memory/pair_resolution.py`
+models what to do instead. A `Resolution` has a `kind`:
+
+- `merge` — fold the pair into `survivor`; `renames` may give the survivor a
+  clearer key;
+- `disambiguate` — keep both, settle `alias_moves` (each contested alias kept
+  on one ref, on `both` — a legitimate homonym — or on `none` — junk such as
+  OCR noise) and optionally give either page a clearer key or name;
+- `relate` — `disambiguate` plus a typed `relation` from one page to the other;
+- `keep` — change nothing.
+
+`resolution_from_judge` maps a judge answer to one (`same` → merge, `related`
+→ relate, `different` → disambiguate when the proposal changes something, else
+keep; `unclear` only with an explicit proposal, never auto-applied);
+`validate_resolution` is the single gate (refs must be the pair's, slugs
+filesystem-safe and not the other page's, relation types normalized like every
+other relation label, aliases neither page carries dropped); `apply_resolution`
+writes the alias moves and relation in one commit, then each rename. Every new
+key is checked before anything is written, so a taken key rejects the whole
+resolution instead of half-applying it. A resolution applied by the user
+tombstones the pair (under its final keys) unless it merged it; the dream's own
+resolutions leave no tombstone.
+
+**Renames** (`durin/memory/entity_rename.py`, also `durin memory rename`)
+change an entity's key in one commit: the page moves, the old slug and old name
+become aliases (unless the same resolution just moved them to the other
+page), and `collect_ref_rewrites` — the same helper the merge uses — redirects
+relations (including their `(to, type)` provenance keys) and archive pointers
+in the commit; entry entity tags follow right after. The new key must be free: not a live page,
+not a ref the user deleted, and not an archived page — unless that archived
+page was merged (possibly through a chain of older merges) into the entity
+being renamed, in which case it is the entity's own former key: the archived
+copy moves aside to `<slug>_archived.md` and the key is reclaimed.
+
+**Re-review** (`durin/memory/pair_rereview.py`, `durin memory rereview`)
+applies the resolution-aware judge to the two backlogs that predate it: pairs
+waiting in the Inbox, and pairs the user kept separate (tombstones). Each pair
+goes to the Tier 2 sub-agent; confident merges and resolutions are applied
+like the nightly pass does, stale pairs (a page since merged, renamed or
+deleted) leave the Inbox, the rest is re-flagged with the new proposal
+(`source="rereview"`). For kept-separate pairs the judge is told the user
+already ruled out a merge and may not answer `same`; its proposals go to the
+Inbox for the user to accept unless `--apply-separated`, and the tombstone
+stays. `--dry-run` judges and reports without writing anything.
 
 ### Pass 4b — relations: keep the graph's edge vocabulary tidy
 
@@ -710,10 +791,14 @@ cross-process lock `SessionManager` uses for that session's sidecar.
 | `run_refine_pass` | `durin/memory/dream_passes.py` | Dedup gate: short-circuits when `auto_absorb` is off, else delegates to `run_refine`; accepts `vector_index` built by `dream_vector_index`. |
 | `run_refine` | `durin/memory/refine_dream.py` | Dedup engine: alias-overlap + optional embedding-near candidate recall, filters, judge, merge via absorb; tombstone bookkeeping. |
 | `dream_vector_index` | `durin/memory/dream_passes.py` | Builds a `VectorIndex` (or returns `None` when unavailable) for the refine semantic recall step; called once per run by the cron and CLI callers. |
-| `judge_pair` | `durin/memory/absorb_judge.py` | Tier 1 LLM identity judge: renders the whole entity page via `to_markdown()` (body-capped), returns `same` / `different` / `unclear` + confidence. |
+| `judge_pair` | `durin/memory/absorb_judge.py` | Tier 1 LLM identity judge: renders the whole entity page via `to_markdown()` (body-capped), returns `same` / `different` / `related` / `unclear` + confidence and an optional proposed resolution. |
 | `escalate_judge` | `durin/memory/tier2_judge.py` | Tier 2 sub-agent: spins up a bounded `AgentRunner` with 4 read-only tools to investigate a borderline pair, then forces one tool-free final-answer call when the investigation ends without the envelope; returns the same `JudgeResult` envelope. On by default (`escalate_floor` 70); `0` disables it. |
 | `default_llm_invoke` / `LLMResponse` | `durin/memory/llm_invoke.py` | The one-prompt invoke every pass uses (resolves `agents.aux_models.memory`, runs the provider's retry policy). Its reply carries the answer as `text` — and as `content`, the name the provider layer's own response uses — plus token counts and `finish_reason`; `"error"` means the text is the provider's error message, not an answer. A pass that takes its own `llm_invoke` must accept this shape. |
-| `add_flagged` / `read_flagged` / `remove_flagged` | `durin/memory/refine_dream.py` | Write / read / delete entries in the `memory/.flagged_pairs.json` flag store: pairs the Tier 2 agent investigated but did not confirm as same. `remove_flagged` is called after the user resolves a pair (merge or separate) so it no longer appears in the Inbox. |
+| `add_flagged` / `read_flagged` / `remove_flagged` | `durin/memory/refine_dream.py` | Write / read / delete entries in the `memory/.flagged_pairs.json` flag store: pairs awaiting a human decision, with the judge's `proposal` and `source`. `remove_flagged` is called after the pair is resolved so it no longer appears in the Inbox. |
+| `rekey_ref_in_stores` / `read_tombstones` | `durin/memory/refine_dream.py` | Move tombstones and flagged pairs to a new key after a rename or merge (dropping verdict-cache entries for the old key); list the user's kept-separate pairs. |
+| `Resolution` / `validate_resolution` / `apply_resolution` / `resolution_from_judge` | `durin/memory/pair_resolution.py` | What to do with a colliding pair (merge into a survivor, disambiguate aliases, relate, keep, clearer keys); the validation gate; the writer; the mapping from a judge answer. |
+| `rename_entity` / `collect_ref_rewrites` / `check_new_key` | `durin/memory/entity_rename.py` | Key change with every reference redirected in one commit; the reference rewrite shared with the merge; the key-availability check. |
+| `run_rereview` | `durin/memory/pair_rereview.py` | Re-judge the Inbox and the kept-separate pairs with the investigating judge and apply / flag its resolutions. |
 | `run_always_on_pass` | `durin/memory/always_on_dream.py` | Pinned-guidance curation: rank feedback entities, fit budget, flip `always_on` flags. |
 | `ReactiveDreamGate` | `durin/memory/dream_passes.py` | In-process lock + throttle for the reactive triggers. |
 | `get_extract_cursor` / `set_extract_cursor` | `durin/memory/extract_runner.py` | Read / advance the per-session cursor (top-level key, legacy fallback). |
@@ -748,6 +833,9 @@ All knobs live under `memory.dream.*` in `durin/config/schema.py`
 | `memory.dream.auto_absorb.semantic_distance_threshold` | `0.30` | Embedding L2² distance below which a same-type entity is a semantic dedup candidate (refine + discovery); ≈ cosine 0.85; lower = stricter — the judge still decides the merge. |
 | `memory.dream.auto_absorb.escalate_floor` | `70` | Confidence floor (0–100) from which the Tier 1 judge's borderline verdicts (`unclear`, or `same` below the merge floor) escalate to a bounded sub-agent for deeper investigation. `0` disables Tier 2 entirely. |
 | `memory.dream.auto_absorb.tier2_confidence_threshold` | `80` | Merge floor for a verdict the investigating sub-agent returned; below it the pair is flagged for review. |
+| `memory.dream.auto_absorb.auto_resolve` | `true` | The dream applies confident non-merge resolutions itself; off, every proposal goes to the Inbox. |
+| `memory.dream.auto_absorb.resolve_threshold` | `85` | Judge confidence floor (0–100) for applying a non-merge resolution automatically. |
+| `memory.dream.auto_absorb.auto_rename` | `true` | Allow automatic resolutions and merges to change a key; off, the rest is applied and keys stay. |
 
 The (provider, model) preset every pass uses is resolved by
 `resolve_aux_preset(config, purpose="memory")` (`durin/memory/model_resolve.py`):
@@ -811,17 +899,24 @@ on the default provider (see `docs/internals/providers.md`).
   **Inbox tab** (the `BandejaTab` component) — surfaces two categories of items
   that need human attention, with a badge on the tab when items are present.
 
-  - *Flagged memory pairs* — pairs the Tier 2 merge judge investigated but did
-    not auto-merge (stored in `memory/.flagged_pairs.json`). Each card shows
-    both entity references, the judge's verdict, confidence, and reasoning. The
-    user resolves each pair with **Merge** (absorb one entity into the other via
-    `EntityAbsorption.absorb`) or **Keep separate** (write a tombstone via
-    `add_tombstone` so the pair is never re-surfaced). Either action calls
+  - *Flagged memory pairs* — pairs the dream could not settle on its own
+    (stored in `memory/.flagged_pairs.json`). Each card (`FlaggedPairCard`)
+    shows both entity references (each opens its page), the judge's verdict,
+    confidence, reasoning, who flagged it, and — when the judge proposed one —
+    the resolution as a list of operations. The user can **Apply proposal**,
+    **Merge into** either page (choosing the surviving key), **Keep separate**
+    (tombstone), or **Edit…**: set who keeps each alias (both / one page /
+    remove), a clearer key or name for either page, and a typed relation in
+    either direction. Every action calls
     `POST /api/v1/memory/flagged-pairs/resolve` (`MemoryService.resolve_flagged`,
-    `durin/service/memory.py`) with `action="merge"` or `action="separate"`,
-    then removes the entry from the store via `remove_flagged`. The full list is
-    fetched on tab load via `GET /api/v1/memory/flagged-pairs`
-    (`MemoryService.flagged_pairs`).
+    `durin/service/memory.py`) with `action` `merge` (+ `survivor`, `renames`),
+    `separate`, `disambiguate` / `relate` (+ `alias_moves`, `renames`,
+    `relation`) or `accept` (the stored proposal); everything but a merge
+    tombstones the pair. A stale pair (a page gone) answers 409, an invalid
+    edit (a taken key, a bad slug) 422 with the reason, which the card shows.
+    The list is fetched on tab load via `GET /api/v1/memory/flagged-pairs`
+    (`MemoryService.flagged_pairs`), which also returns both pages' names and
+    aliases so the editor needs no extra round-trip.
 
   - *Quarantined skills* — the existing quarantine list surfaced as a secondary
     section. Each card shows the skill name and routes the user to the Skills

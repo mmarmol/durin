@@ -482,6 +482,27 @@ class AutoAbsorbConfig(Base):
         validation_alias=AliasChoices("semanticNameGate", "semantic_name_gate"),
         description="How the name signal steers embedding-near candidates: 'prioritize' judges pairs whose names share a token or contain each other first, then the rest by distance; 'require' judges only those; 'off' orders by distance alone. Alias-overlap pairs are always judged",
     )
+    # Resolutions other than a merge: the judges also propose, for pairs that
+    # are related or merely collide, who owns a contested alias, a clearer key
+    # and the typed edge between related pages. These change memory without
+    # archiving anything, so they get their own confidence floor and switches.
+    auto_resolve: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("autoResolve", "auto_resolve"),
+        description="Let the dream apply the judges' non-merge resolutions on its own (alias ownership, the edge between related pages, clearer keys) when confident; false sends every proposal to the Bandeja",
+    )
+    resolve_threshold: int = Field(
+        default=85,
+        ge=0,
+        le=100,
+        validation_alias=AliasChoices("resolveThreshold", "resolve_threshold"),
+        description="Judge confidence floor (0-100) for applying a non-merge resolution automatically; below it the proposal goes to the Bandeja",
+    )
+    auto_rename: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("autoRename", "auto_rename"),
+        description="Allow automatic resolutions (and merges) to give an entity a clearer key; false applies the rest of the resolution and leaves keys unchanged",
+    )
 
 
 class CrossEncoderConfig(Base):
