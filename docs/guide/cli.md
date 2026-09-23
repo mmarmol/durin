@@ -50,6 +50,7 @@ durin secret list                 # list stored secrets, values masked
 durin secret show NAME --reveal   # print the actual value
 durin memory show <entity>        # inspect an entity page (e.g. person:marcelo)
 durin memory history <entity>     # its git history; `diff` / `revert` to inspect or undo
+durin memory rename <entity> <new-slug>  # give it a clearer key; every reference follows
 durin memory dream                # run a memory consolidation (dream) pass now
 durin memory stats                # recall / telemetry summary
 durin memory forget <uri>         # delete one memory entry
