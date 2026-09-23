@@ -2309,7 +2309,8 @@
       "improved": "개선됨",
       "flagged": "표시됨",
       "run": "실행",
-      "warning": "경고"
+      "warning": "경고",
+      "resolved": "해결됨"
     },
     "close": "닫기",
     "openFull": "전체 열기",
@@ -2348,6 +2349,38 @@
         "create": "제안된 스킬",
         "retire": "폐기",
         "fuse": "병합"
+      },
+      "mergeInto": "{{ref}}(으)로 병합",
+      "applyProposal": "제안 적용",
+      "proposalTitle": "제안",
+      "edit": "편집…",
+      "applyChanges": "변경 적용",
+      "cancel": "취소",
+      "aliases": "별칭",
+      "keepBoth": "둘 다",
+      "keepOnly": "{{ref}}만",
+      "keepNone": "삭제",
+      "keys": "키와 이름",
+      "slug": "키",
+      "name": "이름",
+      "relate": "관계 연결",
+      "relationType": "관계 유형",
+      "relationDirection": "관계 방향",
+      "resolveInvalid": "적용할 수 없음:",
+      "proposal": {
+        "merge": "{{survivor}}(으)로 병합",
+        "rename": "{{from}} → {{to}} 이름 변경",
+        "renameName": "{{ref}}의 이름: {{name}}",
+        "aliasOnly": "별칭 “{{alias}}” → {{ref}}만",
+        "aliasNone": "별칭 “{{alias}}” → 삭제",
+        "aliasBoth": "별칭 “{{alias}}” → 둘 다 유지",
+        "relation": "{{from}} —{{type}}→ {{to}}",
+        "keep": "둘 다 그대로 두기"
+      },
+      "source": {
+        "tier1": "빠른 판정",
+        "tier2": "조사됨",
+        "rereview": "재검토"
       }
     }
   },

@@ -722,6 +722,8 @@ These are for human operators, not agent tools.
 | `durin memory dream [entity] [--dry-run]` | Manually trigger the core consolidation passes. `entity` is an optional positional arg (e.g. `person:marcelo`); per-entity filtering is not yet applied by the passes. |
 | `durin memory absorb <canonical> <absorbed> [--reason/-r TEXT] [--yes/-y]` | Merge two entity pages: `canonical` survives, `absorbed` moves to archive. |
 | `durin memory absorb-suggest` | List candidate pairs that share at least one alias (merge hints). |
+| `durin memory rename <ref> <new-slug> [--name]` | Give an entity a clearer key: one commit moves the page, keeps the old slug and name as aliases, and redirects every relation and archive pointer to the new key; memory entries' entity tags follow right after. |
+| `durin memory rereview [--no-pending] [--no-separated] [--apply-separated] [--dry-run] [--limit N]` | Re-judge the Inbox pairs and the kept-separate pairs with the investigating judge and its resolutions; confident outcomes are applied, the rest lands in the Inbox with the proposal. Kept-separate pairs are never merged. |
 | `durin memory stats [--days N] [--json]` | Aggregate memory telemetry and filesystem counts. |
 | `durin memory docs` | List ingested reference documents (title, source, ingest time, chunk count) — the Library catalog. |
 | `durin memory forget <uri>` | Archive an entry + drop its index rows (same helper as the agent tool). |

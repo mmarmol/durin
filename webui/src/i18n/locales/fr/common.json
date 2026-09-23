@@ -2310,7 +2310,8 @@
       "improved": "amélioré",
       "flagged": "signalé",
       "run": "exécution",
-      "warning": "avertissement"
+      "warning": "avertissement",
+      "resolved": "résolu"
     },
     "close": "Fermer",
     "openFull": "Ouvrir en grand",
@@ -2349,6 +2350,38 @@
         "create": "skill proposé",
         "retire": "retirer",
         "fuse": "fusionner"
+      },
+      "mergeInto": "Fusionner dans {{ref}}",
+      "applyProposal": "Appliquer la proposition",
+      "proposalTitle": "Proposition",
+      "edit": "Modifier…",
+      "applyChanges": "Appliquer les modifications",
+      "cancel": "Annuler",
+      "aliases": "Alias",
+      "keepBoth": "Les deux",
+      "keepOnly": "Seulement {{ref}}",
+      "keepNone": "Supprimer",
+      "keys": "Clés et noms",
+      "slug": "Clé",
+      "name": "Nom",
+      "relate": "Les relier",
+      "relationType": "Type de relation",
+      "relationDirection": "Sens de la relation",
+      "resolveInvalid": "Impossible d’appliquer :",
+      "proposal": {
+        "merge": "Fusionner dans {{survivor}}",
+        "rename": "Renommer {{from}} → {{to}}",
+        "renameName": "Nom de {{ref}} : {{name}}",
+        "aliasOnly": "Alias « {{alias}} » → seulement {{ref}}",
+        "aliasNone": "Alias « {{alias}} » → supprimer",
+        "aliasBoth": "Alias « {{alias}} » → garder sur les deux",
+        "relation": "{{from}} —{{type}}→ {{to}}",
+        "keep": "Garder les deux tels quels"
+      },
+      "source": {
+        "tier1": "juge rapide",
+        "tier2": "enquêté",
+        "rereview": "réexamen"
       }
     }
   },

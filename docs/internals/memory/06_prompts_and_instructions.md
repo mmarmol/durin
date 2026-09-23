@@ -215,15 +215,19 @@ Each page block includes:
 The LLM produces an output envelope:
 ```
 ===VERDICT===
-same | different | unclear
+same | different | related | unclear
 ===CONFIDENCE===
 <integer 0-100>
 ===REASONING===
 <1-3 short sentences citing concrete signals>
+===RESOLUTION===
+{"survivor": …, "renames": {…}, "alias_moves": […], "relation": {…}}   (or {})
 ===END===
 ```
 
-`_parse_response` is tolerant: it uses regex with `re.DOTALL | re.IGNORECASE` and accepts surrounding prose. A verdict of `same` plus `confidence >= confidence_threshold` triggers a merge via `EntityAbsorption.absorb`. `unclear` or low-confidence results are skipped for that run (they may be re-evaluated when more evidence arrives). The reasoning is stored in the absorb commit body so `durin memory history` shows why the merge happened.
+`related` means two distinct identities where one is a part, version, edition, instance or specialization of the other — merging them would lose the distinction. The `===RESOLUTION===` block is the judge's proposal for the pair: on `same`, which ref survives (the clearest key) and optionally a clearer key for it; otherwise, who owns a contested alias (one ref, `both` for a legitimate homonym, `none` for junk such as OCR noise), a clearer key or name for either page, and — on `related` — the typed edge from the more specific page to the more general one. The block is advisory: a missing or unreadable one never fails the verdict (`_parse_proposal` reads one JSON object with `raw_decode` and ignores what follows), and `pair_resolution.validate_resolution` checks it against the pair before anything is applied.
+
+`_parse_response` is tolerant: it uses regex with `re.DOTALL | re.IGNORECASE` and accepts surrounding prose. A verdict of `same` plus `confidence >= confidence_threshold` triggers a merge into the proposed survivor. `unclear` or low-confidence results are skipped for that run (they may be re-evaluated when more evidence arrives). The reasoning is stored in the absorb commit body so `durin memory history` shows why the merge happened. The Tier-2 investigating judge (`tier2_judge.py`) answers in the same envelope; its re-review variant (`user_kept_separate=True`) is told the user already ruled the pair out as a duplicate and may not answer `same`.
 
 Up to `max_retries` (default 2) re-attempts are made on parse failure; each retry sends the same prompt without feedback (parse failures are usually transient model formatting errors). The function either returns a `JudgeResult` or raises `JudgeError`, giving the caller a single failure mode.
 
@@ -314,7 +318,7 @@ The marker names the previous session's summary file stem, so the agent can reac
 | `_SKILL_EXTRACT_PROMPT` | `durin/memory/dream_passes.py` | System prompt for the skill-extract agentic sub-agent; includes the `{doctrine}` composition section, the `{workflow_catalog}`, `{existing}` skills, and optional `{principles}` block |
 | `run_skill_extract_pass` | `durin/memory/dream_passes.py` | Spins `AgentRunner` with skill tools; sync wrapper over async runner; closes matching gap observations after the run |
 | `judge_pair` | `durin/memory/absorb_judge.py` | Loads template, renders page blocks, invokes LLM, parses `===VERDICT===` envelope with up to `max_retries` retries; returns `JudgeResult` or raises `JudgeError` |
-| `JudgeResult` | `durin/memory/absorb_judge.py` | Frozen dataclass: `verdict` (same/different/unclear), `confidence` (0–100), `reasoning` (free-form, stored in absorb commit) |
+| `JudgeResult` | `durin/memory/absorb_judge.py` | Frozen dataclass: `verdict` (same/different/related/unclear), `proposal` (the parsed resolution block or None), `confidence` (0–100), `reasoning` (free-form, stored in absorb commit) |
 | `_load_template` | `durin/memory/absorb_judge.py` | Extracts the largest fenced code block from `absorb_judge.md`; raises `JudgeError` if no block found |
 | `_render_page_block` | `durin/memory/absorb_judge.py` | Renders one entity page for the judge: mtime, aliases, identifiers, body |
 | `MemorySearchTool.description` | `durin/agent/tools/memory_search.py` | LLM-visible tool description; delegates to `_PARAMETERS["description"]`; guarded by sync test |

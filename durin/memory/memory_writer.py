@@ -59,7 +59,15 @@ def _refresh_alias_index(memory_root: Path, page: EntityPage, slug: str) -> None
     except Exception:  # noqa: BLE001 — best-effort; never block the write
         pass
 
-__all__ = ["WriteResult", "git_worktree_lock_path", "write_entity", "write_files_cas"]
+__all__ = [
+    "StaleContentError", "WriteResult", "git_worktree_lock_path", "write_entity",
+    "write_files_cas",
+]
+
+
+class StaleContentError(RuntimeError):
+    """A file changed between the caller reading it and the commit (see
+    ``write_files_cas(expect=…)``); the caller recomputes and retries."""
 
 
 def git_worktree_lock_path(memory_git_root: Path) -> Path:
@@ -410,6 +418,7 @@ def write_files_cas(
     *,
     message: str,
     author: bytes = b"durin-memory <memory@durin.local>",
+    expect: dict[str, bytes | None] | None = None,
 ) -> str | None:
     """Commit MULTIPLE file changes atomically via plumbing + CAS, then ff.
 
@@ -418,6 +427,13 @@ def write_files_cas(
     merge uses it so the refine commits like memory_writer (no porcelain
     working-tree staging, resilient to ref-lock contention). Returns the new
     commit sha (hex) on commit; None if ``changes`` is empty.
+
+    ``expect`` maps rel_path → the bytes the caller read and derived its
+    change from (None = absent). The CAS alone only protects the ref: a
+    change computed from a file that another writer has since updated would
+    silently overwrite that update. With ``expect``, every attempt checks the
+    base commit's blobs first and raises :class:`StaleContentError` when one
+    differs, so the caller recomputes from the current content.
     """
     if not changes:
         return None
@@ -448,6 +464,8 @@ def write_files_cas(
         _commit_dirty_as_user(root)  # preserve any in-progress hand edit first
         for attempt in range(_MAX_RETRIES):
             base = head_sha(root)
+            if expect:
+                _check_expected(root, base, expect)
             new_commit = build_commit_with_changes(
                 root, base, changes, author=author, message=msg)
             repo = Repo(str(root))
@@ -476,6 +494,30 @@ def write_files_cas(
     raise RuntimeError(
         f"write_files_cas exceeded {_MAX_RETRIES} CAS retries (high contention)"
     )
+
+
+def _check_expected(root: Path, base: bytes | None, expect: dict[str, bytes | None]) -> None:
+    """Raise :class:`StaleContentError` when a file at ``base`` is not what the
+    caller read. A file git has never tracked (a page written by hand into a
+    new folder, which the human-edit guard does not pick up) has no committed
+    version to compare with; for it the working-tree copy is the reference."""
+    from durin.memory.git_plumbing import _read_blob
+
+    repo = Repo(str(root))
+    try:
+        for rel, want in expect.items():
+            have = _read_blob(repo, base, rel) if base else None
+            if have == want:
+                continue
+            if have is None and want is not None:
+                try:
+                    if (root / rel).read_bytes() == want:
+                        continue
+                except OSError:
+                    pass
+            raise StaleContentError(f"{rel} changed since it was read")
+    finally:
+        repo.close()
 
 
 def _fast_forward_working_tree(root: Path) -> None:

@@ -2309,7 +2309,8 @@
       "improved": "đã cải thiện",
       "flagged": "đã đánh dấu",
       "run": "lượt chạy",
-      "warning": "cảnh báo"
+      "warning": "cảnh báo",
+      "resolved": "đã giải quyết"
     },
     "close": "Đóng",
     "openFull": "Mở đầy đủ",
@@ -2348,6 +2349,38 @@
         "create": "skill đề xuất",
         "retire": "gỡ bỏ",
         "fuse": "gộp"
+      },
+      "mergeInto": "Gộp vào {{ref}}",
+      "applyProposal": "Áp dụng đề xuất",
+      "proposalTitle": "Đề xuất",
+      "edit": "Chỉnh sửa…",
+      "applyChanges": "Áp dụng thay đổi",
+      "cancel": "Hủy",
+      "aliases": "Bí danh",
+      "keepBoth": "Cả hai",
+      "keepOnly": "Chỉ {{ref}}",
+      "keepNone": "Xóa",
+      "keys": "Khóa và tên",
+      "slug": "Khóa",
+      "name": "Tên",
+      "relate": "Liên kết chúng",
+      "relationType": "Loại quan hệ",
+      "relationDirection": "Chiều quan hệ",
+      "resolveInvalid": "Không thể áp dụng:",
+      "proposal": {
+        "merge": "Gộp vào {{survivor}}",
+        "rename": "Đổi tên {{from}} → {{to}}",
+        "renameName": "Tên của {{ref}}: {{name}}",
+        "aliasOnly": "Bí danh “{{alias}}” → chỉ {{ref}}",
+        "aliasNone": "Bí danh “{{alias}}” → xóa",
+        "aliasBoth": "Bí danh “{{alias}}” → giữ ở cả hai",
+        "relation": "{{from}} —{{type}}→ {{to}}",
+        "keep": "Giữ nguyên cả hai"
+      },
+      "source": {
+        "tier1": "đánh giá nhanh",
+        "tier2": "đã điều tra",
+        "rereview": "xem xét lại"
       }
     }
   },

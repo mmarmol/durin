@@ -22,6 +22,7 @@ from typing import Any
 # Per-item activity events (each maps to one or more digest items).
 DREAM_ACTIVITY_TYPES = frozenset({
     "memory.absorb.auto_merged",
+    "memory.absorb.auto_resolved",
     "memory.dream.discover",
     "memory.dream.skill_extract",
     "memory.dream.skill_signals",
@@ -43,8 +44,8 @@ DREAM_EVENT_TYPES = DREAM_ACTIVITY_TYPES | RUN_MARKER_TYPES
 def map_dream_event(event_type: str, data: dict[str, Any], at_ms: int) -> list[dict[str, Any]]:
     """Map one raw telemetry event to zero or more activity dicts.
 
-    Each dict has ``kind`` ("merged" | "created" | "improved" | "flagged" |
-    "warning" | "run"), a human ``summary``, an optional ``ref`` / ``ref_kind``
+    Each dict has ``kind`` ("merged" | "resolved" | "created" | "improved" |
+    "flagged" | "warning" | "run"), a human ``summary``, an optional ``ref`` / ``ref_kind``
     deep-link target,
     and ``at_ms`` (epoch milliseconds). Pure and dependency-free — safe to call
     from any thread (the dream passes run in worker threads).
@@ -57,6 +58,21 @@ def map_dream_event(event_type: str, data: dict[str, Any], at_ms: int) -> list[d
             "summary": f"Merged {absorbed} → {canonical}",
             "ref": canonical or None,
             "ref_kind": "entity" if canonical else None,
+            "at_ms": at_ms,
+        }]
+
+    if event_type == "memory.absorb.auto_resolved":
+        a = data.get("canonical", "")
+        b = data.get("absorbed", "")
+        what = {"relate": "Related", "disambiguate": "Disambiguated"}.get(
+            data.get("kind", ""), "Resolved")
+        renamed = data.get("renamed") or []
+        suffix = f" (renamed {', '.join(renamed)})" if renamed else ""
+        return [{
+            "kind": "resolved",
+            "summary": f"{what} {a} ↔ {b}{suffix}",
+            "ref": b or None,
+            "ref_kind": "entity" if b else None,
             "at_ms": at_ms,
         }]
 

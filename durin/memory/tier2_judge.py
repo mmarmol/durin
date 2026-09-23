@@ -1,6 +1,11 @@
 """Tier-2 merge judge: a bounded sub-agent that investigates a borderline pair
 with the read-entity / lineage / source-session tools and returns the same
-verdict envelope as the cheap judge."""
+verdict envelope as the cheap judge — including the proposed resolution
+(survivor, clearer keys, alias ownership, the edge between related pages).
+
+``user_kept_separate=True`` is the re-review of a pair the user already
+ruled out as a duplicate: the agent is told so, may not answer ``same``, and
+only looks for what would make the two pages clearly distinct."""
 from __future__ import annotations
 
 import asyncio
@@ -11,15 +16,47 @@ from durin.memory.absorb_judge import JudgeError, JudgeResult, _parse_response
 
 AgentRunner = None  # late-bound; patched in tests
 
+_ENVELOPE = (
+    "===VERDICT===\nsame|different|related|unclear\n===CONFIDENCE===\n0-100\n"
+    "===REASONING===\n<2-3 sentences; justify each proposed operation>\n"
+    "===RESOLUTION===\n"
+    '{{"survivor": "<ref>", "renames": {{"<ref>": {{"slug": "<new-slug>", "name": "<new name>"}}}}, '
+    '"alias_moves": [{{"alias": "<alias>", "keep_on": "<ref>|both|none"}}], '
+    '"relation": {{"from": "<ref>", "type": "<snake_case label>", "to": "<ref>"}}}}\n'
+    "(omit keys that do not apply; {{}} when you propose nothing)\n"
+    "===END==="
+)
+
+_GUIDE = (
+    "Verdicts: same = one real-world entity; related = two distinct entities "
+    "where one is a part, version, edition, instance or specialization of the "
+    "other (merging them would lose that distinction); different = unrelated "
+    "homonyms or distinct things; unclear = not enough evidence.\n"
+    "Resolution (only what the evidence supports): survivor (same only) = the "
+    "ref with the clearest, most canonical key; renames = a clearer slug "
+    "(lowercase, digits, '-') or name when a key is cryptic or ambiguous — "
+    "never change the type, and on same only the survivor may be renamed; "
+    "alias_moves = an alias that belongs to only ONE of them (keep_on that "
+    "ref) or is junk such as OCR noise (keep_on none) — legitimate homonyms "
+    "(a first name two people share) stay on both; relation (related only) "
+    "points from the more specific page to the more general one.\n"
+)
+
 _TASK = (
-    "Decide whether these two memory entities are the SAME real-world entity.\n"
+    "Decide what to do with these two colliding memory entities.\n"
     "Entity A: {a}\nEntity B: {b}\n\n"
     "Investigate with your tools: read each entity in full (memory_read_entity), "
     "their git lineage (memory_entity_lineage), and the source conversations "
     "(memory_source_session). Weigh consistent facts and shared specifics; be "
-    "wary of homonyms. Then answer ONLY in this envelope:\n"
-    "===VERDICT===\nsame|different|unclear\n===CONFIDENCE===\n0-100\n"
-    "===REASONING===\n<2-3 sentences>\n===END==="
+    "wary of homonyms.\n{extra}" + _GUIDE + "Then answer ONLY in this envelope:\n" + _ENVELOPE
+)
+
+_SEPARATED_NOTE = (
+    "The user already reviewed this pair and decided it is NOT a duplicate: "
+    "do not answer same. Look for what would make the two clearly distinct — a "
+    "contested alias that belongs to only one of them, a cryptic key, or a "
+    "structural relation between them — and answer keep-as-is (different with "
+    "an empty resolution) when nothing needs to change.\n"
 )
 
 # The reserved final-answer step. Live, an investigation that needed more than
@@ -29,9 +66,8 @@ _TASK = (
 # for the verdict with no tools on offer, so the budget always ends in an answer.
 _FINAL_BRIEF = (
     "Your investigation budget for this pair is spent. Decide NOW from the notes "
-    "below — no more tools are available — and answer ONLY in this envelope:\n"
-    "===VERDICT===\nsame|different|unclear\n===CONFIDENCE===\n0-100\n"
-    "===REASONING===\n<2-3 sentences>\n===END===\n\n"
+    "below — no more tools are available.\n{extra}" + _GUIDE
+    + "Answer ONLY in this envelope:\n" + _ENVELOPE + "\n\n"
     "Entity A: {a}\nEntity B: {b}\n\n"
     "Investigation notes (→ a tool call, ← what it returned):\n{notes}"
 )
@@ -117,6 +153,7 @@ async def _escalate_async(
     provider: Any,
     model: str | None,
     max_iterations: int,
+    user_kept_separate: bool = False,
 ) -> JudgeResult:
     global AgentRunner
     if AgentRunner is None:
@@ -127,8 +164,9 @@ async def _escalate_async(
     if provider is None or not model:
         provider, model = _resolve_provider_model()
 
+    extra = _SEPARATED_NOTE if user_kept_separate else ""
     spec = AgentRunSpec(
-        initial_messages=[{"role": "user", "content": _TASK.format(a=ref_a, b=ref_b)}],
+        initial_messages=[{"role": "user", "content": _TASK.format(a=ref_a, b=ref_b, extra=extra)}],
         tools=_build_tools(Path(workspace)),
         model=model,
         max_iterations=max_iterations,
@@ -144,7 +182,7 @@ async def _escalate_async(
     # One more call, no tools: the agent must answer from what it has read.
     from durin.agent.tools.registry import ToolRegistry
     brief = _FINAL_BRIEF.format(
-        a=ref_a, b=ref_b,
+        a=ref_a, b=ref_b, extra=extra,
         notes=_investigation_notes(
             list(getattr(result, "messages", None) or []),
             str(getattr(result, "stop_reason", "") or ""),
@@ -171,6 +209,7 @@ def escalate_judge(
     provider: Any = None,
     model: str | None = None,
     max_iterations: int = 6,
+    user_kept_separate: bool = False,
 ) -> JudgeResult:
     """Escalate a borderline pair to a bounded sub-agent for investigation.
 
@@ -192,6 +231,7 @@ def escalate_judge(
                 provider=provider,
                 model=model,
                 max_iterations=max_iterations,
+                user_kept_separate=user_kept_separate,
             )
         )
     finally:

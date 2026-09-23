@@ -206,7 +206,10 @@ def run_full_dream(
                 max_seconds=max_s,
                 judge_concurrency=absorb.judge_concurrency,
                 recheck_days=absorb.recheck_days,
-                semantic_name_gate=absorb.semantic_name_gate)
+                semantic_name_gate=absorb.semantic_name_gate,
+                auto_resolve=absorb.auto_resolve,
+                resolve_threshold=absorb.resolve_threshold,
+                auto_rename=absorb.auto_rename)
             _emit_rss(progress, "refine")
             # Relation-vocabulary hygiene: canonicalise entity-relation type
             # labels so graph edges line up. Runs after refine (which merges

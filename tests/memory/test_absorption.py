@@ -346,3 +346,18 @@ def test_merge_unions_derived_from_and_folds_provenance() -> None:
     rel_prov = merged.provenance["relations"]
     tos = {e["to"] for e in rel_prov.values()}
     assert tos == {"topic:virology", "topic:zoonosis"}
+
+
+def test_absorb_replaces_a_stale_archive_copy(tmp_path: Path) -> None:
+    """An archive file already at the absorbed slug (an earlier merge of that
+    slug, or an unmerge whose restore was never committed) does not block."""
+    _write_page(tmp_path, "person", "marcelo", aliases=["Marcelo"])
+    _write_page(tmp_path, "person", "marcelo_m", aliases=["Marcelo"])
+    old = tmp_path / "memory" / "archive" / "entities" / "person" / "marcelo_m.md"
+    old.parent.mkdir(parents=True, exist_ok=True)
+    old.write_text("---\ntype: person\nname: old\narchived_into: person:x\n---\n\nold\n")
+    from durin.memory.memory_writer import write_files_cas
+    write_files_cas(tmp_path, {"archive/entities/person/marcelo_m.md": old.read_bytes()},
+                    message="seed archive")
+    assert EntityAbsorption(tmp_path).absorb("person:marcelo", "person:marcelo_m")
+    assert "archived_into: person:marcelo" in old.read_text()

@@ -2309,7 +2309,8 @@
       "improved": "已改進",
       "flagged": "已標記",
       "run": "執行",
-      "warning": "警告"
+      "warning": "警告",
+      "resolved": "已解決"
     },
     "close": "關閉",
     "openFull": "開啟完整內容",
@@ -2348,6 +2349,38 @@
         "create": "提議的技能",
         "retire": "淘汰",
         "fuse": "合併"
+      },
+      "mergeInto": "合併到 {{ref}}",
+      "applyProposal": "套用建議",
+      "proposalTitle": "建議",
+      "edit": "編輯…",
+      "applyChanges": "套用變更",
+      "cancel": "取消",
+      "aliases": "別名",
+      "keepBoth": "兩者",
+      "keepOnly": "僅 {{ref}}",
+      "keepNone": "刪除",
+      "keys": "鍵與名稱",
+      "slug": "鍵",
+      "name": "名稱",
+      "relate": "建立關聯",
+      "relationType": "關係類型",
+      "relationDirection": "關係方向",
+      "resolveInvalid": "無法套用：",
+      "proposal": {
+        "merge": "合併到 {{survivor}}",
+        "rename": "重新命名 {{from}} → {{to}}",
+        "renameName": "{{ref}} 的名稱：{{name}}",
+        "aliasOnly": "別名「{{alias}}」→ 僅 {{ref}}",
+        "aliasNone": "別名「{{alias}}」→ 刪除",
+        "aliasBoth": "別名「{{alias}}」→ 兩者都保留",
+        "relation": "{{from}} —{{type}}→ {{to}}",
+        "keep": "兩者維持不變"
+      },
+      "source": {
+        "tier1": "快速判斷",
+        "tier2": "已調查",
+        "rereview": "重新審查"
       }
     }
   },

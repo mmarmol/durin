@@ -2309,7 +2309,8 @@
       "improved": "已改进",
       "flagged": "已标记",
       "run": "运行",
-      "warning": "警告"
+      "warning": "警告",
+      "resolved": "已解决"
     },
     "close": "关闭",
     "openFull": "展开全部",
@@ -2348,6 +2349,38 @@
         "create": "新增技能",
         "retire": "淘汰",
         "fuse": "合并"
+      },
+      "mergeInto": "合并到 {{ref}}",
+      "applyProposal": "应用建议",
+      "proposalTitle": "建议",
+      "edit": "编辑…",
+      "applyChanges": "应用更改",
+      "cancel": "取消",
+      "aliases": "别名",
+      "keepBoth": "两者",
+      "keepOnly": "仅 {{ref}}",
+      "keepNone": "删除",
+      "keys": "键与名称",
+      "slug": "键",
+      "name": "名称",
+      "relate": "建立关联",
+      "relationType": "关系类型",
+      "relationDirection": "关系方向",
+      "resolveInvalid": "无法应用：",
+      "proposal": {
+        "merge": "合并到 {{survivor}}",
+        "rename": "重命名 {{from}} → {{to}}",
+        "renameName": "{{ref}} 的名称：{{name}}",
+        "aliasOnly": "别名“{{alias}}”→ 仅 {{ref}}",
+        "aliasNone": "别名“{{alias}}”→ 删除",
+        "aliasBoth": "别名“{{alias}}”→ 两者都保留",
+        "relation": "{{from}} —{{type}}→ {{to}}",
+        "keep": "两者保持不变"
+      },
+      "source": {
+        "tier1": "快速判断",
+        "tier2": "已调查",
+        "rereview": "重新审查"
       }
     }
   },

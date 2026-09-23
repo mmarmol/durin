@@ -2309,7 +2309,8 @@
       "improved": "改善済み",
       "flagged": "フラグ付き",
       "run": "実行",
-      "warning": "警告"
+      "warning": "警告",
+      "resolved": "解決"
     },
     "close": "閉じる",
     "openFull": "全体を開く",
@@ -2348,6 +2349,38 @@
         "create": "提案されたスキル",
         "retire": "廃止",
         "fuse": "マージ"
+      },
+      "mergeInto": "{{ref}} に統合",
+      "applyProposal": "提案を適用",
+      "proposalTitle": "提案",
+      "edit": "編集…",
+      "applyChanges": "変更を適用",
+      "cancel": "キャンセル",
+      "aliases": "エイリアス",
+      "keepBoth": "両方",
+      "keepOnly": "{{ref}} のみ",
+      "keepNone": "削除",
+      "keys": "キーと名前",
+      "slug": "キー",
+      "name": "名前",
+      "relate": "関連付ける",
+      "relationType": "関係の種類",
+      "relationDirection": "関係の向き",
+      "resolveInvalid": "適用できませんでした:",
+      "proposal": {
+        "merge": "{{survivor}} に統合",
+        "rename": "{{from}} → {{to}} に名前変更",
+        "renameName": "{{ref}} の名前: {{name}}",
+        "aliasOnly": "エイリアス「{{alias}}」→ {{ref}} のみ",
+        "aliasNone": "エイリアス「{{alias}}」→ 削除",
+        "aliasBoth": "エイリアス「{{alias}}」→ 両方に残す",
+        "relation": "{{from}} —{{type}}→ {{to}}",
+        "keep": "両方をそのままにする"
+      },
+      "source": {
+        "tier1": "簡易判定",
+        "tier2": "調査済み",
+        "rereview": "再レビュー"
       }
     }
   },

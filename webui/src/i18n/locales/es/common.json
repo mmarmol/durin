@@ -2153,7 +2153,8 @@
       "improved": "mejorado",
       "flagged": "marcado",
       "run": "corrida",
-      "warning": "aviso"
+      "warning": "aviso",
+      "resolved": "resuelto"
     },
     "close": "Cerrar",
     "openFull": "Abrir completo",
@@ -2192,6 +2193,38 @@
         "create": "skill propuesta",
         "retire": "retirar",
         "fuse": "fusionar"
+      },
+      "mergeInto": "Fusionar en {{ref}}",
+      "applyProposal": "Aplicar propuesta",
+      "proposalTitle": "Propuesta",
+      "edit": "Editar…",
+      "applyChanges": "Aplicar cambios",
+      "cancel": "Cancelar",
+      "aliases": "Alias",
+      "keepBoth": "Ambas",
+      "keepOnly": "Solo {{ref}}",
+      "keepNone": "Eliminar",
+      "keys": "Claves y nombres",
+      "slug": "Clave",
+      "name": "Nombre",
+      "relate": "Relacionarlas",
+      "relationType": "Tipo de relación",
+      "relationDirection": "Dirección de la relación",
+      "resolveInvalid": "No se pudo aplicar:",
+      "proposal": {
+        "merge": "Fusionar en {{survivor}}",
+        "rename": "Renombrar {{from}} → {{to}}",
+        "renameName": "Nombre de {{ref}}: {{name}}",
+        "aliasOnly": "Alias «{{alias}}» → solo {{ref}}",
+        "aliasNone": "Alias «{{alias}}» → eliminar",
+        "aliasBoth": "Alias «{{alias}}» → queda en ambas",
+        "relation": "{{from}} —{{type}}→ {{to}}",
+        "keep": "Dejar ambas como están"
+      },
+      "source": {
+        "tier1": "juez rápido",
+        "tier2": "investigado",
+        "rereview": "re-revisión"
       }
     }
   },

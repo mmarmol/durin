@@ -276,8 +276,11 @@ session close) run only the extract pass, throttled by `ReactiveDreamGate`.
 4. **Refine** (`dream_passes.run_refine_pass` → `refine_dream.run_refine`): find
    entity pairs sharing aliases via `AliasIndex`, skip cross-type / tombstoned /
    user-managed / quarantined pairs, judge survivors via `absorb_judge.judge_pair`
-   (LLM returning same / different / unclear + confidence), and merge on
-   `same + confidence ≥ threshold` via `EntityAbsorption.absorb`. ON by default
+   (LLM returning same / different / related / unclear + confidence, plus a
+   proposed resolution), merge on `same + confidence ≥ threshold` into the
+   proposed survivor, and apply confident non-merge resolutions (alias ownership,
+   the edge between related entities, clearer keys) via
+   `pair_resolution.apply_resolution`. ON by default
    (`memory.dream.auto_absorb.enabled = true`); a bad merge is recoverable via
    `git revert` of the absorb commit. Manual `durin memory absorb` is always available.
 
@@ -390,6 +393,8 @@ durin memory dream [entity] [--dry-run]   run the dream consolidation manually
 durin memory reindex                rebuild all indices from markdown
 durin memory absorb-suggest         show alias-overlap candidates for manual review
 durin memory absorb <ref> <into>    manually merge two entity pages
+durin memory rename <ref> <slug>    give an entity a clearer key; redirects every reference
+durin memory rereview               re-judge Inbox pairs and kept-separate pairs with resolutions
 durin memory history <entity-ref>   show git history for an entity page
 durin memory revert <sha>           revert an entity write via git revert
 durin memory stats                  show index sizes and entry counts

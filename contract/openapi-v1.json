@@ -16,6 +16,26 @@
         "title": "AcceptSuggestionCommand",
         "type": "object"
       },
+      "AliasMoveIn": {
+        "additionalProperties": false,
+        "description": "Who keeps ``alias``: ``ref_a``/``ref_b`` (either ref), ``both`` or ``none``.",
+        "properties": {
+          "alias": {
+            "title": "Alias",
+            "type": "string"
+          },
+          "keep_on": {
+            "title": "Keep On",
+            "type": "string"
+          }
+        },
+        "required": [
+          "alias",
+          "keep_on"
+        ],
+        "title": "AliasMoveIn",
+        "type": "object"
+      },
       "AutomationAnswerCommand": {
         "additionalProperties": false,
         "properties": {
@@ -1805,7 +1825,7 @@
         "type": "object"
       },
       "DreamEvent": {
-        "description": "One notable thing the nightly dream did.\n\n``kind`` is the operation: \"merged\" | \"created\" | \"improved\" | \"flagged\" |\n\"warning\" (degraded/unparseable \u2014 needs operator attention) | \"run\"\n(per-run summary line).\n``ref`` / ``ref_kind`` let the UI deep-link to the affected entity or skill;\nboth are None when the event is not tied to a specific ref (e.g. a bulk\nskill-extract pass with no individual ref emitted).  ``at_ms`` is epoch\nmilliseconds so JS Date can consume it directly.",
+        "description": "One notable thing the nightly dream did.\n\n``kind`` is the operation: \"merged\" | \"resolved\" (the dream disambiguated\nor related a colliding pair on its own) | \"created\" | \"improved\" | \"flagged\" |\n\"warning\" (degraded/unparseable \u2014 needs operator attention) | \"run\"\n(per-run summary line).\n``ref`` / ``ref_kind`` let the UI deep-link to the affected entity or skill;\nboth are None when the event is not tied to a specific ref (e.g. a bulk\nskill-extract pass with no individual ref emitted).  ``at_ms`` is epoch\nmilliseconds so JS Date can consume it directly.",
         "properties": {
           "at_ms": {
             "title": "At Ms",
@@ -2006,8 +2026,24 @@
         "type": "object"
       },
       "FlaggedPair": {
-        "description": "One memory pair the dream escalated for human review.",
+        "description": "One memory pair the dream escalated for human review.\n\n``name_*`` / ``aliases_*`` are the pages' current display name and\naliases (empty when a page no longer exists), so the Bandeja can offer\nalias ownership without a round-trip per page. ``proposal`` is the\njudge's resolution (see ``durin.memory.pair_resolution``) \u2014 ``kind``\nmerge | disambiguate | relate | keep, plus ``survivor``, ``renames``,\n``alias_moves`` and ``relation`` \u2014 or None when it proposed none.\n``source`` says who flagged it: tier1 | tier2 | rereview.",
         "properties": {
+          "aliases_a": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Aliases A",
+            "type": "array"
+          },
+          "aliases_b": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Aliases B",
+            "type": "array"
+          },
           "at_ms": {
             "anyOf": [
               {
@@ -2023,6 +2059,29 @@
             "title": "Confidence",
             "type": "integer"
           },
+          "name_a": {
+            "default": "",
+            "title": "Name A",
+            "type": "string"
+          },
+          "name_b": {
+            "default": "",
+            "title": "Name B",
+            "type": "string"
+          },
+          "proposal": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Proposal"
+          },
           "reasoning": {
             "title": "Reasoning",
             "type": "string"
@@ -2034,6 +2093,18 @@
           "ref_b": {
             "title": "Ref B",
             "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Source"
           },
           "verdict": {
             "title": "Verdict",
@@ -5213,13 +5284,85 @@
         "title": "RejectSuggestionCommand",
         "type": "object"
       },
+      "RelationIn": {
+        "additionalProperties": false,
+        "description": "A typed edge between the two pages of the pair.",
+        "properties": {
+          "from_ref": {
+            "title": "From Ref",
+            "type": "string"
+          },
+          "to_ref": {
+            "title": "To Ref",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "from_ref",
+          "type",
+          "to_ref"
+        ],
+        "title": "RelationIn",
+        "type": "object"
+      },
+      "RenameIn": {
+        "additionalProperties": false,
+        "description": "A clearer key (``slug``) and/or display ``name`` for one page.",
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Name"
+          },
+          "slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Slug"
+          }
+        },
+        "title": "RenameIn",
+        "type": "object"
+      },
       "ResolveFlaggedRequest": {
         "additionalProperties": false,
-        "description": "Resolve a flagged pair: merge the two entities or keep them separate.",
+        "description": "Resolve a flagged pair.\n\n``action``:\n- ``merge`` \u2014 fold the pair into ``survivor`` (default ``ref_a``);\n  ``renames`` may give the survivor a clearer key.\n- ``separate`` \u2014 keep both as they are (tombstones the pair).\n- ``disambiguate`` \u2014 keep both, apply ``alias_moves`` / ``renames``.\n- ``relate`` \u2014 ``disambiguate`` plus ``relation``.\n- ``accept`` \u2014 apply the judge's stored proposal as is.\nEvery action except ``merge`` tombstones the pair (under the final keys),\nso the dream never merges what the user kept apart.",
         "properties": {
           "action": {
             "title": "Action",
             "type": "string"
+          },
+          "alias_moves": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/AliasMoveIn"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Alias Moves"
           },
           "ref_a": {
             "title": "Ref A",
@@ -5228,6 +5371,44 @@
           "ref_b": {
             "title": "Ref B",
             "type": "string"
+          },
+          "relation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RelationIn"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "renames": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/RenameIn"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Renames"
+          },
+          "survivor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Survivor"
           }
         },
         "required": [
@@ -5259,7 +5440,7 @@
         "type": "object"
       },
       "ResolveResult": {
-        "description": "Outcome of a resolve action.",
+        "description": "Outcome of a resolve action. ``refs`` maps each original ref to the\nref it has now (a merged-away page maps to the survivor; a renamed page\nto its new key).",
         "properties": {
           "action": {
             "title": "Action",
@@ -5268,6 +5449,14 @@
           "ok": {
             "title": "Ok",
             "type": "boolean"
+          },
+          "refs": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "default": {},
+            "title": "Refs",
+            "type": "object"
           }
         },
         "required": [
@@ -10144,7 +10333,7 @@
             "description": "Success"
           }
         },
-        "summary": "Resolve a flagged pair: merge the entities or keep them separate",
+        "summary": "Resolve a flagged pair: merge, keep separate, disambiguate, relate, or accept the proposal",
         "x-required-scope": "memory:write"
       }
     },
