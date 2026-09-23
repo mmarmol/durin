@@ -712,27 +712,27 @@ def cmd_rename(
 def cmd_rereview(
     pending: bool = typer.Option(
         True, "--pending/--no-pending",
-        help="Re-judge the pairs waiting in the Bandeja."),
+        help="Re-judge the pairs waiting in the Inbox."),
     separated: bool = typer.Option(
         True, "--separated/--no-separated",
         help="Re-examine the pairs you chose to keep separate."),
     apply_separated: bool = typer.Option(
         False, "--apply-separated",
         help="Apply confident proposals for kept-separate pairs directly instead "
-             "of sending them to the Bandeja."),
+             "of sending them to the Inbox."),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Judge and report; write nothing."),
     limit: int = typer.Option(0, "--limit", help="Judge at most N pairs (0 = all)."),
     json_out: bool = typer.Option(False, "--json", help="Print the full report as JSON."),
 ) -> None:
-    """Re-judge Bandeja pairs and kept-separate pairs with the resolution-aware judge.
+    """Re-judge Inbox pairs and kept-separate pairs with the resolution-aware judge.
 
     Each pair goes to the investigating judge, which can now also propose a
     clearer key, who owns a contested alias, and the relation between related
     entities. Confident merges and resolutions are applied (thresholds from
-    ``memory.dream.auto_absorb``); the rest lands in the Bandeja with the
+    ``memory.dream.auto_absorb``); the rest lands in the Inbox with the
     proposal. Kept-separate pairs are never merged, and their proposals go to
-    the Bandeja unless ``--apply-separated``.
+    the Inbox unless ``--apply-separated``.
     """
     import json as _json
 
