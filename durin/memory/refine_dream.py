@@ -311,9 +311,11 @@ def add_flagged(
     proposal: dict | None = None,
     source: str | None = None,
 ) -> None:
-    """Record a pair the Tier-2 agent investigated but did not confirm as same,
-    or a borderline pair capped before Tier-2 ran (escalation budget exhausted
-    for the run) and kept on its cheap Tier-1 verdict instead.
+    """Record a pair for the user to decide: one the Tier-2 agent investigated
+    without settling it; a borderline pair capped before Tier-2 ran (escalation
+    budget exhausted for the run) or whose Tier-2 judge failed, kept on its
+    cheap Tier-1 verdict; a confident proposal the dream may not apply on its
+    own; a resolution whose apply failed; or a re-review's proposal.
 
     ``proposal`` is the judge's resolution (``Resolution.to_dict()``) the
     Bandeja offers to apply; ``source`` names who produced the record

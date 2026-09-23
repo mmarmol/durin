@@ -940,7 +940,7 @@ class MemoryAbsorbJudgedEvent(TypedDict):
 
     canonical: str  # ref of the page picked as canonical (slug winner)
     absorbed: str   # ref of the page that would be absorbed
-    verdict: str    # "same" | "different" | "unclear"
+    verdict: str    # "same" | "different" | "related" | "unclear"
     confidence: int  # 0-100
     # Semantic candidates only: whether the two names show structural overlap
     # (a shared token, or one compact name inside the other); None for
@@ -968,6 +968,23 @@ class MemoryAbsorbAutoMergedEvent(TypedDict):
     entity_type: NotRequired[str]  # both pages share the type (cross-type pairs are filtered)
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
+
+
+class MemoryAbsorbAutoResolvedEvent(TypedDict):
+    """The dream applied a judge's non-merge resolution to a colliding pair
+    on its own — the judge was at least ``resolve_threshold`` confident.
+
+    Emitted by the refine pass and by ``durin memory rereview`` after the
+    resolution was written. ``canonical`` / ``absorbed`` are the pair as
+    judged (before any rename); ``renamed`` lists the refs that got a
+    clearer key.
+    """
+
+    canonical: str
+    absorbed: str
+    kind: str  # "disambiguate" (alias ownership) | "relate" (plus a typed edge)
+    confidence: int  # the deciding judge's, 0-100
+    renamed: list[str]
 
 
 class MemoryAbsorbJudgeUnavailableEvent(TypedDict):
@@ -1004,8 +1021,8 @@ class MemoryAbsorbSkippedEvent(TypedDict):
       and neither page's judgment-bearing content (nor the judge template or
       model) has changed since — the verdict cache answers instead of the LLM.
 
-    Declined verdicts ("different" / "unclear" / below-threshold "same") are
-    not skips — they show up in ``memory.absorb.judged`` instead.
+    Declined verdicts ("different" / "related" / "unclear" / below-threshold
+    "same") are not skips — they show up in ``memory.absorb.judged`` instead.
     """
 
     canonical: str
@@ -1039,7 +1056,7 @@ class MemoryAbsorbEscalatedEvent(TypedDict):
 
     canonical: str
     absorbed: str
-    verdict: str   # "same" | "different" | "unclear"
+    verdict: str   # "same" | "different" | "related" | "unclear"
     confidence: int  # 0-100
 
 
@@ -1053,7 +1070,7 @@ class MemoryAbsorbEscalationFailedEvent(TypedDict):
 
     canonical: str
     absorbed: str
-    verdict: str   # the Tier-1 verdict kept: "same" | "unclear"
+    verdict: str   # the Tier-1 verdict kept: "unclear", a borderline "same", or an unsure proposal's verdict
     confidence: int  # the Tier-1 confidence, 0-100
     error: str  # head of the exception message
 
@@ -1607,13 +1624,15 @@ class MemoryDreamAlwaysOnEvent(TypedDict):
 
 
 class MemoryDreamFlaggedEvent(TypedDict):
-    """The refine dream flagged a pair the Tier-2 agent investigated but did not
-    confirm as the same entity, or a borderline pair capped before Tier-2 ever
-    ran (see ``memory.absorb.escalation_capped``) and kept on the cheap
-    Tier-1 verdict instead.  ``canonical`` and ``absorbed`` are the two refs
-    the judge examined; the pair is stored in ``.flagged_pairs.json`` for future
-    review.  Fires inside ``add_flagged`` so it is always consistent with the
-    on-disk record."""
+    """A pair was flagged for the user to decide: the Tier-2 agent investigated
+    it without settling it; a borderline pair was capped before Tier-2 ran (see
+    ``memory.absorb.escalation_capped``) or its Tier-2 judge failed, and kept
+    the cheap Tier-1 verdict; a confident proposal the dream may not apply on
+    its own; a resolution whose apply failed; or ``durin memory rereview``'s
+    proposal.  ``canonical`` and ``absorbed`` are the two refs the judge
+    examined; the pair is stored in ``.flagged_pairs.json`` for future review.
+    Fires inside ``add_flagged`` so it is always consistent with the on-disk
+    record."""
 
     canonical: str
     absorbed: str
@@ -2005,6 +2024,7 @@ EVENTS: dict[str, type] = {
     "memory.dream.vector_unavailable": MemoryDreamVectorUnavailableEvent,
     "memory.absorb.judged": MemoryAbsorbJudgedEvent,
     "memory.absorb.auto_merged": MemoryAbsorbAutoMergedEvent,
+    "memory.absorb.auto_resolved": MemoryAbsorbAutoResolvedEvent,
     "memory.absorb.skipped": MemoryAbsorbSkippedEvent,
     "memory.absorb.judge_unavailable": MemoryAbsorbJudgeUnavailableEvent,
     "memory.absorb.reverted": MemoryAbsorbRevertedEvent,
