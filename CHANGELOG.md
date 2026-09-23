@@ -5,6 +5,52 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.10.12 — 2026-09-23
+
+### Highlights
+
+- **The dream resolves colliding entities instead of only merging or keeping
+  them apart.** Most pairs the dream flagged were neither duplicates nor
+  strangers — an edition and the game it belongs to, a specific rule and the
+  general one, a page carrying an alias that belongs to the other, a key that
+  says too little (`topic:5e`). Keeping them separate only wrote a tombstone:
+  the contested alias stayed on both pages, lookups stayed ambiguous, and the
+  next page with that alias raised the same collision again. The judges now
+  return a `related` verdict and propose a resolution — which page survives a
+  merge (the clearer key, no longer the alphabetically-first one), a clearer
+  key or name, who owns a contested alias, and the typed edge between related
+  pages. The dream applies a non-merge resolution on its own when the judge
+  is at least 85 confident (`resolve_threshold`); merges keep their own
+  thresholds. `unclear` never changes memory on its own, and nothing
+  automatic ever merges a pair you kept separate.
+
+### Memory
+
+- New verdict `related` and an optional resolution from both judges; an
+  unreadable proposal never fails the verdict. A confident investigated
+  `different` is no longer flagged for review.
+- `durin memory rename <entity> <new-slug>` gives an entity a clearer key in
+  one commit: the old slug and name stay as aliases, relations and archive
+  pointers are redirected, and memory entries' entity tags follow.
+- `durin memory rereview` re-judges the Inbox and the pairs you kept separate
+  with the new judge. Kept-separate pairs are never merged, and their
+  proposals go to the Inbox unless `--apply-separated`; `--dry-run` writes
+  nothing.
+- A merge now redirects references that pointed at the absorbed page (they
+  used to dangle) and carries its keep-separate decisions over to the
+  surviving page.
+- Merges, renames and resolutions commit only when the pages they were
+  derived from are unchanged, and recompute otherwise, so a concurrent agent
+  write or hand edit is never overwritten.
+- New `memory.dream.auto_absorb` keys: `auto_resolve` (default `true`),
+  `resolve_threshold` (default `85`) and `auto_rename` (default `true`).
+
+### WebUI
+
+- The Dream Inbox offers Apply proposal, Merge into A or into B, Keep
+  separate, and Edit — alias ownership, keys and names, and the relation —
+  and the list reloads when keys change.
+
 ## 0.10.11 — 2026-09-22
 
 ### Highlights
