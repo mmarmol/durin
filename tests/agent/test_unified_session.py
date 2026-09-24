@@ -518,3 +518,21 @@ class TestStopCommandWithUnifiedSession:
 
         # Both tasks should be cancelled
         assert "Stopped 2 task" in result.content
+
+    @pytest.mark.asyncio
+    async def test_stop_as_dispatched_finds_unified_turn(self, tmp_path: Path):
+        """The priority path hands /stop the raw inbound message — no override —
+        so /stop must derive the unified key itself."""
+        from durin.agent.loop import UNIFIED_SESSION_KEY
+        from durin.command.builtin import cmd_stop
+
+        loop = _make_loop(tmp_path, unified_session=True)
+        task = asyncio.create_task(asyncio.sleep(10))
+        loop._active_tasks[UNIFIED_SESSION_KEY] = [task]
+        msg = InboundMessage(channel="websocket", chat_id="abc", sender_id="u", content="/stop")
+        ctx = CommandContext(msg=msg, session=None, key=msg.session_key, raw="/stop", loop=loop)
+
+        result = await cmd_stop(ctx)
+
+        assert task.cancelled()
+        assert "Stopped 1 task" in result.content

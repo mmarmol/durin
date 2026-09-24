@@ -289,7 +289,9 @@ async def cmd_stop(ctx: CommandContext) -> OutboundMessage:
     """Cancel all active tasks and subagents for the session."""
     loop = ctx.loop
     msg = ctx.msg
-    total = await loop._cancel_active_tasks(msg.session_key)
+    # Turns register under the effective key (unified mode folds every channel
+    # into one session); /stop arrives un-rewritten on the priority path.
+    total = await loop._cancel_active_tasks(loop._effective_session_key(msg))
     content = f"Stopped {total} task(s)." if total else "No active task to stop."
     return OutboundMessage(
         channel=msg.channel, chat_id=msg.chat_id, content=content,
