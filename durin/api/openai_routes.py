@@ -11,7 +11,6 @@ a durin token as its ``api_key``.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import time
 import uuid
@@ -206,15 +205,105 @@ def build_openai_routes(
     *,
     model_name: str,
     request_timeout: float,
-    stream_timeout: float = 3600.0,
+    turn_timeout: float = 3600.0,
     resolve_principal: Callable[[Any], Principal | None],
 ) -> list[Route]:
     """Build the ``/v1`` route list for the gateway app.
 
     ``resolve_principal`` is injected (headers → Principal | None) so this
     module needs no import from ``asgi`` and stays independently testable.
+
+    A turn runs in its own task and outlives the request that started it: a
+    client that disconnects, or a non-streaming request that times out, gets
+    no answer, but the turn finishes and is saved to its session, where the
+    next request on that ``session_id`` finds it. ``turn_timeout`` bounds every
+    turn; ``request_timeout`` is only how long a non-streaming request waits.
     """
     session_locks: dict[str, asyncio.Lock] = {}
+    # Strong references: a detached turn must not be garbage-collected.
+    running: set[asyncio.Task] = set()
+
+    async def _no_progress(*_a: Any, **_kw: Any) -> None:
+        # The OpenAI format has no place for progress. Without a callback the
+        # loop would publish it for a nonexistent "api" channel, which logs a
+        # warning per tool call.
+        return None
+
+    def _start_turn(
+        text: str,
+        media_paths: list[str],
+        session_key: str,
+        lock: asyncio.Lock,
+        **stream_callbacks: Any,
+    ) -> tuple[asyncio.Task, dict[str, Any]]:
+        """Run one turn in its own task. ``state`` records whether it got its
+        session (``started``), its ceiling (to tell a ceiling hit from a
+        failure), and whether its request was abandoned."""
+        state: dict[str, Any] = {"started": False, "ceiling": None, "abandoned": False}
+
+        async def _turn() -> Any:
+            async with lock:
+                state["started"] = True
+                # Built once the session lock is held: asyncio.timeout fixes its
+                # deadline at construction, and queueing behind another turn on
+                # the session must not spend this turn's budget.
+                state["ceiling"] = asyncio.timeout(turn_timeout if turn_timeout > 0 else None)
+                async with state["ceiling"]:
+                    return await agent_loop.process_direct(
+                        content=text,
+                        media=media_paths or None,
+                        session_key=session_key,
+                        channel="api",
+                        chat_id=API_CHAT_ID,
+                        on_progress=_no_progress,
+                        **stream_callbacks,
+                    )
+
+        task = asyncio.create_task(_turn())
+        running.add(task)
+        task.add_done_callback(running.discard)
+
+        def _read_outcome(t: asyncio.Task) -> None:
+            # Always retrieve the result, so a turn nobody awaits any more never
+            # ends as "Task exception was never retrieved"; a failure after the
+            # request gave up is logged here, since no response will carry it.
+            if t.cancelled():
+                return
+            exc = t.exception()
+            if exc is not None and state["abandoned"]:
+                logger.opt(exception=exc).error(
+                    "OpenAI API turn for session {} failed after its request ended",
+                    session_key,
+                )
+
+        task.add_done_callback(_read_outcome)
+        return task, state
+
+    def _abandon(task: asyncio.Task, state: dict[str, Any]) -> None:
+        """The request is gone. A started turn keeps running and is saved; one
+        still queued for its session is dropped, so a client that retries does
+        not pile duplicate, billed turns up behind it."""
+        state["abandoned"] = True
+        if not state["started"] and not task.done():
+            task.cancel()
+
+    def _turn_error(
+        task: asyncio.Task, state: dict[str, Any], session_key: str,
+    ) -> tuple[int, str, str] | None:
+        """``(status, message, type)`` for a finished turn with no answer."""
+        if task.cancelled():
+            return 409, "Turn was stopped", "turn_stopped"
+        exc = task.exception()
+        if exc is None:
+            return None
+        ceiling = state["ceiling"]
+        if ceiling is not None and ceiling.expired():
+            logger.warning(
+                "OpenAI API turn for session {} hit the {}s ceiling", session_key, turn_timeout,
+            )
+            return 504, f"Turn exceeded {turn_timeout:g}s limit", "server_error"
+        logger.opt(exception=exc).error("OpenAI API turn failed for session {}", session_key)
+        return 500, "Internal server error", "server_error"
 
     def _auth_or_error(request: Request) -> JSONResponse | None:
         principal = resolve_principal(request.headers)
@@ -246,50 +335,49 @@ def build_openai_routes(
             }
         )
 
-    async def _plain_response(
-        text: str, media_paths: list[str], session_key: str, lock: asyncio.Lock
-    ) -> Response:
+    async def _wait_for_turn(
+        task: asyncio.Task, state: dict[str, Any], session_key: str,
+    ) -> Any | JSONResponse:
+        """Wait up to ``request_timeout`` for a turn; the answer, or an error
+        response. The turn is never cancelled by the wait itself."""
         try:
-            async with lock:
-                response = await asyncio.wait_for(
-                    agent_loop.process_direct(
-                        content=text,
-                        media=media_paths or None,
-                        session_key=session_key,
-                        channel="api",
-                        chat_id=API_CHAT_ID,
-                    ),
-                    timeout=request_timeout,
-                )
-                response_text = _response_text(response)
-                usage = _response_usage(response)
-                if not response_text.strip():
-                    logger.warning(
-                        "Empty API response for session {}, retrying", session_key
-                    )
-                    retry = await asyncio.wait_for(
-                        agent_loop.process_direct(
-                            content=text,
-                            media=media_paths or None,
-                            session_key=session_key,
-                            channel="api",
-                            chat_id=API_CHAT_ID,
-                        ),
-                        timeout=request_timeout,
-                    )
-                    response_text = _response_text(retry)
-                    # The first call was a real, billed LLM round-trip even
-                    # though its content was empty — its usage still counts.
-                    usage = _add_usage(usage, _response_usage(retry))
-                    if not response_text.strip():
-                        response_text = EMPTY_FINAL_RESPONSE_MESSAGE
-        except asyncio.TimeoutError:
+            done, _ = await asyncio.wait({task}, timeout=request_timeout)
+        except asyncio.CancelledError:
+            _abandon(task, state)
+            raise
+        if not done:
+            _abandon(task, state)
             return _error_json(
                 504, f"Request timed out after {request_timeout}s", "server_error"
             )
-        except Exception:
-            logger.exception("OpenAI API error for session {}", session_key)
-            return _error_json(500, "Internal server error", "server_error")
+        err = _turn_error(task, state, session_key)
+        if err is not None:
+            return _error_json(*err)
+        return task.result()
+
+    async def _plain_response(
+        text: str, media_paths: list[str], session_key: str, lock: asyncio.Lock
+    ) -> Response:
+        response = await _wait_for_turn(
+            *_start_turn(text, media_paths, session_key, lock), session_key,
+        )
+        if isinstance(response, JSONResponse):
+            return response
+        response_text = _response_text(response)
+        usage = _response_usage(response)
+        if not response_text.strip():
+            logger.warning("Empty API response for session {}, retrying", session_key)
+            retry = await _wait_for_turn(
+                *_start_turn(text, media_paths, session_key, lock), session_key,
+            )
+            if isinstance(retry, JSONResponse):
+                return retry
+            response_text = _response_text(retry)
+            # The first call was a real, billed LLM round-trip even though its
+            # content was empty — its usage still counts.
+            usage = _add_usage(usage, _response_usage(retry))
+            if not response_text.strip():
+                response_text = EMPTY_FINAL_RESPONSE_MESSAGE
         return JSONResponse(_chat_completion_response(response_text, model_name, usage))
 
     def _stream_response(
@@ -297,73 +385,43 @@ def build_openai_routes(
     ) -> StreamingResponse:
         chunk_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
         queue: asyncio.Queue[str | None] = asyncio.Queue()
-        state: dict[str, Any] = {
-            "error": None,
-            "emitted": False,
-            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-        }
+        emitted = {"any": False}
+        usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
         async def _on_stream(token: str) -> None:
             if token:
-                state["emitted"] = True
+                emitted["any"] = True
             await queue.put(token)
 
         async def _on_stream_end(*_a: Any, **_kw: Any) -> None:
             # Stream-end callbacks mark generation-segment boundaries (e.g.
             # before a tool call). Tool-backed turns continue after a segment,
-            # so the HTTP stream closes only when process_direct returns.
+            # so the HTTP stream closes only when the turn ends.
             return None
 
-        # No idle cut here: a hung turn is already stopped by the agent's own
-        # limits (the provider's stream-silence watchdog, each tool's timeout,
-        # the tool-iteration cap), and a second silence clock would kill work
-        # those limits deliberately allow (a local model evaluating a long
-        # prompt emits nothing for minutes). The ceiling only bounds a turn
-        # that keeps working. asyncio.timeout() fixes its deadline when it is
-        # built, so it is built once the session lock is held: time spent
-        # queued behind another turn is not billed to this one.
-        async def _run() -> None:
-            ceiling: asyncio.Timeout | None = None
-            try:
-                async with lock:
-                    ceiling = asyncio.timeout(
-                        stream_timeout if stream_timeout > 0 else None
-                    )
-                    async with ceiling:
-                        response = await agent_loop.process_direct(
-                            content=text,
-                            media=media_paths or None,
-                            session_key=session_key,
-                            channel="api",
-                            chat_id=API_CHAT_ID,
-                            on_stream=_on_stream,
-                            on_stream_end=_on_stream_end,
-                        )
-                    state["usage"] = _response_usage(response)
-                    if not state["emitted"]:
-                        tail = _response_text(response)
-                        if tail.strip():
-                            await queue.put(tail)
-            except Exception:
-                if ceiling is not None and ceiling.expired():
-                    state["error"] = f"Stream exceeded {stream_timeout:g}s limit"
-                    logger.warning(
-                        "OpenAI API stream for session {} hit the {}s ceiling",
-                        session_key,
-                        stream_timeout,
-                    )
-                else:
-                    state["error"] = "stream failed"
-                    logger.exception(
-                        "OpenAI API streaming error for session {}", session_key
-                    )
-            finally:
-                await queue.put(None)
+        task, state = _start_turn(
+            text, media_paths, session_key, lock,
+            on_stream=_on_stream, on_stream_end=_on_stream_end,
+        )
+
+        def _on_done(t: asyncio.Task) -> None:
+            if not t.cancelled() and t.exception() is None:
+                response = t.result()
+                usage.update(_response_usage(response))
+                if not emitted["any"]:
+                    tail = _response_text(response)
+                    if tail.strip():
+                        queue.put_nowait(tail)
+            queue.put_nowait(None)
+
+        task.add_done_callback(_on_done)
 
         async def _gen():
-            task = asyncio.create_task(_run())
+            finished = False
             try:
                 while True:
+                    # While a tool runs no text flows; a comment line keeps
+                    # proxies and read timeouts from dropping the connection.
                     try:
                         async with asyncio.timeout(_SSE_KEEPALIVE_S):
                             token = await queue.get()
@@ -373,26 +431,21 @@ def build_openai_routes(
                     if token is None:
                         break
                     yield _sse_chunk(token, model_name, chunk_id)
-                if state["error"]:
-                    err = {
-                        "error": {"message": state["error"], "type": "server_error"}
-                    }
-                    yield f"data: {json.dumps(err)}\n\n".encode()
+                err = _turn_error(task, state, session_key)
+                if err is not None:
+                    _status, message, err_type = err
+                    frame = {"error": {"message": message, "type": err_type}}
+                    yield f"data: {json.dumps(frame)}\n\n".encode()
                 else:
                     yield _sse_chunk(
-                        "",
-                        model_name,
-                        chunk_id,
-                        finish_reason="stop",
-                        usage=state["usage"],
+                        "", model_name, chunk_id, finish_reason="stop", usage=usage,
                     )
                     yield _SSE_DONE
+                finished = True
             finally:
-                # Client disconnect cancels the generator; take the turn down too.
-                if not task.done():
-                    task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await task
+                if not finished:
+                    # The client left: the stream ends, the turn does not.
+                    _abandon(task, state)
 
         return StreamingResponse(
             _gen(),
