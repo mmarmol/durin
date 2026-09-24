@@ -871,7 +871,13 @@ Read at runtime (mostly in the runner / loop):
   channel-agnostic. The TUI publishes to the bus like a channel. The CLI's
   single-message mode, cron jobs, the automations judge, the OpenAI-compatible
   `/v1` endpoint and the SDK use `process_direct` for a one-shot turn that
-  mirrors `_dispatch`'s lease-and-reload semantics.
+  mirrors `_dispatch`'s lease-and-reload semantics. For the length of the turn
+  the caller's task is registered under the session key with the running
+  turns, so `/stop` and the chat stop route can cancel it and shutdown's drain
+  bounds it — cancelled, never journaled, since it has no inbound message to
+  replay. The caller's own task is registered, not a child task, so ContextVars
+  the turn sets (the message tool's delivered flag, which cron reads to avoid
+  delivering twice) reach the caller.
 - **Webui** drives the same loop through the `websocket` channel, which adds
   streaming segments, the `_turn_end` signal, and background title generation.
   Generated titles are validated before persisting (reasoning models can leak

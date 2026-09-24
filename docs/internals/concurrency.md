@@ -426,7 +426,8 @@ The snapshot is bound by a cost contract:
 - **In-memory only.** It reads the two `ResizableSemaphore` gates, the
   `SubagentManager`'s live task set, and `AgentLoop._active_tasks` — never disk.
   Because a global view must not touch session files, the `work` list enumerates
-  only the in-memory execution units (interactive turns + running sub-agents);
+  only the in-memory execution units (interactive turns, direct turns from
+  `process_direct` — `/v1`, cron, automation judges — and running sub-agents);
   workflow *runs* live in on-disk manifests (read per-session by
   `durin/agent/background_tasks.py`) and are intentionally not enumerated
   globally. Workflow-driven work still appears as its turns/sub-agents, and the

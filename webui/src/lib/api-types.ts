@@ -1767,7 +1767,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Stop the running turn of a webui conversation */
+        /** Stop the running turn of a webui or /v1 conversation */
         post: operations["chat_stop"];
         delete?: never;
         options?: never;

@@ -104,7 +104,8 @@ curl -X POST http://127.0.0.1:8765/api/v1/sessions/websocket:report-42/stop \
 
 Answers `{"stopped": <tasks cancelled>}`; watchers see `turn_end` with
 `outcome: "stopped"`. Disconnecting from the stream never stops a turn — this
-route is how you do.
+route is how you do. It also stops a turn of the
+[OpenAI-compatible API](openai-api.md): use the key `api:<session_id>`.
 
 ### Send and stream in one call
 

@@ -51,9 +51,12 @@ The API is OpenAI-shaped but **session-oriented**, and that difference matters:
   rejected with 400.
 - **`session_id` picks the conversation.** Send it as a top-level field; the
   turn lands in the durin session `api:<session_id>`, which persists across
-  requests and across gateway restarts, and shows up in the web dashboard like
-  any other chat. Omit it and everything shares one `api:default` session.
-- **`model` is optional.** If sent, it must match the id from `GET /v1/models`.
+  requests and across gateway restarts. The web dashboard lists it and shows it
+  read-only (continue it through this API; for conversations you can also
+  drive from the dashboard, use [durin's API](api.md)). Omit it and everything
+  shares one `api:default` session.
+- **`model` is optional.** If sent, it must match the id `GET /v1/models`
+  reports — the configured model's name, not `"durin"`.
 - **Client-defined tools are rejected.** durin runs its own tools inside the
   turn; a request carrying `tools`, `tool_choice`, `functions`, or
   `function_call` gets a 400 rather than silently ignoring them.
@@ -61,7 +64,8 @@ The API is OpenAI-shaped but **session-oriented**, and that difference matters:
   image URLs are rejected — the gateway does not fetch URLs on a caller's
   behalf.
 - **Other files** go through `multipart/form-data` with the fields `message`,
-  `session_id`, and one or more `files` parts.
+  `session_id`, `model` (optional), and one or more `files` parts. A multipart
+  request is always answered without streaming.
 
 ### curl
 
@@ -75,9 +79,10 @@ curl http://127.0.0.1:8765/v1/chat/completions -H "Authorization: Bearer $DURIN_
 from openai import OpenAI
 
 client = OpenAI(base_url="http://127.0.0.1:8765/v1", api_key=DURIN_TOKEN)
+model = client.models.list().data[0].id  # the configured model
 
 reply = client.chat.completions.create(
-    model="durin",
+    model=model,
     messages=[{"role": "user", "content": "summarize my open tickets"}],
     extra_body={"session_id": "agent-billing"},
     timeout=180,
@@ -100,12 +105,20 @@ read timeouts don't mistake a busy turn for a dead connection.
 
 What the stream carries is the assistant's text as it is generated. Tool runs
 happen server-side inside the turn and are not emitted as separate events — the
-narration durin writes between tool calls arrives as ordinary content.
+narration durin writes between tool calls arrives as ordinary content. (To see
+tool calls and progress as they happen, use [durin's API](api.md), whose event
+stream carries them.)
 
 A successful stream ends with a `finish_reason: "stop"` chunk followed by
 `data: [DONE]`. If the turn fails mid-stream, the last frame is an
 `{"error": ...}` object and `[DONE]` is **not** sent, so a client can tell a
 truncated stream from a complete one.
+
+Closing the connection ends the stream, **not the turn**: durin finishes it and
+saves it to the session, where your next request on that `session_id` finds it
+(that request waits for it first). A request whose turn had not started yet —
+it was still waiting behind another request on the same `session_id` — is
+dropped instead, so a retrying client does not queue duplicate turns.
 
 ## Usage
 
@@ -117,9 +130,12 @@ frame after it.
 
 ## Timeouts
 
-A **non-streaming** request is capped by `gateway.api_request_timeout` (default
-`120.0` seconds) and answers `504` when it runs over. Raise it for tool-heavy
-work, or stream instead:
+A **non-streaming** request waits up to `gateway.api_request_timeout` (default
+`120.0` seconds) for its answer and answers `504` when it runs over — but the
+turn keeps running and is saved to the session, as when a stream disconnects.
+If the answer comes back empty, durin retries once, with a second wait of the
+same length, before answering a fallback message. Raise the timeout for
+tool-heavy work, or stream instead:
 
 ```json
 {
@@ -131,16 +147,26 @@ work, or stream instead:
 
 Give a non-streaming client a timeout comfortably above the server's.
 
-A **streaming** request is not cut for taking long — a turn that keeps working
-keeps its stream. A turn that gets stuck is stopped by durin's own limits (a
-model that goes silent, a tool that runs past its timeout, the cap on tool
-iterations per turn) and ends with the error frame described above.
-`gateway.api_stream_timeout` (default `3600.0` seconds; `0` disables it) is a
-hard ceiling on top of that, for a turn that keeps working without end; hitting
-it also ends with an error frame and no `[DONE]`. The clock starts when the
-turn gets its session, not while it waits behind another request.
+A turn is not cut for taking long — a turn that keeps working keeps its
+stream. A turn that gets stuck is stopped by durin's own limits (a model that
+goes silent, a tool that runs past its timeout, the cap on tool iterations per
+turn). `gateway.api_turn_timeout` (default `3600.0` seconds; `0` disables it)
+is a hard ceiling on top of that for every turn, streaming or not: hitting it
+answers `504` (`Turn exceeded …s limit`) or ends the stream with that error
+frame and no `[DONE]`. The clock starts when the turn gets its session, not
+while it waits behind another request.
 
-Closing the connection cancels the turn in progress.
+## Stopping a turn
+
+```bash
+curl -X POST http://127.0.0.1:8765/api/v1/sessions/api:agent-billing/stop -H "Authorization: Bearer $DURIN_TOKEN"
+```
+
+Answers `{"stopped": <tasks cancelled>}` (the token needs `chat:write`). The
+request waiting on that turn answers `409` with `type: "turn_stopped"`, or a
+stream ends with an `{"error": {"message": "Turn was stopped", "type":
+"turn_stopped"}}` frame and no `[DONE]`. The route addresses the session by
+`api:<session_id>`, so it cannot reach a `session_id` containing `/`.
 
 Requests to the same `session_id` are processed one at a time — a second call
 waits for the first to finish. Use distinct session ids for genuinely

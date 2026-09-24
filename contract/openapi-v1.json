@@ -11609,7 +11609,7 @@
             "description": "Success"
           }
         },
-        "summary": "Stop the running turn of a webui conversation",
+        "summary": "Stop the running turn of a webui or /v1 conversation",
         "x-required-scope": "chat:write"
       }
     },
