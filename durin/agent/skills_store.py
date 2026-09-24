@@ -853,24 +853,84 @@ def write_skill_edit(
             "verdict": scan.after, "findings": scan.findings}
 
 
+def gate_skill_edit(workspace: Path, name: str, *, old: str, new: str, rationale: str,
+                    file: str = "SKILL.md") -> dict:
+    """Plan and scan one bounded skill edit, and decide whether it may write
+    directly: a ``manual`` skill never does (its owner decides); an ``auto``
+    skill does only when the write's scan needs no review. Every caller that
+    gates an edit — autonomous curation and the interactive edit tool alike —
+    shares this one decision, so "auto and no review → write, else go through
+    approval" is made in one place.
+
+    Returns ``{"error"}``, or ``{"plan", "scan", "write"}`` where ``scan`` is
+    ``None`` for a manual skill (nothing was scanned; the caller never writes
+    it) and ``write`` is True only when the caller may call
+    ``write_skill_edit`` straight away."""
+    plan = plan_skill_edit(workspace, name, old=old, new=new, rationale=rationale, file=file)
+    if "error" in plan:
+        return plan
+    if plan["mode"] == "manual":
+        return {"plan": plan, "scan": None, "write": False}
+    scan = scan_skill_write(plan["skill_dir"], {file: plan["after"]})
+    return {"plan": plan, "scan": scan, "write": not scan.needs_review}
+
+
 def apply_skill_edit(
     workspace: Path, name: str, *, old: str, new: str, rationale: str,
     file: str = "SKILL.md", attribution: "Attribution | None" = None,
 ) -> dict:
     """A bounded skill edit made with no person to ask (curation's ``evolve``).
+
     A ``manual`` skill is the user's: the edit comes back as a proposed diff and
-    nothing is written. An ``auto`` skill is edited."""
-    plan = plan_skill_edit(workspace, name, old=old, new=new, rationale=rationale, file=file)
-    if "error" in plan:
-        return plan
+    nothing is written. An ``auto`` skill is edited when its scan needs no
+    review. Otherwise the skills judge may clear a ``caution`` result; failing
+    that, a pending ``skill_edit`` approval request is filed and nothing is
+    written. The decision runs on its own event loop, so this must not be
+    called from a coroutine."""
+    gate = gate_skill_edit(workspace, name, old=old, new=new, rationale=rationale, file=file)
+    if "error" in gate:
+        return gate
+    plan = gate["plan"]
     if plan["mode"] == "manual":
         return {
             "proposed": True, "mode": "manual", "name": name, "file": file,
             "note": "skill is manual; it was not changed — its owner decides edits to it",
             "preview": _preview(plan["before"], plan["after"]),
         }
+    if gate["write"]:
+        return write_skill_edit(workspace, name, old=old, new=new, rationale=rationale,
+                                file=file, attribution=attribution)
+    from durin.agent.approval_kinds_skills import request_edit_autonomously
+    return request_edit_autonomously(workspace, name, old=old, new=new,
+                                     rationale=rationale, file=file,
+                                     attribution=attribution, plan=plan, scan=gate["scan"])
+
+
+def _scan_refusal(scan: "WriteScan", what: str) -> dict:
+    """The result of a write the scan refused; nothing was written."""
+    reasons = "; ".join(f"{f['detail']} ({f['where']})"
+                        for f in (scan.new_findings or scan.findings)[:3])
+    return {"error": f"{what} refused: the security scan of the result is "
+                     f"{scan.after} — {reasons}",
+            "scan_blocked": True, "verdict": scan.after, "findings": scan.findings}
+
+
+def apply_accepted_edit(workspace: Path, name: str, *, old: str, new: str, rationale: str,
+                        file: str = "SKILL.md",
+                        attribution: "Attribution | None" = None) -> dict:
+    """An edit a person accepted after reading its diff (a skill suggestion
+    accepted in the web UI). The acceptance is the owner's consent, so a
+    ``manual`` skill is written. The rule for a person's write still applies: an
+    edit that makes the skill dangerous is refused with its findings; a
+    ``caution`` one lands and its findings are returned."""
+    plan = plan_skill_edit(workspace, name, old=old, new=new, rationale=rationale, file=file)
+    if "error" in plan:
+        return plan
+    scan = scan_skill_write(plan["skill_dir"], {file: plan["after"]})
+    if scan.needs_review and scan.after == "dangerous":
+        return _scan_refusal(scan, "edit")
     return write_skill_edit(workspace, name, old=old, new=new, rationale=rationale,
-                            file=file, attribution=attribution)
+                            file=file, attribution=attribution, approved_by="user")
 
 
 def save_skill_content(workspace: Path, name: str, content: str,

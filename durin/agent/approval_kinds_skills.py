@@ -475,6 +475,35 @@ def edit_judge(workspace: Path, name: str, *, file: str, content: str,
                      findings=scan.findings, settings=settings, llm_invoke=llm_invoke)
 
 
+# --- autonomous edits -------------------------------------------------------------
+
+def request_edit_autonomously(workspace: Path, name: str, *, old: str, new: str,
+                              rationale: str, file: str,
+                              attribution: "ss.Attribution | None", plan: dict,
+                              scan: "ss.WriteScan") -> dict:
+    """File an edit made with nobody to ask, or let the judge clear it.
+
+    Runs the decision flow on its own event loop, so it is called from worker
+    threads that own no loop (the nightly curation pass). Returns the landed
+    edit's result when the judge cleared it; otherwise an error naming the
+    pending request, so the caller counts the edit as not applied."""
+    attribution = attribution or ss.Attribution(actor="curation")
+    prepared = prepare_skill_edit(workspace, name, old=old, new=new, rationale=rationale,
+                                  file=file, attribution=attribution, plan=plan, scan=scan)
+    judge = edit_judge(workspace, name, file=file, content=plan["after"],
+                       settings=judge_settings())
+    outcome = asyncio.run(approval.request(
+        Path(workspace), prepared,
+        session_key=attribution.session or AUTONOMOUS_SKILLS_SESSION,
+        deps=ExecDeps(), judge=judge))
+    if outcome.status == "applied":
+        return {**(outcome.result or {}), "approval_id": outcome.record["id"],
+                "approved_by": "judge"}
+    return {"error": outcome.message,
+            "pending_approval": (outcome.record or {}).get("id"),
+            "verdict": scan.after, "findings": scan.findings}
+
+
 def register_all() -> None:
     """Register the three skill kinds with the approval executor registry."""
     register("skill_install", hash_fn=install_hash, execute_fn=execute_install)
