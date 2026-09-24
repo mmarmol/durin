@@ -23,6 +23,11 @@ FALLBACK = _Fallback()
 
 _WAITERS: dict[str, asyncio.Future] = {}
 
+# session_key -> (kind, ref) for the live waiter registered on it. "question"
+# waiters take the user's text verbatim; "approval" waiters (ref = the
+# approval record id) accept only a yes/no verdict, parsed by the loop.
+_KINDS: dict[str, tuple[str, str | None]] = {}
+
 # True while AgentLoop.run()'s inbound consumer is active — the only thing
 # that can ever resolve a waiter. Without it (single-message mode, tests),
 # blocking would stall for the full timeout with nobody listening.
@@ -55,8 +60,12 @@ def can_block(session_key: str | None) -> bool:
     return human_reachable(session_key)
 
 
-def create(session_key: str) -> asyncio.Future:
+def create(session_key: str, *, kind: str = "question", ref: str | None = None) -> asyncio.Future:
     """Register a fresh waiter for *session_key*, replacing any stale one.
+
+    ``kind`` tells the loop how to read the reply: a ``question`` takes the
+    user's text verbatim, an ``approval`` (``ref`` = the record id) takes
+    only a yes/no verdict parsed by the server.
 
     Must be called from a coroutine: the future binds to the RUNNING loop
     (``get_event_loop`` could return a stale policy loop under test
@@ -67,7 +76,18 @@ def create(session_key: str) -> asyncio.Future:
         stale.cancel()
     fut: asyncio.Future = asyncio.get_running_loop().create_future()
     _WAITERS[session_key] = fut
+    _KINDS[session_key] = (kind, ref)
     return fut
+
+
+def waiting_kind(session_key: str) -> str | None:
+    """``question`` / ``approval`` for a live waiter, else None."""
+    return _KINDS[session_key][0] if is_waiting(session_key) and session_key in _KINDS else None
+
+
+def waiting_ref(session_key: str) -> str | None:
+    """The approval record id a live approval waiter is for, else None."""
+    return _KINDS[session_key][1] if is_waiting(session_key) and session_key in _KINDS else None
 
 
 def is_waiting(session_key: str) -> bool:
@@ -81,6 +101,7 @@ def _pop_live(session_key: str) -> asyncio.Future | None:
     if fut is None:
         return None
     del _WAITERS[session_key]
+    _KINDS.pop(session_key, None)
     if fut.done():
         return None
     return fut
@@ -108,6 +129,7 @@ def discard(session_key: str, fut: asyncio.Future) -> None:
     """Remove *fut* from the registry if it is still the registered waiter."""
     if _WAITERS.get(session_key) is fut:
         del _WAITERS[session_key]
+        _KINDS.pop(session_key, None)
 
 
 def reset() -> None:
@@ -117,4 +139,5 @@ def reset() -> None:
         if not fut.done():
             fut.cancel()
     _WAITERS.clear()
+    _KINDS.clear()
     _CONSUMER_ACTIVE = False

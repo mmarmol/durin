@@ -1602,6 +1602,16 @@ class AgentLoop:
             return False
         if not text:
             return False
+        if pending_answers.waiting_kind(session_key) == "approval":
+            # An approval takes only a verdict. Anything else is a normal
+            # message: the request stays pending instead of being guessed.
+            from durin.workflow.approval import parse_approval_reply
+
+            verdict = parse_approval_reply(text)
+            if verdict is None:
+                pending_answers.fallback(session_key)
+                return False
+            return pending_answers.resolve(session_key, verdict)
         return pending_answers.resolve(session_key, text)
 
     async def _maybe_publish_interaction_fallback(

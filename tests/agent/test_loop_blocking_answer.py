@@ -86,3 +86,23 @@ async def test_no_waiter_means_no_consumption(tmp_path):
     loop = _make_loop(tmp_path)
     key = loop._effective_session_key(_msg("x"))
     assert loop._maybe_resolve_pending_answer(_msg("hello"), key) is False
+
+
+@pytest.mark.asyncio
+async def test_yes_resolves_an_approval_waiter_as_approve(tmp_path):
+    loop = _make_loop(tmp_path)
+    key = loop._effective_session_key(_msg("x"))
+    fut = pa.create(key, kind="approval", ref="r1")
+    assert loop._maybe_resolve_pending_answer(_msg("sí"), key) is True
+    assert await fut == "approve"
+
+
+@pytest.mark.asyncio
+async def test_non_verdict_reply_falls_back_and_continues(tmp_path):
+    loop = _make_loop(tmp_path)
+    key = loop._effective_session_key(_msg("x"))
+    fut = pa.create(key, kind="approval", ref="r1")
+    # «sí pero cambiá X» is not a verdict: the approval stays pending and the
+    # message goes on as a normal message.
+    assert loop._maybe_resolve_pending_answer(_msg("sí pero cambiá X"), key) is False
+    assert await fut is pa.FALLBACK
