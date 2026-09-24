@@ -433,8 +433,21 @@ def install_judge(qdir: Path, *, action: str, findings: list[dict], settings: Ju
                   llm_invoke: Any = None) -> approval.JudgeFn | None:
     """The judge for a skill install, or None when it may not decide: only a
     ``confirm`` install is eligible (``block`` means dangerous, which only a
-    person can accept), and only while the judge is enabled."""
+    person can accept), and only while the judge is enabled.
+
+    Eligibility is re-derived from ``install_gate`` here rather than trusting
+    the caller's ``action``: ``install_gate`` raises the fresh deterministic
+    scan by whatever verdict is cached in the quarantine's ``.scan.json`` — a
+    prior judge finding the AST scanner alone cannot reproduce — which a bare
+    ``scan_skill`` on the tree (the generic check in ``_judge_tree``) would
+    miss. ``source``/``allowlist`` are passed as empty: they only affect
+    ``decide_action``'s ``confirm``/``allow`` split, never its ``block``
+    branch, which fires on the dangerous verdict alone — the one thing this
+    check cares about."""
     if action != "confirm":
+        return None
+    gate = si.install_gate(Path(qdir), source="", allowlist=[])
+    if gate["action"] == "block" or gate["verdict"] == "dangerous":
         return None
     return _judge_fn(lambda: nullcontext(Path(qdir)), findings=findings,
                      settings=settings, llm_invoke=llm_invoke)
