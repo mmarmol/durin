@@ -1863,6 +1863,11 @@ class AgentLoop:
         mode folds every channel's conversation into one session."""
         return UNIFIED_SESSION_KEY if self._unified_session else session_key
 
+    async def cancel_session_turns(self, key: str) -> int:
+        """Cancel the running turns and subagents registered under *key*;
+        return how many were cancelled."""
+        return await self._cancel_active_tasks(key)
+
     async def _dispatch_priority_command(self, msg: InboundMessage, raw: str) -> None:
         """Run a priority command (/stop, /status, /restart) outside the turn
         lock, keyed like the turns it acts on."""

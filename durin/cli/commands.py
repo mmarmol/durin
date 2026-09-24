@@ -2144,6 +2144,9 @@ def _run_gateway(
                     tool_registry_resolver=lambda: agent.tools,
                     on_config_changed=agent.reload_app_config,
                     on_default_changed=agent.apply_default_model_live,
+                    chat_channel_resolver=lambda: channels.get_channel("websocket"),
+                    stop_turn=agent.cancel_session_turns,
+                    turn_key=agent.bus_turn_key,
                 )
                 # Static token lives on the websocket channel config.
                 _ws_cfg_u = getattr(config.channels, "websocket", None)

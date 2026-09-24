@@ -622,6 +622,7 @@ class WebSocketChannel(BaseChannel):
             cron_service=self._cron_service,
             bus=bus,
             subagent_manager=None,
+            chat_channel_resolver=lambda: self,
         )
 
     def _endpoint_workspace(self) -> Path:
