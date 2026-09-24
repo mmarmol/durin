@@ -169,7 +169,10 @@ automation interceptors once. For each message it decides the routing in order:
 - **Priority command?** `commands.is_priority(raw)` matches the exact-match,
   no-lock tier (`/stop`, `/restart`, `/status`). These are dispatched
   immediately via `_dispatch_command_inline` so `/stop` can cancel a running
-  turn — it never queues behind the lock.
+  turn — it never queues behind the lock. They run under the effective session
+  key, the key the turns they act on are registered under, so `/stop` and
+  `/status` work with `unified_session` on; a command typed inside a direct
+  session (`process_direct`) uses that session's own key.
 - **Pending answer?** If a turn is blocked on `ask_user_question`, a plain-text
   reply is consumed as the answer (`_maybe_resolve_pending_answer`).
 - **Mid-turn follow-up?** If the effective session key already has pending
@@ -751,9 +754,15 @@ consolidating (`compaction.deferred` records either):
 
 Once the state machine returns, `_dispatch` publishes the outbound message,
 serializes any pending interactive payloads for channels that cannot render
-structured tool output, and for websocket clients emits a `_turn_end` signal
-(carrying turn latency and goal state) and, for the webui, schedules background
-title generation. The outbound's metadata carries `_stop_reason` (the
+structured tool output, and for the webui schedules background title
+generation. For websocket clients every turn ends with exactly one `_turn_end`
+signal, on whichever path it exits: `outcome` is `completed` here, `stopped`
+when the turn is cancelled (including while it is still queued behind the
+session lock, the interactive lane or the ceiling), and `failed` on an error,
+on a busy session lease, or on a failure outside the turn body. It carries the
+turn latency, the goal state, and the `client_msg_id` of the message that
+opened the turn, so a client waiting on its own message can tell its turn from
+an earlier one. The outbound's metadata carries `_stop_reason` (the
 runner's stop reason) so a direct caller such as the cron runner can tell a
 provider failure delivered as reply text from an answer. A `turn.latency` breakdown is emitted by the state-machine
 driver as soon as the machine reaches DONE — total wall-clock split into
@@ -846,9 +855,11 @@ Read at runtime (mostly in the runner / loop):
   managed through the webui Personas settings section — see the Surfaces
   subsection in "Personas & SOULs" above.
 - **Bus** — any channel publishes/consumes through `MessageBus`; the loop is
-  channel-agnostic. The CLI/TUI also use `process_direct` for a synchronous
-  one-shot turn that mirrors `_dispatch`'s lease-and-reload semantics.
-- **Webui/API** drive the same loop through the `websocket` channel, which adds
+  channel-agnostic. The TUI publishes to the bus like a channel. The CLI's
+  single-message mode, cron jobs, the automations judge, the OpenAI-compatible
+  `/v1` endpoint and the SDK use `process_direct` for a one-shot turn that
+  mirrors `_dispatch`'s lease-and-reload semantics.
+- **Webui** drives the same loop through the `websocket` channel, which adds
   streaming segments, the `_turn_end` signal, and background title generation.
   Generated titles are validated before persisting (reasoning models can leak
   meta text instead of a title); invalid output retries once, then falls back

@@ -76,4 +76,4 @@ manage MCP servers. Append `--help` to any group for its full command list.
   to record. In the webui: attach a clip or use the 🎙 mic button.
 - `@<prefix>` — fuzzy-complete a workspace file
 - `!cmd` / `!!cmd` — shell shortcut (publishes / silent)
-- `Alt+Enter` — newline; `Enter` — submit; `Esc` — cancel turn
+- `Alt+Enter` — newline; `Enter` — submit; `Esc` — cancel turn (also with `unified_session` on)

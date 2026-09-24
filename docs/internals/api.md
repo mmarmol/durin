@@ -193,9 +193,13 @@ carries `prevCursor: null` since it is not byte-paged.
 
 Display-transcript appends are buffered: the WS channel enqueues each streamed
 event into a process-wide `TranscriptWriter`, which batches them to disk with
-one fsync per session file per drain (≤ ~100 ms behind the stream). The
-webui-thread route flushes the writer for the requested key before reading, so
-a reloading client always sees every event enqueued up to that moment.
+one fsync per session file per drain (≤ ~100 ms behind the stream). A turn's
+output (replies, stream deltas, reasoning, `turn_end`) is enqueued whether or
+not any client is subscribed to the chat, so a turn that finishes while the tab
+is closed is there when the user returns; live-state frames (`goal_status`,
+queued notices) are never persisted. The webui-thread route flushes the writer
+for the requested key before reading, so a reloading client always sees every
+event enqueued up to that moment.
 
 ### Webhook trigger ingress
 
