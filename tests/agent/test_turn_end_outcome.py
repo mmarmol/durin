@@ -103,3 +103,28 @@ async def test_non_websocket_turns_publish_no_turn_end(tmp_path: Path) -> None:
         channel="telegram", sender_id="u1", chat_id="t1", content="hi",
     ))
     assert _turn_ends(await _drain(bus)) == []
+
+
+@pytest.mark.asyncio
+async def test_turn_cancelled_while_waiting_publishes_stopped_turn_end(tmp_path: Path) -> None:
+    """A turn stopped before it started (queued behind the session lock, the
+    interactive lane or the ceiling) still ends for the client."""
+    loop, bus = _loop(tmp_path)
+    lock = loop._session_locks.setdefault("websocket:chat1", asyncio.Lock())
+    await lock.acquire()
+    task = asyncio.create_task(loop._dispatch(_msg()))
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    lock.release()
+    assert [e.metadata["outcome"] for e in _turn_ends(await _drain(bus))] == ["stopped"]
+
+
+@pytest.mark.asyncio
+async def test_turn_that_crashes_outside_the_turn_body_publishes_failed_turn_end(tmp_path: Path) -> None:
+    loop, bus = _loop(tmp_path)
+    loop.sessions.reload = MagicMock(side_effect=OSError("disk gone"))  # type: ignore[method-assign]
+    with pytest.raises(OSError):
+        await loop._dispatch(_msg())
+    assert [e.metadata["outcome"] for e in _turn_ends(await _drain(bus))] == ["failed"]

@@ -1831,21 +1831,11 @@ class WebSocketChannel(BaseChannel):
         # Snapshot the subscriber set so ConnectionClosed cleanups mid-iteration are safe.
         conns = list(self._subs.get(msg.chat_id, ()))
         if not conns:
-            if (
-                msg.metadata.get("_progress")
-                or msg.metadata.get("_turn_end")
-                or msg.metadata.get("_session_updated")
-                or msg.metadata.get("_goal_status")
-                or msg.metadata.get("_goal_state_sync")
-                or msg.metadata.get("_message_queued")
-                or msg.metadata.get("_queued_consumed")
-            ):
-                self.logger.debug("no active subscribers for chat_id={}", msg.chat_id)
-            else:
-                self.logger.warning("no active subscribers for chat_id={}", msg.chat_id)
-            # Fall through: live-state frames are dropped by their senders, but a
-            # reply or a turn_end is still persisted, so a client that reattaches
-            # rebuilds the turn from the transcript.
+            # Nobody watches this chat right now. Fall through anyway: live-state
+            # frames are dropped by their senders, but a reply or a turn_end is
+            # still persisted, so a client that reattaches rebuilds the turn from
+            # the transcript.
+            self.logger.debug("no active subscribers for chat_id={}", msg.chat_id)
         if msg.metadata.get("_goal_state_sync"):
             blob = msg.metadata.get("goal_state")
             await self.send_goal_state(msg.chat_id, blob if isinstance(blob, dict) else {"active": False})

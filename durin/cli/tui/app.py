@@ -817,7 +817,11 @@ class DurinApp(App[None]):
         if self._agent_loop is None:
             return
         try:
-            session_key = f"{self._cli_channel}:{self._cli_chat_id}"
+            # The loop registers the turn under its bus key (unified mode
+            # folds every channel into one session).
+            session_key = self._agent_loop.bus_turn_key(
+                f"{self._cli_channel}:{self._cli_chat_id}"
+            )
             cancel = getattr(self._agent_loop, "_cancel_active_tasks", None)
             if cancel is not None:
                 await cancel(session_key)
