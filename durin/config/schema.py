@@ -628,19 +628,22 @@ class SkillsHotTierConfig(Base):
 
 
 class SkillJudgeConfig(Base):
-    """LLM semantic-audit pass over an imported skill, after the deterministic
-    AST scan. ``trigger`` decides WHEN it auto-runs:
-    ``off`` (default) — never auto; invoke on-demand per skill ("Audit with LLM").
-    ``uncertain`` — only when the gate is already unsure (carries code / caution /
-    out-of-allowlist), to break the tie; clean allowlisted skills skip it (zero
-    tax). ``always`` — every import. An LLM call per import is overkill for the
-    common case (the human already reviews + approves), hence ``off`` default.
-    Degrades gracefully (skips, never errors/blocks) when no aux model resolves.
-    ``max_severity`` caps how high the judge may raise the verdict: ``caution``
-    (default) lets it force a confirm but never block on its own — only the
-    deterministic rules block. ``model`` names an aux model; empty → default."""
+    """LLM semantic-audit pass over a skill install or edit, after the
+    deterministic scan. ``trigger`` decides WHEN it runs: ``off`` (default) —
+    never auto; still invocable on demand ("Audit with LLM"). ``uncertain`` —
+    only when the deterministic gate is already unsure, to break the tie.
+    ``always`` — every eligible request. Degrades gracefully (skips, never
+    errors/blocks) when no aux model resolves. ``max_severity`` caps how high
+    it may raise a verdict: ``caution`` (default) can force a confirm but
+    never block; only deterministic rules block. Beyond raising severity, it
+    may also clear an eligible request without asking a person: a skill
+    install the gate marked ``confirm``, or an auto-mode skill's edit whose
+    post-edit scan is ``caution`` — only when it read every finding, and only
+    on a strict ``safe`` verdict. It never clears a ``dangerous`` verdict, a
+    manual skill's edit, a dependency install, an MCP action, or exec.
+    ``model`` names an aux model; empty → default."""
 
-    trigger: Literal["off", "uncertain", "always"] = Field(default="off", description='When the LLM audit auto-runs on import: "off" = only on demand, "uncertain" = only when the deterministic gate is unsure, "always" = every import')
+    trigger: Literal["off", "uncertain", "always"] = Field(default="off", description='When the LLM judge auto-runs: "off" = only on demand, "uncertain" = only when the deterministic gate is unsure, "always" = every eligible skill install or edit')
     max_severity: Literal["caution", "dangerous"] = Field(default="caution", description='Cap on how high the judge may raise the verdict: "caution" can force a confirm but never block; only deterministic rules block')
     model: str = Field(default="", description="Aux model name for the judge; empty = default aux model")
     provider: str = Field(default="auto", description='Provider for the judge model; "auto" detects it from the model name among the configured providers (a bare model name is meaningless without its provider)')
