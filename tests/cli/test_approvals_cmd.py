@@ -11,10 +11,30 @@ from __future__ import annotations
 
 from typer.testing import CliRunner
 
+from durin.agent import approval_kinds_skills as kinds
 from durin.agent import approval_store as st
+from durin.agent import skills_store as ss
 from durin.cli.commands import app
 
 runner = CliRunner()
+
+
+def _skill(ws, name: str, body: str, mode: str = "manual"):
+    d = ws / "skills" / name
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: d\nmetadata:\n  durin:\n    mode: {mode}\n---\n{body}",
+        encoding="utf-8")
+    return d
+
+
+def _prep_edit(ws, name: str, old: str, new: str, file: str = "SKILL.md"):
+    plan = ss.plan_skill_edit(ws, name, old=old, new=new, rationale="r", file=file)
+    scan = ss.scan_skill_write(plan["skill_dir"], {file: plan["after"]})
+    return kinds.prepare_skill_edit(
+        ws, name, old=old, new=new, rationale="r", file=file,
+        attribution=ss.Attribution(actor="agent", session="cron:nightly"),
+        plan=plan, scan=scan)
 
 
 def test_list_approve_and_discard(tmp_path, monkeypatch):
@@ -86,20 +106,48 @@ def test_reject_with_tty_succeeds(tmp_path, monkeypatch):
     assert st.get(ws, rec["id"])["status"] == "rejected"
 
 
-def test_approve_with_tty_but_no_executor_exits_nonzero(tmp_path, monkeypatch):
-    # No approval_kinds_* module is registered for "skill_edit" yet in this
-    # branch (later tasks add them), so approving past the TTY gate must
-    # still fail loudly rather than silently pretend to succeed.
+def test_approve_a_request_whose_target_changed_is_stale(tmp_path, monkeypatch):
+    # A real skill_edit record, hashed against the file as it was when filed.
+    # The file changes before it's decided, so the executor's re-hash must
+    # not match: approving must refuse the run, not apply a stale review.
+    kinds.register_all()
     monkeypatch.setenv("DURIN_HOME", str(tmp_path))
     monkeypatch.setattr("durin.cli.commands._stdin_is_interactive", lambda: True)
     ws = tmp_path / "workspace"
     ws.mkdir()
-    rec = st.create(ws, kind="skill_edit", summary="edit skill 'e'", detail={},
-                    payload={}, change_hash="h", session_key="cron:x", context="autonomous")
+    skill_dir = _skill(ws, "mine", "step one\n")
+    prep = _prep_edit(ws, "mine", "step one", "step two")
+    rec = st.create(ws, kind=prep.kind, summary=prep.summary, detail=prep.detail,
+                    payload=prep.payload, change_hash=prep.change_hash,
+                    session_key="cron:nightly", context="autonomous")
+
+    (skill_dir / "SKILL.md").write_text(
+        (skill_dir / "SKILL.md").read_text() + "more\n", encoding="utf-8")
 
     out = runner.invoke(app, ["approvals", "approve", rec["id"]])
     assert out.exit_code == 1
-    assert st.get(ws, rec["id"])["status"] == "failed"
+    assert st.get(ws, rec["id"])["status"] == "stale"
+    assert "step two" not in (skill_dir / "SKILL.md").read_text()
+
+
+def test_approve_applies_a_real_edit(tmp_path, monkeypatch):
+    kinds.register_all()
+    monkeypatch.setenv("DURIN_HOME", str(tmp_path))
+    monkeypatch.setattr("durin.cli.commands._stdin_is_interactive", lambda: True)
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    skill_dir = _skill(ws, "mine", "step one\n")
+    prep = _prep_edit(ws, "mine", "step one", "step two")
+    rec = st.create(ws, kind=prep.kind, summary=prep.summary, detail=prep.detail,
+                    payload=prep.payload, change_hash=prep.change_hash,
+                    session_key="cron:nightly", context="autonomous")
+
+    out = runner.invoke(app, ["approvals", "approve", rec["id"]])
+    assert out.exit_code == 0, out.output
+    assert st.get(ws, rec["id"])["status"] == "applied"
+    assert "step two" in (skill_dir / "SKILL.md").read_text()
+    msg = ss._store(ws).log(max_entries=1)[0].message
+    assert "Approved-by: operator" in msg
 
 
 def test_discard_missing_id_exits_nonzero(tmp_path, monkeypatch):
