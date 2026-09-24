@@ -464,9 +464,12 @@ use `Principal.local()`, which carries `Scope.ADMIN` and is never checked agains
 a token. Remote callers receive a `Principal` built from the verified token's
 stored scopes. `principal.require(Scope.X)` raises `ForbiddenError` if the
 principal lacks the scope (or `ADMIN`). The scope catalog is declared in the
-`Scope` enum and covers paired read/write scopes for every service domain:
-settings, secrets, skills, cron, sessions, config, memory, MCP, workflows,
-automations, and system.
+`Scope` enum: paired read/write scopes for the service domains (settings,
+secrets, skills, cron, sessions, config, memory, MCP, workflows, automations,
+system) plus two write-only powers — `channels:write` (speaking as durin in a
+conversation with an external party) and `chat:write` (conversing with durin
+through the native chat routes and `/v1`; an API-originated turn never carries
+a person's authority to approve privileged actions).
 
 `AuthService` (`durin/service/auth.py`) owns token lifecycle routes; it calls
 `principal.require(Scope.SYSTEM_WRITE)` before issuing or revoking tokens, so
@@ -495,7 +498,7 @@ only callers with system-write authority can manage other tokens.
 | `_guard_memory_mutation` | `durin/agent/tools/shell.py` | Blocks rm/mv/cp/tee/sed -i/dd/redirect targeting `memory/` paths |
 | `_build_env` | `durin/agent/tools/shell.py` | Constructs minimal subprocess env + `allowed_env_keys` + scoped secrets |
 | `Principal` | `durin/service/principal.py` | Immutable identity + authorization: `subject`, `scopes` (frozenset), `kind`; `require()` raises `ForbiddenError` |
-| `Scope` | `durin/service/principal.py` | Enum of permission scopes (`domain:read`/`domain:write` pairs + `admin`) |
+| `Scope` | `durin/service/principal.py` | Enum of permission scopes (`domain:read`/`domain:write` pairs, the write-only `channels:write` and `chat:write`, and `admin`) |
 | `ApiTokenStore` | `durin/security/api_tokens.py` | File-backed hashed token store (mode 0600); `issue()` returns plaintext once; `resolve()` uses HMAC timing-safe compare |
 | `SSRFGuardTransport` | `durin/security/network.py` | `httpx.AsyncHTTPTransport` subclass; resolves + validates hostname per request, pins connection to IP, re-validates on redirects |
 | `resolve_and_validate` | `durin/security/network.py` | Resolves host to public IP; raises `SSRFError` for private/unresolvable targets |
@@ -552,8 +555,8 @@ durin secret migrate                  # move legacy config-embedded credentials 
 The web dashboard exposes secret management under **Settings → Secrets** (view
 names, set/delete entries, manage scopes). Skill security configuration is
 available under **Settings → Skills → Security** (allowlist patterns, LLM judge
-trigger). API tokens are managed under **Settings → API Tokens** (issue, list,
-revoke).
+trigger). The dashboard has no API-token screen: tokens are managed with
+`durin auth token issue|list|revoke` or the `/api/v1/auth/tokens` routes above.
 
 ## 7 Curated rationale
 

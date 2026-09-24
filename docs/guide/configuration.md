@@ -75,7 +75,7 @@ disk.
 | `durin config show --raw` | Show config with secrets unmasked |
 | `durin config get agents.defaults.model` | Print one effective value (defaults applied) |
 | `durin config schema memory.owner` | Describe one key from the schema: type, default, constraints, description |
-| `durin config set gateway.port 19000` | Set one value (validated before write) |
+| `durin config set channels.websocket.port 19000` | Set one value (validated before write) |
 | `durin config edit` | Open config in `$EDITOR`; restore on validation failure |
 | `durin config import ~/.durin_backup` | Import a config and migrate plaintext secrets |
 
@@ -741,12 +741,16 @@ Periodic refresh of the durin-owned MCP catalog (top-level config field, peer of
 
 ### `gateway`
 
-HTTP gateway and embedded web dashboard settings.
+Gateway process settings. The dashboard, the WebSocket chat and the HTTP APIs
+(`/api/v1`, `/v1`) are served on the websocket channel's address,
+`channels.websocket.host` / `channels.websocket.port` (default
+`127.0.0.1:8765`); `gateway.host` / `gateway.port` only serve the `/health`
+endpoint.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `host` | `127.0.0.1` | Bind address; local-only by default |
-| `port` | `18790` | Gateway listen port |
+| `host` | `127.0.0.1` | Bind address of the `/health` endpoint; local-only by default |
+| `port` | `18790` | Port of the `/health` endpoint |
 | `daemon` | `false` | Run detached with a PID file and log file; easier to debug when off |
 | `webui_enabled` | `true` | Auto-enable the websocket channel so the embedded web dashboard is served |
 | `public_url` | `null` | How this gateway is reached from the outside (e.g. `https://durin.tailXXXX.ts.net`) |
@@ -938,13 +942,17 @@ durin config set memory.dream.post_compaction false
 durin config set memory.dream.on_session_close false
 ```
 
-### Change the gateway port
+### Change the dashboard and API port
+
+The dashboard, the WebSocket and the HTTP APIs listen on the websocket
+channel's port:
 
 ```
-durin config set gateway.port 19000
+durin config set channels.websocket.port 19000
 ```
 
-Then restart the gateway:
+(`gateway.port` is only the `/health` endpoint's port.) Then restart the
+gateway:
 
 ```
 durin gateway restart

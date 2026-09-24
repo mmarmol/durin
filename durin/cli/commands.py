@@ -1002,7 +1002,10 @@ def _gateway_apply_verbose() -> None:
 @gateway_app.callback()
 def gateway_root(
     ctx: typer.Context,
-    port: int | None = typer.Option(None, "--port", "-p", help="Gateway port"),
+    port: int | None = typer.Option(
+        None, "--port", "-p",
+        help="Port of the /health endpoint (the dashboard and APIs listen on channels.websocket.port)",
+    ),
     workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
     config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
