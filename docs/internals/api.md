@@ -294,7 +294,11 @@ The WebSocket route calls `chat_ws_endpoint`, which authenticates via
 `StarletteConnectionAdapter` — a thin adapter satisfying the same
 `ConnectionAdapter` interface as the raw `websockets`-backed channel — and handed
 to `channel._run_connection()`. The chat path is read from
-`channel._expected_path()` at factory time, not hardcoded.
+`channel._expected_path()` at factory time, not hardcoded. The adapter reports a
+send to a socket that is already gone as `ConnectionClosed` (Starlette raises
+`WebSocketDisconnect` or `RuntimeError`), which the channel handles by dropping
+the subscription and carrying on — so a message sent just before the client
+left still reaches the agent instead of being aborted mid-processing.
 
 ### OpenAPI contract
 
