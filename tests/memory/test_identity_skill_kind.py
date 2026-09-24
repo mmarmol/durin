@@ -42,3 +42,10 @@ def test_skills_section_reframed_as_working_set_with_search_nudge():
     assert ("if nothing" in t or "if none" in t or "don't cover" in t
             or "doesn't cover" in t)
     assert ("before" in t and ("proceed" in t or "conclud" in t or "say" in t))
+
+def test_skills_section_leaves_install_approval_to_the_tool():
+    t = _norm(_SKILLS_SECTION)
+    # A flagged install is approved through the tool, never by the agent asking.
+    assert "ask_user_question" not in t
+    assert "asks the user to approve" in t
+    assert "do not reach the same result another way" in t

@@ -29,4 +29,6 @@ def test_import_skill_drives_the_tool():
     # `needs` values, a pending install pointing at `durin approvals`), never
     # a model-writable authority field to pass through install (there is none).
     assert "confirm" in body and "durin approvals" in body
-    assert "override" not in body
+    # approval is the tool's and the user's, never an argument
+    assert "approv" in body
+    assert "override=" not in body and "confirm=" not in body
