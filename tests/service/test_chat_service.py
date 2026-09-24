@@ -114,3 +114,25 @@ async def test_send_mints_a_client_msg_id_when_absent() -> None:
     msg = await bus.consume_inbound()
     assert res.client_msg_id
     assert msg.metadata["client_msg_id"] == res.client_msg_id
+
+
+@pytest.mark.asyncio
+async def test_stop_reaches_v1_turns_under_their_own_key() -> None:
+    # /v1 turns run under api:<session_id> even in unified mode.
+    seen = []
+
+    async def _stop(key: str) -> int:
+        seen.append(key)
+        return 1
+
+    svc, _ = _svc(stop_turn=_stop, turn_key=lambda k: "unified:default")
+    res = await svc.stop(ChatStopCommand(key="api:agent-1"), _WRITER)
+    assert (res.stopped, seen) == (1, ["api:agent-1"])
+
+
+@pytest.mark.asyncio
+async def test_messages_still_cannot_be_sent_to_v1_sessions() -> None:
+    svc, bus = _svc()
+    with pytest.raises(ValidationFailedError):
+        await svc.send(ChatSendCommand(key="api:agent-1", content="hi"), _WRITER)
+    assert bus.inbound_size == 0

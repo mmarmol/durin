@@ -161,11 +161,21 @@ class ChatService:
         scope=Scope.CHAT_WRITE.value,
         request_model=ChatStopCommand,
         response_model=ChatStopResult,
-        summary="Stop the running turn of a webui conversation",
+        summary="Stop the running turn of a webui or /v1 conversation",
     )
     async def stop(self, cmd: ChatStopCommand, principal: Principal) -> ChatStopResult:
         principal.require(Scope.CHAT_WRITE)
-        webui_chat_id(cmd.key)
+        from durin.api.openai_routes import API_SESSION_PREFIX
+
+        # A /v1 turn runs under its own api:<session_id> key even in unified
+        # mode; a webui turn runs under the bus key (which unified mode folds).
+        if cmd.key.startswith(API_SESSION_PREFIX):
+            target = cmd.key
+        else:
+            webui_chat_id(cmd.key)
+            target = None
         if self._stop_turn is None or self._turn_key is None:
             raise UnavailableError("the agent loop is not available")
-        return ChatStopResult(stopped=await self._stop_turn(self._turn_key(cmd.key)))
+        if target is None:
+            target = self._turn_key(cmd.key)
+        return ChatStopResult(stopped=await self._stop_turn(target))
