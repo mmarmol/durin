@@ -1016,6 +1016,38 @@ class WebSocketChannel(BaseChannel):
         # raises; the writer batches the disk fsyncs off the event loop.
         get_transcript_writer().enqueue(f"websocket:{chat_id}", wire)
 
+    async def _echo_user_message(
+        self,
+        chat_id: str,
+        user_obj: dict[str, Any],
+        media: list[str] | None,
+        client_msg_id: Any,
+    ) -> None:
+        """Show a user message live to everyone watching the conversation.
+
+        A conversation can be driven from the API or from another tab, and a
+        watcher must see the question, not only the answer. The sender's own
+        client already shows the message it sent, so the frame carries the
+        ``client_msg_id`` it reconciles by; a message without one (the
+        webui's ``/stop``) has nothing to reconcile with and is not echoed."""
+        if not isinstance(client_msg_id, str) or not client_msg_id:
+            return
+        frame: dict[str, Any] = {
+            "event": "user",
+            "chat_id": chat_id,
+            "text": user_obj.get("text", ""),
+            "client_msg_id": client_msg_id[:64],
+        }
+        if user_obj.get("origin"):
+            frame["origin"] = user_obj["origin"]
+        if media:
+            media_urls = self._augment_transcript_user_media(list(media))
+            if media_urls:
+                frame["media_urls"] = media_urls
+        raw = json.dumps(frame, ensure_ascii=False)
+        for connection in list(self._subs.get(chat_id, ())):
+            await self._safe_send_to(connection, raw, label=" user ")
+
     def _augment_transcript_user_media(self, paths: list[str]) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
         for pstr in paths:
@@ -1055,6 +1087,7 @@ class WebSocketChannel(BaseChannel):
             if meta.get("origin"):
                 user_obj["origin"] = meta["origin"]
             self._try_append_webui_transcript(chat_id, user_obj)
+            await self._echo_user_message(chat_id, user_obj, media, meta.get("client_msg_id"))
         await super()._handle_message(
             sender_id,
             chat_id,

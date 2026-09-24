@@ -8,6 +8,7 @@ HTTP front door mounts; stopping it cancels the turn in the agent loop.
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -44,6 +45,15 @@ def webui_chat_id(key: str) -> str:
     if not _is_valid_chat_id(chat_id):
         raise ValidationFailedError("invalid conversation id", details={"key": key})
     return chat_id
+
+
+def with_client_msg_id(cmd: ChatSendCommand) -> ChatSendCommand:
+    """Give *cmd* a ``client_msg_id`` when the caller sent none. It keys the
+    live echo of the message to the conversation's watchers and the
+    ``turn_end`` that answers it, and is returned so the caller can use it."""
+    if cmd.client_msg_id:
+        return cmd
+    return cmd.model_copy(update={"client_msg_id": uuid.uuid4().hex})
 
 
 class ChatMediaItem(ServiceModel):
@@ -107,6 +117,7 @@ class ChatService:
         status_code=202,
     )
     async def send(self, cmd: ChatSendCommand, principal: Principal) -> ChatSendResult:
+        cmd = with_client_msg_id(cmd)
         chat_id, media_paths = self.check(cmd, principal)
         await self.deliver(cmd, principal, chat_id, media_paths)
         return ChatSendResult(key=cmd.key, client_msg_id=cmd.client_msg_id)

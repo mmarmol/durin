@@ -2058,6 +2058,7 @@
     },
     "queuedChip": "대기 중 — 현재 작업이 끝나면 처리됩니다",
     "steerChip": "조정",
+    "apiOriginChip": "API를 통해 전송됨",
     "chips": {
       "spawn": "생성 {{name}}",
       "tasks": "작업 {{action}}{{id}}",

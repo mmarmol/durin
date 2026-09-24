@@ -136,6 +136,11 @@ export function MessageBubble({
             {t("message.steerChip")}
           </span>
         ) : null}
+        {message.origin === "api" ? (
+          <span className="ml-auto inline-flex w-fit items-center gap-1 rounded-full border border-border/60 px-2 py-0.5 text-[11px] text-muted-foreground">
+            {t("message.apiOriginChip")}
+          </span>
+        ) : null}
         {onEdit ? (
           <button
             type="button"

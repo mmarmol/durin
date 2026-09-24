@@ -425,6 +425,29 @@ export function useDurinStream(
         return;
       }
 
+      if (ev.event === "user") {
+        // Someone else sent this to the conversation (another tab, or a
+        // program through the API). This client's own messages are already
+        // on screen under their client_msg_id, so those echoes are skipped.
+        const echoId = ev.client_msg_id;
+        setMessages((prev) =>
+          echoId && prev.some((m) => m.id === echoId)
+            ? prev
+            : [
+                ...prev,
+                {
+                  id: echoId ?? crypto.randomUUID(),
+                  role: "user",
+                  content: ev.text,
+                  createdAt: Date.now(),
+                  ...(ev.origin ? { origin: ev.origin } : {}),
+                  ...(ev.media_urls && ev.media_urls.length > 0 ? { media: ev.media_urls } : {}),
+                },
+              ],
+        );
+        return;
+      }
+
       if (ev.event === "message_queued") {
         // Server confirmed the message was deferred until the turn ends.
         if (ev.client_msg_id) {

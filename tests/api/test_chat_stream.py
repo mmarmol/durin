@@ -293,7 +293,8 @@ def test_gateway_app_routes_send_and_events(tmp_path, monkeypatch) -> None:
 
     r = client.post("/api/v1/sessions/websocket:c9/messages", json={"content": "hello"}, headers=hdr)
     assert r.status_code == 202
-    assert r.json() == {"key": "websocket:c9", "client_msg_id": None}
+    assert r.json()["key"] == "websocket:c9"
+    assert r.json()["client_msg_id"]
     assert bus.inbound_size == 1
 
     r = client.get("/api/v1/sessions/slack:C1/events", headers=hdr)

@@ -1152,4 +1152,45 @@ describe("useDurinStream", () => {
     expect(result.current.messages.every((message) => !message.isStreaming)).toBe(true);
     expect(onTurnEnd).toHaveBeenCalledTimes(1);
   });
+
+  it("shows a user message another client sent to the conversation", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(() => useDurinStream("chat-echo", EMPTY_MESSAGES), {
+      wrapper: wrap(fake.client),
+    });
+
+    act(() => {
+      fake.emit("chat-echo", {
+        event: "user",
+        chat_id: "chat-echo",
+        text: "from a script",
+        client_msg_id: "api-1",
+        origin: "api",
+      });
+    });
+
+    expect(result.current.messages).toHaveLength(1);
+    expect(result.current.messages[0]).toMatchObject({
+      id: "api-1",
+      role: "user",
+      content: "from a script",
+      origin: "api",
+    });
+  });
+
+  it("does not duplicate a message this client already shows", () => {
+    const fake = fakeClient();
+    const own: import("@/lib/types").UIMessage[] = [
+      { id: "mine-1", role: "user", content: "hi", createdAt: 1 },
+    ];
+    const { result } = renderHook(() => useDurinStream("chat-own", own), {
+      wrapper: wrap(fake.client),
+    });
+
+    act(() => {
+      fake.emit("chat-own", { event: "user", chat_id: "chat-own", text: "hi", client_msg_id: "mine-1" });
+    });
+
+    expect(result.current.messages).toHaveLength(1);
+  });
 });

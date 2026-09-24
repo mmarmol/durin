@@ -104,3 +104,13 @@ async def test_stop_unavailable_without_a_loop() -> None:
     svc, _ = _svc()
     with pytest.raises(UnavailableError):
         await svc.stop(ChatStopCommand(key="websocket:c1"), _WRITER)
+
+
+@pytest.mark.asyncio
+async def test_send_mints_a_client_msg_id_when_absent() -> None:
+    # It keys the live echo of the message and the turn_end that answers it.
+    svc, bus = _svc()
+    res = await svc.send(ChatSendCommand(key="websocket:c1", content="hi"), _WRITER)
+    msg = await bus.consume_inbound()
+    assert res.client_msg_id
+    assert msg.metadata["client_msg_id"] == res.client_msg_id

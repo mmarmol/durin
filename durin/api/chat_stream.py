@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import uuid
 from collections import deque
 from collections.abc import AsyncIterator, Callable
 from typing import Any
@@ -133,7 +132,7 @@ def build_chat_stream_routes(
     """Routes for watching webui conversations over SSE and the send route's
     streaming form. List them ahead of the generic ``/api/v1`` table (first
     match wins)."""
-    from durin.service.chat import ChatSendCommand, webui_chat_id
+    from durin.service.chat import ChatSendCommand, webui_chat_id, with_client_msg_id
 
     def _authorize(request: Request, *scopes: Scope) -> Principal | Response:
         principal = resolve_principal(request.headers)
@@ -220,8 +219,7 @@ def build_chat_stream_routes(
             return _problem(ValidationFailedError(
                 "commands answer without a turn; send them without Accept: text/event-stream",
             ))
-        if cmd.client_msg_id is None:
-            cmd = cmd.model_copy(update={"client_msg_id": uuid.uuid4().hex})
+        cmd = with_client_msg_id(cmd)
         try:
             chat_id, media_paths = service.check(cmd, auth)
         except DomainError as exc:
