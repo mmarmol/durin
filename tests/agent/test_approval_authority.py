@@ -176,16 +176,22 @@ async def test_skill_install_deps_stages_without_a_human(tmp_path, monkeypatch) 
 
 
 @pytest.mark.asyncio
-async def test_skill_edit_stages_an_applied_edit_without_a_human(tmp_path) -> None:
+async def test_skill_edit_files_a_request_without_a_human(tmp_path) -> None:
+    from durin.agent import approval_store
     from durin.agent.tools.context import RequestContext
     from durin.agent.tools.skill_edit import SkillEditTool
 
+    d = tmp_path / "skills" / "demo"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text("---\nname: demo\ndescription: d\n---\nstep one\n")
     tool = SkillEditTool(workspace=tmp_path)
     tool.set_context(RequestContext(channel="system", chat_id="c",
                                     session_key="reactive_dream"))
-    out = await tool.execute(name="demo", old="a", new="b", confirm=True)
-    assert "staged_for_approval" in out
-    assert approval.list_pending(tmp_path, "skills")[0]["action"] == "edit"
+    out = await tool.execute(name="demo", old="step one", new="step two", rationale="r")
+    assert out["status"] == "pending"
+    assert (d / "SKILL.md").read_text().endswith("step one\n")
+    [rec] = approval_store.list_records(tmp_path, status="pending", include_legacy=False)
+    assert rec["kind"] == "skill_edit"
 
 
 def test_cli_lists_and_discards_pending(tmp_path) -> None:
