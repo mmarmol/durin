@@ -1864,10 +1864,18 @@ class AgentLoop:
         ``_cancel_active_tasks``) and ValueError-safe (membership-checked
         before remove).
         """
+        self._unregister_turn_task(task, key)
+        self._in_flight_messages.pop(task, None)
+
+    def _unregister_turn_task(self, task: asyncio.Task, key: str) -> None:
+        """Remove *task* from *key*'s running turns, and the key once empty:
+        direct turns use a fresh key per run (``cron:<id>:run:<ms>``), so empty
+        lists would otherwise pile up for the life of the process."""
         tasks = self._active_tasks.get(key)
         if tasks is not None and task in tasks:
             tasks.remove(task)
-        self._in_flight_messages.pop(task, None)
+        if tasks is not None and not tasks:
+            self._active_tasks.pop(key, None)
 
     def bus_turn_key(self, session_key: str) -> str:
         """The key a bus turn for *session_key* is registered under: unified
@@ -4268,6 +4276,15 @@ class AgentLoop:
                     channel=channel, chat_id=chat_id,
                     content=_SESSION_BUSY_NOTICE,
                 )
+            # Registered like a bus turn so /stop and the stop route can cancel
+            # it and shutdown's drain bounds it (the drain journals only turns
+            # with an in-flight inbound message, so it is cancelled, never
+            # replayed). The caller's own task is registered — not a child
+            # task — so ContextVars the turn sets (the message tool's
+            # "already delivered" flag, read by cron afterwards) reach it.
+            turn = asyncio.current_task()
+            if turn is not None:
+                self._active_tasks.setdefault(session_key, []).append(turn)
             try:
                 self.sessions.reload(session_key)  # load-per-turn under the lease
                 return await self._process_message(
@@ -4280,4 +4297,8 @@ class AgentLoop:
                     persona=persona,
                 )
             finally:
+                if turn is not None:
+                    # Only this registration: when the caller is itself a bus
+                    # turn, its in-flight message must stay for the journal.
+                    self._unregister_turn_task(turn, session_key)
                 await turn_lease_cm.__aexit__(None, None, None)
