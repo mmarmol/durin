@@ -50,8 +50,9 @@ def test_traversal_paths_rejected_before_anything_lands(tmp_path):
     assert not (tmp_path / "escape.py").exists()
 
 
-def test_no_files_path_unchanged_no_scan_stamp(tmp_path):
+def test_no_files_path_is_scanned_and_stamped_safe(tmp_path):
+    # A prose-only skill is instructions the agent follows, so it is scanned too.
     out = dream_create_skill(tmp_path, "convert-notes", BODY, "r")
     assert out.get("ok") is True
     md = (tmp_path / "skills" / "convert-notes" / "SKILL.md").read_text(encoding="utf-8")
-    assert "scan_verdict" not in md
+    assert "scan_verdict: safe" in md

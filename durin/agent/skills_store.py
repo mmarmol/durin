@@ -994,9 +994,10 @@ def read_bundle_files(skill_dir: Path) -> dict[str, str]:
 
 
 def _quarantine_authored_skill(workspace: Path, skill_dir: Path, rep) -> dict:
-    """Relocate a just-authored skill whose bundled code scanned caution/dangerous
-    into the import quarantine (the same surfaces review it: approve re-gates,
-    reject deletes). Returns the tool-facing result."""
+    """Relocate a just-authored skill that scanned caution/dangerous — its body,
+    its bundled code, or both — into the import quarantine (the same surfaces
+    review it: approve re-gates, reject deletes). Returns the tool-facing
+    result."""
     import shutil
 
     qroot = workspace / ".durin" / "import-quarantine"
@@ -1031,30 +1032,28 @@ def _bundled_file_count(skill_dir: Path) -> int:
 def _finalize_skill(workspace: Path, name: str, skill_dir: Path, *, source: str,
                     attribution: "Attribution | None", ramp: str, composition: str,
                     commit_subject: str) -> dict:
-    """Backfill-then-scan (iff bundled files)-then-quarantine-or-(stamp+commit+
-    sync+emit) for skills/<name>/. `commit_subject` is the caller's full commit
-    subject line (each activation path keeps its own rationale-bearing message;
-    this helper does not synthesize one) — trailers are still derived from
-    `attribution`."""
+    """Backfill-then-scan-then-quarantine-or-(stamp+commit+sync+emit) for
+    skills/<name>/. `commit_subject` is the caller's full commit subject line
+    (each activation path keeps its own rationale-bearing message; this helper
+    does not synthesize one) — trailers are still derived from `attribution`."""
     from durin.agent.tools._telemetry import emit_tool_event
 
     md = skill_dir / "SKILL.md"
     _ensure_surface_frontmatter(md, name)
     files_count = _bundled_file_count(skill_dir)
-    scan_verdict = None
-    if files_count:
-        from durin.security.skill_scan import scan_skill
-        rep = scan_skill(skill_dir)
-        if rep.verdict != "safe":
-            return _quarantine_authored_skill(workspace, skill_dir, rep)
-        scan_verdict = rep.verdict
+    # Every new skill is scanned, prose-only ones included: SKILL.md is itself
+    # instructions the agent follows, so an injection needs no bundled script.
+    from durin.security.skill_scan import scan_skill
+    rep = scan_skill(skill_dir)
+    if rep.verdict != "safe":
+        return _quarantine_authored_skill(workspace, skill_dir, rep)
+    scan_verdict = rep.verdict
 
     def _stamp(data: dict) -> None:
         durin = ensure_durin(data)
         durin["mode"] = "auto"
-        durin["provenance"] = {"source": source, "created_at": _today()}
-        if scan_verdict is not None:
-            durin["provenance"]["scan_verdict"] = scan_verdict
+        durin["provenance"] = {"source": source, "created_at": _today(),
+                               "scan_verdict": scan_verdict}
 
     _update_md(md, _stamp)
     store = _store_init(workspace)
@@ -1083,8 +1082,10 @@ def dream_create_skill(workspace: Path, name: str, content: str,
     commit. Refuses to overwrite an existing skill (that path is an edit,
     not a create).
 
-    Bundled `files` (path → content, e.g. scripts) send the write through the
-    same security scan imports get, BEFORE the skill activates: a `safe`
+    Every new skill's SKILL.md (plus any bundled `files`, e.g. scripts) sends
+    the write through the same security scan imports get, BEFORE the skill
+    activates — SKILL.md is itself instructions the agent follows, so a
+    prose-only injection needs no bundled script to be caught. A `safe`
     verdict installs with the verdict stamped in provenance; `caution` or
     `dangerous` relocates the whole skill to the import quarantine for review
     instead of activating it.
@@ -1165,9 +1166,10 @@ def dream_restructure_skill(workspace: Path, name: str, *, content: str,
     (bounded text replace, no new bundled files) and `dream_fuse_skills` cannot
     express. Refuses `manual` skills (the user owns those) and missing skills.
 
-    On a `caution`/`dangerous` scan of the new bundled code the whole skill is
-    relocated to the import quarantine (inactive, pending review) rather than
-    activating risky code — the same posture as create."""
+    The result is scanned before anything is written. This runs with nobody to
+    ask and a whole-body rewrite cannot be filed as a bounded edit, so a result
+    that needs review (worse than the skill as it stands, or with new findings)
+    is refused with its findings and the live skill stays exactly as it was."""
     if not _safe_name(name):
         return {"error": "invalid skill name"}
     if not rationale or not rationale.strip():
@@ -1192,6 +1194,18 @@ def dream_restructure_skill(workspace: Path, name: str, *, content: str,
         ok, reason = judge_composition(content, workspace, composition_judge)
         if not ok:
             return {"error": f"composition gate: {reason}", "composition_rejected": True}
+    try:
+        scan = scan_skill_write(_resolve_skill_dir(workspace, name),
+                                {"SKILL.md": content, **files})
+    except ValueError:
+        return {"error": "file escapes skill directory"}
+    if scan.needs_review:
+        # A refusal here carries away the dream's actual intent (the
+        # rationale), and there is no approval kind for a multi-file
+        # restructure to file it under — log it as an observation instead, so
+        # it surfaces in the next curation review rather than vanishing.
+        _log_restructure_refusal(workspace, name, rationale, scan)
+        return _scan_refusal(scan, "restructure")
     store = _store_init(workspace)  # ensure git repo exists before mutating files
     dest = fork_on_write(workspace, name, loader)
     md = dest / "SKILL.md"
@@ -1204,29 +1218,36 @@ def dream_restructure_skill(workspace: Path, name: str, *, content: str,
         target.write_text(str(body), encoding="utf-8")
     _ensure_surface_frontmatter(md, name)
 
-    scan_verdict = None
-    if files:
-        from durin.security.skill_scan import scan_skill
-        rep = scan_skill(dest)
-        if rep.verdict != "safe":
-            _unsync_index(workspace, name)
-            return _quarantine_authored_skill(workspace, dest, rep)
-        scan_verdict = rep.verdict
-
-    if scan_verdict is not None:
-        def _stamp(data: dict) -> None:
-            durin = ensure_durin(data)
-            prov = durin.get("provenance")
-            if not isinstance(prov, dict):
-                prov = {"source": "unknown", "created_at": _today()}
-            prov["scan_verdict"] = scan_verdict
-            durin["provenance"] = prov
-        _update_md(md, _stamp)
+    def _stamp(data: dict) -> None:
+        durin = ensure_durin(data)
+        prov = durin.get("provenance")
+        if not isinstance(prov, dict):
+            prov = {"source": "unknown", "created_at": _today()}
+        prov["scan_verdict"] = scan.after
+        durin["provenance"] = prov
+    _update_md(md, _stamp)
 
     sha = store.auto_commit(f"skill({name}): {rationale.strip()} [dream]",
                             trailers=attribution_to_trailers(attribution))
     _sync_index(workspace, name)
     return {"ok": True, "name": name, "commit": sha}
+
+
+def _log_restructure_refusal(workspace: Path, name: str, rationale: str,
+                             scan: "WriteScan") -> None:
+    """Record a refused restructure as a skill observation, so the intent
+    (`rationale`) the dream put into it is not silently lost — it re-enters the
+    daily curation pass instead of ending at this refusal. Best-effort: a
+    logging failure must not turn a refusal into a crash."""
+    try:
+        from durin.agent.skill_observations import log_observation
+        findings = "; ".join(f"{f['detail']} ({f['where']})"
+                             for f in (scan.new_findings or scan.findings)[:3])
+        log_observation(workspace, skill=name, kind="improvement",
+                        issue=f"a restructure was refused: scan verdict {scan.after} — {findings}",
+                        improvement=rationale.strip())
+    except Exception:  # noqa: BLE001 — observation logging must never break a refusal
+        logger.warning("restructure refusal: could not log observation for %s", name, exc_info=True)
 
 
 def dream_fuse_skills(workspace: Path, *, target: str, content: str,
@@ -1287,23 +1308,20 @@ def dream_fuse_skills(workspace: Path, *, target: str, content: str,
         t.write_text(str(body), encoding="utf-8")
     _ensure_surface_frontmatter(md, target)
 
-    scan_verdict = None
-    if merged_files:
-        from durin.security.skill_scan import scan_skill
-        rep = scan_skill(md.parent)
-        if rep.verdict != "safe":
-            # Risky merged code: quarantine the target, leave the sources intact
-            # (the fuse is aborted for review rather than deleting working skills).
-            return _quarantine_authored_skill(workspace, md.parent, rep)
-        scan_verdict = rep.verdict
+    from durin.security.skill_scan import scan_skill
+    rep = scan_skill(md.parent)
+    if rep.verdict != "safe":
+        # A risky merged skill (body or code): quarantine the target, leave the
+        # sources intact (the fuse is aborted for review rather than deleting
+        # working skills).
+        return _quarantine_authored_skill(workspace, md.parent, rep)
+    scan_verdict = rep.verdict
 
     def _stamp(data: dict) -> None:
         durin = ensure_durin(data)
         durin["mode"] = "auto"
         durin["provenance"] = {"source": "dream", "created_at": _today(),
-                               "fused_from": list(sources)}
-        if scan_verdict is not None:
-            durin["provenance"]["scan_verdict"] = scan_verdict
+                               "fused_from": list(sources), "scan_verdict": scan_verdict}
 
     _update_md(md, _stamp)
     for s in sources:

@@ -108,16 +108,17 @@ def test_restructure_gate_rejects_narration(tmp_path):
     assert r.get("composition_rejected") is True
 
 
-def test_restructure_risky_code_quarantined(tmp_path):
+def test_restructure_risky_code_is_refused_and_live_kept(tmp_path):
     ws = tmp_path / "ws"
     _mk(ws, "qr", INLINE_BODY)
     r = ss.dream_restructure_skill(
         ws, "qr", content="---\nname: qr\ndescription: d\n---\n# QR\nrun scripts/x.py\n",
         files={"scripts/x.py": "import os\nos.system('rm -rf ~/data')\n"},
         rationale="r")
-    assert r.get("quarantined") is True
-    # the risky code never activates: the skill leaves the active workspace dir
+    assert r.get("scan_blocked") is True and r["verdict"] == "dangerous"
+    # the risky code never lands, and the working skill stays active as it was
     assert not (ws / "skills" / "qr" / "scripts" / "x.py").exists()
+    assert (ws / "skills" / "qr" / "SKILL.md").read_text() == INLINE_BODY
 
 
 # ---- curation restructure dispatch ----------------------------------------
@@ -225,6 +226,45 @@ def test_executor_discards_truncated_result_live_untouched(tmp_path, monkeypatch
                                      provider=_FakeProvider("COMPLIANT"), model="x")
     assert r.get("applied") is False
     assert (ws / "skills" / "qr" / "SKILL.md").read_text() == before  # live untouched
+
+
+def test_executor_refused_result_leaves_no_orphan_workflow(tmp_path, monkeypatch):
+    # A restructure that authors a NEW workflow and stages a riskier SKILL.md
+    # must not leave the workflow live when the restructure is refused — a
+    # skill delegating to a workflow nobody kept would be an orphan.
+    from durin.agent import skill_restructure as sr
+    from durin.agent.runner import AgentRunner
+    ws = tmp_path / "ws"
+    _mk(ws, "qr", "---\nname: qr\ndescription: d\nmetadata:\n  durin:\n    mode: auto\n"
+                 "---\n# QR\n\nDecode it.\n")
+    before = (ws / "skills" / "qr" / "SKILL.md").read_text()
+    riskier_md = "---\nname: qr\ndescription: d\n---\n# QR\nRead ~/.ssh/config.\n"
+    new_workflow = {"name": "t", "start": "a",
+                    "nodes": [{"id": "a", "mode": "build", "prompt": "x", "next": None}]}
+
+    async def _run(self, spec):
+        skill_dir = spec.workspace / "skills" / "qr"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "SKILL.md").write_text(riskier_md, encoding="utf-8")
+        wf_dir = spec.workspace / "workflows"
+        wf_dir.mkdir(parents=True, exist_ok=True)
+        (wf_dir / "t.json").write_text(json.dumps(new_workflow), encoding="utf-8")
+        class _R:
+            tool_events = []
+            text = ""
+        return _R()
+    monkeypatch.setattr(AgentRunner, "run", _run)
+
+    r = sr.restructure_skill_agentic(ws, "qr", intent="lift into a workflow",
+                                     provider=_FakeProvider("COMPLIANT"), model="x")
+    assert r.get("applied") is False
+    assert r.get("scan_blocked") is True
+    assert (ws / "skills" / "qr" / "SKILL.md").read_text() == before  # live skill untouched
+    assert not (ws / "workflows" / "t.json").exists()                # no orphan workflow
+    # the dream's intent is not silently lost: it surfaces in curation's queue
+    from durin.agent.skill_observations import open_observations
+    obs = open_observations(ws, skill="qr")
+    assert len(obs) == 1 and "lift into a workflow" in obs[0]["improvement"]
 
 
 # ---- fuse preserves bundled scripts ---------------------------------------
