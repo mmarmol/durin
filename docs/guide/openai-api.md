@@ -12,6 +12,11 @@ It is served on the websocket channel's host and port (`channels.websocket`,
 default `127.0.0.1:8765` — the same address as the dashboard), not on
 `gateway.port`, which only answers `/health`.
 
+The API exists only while the websocket channel runs. The gateway turns that
+channel on by itself while the dashboard is enabled (`gateway.webui_enabled`,
+the default); if you switched the dashboard off, set
+`channels.websocket.enabled` to `true`.
+
 Start the gateway first — the API lives inside it, there is no separate server
 process:
 
