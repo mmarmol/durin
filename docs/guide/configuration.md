@@ -750,8 +750,8 @@ HTTP gateway and embedded web dashboard settings.
 | `daemon` | `false` | Run detached with a PID file and log file; easier to debug when off |
 | `webui_enabled` | `true` | Auto-enable the websocket channel so the embedded web dashboard is served |
 | `public_url` | `null` | How this gateway is reached from the outside (e.g. `https://durin.tailXXXX.ts.net`) |
-| `api_request_timeout` | `120.0` | Per-request timeout in seconds for non-streaming requests to the OpenAI-compatible `/v1` chat endpoint |
-| `api_stream_timeout` | `3600.0` | Hard ceiling in seconds on one streaming `/v1` chat turn; `0` disables. A stuck turn is stopped earlier by durin's own limits, so this only bounds a turn that keeps working |
+| `api_request_timeout` | `120.0` | How long, in seconds, a non-streaming request to the OpenAI-compatible `/v1` chat endpoint waits for its answer; on overrun it answers 504 and the turn still completes and is saved |
+| `api_turn_timeout` | `3600.0` | Hard ceiling in seconds on one `/v1` chat turn, streaming or not; `0` disables. A stuck turn is stopped earlier by durin's own limits, so this only bounds a turn that keeps working |
 
 Set `public_url` when the webui is reached over a tailnet, VPN, or public
 HTTPS domain rather than `localhost` or a plain `host:port`. It has two
