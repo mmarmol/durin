@@ -2144,6 +2144,9 @@ def _run_gateway(
                     tool_registry_resolver=lambda: agent.tools,
                     on_config_changed=agent.reload_app_config,
                     on_default_changed=agent.apply_default_model_live,
+                    chat_channel_resolver=lambda: channels.get_channel("websocket"),
+                    stop_turn=agent.cancel_session_turns,
+                    turn_key=agent.bus_turn_key,
                 )
                 # Static token lives on the websocket channel config.
                 _ws_cfg_u = getattr(config.channels, "websocket", None)
@@ -3443,11 +3446,12 @@ def approvals(
     config: str | None = typer.Option(None, "--config", "-c", help="Config file path."),
     workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace path."),
 ) -> None:
-    """Privileged actions an autonomous run recorded for your approval.
+    """Privileged actions recorded for your approval.
 
-    A cron job, dream, workflow or sub-agent has no user to ask, so an action
-    that would add or change executable state (an MCP server, a skill, a
-    dependency install) is recorded instead of run. This is where they wait.
+    A cron job, dream, workflow or sub-agent has no user to ask, and a turn
+    driven by an API token has no person's authority, so an action that would
+    add or change executable state (an MCP server, a skill, a dependency
+    install) is recorded instead of run. This is where they wait.
     """
     from durin.agent import approval
 

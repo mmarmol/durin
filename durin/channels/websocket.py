@@ -622,6 +622,7 @@ class WebSocketChannel(BaseChannel):
             cron_service=self._cron_service,
             bus=bus,
             subagent_manager=None,
+            chat_channel_resolver=lambda: self,
         )
 
     def _endpoint_workspace(self) -> Path:
@@ -1015,6 +1016,38 @@ class WebSocketChannel(BaseChannel):
         # raises; the writer batches the disk fsyncs off the event loop.
         get_transcript_writer().enqueue(f"websocket:{chat_id}", wire)
 
+    async def _echo_user_message(
+        self,
+        chat_id: str,
+        user_obj: dict[str, Any],
+        media: list[str] | None,
+        client_msg_id: Any,
+    ) -> None:
+        """Show a user message live to everyone watching the conversation.
+
+        A conversation can be driven from the API or from another tab, and a
+        watcher must see the question, not only the answer. The sender's own
+        client already shows the message it sent, so the frame carries the
+        ``client_msg_id`` it reconciles by; a message without one (the
+        webui's ``/stop``) has nothing to reconcile with and is not echoed."""
+        if not isinstance(client_msg_id, str) or not client_msg_id:
+            return
+        frame: dict[str, Any] = {
+            "event": "user",
+            "chat_id": chat_id,
+            "text": user_obj.get("text", ""),
+            "client_msg_id": client_msg_id[:64],
+        }
+        if user_obj.get("origin"):
+            frame["origin"] = user_obj["origin"]
+        if media:
+            media_urls = self._augment_transcript_user_media(list(media))
+            if media_urls:
+                frame["media_urls"] = media_urls
+        raw = json.dumps(frame, ensure_ascii=False)
+        for connection in list(self._subs.get(chat_id, ())):
+            await self._safe_send_to(connection, raw, label=" user ")
+
     def _augment_transcript_user_media(self, paths: list[str]) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
         for pstr in paths:
@@ -1048,7 +1081,13 @@ class WebSocketChannel(BaseChannel):
             }
             if media:
                 user_obj["media_paths"] = list(media)
+            # Who sent it: a message from an API token is labelled as such, so
+            # the conversation does not present a program's text as the
+            # person's own words.
+            if meta.get("origin"):
+                user_obj["origin"] = meta["origin"]
             self._try_append_webui_transcript(chat_id, user_obj)
+            await self._echo_user_message(chat_id, user_obj, media, meta.get("client_msg_id"))
         await super()._handle_message(
             sender_id,
             chat_id,
@@ -1435,6 +1474,73 @@ class WebSocketChannel(BaseChannel):
             paths.append(saved)
         return paths, None
 
+    def validate_chat_message(
+        self, chat_id: object, content: object, raw_media: object,
+    ) -> list[str]:
+        """Check one chat message and save its media; return the media paths.
+
+        Shared by the WebSocket ``message`` frame and the HTTP send route, so
+        both accept exactly the same messages. Failures raise
+        ``ValidationFailedError`` whose ``details`` carry the same tokens the
+        WebSocket reports in its ``error`` frames."""
+        if not _is_valid_chat_id(chat_id):
+            raise ValidationFailedError("invalid chat_id", details={"detail": "invalid chat_id"})
+        if not isinstance(content, str):
+            raise ValidationFailedError("missing content", details={"detail": "missing content"})
+        media_paths: list[str] = []
+        if raw_media is not None:
+            if not isinstance(raw_media, list):
+                raise ValidationFailedError(
+                    "image_rejected", details={"detail": "image_rejected", "reason": "malformed"},
+                )
+            media_paths, reason = self._save_envelope_media(raw_media)
+            if reason is not None:
+                raise ValidationFailedError(
+                    "image_rejected", details={"detail": "image_rejected", "reason": reason},
+                )
+        # Image-only turns are allowed (content may be empty when media is attached).
+        if not content.strip() and not media_paths:
+            raise ValidationFailedError("missing content", details={"detail": "missing content"})
+        return media_paths
+
+    async def publish_chat_message(
+        self,
+        *,
+        sender_id: str,
+        chat_id: str,
+        content: str,
+        media_paths: list[str],
+        remote: Any = None,
+        webui: bool = False,
+        steer: bool = False,
+        client_msg_id: str | None = None,
+        origin: str | None = None,
+    ) -> None:
+        """Hand one validated chat message to the agent (see ``validate_chat_message``).
+
+        ``origin`` names a non-person sender (``"api"`` for an API token); the
+        agent treats a turn with such input as having no person to approve
+        privileged actions."""
+        metadata: dict[str, Any] = {"remote": remote}
+        if webui:
+            metadata["webui"] = True
+        # Mid-turn semantics: a steer injects into the running turn;
+        # a plain message defers until the turn's final response.
+        if steer:
+            metadata["steer"] = True
+        if client_msg_id:
+            metadata["client_msg_id"] = client_msg_id[:64]
+        if origin:
+            metadata["origin"] = origin
+        await self._handle_message(
+            sender_id=sender_id,
+            chat_id=chat_id,
+            content=content,
+            media=media_paths or None,
+            metadata=metadata,
+            is_dm=False,
+        )
+
     async def _dispatch_envelope(
         self,
         connection: Any,
@@ -1460,56 +1566,26 @@ class WebSocketChannel(BaseChannel):
             return
         if t == "message":
             cid = envelope.get("chat_id")
-            content = envelope.get("content")
-            if not _is_valid_chat_id(cid):
-                await self._send_event(connection, "error", detail="invalid chat_id")
+            try:
+                media_paths = self.validate_chat_message(
+                    cid, envelope.get("content"), envelope.get("media"),
+                )
+            except ValidationFailedError as exc:
+                await self._send_event(connection, "error", **exc.details)
                 return
-            if not isinstance(content, str):
-                await self._send_event(connection, "error", detail="missing content")
-                return
-
-            raw_media = envelope.get("media")
-            media_paths: list[str] = []
-            if raw_media is not None:
-                if not isinstance(raw_media, list):
-                    await self._send_event(
-                        connection, "error",
-                        detail="image_rejected", reason="malformed",
-                    )
-                    return
-                media_paths, reason = self._save_envelope_media(raw_media)
-                if reason is not None:
-                    await self._send_event(
-                        connection, "error",
-                        detail="image_rejected", reason=reason,
-                    )
-                    return
-
-            # Allow image-only turns (content may be empty when media is attached).
-            if not content.strip() and not media_paths:
-                await self._send_event(connection, "error", detail="missing content")
-                return
-
             # Auto-attach on first use so clients can one-shot without a separate attach.
             self._attach(connection, cid)
             await self._hydrate_after_subscribe(cid)
-            metadata: dict[str, Any] = {"remote": getattr(connection, "remote", None)}
-            if envelope.get("webui") is True:
-                metadata["webui"] = True
-            # Mid-turn semantics: a steer injects into the running turn;
-            # a plain message defers until the turn's final response.
-            if envelope.get("steer") is True:
-                metadata["steer"] = True
             client_msg_id = envelope.get("client_msg_id")
-            if isinstance(client_msg_id, str) and client_msg_id:
-                metadata["client_msg_id"] = client_msg_id[:64]
-            await self._handle_message(
+            await self.publish_chat_message(
                 sender_id=client_id,
                 chat_id=cid,
-                content=content,
-                media=media_paths or None,
-                metadata=metadata,
-                is_dm=False,
+                content=envelope["content"],
+                media_paths=media_paths,
+                remote=getattr(connection, "remote", None),
+                webui=envelope.get("webui") is True,
+                steer=envelope.get("steer") is True,
+                client_msg_id=client_msg_id if isinstance(client_msg_id, str) else None,
             )
             return
         if t == "audio_transcribe":

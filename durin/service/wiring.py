@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 from loguru import logger
 
@@ -31,6 +31,9 @@ def build_service_registry(
     tool_registry_resolver: Callable[[], Any] | None = None,
     on_config_changed: Callable[[], None] | None = None,
     on_default_changed: Callable[[], None] | None = None,
+    chat_channel_resolver: Callable[[], Any] | None = None,
+    stop_turn: Callable[[str], Awaitable[int]] | None = None,
+    turn_key: Callable[[str], str] | None = None,
 ) -> ServiceRegistry:
     """Construct a registry with all domain services wired to real deps.
 
@@ -59,6 +62,13 @@ def build_service_registry(
     what the running agent can call; surfaces without a loop leave it ``None`` and
     the catalog falls back to loader discovery (core built-ins only).
 
+    ``chat_channel_resolver`` / ``stop_turn`` / ``turn_key`` back
+    ``ChatService``: the resolver returns the live websocket channel (the
+    websocket channel's own shim registry passes itself), ``stop_turn`` is
+    ``AgentLoop.cancel_session_turns`` and ``turn_key`` is
+    ``AgentLoop.bus_turn_key``. Without a resolver the send route reports
+    unavailable; without the loop callables the stop route does.
+
     ``automations_runtime`` is optional: the unified gateway passes the live
     ``AutomationsRuntime`` so ``AutomationsService`` can fire/answer runs;
     surfaces without one (the websocket channel's shim registry) leave it
@@ -74,6 +84,7 @@ def build_service_registry(
     from durin.service.channels_slack import SlackService
     from durin.service.channels_telegram import TelegramService
     from durin.service.channels_whatsapp import WhatsAppService
+    from durin.service.chat import ChatService
     from durin.service.commands import CommandsService
     from durin.service.config import ConfigService
     from durin.service.cron import CronService
@@ -118,6 +129,8 @@ def build_service_registry(
     registry.register("secrets", SecretsService())
     registry.register("cron", CronService(cron_scheduler=cron_service))
     registry.register("sessions", SessionsService(session_manager=session_manager))
+    registry.register("chat", ChatService(
+        channel_resolver=chat_channel_resolver, stop_turn=stop_turn, turn_key=turn_key))
     registry.register("settings", SettingsService(on_default_changed=on_default_changed))
     registry.register("config", ConfigService(
         on_config_changed=on_config_changed, channel_manager=channel_manager))

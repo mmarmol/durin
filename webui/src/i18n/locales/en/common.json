@@ -2160,6 +2160,7 @@
     },
     "queuedChip": "Queued — read when the current work finishes",
     "steerChip": "Steer",
+    "apiOriginChip": "Sent through the API",
     "chips": {
       "spawn": "spawn {{name}}",
       "tasks": "tasks {{action}}{{id}}",

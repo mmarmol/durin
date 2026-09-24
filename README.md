@@ -138,6 +138,7 @@ commands, see the [CLI reference](https://github.com/mmarmol/durin/blob/main/doc
 - [Documents & your knowledge](https://github.com/mmarmol/durin/blob/main/docs/guide/documents.md)
 - [Workflows](https://github.com/mmarmol/durin/blob/main/docs/guide/workflows.md)
 - [Automations](https://github.com/mmarmol/durin/blob/main/docs/guide/automations.md) — standing triggers that fire a workflow on their own
+- [durin's API](https://github.com/mmarmol/durin/blob/main/docs/guide/api.md) — chat with durin over HTTP: send, watch the turn stream, stop it
 - [OpenAI-compatible API](https://github.com/mmarmol/durin/blob/main/docs/guide/openai-api.md) — point any OpenAI client at durin with a scoped token
 - [How it works (internals)](https://github.com/mmarmol/durin/blob/main/docs/internals/README.md)
 

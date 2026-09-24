@@ -95,10 +95,11 @@ class SkillInstallDepsTool(Tool, ContextAware):
                     "note": "install_policy=never — reporting only, not running"}
         # Authority is a property of the context, never of `confirm`: a value
         # the model wrote cannot be evidence that a person approved. With
-        # nobody reachable the request is recorded, not run. install_policy=auto
+        # nobody who can approve (no person reachable, or a turn driven by an
+        # API token) the request is recorded, not run. install_policy=auto
         # is the exception — that authority was granted in config, out of band.
         session_key = getattr(self._request_ctx, "session_key", None)
-        if self._policy != "auto" and not approval.human_reachable(session_key):
+        if self._policy != "auto" and not approval.can_authorize(session_key):
             decision = approval.gate(
                 self._workspace, "skills", action="install_deps",
                 summary=f"install declared dependencies of skill {name!r}",

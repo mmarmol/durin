@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 from loguru import logger
 
 from durin.agent import model_presets as preset_helpers
-from durin.agent.approval import AUTONOMOUS_SESSION_PREFIXES
+from durin.agent.approval import AUTONOMOUS_SESSION_PREFIXES, note_turn_input
 from durin.agent.aux_bridges import build_aux_providers
 from durin.agent.context import ContextBuilder
 from durin.agent.hook import AgentHook, CompositeHook
@@ -1604,6 +1604,17 @@ class AgentLoop:
             return False
         return pending_answers.resolve(session_key, text)
 
+    async def _answer_pending_question(self, msg: InboundMessage, session_key: str) -> bool:
+        """Deliver *msg* as the answer to a blocked ask_user, if one is waiting.
+
+        The answer enters the running turn, so it is acknowledged the way a
+        consumed queued message is: a client waiting on this message then
+        knows the running turn's ``turn_end`` is the one that answers it."""
+        if not self._maybe_resolve_pending_answer(msg, session_key):
+            return False
+        await self._ack_queued_consumed([msg])
+        return True
+
     async def _maybe_publish_interaction_fallback(
         self, *, channel: str, chat_id: str, session_key: str
     ) -> None:
@@ -1863,6 +1874,11 @@ class AgentLoop:
         mode folds every channel's conversation into one session."""
         return UNIFIED_SESSION_KEY if self._unified_session else session_key
 
+    async def cancel_session_turns(self, key: str) -> int:
+        """Cancel the running turns and subagents registered under *key*;
+        return how many were cancelled."""
+        return await self._cancel_active_tasks(key)
+
     async def _dispatch_priority_command(self, msg: InboundMessage, raw: str) -> None:
         """Run a priority command (/stop, /status, /restart) outside the turn
         lock, keyed like the turns it acts on."""
@@ -2026,6 +2042,9 @@ class AgentLoop:
                         break
                     consumed.append(pending_msg)
                     pending.append(pending_msg)
+                    # Joining the turn with API input drops a person's authority
+                    # for the rest of it (set here, in the turn's own task).
+                    note_turn_input(pending_msg.metadata)
 
             _pull(pending_queues.inject)
             if not steer_only:
@@ -2283,7 +2302,7 @@ class AgentLoop:
             # answer. A plain-text reply resolves the in-turn waiter and is
             # consumed here; anything else (commands, media) tells the waiter
             # to fall back to yield semantics and routes on.
-            if self._maybe_resolve_pending_answer(msg, effective_key):
+            if await self._answer_pending_question(msg, effective_key):
                 continue
             # A literal "[steer]" prefix marks a steer (older TUI clients and
             # users typing it by hand); normalize it into the metadata flag so
@@ -2373,6 +2392,9 @@ class AgentLoop:
         session_key = self._effective_session_key(msg)
         if session_key != msg.session_key:
             msg = dataclasses.replace(msg, session_key_override=session_key)
+        # This task is the turn: a message from an API token drops a person's
+        # authority to approve privileged actions for all of it.
+        note_turn_input(msg.metadata)
         lock = self._session_locks.setdefault(session_key, asyncio.Lock())
 
         if pending is None:

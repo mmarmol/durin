@@ -704,6 +704,136 @@
         "title": "ChannelsRuntimeStatusResult",
         "type": "object"
       },
+      "ChatMediaItem": {
+        "additionalProperties": false,
+        "properties": {
+          "data_url": {
+            "title": "Data Url",
+            "type": "string"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Name"
+          }
+        },
+        "required": [
+          "data_url"
+        ],
+        "title": "ChatMediaItem",
+        "type": "object"
+      },
+      "ChatSendCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "client_msg_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Client Msg Id"
+          },
+          "content": {
+            "default": "",
+            "title": "Content",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "media": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ChatMediaItem"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Media"
+          },
+          "steer": {
+            "default": false,
+            "title": "Steer",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "title": "ChatSendCommand",
+        "type": "object"
+      },
+      "ChatSendResult": {
+        "properties": {
+          "client_msg_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Client Msg Id"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "title": "ChatSendResult",
+        "type": "object"
+      },
+      "ChatStopCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "title": "Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "title": "ChatStopCommand",
+        "type": "object"
+      },
+      "ChatStopResult": {
+        "properties": {
+          "stopped": {
+            "title": "Stopped",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "stopped"
+        ],
+        "title": "ChatStopResult",
+        "type": "object"
+      },
       "CommandsListQuery": {
         "additionalProperties": false,
         "description": "No inputs.",
@@ -11396,6 +11526,33 @@
         },
         "summary": "Return unsigned session JSONL payload (shim applies media signing)",
         "x-required-scope": "sessions:read"
+      },
+      "post": {
+        "operationId": "chat_send",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatSendCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatSendResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Send a message to a webui conversation; the turn runs server-side",
+        "x-required-scope": "chat:write"
       }
     },
     "/api/v1/sessions/{key}/rename": {
@@ -11425,6 +11582,35 @@
         },
         "summary": "Set a user-edited title for a session",
         "x-required-scope": "sessions:write"
+      }
+    },
+    "/api/v1/sessions/{key}/stop": {
+      "post": {
+        "operationId": "chat_stop",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatStopCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatStopResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Stop the running turn of a webui conversation",
+        "x-required-scope": "chat:write"
       }
     },
     "/api/v1/sessions/{key}/webui-thread": {

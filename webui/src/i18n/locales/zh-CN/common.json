@@ -2058,6 +2058,7 @@
     },
     "queuedChip": "已排队——将在当前工作完成后读取",
     "steerChip": "引导",
+    "apiOriginChip": "通过 API 发送",
     "chips": {
       "spawn": "派生 {{name}}",
       "tasks": "任务 {{action}}{{id}}",

@@ -50,6 +50,17 @@ plus the live-consumer flag that says an answer could actually be delivered.
 An unrecognised session kind is treated as autonomous: an unknown context is
 not a person.
 
+A person's context loses that authority for a turn that received input from an
+API token. A message sent through the native chat routes carries
+`origin: "api"`; the agent loop marks the turn (`approval.note_turn_input`, a
+context variable set in the turn's own task, for the opening message and for
+any message injected into the turn). The privileged tools decide with
+`approval.can_authorize` — a person reachable *and* no API input in the turn —
+so such a turn stages their actions as an autonomous context does, and the
+staged note says why. A `chat:write` token may hold a
+conversation in the dashboard's sessions, but it is a program, and it must not
+carry the person's authority to install or rewrite executable state.
+
 A `confirm` field in the tool call is a claim by the model, never evidence
 that a person agreed, so it can only ever *narrow* the decision: it is
 consulted after the context has already established that a human is reachable.
@@ -61,7 +72,10 @@ policy of `auto` (`tools.mcp_discovery.install_policy`, `skills.install_policy`)
 that authority was granted by the operator in config, out of band and ahead of
 the run, which is what makes it delegable. `durin.agent.approval` owns this
 classification, and `pending_answers.can_block` (the blocking `ask_user_question`
-wait) delegates to it — a context that cannot authorize cannot answer either.
+wait) delegates to its `human_reachable` — a context with no person cannot
+answer either. The API-input rule narrows only authorization, not answering: a
+turn driven through the API may still wait for an answer, which the API client
+sends as a plain message.
 
 **Layered skill import gates.** Importing a skill passes two independent scan
 stages. The first is deterministic: a regex and AST pass that always runs.

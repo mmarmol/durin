@@ -165,11 +165,11 @@ class SkillImportTool(Tool, ContextAware):
         replace = bool(kwargs.get("replace", False))
         # `confirm` is a claim written by the model, not evidence that a person
         # approved: installing a skill adds executable content, so with nobody
-        # reachable (cron, dream, workflow, sub-agent) the request is recorded
-        # for out-of-band approval instead of running.
+        # who can approve (cron, dream, workflow, sub-agent, or a turn driven by
+        # an API token) the request is recorded for out-of-band approval.
         if action == "install":
             session_key = self._session.get()
-            if self._install_policy != "auto" and not approval.human_reachable(session_key):
+            if self._install_policy != "auto" and not approval.can_authorize(session_key):
                 decision = approval.gate(
                     self._workspace, "skills", action="import",
                     summary=f"install skill {name or source!r}",

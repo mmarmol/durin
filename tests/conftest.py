@@ -194,6 +194,20 @@ def _restore_loguru_durin_activation():
         logger.enable("durin")
 
 
+@pytest.fixture(autouse=True)
+def _fresh_transcript_writer(monkeypatch):
+    """Give every test its own display-transcript writer.
+
+    The production writer is a process-wide singleton that buffers events
+    until a drain. A test that sends frames without flushing (anything that
+    persists a reply, including to a chat nobody watches) would otherwise
+    leave buffered rows that a later test's flush writes into *its* data dir,
+    under the same session key — an order-dependent extra row."""
+    from durin.utils import webui_transcript
+
+    monkeypatch.setattr(webui_transcript, "_WRITER", None)
+
+
 def write_webui_transcript(session_key: str, *events: dict) -> None:
     """Persist webui transcript events through the production writer.
 

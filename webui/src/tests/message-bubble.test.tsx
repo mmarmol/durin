@@ -22,6 +22,24 @@ describe("MessageBubble", () => {
     expect(screen.queryByRole("button", { name: "Copy reply" })).not.toBeInTheDocument();
   });
 
+  it("labels a user message sent through the API", () => {
+    const message: UIMessage = {
+      id: "u-api",
+      role: "user",
+      content: "from a script",
+      createdAt: Date.now(),
+      origin: "api",
+    };
+    render(<MessageBubble message={message} />);
+    expect(screen.getByText("Sent through the API")).toBeInTheDocument();
+  });
+
+  it("does not label a person's own message", () => {
+    const message: UIMessage = { id: "u-me", role: "user", content: "hi", createdAt: Date.now() };
+    render(<MessageBubble message={message} />);
+    expect(screen.queryByText("Sent through the API")).not.toBeInTheDocument();
+  });
+
   it("copies completed assistant replies from the action row", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", {
