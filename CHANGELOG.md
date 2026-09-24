@@ -5,6 +5,82 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.10.13 — 2026-09-24
+
+### Highlights
+
+- **Chat with durin over its own HTTP API.** Any program with a `chat:write`
+  token can now hold a real conversation through `/api/v1`: send a message
+  (`POST /api/v1/sessions/{key}/messages`), watch the turn live as
+  server-sent events — text, reasoning and tool calls — on
+  `GET /api/v1/sessions/{key}/events`, catch up after a disconnect from the
+  history, and stop it (`POST /api/v1/sessions/{key}/stop`). Send with
+  `Accept: text/event-stream` to get the turn's events in the same response.
+  These are the dashboard's own conversations: they appear in the sidebar,
+  either side can continue them, and a message that came through the API is
+  labelled so in the chat. A turn started from the API never carries a
+  person's authority: privileged actions (installing an MCP server,
+  importing or editing a skill, installing a skill's dependencies) are
+  staged for a person to approve. (#633)
+- **An OpenAI-compatible `/v1` turn is no longer lost or cut short.** A
+  streaming turn that was busy — a long tool, a model reasoning — used to be
+  killed after 120 s, and closing the connection cancelled the turn. Now a
+  started turn keeps running when the client leaves and its answer is saved
+  to the conversation; streams send a keepalive every 15 s so proxies don't
+  drop them; one high ceiling, `gateway.api_turn_timeout` (default 3600 s,
+  `0` disables), bounds any turn; and a `/v1` turn can be stopped through
+  `POST /api/v1/sessions/api:<session_id>/stop`, which answers the waiting
+  request with 409 `turn_stopped`. (#629, #634)
+
+### API
+
+- `gateway.api_request_timeout` (default 120 s) now only bounds how long a
+  non-streaming `/v1` request waits; on overrun it answers 504 and the turn
+  still completes and is saved.
+- A `/v1` request still queued behind another turn on the same session is
+  dropped if its client leaves before the turn starts.
+
+### Chat
+
+- Every turn ends with an outcome — completed, stopped or failed — and a
+  turn nobody is watching is still recorded in the conversation. (#632)
+- `/stop` and `/status` find the running turn when `unified_session` is on,
+  and Esc in the terminal UI stops it too. (#632)
+- A message sent just before the browser connection closed is no longer
+  lost. (#632)
+
+### Tools
+
+- Stopping an `exec` command — its timeout, a cancelled turn, a gateway
+  shutdown — now stops everything the command started. Its child processes
+  used to keep running and the stop stalled for 5 s. (#630)
+- A command refused by the exec deny/allow rules now names the rule and tells
+  the agent to stop and ask you, instead of coaching it to reach the same
+  effect another way. (#631)
+
+### Agent
+
+- A turn no longer aborts with a false "prompt overflow" from its second
+  model call on: the tool definitions were counted twice, about 34K tokens
+  with the default tool set. (#631)
+
+### Workflows and skills
+
+- Script nodes receive the task exactly as passed, not the text framed for
+  agent nodes — a parameter parser could read values out of the workflow's
+  description. (#631)
+- Skill history shows real git commit ids; the old ids were not git ids and
+  could collide in a large store. (#631)
+
+### Docs
+
+- New guide for the native chat API; the OpenAI-compatible API guide covers
+  disconnects, the turn ceiling and stopping a turn.
+- The docs, `durin gateway --port` and `durin config schema` now say that the
+  dashboard and the APIs listen on `channels.websocket.port` (default 8765)
+  and `gateway.port` only serves `/health`; the dashboard sign-in, the scope
+  list and the token commands match the code. (#635)
+
 ## 0.10.12 — 2026-09-23
 
 ### Highlights
