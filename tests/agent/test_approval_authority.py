@@ -155,7 +155,8 @@ async def test_mcp_manage_self_confirm_cannot_run_without_a_human(tmp_path) -> N
 
 
 @pytest.mark.asyncio
-async def test_skill_install_deps_stages_without_a_human(tmp_path, monkeypatch) -> None:
+async def test_skill_install_deps_files_a_request_without_a_human(tmp_path, monkeypatch) -> None:
+    from durin.agent import approval_store
     from durin.agent.tools.context import RequestContext
     from durin.agent.tools.skill_install_deps import SkillInstallDepsTool
 
@@ -169,10 +170,10 @@ async def test_skill_install_deps_stages_without_a_human(tmp_path, monkeypatch) 
     tool = SkillInstallDepsTool(workspace=tmp_path, exec_run=_boom)
     tool.set_context(RequestContext(channel="system", chat_id="c",
                                     session_key="cron:nightly"))
-    out = await tool.execute(name="demo", confirm=True)
-    assert out["ran"] is False
-    assert "staged_for_approval" in out
-    assert approval.list_pending(tmp_path, "skills")[0]["action"] == "install_deps"
+    out = await tool.execute(name="demo")
+    assert out["ran"] is False and out["status"] == "pending"
+    [rec] = approval_store.list_records(tmp_path, status="pending", include_legacy=False)
+    assert rec["kind"] == "skill_deps"
 
 
 @pytest.mark.asyncio
