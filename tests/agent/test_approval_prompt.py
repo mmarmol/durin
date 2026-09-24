@@ -85,3 +85,28 @@ def test_no_asker_without_a_person():
     pa.set_consumer_active(False)
     assert make_chat_asker(sessions=_Sessions(), bus=_Bus(),
                            request_ctx=_ctx("websocket"), timeout_s=5) is None
+
+
+@pytest.mark.asyncio
+async def test_timeout_racing_a_landed_resolve_still_returns_the_verdict(monkeypatch):
+    """resolve() can land in the same loop iteration the timeout's own
+    cancellation fires. Simulate that race directly: the future gets its
+    result inside asyncio.timeout's __aenter__, then __aexit__ still raises
+    TimeoutError, as the real deadline callback can when it wins a tie."""
+    import durin.agent.approval_prompt as approval_prompt_mod
+
+    class _RaceTimeout:
+        def __init__(self, delay):
+            pass
+
+        async def __aenter__(self):
+            pa.resolve("websocket:c1", "approve")
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            raise asyncio.TimeoutError()
+
+    monkeypatch.setattr(approval_prompt_mod.asyncio, "timeout", _RaceTimeout)
+    sessions, bus = _Sessions(), _Bus()
+    ask = make_chat_asker(sessions=sessions, bus=bus, request_ctx=_ctx("websocket"), timeout_s=0)
+    assert await ask(REC) == "approve"

@@ -120,11 +120,12 @@ def test_unified_and_extra_chat_channels_are_interactive():
 
 
 @pytest.mark.asyncio
-async def test_cancelled_during_execute_leaves_record_failed_and_propagates(tmp_path):
+async def test_cancelled_during_execute_leaves_record_failed_and_propagates(tmp_path, monkeypatch):
     async def _cancel_run(ws, payload, deps):
         raise asyncio.CancelledError()
 
-    ex._REGISTRY["skill_edit"] = (lambda ws, payload: STATE["hash"], _cancel_run)
+    monkeypatch.setitem(ex._REGISTRY, "skill_edit",
+                        (lambda ws, payload: STATE["hash"], _cancel_run))
     out = await approval.request(tmp_path, PREP, session_key="cron:x", deps=ex.ExecDeps())
     rid = out.record["id"]
     with pytest.raises(asyncio.CancelledError):
@@ -132,3 +133,65 @@ async def test_cancelled_during_execute_leaves_record_failed_and_propagates(tmp_
                               deps=ex.ExecDeps())
     rec = st.get(tmp_path, rid)
     assert rec["status"] == "failed"
+    assert rec["result"] == {"error": "cancelled"}
+
+
+@pytest.mark.asyncio
+async def test_unknown_answer_leaves_it_pending_and_runs_nothing(tmp_path):
+    # A fail-open bug once let anything other than "reject" through as an
+    # approval; only "approve" may run it.
+    out = await approval.request(tmp_path, PREP, session_key="websocket:s", deps=ex.ExecDeps(),
+                                 ask=_asker("yes"))
+    assert out.status == "pending" and RUNS == []
+
+
+@pytest.mark.asyncio
+async def test_hash_fn_raising_any_exception_leaves_the_record_failed(tmp_path, monkeypatch):
+    def _boom_hash(ws, payload):
+        raise OSError("disk gone")
+
+    monkeypatch.setitem(ex._REGISTRY, "skill_edit", (_boom_hash, _run))
+    out = await approval.request(tmp_path, PREP, session_key="cron:x", deps=ex.ExecDeps())
+    rid = out.record["id"]
+    result = await approval.decide(tmp_path, rid, "approve", decided_by={"kind": "user"},
+                                   deps=ex.ExecDeps())
+    assert result.status == "failed"
+    assert st.get(tmp_path, rid)["status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_judge_safe_approves_the_existing_pending_record_not_a_duplicate(tmp_path):
+    pending = await approval.request(tmp_path, PREP, session_key="websocket:s", deps=ex.ExecDeps(),
+                                     ask=_asker(None))
+    assert pending.status == "pending"
+    out = await approval.request(tmp_path, PREP, session_key="websocket:s", deps=ex.ExecDeps(),
+                                 judge=_judge_safe)
+    assert out.status == "applied" and RUNS == [{"name": "a"}]
+    assert out.record["id"] == pending.record["id"]
+    assert len(st.list_records(tmp_path, include_legacy=False)) == 1
+
+
+MCP_PREP = ex.Prepared(kind="mcp_change", summary="update mcp 'x'", detail={},
+                       payload={"name": "x"}, change_hash="h1")
+
+
+@pytest.mark.asyncio
+async def test_judge_never_clears_mcp_change(tmp_path):
+    out = await approval.request(tmp_path, MCP_PREP, session_key="cron:x", deps=ex.ExecDeps(),
+                                 judge=_judge_safe)
+    assert out.status == "pending" and RUNS == []
+
+
+def test_ensure_loaded_reraises_a_dependency_import_error(monkeypatch):
+    # A ModuleNotFoundError for something the kind module itself imports must
+    # not be mistaken for the kind module not existing yet.
+    def _fake_import(name):
+        if name == ex._KIND_MODULES[0]:
+            raise ModuleNotFoundError("no module named 'some_missing_dep'",
+                                      name="some_missing_dep")
+        raise ModuleNotFoundError(name=name)
+
+    monkeypatch.setattr(ex.importlib, "import_module", _fake_import)
+    monkeypatch.delitem(ex._REGISTRY, "skill_edit", raising=False)
+    with pytest.raises(ModuleNotFoundError):
+        ex._ensure_loaded("skill_edit")

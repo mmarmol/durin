@@ -61,7 +61,12 @@ def _ensure_loaded(kind: str) -> tuple[HashFn, ExecuteFn]:
         for mod in _KIND_MODULES:
             try:
                 importlib.import_module(mod)
-            except ModuleNotFoundError:
+            except ModuleNotFoundError as e:
+                # Only a missing kind module itself is expected (later tasks
+                # haven't landed it yet); a missing dependency INSIDE one that
+                # does exist is a real bug and must not be swallowed.
+                if e.name != mod:
+                    raise
                 continue
     if kind not in _REGISTRY:
         raise ApprovalExecError(f"no executor registered for kind {kind!r}")

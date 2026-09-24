@@ -34,7 +34,6 @@ from typing import Any, Awaitable, Callable
 
 from durin.agent import approval_store
 from durin.agent.approval_executors import (
-    ApprovalExecError,
     ExecDeps,
     Prepared,
     current_hash,
@@ -205,7 +204,7 @@ async def _run_approved(workspace: Path | str, record: dict, deps: ExecDeps) -> 
     """Execute a record already in ``approved``: re-check its hash, run it once."""
     try:
         now_hash = current_hash(Path(workspace), record)
-    except ApprovalExecError as exc:
+    except Exception as exc:  # noqa: BLE001 — any hash failure ends the record, never hangs it
         rec = approval_store.transition(workspace, record["id"], expect=("approved",),
                                         to="failed", result={"error": str(exc)})
         return Outcome("failed", rec, None, f"Could not run {record['summary']}: {exc}")
@@ -251,6 +250,10 @@ async def request(workspace: Path | str, prepared: Prepared, *, session_key: str
     filed as pending. Nothing here reads a value the model wrote.
     """
     context = "interactive" if is_interactive(session_key) else "autonomous"
+    if prepared.kind in ("skill_deps", "mcp_change", "exec_command"):
+        # The judge only ever clears skill installs/edits; deps, MCP changes
+        # and exec commands always need a person or end up pending.
+        judge = None
     if judge is not None:
         verdict = None
         try:
@@ -258,11 +261,21 @@ async def request(workspace: Path | str, prepared: Prepared, *, session_key: str
         except Exception:  # noqa: BLE001 — an unavailable judge falls through to a person
             verdict = None
         if verdict == "safe":
-            record = approval_store.create(
-                workspace, kind=prepared.kind, summary=prepared.summary,
-                detail=prepared.detail, payload=prepared.payload,
-                change_hash=prepared.change_hash, session_key=session_key,
-                context=context, status="approved", decided_by={"kind": "judge"})
+            existing = approval_store.find_pending(
+                workspace, session_key=session_key, kind=prepared.kind,
+                change_hash=prepared.change_hash)
+            if existing is not None:
+                record = approval_store.transition(
+                    workspace, existing["id"], expect=("pending",), to="approved",
+                    decided_by={"kind": "judge"})
+                if record is None:
+                    return _already_decided(workspace, existing["id"])
+            else:
+                record = approval_store.create(
+                    workspace, kind=prepared.kind, summary=prepared.summary,
+                    detail=prepared.detail, payload=prepared.payload,
+                    change_hash=prepared.change_hash, session_key=session_key,
+                    context=context, status="approved", decided_by={"kind": "judge"})
             return await _run_approved(workspace, record, deps)
 
     record = approval_store.find_pending(
@@ -275,7 +288,7 @@ async def request(workspace: Path | str, prepared: Prepared, *, session_key: str
     if ask is None:
         return _pending_outcome(record, asked=False)
     answer = await ask(record)
-    if answer is None:
+    if answer not in ("approve", "reject"):
         return _pending_outcome(record, asked=True)
     return await _apply_decision(workspace, record["id"], answer,
                                  decided_by={"kind": "user", "channel": session_key},
@@ -292,6 +305,8 @@ async def _apply_decision(workspace: Path | str, approval_id: str, decision: str
         return Outcome("rejected", rec, None, (
             f"The user declined: {rec['summary']}. Do not retry, and do not reach the "
             "same effect another way."))
+    if decision != "approve":
+        return Outcome("refused", None, None, f"Unknown decision {decision!r}.")
     rec = approval_store.transition(workspace, approval_id, expect=("pending",),
                                     to="approved", decided_by=decided_by)
     if rec is None:

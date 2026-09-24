@@ -65,6 +65,12 @@ def make_chat_asker(*, sessions: Any, bus: Any, request_ctx: Any,
                 async with asyncio.timeout(timeout_s):
                     answer = await fut
             except asyncio.TimeoutError:
+                # resolve() can land in the same loop iteration as the
+                # timeout's own cancellation; check the future directly
+                # instead of treating every TimeoutError as "no answer".
+                if fut.done() and not fut.cancelled():
+                    verdict = fut.result()
+                    return verdict if verdict in ("approve", "reject") else None
                 return None
             finally:
                 pending_answers.discard(session_key, fut)
