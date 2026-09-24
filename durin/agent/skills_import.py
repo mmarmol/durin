@@ -710,8 +710,14 @@ async def run_install_specs(specs: list[dict], *,
     for spec in specs:
         cmd = spec["command"]
         try:
-            output = await exec_run(command=cmd)
-            results.append({"command": cmd, "success": True, "output": str(output)[-2000:]})
+            output = str(await exec_run(command=cmd))
+            # The exec policy can refuse a command by returning its refusal text
+            # as ordinary output instead of raising (shell.py's "Error: Command
+            # blocked..." headline). That must not be recorded as a successful
+            # install step.
+            blocked = output.startswith("Error: Command blocked")
+            results.append({"command": cmd, "success": not blocked,
+                            "output": output[-2000:]})
         except Exception as exc:  # noqa: BLE001
             results.append({"command": cmd, "success": False, "error": str(exc)})
     return results
