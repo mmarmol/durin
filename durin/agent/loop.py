@@ -1773,6 +1773,28 @@ class AgentLoop:
         else:
             logger.warning("Command '{}' matched but dispatch returned None", raw)
 
+    async def _publish_turn_end(
+        self, msg: InboundMessage, session_key: str, outcome: str,
+    ) -> None:
+        """Tell websocket watchers the turn is over and how it ended.
+
+        Every websocket turn gets exactly one — ``completed``, ``stopped`` or
+        ``failed`` — so a client never waits on a turn that already ended.
+        The inbound metadata rides along, which carries the ``client_msg_id``
+        of the message that opened the turn."""
+        if msg.channel != "websocket":
+            return
+        metadata: dict[str, Any] = {**msg.metadata, "_turn_end": True, "outcome": outcome}
+        latency = self._pending_turn_latency_ms.pop(session_key, None)
+        if latency is not None:
+            metadata["latency_ms"] = int(latency)
+        with suppress(Exception):
+            session = self.sessions.get_or_create(session_key)
+            metadata["goal_state"] = goal_state_ws_blob(session.metadata)
+        await self.bus.publish_outbound(OutboundMessage(
+            channel=msg.channel, chat_id=msg.chat_id, content="", metadata=metadata,
+        ))
+
     async def _notify_queued(self, msg: InboundMessage) -> None:
         """Tell the sender's surface its message was deferred (queued) mid-turn.
 
@@ -1835,6 +1857,18 @@ class AgentLoop:
         if tasks is not None and task in tasks:
             tasks.remove(task)
         self._in_flight_messages.pop(task, None)
+
+    def bus_turn_key(self, session_key: str) -> str:
+        """The key a bus turn for *session_key* is registered under: unified
+        mode folds every channel's conversation into one session."""
+        return UNIFIED_SESSION_KEY if self._unified_session else session_key
+
+    async def _dispatch_priority_command(self, msg: InboundMessage, raw: str) -> None:
+        """Run a priority command (/stop, /status, /restart) outside the turn
+        lock, keyed like the turns it acts on."""
+        await self._dispatch_command_inline(
+            msg, self._effective_session_key(msg), raw, self.commands.dispatch_priority,
+        )
 
     def _effective_session_key(self, msg: InboundMessage) -> str:
         """Return the session key used for task routing and mid-turn injections."""
@@ -2242,10 +2276,7 @@ class AgentLoop:
 
             raw = msg.content.strip()
             if self.commands.is_priority(raw):
-                await self._dispatch_command_inline(
-                    msg, msg.session_key, raw,
-                    self.commands.dispatch_priority,
-                )
+                await self._dispatch_priority_command(msg, raw)
                 continue
             effective_key = self._effective_session_key(msg)
             # Blocking ask_user: a turn may be paused awaiting the user's
@@ -2349,6 +2380,16 @@ class AgentLoop:
             self._pending_queues[session_key] = pending
 
         session_path = self.sessions._get_session_path(session_key)
+        turn_ended = False
+
+        async def _end_turn(outcome: str) -> None:
+            # Exactly one turn_end per turn, whichever way it exits.
+            nonlocal turn_ended
+            if turn_ended:
+                return
+            turn_ended = True
+            await self._publish_turn_end(msg, session_key, outcome)
+
         try:
             async with lock, self._interactive_lane, self._ceiling:
                 try:
@@ -2359,6 +2400,7 @@ class AgentLoop:
                         channel=msg.channel, chat_id=msg.chat_id,
                         content=_SESSION_BUSY_NOTICE,
                     ))
+                    await _end_turn("failed")
                     return
                 try:
                     self.sessions.reload(session_key)  # load-per-turn: refresh from disk under the lease
@@ -2410,20 +2452,11 @@ class AgentLoop:
                                 channel=msg.channel, chat_id=msg.chat_id,
                                 content="", metadata=msg.metadata or {},
                             ))
+                        # Signal that the turn is fully complete (all tools executed,
+                        # final text streamed).  This lets WS clients know when to
+                        # definitively stop the loading indicator.
+                        await _end_turn("completed")
                         if msg.channel == "websocket":
-                            # Signal that the turn is fully complete (all tools executed,
-                            # final text streamed).  This lets WS clients know when to
-                            # definitively stop the loading indicator.
-                            turn_lat = self._pending_turn_latency_ms.pop(session_key, None)
-                            turn_metadata: dict[str, Any] = {**msg.metadata, "_turn_end": True}
-                            if turn_lat is not None:
-                                turn_metadata["latency_ms"] = int(turn_lat)
-                            sess_turn = self.sessions.get_or_create(session_key)
-                            turn_metadata["goal_state"] = goal_state_ws_blob(sess_turn.metadata)
-                            await self.bus.publish_outbound(OutboundMessage(
-                                channel=msg.channel, chat_id=msg.chat_id,
-                                content="", metadata=turn_metadata,
-                            ))
                             if msg.metadata.get("webui") is True:
                                 async def _generate_title_and_notify() -> None:
                                     generated = await maybe_generate_webui_title_after_turn(
@@ -2468,6 +2501,8 @@ class AgentLoop:
                                 session_key,
                                 exc_info=True,
                             )
+                        with suppress(Exception):
+                            await _end_turn("stopped")
                         raise
                     except Exception:
                         logger.exception("Error processing message for session {}", session_key)
@@ -2475,8 +2510,20 @@ class AgentLoop:
                             channel=msg.channel, chat_id=msg.chat_id,
                             content="Sorry, I encountered an error.",
                         ))
+                        await _end_turn("failed")
                 finally:
                     await turn_lease_cm.__aexit__(None, None, None)
+        except asyncio.CancelledError:
+            # Stopped before the turn body ran — while queued behind the session
+            # lock, the interactive lane or the ceiling, or waiting for the lease.
+            with suppress(Exception):
+                await _end_turn("stopped")
+            raise
+        except Exception:
+            # Failed outside the turn body (session reload, lease release).
+            with suppress(Exception):
+                await _end_turn("failed")
+            raise
         finally:
             # Drain any messages still in the pending queues and re-publish
             # them to the bus so they are processed as fresh inbound messages

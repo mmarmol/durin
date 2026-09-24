@@ -1131,4 +1131,25 @@ describe("useDurinStream", () => {
     expect(rows[0].renderKey ?? rows[0].id).toBe(streamedId);
     expect(rows[0].reasoning).toBe("hmm");
   });
+
+  it("ends streaming when a stopped turn's turn_end arrives mid-reply", () => {
+    const fake = fakeClient();
+    const onTurnEnd = vi.fn();
+    const { result } = renderHook(() => useDurinStream("chat-stop", EMPTY_MESSAGES, false, onTurnEnd), {
+      wrapper: wrap(fake.client),
+    });
+
+    act(() => {
+      fake.emit("chat-stop", { event: "delta", chat_id: "chat-stop", text: "Work" });
+    });
+    expect(result.current.isStreaming).toBe(true);
+
+    act(() => {
+      fake.emit("chat-stop", { event: "turn_end", chat_id: "chat-stop", outcome: "stopped" });
+    });
+
+    expect(result.current.isStreaming).toBe(false);
+    expect(result.current.messages.every((message) => !message.isStreaming)).toBe(true);
+    expect(onTurnEnd).toHaveBeenCalledTimes(1);
+  });
 });

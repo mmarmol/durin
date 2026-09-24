@@ -518,3 +518,45 @@ class TestStopCommandWithUnifiedSession:
 
         # Both tasks should be cancelled
         assert "Stopped 2 task" in result.content
+
+    @pytest.mark.asyncio
+    async def test_priority_stop_as_dispatched_finds_unified_turn(self, tmp_path: Path):
+        """The run loop hands /stop the raw inbound message — no override — so
+        the priority dispatch must key it like the turns it acts on."""
+        from durin.agent.loop import UNIFIED_SESSION_KEY
+
+        loop = _make_loop(tmp_path, unified_session=True)
+        task = asyncio.create_task(asyncio.sleep(10))
+        loop._active_tasks[UNIFIED_SESSION_KEY] = [task]
+        msg = InboundMessage(channel="websocket", chat_id="abc", sender_id="u", content="/stop")
+
+        await loop._dispatch_priority_command(msg, "/stop")
+
+        reply = await loop.bus.consume_outbound()
+        assert task.cancelled()
+        assert "Stopped 1 task" in reply.content
+
+    @pytest.mark.asyncio
+    async def test_stop_from_a_direct_session_leaves_the_unified_turn_alone(self, tmp_path: Path):
+        """A /stop typed into a direct session (the OpenAI endpoint, cron) acts on
+        that session's key, never on the unified webui/chat turn."""
+        from durin.agent.loop import UNIFIED_SESSION_KEY
+        from durin.command.builtin import cmd_stop
+
+        loop = _make_loop(tmp_path, unified_session=True)
+        task = asyncio.create_task(asyncio.sleep(10))
+        loop._active_tasks[UNIFIED_SESSION_KEY] = [task]
+        msg = InboundMessage(channel="api", chat_id="default", sender_id="user", content="/stop")
+        ctx = CommandContext(msg=msg, session=None, key="api:agent-1", raw="/stop", loop=loop)
+
+        result = await cmd_stop(ctx)
+
+        assert not task.cancelled()
+        assert "No active task" in result.content
+        task.cancel()
+
+    def test_bus_turn_key_folds_channels_in_unified_mode(self, tmp_path: Path):
+        from durin.agent.loop import UNIFIED_SESSION_KEY
+
+        assert _make_loop(tmp_path, unified_session=True).bus_turn_key("cli:direct") == UNIFIED_SESSION_KEY
+        assert _make_loop(tmp_path, unified_session=False).bus_turn_key("cli:direct") == "cli:direct"

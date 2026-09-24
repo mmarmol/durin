@@ -35,6 +35,7 @@ from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, R
 from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocket, WebSocketDisconnect
+from websockets.exceptions import ConnectionClosed
 
 from durin.service.auth import AuthService
 from durin.service.principal import Principal, Scope
@@ -77,7 +78,16 @@ class StarletteConnectionAdapter:
         self._iter: Any = None
 
     async def send_text(self, raw: str) -> None:
-        await self._ws.send_text(raw)
+        # The channel treats ``ConnectionClosed`` as "this client is gone":
+        # it drops the subscription and carries on. Starlette reports the same
+        # fact as ``WebSocketDisconnect`` (the send failed) or ``RuntimeError``
+        # (the socket is already closed); left untranslated, either would abort
+        # the frame being processed — e.g. a message sent just before the
+        # client left would never reach the agent.
+        try:
+            await self._ws.send_text(raw)
+        except (WebSocketDisconnect, RuntimeError) as exc:
+            raise ConnectionClosed(None, None) from exc
 
     @property
     def remote(self) -> Any:

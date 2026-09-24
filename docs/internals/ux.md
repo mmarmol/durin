@@ -210,7 +210,7 @@ Metadata flags on `OutboundMessage` route behavior at each surface:
 | `_switch_chat_id` | In-place session switch; `run_interactive` / `DurinApp` updates `cli_chat_id` |
 | `_pairing_code` | Channel-level pairing code delivery (external channels only) |
 | `_progress` | Progress note; not rendered as a full message in WebSocket channel |
-| `_turn_end` | Carries latency and goal-state; triggers WS `turn_end` frame |
+| `_turn_end` | Sent once per websocket turn on every exit; carries `outcome` (`completed`, `stopped`, `failed`), latency, goal-state and the opening message's `client_msg_id`; triggers WS `turn_end` frame |
 | `render_as="text"` | Render as a plain system bubble instead of an assistant bubble |
 
 ### WebUI message rendering

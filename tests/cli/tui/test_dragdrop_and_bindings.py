@@ -39,6 +39,8 @@ def _fake_agent_loop(bus: MessageBus, tmp_path) -> SimpleNamespace:
         ),
         run=_idle_run,
         _cancel_active_tasks=_cancel_active_tasks,
+        # AgentLoop.bus_turn_key outside unified mode: the key is unchanged.
+        bus_turn_key=lambda key: key,
     )
     loop._cancelled = cancelled  # type: ignore[attr-defined]
     return loop
