@@ -25,7 +25,7 @@ def test_apply_edit_rejects_traversal_name(tmp_path):
     ws.mkdir()
     secret = _sentinel(tmp_path)
     res = ss.apply_skill_edit(ws, "../../SECRET", old="ORIGINAL", new="PWNED",
-                              rationale="r", confirm=True, file="../SECRET.txt")
+                              rationale="r", file="../SECRET.txt")
     assert "error" in res
     assert secret.read_text(encoding="utf-8") == "ORIGINAL"
 
@@ -37,7 +37,7 @@ def test_apply_edit_rejects_traversal_file(tmp_path):
     ss.set_mode(ws, "mine", "auto")
     escaped = ws / "escaped.txt"
     res = ss.apply_skill_edit(ws, "mine", old="", new="PWNED", rationale="r",
-                              confirm=True, file="../../escaped.txt")
+                              file="../../escaped.txt")
     assert "error" in res
     assert not (tmp_path / "escaped.txt").exists()
     assert not escaped.exists()
@@ -50,7 +50,7 @@ def test_apply_edit_allows_scripts_subdir_file(tmp_path):
     _user_skill(ws, "mine", body="step\n")
     ss.set_mode(ws, "mine", "auto")
     res = ss.apply_skill_edit(ws, "mine", old="", new="print('hi')\n",
-                              rationale="add script", confirm=True,
+                              rationale="add script",
                               file="scripts/run.py")
     assert res["ok"] is True
     assert (ws / "skills" / "mine" / "scripts" / "run.py").exists()

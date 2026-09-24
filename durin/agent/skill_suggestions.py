@@ -260,11 +260,11 @@ def apply_suggestion(workspace: Path, action: dict) -> dict:
     from durin.agent import skills_store as ss
     t = action.get("type")
     if t == "evolve":
-        return ss.apply_skill_edit(
+        return ss.write_skill_edit(
             workspace, action["name"], old=action["old"], new=action["new"],
             rationale=action.get("rationale", "evolve"),
-            file=action.get("file", "SKILL.md"), confirm=True,
-            attribution=ss.Attribution(actor="curation"))
+            file=action.get("file", "SKILL.md"),
+            attribution=ss.Attribution(actor="curation"), approved_by="user")
     if t == "retire":
         return ss.remove_skill(workspace, action["name"])
     if t == "fuse":

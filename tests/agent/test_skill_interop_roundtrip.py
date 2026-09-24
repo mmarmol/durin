@@ -72,10 +72,10 @@ def test_apply_edit_preserves_foreign(tmp_path):
     ws.mkdir()
     _seed(ws)
     ss.set_mode(ws, "imported-thing", "manual")
-    res = ss.apply_skill_edit(
+    res = ss.write_skill_edit(
         ws, "imported-thing",
         old="do the thing", new="do the improved thing",
-        rationale="clarify step", confirm=True,
+        rationale="clarify step", approved_by="user",
     )
     assert res["ok"] is True
     text = _read(ws)

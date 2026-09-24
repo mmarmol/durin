@@ -99,7 +99,6 @@ class SkillEditTool(Tool, ContextAware):
             new=str(kwargs.get("new", "")),
             rationale=rationale,
             file=str(kwargs.get("file") or "SKILL.md"),
-            confirm=bool(kwargs.get("confirm", False)),
             attribution=attribution,
         )
         # A direct in-loop edit of an `auto` skill is itself a structural

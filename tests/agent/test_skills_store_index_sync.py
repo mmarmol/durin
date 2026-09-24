@@ -50,13 +50,12 @@ def test_apply_edit_ok_syncs_proposed_does_not(tmp_path, monkeypatch):
     assert calls2 == []
 
 
-def test_apply_edit_manual_confirm_syncs(tmp_path, monkeypatch):
+def test_approved_manual_edit_syncs(tmp_path, monkeypatch):
     ws = tmp_path / "ws"
     _write_skill(ws, "manual-skill", "manual", body="x")
     calls = _spy(monkeypatch)
-    res = ss.apply_skill_edit(
-        ws, "manual-skill", old="x", new="y", rationale="r", confirm=True
-    )
+    res = ss.write_skill_edit(ws, "manual-skill", old="x", new="y", rationale="r",
+                              approved_by="user")
     assert res.get("ok") is True
     assert ("sync", "manual-skill") in calls
 

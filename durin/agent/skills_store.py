@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import tempfile
 import tomllib
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -673,32 +674,19 @@ def _preview(before: str, after: str) -> str:
     ))
 
 
-def apply_skill_edit(
-    workspace: Path, name: str, *, old: str, new: str, rationale: str,
-    file: str = "SKILL.md", confirm: bool = False,
-    attribution: "Attribution | None" = None,
-) -> dict:
-    """The skill_edit operation: fork-on-write, mode gate, bounded replace, commit."""
-    if not rationale or not rationale.strip():
-        return {"error": "rationale is required"}
-    if not _safe_name(name):
-        return {"error": "invalid skill name"}
-    loader = _loader(workspace)
-    if loader.load_skill(name) is None:
-        return {"error": f"skill not found: {name}"}
-    mode = read_mode(workspace, name, loader)
-    store = _store_init(workspace)  # ensure git repo exists before mutating files
-    dest = fork_on_write(workspace, name, loader)
-    target = (dest / file).resolve()
-    if not target.is_relative_to(dest.resolve()):
+def _edit_text(root: Path, file: str, old: str, new: str) -> dict:
+    """Apply a bounded old→new replace to ``root/file`` in memory. Returns
+    ``{"before", "after"}`` or ``{"error"}``; writes nothing. An empty ``old``
+    appends ``new`` (creating the file when it does not exist yet)."""
+    target = _safe_target(root, file)
+    if target is None:
         return {"error": "file escapes skill directory"}
-    if not target.exists():
-        if old == "":
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text("", encoding="utf-8")
-        else:
-            return {"error": f"file not found: {file}"}
-    content = target.read_text(encoding="utf-8")
+    if target.exists():
+        content = target.read_text(encoding="utf-8")
+    elif old == "":
+        content = ""
+    else:
+        return {"error": f"file not found: {file}"}
     if old == "":
         updated = content + new
     else:
@@ -710,25 +698,179 @@ def apply_skill_edit(
                               "frontmatter description and the body; include "
                               "surrounding lines to pin one occurrence")}
         updated = content.replace(old, new, 1)
-
     if (file == "SKILL.md" and frontmatter_broken(updated)
             and not frontmatter_broken(content)):
         # e.g. the replacement slipped an unquoted ':' into the description —
         # persisting would hide the skill's name/description/provenance.
         return {"error": "edit would break the SKILL.md YAML frontmatter — "
                          "quote scalars that contain ': '"}
+    return {"before": content, "after": updated}
 
-    if mode == "manual" and not confirm:
+
+def plan_skill_edit(workspace: Path, name: str, *, old: str, new: str,
+                    rationale: str, file: str = "SKILL.md") -> dict:
+    """Validate one bounded edit and compute its result without writing
+    anything (a builtin is not forked). Returns ``{"error"}`` or ``{"mode",
+    "skill_dir", "file", "before", "after"}``; ``skill_dir`` is where the skill
+    is read from now (the workspace copy, else the builtin)."""
+    if not rationale or not rationale.strip():
+        return {"error": "rationale is required"}
+    if not _safe_name(name):
+        return {"error": "invalid skill name"}
+    loader = _loader(workspace)
+    if loader.load_skill(name) is None:
+        return {"error": f"skill not found: {name}"}
+    root = _resolve_skill_dir(workspace, name)
+    if root is None:
+        return {"error": f"skill not found: {name}"}
+    edit = _edit_text(root, file, old, new)
+    if "error" in edit:
+        return edit
+    return {"mode": read_mode(workspace, name, loader), "skill_dir": root,
+            "file": file, **edit}
+
+
+@dataclass(frozen=True)
+class WriteScan:
+    """Deterministic scan of a skill as it stands and as a write would leave it.
+
+    ``needs_review`` is the gate every write path shares: the result is not
+    ``safe`` AND it is either worse than the skill as it stands or carries a
+    finding the current skill does not have. A write that keeps an already
+    accepted risk as it was passes; a write that adds risk does not."""
+
+    before: str
+    after: str
+    findings: list
+    new_findings: list
+
+    @property
+    def worse(self) -> bool:
+        from durin.agent.skills_import import _VERDICT_ORDER
+        return _VERDICT_ORDER.get(self.after, 0) > _VERDICT_ORDER.get(self.before, 0)
+
+    @property
+    def needs_review(self) -> bool:
+        return self.after != "safe" and (self.worse or bool(self.new_findings))
+
+
+@contextmanager
+def post_write_tree(skill_dir: Path | None, writes: dict[str, str]):
+    """Yield a throwaway copy of ``skill_dir`` with ``writes`` (relative path →
+    text) applied, so a change can be scanned or judged before it lands. An
+    absent ``skill_dir`` starts from an empty tree. Raises ValueError when a
+    path escapes the skill directory."""
+    with tempfile.TemporaryDirectory(prefix="durin-skill-write-") as td:
+        tree = Path(td) / (Path(skill_dir).name if skill_dir is not None else "skill")
+        if skill_dir is not None and Path(skill_dir).is_dir():
+            shutil.copytree(skill_dir, tree,
+                            ignore=shutil.ignore_patterns(".git", "__pycache__"))
+        else:
+            tree.mkdir()
+        for rel, text in writes.items():
+            target = _safe_target(tree, rel)
+            if target is None:
+                raise ValueError(f"file escapes skill directory: {rel}")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(str(text), encoding="utf-8")
+        yield tree
+
+
+def scan_skill_write(skill_dir: Path | None, writes: dict[str, str]) -> WriteScan:
+    """Scan ``skill_dir`` as it is and as it would be after ``writes``."""
+    from durin.security.skill_reviews import fingerprint
+    from durin.security.skill_scan import ScanReport, scan_skill
+
+    current = (scan_skill(skill_dir) if skill_dir is not None and Path(skill_dir).is_dir()
+               else ScanReport())
+    with post_write_tree(skill_dir, writes) as tree:
+        result = scan_skill(tree)
+    seen = {fingerprint(f) for f in current.findings}
+    findings = _active_findings(result)
+    new = [f for f in findings if f["severity"] != "info" and fingerprint(f) not in seen]
+    return WriteScan(before=current.verdict, after=result.verdict,
+                     findings=findings, new_findings=new)
+
+
+def _void_verdict_cleared(md: Path) -> bool:
+    """Drop ``provenance.verdict_cleared``: a user's review adopted the skill as
+    it was, not the findings a later write brings, so the import-time verdict
+    pin comes back until someone reviews again. A frontmatter that does not
+    parse is left alone, since rewriting it would lose its hand-written fields."""
+    text = md.read_text(encoding="utf-8")
+    if frontmatter_broken(text):
+        return False
+    prov = _durin_blob(text).get("provenance")
+    if not isinstance(prov, dict) or "verdict_cleared" not in prov:
+        return False
+
+    def _drop(data: dict) -> None:
+        p = ensure_durin(data).get("provenance")
+        if isinstance(p, dict):
+            p.pop("verdict_cleared", None)
+
+    _update_md(md, _drop)
+    return True
+
+
+def write_skill_edit(
+    workspace: Path, name: str, *, old: str, new: str, rationale: str,
+    file: str = "SKILL.md", attribution: "Attribution | None" = None,
+    approval_id: str | None = None, approved_by: str | None = None,
+) -> dict:
+    """Apply one bounded edit and commit it, whatever the skill's mode.
+
+    This is the landing step once an edit is allowed: an ``auto`` skill whose
+    scan needs no review, or an edit someone approved (``approval_id`` /
+    ``approved_by`` become commit trailers). It forks a builtin first and
+    re-applies the replace to the file as it is now, so the fork's stamped
+    frontmatter is kept. An edit that adds findings drops
+    ``provenance.verdict_cleared``."""
+    if not rationale or not rationale.strip():
+        return {"error": "rationale is required"}
+    if not _safe_name(name):
+        return {"error": "invalid skill name"}
+    loader = _loader(workspace)
+    if loader.load_skill(name) is None:
+        return {"error": f"skill not found: {name}"}
+    mode = read_mode(workspace, name, loader)
+    store = _store_init(workspace)  # ensure git repo exists before mutating files
+    dest = fork_on_write(workspace, name, loader)
+    edit = _edit_text(dest, file, old, new)
+    if "error" in edit:
+        return edit
+    scan = scan_skill_write(dest, {file: edit["after"]})
+    target = (dest / file).resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(edit["after"], encoding="utf-8")
+    if scan.new_findings:
+        _void_verdict_cleared(dest / "SKILL.md")
+    sha = store.auto_commit(f"skill({name}): {rationale.strip()}",
+                            trailers={**attribution_to_trailers(attribution),
+                                      **approval_trailers(approval_id, approved_by)})
+    _sync_index(workspace, name)
+    return {"ok": True, "name": name, "file": file, "mode": mode, "commit": sha,
+            "verdict": scan.after, "findings": scan.findings}
+
+
+def apply_skill_edit(
+    workspace: Path, name: str, *, old: str, new: str, rationale: str,
+    file: str = "SKILL.md", attribution: "Attribution | None" = None,
+) -> dict:
+    """A bounded skill edit made with no person to ask (curation's ``evolve``).
+    A ``manual`` skill is the user's: the edit comes back as a proposed diff and
+    nothing is written. An ``auto`` skill is edited."""
+    plan = plan_skill_edit(workspace, name, old=old, new=new, rationale=rationale, file=file)
+    if "error" in plan:
+        return plan
+    if plan["mode"] == "manual":
         return {
             "proposed": True, "mode": "manual", "name": name, "file": file,
-            "note": "skill is manual; re-call with confirm=true after the user approves",
-            "preview": _preview(content, updated),
+            "note": "skill is manual; it was not changed — its owner decides edits to it",
+            "preview": _preview(plan["before"], plan["after"]),
         }
-    target.write_text(updated, encoding="utf-8")
-    sha = store.auto_commit(f"skill({name}): {rationale.strip()}",
-                            trailers=attribution_to_trailers(attribution))
-    _sync_index(workspace, name)
-    return {"ok": True, "name": name, "file": file, "mode": mode, "commit": sha}
+    return write_skill_edit(workspace, name, old=old, new=new, rationale=rationale,
+                            file=file, attribution=attribution)
 
 
 def save_skill_content(workspace: Path, name: str, content: str,
