@@ -16,6 +16,7 @@ from typing import Any
 from loguru import logger
 from pydantic import Field
 
+from durin.agent.approval_prompt import ChatHandles
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.context import ContextAware, RequestContext
 from durin.agent.tools.sandbox import wrap_command
@@ -63,6 +64,29 @@ _HARD_FLOOR_NOTE = (
     "another tool). Tell the user what you wanted to run and why; if it is "
     "really needed, they must run it themselves outside durin."
 )
+
+# Appended to a deny/allowlist refusal after the person in the chat was asked
+# to approve that exact command and declined.
+_APPROVAL_DECLINED_NOTE = (
+    "\n\nThe user was asked to approve this exact command and declined. Do "
+    "NOT retry it, and do NOT get the same result another way (a reworded "
+    "command, python or perl, find -delete, a script you write and run, or "
+    "another tool). Continue without it, or ask the user what they want instead."
+)
+
+# Appended when the approval request got no answer during the turn. The
+# request is closed, not left waiting: approving it later would run a shell
+# command outside the turn that needed it.
+_APPROVAL_UNANSWERED_NOTE = (
+    "\n\nThe user was asked to approve this exact command and did not answer, "
+    "so it did not run and the request was dropped. Do NOT retry it, and do "
+    "NOT get the same result another way (a reworded command, python or perl, "
+    "find -delete, a script you write and run, or another tool). Continue "
+    "without it, or ask the user."
+)
+
+# Appended to the output of a command that ran after the person approved it.
+_APPROVAL_APPLIED_NOTE = "\n\n(The user approved this exact command, once.)"
 
 # Rule name recorded when a configured allowlist refuses a command: no pattern
 # matched, so the refusal names the setting the command is missing from.
@@ -217,6 +241,7 @@ class ExecTool(Tool, ContextAware):
             allow_patterns=cfg.allow_patterns,
             deny_patterns=cfg.deny_patterns,
             process_config=getattr(ctx.config, "process", None),
+            chat=ChatHandles.from_tool_context(ctx),
         )
 
     def __init__(
@@ -230,8 +255,12 @@ class ExecTool(Tool, ContextAware):
         path_append: str = "",
         allowed_env_keys: list[str] | None = None,
         process_config: Any = None,
+        chat: ChatHandles | None = None,
     ):
         self.timeout = timeout
+        # What asking the person in the chat to approve a refused command
+        # needs; without sessions nobody is ever asked.
+        self._chat = chat or ChatHandles()
         self._process_config = process_config
         self.working_dir = working_dir
         self._request_ctx: RequestContext | None = None
@@ -327,8 +356,11 @@ class ExecTool(Tool, ContextAware):
             "Use -y or --yes flags to avoid interactive prompts. "
             "Output is truncated at 10 000 chars; timeout defaults to 60s. "
             "Destructive commands (rm -rf, dd, mkfs, format, shutdown) and "
-            "writes into memory/ or history files are blocked; when one is "
-            "blocked, ask the user instead of reaching the result another way. "
+            "writes into memory/ or history files are blocked. In a chat, the "
+            "tool itself shows a blocked command to the user, who can approve "
+            "running it once; wiping / or home, formatting a disk and shutdown "
+            "never run. When a command is refused, do not reach the result "
+            "another way. "
             "Set background=true for long-lived commands (servers, builds) "
             "and manage them with the process tool."
         )
@@ -341,6 +373,28 @@ class ExecTool(Tool, ContextAware):
         self, command: str, working_dir: str | None = None,
         timeout: int | None = None, background: bool = False, **kwargs: Any,
     ) -> str:
+        # The model-facing entry, and the only caller that may ask the person
+        # to approve a refused command. Nothing else in kwargs reaches the
+        # runner, so the model cannot lift a rule by passing one.
+        return await self._run(command, working_dir, timeout, background, ask=True)
+
+    async def _run(
+        self, command: str, working_dir: str | None = None,
+        timeout: int | None = None, background: bool = False, *,
+        approved_rules: frozenset[str] = frozenset(), ask: bool = False,
+    ) -> str:
+        """Guard and run *command*.
+
+        Never opens an approval unless ``ask`` is set, and only ``execute``
+        sets it. This is the runner handed to approval executors and to the
+        skill tools: a command they run that the policy refuses fails with
+        the refusal text instead of opening a second approval in the middle
+        of the one being carried out (or in whichever chat last set this
+        shared tool's context).
+
+        ``approved_rules`` is set only when a person approved this exact
+        command: the policy rules it lifts are skipped, nothing else is.
+        """
         cwd = working_dir or str(self._work_dir() or self.working_dir or os.getcwd())
 
         # Prevent an LLM-supplied working_dir from escaping the configured
@@ -362,9 +416,11 @@ class ExecTool(Tool, ContextAware):
                     + _WORKSPACE_BOUNDARY_NOTE
                 )
 
-        guard_error = self._guard_command(command, cwd)
-        if guard_error:
-            return guard_error
+        refusal = self._check(command, cwd, approved_rules=approved_rules)
+        if refusal is not None:
+            if ask and refusal.approvable:
+                return await self._ask_to_run(command, cwd, refusal, timeout, background)
+            return refusal.message
 
         if self.sandbox:
             if _IS_WINDOWS:
@@ -464,6 +520,80 @@ class ExecTool(Tool, ContextAware):
 
         except Exception as e:
             return f"Error executing command: {str(e)}"
+
+    async def _ask_to_run(
+        self, command: str, cwd: str, refusal: CommandRefusal,
+        timeout: int | None, background: bool,
+    ) -> str:
+        """Ask the person in this chat to approve one refused command.
+
+        Approved, it runs once, past only the policy rules that refused it.
+        With nobody to ask (cron, workflow, sub-agent, a chat with no live
+        consumer: the asker is None unless ``approval.human_reachable``), the
+        refusal stands and nothing is filed: a shell command replayed outside
+        the run that needed it has no defined meaning. A filed request is
+        never left pending either: declined, it is rejected; unanswered, or
+        cancelled with the turn while it waits, it is closed as expired.
+        """
+        from durin.agent import approval, approval_store
+        from durin.agent.approval_executors import ExecDeps
+        from durin.agent.approval_kinds_exec import prepare
+
+        # Read before the first await: this tool instance is shared across
+        # chats, and a turn in another chat re-points its context.
+        ctx = self._request_ctx
+        ask = self._chat.asker(ctx) if self.working_dir else None
+        if ask is None:
+            return refusal.message
+
+        # Ask only for a command an approval would actually let run. With the
+        # refusing rules lifted, a further policy rule (an allowlist behind a
+        # deny match) joins the request; any other refusal (the memory vault,
+        # a private URL, the workspace boundary) stands and nobody is asked.
+        rules = refusal.rules
+        while (further := self._check(command, cwd, approved_rules=frozenset(rules))) is not None:
+            if not further.approvable:
+                return further.message
+            rules += further.rules
+
+        session_key = ctx.session_key
+        filed: list[str] = []
+
+        async def ask_once(record: dict) -> str | None:
+            filed.append(record["id"])
+            return await ask(record)
+
+        try:
+            outcome = await approval.request(
+                self.working_dir,
+                prepare(command=command, cwd=cwd, rules=rules, session_key=session_key,
+                        timeout=timeout, background=background),
+                session_key=session_key,
+                # The literal command exists only here, in memory: the record
+                # holds a redacted copy, and the executor runs this literal
+                # after checking that it redacts to the recorded one.
+                deps=ExecDeps(exec_run=self._run, extra={"exec_command": command}),
+                ask=ask_once)
+        finally:
+            # An exec request never waits in Pending: approving it later would
+            # run a shell command outside the turn that needed it. Close it
+            # when no answer came back, including when the turn is cancelled
+            # (/stop, shutdown) while it waits. An answered request is no
+            # longer pending, so this leaves it alone.
+            for approval_id in filed:
+                approval_store.transition(
+                    self.working_dir, approval_id, expect=("pending",), to="expired",
+                    result={"reason": "not answered during the turn"})
+
+        if outcome.status == "applied":
+            return str((outcome.result or {}).get("output", "")) + _APPROVAL_APPLIED_NOTE
+        if outcome.status == "rejected":
+            return refusal.headline + _APPROVAL_DECLINED_NOTE
+        if outcome.status == "pending":
+            return refusal.headline + _APPROVAL_UNANSWERED_NOTE
+        if outcome.status == "failed":
+            return f"Error: {outcome.message}"
+        return f"{refusal.headline}\n\n{outcome.message}"
 
     @staticmethod
     async def _spawn(
