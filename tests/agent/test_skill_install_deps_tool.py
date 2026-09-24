@@ -6,11 +6,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from durin.agent import approval_store
 from durin.agent import approval_kinds_skills as kinds
+from durin.agent import approval_store
 from durin.agent import pending_answers as pa
-from durin.agent.tools.context import RequestContext
+from durin.agent import skills_import as si
+from durin.agent.tools.context import RequestContext, ToolContext
+from durin.agent.tools.shell import ExecTool
 from durin.agent.tools.skill_install_deps import _PARAMETERS, SkillInstallDepsTool
+from durin.config.schema import Config
 
 CHAT = "websocket:test"
 _SPEC = [{"kind": "brew", "value": "gh", "command": "brew install gh",
@@ -113,3 +116,41 @@ def test_privileged_commands_are_flagged_and_filed_when_nobody_can_answer(tmp_pa
     [rec] = approval_store.list_records(tmp_path, status="pending", include_legacy=False)
     assert rec["kind"] == "skill_deps"
     assert rec["detail"]["needs_privileges"] == ["apt-get install -y ripgrep"]
+
+
+def test_a_refused_step_in_an_approved_install_fails_without_a_second_approval(
+        tmp_path, monkeypatch):
+    # The runner comes from ExecTool.create(ctx). Even when that exec tool
+    # knows this chat, a step the exec policy refuses must fail with the
+    # refusal text, not put a second approval to the person mid-install.
+    spec = [{"kind": "brew", "value": "x", "command": "rm -rf build",
+             "needs_privileges": False}]
+    monkeypatch.setattr("durin.agent.skills_import.runnable_install_specs", lambda d: spec)
+    steps: list = []
+    real_run_install_specs = si.run_install_specs
+
+    async def _record_steps(specs, *, exec_run):
+        steps.extend(await real_run_install_specs(specs, exec_run=exec_run))
+        return steps
+
+    monkeypatch.setattr("durin.agent.skills_import.run_install_specs", _record_steps)
+    (tmp_path / "build").mkdir()
+    pa.set_consumer_active(True)
+    cfg = Config()
+    cfg.agents.defaults.ask_user_answer_timeout_s = 1
+    tool = SkillInstallDepsTool.create(ToolContext(
+        config=cfg.tools, workspace=str(tmp_path), sessions=_Sessions(), app_config=cfg))
+    chat = RequestContext(channel="websocket", chat_id="c", session_key=CHAT)
+    tool.set_context(chat)
+    tool._exec_run.__self__.set_context(chat)
+
+    out = _run_answering(tool, "approve")
+
+    [step] = steps
+    assert step["success"] is False
+    assert step["output"] == ExecTool()._guard_command("rm -rf build", str(tmp_path))
+    assert (tmp_path / "build").is_dir()
+    assert out["status"] == "failed" and "rm -rf build" in out["message"]
+    assert [(r["kind"], r["status"]) for r in
+            approval_store.list_records(tmp_path, include_legacy=False)] \
+        == [("skill_deps", "failed")]

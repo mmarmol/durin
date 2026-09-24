@@ -126,7 +126,10 @@ class SkillImportTool(Tool, ContextAware):
         exec_run = None
         try:
             from durin.agent.tools.shell import ExecTool
-            exec_run = ExecTool.create(ctx).execute
+            # The runner that never asks: a dependency command the exec policy
+            # refuses fails its step instead of opening a second approval
+            # inside the install that is being carried out.
+            exec_run = ExecTool.create(ctx)._run
         except Exception:  # noqa: BLE001
             pass
         return cls(workspace=ctx.workspace, allowlist=allowlist, caps=caps, judge=judge,

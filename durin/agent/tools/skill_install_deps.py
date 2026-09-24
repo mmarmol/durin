@@ -79,7 +79,9 @@ class SkillInstallDepsTool(Tool, ContextAware):
                 policy = load_config().skills.install_policy
             except Exception:  # noqa: BLE001
                 pass
-        return cls(workspace=ctx.workspace, exec_run=exec_tool.execute, policy=policy,
+        # The runner that never asks: a command the exec policy refuses fails
+        # its step instead of opening a second approval inside this one.
+        return cls(workspace=ctx.workspace, exec_run=exec_tool._run, policy=policy,
                    chat=kinds.ChatHandles.from_tool_context(ctx))
 
     async def execute(self, **kwargs: Any) -> Any:

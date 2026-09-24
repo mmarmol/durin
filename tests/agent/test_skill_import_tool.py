@@ -17,8 +17,10 @@ from durin.agent import approval_kinds_skills as kinds
 from durin.agent import pending_answers as pa
 from durin.agent.approval_executors import ExecDeps
 from durin.agent.skills_frontmatter import split_frontmatter
-from durin.agent.tools.context import RequestContext
+from durin.agent.tools.context import RequestContext, ToolContext
+from durin.agent.tools.shell import ExecTool
 from durin.agent.tools.skill_import import _PARAMETERS, SkillImportTool
+from durin.config.schema import Config
 
 CHAT = "websocket:test"
 # The body without its END line: a compliant judge must echo back the random
@@ -332,3 +334,33 @@ def test_reject(tmp_path):
 def test_unresolved_source_reported(tmp_path):
     out = _run(_tool(tmp_path / "ws"), action="fetch", source="https://example.com/page")
     assert out.get("unresolved_reason")
+
+
+def test_a_refused_dependency_step_fails_without_a_second_approval(tmp_path, monkeypatch):
+    # The dependency runner comes from ExecTool.create(ctx). Even when that
+    # exec tool knows this chat, a step the exec policy refuses must fail with
+    # the refusal text, not put a second approval to the person mid-install.
+    spec = [{"kind": "brew", "value": "x", "command": "rm -rf build",
+             "needs_privileges": False}]
+    monkeypatch.setattr("durin.agent.skills_import.runnable_install_specs", lambda d: spec)
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    src = _src_skill(tmp_path / "src", "a", scripts={"run.sh": "echo hi\n"})
+    pa.set_consumer_active(True)
+    cfg = Config()
+    cfg.skills.install_policy = "auto"
+    cfg.agents.defaults.ask_user_answer_timeout_s = 1
+    tool = SkillImportTool.create(ToolContext(
+        config=cfg.tools, workspace=str(ws), sessions=_Sessions(), app_config=cfg))
+    chat = RequestContext(channel="websocket", chat_id="c", session_key=CHAT)
+    tool.set_context(chat)
+    tool._exec_run.__self__.set_context(chat)
+    _run(tool, action="fetch", source=str(src))
+
+    out = _run(tool, action="install", name="a")
+
+    assert out["ok"] is True
+    [step] = out["deps_installed"]
+    assert step["success"] is False
+    assert step["output"] == ExecTool()._guard_command("rm -rf build", str(ws))
+    assert approval_store.list_records(ws, include_legacy=False) == []
