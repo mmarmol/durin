@@ -10,7 +10,7 @@ from pydantic import Field
 
 from durin.agent.subagent import SubagentStatus
 from durin.agent.tools.base import Tool
-from durin.agent.tools.context import ContextAware, RequestContext
+from durin.agent.tools.context import ContextAware, RequestContext, RequestContextVar
 from durin.agent.tools.runtime_state import RuntimeState
 from durin.config.schema import Base
 
@@ -103,8 +103,8 @@ class MyTool(Tool, ContextAware):
     def __init__(self, runtime_state: RuntimeState, modify_allowed: bool = True) -> None:
         self._runtime_state = runtime_state
         self._modify_allowed = modify_allowed
-        self._channel = ""
-        self._chat_id = ""
+        # This turn's context: the instance is shared by concurrent turns.
+        self._ctx = RequestContextVar("my_tool_request_ctx")
 
     def __deepcopy__(self, memo: dict[int, Any]) -> MyTool:
         cls = self.__class__
@@ -112,13 +112,11 @@ class MyTool(Tool, ContextAware):
         memo[id(self)] = result
         result._runtime_state = self._runtime_state
         result._modify_allowed = self._modify_allowed
-        result._channel = self._channel
-        result._chat_id = self._chat_id
+        result._ctx = self._ctx
         return result
 
     def set_context(self, ctx: RequestContext) -> None:
-        self._channel = ctx.channel
-        self._chat_id = ctx.chat_id
+        self._ctx.set(ctx)
 
     @property
     def name(self) -> str:
@@ -175,7 +173,8 @@ class MyTool(Tool, ContextAware):
         }
 
     def _audit(self, action: str, detail: str) -> None:
-        session = f"{self._channel}:{self._chat_id}" if self._channel else "unknown"
+        ctx = self._ctx.get()
+        session = f"{ctx.channel}:{ctx.chat_id}" if ctx and ctx.channel else "unknown"
         logger.info("self.{} | {} | session:{}", action, detail, session)
 
     # ------------------------------------------------------------------

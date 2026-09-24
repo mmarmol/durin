@@ -225,6 +225,29 @@ For each tool call, `_run_tool()` applies checks in this order:
    `"Error: ..."` return values are both recorded in `seen_failed_calls` so
    identical retries are short-circuited.
 
+### Per-turn request context (`ContextAware`)
+
+A registry holds one instance of each tool, and that instance is shared by
+every turn running at the same time — the interactive lane runs several chats
+concurrently, and `process_direct` (cron, automations, the HTTP API) reuses the
+same instances. A tool that needs to know which chat called it (a session key
+for metadata, a channel/chat id to publish an out-of-band message, a per-chat
+work directory) cannot keep that as a plain attribute: whichever turn's
+`set_context()` ran last would win, so a question, a file write, a secret
+request or a todo list could land in a different chat than the one that asked
+for it.
+
+A context-aware tool instead implements the `ContextAware` protocol
+(`durin/agent/tools/context.py`) and stores its context in a
+`RequestContextVar` — a small wrapper around a `contextvars.ContextVar`.
+Before each tool batch, the loop builds a `RequestContext` (channel, chat id,
+session key, metadata) for the turn and calls `set_context()` on every
+registered tool that implements `ContextAware`. Because a `ContextVar` value is
+scoped to the asyncio task that set it (and copied into any child task
+started afterward, e.g. via `asyncio.gather` or `asyncio.to_thread`), each
+turn's task reads back only the context it set, even while another turn's task
+calls `set_context()` on the same shared instance in between.
+
 ### Message-history sanitization
 
 Before each LLM call, the runner sanitizes the message history to satisfy provider

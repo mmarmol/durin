@@ -40,7 +40,7 @@ from typing import TYPE_CHECKING, Any
 
 from durin.agent.tools._telemetry import emit_tool_event
 from durin.agent.tools.base import Tool, tool_parameters
-from durin.agent.tools.context import ContextAware, RequestContext
+from durin.agent.tools.context import ContextAware, RequestContext, RequestContextVar
 from durin.agent.tools.schema import (
     ArraySchema,
     ObjectSchema,
@@ -105,10 +105,11 @@ class TodoWriteTool(Tool, ContextAware):
 
     def __init__(self, sessions: "SessionManager") -> None:
         self._sessions = sessions
-        self._request_ctx: RequestContext | None = None
+        # This turn's context: the instance is shared by concurrent turns.
+        self._ctx = RequestContextVar("todo_write_request_ctx")
 
     def set_context(self, ctx: RequestContext) -> None:
-        self._request_ctx = ctx
+        self._ctx.set(ctx)
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
@@ -141,9 +142,10 @@ class TodoWriteTool(Tool, ContextAware):
         )
 
     def _session(self) -> Any | None:
-        if self._request_ctx is None:
+        ctx = self._ctx.get()
+        if ctx is None:
             return None
-        key = self._request_ctx.session_key
+        key = ctx.session_key
         if not key:
             return None
         return self._sessions.get_or_create(key)

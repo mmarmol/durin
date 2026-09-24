@@ -37,7 +37,7 @@ from contextlib import suppress
 from typing import TYPE_CHECKING, Any
 
 from durin.agent.tools.base import Tool, tool_parameters
-from durin.agent.tools.context import ContextAware, RequestContext
+from durin.agent.tools.context import ContextAware, RequestContext, RequestContextVar
 from durin.agent.tools.schema import (
     ArraySchema,
     StringSchema,
@@ -100,10 +100,11 @@ class AskUserQuestionTool(Tool, ContextAware):
         self._bus = bus
         self._blocking = blocking
         self._answer_timeout_s = answer_timeout_s
-        self._request_ctx: RequestContext | None = None
+        # This turn's context: the instance is shared by concurrent turns.
+        self._ctx = RequestContextVar("ask_user_request_ctx")
 
     def set_context(self, ctx: RequestContext) -> None:
-        self._request_ctx = ctx
+        self._ctx.set(ctx)
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
@@ -148,9 +149,10 @@ class AskUserQuestionTool(Tool, ContextAware):
         )
 
     def _session(self) -> Any | None:
-        if self._request_ctx is None:
+        ctx = self._ctx.get()
+        if ctx is None:
             return None
-        key = self._request_ctx.session_key
+        key = ctx.session_key
         if not key:
             return None
         return self._sessions.get_or_create(key)
@@ -194,7 +196,8 @@ class AskUserQuestionTool(Tool, ContextAware):
 
         # Blocking V2: wait in-turn for the answer; degrade to the V1 yield
         # contract on timeout, fallback sentinel, or missing session context.
-        session_key = self._request_ctx.session_key if self._request_ctx else None
+        ctx = self._ctx.get()
+        session_key = ctx.session_key if ctx else None
         if self._blocking and session is not None and session_key:
             answer = await self._await_answer(session_key, question_id)
             if answer is not None:
@@ -259,9 +262,10 @@ class AskUserQuestionTool(Tool, ContextAware):
         the turn-end fallback serializer never fires while we block, so dumb
         channels need the serialized question published here.
         """
-        if self._bus is None or self._request_ctx is None:
+        ctx = self._ctx.get()
+        if self._bus is None or ctx is None:
             return
-        channel = self._request_ctx.channel
+        channel = ctx.channel
         if channel_renders_tool_payloads(channel):
             return
         session = self._session()
@@ -274,7 +278,7 @@ class AskUserQuestionTool(Tool, ContextAware):
 
                 await self._bus.publish_outbound(OutboundMessage(
                     channel=channel,
-                    chat_id=self._request_ctx.chat_id,
+                    chat_id=ctx.chat_id,
                     content=text,
                 ))
 

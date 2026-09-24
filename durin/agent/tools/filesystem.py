@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from durin.agent.tools.base import Tool, tool_parameters
-from durin.agent.tools.context import ContextAware, RequestContext
+from durin.agent.tools.context import ContextAware, RequestContext, RequestContextVar
 from durin.agent.tools.file_state import FileStates, _hash_file, current_file_states
 from durin.agent.tools.path_utils import resolve_workspace_path
 from durin.agent.tools.post_edit_check import run_post_edit_check
@@ -57,10 +57,11 @@ class _FsTool(Tool, ContextAware):
         # current async task, which keeps shared tool instances session-safe.
         self._explicit_file_states = file_states
         self._fallback_file_states = FileStates()
-        self._request_ctx: RequestContext | None = None
+        # This turn's context: the instance is shared by concurrent turns.
+        self._ctx = RequestContextVar("fs_request_ctx")
 
     def set_context(self, ctx: RequestContext) -> None:
-        self._request_ctx = ctx
+        self._ctx.set(ctx)
 
     def _work_dir(self) -> Path | None:
         """Return the per-session work directory path, or None when no session is set.
@@ -70,7 +71,8 @@ class _FsTool(Tool, ContextAware):
         parent.mkdir before writing), so read-only sessions never litter the
         workspace with empty work/<session>/ directories.
         """
-        sk = self._request_ctx.session_key if self._request_ctx else None
+        ctx = self._ctx.get()
+        sk = ctx.session_key if ctx else None
         if not sk or self._workspace is None:
             return None
         from durin.agent.tools.work_area import session_work_dir

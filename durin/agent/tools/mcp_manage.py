@@ -20,7 +20,7 @@ from typing import Any
 from durin.agent import approval
 from durin.agent.mcp_registry import build_mcp_adapters
 from durin.agent.tools.base import Tool, tool_parameters
-from durin.agent.tools.context import ContextAware, RequestContext
+from durin.agent.tools.context import ContextAware, RequestContext, RequestContextVar
 from durin.agent.tools.schema import StringSchema, tool_parameters_schema
 
 _GATED = {"install", "add", "update"}
@@ -59,10 +59,11 @@ class McpManageTool(Tool, ContextAware):
         self._policy = install_policy
         self._registries = list(registries or [])
         self._workspace = workspace
-        self._request_ctx: RequestContext | None = None
+        # This turn's context: the instance is shared by concurrent turns.
+        self._ctx = RequestContextVar("mcp_manage_request_ctx")
 
     def set_context(self, ctx: RequestContext) -> None:
-        self._request_ctx = ctx
+        self._ctx.set(ctx)
 
     @property
     def name(self) -> str:
@@ -120,8 +121,8 @@ class McpManageTool(Tool, ContextAware):
         return "dry"
 
     def _session_key(self) -> str | None:
-        ctx = getattr(self, "_request_ctx", None)
-        return getattr(ctx, "session_key", None) if ctx is not None else None
+        ctx = self._ctx.get()
+        return ctx.session_key if ctx is not None else None
 
     def _stage(self, action: str, *, summary: str, detail: dict) -> dict:
         decision = approval.gate(

@@ -32,7 +32,7 @@ from contextlib import suppress
 from typing import Any
 
 from durin.agent.tools.base import Tool, tool_parameters
-from durin.agent.tools.context import ContextAware, RequestContext
+from durin.agent.tools.context import ContextAware, RequestContext, RequestContextVar
 from durin.agent.tools.schema import NumberSchema, StringSchema, tool_parameters_schema
 from durin.telemetry.logger import current_telemetry
 
@@ -78,10 +78,11 @@ class SleepTool(Tool, ContextAware):
         self._workspace = workspace
         self._manager = subagent_manager
         self._sessions = sessions
-        self._request_ctx: RequestContext | None = None
+        # This turn's context: the instance is shared by concurrent turns.
+        self._ctx = RequestContextVar("sleep_request_ctx")
 
     def set_context(self, ctx: RequestContext) -> None:
-        self._request_ctx = ctx
+        self._ctx.set(ctx)
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
@@ -107,7 +108,7 @@ class SleepTool(Tool, ContextAware):
         the agent to poll for exactly the work it must not poll for. Empty on
         any failure or missing wiring; the reminder is advisory only."""
         try:
-            ctx = self._request_ctx
+            ctx = self._ctx.get()
             if not self._workspace or ctx is None:
                 return []
             session_key = ctx.session_key or (

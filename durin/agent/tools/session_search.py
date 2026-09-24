@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from durin.agent.tools.base import Tool, tool_parameters
-from durin.agent.tools.context import ContextAware, RequestContext
+from durin.agent.tools.context import ContextAware, RequestContext, RequestContextVar
 from durin.agent.tools.schema import (
     BooleanSchema,
     IntegerSchema,
@@ -285,10 +285,11 @@ class SessionSearchTool(Tool, ContextAware):
 
     def __init__(self, sessions: "SessionManager") -> None:
         self._sessions = sessions
-        self._request_ctx: RequestContext | None = None
+        # This turn's context: the instance is shared by concurrent turns.
+        self._ctx = RequestContextVar("session_search_request_ctx")
 
     def set_context(self, ctx: RequestContext) -> None:
-        self._request_ctx = ctx
+        self._ctx.set(ctx)
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
@@ -319,9 +320,10 @@ class SessionSearchTool(Tool, ContextAware):
         )
 
     def _session(self) -> Any | None:
-        if self._request_ctx is None:
+        ctx = self._ctx.get()
+        if ctx is None:
             return None
-        key = self._request_ctx.session_key
+        key = ctx.session_key
         if not key:
             return None
         return self._sessions.get_or_create(key)
@@ -352,7 +354,8 @@ class SessionSearchTool(Tool, ContextAware):
         width = snippet_chars if snippet_chars is not None else _DEFAULT_SNIPPET_CHARS
         width = max(_MIN_SNIPPET_CHARS, min(int(width), _MAX_SNIPPET_CHARS))
 
-        current_key = self._request_ctx.session_key if self._request_ctx else None
+        ctx = self._ctx.get()
+        current_key = ctx.session_key if ctx else None
         other = bool(session_key) and session_key != current_key
         if other:
             data = self._sessions.read_session_file(str(session_key))
