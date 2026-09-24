@@ -24,6 +24,14 @@ _REGISTRY_DOORS = {
                      "automations editor"),
 }
 
+# Denied directories that have no write door at all — nothing the agent calls
+# writes here under any name, so the refusal must not claim a door exists (as
+# the _REGISTRY_DOORS wording does). Keyed by the directory's name, value is
+# why the agent can't write there.
+_NO_DOOR_REASONS = {
+    ".approvals": "approval records are written only by the server",
+}
+
 
 def is_under(path: Path, directory: Path) -> bool:
     """Return True when path resolves under directory."""
@@ -76,9 +84,15 @@ def resolve_workspace_path(
     for denied in (denied_subdirs or []):
         if is_under(resolved, denied):
             door = _REGISTRY_DOORS.get(denied.name)
+            if door:
+                raise PermissionError(
+                    f"Path {path} is under the protected {denied.name} registry, which owns "
+                    f"its own validated + versioned write door: {door}."
+                    + WORKSPACE_BOUNDARY_NOTE
+                )
+            reason = _NO_DOOR_REASONS.get(denied.name, "it is not writable by the agent")
             raise PermissionError(
-                f"Path {path} is under the protected {denied.name} registry, which owns "
-                f"its own validated + versioned write door"
-                + (f": {door}." if door else ".") + WORKSPACE_BOUNDARY_NOTE
+                f"Path {path} is under {denied.name}, which the agent cannot write: "
+                f"{reason}." + WORKSPACE_BOUNDARY_NOTE
             )
     return resolved

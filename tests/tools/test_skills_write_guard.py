@@ -104,14 +104,49 @@ async def test_write_tool_guard_registry_dirs_false_allows_isolated_staging_writ
 @pytest.mark.asyncio
 async def test_write_tool_refuses_approvals(tmp_path):
     """Approval records are written only by the server; the model must not be
-    able to forge or rewrite one through its own file tools."""
+    able to forge or rewrite one through its own file tools. The refusal must
+    not claim a write door exists here — there isn't one."""
     ws = tmp_path / "ws"
     ws.mkdir()
     (ws / ".approvals").mkdir()
     tool = WriteFileTool(workspace=ws, allowed_dir=ws)
     result = await tool.execute(path=".approvals/fake123.json", content="{}")
     assert "Error" in result
+    assert "approval records are written only by the server" in result
+    assert "write door" not in result
     assert not (ws / ".approvals" / "fake123.json").exists()
+
+
+def test_approvals_refusal_names_no_door(tmp_path):
+    """.approvals owns no write door at all, unlike skills/workflows/automations.
+    The refusal wording must say so plainly instead of reusing the door-owning
+    registries' "which owns its own validated + versioned write door" phrasing,
+    which would send the model looking for a door that does not exist."""
+    ws = tmp_path
+    denied = [ws / d for d in ("skills", "workflows", "automations", ".approvals")]
+    with pytest.raises(PermissionError) as exc:
+        resolve_workspace_path(".approvals/fake123.json", ws, allowed_dir=ws,
+                               denied_subdirs=denied)
+    message = str(exc.value)
+    assert message.startswith(
+        "Path .approvals/fake123.json is under .approvals, which the agent cannot "
+        "write: approval records are written only by the server."
+    )
+    assert "write door" not in message
+
+
+def test_door_owning_dir_still_names_its_door(tmp_path):
+    """A registry that does own a door (skills) keeps naming it — the no-door
+    wording added for .approvals must not affect dirs that have a real door,
+    even when both kinds of denied dirs are passed together."""
+    ws = tmp_path
+    denied = [ws / d for d in ("skills", "workflows", "automations", ".approvals")]
+    with pytest.raises(PermissionError) as exc:
+        resolve_workspace_path("skills/x/SKILL.md", ws, allowed_dir=ws, denied_subdirs=denied)
+    message = str(exc.value)
+    assert "protected skills registry" in message
+    assert "skill_publish" in message
+    assert "the agent cannot write" not in message
 
 
 @pytest.mark.parametrize(
