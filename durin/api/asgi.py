@@ -874,6 +874,8 @@ def build_gateway_http_app(
     # Build the /api/v1/* routes from the service registry. build_api_app's
     # routes already carry the full "/api/v1/..." path, so splice them in at the
     # top level — mounting under "/api/v1" would double the prefix.
+    from durin.api.chat_stream import build_chat_stream_routes
+
     api_app = build_api_app(registry, auth=auth, static_token=static_token)
 
     routes: list[Any] = [
@@ -883,6 +885,15 @@ def build_gateway_http_app(
         # media-signing versions win (the generic handler can't sign).
         Route("/api/v1/sessions/{key}/messages", v1_session_messages, methods=["GET"]),
         Route("/api/v1/sessions/{key}/webui-thread", v1_webui_thread, methods=["GET"]),
+        # Webui conversations over SSE; the send route's streaming form must
+        # precede the generic /api/v1 table (first match wins).
+        *build_chat_stream_routes(
+            channel,
+            registry,
+            resolve_principal=lambda headers: resolve_principal_from_headers(
+                headers, auth=auth, static_token=static_token
+            ),
+        ),
         # /api/v1/* — new front door (highest priority).
         *api_app.routes,
         # /api/v1/mcp/oauth/callback — OAuth provider redirect (state-gated).

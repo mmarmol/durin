@@ -1604,6 +1604,17 @@ class AgentLoop:
             return False
         return pending_answers.resolve(session_key, text)
 
+    async def _answer_pending_question(self, msg: InboundMessage, session_key: str) -> bool:
+        """Deliver *msg* as the answer to a blocked ask_user, if one is waiting.
+
+        The answer enters the running turn, so it is acknowledged the way a
+        consumed queued message is: a client waiting on this message then
+        knows the running turn's ``turn_end`` is the one that answers it."""
+        if not self._maybe_resolve_pending_answer(msg, session_key):
+            return False
+        await self._ack_queued_consumed([msg])
+        return True
+
     async def _maybe_publish_interaction_fallback(
         self, *, channel: str, chat_id: str, session_key: str
     ) -> None:
@@ -2291,7 +2302,7 @@ class AgentLoop:
             # answer. A plain-text reply resolves the in-turn waiter and is
             # consumed here; anything else (commands, media) tells the waiter
             # to fall back to yield semantics and routes on.
-            if self._maybe_resolve_pending_answer(msg, effective_key):
+            if await self._answer_pending_question(msg, effective_key):
                 continue
             # A literal "[steer]" prefix marks a steer (older TUI clients and
             # users typing it by hand); normalize it into the metadata flag so
