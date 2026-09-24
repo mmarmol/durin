@@ -535,6 +535,7 @@ def build_gateway_http_app(
     agent_loop: Any = None,
     model_name: str = "durin",
     api_request_timeout: float = 120.0,
+    api_stream_timeout: float = 3600.0,
 ) -> Starlette:
     """Build a Starlette ASGI app serving the full gateway HTTP surface.
 
@@ -574,7 +575,10 @@ def build_gateway_http_app(
                           ``None`` leaves the whole ``/v1`` surface unmounted.
         model_name:       Model id reported by ``/v1/models`` and echoed in
                           chat responses.
-        api_request_timeout: Per-request timeout (seconds) for ``/v1`` chat turns.
+        api_request_timeout: Per-request timeout (seconds) for non-streaming
+                          ``/v1`` chat turns.
+        api_stream_timeout: Hard ceiling (seconds) on a streaming ``/v1`` chat
+                          turn; ``0`` disables it.
     """
     resolved_static = static_dist_path or channel._static_dist_path
 
@@ -899,6 +903,7 @@ def build_gateway_http_app(
                 agent_loop,
                 model_name=model_name,
                 request_timeout=api_request_timeout,
+                stream_timeout=api_stream_timeout,
                 resolve_principal=lambda headers: resolve_principal_from_headers(
                     headers, auth=auth, static_token=static_token
                 ),

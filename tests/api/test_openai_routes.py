@@ -19,7 +19,13 @@ def _make_loop(text: str = "mock response") -> MagicMock:
     return loop
 
 
-def _build_app(tmp_path, monkeypatch, agent_loop=None, api_request_timeout: float = 5.0):
+def _build_app(
+    tmp_path,
+    monkeypatch,
+    agent_loop=None,
+    api_request_timeout: float = 5.0,
+    api_stream_timeout: float = 5.0,
+):
     data_dir = tmp_path / "durin_data"
     data_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr("durin.config.paths.get_data_dir", lambda: data_dir)
@@ -49,6 +55,7 @@ def _build_app(tmp_path, monkeypatch, agent_loop=None, api_request_timeout: floa
         agent_loop=agent_loop if agent_loop is not None else _make_loop(),
         model_name="test-model",
         api_request_timeout=api_request_timeout,
+        api_stream_timeout=api_stream_timeout,
     )
 
 
@@ -469,6 +476,186 @@ def test_stream_failure_emits_error_frame_and_no_done(tmp_path, monkeypatch):
     assert events, "expected at least the error frame"
     assert events[-1] != "[DONE]"
     assert "error" in json.loads(events[-1])
+
+
+def _stream_raw(client, tok) -> str:
+    with client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "a"}], "stream": True},
+        headers=_hdr(tok),
+    ) as r:
+        assert r.status_code == 200
+        return "".join(r.iter_text())
+
+
+def test_stream_outlives_the_request_timeout(tmp_path, monkeypatch):
+    """A working stream is not cut by api_request_timeout (non-streaming only)."""
+
+    async def _long_turn(**kwargs):
+        await asyncio.sleep(0.3)
+        await kwargs["on_stream"]("done")
+        return SimpleNamespace(content="done")
+
+    loop = MagicMock()
+    loop.process_direct = AsyncMock(side_effect=_long_turn)
+    client = TestClient(
+        _build_app(tmp_path, monkeypatch, agent_loop=loop, api_request_timeout=0.05)
+    )
+    events = _sse_events(_stream_raw(client, _mint(["chat:write"])))
+    assert events[-1] == "[DONE]"
+    deltas = [
+        json.loads(e)["choices"][0]["delta"].get("content", "") for e in events[:-1]
+    ]
+    assert "".join(deltas) == "done"
+
+
+def test_stream_sends_keepalive_comments_while_silent(tmp_path, monkeypatch):
+    """Silence (a tool running) yields SSE comment lines, not data frames."""
+    monkeypatch.setattr("durin.api.openai_routes._SSE_KEEPALIVE_S", 0.02)
+
+    async def _silent_then_answer(**kwargs):
+        await asyncio.sleep(0.2)
+        await kwargs["on_stream"]("ok")
+        return SimpleNamespace(content="ok")
+
+    loop = MagicMock()
+    loop.process_direct = AsyncMock(side_effect=_silent_then_answer)
+    client = TestClient(_build_app(tmp_path, monkeypatch, agent_loop=loop))
+    raw = _stream_raw(client, _mint(["chat:write"]))
+    assert ": keepalive" in raw.splitlines()
+    events = _sse_events(raw)
+    assert events[-1] == "[DONE]"
+
+
+def test_stream_ceiling_ends_with_error_frame_and_no_done(tmp_path, monkeypatch):
+    async def _runaway(**_kwargs):
+        await asyncio.sleep(30)
+
+    loop = MagicMock()
+    loop.process_direct = AsyncMock(side_effect=_runaway)
+    client = TestClient(
+        _build_app(tmp_path, monkeypatch, agent_loop=loop, api_stream_timeout=0.05)
+    )
+    events = _sse_events(_stream_raw(client, _mint(["chat:write"])))
+    assert events[-1] != "[DONE]"
+    error = json.loads(events[-1])["error"]
+    assert "0.05s" in error["message"]
+    assert error["type"] == "server_error"
+
+
+def test_stream_ceiling_zero_disables_it(tmp_path, monkeypatch):
+    async def _long_turn(**kwargs):
+        await asyncio.sleep(0.2)
+        await kwargs["on_stream"]("fine")
+        return SimpleNamespace(content="fine")
+
+    loop = MagicMock()
+    loop.process_direct = AsyncMock(side_effect=_long_turn)
+    client = TestClient(
+        _build_app(
+            tmp_path,
+            monkeypatch,
+            agent_loop=loop,
+            api_request_timeout=0.05,
+            api_stream_timeout=0,
+        )
+    )
+    events = _sse_events(_stream_raw(client, _mint(["chat:write"])))
+    assert events[-1] == "[DONE]"
+
+
+def test_stream_client_disconnect_cancels_the_turn():
+    """Closing the body iterator (what Starlette does on disconnect) cancels the turn."""
+    from durin.api.openai_routes import build_openai_routes
+    from durin.service.principal import Principal
+
+    seen = {"cancelled": False}
+
+    async def _turn(**kwargs):
+        await kwargs["on_stream"]("first")
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            seen["cancelled"] = True
+            raise
+        return SimpleNamespace(content="never")
+
+    loop = MagicMock()
+    loop.process_direct = AsyncMock(side_effect=_turn)
+    routes = build_openai_routes(
+        loop,
+        model_name="test-model",
+        request_timeout=5.0,
+        stream_timeout=5.0,
+        resolve_principal=lambda _h: Principal.remote("t", frozenset({"chat:write"})),
+    )
+    chat_endpoint = next(r for r in routes if r.path == "/v1/chat/completions").endpoint
+
+    class _Req:
+        headers = {"content-type": "application/json"}
+
+        async def json(self):
+            return {"messages": [{"role": "user", "content": "x"}], "stream": True}
+
+    async def _drive():
+        response = await chat_endpoint(_Req())
+        body = response.body_iterator
+        first = await body.__anext__()
+        assert b"first" in first
+        await body.aclose()
+
+    asyncio.run(_drive())
+    assert seen["cancelled"]
+
+
+def test_stream_ceiling_starts_when_the_turn_gets_the_session():
+    """Time spent queued behind another turn on the session is not billed."""
+    from durin.api.openai_routes import build_openai_routes
+    from durin.service.principal import Principal
+
+    async def _turn(**kwargs):
+        if kwargs.get("on_stream") is None:  # the blocking, non-streaming turn
+            await asyncio.sleep(0.3)
+            return SimpleNamespace(content="first")
+        await asyncio.sleep(0.05)  # well inside the 0.2s ceiling on its own
+        await kwargs["on_stream"]("second")
+        return SimpleNamespace(content="second")
+
+    loop = MagicMock()
+    loop.process_direct = AsyncMock(side_effect=_turn)
+    routes = build_openai_routes(
+        loop,
+        model_name="test-model",
+        request_timeout=5.0,
+        stream_timeout=0.2,
+        resolve_principal=lambda _h: Principal.remote("t", frozenset({"chat:write"})),
+    )
+    chat_endpoint = next(r for r in routes if r.path == "/v1/chat/completions").endpoint
+
+    def _req(stream: bool):
+        class _Req:
+            headers = {"content-type": "application/json"}
+
+            async def json(self):
+                return {
+                    "messages": [{"role": "user", "content": "x"}],
+                    "session_id": "same",
+                    "stream": stream,
+                }
+
+        return _Req()
+
+    async def _drive() -> bytes:
+        blocking = asyncio.create_task(chat_endpoint(_req(False)))
+        await asyncio.sleep(0.05)  # the blocking turn now holds the session
+        response = await chat_endpoint(_req(True))
+        chunks = [chunk async for chunk in response.body_iterator]
+        await blocking
+        return b"".join(chunks)
+
+    raw = asyncio.run(_drive()).decode()
+    assert _sse_events(raw)[-1] == "[DONE]"
 
 
 def test_same_session_requests_serialize():

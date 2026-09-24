@@ -238,9 +238,10 @@ that never come.
 
 Turns run through `AgentLoop.process_direct` under a per-session `asyncio.Lock`
 held in the closure, so concurrent calls on one session queue instead of
-colliding, wrapped in `asyncio.wait_for(gateway.api_request_timeout)`. An empty
-final response is retried once before falling back to
-`EMPTY_FINAL_RESPONSE_MESSAGE`; a timeout answers 504.
+colliding. A non-streaming turn is wrapped in
+`asyncio.wait_for(gateway.api_request_timeout)`; an empty final response is
+retried once before falling back to `EMPTY_FINAL_RESPONSE_MESSAGE`, and a
+timeout answers 504.
 
 Streaming hands back a `StreamingResponse` fed by a queue that
 `process_direct`'s `on_stream` callback fills. `on_stream_end` deliberately does
@@ -249,6 +250,21 @@ past them, so the HTTP stream closes only when `process_direct` returns. A
 completed stream emits a `finish_reason: "stop"` chunk then `data: [DONE]`; a
 failed one emits a single `{"error": ...}` frame and **omits** `[DONE]`, which is
 how a client distinguishes truncation from completion.
+
+A streaming turn has no idle clock of its own. Every way a turn can hang is
+already bounded inside the agent — the provider's stream-silence watchdog on
+each LLM call, each tool's own timeout, the per-turn tool-iteration cap — and a
+second silence clock at the edge would kill waits those limits deliberately
+allow (a local model evaluating a long prompt emits nothing for minutes). The
+only edge bound is a hard ceiling, `gateway.api_stream_timeout` (`0` disables),
+for a turn that keeps working; it is an `asyncio.timeout` built after the
+session lock is acquired, because `asyncio.timeout` fixes its deadline at
+construction and queueing behind another turn must not spend the budget. A
+ceiling hit is reported as `Stream exceeded {n}s limit` in the error frame.
+While the queue is empty the generator emits an SSE comment (`: keepalive`) on
+an interval (`_SSE_KEEPALIVE_S`), so proxies and client read timeouts do not
+drop a connection whose turn is running a long tool. A client disconnect makes
+Starlette close the generator, whose `finally` cancels the turn task.
 
 Both response shapes carry real token usage, not a placeholder. The agent loop
 accumulates `prompt_tokens`/`completion_tokens` across every LLM call in the
@@ -346,7 +362,8 @@ URL signing (`get_or_create_media_secret()`), stored base64-encoded in the same
 | `channels.websocket.websocket_requires_token` | When true (default), the WS handshake must include a valid token (static or issued); when false, unauthenticated connections are allowed |
 | `tools.mcp_servers` | List of MCP server configs; `McpService.update` (PATCH) and other MCP routes mutate this via `save_config` |
 | Gateway host/port | Set via the `--port` flag or config; uvicorn runs in the agent event loop; WS and HTTP share the same port |
-| `gateway.api_request_timeout` | Per-request timeout (seconds) for `/v1/chat/completions` turns; a non-streaming overrun answers 504 |
+| `gateway.api_request_timeout` | Per-request timeout (seconds) for non-streaming `/v1/chat/completions` turns; an overrun answers 504 |
+| `gateway.api_stream_timeout` | Hard ceiling (seconds) on a streaming `/v1/chat/completions` turn, counted from when the turn gets its session; `0` disables; a hit ends the stream with an error frame and no `[DONE]` |
 
 `TranscriptionService` exists in the codebase but is not HTTP-exposed (it
 carries no `@route` decorator on any method). Its configuration
