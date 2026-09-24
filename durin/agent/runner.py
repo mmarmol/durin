@@ -2036,12 +2036,13 @@ class AgentRunner:
         "path traversal detected",
     )
 
-    # Exec policy refusals (deny list, configured allowlist). The tool's own
-    # message says to stop and ask the user; the generic "try a different
-    # approach" hint would contradict it and coach a workaround.
+    # Exec policy refusals (hard floor, deny list, configured allowlist). The
+    # tool's own message says to stop and ask the user; the generic "try a
+    # different approach" hint would contradict it and coach a workaround.
     _COMMAND_POLICY_MARKERS: tuple[str, ...] = (
         "blocked by deny pattern filter",
         "blocked by allowlist filter",
+        "blocked by the exec hard floor",
     )
 
     @classmethod

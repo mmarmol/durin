@@ -36,7 +36,7 @@ async def test_background_returns_immediately_with_proc_id(tmp_path):
 async def test_background_respects_deny_patterns(tmp_path):
     tool = ExecTool(working_dir=str(tmp_path))
     result = await tool.execute(command="rm -rf /", background=True)
-    assert "blocked by deny pattern" in result
+    assert "blocked by the exec hard floor" in result
 
 
 @pytest.mark.asyncio

@@ -9,6 +9,7 @@ import shutil
 import signal
 import sys
 from contextlib import suppress
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +52,85 @@ _COMMAND_POLICY_NOTE = (
     "proceed: they can run it themselves, or allow it for you via "
     "tools.exec.allow_patterns."
 )
+
+# Policy note appended when the hard floor refuses a command. These commands
+# never run through durin, not even with the user's approval, so the note
+# offers neither allow_patterns nor an approval.
+_HARD_FLOOR_NOTE = (
+    "\n\nNote: this command is on the exec hard floor: durin never runs it, "
+    "not even with the user's approval. Do NOT get the same result another "
+    "way (a reworded command, python or perl, a script you write and run, or "
+    "another tool). Tell the user what you wanted to run and why; if it is "
+    "really needed, they must run it themselves outside durin."
+)
+
+# Rule name recorded when a configured allowlist refuses a command: no pattern
+# matched, so the refusal names the setting the command is missing from.
+_ALLOWLIST_RULE = "tools.exec.allow_patterns"
+
+# A command position: the start of the command, right after a separator, or
+# after a wrapper that runs its argument as a command (sudo, exec, systemctl…),
+# with an optional path prefix. Anchoring there keeps a word such as
+# "shutdown" inside an argument (a grep pattern, a test file name) off the floor.
+_CMD_START = (
+    r"(?:^|[;&|(\n]\s*|\b(?:sudo|doas|exec|nohup|command|systemctl)\s+"
+    r"(?:-\S+\s+(?:[^-\s]\S*\s+)?)*)(?:\S*/)?"
+)
+# Whole-disk block devices (Linux, macOS).
+_RAW_DISK = r"/dev/(?:sd[a-z]|hd[a-z]|vd[a-z]|xvd[a-z]|nvme\d|mmcblk\d|disk\d|rdisk\d)"
+
+# Commands that never run, not even when the user approves them: removing the
+# filesystem root or the home directory recursively, formatting or overwriting
+# a whole disk, a fork bomb, powering the host off, and approving or rejecting
+# a pending approval request through the shell (which would let the model
+# authorize its own privileged action — the "durin approvals" CLI itself also
+# refuses to run without a TTY, as a second, independent layer). Matched
+# against the lowercased command before allow_patterns, so no configuration
+# exempts them.
+_HARD_FLOOR_PATTERNS: tuple[str, ...] = (
+    # rm with a recursive flag whose target is exactly /, /*, ~, ~/, ~/*,
+    # $HOME or ${HOME} (optionally quoted, options before or after).
+    r"\brm\b(?=[^;&|\n]*\s(?:-[a-z]*r[a-z]*|--recursive)(?:\s|$))"
+    r"[^;&|\n]*\s[\"']?(?:/\*?|~/?\*?|\$\{?home\}?/?\*?)[\"']?(?=\s|$|[;&|])",
+    _CMD_START + r"(?:mkfs(?:\.[a-z0-9]+)?|diskpart)(?![\w.-])",
+    r"\bdd\b[^;&|\n]*\bof=" + _RAW_DISK,
+    r">\s*" + _RAW_DISK,
+    r"\\\\\.\\physicaldrive\d",  # Windows raw disk: \\.\PhysicalDriveN
+    # Fork bomb: a function that pipes itself into itself in the background.
+    r"(?P<fn>[\w:]+)\s*\(\)\s*\{\s*(?P=fn)\s*\|\s*(?P=fn)\s*&\s*;?\s*\}\s*;\s*(?P=fn)",
+    _CMD_START + r"(?:shutdown|reboot|poweroff)(?![\w.-])",
+    # "durin approvals approve/reject", wherever it appears in the command:
+    # a bare invocation, "python -m durin approvals ...", or nested inside
+    # `bash -c '...'`. Not anchored to the command start on purpose, and
+    # tolerant of extra whitespace between the words.
+    r"\bdurin\b\s+\bapprovals\b\s+\b(?:approve|reject)\b",
+)
+
+
+@dataclass(frozen=True)
+class CommandRefusal:
+    """Why the exec guard refused a command.
+
+    ``kind`` is ``hard_floor``, ``deny`` or ``allowlist`` for the exec safety
+    policy, and ``guard`` for every other refusal (memory vault, private URL,
+    workspace boundary). ``rules`` are the policy rules that matched: a person
+    may approve running the command once past exactly those rules, except on
+    the hard floor. ``headline`` is the first line of the refusal text and
+    ``message`` the whole text the model receives.
+    """
+
+    kind: str
+    headline: str
+    note: str = ""
+    rules: tuple[str, ...] = ()
+
+    @property
+    def message(self) -> str:
+        return self.headline + self.note
+
+    @property
+    def approvable(self) -> bool:
+        return self.kind in ("deny", "allowlist")
 
 
 class ExecToolConfig(Base):
@@ -482,9 +562,33 @@ class ExecTool(Tool, ContextAware):
         return env
 
     def _guard_command(self, command: str, cwd: str) -> str | None:
-        """Best-effort safety guard for potentially destructive commands."""
+        """Best-effort safety guard for potentially destructive commands.
+
+        The refusal text, or None when the command may run.
+        """
+        refusal = self._check(command, cwd)
+        return refusal.message if refusal is not None else None
+
+    def _check(
+        self, command: str, cwd: str, *,
+        approved_rules: frozenset[str] = frozenset(),
+    ) -> CommandRefusal | None:
+        """Run the guard pipeline: the first refusal, or None when it may run.
+
+        ``approved_rules`` are policy rules a person approved this exact
+        command past; only those are skipped. The hard floor and the other
+        guards (memory vault, private URL, workspace boundary) always apply.
+        """
         cmd = command.strip()
         lower = cmd.lower()
+
+        floor = tuple(p for p in _HARD_FLOOR_PATTERNS if re.search(p, lower))
+        if floor:
+            return CommandRefusal(
+                "hard_floor",
+                f"Error: Command blocked by the exec hard floor (rule: {floor[0]})",
+                _HARD_FLOOR_NOTE, floor,
+            )
 
         # allow_patterns take priority over deny_patterns so that users can
         # exempt specific commands (e.g. "rm -rf" inside a build directory)
@@ -493,33 +597,43 @@ class ExecTool(Tool, ContextAware):
             re.search(p, lower) for p in self.allow_patterns
         )
         if not explicitly_allowed:
-            for pattern in self.deny_patterns:
-                if re.search(pattern, lower):
-                    return (
-                        f"Error: Command blocked by deny pattern filter (rule: {pattern})"
-                        + _COMMAND_POLICY_NOTE
-                    )
+            denied = tuple(
+                p for p in self.deny_patterns
+                if p not in approved_rules and re.search(p, lower)
+            )
+            if denied:
+                named = ", ".join(f"rule: {p}" for p in denied)
+                return CommandRefusal(
+                    "deny",
+                    f"Error: Command blocked by deny pattern filter ({named})",
+                    _COMMAND_POLICY_NOTE, denied,
+                )
 
             mem_block = self._guard_memory_mutation(lower)
             if mem_block:
-                return mem_block
+                return CommandRefusal("guard", mem_block)
 
-            if self.allow_patterns:
-                return (
-                    "Error: Command blocked by allowlist filter (not in allowlist)"
-                    + _COMMAND_POLICY_NOTE
+            if self.allow_patterns and _ALLOWLIST_RULE not in approved_rules:
+                return CommandRefusal(
+                    "allowlist",
+                    "Error: Command blocked by allowlist filter (not in allowlist)",
+                    _COMMAND_POLICY_NOTE, (_ALLOWLIST_RULE,),
                 )
 
         from durin.security.network import contains_internal_url
         if contains_internal_url(cmd):
             # The runner turns this marker into a non-retryable security hint.
-            return "Error: Command blocked by safety guard (internal/private URL detected)"
+            return CommandRefusal(
+                "guard",
+                "Error: Command blocked by safety guard (internal/private URL detected)",
+            )
 
         if self.restrict_to_workspace:
             if "..\\" in cmd or "../" in cmd:
-                return (
-                    "Error: Command blocked by safety guard (path traversal detected)"
-                    + _WORKSPACE_BOUNDARY_NOTE
+                return CommandRefusal(
+                    "guard",
+                    "Error: Command blocked by safety guard (path traversal detected)",
+                    _WORKSPACE_BOUNDARY_NOTE,
                 )
 
             cwd_path = Path(cwd).resolve()
@@ -546,9 +660,10 @@ class ExecTool(Tool, ContextAware):
                     and media_path not in p.parents
                     and p != media_path
                 ):
-                    return (
-                        "Error: Command blocked by safety guard (path outside working dir)"
-                        + _WORKSPACE_BOUNDARY_NOTE
+                    return CommandRefusal(
+                        "guard",
+                        "Error: Command blocked by safety guard (path outside working dir)",
+                        _WORKSPACE_BOUNDARY_NOTE,
                     )
 
         return None
