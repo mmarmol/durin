@@ -67,7 +67,10 @@ async def test_executor_runs_the_literal_when_the_turn_hands_it_over():
     p = _prep()
     deps = ex.ExecDeps(exec_run=run, extra={"exec_command": "rm -rf build"})
     out = await ex.execute("/ws", {"kind": p.kind, "payload": p.payload}, deps)
-    assert out == {"output": "done\nExit code: 0"}
+    # The output goes back to the turn in memory, never into the record: it
+    # can echo the literal command (a background start message does).
+    assert out == {"ran": True}
+    assert deps.extra["exec_output"] == "done\nExit code: 0"
     assert calls == [{"command": "rm -rf build", "working_dir": "/w", "timeout": None,
                       "background": False, "approved_rules": frozenset({RM_RULE})}]
 

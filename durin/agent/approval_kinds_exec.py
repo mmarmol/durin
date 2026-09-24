@@ -25,6 +25,10 @@ runner, or no literal to run — fails with a clear message: approving the
 record from anywhere else (Pending, the CLI, the API) has no live turn behind
 it, and a shell command replayed outside the run that needed it has no
 defined meaning anyway.
+
+The command's output goes back to the turn the same way, in memory, as
+``deps.extra["exec_output"]``; the record's result is only ``{"ran": True}``.
+Output can echo the literal command (a background start message does).
 """
 from __future__ import annotations
 
@@ -143,7 +147,10 @@ async def _execute(workspace: Path, payload: dict, deps: ExecDeps) -> dict:
         background=bool(payload.get("background")),
         approved_rules=frozenset(payload.get("rules") or ()),
     )
-    return {"output": output}
+    # Back to the turn in memory, never into the record's result: the output
+    # can echo the literal command (a background start message does).
+    deps.extra["exec_output"] = output
+    return {"ran": True}
 
 
 register(KIND, hash_fn=_hash, execute_fn=_execute)

@@ -18,7 +18,7 @@ from pydantic import Field
 
 from durin.agent.approval_prompt import ChatHandles
 from durin.agent.tools.base import Tool, tool_parameters
-from durin.agent.tools.context import ContextAware, RequestContext
+from durin.agent.tools.context import ContextAware, RequestContext, RequestContextVar
 from durin.agent.tools.sandbox import wrap_command
 from durin.agent.tools.schema import (
     BooleanSchema,
@@ -263,7 +263,8 @@ class ExecTool(Tool, ContextAware):
         self._chat = chat or ChatHandles()
         self._process_config = process_config
         self.working_dir = working_dir
-        self._request_ctx: RequestContext | None = None
+        # This turn's context: the instance is shared by concurrent turns.
+        self._ctx = RequestContextVar("exec_request_ctx")
         self.sandbox = sandbox
         self.deny_patterns = (deny_patterns or []) + [
             r"\brm\s+-[rf]{1,2}\b",          # rm -r, rm -rf, rm -fr
@@ -290,7 +291,7 @@ class ExecTool(Tool, ContextAware):
         self.allowed_env_keys = allowed_env_keys or []
 
     def set_context(self, ctx: RequestContext) -> None:
-        self._request_ctx = ctx
+        self._ctx.set(ctx)
 
     def _work_dir(self) -> Path | None:
         """Return the per-session work directory, creating it if necessary.
@@ -299,7 +300,8 @@ class ExecTool(Tool, ContextAware):
         creates the directory before returning it. Returns None when no session
         context is set or no workspace is configured.
         """
-        sk = self._request_ctx.session_key if self._request_ctx else None
+        ctx = self._ctx.get()
+        sk = ctx.session_key if ctx else None
         if not sk or not self.working_dir:
             return None
         from durin.agent.tools.work_area import session_work_dir
@@ -389,8 +391,7 @@ class ExecTool(Tool, ContextAware):
         sets it. This is the runner handed to approval executors and to the
         skill tools: a command they run that the policy refuses fails with
         the refusal text instead of opening a second approval in the middle
-        of the one being carried out (or in whichever chat last set this
-        shared tool's context).
+        of the one being carried out.
 
         ``approved_rules`` is set only when a person approved this exact
         command: the policy rules it lifts are skipped, nothing else is.
@@ -539,9 +540,7 @@ class ExecTool(Tool, ContextAware):
         from durin.agent.approval_executors import ExecDeps
         from durin.agent.approval_kinds_exec import prepare
 
-        # Read before the first await: this tool instance is shared across
-        # chats, and a turn in another chat re-points its context.
-        ctx = self._request_ctx
+        ctx = self._ctx.get()
         ask = self._chat.asker(ctx) if self.working_dir else None
         if ask is None:
             return refusal.message
@@ -563,17 +562,16 @@ class ExecTool(Tool, ContextAware):
             filed.append(record["id"])
             return await ask(record)
 
+        # The literal command exists only here, in memory: the record holds a
+        # redacted copy, and the executor runs this literal after checking that
+        # it redacts to the recorded one. Its output comes back the same way.
+        deps = ExecDeps(exec_run=self._run, extra={"exec_command": command})
         try:
             outcome = await approval.request(
                 self.working_dir,
                 prepare(command=command, cwd=cwd, rules=rules, session_key=session_key,
                         timeout=timeout, background=background),
-                session_key=session_key,
-                # The literal command exists only here, in memory: the record
-                # holds a redacted copy, and the executor runs this literal
-                # after checking that it redacts to the recorded one.
-                deps=ExecDeps(exec_run=self._run, extra={"exec_command": command}),
-                ask=ask_once)
+                session_key=session_key, deps=deps, ask=ask_once)
         finally:
             # An exec request never waits in Pending: approving it later would
             # run a shell command outside the turn that needed it. Close it
@@ -586,7 +584,7 @@ class ExecTool(Tool, ContextAware):
                     result={"reason": "not answered during the turn"})
 
         if outcome.status == "applied":
-            return str((outcome.result or {}).get("output", "")) + _APPROVAL_APPLIED_NOTE
+            return str(deps.extra.get("exec_output", "")) + _APPROVAL_APPLIED_NOTE
         if outcome.status == "rejected":
             return refusal.headline + _APPROVAL_DECLINED_NOTE
         if outcome.status == "pending":
