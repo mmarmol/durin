@@ -919,6 +919,20 @@ will be discovered at startup and can be enabled with
 - **Webui** — the WebSocket channel hosts the embedded single-page app at the
   configured `host:port/path`. Authentication is handled via `token` or
   `token_issue_secret` (reverse-proxy path).
+- **HTTP chat** — the native chat routes (`/api/v1/sessions/{key}/messages`,
+  `…/events`, `…/stop`) are a second transport into the same channel. A message
+  enters through `WebSocketChannel.validate_chat_message` and
+  `publish_chat_message`, the path the WebSocket `message` frame uses, so both
+  accept exactly the same messages. An SSE watcher (`SseSubscriber`) joins the
+  per-chat fan-out (`_attach` / `_cleanup_connection`) alongside WebSocket
+  connections; its `send_text` never blocks the channel. A message may carry
+  `origin: "api"`, which is recorded on the transcript's `user` row.
+- **Live user messages** — each user message that carries a `client_msg_id` is
+  echoed to the conversation's watchers as a `user` frame (text, id, `origin`,
+  signed `media_urls`), so a conversation driven from the API or from another
+  tab shows the question, not only the answer. The sender recognizes its own
+  message by that id; a message without one (the webui's `/stop`) is not
+  echoed.
 
 ### Dashboard channel services
 

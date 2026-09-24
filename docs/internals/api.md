@@ -129,9 +129,11 @@ loop. WS and HTTP share the same port.
 1. **Routing.** `build_gateway_http_app` assembles a Starlette route list in
    priority order: the WebSocket upgrade route first (so the WS handshake isn't
    swallowed by an HTTP catch-all), then the signed session-read routes, then the
-   generic `/api/v1/*` routes from `build_api_app`, then the bootstrap and media
-   handlers, and finally the SPA static mount. Starlette matches in list order;
-   the first match wins.
+   native chat stream routes (`build_chat_stream_routes`), then the generic
+   `/api/v1/*` routes from `build_api_app`, then the MCP OAuth callback,
+   bootstrap, signout, media and webhook handlers, then the OpenAI-compatible
+   `/v1` routes (when an agent loop is wired), and finally the SPA static mount.
+   Starlette matches in list order; the first match wins.
 
 2. **Auth.** `resolve_principal_from_headers()` extracts the `Authorization:
    Bearer` token and calls `auth.resolve(token)`. This re-hashes the candidate
@@ -214,6 +216,59 @@ surface with no `hook_dispatcher` wired the route reports 503 rather than 404,
 the same "not available here" shape the automations runtime's other routes
 use. See `durin/automations/hooks.py` for what the dispatcher does with a
 matched request.
+
+### Native chat
+
+Three routes let any program converse in **webui conversations** — the same
+sessions the dashboard shows (`websocket:<chat_id>`), not a separate kind:
+
+| Route | Scope | Where it lives |
+|---|---|---|
+| `POST /api/v1/sessions/{key}/messages` | `chat:write` (+ `sessions:read` for the streaming form) | `ChatService.send` (in the contract) and a hand-mounted handler in `durin/api/chat_stream.py` that wins first match |
+| `GET /api/v1/sessions/{key}/events` | `sessions:read` | hand-mounted SSE in `durin/api/chat_stream.py` |
+| `POST /api/v1/sessions/{key}/stop` | `chat:write` | `ChatService.stop` (in the contract) |
+
+**Sending** goes through the websocket channel's own submission path:
+`ChatService.check` (scope, key, `allowFrom`, then
+`WebSocketChannel.validate_chat_message`, the same rules as a WebSocket
+`message` frame) and `ChatService.deliver`
+(`WebSocketChannel.publish_chat_message`). The message carries
+`webui: True`, a `client_msg_id` (minted when absent), and `origin: "api"`; the
+sender id is `api:<token subject>`. The turn runs on the bus like a dashboard
+turn, detached from the request, which answers `202`. A sender outside
+`channels.websocket.allowFrom` is refused with `403` up front — the bus ingress
+gate would otherwise drop it silently after the `202`. A body larger than
+`channels.websocket.max_message_bytes` is refused with `413`, the WebSocket
+frame limit.
+
+**Watching** is an `SseSubscriber` attached to the channel's per-chat fan-out
+next to WebSocket connections, so an SSE watcher receives the same frames
+(`voice_*` excluded), named after their `event` field. Opening the stream
+replays what a reattaching dashboard gets (`_hydrate_after_subscribe`: the goal
+state, `goal_status: running` for a turn in flight). `send_text` never blocks
+the channel: frames wait in a per-subscriber buffer bounded by bytes
+(`SSE_BUFFER_LIMIT_BYTES`); when it is full, text previews (`delta`,
+`reasoning_delta`) are dropped first, and a state frame that still does not fit
+ends the stream with `lagged`. While idle the stream sends a `: keepalive`
+comment every `SSE_KEEPALIVE_S`.
+
+**The streaming send** (`Accept: text/event-stream`) attaches the subscriber and
+delivers the message before returning the response, so a client that leaves at
+once loses the stream, never the message. It ends after the `turn_end` that
+answers the message: the one whose `client_msg_id` matches, or the first after
+a `queued_consumed` that lists it (a message queued behind a running turn), or
+the next one for a `steer`. Commands are refused in this form (`422`): they
+answer inline and open no turn. An answer to a blocked `ask_user_question` is
+acknowledged with `queued_consumed` (`AgentLoop._answer_pending_question`) for
+the same reason.
+
+**Stopping** cancels by the key the turn runs under: `AgentLoop.bus_turn_key`
+folds the key into the unified session when `unified_session` is on, then
+`AgentLoop.cancel_session_turns` cancels the turn and its subagents.
+
+**Authority.** A turn with input from a token (`origin: "api"`) stages
+privileged actions for approval instead of running them — see the approval
+gate in the security internals.
 
 ### OpenAI-compatible `/v1` surface
 
