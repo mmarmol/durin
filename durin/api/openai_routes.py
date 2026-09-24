@@ -46,6 +46,13 @@ _UNSUPPORTED_TOOL_FIELDS = ("tools", "tool_choice", "functions", "function_call"
 
 _SSE_DONE = b"data: [DONE]\n\n"
 
+# While a tool runs (or the turn waits its turn on the session) no content
+# flows; proxies and HTTP clients read a long-silent connection as dead and cut
+# it, which would cancel the turn. An SSE comment line keeps bytes moving and
+# is ignored by every conforming SSE parser.
+_SSE_KEEPALIVE = b": keepalive\n\n"
+_SSE_KEEPALIVE_S = 15.0
+
 
 def _error_json(
     status: int, message: str, err_type: str = "invalid_request_error"
@@ -199,6 +206,7 @@ def build_openai_routes(
     *,
     model_name: str,
     request_timeout: float,
+    stream_timeout: float = 3600.0,
     resolve_principal: Callable[[Any], Principal | None],
 ) -> list[Route]:
     """Build the ``/v1`` route list for the gateway app.
@@ -289,8 +297,8 @@ def build_openai_routes(
     ) -> StreamingResponse:
         chunk_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
         queue: asyncio.Queue[str | None] = asyncio.Queue()
-        state = {
-            "failed": False,
+        state: dict[str, Any] = {
+            "error": None,
             "emitted": False,
             "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
         }
@@ -306,11 +314,23 @@ def build_openai_routes(
             # so the HTTP stream closes only when process_direct returns.
             return None
 
+        # No idle cut here: a hung turn is already stopped by the agent's own
+        # limits (the provider's stream-silence watchdog, each tool's timeout,
+        # the tool-iteration cap), and a second silence clock would kill work
+        # those limits deliberately allow (a local model evaluating a long
+        # prompt emits nothing for minutes). The ceiling only bounds a turn
+        # that keeps working. asyncio.timeout() fixes its deadline when it is
+        # built, so it is built once the session lock is held: time spent
+        # queued behind another turn is not billed to this one.
         async def _run() -> None:
+            ceiling: asyncio.Timeout | None = None
             try:
                 async with lock:
-                    response = await asyncio.wait_for(
-                        agent_loop.process_direct(
+                    ceiling = asyncio.timeout(
+                        stream_timeout if stream_timeout > 0 else None
+                    )
+                    async with ceiling:
+                        response = await agent_loop.process_direct(
                             content=text,
                             media=media_paths or None,
                             session_key=session_key,
@@ -318,19 +338,25 @@ def build_openai_routes(
                             chat_id=API_CHAT_ID,
                             on_stream=_on_stream,
                             on_stream_end=_on_stream_end,
-                        ),
-                        timeout=request_timeout,
-                    )
+                        )
                     state["usage"] = _response_usage(response)
                     if not state["emitted"]:
                         tail = _response_text(response)
                         if tail.strip():
                             await queue.put(tail)
             except Exception:
-                state["failed"] = True
-                logger.exception(
-                    "OpenAI API streaming error for session {}", session_key
-                )
+                if ceiling is not None and ceiling.expired():
+                    state["error"] = f"Stream exceeded {stream_timeout:g}s limit"
+                    logger.warning(
+                        "OpenAI API stream for session {} hit the {}s ceiling",
+                        session_key,
+                        stream_timeout,
+                    )
+                else:
+                    state["error"] = "stream failed"
+                    logger.exception(
+                        "OpenAI API streaming error for session {}", session_key
+                    )
             finally:
                 await queue.put(None)
 
@@ -338,13 +364,18 @@ def build_openai_routes(
             task = asyncio.create_task(_run())
             try:
                 while True:
-                    token = await queue.get()
+                    try:
+                        async with asyncio.timeout(_SSE_KEEPALIVE_S):
+                            token = await queue.get()
+                    except TimeoutError:
+                        yield _SSE_KEEPALIVE
+                        continue
                     if token is None:
                         break
                     yield _sse_chunk(token, model_name, chunk_id)
-                if state["failed"]:
+                if state["error"]:
                     err = {
-                        "error": {"message": "stream failed", "type": "server_error"}
+                        "error": {"message": state["error"], "type": "server_error"}
                     }
                     yield f"data: {json.dumps(err)}\n\n".encode()
                 else:

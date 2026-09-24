@@ -92,9 +92,11 @@ client just puts it in the JSON body.
 
 Set `stream: true` for server-sent events in the standard
 `chat.completion.chunk` format. Use it for anything long: the stream stays open
-for the **whole turn**, including the time durin spends running tools, so the
-connection keeps producing data instead of looking dead to impatient proxies
-and clients.
+for the **whole turn**, including the time durin spends running tools. While no
+text flows — a tool running, or the request waiting behind another one on the
+same `session_id` — durin sends an SSE comment line (`: keepalive`) every 15
+seconds. SSE clients ignore comment lines; they exist so proxies and client
+read timeouts don't mistake a busy turn for a dead connection.
 
 What the stream carries is the assistant's text as it is generated. Tool runs
 happen server-side inside the turn and are not emitted as separate events — the
@@ -115,8 +117,9 @@ frame after it.
 
 ## Timeouts
 
-Each request is capped by `gateway.api_request_timeout` (default `120.0`
-seconds). Raise it for tool-heavy work:
+A **non-streaming** request is capped by `gateway.api_request_timeout` (default
+`120.0` seconds) and answers `504` when it runs over. Raise it for tool-heavy
+work, or stream instead:
 
 ```json
 {
@@ -126,8 +129,18 @@ seconds). Raise it for tool-heavy work:
 }
 ```
 
-A non-streaming request that exceeds the cap answers `504`. Give the client a
-timeout comfortably above the server's.
+Give a non-streaming client a timeout comfortably above the server's.
+
+A **streaming** request is not cut for taking long — a turn that keeps working
+keeps its stream. A turn that gets stuck is stopped by durin's own limits (a
+model that goes silent, a tool that runs past its timeout, the cap on tool
+iterations per turn) and ends with the error frame described above.
+`gateway.api_stream_timeout` (default `3600.0` seconds; `0` disables it) is a
+hard ceiling on top of that, for a turn that keeps working without end; hitting
+it also ends with an error frame and no `[DONE]`. The clock starts when the
+turn gets its session, not while it waits behind another request.
+
+Closing the connection cancels the turn in progress.
 
 Requests to the same `session_id` are processed one at a time — a second call
 waits for the first to finish. Use distinct session ids for genuinely

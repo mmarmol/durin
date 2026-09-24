@@ -2166,6 +2166,7 @@ def _run_gateway(
                     agent_loop=agent,
                     model_name=_model_name_u,
                     api_request_timeout=config.gateway.api_request_timeout,
+                    api_stream_timeout=config.gateway.api_stream_timeout,
                 )
                 _ws_port = _ws_channel.config.port  # type: ignore[attr-defined]
                 _ws_host = _ws_channel.config.host  # type: ignore[attr-defined]

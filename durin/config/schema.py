@@ -1257,7 +1257,20 @@ class GatewayConfig(Base):
         default=120.0,
         validation_alias=AliasChoices("apiRequestTimeout", "api_request_timeout"),
         serialization_alias="apiRequestTimeout",
-        description="Per-request timeout in seconds for the OpenAI-compatible /v1 chat endpoint",
+        description=(
+            "Per-request timeout in seconds for non-streaming requests to the "
+            "OpenAI-compatible /v1 chat endpoint"
+        ),
+    )
+    api_stream_timeout: float = Field(
+        default=3600.0,
+        validation_alias=AliasChoices("apiStreamTimeout", "api_stream_timeout"),
+        serialization_alias="apiStreamTimeout",
+        description=(
+            "Hard ceiling in seconds on one streaming /v1 chat turn; 0 disables. "
+            "A hung turn is cut earlier by the agent's own per-call and per-tool "
+            "limits, so this only bounds a turn that keeps working"
+        ),
     )
 
 
