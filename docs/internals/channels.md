@@ -892,7 +892,9 @@ Channel-specific extensions:
   pairing flow via the central ingress gate (see "WhatsApp bridge transport"
   above).
 - **WebSocket** (webui): `host`, `port`, `path`, `token`,
-  `token_issue_secret`, `websocket_requires_token` (bool; default `true`),
+  `token_issue_secret`, `websocket_requires_token` (bool; default `true`, but
+  `false` when the gateway creates the section at runtime for the dashboard
+  because the config has none; a set `token` always requires a valid token),
   `allow_from` (default `["*"]`).
 
 ### Plugin channel registration

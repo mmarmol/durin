@@ -96,11 +96,18 @@ WebSocket channel. This channel is **always on while the dashboard is
 enabled** (`gateway.webui_enabled = true`) — there is no separate enable
 toggle for it.
 
-The dashboard itself authenticates via short-lived bootstrap tokens issued
-at page load; it never uses the static `token` field. The `token` field is
-only needed for **external WebSocket clients** (scripts, integrations) that
-connect without going through the dashboard bootstrap flow. When set, store
-it as a durin secret and reference it with `${secret:…}`.
+The dashboard authenticates with short-lived tokens it mints at page load
+(`GET /webui/bootstrap`). With no setup secret configured, only localhost may
+mint them. Setting `token_issue_secret` — or the static `token` while
+`token_issue_secret` is empty — makes every sign-in, localhost included, ask
+for that secret once; the browser then stays signed in through an `httpOnly`
+session cookie (`webui_session_ttl_s`, default 7 days) and never stores the
+secret.
+
+The static `token` field is meant for **external WebSocket clients** (scripts,
+integrations) that connect without the bootstrap flow — but, as above, it also
+becomes the dashboard's sign-in secret when `token_issue_secret` is empty.
+When set, store it as a durin secret and reference it with `${secret:…}`.
 
 ```toml
 [channels.websocket]
@@ -120,9 +127,9 @@ streaming = true
 | `host` | `127.0.0.1` | Binding to `0.0.0.0` or `::` requires either `token` or `token_issue_secret` to be set |
 | `port` | `8765` | WebSocket listen port |
 | `path` | `"/"` | URL path prefix |
-| `token` | _(empty)_ | Optional static secret for external clients; stored as a durin secret |
-| `token_issue_secret` | _(empty)_ | Bearer secret for `GET /webui/bootstrap`; used with reverse proxies |
-| `websocket_requires_token` | `true` | Reject connections that present no valid token |
+| `token` | _(empty)_ | Optional static secret for external clients; stored as a durin secret. Also the dashboard sign-in secret when `token_issue_secret` is empty |
+| `token_issue_secret` | _(empty)_ | Dashboard sign-in secret for `GET /webui/bootstrap` (required from every client, localhost included, once set); use it behind a reverse proxy or on a non-loopback bind |
+| `websocket_requires_token` | `true` | Reject connections that present no valid token. When your config has no `[channels.websocket]` section, the gateway creates one for the dashboard with this set to `false`. A set `token` always requires a valid token, whatever this says |
 | `streaming` | `true` | Send incremental text deltas while the model is generating |
 | `ssl_certfile` / `ssl_keyfile` | _(empty)_ | Paths to TLS certificate and key for direct TLS |
 | `allow_from` | `["*"]` | Client IDs that may connect |
