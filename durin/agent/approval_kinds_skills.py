@@ -91,11 +91,20 @@ def quarantine_source(qdir: Path, default: str) -> str:
 def install_hash(workspace: Path, payload: dict) -> str:
     """The quarantined tree's content hash (``.scan.json`` excluded, so a
     re-audit of the same bytes keeps the approval), bound to the replace flag
-    the person saw."""
+    the person saw. When replacing, the currently installed skill's bytes are
+    folded in too: a ``replace`` overwrites it, so an edit to it between the
+    request and the decision must also make the approval stale, not just a
+    re-fetch of the quarantine."""
     qdir = quarantine_dir(workspace, str(payload.get("quarantine") or ""))
     if qdir is None or not (qdir / "SKILL.md").is_file():
         return "absent"
-    return f"{si._content_hash(qdir)}:replace={bool(payload.get('replace'))}"
+    base = f"{si._content_hash(qdir)}:replace={bool(payload.get('replace'))}"
+    if not payload.get("replace"):
+        return base
+    name = si.validate_skill(qdir).name
+    target = Path(workspace) / "skills" / name / "SKILL.md"
+    installed = _reviewed_bytes(target, "SKILL.md") if target.is_file() else b""
+    return _sha(base.encode("utf-8"), installed)
 
 
 def _install_reason(gate: dict) -> str:
@@ -135,20 +144,25 @@ def prepare_skill_install(workspace: Path, qdir: Path, *, gate: dict, source: st
 
 async def execute_install(workspace: Path, payload: dict, deps: ExecDeps) -> dict:
     """Install the approved quarantine. ``confirmed`` is granted because someone
-    decided; ``override`` only when the verdict they saw was dangerous. If the
-    verdict rose since (a re-audit of the quarantine), the install refuses and
-    the request fails instead of installing what nobody approved."""
+    decided; ``override`` only when the verdict they saw was dangerous — and
+    only when a person (not a judge or policy) is who decided it, since
+    overriding a dangerous verdict is a person's call to make. If the verdict
+    rose since (a re-audit of the quarantine), the install refuses and the
+    request fails instead of installing what nobody approved."""
     name = str(payload.get("quarantine") or "")
     qdir = quarantine_dir(workspace, name)
     if qdir is None or not (qdir / "SKILL.md").is_file():
         raise ApprovalExecError(f"not in quarantine: {name}")
     approval_id, approved_by = _approver(deps)
+    verdict = payload.get("verdict")
+    if verdict == "dangerous" and approved_by not in ("user", "operator"):
+        raise ApprovalExecError("a dangerous install needs a person's approval")
     try:
         return await asyncio.to_thread(
             si.install_imported_skill, Path(workspace), qdir,
             source=str(payload.get("source") or name),
             allowlist=ss._import_allowlist(), confirmed=True,
-            override=payload.get("verdict") == "dangerous",
+            override=verdict == "dangerous",
             replace=bool(payload.get("replace")),
             attribution=_attribution(payload),
             approval_id=approval_id, approved_by=approved_by)
@@ -174,7 +188,16 @@ def _reviewed_bytes(target: Path, file: str) -> bytes:
     if isinstance(durin, dict):
         for key in _BOOKKEEPING_KEYS:
             durin.pop(key, None)
-    return (json.dumps(data, sort_keys=True, default=str) + "\n" + body).encode("utf-8")
+    try:
+        rendered = json.dumps(data, sort_keys=True, default=str)
+    except TypeError:
+        # A YAML mapping with mixed-type keys (e.g. an int and a str key in
+        # the same table) cannot be sorted for a stable rendering. Falling
+        # back to the raw bytes still binds the hash to exactly what was
+        # reviewed; it just skips stripping the bookkeeping keys in this rare
+        # case, which only makes the approval go stale a bit more eagerly.
+        return raw
+    return (rendered + "\n" + body).encode("utf-8")
 
 
 def edit_hash(workspace: Path, payload: dict) -> str:
@@ -220,10 +243,15 @@ def prepare_skill_edit(workspace: Path, name: str, *, old: str, new: str, ration
 
 
 async def execute_edit(workspace: Path, payload: dict, deps: ExecDeps) -> dict:
-    """Land the approved edit through the write an allowed edit uses."""
+    """Land the approved edit through the write an allowed edit uses. A
+    manual skill is its owner's; only a person (not a judge or policy) may
+    consent to changing it."""
     approval_id, approved_by = _approver(deps)
+    name = str(payload.get("name") or "")
+    if ss.read_mode(Path(workspace), name) == "manual" and approved_by not in ("user", "operator"):
+        raise ApprovalExecError("a manual skill's edit needs its owner's approval")
     res = await asyncio.to_thread(
-        ss.write_skill_edit, Path(workspace), str(payload.get("name") or ""),
+        ss.write_skill_edit, Path(workspace), name,
         old=str(payload.get("old") or ""), new=str(payload.get("new") or ""),
         rationale=str(payload.get("rationale") or ""),
         file=str(payload.get("file") or "SKILL.md"),
@@ -265,19 +293,36 @@ def prepare_skill_deps(workspace: Path, name: str, specs: list[dict]) -> Prepare
 
 async def execute_deps(workspace: Path, payload: dict, deps: ExecDeps) -> dict:
     """Run the approved commands through the exec runner the caller provided
-    (the gateway's ExecTool, with its own guards)."""
+    (the gateway's ExecTool, with its own guards).
+
+    ``deps_hash`` binds the approval to the skill's own declared specs, never
+    to ``payload["specs"]`` (recomputing per-payload would let a tampered
+    payload keep a matching hash). So the payload is checked against what the
+    skill currently declares here, right before running it: a command that is
+    not among them refuses instead of running something nobody reviewed."""
     if deps.exec_run is None:
         raise ApprovalExecError(
             "installing dependencies needs the running gateway's exec tool; "
             "approve it from the chat or the web UI")
+    name = str(payload.get("name") or "")
+    declared = (si.runnable_install_specs(Path(workspace) / "skills" / name)
+                if ss._safe_name(name) else [])
+    allowed_commands = {s["command"] for s in declared}
     specs = [s for s in (payload.get("specs") or [])
              if isinstance(s, dict) and s.get("command")]
+    undeclared = [s["command"] for s in specs if s["command"] not in allowed_commands]
+    if undeclared:
+        raise ApprovalExecError(
+            f"the skill no longer declares: {', '.join(undeclared)}")
     results = await si.run_install_specs(specs, exec_run=deps.exec_run)
     approval_id, approved_by = _approver(deps)
     si._audit(Path(workspace), name=payload.get("name"), action="install_deps",
               commands=[s["command"] for s in specs],
               succeeded=[r["command"] for r in results if r.get("success")],
               approval_id=approval_id, approved_by=approved_by)
+    failed = [r["command"] for r in results if not r.get("success")]
+    if failed:
+        raise ApprovalExecError(f"install failed: {', '.join(failed)}")
     return {"ran": True, "results": results}
 
 

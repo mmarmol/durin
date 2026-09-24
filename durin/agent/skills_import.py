@@ -704,6 +704,18 @@ def runnable_install_specs(skill_dir) -> list[dict]:
     return out
 
 
+_EXIT_CODE_RE = re.compile(r"Exit code: (-?\d+)\s*$")
+
+
+def _install_step_failed(output: str) -> bool:
+    """True when ``output`` — ExecTool's return value, never an exception for
+    a blocked command, a timeout, or a non-zero exit — is a failed step."""
+    if output.startswith(("Error: Command blocked", "Error: Command timed out")):
+        return True
+    m = _EXIT_CODE_RE.search(output)
+    return m is not None and m.group(1) != "0"
+
+
 async def run_install_specs(specs: list[dict], *,
                             exec_run: Callable[..., Awaitable[str]]) -> list[dict]:
     results: list[dict] = []
@@ -711,12 +723,7 @@ async def run_install_specs(specs: list[dict], *,
         cmd = spec["command"]
         try:
             output = str(await exec_run(command=cmd))
-            # The exec policy can refuse a command by returning its refusal text
-            # as ordinary output instead of raising (shell.py's "Error: Command
-            # blocked..." headline). That must not be recorded as a successful
-            # install step.
-            blocked = output.startswith("Error: Command blocked")
-            results.append({"command": cmd, "success": not blocked,
+            results.append({"command": cmd, "success": not _install_step_failed(output),
                             "output": output[-2000:]})
         except Exception as exc:  # noqa: BLE001
             results.append({"command": cmd, "success": False, "error": str(exc)})
