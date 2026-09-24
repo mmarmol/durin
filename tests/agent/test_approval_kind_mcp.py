@@ -54,13 +54,23 @@ def test_existing_reference_is_kept_and_a_dangling_one_refused():
     ("headers", "Authorization", "Bearer abcdefghijklmnop"),
     ("headers", "X-Custom", "sk-" + "b" * 30),
     ("env", "FOO", "«redacted:GH_TOKEN»"),
-    ("oauth", "clientSecret", "s3cr3t-value-123"),
 ])
 def test_unstored_credential_is_refused_without_echoing_it(section, key, value):
     with pytest.raises(mk.SecretValueError) as err:
         mk.secret_safe_config("s", {"url": "https://x", section: {key: value}})
     assert "request_secret" in str(err.value)
     assert f"{section}.{key}" in str(err.value)
+    assert value not in str(err.value)
+
+
+def test_oauth_literal_client_secret_is_refused_by_its_canonical_field_name():
+    # oauth is now validated against MCPOAuthConfig before being scanned, so
+    # the reported field name is the canonical one (client_secret), not
+    # whatever alias spelling the caller used (clientSecret).
+    value = "s3cr3t-value-123"
+    with pytest.raises(mk.SecretValueError) as err:
+        mk.secret_safe_config("s", {"url": "https://x", "oauth": {"clientSecret": value}})
+    assert "oauth.client_secret" in str(err.value)
     assert value not in str(err.value)
 
 
@@ -381,3 +391,211 @@ def test_prepare_enable_redacts_a_literal_credential_typed_into_the_dashboard():
     assert "zq9-Plain-Stored-Value-77" not in p.detail["server"]
     assert "«redacted" in p.detail["server"]
     assert "'a value with spaces'" in p.detail["server"]
+
+
+# -- Review round 2 -----------------------------------------------------------
+# Re-review findings on top of round 1's fix.
+
+# IMPORTANT 1 (regression): the "must be a string" rule applied to ALL of
+# oauth, refusing a documented int (callback_port) and a None scope.
+
+def test_oauth_int_callback_port_and_none_scope_are_not_refused():
+    safe = mk.secret_safe_config(
+        "s", {"url": "https://x", "oauth": {"clientId": "c", "callbackPort": 8765}})
+    assert safe["oauth"] == {"clientId": "c", "callbackPort": 8765}
+    safe2 = mk.secret_safe_config("s", {"url": "https://x", "oauth": {"client_id": "c", "scope": None}})
+    assert safe2["oauth"] == {"client_id": "c", "scope": None}
+
+
+def test_oauth_literal_credential_is_refused_even_when_it_equals_a_stored_value():
+    # oauth never gets the env/headers treatment of auto-converting an
+    # exact-match literal into a reference: mcp_oauth.py's static-client seed
+    # forwards client_secret unresolved, so a reference there would silently
+    # send the placeholder string as the credential instead of the real one.
+    from durin.security.secrets import store_secret
+
+    store_secret("MY_API", "zq9-Plain-Stored-Value-77", service="x", scope=[])
+    with pytest.raises(mk.SecretValueError, match="oauth.client_secret") as err:
+        mk.secret_safe_config("s", {"url": "https://x", "oauth": {"clientSecret": "zq9-Plain-Stored-Value-77"}})
+    assert "zq9-Plain-Stored-Value-77" not in str(err.value)
+
+
+def test_oauth_existing_reference_is_kept():
+    from durin.security.secrets import store_secret
+
+    store_secret("GOOD", "tok-123456789", service="x", scope=[])
+    safe = mk.secret_safe_config(
+        "s", {"url": "https://x", "oauth": {"client_id": "c", "client_secret": "${secret:GOOD}"}})
+    assert safe["oauth"]["client_secret"] == "${secret:GOOD}"
+
+
+# FINDING 1: residual url/args gaps
+
+PLAIN = "plainrandomcredential42"
+
+
+@pytest.mark.parametrize("query", ["key", "apikey", "my_key", "my-key"])
+def test_url_query_key_named_key_or_ending_in_key_is_refused(query):
+    with pytest.raises(mk.SecretValueError, match="url") as err:
+        mk.secret_safe_config("s", {"url": f"https://api.x.com/mcp?{query}={PLAIN}"})
+    assert PLAIN not in str(err.value)
+
+
+def test_url_username_only_long_secret_shaped_is_refused():
+    with pytest.raises(mk.SecretValueError, match="url") as err:
+        mk.secret_safe_config("s", {"url": f"https://{PLAIN}@api.x.com/mcp"})
+    assert PLAIN not in str(err.value)
+
+
+def test_url_short_username_is_not_refused():
+    safe = mk.secret_safe_config("s", {"url": "https://bob@api.x.com/mcp"})
+    assert safe["url"] == "https://bob@api.x.com/mcp"
+
+
+def test_url_credential_shaped_fragment_is_refused():
+    with pytest.raises(mk.SecretValueError, match="url") as err:
+        mk.secret_safe_config("s", {"url": f"https://api.x.com/mcp#token={PLAIN}"})
+    assert PLAIN not in str(err.value)
+
+
+@pytest.mark.parametrize("args", [
+    ["srv", "--token", PLAIN],
+    ["srv", f"--token={PLAIN}"],
+    ["srv", "--api-key", PLAIN],
+    ["srv", f"--password={PLAIN}"],
+    ["srv", f"API_KEY={PLAIN}"],
+])
+def test_args_flag_or_key_value_pair_with_a_credential_named_flag_is_refused(args):
+    with pytest.raises(mk.SecretValueError, match=r"args\[") as err:
+        mk.secret_safe_config("s", {"command": "npx", "args": args})
+    assert PLAIN not in str(err.value)
+
+
+# FALSE POSITIVES (finding 4)
+
+def test_max_tokens_query_param_is_not_refused():
+    safe = mk.secret_safe_config("s", {"url": "https://api.example.com/mcp?max_tokens=4096"})
+    assert safe["url"] == "https://api.example.com/mcp?max_tokens=4096"
+
+
+def test_access_token_query_param_still_refused():
+    with pytest.raises(mk.SecretValueError, match="url"):
+        mk.secret_safe_config("s", {"url": f"https://api.example.com/mcp?access_token={PLAIN}"})
+
+
+def test_tokenizer_path_env_value_is_not_refused():
+    safe = mk.secret_safe_config(
+        "s", {"command": "npx", "env": {"TOKENIZER_PATH": "/models/tokenizer.json"}})
+    assert safe["env"]["TOKENIZER_PATH"] == "/models/tokenizer.json"
+
+
+def test_cache_key_is_an_accepted_documented_false_positive():
+    # See the module docstring: any *_KEY-suffixed name is treated as a
+    # credential, even here where the value is plainly a cache namespace, not
+    # a secret. Narrowing the rule would also let real API keys stored under
+    # a *_KEY name through, so this stays refused on purpose.
+    with pytest.raises(mk.SecretValueError, match="env.CACHE_KEY"):
+        mk.secret_safe_config("s", {"command": "npx", "env": {"CACHE_KEY": "my-cache-namespace"}})
+
+
+# MINOR 5: pydantic ValidationError must never echo the value
+
+@pytest.mark.parametrize("bad_config", [
+    {"command": "npx", "args": "--token " + "ghp_" + "d" * 36},
+    {"url": "https://x", "oauth": "ghp_" + "d" * 36},
+    {"command": "npx", "tool_timeout": "ghp_" + "d" * 36},
+])
+def test_a_malformed_field_never_echoes_its_value_via_pydantic(bad_config):
+    token = "ghp_" + "d" * 36
+    with pytest.raises(mk.SecretValueError) as err:
+        mk.prepare_upsert("add", "s", bad_config)
+    assert token not in str(err.value)
+
+
+# MINOR 6: command/version/sampling.model/enabled_tools/tool_timeouts scanned
+
+def test_command_holding_a_token_is_refused():
+    token = "ghp_" + "e" * 36
+    with pytest.raises(mk.SecretValueError, match="command") as err:
+        mk.secret_safe_config("s", {"command": token})
+    assert token not in str(err.value)
+
+
+def test_version_holding_a_token_is_refused():
+    token = "ghp_" + "e" * 36
+    with pytest.raises(mk.SecretValueError, match="version") as err:
+        mk.secret_safe_config("s", {"command": "npx", "version": token})
+    assert token not in str(err.value)
+
+
+def test_sampling_model_holding_a_token_is_refused():
+    token = "ghp_" + "e" * 36
+    with pytest.raises(mk.SecretValueError, match=r"sampling\.model") as err:
+        mk.secret_safe_config("s", {"command": "npx", "sampling": {"enabled": True, "model": token}})
+    assert token not in str(err.value)
+
+
+def test_enabled_tools_holding_a_token_is_refused():
+    token = "ghp_" + "e" * 36
+    with pytest.raises(mk.SecretValueError, match=r"enabled_tools\[0\]") as err:
+        mk.secret_safe_config("s", {"command": "npx", "enabled_tools": [token]})
+    assert token not in str(err.value)
+
+
+def test_tool_timeouts_key_holding_a_token_is_refused_without_echoing_the_key():
+    token = "ghp_" + "e" * 36
+    with pytest.raises(mk.SecretValueError, match="tool_timeouts") as err:
+        mk.secret_safe_config("s", {"command": "npx", "tool_timeouts": {token: 5}})
+    assert token not in str(err.value)
+
+
+# MINOR 3 (F3 in the probes): re-scrub after normalization catches Python-only
+# shapes the pre-scrub's isinstance checks don't recognize.
+
+def test_prepare_upsert_catches_a_tuple_of_args():
+    token = "ghp_" + "f" * 36
+    with pytest.raises(mk.SecretValueError) as err:
+        mk.prepare_upsert("add", "s", {"command": "npx", "args": ("--token", token)})
+    assert token not in str(err.value)
+
+
+def test_prepare_upsert_catches_a_mapping_proxy_env():
+    import types
+
+    token = "ghp_" + "f" * 36
+    with pytest.raises(mk.SecretValueError) as err:
+        mk.prepare_upsert(
+            "add", "s", {"command": "npx", "env": types.MappingProxyType({"GITHUB_TOKEN": token})})
+    assert token not in str(err.value)
+
+
+def test_prepare_upsert_catches_an_mcpoauthconfig_instance_with_a_literal_secret():
+    from durin.config.schema import MCPOAuthConfig
+
+    with pytest.raises(mk.SecretValueError) as err:
+        mk.prepare_upsert("add", "s", {"url": "https://x", "oauth": MCPOAuthConfig(client_secret=PLAIN)})
+    assert PLAIN not in str(err.value)
+
+
+# MINOR 8: newlines in a displayed value cannot inject extra lines
+
+def test_display_escapes_embedded_newlines():
+    p = mk.prepare_upsert("add", "fs", {
+        "command": "npx", "args": ["-y", "@x/fs"],
+        "env": {"NODE_OPTIONS": "--require /tmp/evil.js\nfake: line"},
+    })
+    assert "\n" not in p.detail["server"]
+    assert "\n" not in p.detail["env"]
+    assert "\\n" in p.detail["env"]
+
+
+# MINOR 9: sampling.enabled=true surfaces in the security line
+
+def test_sampling_enabled_true_is_shown_in_security_notes():
+    p = mk.prepare_upsert("add", "fs", {"command": "npx", "sampling": {"enabled": True}})
+    assert "sampling.enabled=true" in p.detail["security"]
+
+
+def test_sampling_disabled_is_not_shown():
+    p = mk.prepare_upsert("add", "fs", {"command": "npx"})
+    assert "security" not in p.detail
