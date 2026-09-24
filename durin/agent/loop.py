@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 from loguru import logger
 
 from durin.agent import model_presets as preset_helpers
-from durin.agent.approval import AUTONOMOUS_SESSION_PREFIXES
+from durin.agent.approval import AUTONOMOUS_SESSION_PREFIXES, note_turn_input
 from durin.agent.aux_bridges import build_aux_providers
 from durin.agent.context import ContextBuilder
 from durin.agent.hook import AgentHook, CompositeHook
@@ -2026,6 +2026,9 @@ class AgentLoop:
                         break
                     consumed.append(pending_msg)
                     pending.append(pending_msg)
+                    # Joining the turn with API input drops a person's authority
+                    # for the rest of it (set here, in the turn's own task).
+                    note_turn_input(pending_msg.metadata)
 
             _pull(pending_queues.inject)
             if not steer_only:
@@ -2373,6 +2376,9 @@ class AgentLoop:
         session_key = self._effective_session_key(msg)
         if session_key != msg.session_key:
             msg = dataclasses.replace(msg, session_key_override=session_key)
+        # This task is the turn: a message from an API token drops a person's
+        # authority to approve privileged actions for all of it.
+        note_turn_input(msg.metadata)
         lock = self._session_locks.setdefault(session_key, asyncio.Lock())
 
         if pending is None:

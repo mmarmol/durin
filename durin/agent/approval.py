@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,6 +37,7 @@ __all__ = [
     "gate",
     "human_reachable",
     "list_pending",
+    "note_turn_input",
 ]
 
 # Session-key prefixes the runtime uses for contexts with no person attached.
@@ -84,6 +86,24 @@ def _pending_dir(workspace: Path | str, subsystem: str) -> Path:
     return Path(workspace) / _APPROVALS_DIR / subsystem
 
 
+# Set for the rest of a turn once any of its input came from an API token
+# rather than a person at a chat surface. A token holder is a program: a
+# ``chat:write`` token may converse in a webui conversation, but it must not
+# carry the person's authority to approve privileged actions there. Turns run
+# in their own task, so the flag never outlives the turn that set it.
+_TURN_HAS_API_INPUT: ContextVar[bool] = ContextVar("approval_turn_has_api_input", default=False)
+
+
+def note_turn_input(metadata: dict[str, Any] | None) -> None:
+    """Record that the current turn received input from *metadata*'s sender.
+
+    Called for the message that opens a turn and for every message injected
+    into it; input marked ``origin: "api"`` makes ``gate`` stage privileged
+    actions for the rest of the turn."""
+    if metadata and metadata.get("origin") == "api":
+        _TURN_HAS_API_INPUT.set(True)
+
+
 def gate(
     workspace: Path | str,
     subsystem: str,
@@ -98,7 +118,7 @@ def gate(
     ``detail`` is recorded verbatim for the operator's review and is never
     consulted for the decision — a request cannot authorize itself.
     """
-    if human_reachable(session_key):
+    if human_reachable(session_key) and not _TURN_HAS_API_INPUT.get():
         return Decision(allow=True)
     record = _stage(workspace, subsystem, action=action, summary=summary,
                     detail=detail or {}, session_key=session_key)
