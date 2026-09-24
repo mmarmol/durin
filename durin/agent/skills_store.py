@@ -340,14 +340,20 @@ def _skill_md_integrity(content: str) -> str | None:
 def save_skill_file(workspace: Path, name: str, relpath: str, content: str, *,
                     rationale: str = "edit via web",
                     attribution: "Attribution | None" = None) -> dict:
-    """Save one text file in a skill: fork-on-write, script lint (blocking),
-    write, commit (with attribution trailers), security re-scan (non-blocking).
+    """Save one text file in a skill: script lint (blocking), security scan
+    (blocking), fork-on-write, write, commit (with attribution trailers).
 
     Editable in either mode. `manual` means "the user owns this skill"; `auto`
     means "dream may auto-improve it" — neither locks the user out of editing.
     A user edit to an `auto` skill is committed with the user's attribution and
     left `auto`, so dream keeps curating it (respecting the edit, not reverting
-    it blindly)."""
+    it blindly).
+
+    This is a person's write, and the scan gates it as one: a result that needs
+    review and is `dangerous` is refused with its findings and nothing is
+    written; a `caution` result is saved and its findings are returned for the
+    editor to show. New findings drop `provenance.verdict_cleared`. A scan that
+    cannot run at all is refused too (fail closed) instead of writing blind."""
     if not _safe_name(name):
         return {"error": "invalid skill name"}
     lint = _lint_script(relpath, content)
@@ -357,29 +363,35 @@ def save_skill_file(workspace: Path, name: str, relpath: str, content: str, *,
         bad = _skill_md_integrity(content)
         if bad is not None:
             return {"error": bad}  # integrity floor - nothing written
+    root = _resolve_skill_dir(workspace, name)
+    if root is None:
+        return {"error": f"skill not found: {name}"}
+    probe = _safe_target(root, relpath)
+    if probe is None:
+        return {"error": "file escapes skill directory"}
+    if probe.exists() and probe.is_dir():
+        return {"error": "path is a directory"}
+    try:
+        scan = scan_skill_write(root, {relpath: content})
+    except Exception as exc:  # noqa: BLE001 - fail closed: no scan, no write
+        logger.warning("save scan failed for %s: %s", name, exc)
+        return {"error": f"could not scan the change: {exc}", "scan_blocked": True}
+    if scan.needs_review and scan.after == "dangerous":
+        return _scan_refusal(scan, "save")  # security floor - nothing written
     store = _store_init(workspace)
     dest = fork_on_write(workspace, name)
     target = _safe_target(dest, relpath)
     if target is None:
         return {"error": "file escapes skill directory"}
-    if target.exists() and target.is_dir():
-        return {"error": "path is a directory"}
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
+    if scan.new_findings:
+        _void_verdict_cleared(dest / "SKILL.md")
     sha = store.auto_commit(f"skill({name}): {rationale}",
                             trailers=attribution_to_trailers(attribution))
     _sync_index(workspace, name)
-    payload = {"ok": True, "name": name, "path": relpath, "commit": sha}
-    # Non-blocking security re-scan so the UI can refresh the verdict badge.
-    try:
-        from durin.security.skill_scan import scan_skill
-        rep = scan_skill(dest)
-        payload["verdict"] = rep.verdict
-        payload["findings"] = [{"category": f.category, "severity": f.severity,
-                                "where": f.where, "detail": f.detail} for f in rep.findings]
-    except Exception as exc:  # noqa: BLE001 - scan is advisory, never fatal
-        logger.warning("post-save scan failed for %s: %s", name, exc)
-    return payload
+    return {"ok": True, "name": name, "path": relpath, "commit": sha,
+            "verdict": scan.after, "findings": scan.findings}
 
 
 def _index_skills_enabled() -> bool:
