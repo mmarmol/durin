@@ -69,6 +69,18 @@ def attribution_to_trailers(attr: "Attribution | None") -> dict[str, str]:
     return out
 
 
+def approval_trailers(approval_id: str | None, approved_by: str | None) -> dict[str, str]:
+    """`Approved-by` / `Approval` commit trailers for a change someone authorized:
+    who decided (user | judge | operator | policy) and which approval request
+    carried the decision. Empty when the change needed no decision."""
+    out: dict[str, str] = {}
+    if approved_by:
+        out["Approved-by"] = str(approved_by)
+    if approval_id:
+        out["Approval"] = str(approval_id)
+    return out
+
+
 def _skills_dir(workspace: Path) -> Path:
     return Path(workspace) / "skills"
 
@@ -1545,9 +1557,11 @@ async def web_skill_approve(workspace: Path, name: str, *, confirm: bool,
         except Exception:  # noqa: BLE001
             pass
     try:
+        # A click in the Skills view is a person deciding, so it is recorded as one.
         res = install_imported_skill(workspace, qdir, source=source,
                                      allowlist=_import_allowlist(),
-                                     confirmed=confirm, override=override, replace=replace)
+                                     confirmed=confirm, override=override, replace=replace,
+                                     approved_by="user" if (confirm or override) else None)
     except SkillImportRefused as exc:
         return 409, {"refused": exc.action, "verdict": exc.verdict, "message": str(exc)}
 

@@ -297,6 +297,51 @@ def fetch_candidate(cand: SkillCandidate, *, quarantine_root: Path,
 
 # --- install (the gate invariant) --------------------------------------------
 
+def install_gate(quarantine_dir: Path, *, source: str, allowlist: list[str]) -> dict:
+    """The import gate's decision for a quarantined skill, computed the way
+    ``install_imported_skill`` enforces it: a fresh deterministic scan (never the
+    cached one, which could be stale or tampered with), raised — never lowered —
+    by the verdict cached in ``.scan.json`` (a judge finding the scanner cannot
+    reproduce), then ``decide_action``. ``findings`` merges the fresh scan with
+    every cached finding it does not reproduce, so whoever decides sees every
+    reason. ``action`` is ``invalid`` when the skill does not validate."""
+    quarantine_dir = Path(quarantine_dir)
+    vr = validate_skill(quarantine_dir)
+    out: dict = {"valid": vr.ok, "errors": list(vr.errors), "name": vr.name,
+                 "carries_code": vr.carries_code,
+                 "code_artifacts": list(vr.code_artifacts),
+                 "verdict": "", "action": "invalid", "findings": []}
+    if not vr.ok:
+        return out
+    rep = scan_skill(quarantine_dir)
+    verdict = rep.verdict
+    findings = [{"category": f.category, "severity": f.severity,
+                 "where": f.where, "detail": f.detail} for f in rep.findings]
+    sj = quarantine_dir / ".scan.json"
+    if sj.is_file():
+        try:
+            cached = json.loads(sj.read_text())
+        except Exception:  # noqa: BLE001 — an unreadable cache adds nothing
+            cached = {}
+        if isinstance(cached, dict):
+            stored = str(cached.get("verdict", ""))
+            if _VERDICT_ORDER.get(stored, 0) > _VERDICT_ORDER.get(verdict, 0):
+                verdict = stored
+            seen = {(f["category"], f["where"], f["detail"]) for f in findings}
+            for f in cached.get("findings") or []:
+                if not isinstance(f, dict):
+                    continue
+                key = (f.get("category"), f.get("where"), f.get("detail"))
+                if key not in seen:
+                    seen.add(key)
+                    findings.append({k: f.get(k) for k in
+                                     ("category", "severity", "where", "detail")})
+    out.update(verdict=verdict, findings=findings,
+               action=decide_action(source, verdict=verdict,
+                                    carries_code=vr.carries_code, allowlist=allowlist))
+    return out
+
+
 class SkillImportRefused(Exception):  # noqa: N818 — deliberate event-style name, not *Error
     """install_imported_skill refused the install. `.action` is the gate verdict
     ('block' | 'confirm' | 'invalid' | 'exists'); `.verdict` is the security gate verdict."""
@@ -331,49 +376,45 @@ def _safe_qname(name: str) -> bool:
 def install_imported_skill(workspace: Path, quarantine_dir: Path, *, source: str,
                            allowlist: list[str], confirmed: bool = False,
                            override: bool = False, replace: bool = False,
-                           attribution: "Attribution | None" = None) -> dict:
+                           attribution: "Attribution | None" = None,
+                           approval_id: str | None = None,
+                           approved_by: str | None = None) -> dict:
     """Install a quarantined skill — but ONLY through the import security gate, enforced
     HERE in code (not in the tool/skill/UI): `block` (dangerous) needs
     `override`; `confirm` (code / caution / out-of-allowlist) needs `confirmed`
     or `override`; a name that already exists needs `replace`. On pass: copy out
     of quarantine, stamp metadata.durin.provenance + mode=manual, commit, index,
     append the audit log, and consume the quarantine dir. Raises
-    SkillImportRefused otherwise."""
+    SkillImportRefused otherwise.
+
+    `approval_id` / `approved_by` record who authorized a gated install (the
+    approval request's id; user | judge | operator | policy). Both stay None when
+    the gate needed no decision. They land in provenance, in the audit log and
+    as commit trailers."""
     from durin.agent.skills_store import (
         _skill_md,
         _store_init,
         _sync_index,
         _today,
         _update_md,
+        approval_trailers,
+        attribution_to_trailers,
         ensure_durin,
     )
 
     workspace = Path(workspace)
     quarantine_dir = Path(quarantine_dir)
-    vr = validate_skill(quarantine_dir)
-    if not vr.ok:
-        raise SkillImportRefused("invalid", "", f"invalid skill: {vr.errors}")
-    rep = scan_skill(quarantine_dir)  # fresh deterministic — the block path never trusts cache
-    verdict = rep.verdict
-    # Fold in the cached judge verdict (caps at caution → can raise to a confirm,
-    # never enable a block; the fresh deterministic re-scan above owns blocking).
-    sj = quarantine_dir / ".scan.json"
-    if sj.is_file():
-        try:
-            stored = str(json.loads(sj.read_text()).get("verdict", ""))
-            if _VERDICT_ORDER.get(stored, 0) > _VERDICT_ORDER.get(verdict, 0):
-                verdict = stored
-        except Exception:  # noqa: BLE001
-            pass
-    action = decide_action(source, verdict=verdict,
-                           carries_code=vr.carries_code, allowlist=allowlist)
+    gate = install_gate(quarantine_dir, source=source, allowlist=allowlist)
+    if not gate["valid"]:
+        raise SkillImportRefused("invalid", "", f"invalid skill: {gate['errors']}")
+    verdict, action = gate["verdict"], gate["action"]
     if action == "block" and not override:
         raise SkillImportRefused("block", verdict,
                                  "dangerous verdict; explicit override required")
     if action == "confirm" and not (confirmed or override):
         raise SkillImportRefused("confirm", verdict,
                                  "confirmation required (carries code / caution / out-of-allowlist)")
-    name = vr.name
+    name = gate["name"]
     dest = _skill_md(workspace, name).parent
     if dest.exists():
         if not replace:
@@ -391,7 +432,8 @@ def install_imported_skill(workspace: Path, quarantine_dir: Path, *, source: str
         durin["provenance"] = {
             "source": source,
             "verdict": verdict,
-            "confirmed": bool(confirmed),
+            "approval_id": approval_id,
+            "approved_by": approved_by,
             "overridden": bool(override),
             "replaced": bool(replace),
             "content_hash": chash,
@@ -408,12 +450,13 @@ def install_imported_skill(workspace: Path, quarantine_dir: Path, *, source: str
                 pass
 
     _update_md(dest / "SKILL.md", _stamp)
-    from durin.agent.skills_store import attribution_to_trailers
     sha = store.auto_commit(f"skill({name}): import from {source} [{verdict}]",
-                            trailers=attribution_to_trailers(attribution))
+                            trailers={**attribution_to_trailers(attribution),
+                                      **approval_trailers(approval_id, approved_by)})
     _sync_index(workspace, name)
     _audit(workspace, name=name, source=source, verdict=verdict, action=action,
-           confirmed=bool(confirmed), overridden=bool(override), replaced=bool(replace),
+           approval_id=approval_id, approved_by=approved_by,
+           overridden=bool(override), replaced=bool(replace),
            content_hash=chash, commit=sha)
     shutil.rmtree(quarantine_dir, ignore_errors=True)  # consumed
     return {"ok": True, "name": name, "verdict": verdict, "commit": sha}
