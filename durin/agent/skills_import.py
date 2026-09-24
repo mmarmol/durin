@@ -729,8 +729,11 @@ _EXIT_CODE_RE = re.compile(r"Exit code: (-?\d+)\s*$")
 
 def _install_step_failed(output: str) -> bool:
     """True when ``output`` — ExecTool's return value, never an exception for
-    a blocked command, a timeout, or a non-zero exit — is a failed step."""
-    if output.startswith(("Error: Command blocked", "Error: Command timed out")):
+    a blocked command, a timeout, a spawn failure, or a non-zero exit — is a
+    failed step. "Error executing command: " is ExecTool's own catch-all
+    (e.g. the binary doesn't exist), returned as text rather than raised."""
+    if output.startswith(("Error: Command blocked", "Error: Command timed out",
+                          "Error executing command:")):
         return True
     m = _EXIT_CODE_RE.search(output)
     return m is not None and m.group(1) != "0"

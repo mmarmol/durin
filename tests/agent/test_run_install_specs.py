@@ -77,6 +77,19 @@ async def test_run_install_specs_treats_a_nonzero_exit_as_failed():
 
 
 @pytest.mark.asyncio
+async def test_run_install_specs_treats_a_spawn_error_string_as_failed():
+    # ExecTool's own catch-all ("Error executing command: ...", e.g. the
+    # binary doesn't exist) is returned as text rather than raised — it must
+    # not be recorded as a successful install step either.
+    async def mock_exec(*, command):
+        return "Error executing command: [Errno 2] No such file or directory: 'brew'"
+
+    specs = [{"command": "brew install gh", "needs_privileges": False}]
+    results = await run_install_specs(specs, exec_run=mock_exec)
+    assert results[0]["success"] is False
+
+
+@pytest.mark.asyncio
 async def test_run_install_specs_zero_exit_still_succeeds():
     # A guard against being too strict: an explicit "Exit code: 0" (the normal
     # shape of real ExecTool output) must still count as success.

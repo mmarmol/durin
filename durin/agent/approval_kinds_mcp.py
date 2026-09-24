@@ -11,8 +11,14 @@ so a request whose server changed after it was filed is stale instead of
 overwriting that change.
 
 A request never holds a credential. ``secret_safe_config`` turns a value that
-equals a stored secret into that secret's ``${secret:NAME}`` reference and
-refuses any other credential, pointing the model at ``request_secret``.
+equals a stored secret into that secret's ``${secret:NAME}`` reference in
+``env``/``headers``/``oauth`` and refuses any other credential there, pointing
+the model at ``request_secret``. ``url`` and ``args`` get no such reference
+treatment: the connection layer resolves ``${secret:NAME}`` only inside
+``env``/``headers`` (``durin/agent/tools/mcp_connection.py``), so a reference
+placed in ``url``/``args`` would never resolve — a credential detected there
+is refused outright, never turned into a reference that silently does
+nothing.
 
 Execution uses the ``McpService`` handed in as ``ExecDeps.mcp``. Without one
 (an approval decided from the CLI, or any process without the gateway's live
@@ -25,8 +31,11 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import re
+import shlex
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, urlsplit
 
 from durin.agent.approval_executors import (
     ApprovalExecError,
@@ -40,10 +49,19 @@ KIND = "mcp_change"
 # Header names that carry a credential whatever their value looks like.
 _AUTH_HEADERS = frozenset({"authorization", "proxy-authorization", "cookie",
                            "x-api-key", "api-key"})
+# A key ending in one of these (hyphen- or underscore-separated: "Ocp-Apim-
+# Subscription-Key", "OPENAI_KEY", "GOOGLE_CREDENTIALS", "X-Goog-Api-Key")
+# names a credential regardless of what CREDENTIAL_KEY_RE's own vocabulary
+# covers — that pattern requires "api_key"/"access_key" specifically and has
+# no bare "key" or "credential(s)" alternative.
+_CREDENTIAL_SUFFIX_RE = re.compile(r"[-_](key|token|secret|credentials?)$", re.IGNORECASE)
 # Values shorter than this are never treated as credentials: they are too
 # likely to be ordinary settings ("true", "30"). The secret redactor uses the
 # same floor for the same reason.
 _MIN_SECRET_LEN = 8
+# Non-default security settings worth calling out to the reviewer explicitly
+# (beyond what the "server" line already shows), in the order they are shown.
+_SECURITY_FIELDS = ("malware_check", "spawn_egress_policy", "allow_private_url")
 
 _CONFIG_ONLY_NOTE = (
     "Saved to config. This process has no live MCP connections, so the running "
@@ -65,27 +83,65 @@ def as_dict(result: Any) -> dict:
     return {"status": getattr(result, "status", None), "ok": getattr(result, "ok", None)}
 
 
-def _is_credential(key: str, value: str) -> bool:
-    from durin.security.secrets import CREDENTIAL_KEY_RE, SecretRedactor
+def _is_credential_key(key: str) -> bool:
+    from durin.security.secrets import CREDENTIAL_KEY_RE
 
+    return bool(CREDENTIAL_KEY_RE.search(key) or _CREDENTIAL_SUFFIX_RE.search(key))
+
+
+def _is_credential(key: str, value: str, redactor: Any) -> bool:
     if len(value) < _MIN_SECRET_LEN:
         return False
-    if key.lower() in _AUTH_HEADERS or CREDENTIAL_KEY_RE.search(key):
+    if key.lower() in _AUTH_HEADERS or _is_credential_key(key):
         return True
     # A credential-shaped value under a neutral key: a vendor token prefix, a
-    # bearer token, a JWT, a private key block.
-    return SecretRedactor({}, patterns=True).redact_text(value) != value
+    # bearer token, a JWT, a private-key block, or a substring equal to a
+    # stored secret's value.
+    if redactor.redact_text(value) != value:
+        return True
+    # A neutral-looking key next to its value, synthesized as "KEY=value" and
+    # run through the same KV heuristics ``exec`` output goes through — this
+    # is what actually recognizes "GOOGLE_CREDENTIALS=..." (the shared
+    # ``CREDENTIALS?`` alternative), on top of the direct suffix check above.
+    probe = f"{key}={value}"
+    return redactor.redact_text(probe) != probe
+
+
+def _looks_like_credential(value: str, redactor: Any) -> bool:
+    return bool(value) and redactor.redact_text(value) != value
+
+
+def _url_is_unsafe(url: str, redactor: Any) -> bool:
+    """True when *url* embeds a credential: a stored/pattern-shaped value, a
+    ``user:pass@`` password, or a query parameter named like a credential."""
+    if _looks_like_credential(url, redactor):
+        return True
+    parts = urlsplit(url)
+    if parts.password:
+        return True
+    return any(_is_credential_key(key) for key, _ in parse_qsl(parts.query, keep_blank_values=True))
+
+
+def _build_redactor(store: Any) -> Any:
+    from durin.security.secrets import SecretRedactor
+
+    values = {name: entry.value for name, entry in store.all().items()
+              if len(entry.value) >= _MIN_SECRET_LEN}
+    return SecretRedactor(values, patterns=True)
 
 
 def secret_safe_config(server: str, config: dict) -> dict:
-    """A copy of *config* whose env, header and OAuth values hold no credential.
+    """A copy of *config* whose env, header, OAuth, url and arg values hold no
+    literal credential.
 
     A value equal to a stored secret becomes that secret's ``${secret:NAME}``
-    reference. A reference to a secret that is not stored, a redaction marker
-    read back from a tool result, or any other credential raises
-    ``SecretValueError``: a credential enters durin only from the user,
-    through ``request_secret`` or the dashboard. The message names the fields,
-    never their values.
+    reference in ``env``/``headers``/``oauth`` — the only sections the
+    connection layer resolves a reference from. A reference to a secret that
+    is not stored, a redaction marker read back from a tool result, or any
+    other credential (there or in ``url``/``args``, where a reference would
+    never resolve) raises ``SecretValueError``: a credential enters durin only
+    from the user, through ``request_secret`` or the dashboard. The message
+    names the fields, never their values.
     """
     from durin.security.secrets import (
         REDACTION_MARKER_PREFIX,
@@ -99,14 +155,23 @@ def secret_safe_config(server: str, config: dict) -> dict:
     for name, entry in sorted(store.all().items()):
         if len(entry.value) >= _MIN_SECRET_LEN:
             by_value.setdefault(entry.value, name)
+    redactor = _build_redactor(store)
     safe = copy.deepcopy(config)
     problems: list[str] = []
+
     for section in ("env", "headers", "oauth"):
         mapping = safe.get(section)
         if not isinstance(mapping, dict):
             continue
         for key, value in list(mapping.items()):
-            if not isinstance(value, str) or not value:
+            if isinstance(value, str):
+                if not value:
+                    continue
+            else:
+                # dict[str, str]: a non-string value never reaches
+                # MCPServerConfig.model_validate, whose pydantic error would
+                # otherwise echo it verbatim.
+                problems.append(f"{section}.{key} (must be a string)")
                 continue
             ref = parse_secret_ref(value)
             if ref is not None:
@@ -115,15 +180,33 @@ def secret_safe_config(server: str, config: dict) -> dict:
                 continue
             if value in by_value:
                 mapping[key] = make_ref(by_value[value])
-            elif REDACTION_MARKER_PREFIX in value or _is_credential(str(key), value):
+            elif REDACTION_MARKER_PREFIX in value or _is_credential(str(key), value, redactor):
                 problems.append(f"{section}.{key}")
+
+    url = safe.get("url")
+    if isinstance(url, str):
+        if url and (REDACTION_MARKER_PREFIX in url or _url_is_unsafe(url, redactor)):
+            problems.append("url")
+    elif url is not None:
+        problems.append("url (must be a string)")
+
+    args = safe.get("args")
+    if isinstance(args, list):
+        for i, item in enumerate(args):
+            if not isinstance(item, str):
+                problems.append(f"args[{i}] (must be a string)")
+            elif item and (REDACTION_MARKER_PREFIX in item or _looks_like_credential(item, redactor)):
+                problems.append(f"args[{i}]")
+
     if problems:
         raise SecretValueError(
             f"Not done: {', '.join(problems)} of MCP server {server!r} must be a "
             "stored secret. A credential never goes into an MCP config or an "
             "approval request as plain text. Call request_secret so the user "
-            "stores it, then pass the whole value as ${secret:NAME} (a prefix "
-            "such as 'Bearer ' is part of the stored value).")
+            "stores it, then pass the whole value as ${secret:NAME} in env or "
+            "headers (a prefix such as 'Bearer ' is part of the stored value) "
+            "— url and args are never resolved for a reference, so a "
+            "credential can't go there at all.")
     return safe
 
 
@@ -142,11 +225,69 @@ def change_hash(payload: dict) -> str:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
+def _redact_for_display(text: str) -> str:
+    """*text* with any stored-secret/pattern-shaped substring masked.
+
+    Forces a fresh store read first: this runs on config that may not have
+    gone through ``secret_safe_config`` in this call (``prepare_enable`` reads
+    an already-persisted server, possibly written by a hand-edit that bypassed
+    this module entirely), so a stale cached store must not hide a credential
+    that IS in fact stored.
+    """
+    from durin.security.secrets import get_secret_store, redact_secrets
+
+    get_secret_store(reload=True)
+    return redact_secrets(text)
+
+
 def _target(config: dict) -> str:
     command = str(config.get("command") or "")
     if command:
-        return " ".join([command, *(str(a) for a in config.get("args") or [])])
-    return str(config.get("url") or "")
+        args = [str(a) for a in config.get("args") or []]
+        target = shlex.join([command, *args])
+    else:
+        target = str(config.get("url") or "")
+    return _redact_for_display(target)
+
+
+def _fmt_setting(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def _assignments(mapping: Any) -> str:
+    if not isinstance(mapping, dict) or not mapping:
+        return ""
+    return ", ".join(f"{k}={v}" for k, v in sorted(mapping.items()))
+
+
+def _security_notes(config: dict) -> str:
+    return ", ".join(f"{f}={_fmt_setting(config[f])}" for f in _SECURITY_FIELDS if f in config)
+
+
+def _extra_detail(config: dict, *, runtime_command: str | None = None) -> dict:
+    """Detail keys ``_serialize_approval`` prints beyond ``server``/``source``.
+
+    The "server" line alone (command/args or url) hides what actually changes
+    behind the scenes: env/header assignments (safe to show — a value here is
+    either a plain setting or a ``${secret:NAME}`` reference, never a literal
+    secret, by the time this is called), non-default security settings, and
+    an install's runtime-install command.
+    """
+    extra: dict[str, str] = {}
+    env_line = _assignments(config.get("env"))
+    if env_line:
+        extra["env"] = env_line
+    headers_line = _assignments(config.get("headers"))
+    if headers_line:
+        extra["headers"] = headers_line
+    security_line = _security_notes(config)
+    if security_line:
+        extra["security"] = security_line
+    if runtime_command:
+        extra["runtime"] = f"then runs: {runtime_command}"
+    return extra
 
 
 def _prepared(action: str, name: str, *, summary: str, payload: dict,
@@ -158,18 +299,31 @@ def _prepared(action: str, name: str, *, summary: str, payload: dict,
 
 
 def prepare_upsert(action: str, name: str, config: dict) -> Prepared:
-    """An ``add`` or ``update`` of server *name* with *config*."""
+    """An ``add`` or ``update`` of server *name* with *config*.
+
+    Runs the credential scrub on the model's raw dict FIRST — before any
+    schema validation touches it — so a non-string ``env``/``headers`` value
+    is refused with a clean message instead of surfacing pydantic's own
+    ``ValidationError``, which echoes the offending input verbatim. Only then
+    is the scrubbed dict validated and re-dumped through ``MCPServerConfig``:
+    this resolves an alias/field-name collision (``spawnEgressPolicy`` vs
+    ``spawn_egress_policy``) to the single value that will actually apply,
+    and drops unknown keys, so the payload that gets stored and shown to the
+    reviewer is exactly the config that will be written — never a raw dict
+    that could show one thing and apply another.
+    """
     from durin.config.schema import MCPServerConfig
 
     safe = secret_safe_config(name, config)
     sc = MCPServerConfig.model_validate(safe)
     if not sc.command and not sc.url:
         raise ValueError("a server needs a command (stdio) or a url (http)")
-    target = _target(safe)
+    normalized = sc.model_dump(mode="json", exclude_defaults=True)
+    target = _target(normalized)
     return _prepared(action, name, summary=f"{action} MCP server {name!r}",
-                     payload={"config": safe},
+                     payload={"config": normalized},
                      detail={"server": f"{name} → {target}", "target": target,
-                             "config": safe})
+                             "config": normalized, **_extra_detail(normalized)})
 
 
 def prepare_enable(name: str) -> Prepared:
@@ -179,7 +333,11 @@ def prepare_enable(name: str) -> Prepared:
     sc = load_config().tools.mcp_servers.get(name)
     if sc is None:
         raise ValueError(f"no MCP server named {name!r}")
-    target = " ".join([sc.command, *sc.args]).strip() if sc.command else sc.url
+    if sc.command:
+        target = shlex.join([sc.command, *sc.args])
+    else:
+        target = sc.url
+    target = _redact_for_display(target)
     return _prepared("enable", name, summary=f"enable MCP server {name!r}", payload={},
                      detail={"server": f"{name} → {target}", "target": target})
 
@@ -202,11 +360,13 @@ async def prepare_install(detail: Any, *, ref: str, prefer: str) -> Prepared:
         sc, has_declared_headers=bool(detail.remotes and detail.remotes[0].headers))
     config = secret_safe_config(name, sc.model_dump(mode="json", exclude_defaults=True))
     target = _target(config)
+    runtime_command = runtime_plan.get("command") if runtime_plan else None
     return _prepared(
         "install", name, summary=f"install MCP server {name!r} from {ref}",
         payload={"ref": ref, "config": config, "runtime_plan": runtime_plan},
         detail={"server": f"{name} → {target}", "target": target, "source": ref,
-                "config": config, "runtime_plan": runtime_plan})
+                "config": config, "runtime_plan": runtime_plan,
+                **_extra_detail(config, runtime_command=runtime_command)})
 
 
 async def _install_runtime(plan: dict | None, deps: ExecDeps) -> str | None:

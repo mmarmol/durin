@@ -105,7 +105,8 @@ def _serialize_approval(payload: Mapping[str, Any]) -> str | None:
         return None
     lines = [f"🔐 Approval needed: {summary}"]
     detail = payload.get("detail") or {}
-    for key in ("command", "cwd", "rule", "verdict", "source", "server", "packages"):
+    for key in ("command", "cwd", "rule", "verdict", "source", "server", "packages",
+                "env", "headers", "security", "runtime"):
         value = detail.get(key) if isinstance(detail, Mapping) else None
         if value:
             lines.append(f"{key}: {value}")
