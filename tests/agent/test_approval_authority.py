@@ -193,6 +193,8 @@ def test_cli_lists_and_discards_pending(tmp_path) -> None:
     # the surface that makes it real. Driven through the REAL config loader via
     # --workspace: a hand-rolled config double would have its own attribute
     # names and would pass while the shipped command raised AttributeError.
+    # The record here uses the earlier per-subsystem layout (approval.gate);
+    # the new store lists and discards it as a legacy row.
     from typer.testing import CliRunner
 
     from durin.cli.commands import app
@@ -206,11 +208,11 @@ def test_cli_lists_and_discards_pending(tmp_path) -> None:
     listed = runner.invoke(app, ["approvals", "--workspace", str(ws)])
     assert listed.exit_code == 0, listed.output
     assert "add server playwright" in listed.stdout
-    assert "cron:nightly" in listed.stdout
+    assert "legacy:mcp" in listed.stdout
 
     [record] = approval.list_pending(ws, "mcp")
     dropped = runner.invoke(
-        app, ["approvals", "--workspace", str(ws), "--discard", record["id"]])
+        app, ["approvals", "--workspace", str(ws), "discard", record["id"]])
     assert dropped.exit_code == 0, dropped.output
     assert approval.list_pending(ws, "mcp") == []
     empty = runner.invoke(app, ["approvals", "--workspace", str(ws)])

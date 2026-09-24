@@ -3434,12 +3434,57 @@ def _refresh_help_epilog() -> None:
         pass  # keep the static _HELP_EPILOG
 
 
-@app.command()
-def approvals(
-    subsystem: str = typer.Argument(
-        "", help="Only this subsystem (mcp, skills). Default: all."),
-    discard: str = typer.Option(
-        "", "--discard", help="Discard one pending request by id."),
+approvals_app = typer.Typer(
+    invoke_without_command=True,
+    no_args_is_help=False,
+    help="Privileged actions an autonomous run recorded for your approval.",
+)
+app.add_typer(approvals_app, name="approvals")
+
+
+def _approvals_workspace(ctx: typer.Context) -> Path:
+    opts = ctx.obj or {}
+    cfg = _load_runtime_config(opts.get("config"), opts.get("workspace"))
+    return Path(cfg.workspace_path).expanduser()
+
+
+def _approval_age(requested_at: str) -> str:
+    """Human-friendly '2h'/'3d' age label for a record's requested_at."""
+    from datetime import datetime, timezone
+    try:
+        then = datetime.fromisoformat(requested_at)
+    except (TypeError, ValueError):
+        return "?"
+    delta = max(0.0, (datetime.now(timezone.utc) - then).total_seconds())
+    if delta < 60:
+        return f"{int(delta)}s"
+    if delta < 3600:
+        return f"{int(delta / 60)}m"
+    if delta < 86400:
+        return f"{int(delta / 3600)}h"
+    return f"{int(delta / 86400)}d"
+
+
+def _approvals_list(ctx: typer.Context, show_all: bool) -> None:
+    from durin.agent import approval_store
+
+    ws = _approvals_workspace(ctx)
+    records = (approval_store.list_records(ws) if show_all
+               else approval_store.list_records(ws, status="pending"))
+    if not records:
+        console.print("No approvals." if show_all else "No pending approvals.")
+        return
+    for rec in records:
+        console.print(
+            f"[bold]{rec['id']}[/bold]  {rec['kind']}  {rec['status']}  "
+            f"{_approval_age(rec.get('requested_at') or '')}  {rec['summary']}")
+
+
+@approvals_app.callback()
+def approvals_root(
+    ctx: typer.Context,
+    all_: bool = typer.Option(
+        False, "--all", help="Include resolved records too (default: pending only)."),
     config: str | None = typer.Option(None, "--config", "-c", help="Config file path."),
     workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace path."),
 ) -> None:
@@ -3447,32 +3492,78 @@ def approvals(
 
     A cron job, dream, workflow or sub-agent has no user to ask, so an action
     that would add or change executable state (an MCP server, a skill, a
-    dependency install) is recorded instead of run. This is where they wait.
+    dependency install, an exec command) is recorded instead of run. This is
+    where they wait: bare `durin approvals` lists pending ones (`--all` for
+    everything too); `approve`/`reject <id>` decide one; `discard <id>`
+    deletes a record without deciding it.
     """
+    ctx.obj = {"config": config, "workspace": workspace}
+    if ctx.invoked_subcommand is None:
+        _approvals_list(ctx, all_)
+
+
+@approvals_app.command("list")
+def approvals_list_cmd(
+    ctx: typer.Context,
+    all_: bool = typer.Option(
+        False, "--all", help="Include resolved records too (default: pending only)."),
+) -> None:
+    """List approval records (pending only by default)."""
+    _approvals_list(ctx, all_)
+
+
+def _approvals_decide(ctx: typer.Context, approval_id: str, decision: str) -> None:
+    # The agent's exec tool runs commands with stdin as a pipe, so a model
+    # could otherwise approve its own staged request by shelling out to this
+    # very command. Refusing outside a real terminal keeps that decision with
+    # a person at a keyboard.
+    if not _stdin_is_interactive():
+        console.print("[red]approving requires an interactive terminal[/red]")
+        raise typer.Exit(1)
     from durin.agent import approval
+    from durin.agent.approval_executors import ExecDeps
 
-    cfg = _load_runtime_config(config, workspace)
-    ws = Path(cfg.workspace_path).expanduser()
-    subsystems = [subsystem] if subsystem else ["mcp", "skills"]
-
-    if discard:
-        for name in subsystems:
-            if approval.discard_pending(ws, name, discard):
-                console.print(f"[green]Discarded {name}/{discard}[/green]")
-                return
-        console.print(f"[yellow]No pending request {discard!r}[/yellow]")
+    ws = _approvals_workspace(ctx)
+    outcome = asyncio.run(approval.decide(
+        ws, approval_id, decision,
+        decided_by={"kind": "operator", "channel": "cli"}, deps=ExecDeps()))
+    console.print(outcome.message)
+    if outcome.status in ("refused", "failed", "stale"):
         raise typer.Exit(1)
 
-    total = 0
-    for name in subsystems:
-        for record in approval.list_pending(ws, name):
-            total += 1
-            console.print(
-                f"[bold]{name}/{record['id']}[/bold]  {record['summary']}\n"
-                f"  action={record['action']}  from={record.get('session_key') or '?'}"
-                f"  at={record.get('requested_at', '')[:19]}")
-    if not total:
-        console.print("No pending approvals.")
+
+@approvals_app.command("approve")
+def approvals_approve(
+    ctx: typer.Context,
+    approval_id: str = typer.Argument(..., metavar="ID"),
+) -> None:
+    """Approve a pending request and run it (requires a real terminal)."""
+    _approvals_decide(ctx, approval_id, "approve")
+
+
+@approvals_app.command("reject")
+def approvals_reject(
+    ctx: typer.Context,
+    approval_id: str = typer.Argument(..., metavar="ID"),
+) -> None:
+    """Reject a pending request (requires a real terminal)."""
+    _approvals_decide(ctx, approval_id, "reject")
+
+
+@approvals_app.command("discard")
+def approvals_discard(
+    ctx: typer.Context,
+    approval_id: str = typer.Argument(..., metavar="ID"),
+) -> None:
+    """Delete an approval record without deciding it."""
+    from durin.agent import approval_store
+
+    ws = _approvals_workspace(ctx)
+    if approval_store.discard(ws, approval_id):
+        console.print(f"[green]Discarded {approval_id}[/green]")
+    else:
+        console.print(f"[yellow]No approval request {approval_id!r}[/yellow]")
+        raise typer.Exit(1)
 
 
 _refresh_help_epilog()

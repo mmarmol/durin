@@ -60,6 +60,19 @@ durin memory forget <uri>         # delete one memory entry
 apply workflow self-improvement suggestions; `durin mcp search|install|status`
 manage MCP servers. Append `--help` to any group for its full command list.
 
+## Approvals
+
+A cron job, dream, workflow or sub-agent has no user to ask, so a privileged
+action (an MCP server, a skill, a dependency install, an exec command) is
+recorded instead of run; these commands are where they wait.
+
+```bash
+durin approvals                # list pending records (--all for resolved too)
+durin approvals approve <id>   # approve and run it — needs a real terminal
+durin approvals reject <id>    # reject it — needs a real terminal
+durin approvals discard <id>   # delete the record without deciding it
+```
+
 ## Inside the TUI
 
 - `/sessions` — modal picker over saved sessions (Esc to cancel)
