@@ -239,7 +239,9 @@ class GitStore:
                 )
                 if sha_bytes is None:
                     return None
-                sha = sha_bytes.hex()[:8]
+                # dulwich object ids are already hex text (40 ASCII bytes);
+                # hex-encoding them again yields ids git does not know.
+                sha = sha_bytes.decode("ascii")[:8]
                 logger.debug("Git auto-commit: {} ({})", sha, message)
                 return sha
             except Exception:
@@ -309,7 +311,7 @@ class GitStore:
                     return None
 
                 while sha:
-                    if sha.hex().startswith(short_sha):
+                    if sha.decode("ascii").startswith(short_sha):
                         return sha
                     commit = repo[sha]
                     if commit.type_name != b"commit":
@@ -406,7 +408,7 @@ class GitStore:
                     if include:
                         ts = time.strftime("%Y-%m-%d %H:%M", time.localtime(commit.commit_time))
                         msg = commit.message.decode("utf-8", errors="replace").strip()
-                        entries.append(CommitInfo(sha=sha.hex()[:8], message=msg, timestamp=ts))
+                        entries.append(CommitInfo(sha=sha.decode("ascii")[:8], message=msg, timestamp=ts))
                     sha = parent
 
             return entries
@@ -490,10 +492,10 @@ class GitStore:
                 parent = commit.parents[0] if commit.parents else None
                 ts = time.strftime("%Y-%m-%d %H:%M", time.localtime(commit.commit_time))
                 msg = commit.message.decode("utf-8", errors="replace").strip()
-                info = CommitInfo(sha=full.hex()[:8], message=msg, timestamp=ts)
+                info = CommitInfo(sha=full.decode("ascii")[:8], message=msg, timestamp=ts)
             if parent is None:
                 return info, ""
-            patch = self.diff_commits(parent.hex(), full.hex())
+            patch = self.diff_commits(parent.decode("ascii"), full.decode("ascii"))
             if path is not None:
                 patch = _filter_patch_by_path(patch, path)
             return info, patch

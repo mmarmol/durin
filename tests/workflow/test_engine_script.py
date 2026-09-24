@@ -318,3 +318,71 @@ def test_preflight_rejects_unresolvable_secrets(monkeypatch, tmp_path):
     assert "'s'" in out and "NOPE_TOKEN" in out and "DENIED_TOKEN" in out
     assert result.runs == []
     assert run_log.read_manifest(tmp_path, "t", result.run_id) is None
+
+
+# The workflow's I/O descriptions frame the task for agent nodes. A script
+# parses its input as data, so neither the description (with its examples) nor
+# the deliverable/artifacts suffix may reach it: it gets the task as given.
+_FRAMED_IO = {
+    "input": {"text": True, "description": "a task naming env, e.g. 'env=dev scenario=x'"},
+    "output": {"description": "a verdict",
+               "artifacts": [{"path": "report.md", "description": "from verifier exit codes"}]},
+}
+
+
+def _capture_cmd(tmp_path, tag):
+    return (f'cat > "{tmp_path}/{tag}.stdin"; '
+            f'printf %s "$DURIN_TASK" > "{tmp_path}/{tag}.env"; touch report.md')
+
+
+def _captured(tmp_path, tag):
+    return ((tmp_path / f"{tag}.stdin").read_text(), (tmp_path / f"{tag}.env").read_text())
+
+
+def test_start_script_gets_the_raw_task_not_the_framing(tmp_path):
+    wf = parse_workflow({"name": "t", "start": "s", **_FRAMED_IO, "nodes": [
+        {"id": "s", "kind": "script", "command": _capture_cmd(tmp_path, "s"), "next": "a"},
+        {"id": "a", "prompt": "consume", "next": None},
+    ]})
+    eng = engine_for(tmp_path, ["done"])
+    eng.run(wf, "env=prd scenario=y")
+    assert _captured(tmp_path, "s") == ("env=prd scenario=y", "env=prd scenario=y")
+    # Agent nodes keep the framing: it is their steering.
+    assert eng._node_runner.calls[0].task.startswith("This workflow's input is:")
+
+
+def test_detached_script_gets_the_raw_task(tmp_path):
+    wf = parse_workflow({"name": "t", "start": "s", **_FRAMED_IO, "nodes": [
+        {"id": "s", "kind": "script", "command": _capture_cmd(tmp_path, "d"),
+         "detached": True, "next": "a"},
+        {"id": "a", "prompt": "consume", "next": None},
+    ]})
+    engine_for(tmp_path, ["done"]).run(wf, "env=prd")
+    assert _captured(tmp_path, "d") == ("env=prd", "env=prd")
+
+
+def test_parallel_script_branch_gets_the_raw_task(tmp_path):
+    wf = parse_workflow({"name": "t", "start": "fan", **_FRAMED_IO, "nodes": [
+        {"id": "fan", "kind": "parallel", "branches": ["think", "fetch"], "next": None},
+        {"id": "think", "kind": "work"},
+        {"id": "fetch", "kind": "script", "command": _capture_cmd(tmp_path, "b")},
+    ]})
+    engine_for(tmp_path, ["thought"]).run(wf, "env=prd")
+    assert _captured(tmp_path, "b") == ("env=prd", "env=prd")
+
+
+def test_start_subworkflow_gets_the_raw_task_so_it_frames_once(tmp_path):
+    seen = []
+
+    def sub_runner(name, task, root_key, **_kw):
+        seen.append(task)
+        return "child output"
+
+    wf = parse_workflow({"name": "t", "start": "sw", **_FRAMED_IO, "nodes": [
+        {"id": "sw", "kind": "subworkflow", "workflow": "child", "next": None},
+    ]})
+    eng = WorkflowEngine(node_runner=fake_agent_runner([]),
+                         script_runner=ScriptNodeRunner(str(tmp_path)),
+                         subworkflow_runner=sub_runner, workspace=str(tmp_path))
+    eng.run(wf, "env=prd")
+    assert seen == ["env=prd"]

@@ -30,7 +30,7 @@ target is `null` (end of run).
 | `nodes` | array | — | **Required.** Non-empty list of node objects (see below). |
 | `description` | string | none | One-line discovery hint surfaced by `list_workflows`. Optional but recommended. |
 | `input` | object | none | I/O descriptor: `{ "text": bool, "file": bool, "description": str }`. Text input becomes the start node's task; input files land in the run's shared working folder. Provided files are validated before anything runs (missing or same-named files abort with a clear message); declaring `"file": true` and passing none ends the run immediately as `needs_input`, before any node spends a turn. |
-| `output` | object | none | Same shape as `input`, plus optional `"artifacts"`: a list of `{ "path": str, "description": str? }` — the files (relative to the run's working folder) the run promises to produce. The paths ride in every node's framing, and after a completed run the engine reports missing ones as a **warning** (the run still completes) in the result, manifest, and `tasks(status)`. The free-text `description` stays a soft contract that frames every node's task — a hint, not enforced. |
+| `output` | object | none | Same shape as `input`, plus optional `"artifacts"`: a list of `{ "path": str, "description": str? }` — the files (relative to the run's working folder) the run promises to produce. The paths ride in every agent node's framing, and after a completed run the engine reports missing ones as a **warning** (the run still completes) in the result, manifest, and `tasks(status)`. The free-text `description` stays a soft contract that frames every agent node's task — a hint, not enforced; script nodes get the task unframed. |
 | `max_visits` | int ≥ 1 | `3` | Per-node loop cap (a node may run at most this many times across loop-backs). Clamped by the global `workflow.max_node_visits` config ceiling. |
 | `improvement_mode` | `"manual"` \| `"auto"` | `"manual"` | Dream self-improvement: `manual` leaves a recommendation to review; `auto` (later slice) applies edits directly. |
 
@@ -97,10 +97,11 @@ follows `next` or **routes** on a verdict.
 
 Runs a command or a script file instead of an agent turn. The upstream edge text arrives
 on **stdin** (a start-position node receives the run's task instead — the workflow input is
-the start node's incoming edge; an upstream that printed nothing yields empty stdin); its
+the start node's incoming edge, and it arrives exactly as passed, without the input/output
+description framing agent nodes get; an upstream that printed nothing yields empty stdin); its
 **stdout** (capped) becomes the edge text to the next node; **stderr** is diagnostics only.
 It executes with **cwd = the run's shared working folder**, so it reads earlier steps'
-files and its writes are visible downstream, and it gets `DURIN_TASK` (capped),
+files and its writes are visible downstream, and it gets `DURIN_TASK` (the task as passed, capped),
 `DURIN_RUN_ID`, `DURIN_NODE_ID`, `DURIN_ITERATION`, `DURIN_WORK_DIR` plus the rest of
 its environment per the `env` field below (default: a minimal allowlist, not the full
 gateway environment). A script node has no session and never reads the shared-context

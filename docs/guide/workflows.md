@@ -66,7 +66,9 @@ A script node has two forms — pick exactly one:
 The I/O contract is plain Unix:
 
 - **stdin** is the previous node's output (the upstream edge text). If the
-  script node is the workflow's first node, stdin is the run's task instead.
+  script node is the workflow's first node, stdin is the run's task instead,
+  exactly as it was passed — the workflow's input/output descriptions are
+  framing for agent steps and never reach a script.
 - **stdout** becomes the edge text for the next node — capped
   (`workflow.script_output_max_chars`, default 16000 characters; excess is
   truncated with a notice).
@@ -84,7 +86,7 @@ The I/O contract is plain Unix:
   writes, so a script step can read files an earlier step produced, or leave
   files for a later step.
 - **Environment.** A handful of `DURIN_*` variables carry run metadata:
-  `DURIN_TASK` (the run's task, capped), `DURIN_RUN_ID`, `DURIN_NODE_ID`,
+  `DURIN_TASK` (the run's task as passed, capped), `DURIN_RUN_ID`, `DURIN_NODE_ID`,
   `DURIN_ITERATION` (which pass this is, for a looping node), and
   `DURIN_WORK_DIR` (the shared working folder's path). The rest of the
   subprocess environment is controlled by `env`: `"clean"` (the default) gives
@@ -271,9 +273,10 @@ refines its work in response to loop feedback.
   descriptor. Declaring `file: true` input means the workflow expects
   files to work on — pass them via `input_files` (absolute paths) when you
   run it, and they land in the shared working folder before the first node
-  runs. The `description` fields are framing hints given to every node
-  (what the run received, what it must deliver) — not enforced, just
-  steering.
+  runs. The `description` fields are framing hints given to every agent
+  node (what the run received, what it must deliver) — not enforced, just
+  steering. Script nodes never see them: a script gets the task exactly as
+  it was passed, so an example in a description can't be parsed as a value.
 - **Reading back what a run produced.** A completed run reports its
   `output_dir` (the shared working folder) and the list of files inside it
   (`output_files`, relative paths) — so you know exactly what was created

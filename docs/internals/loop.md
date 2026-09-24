@@ -370,6 +370,19 @@ emergency-trims the largest string tool results on the model-facing copy and
 proceeds if that fits (`mid_turn_precheck.recovered`); only when trimming can't
 recover does it abort *before* the LLM call with
 `stop_reason=mid_turn_precheck_overflow` and an overflow-specific placeholder.
+The abort leaves the request unfinished and nothing re-sends it; the error tells
+the user to send it again, and the next turn runs on a compacted context.
+
+The estimate (`estimate_prompt_tokens_chain`) prefers the provider's own count.
+Every assistant message the runner persists is stamped with
+`usage_prompt_tokens`, the provider's count for the prompt that *produced* it:
+system prompt, tool definitions and every earlier message. From the second call
+of a turn onward the estimate is that stamp plus a tiktoken estimate of the
+stamped message and everything after it, *without* the tool definitions, which
+the stamp already contains. Before any call has been made (iteration 0, and the
+consolidator, whose history carries no stamps) it is a tiktoken estimate of the
+messages plus the tool definitions — the same basis on both sides, which is what
+the iteration-0 overflow invariant above relies on.
 
 **Microcompaction** is gated on pressure: results beyond the most recent
 `_MICROCOMPACT_KEEP_RECENT` are only collapsed when the estimated prompt

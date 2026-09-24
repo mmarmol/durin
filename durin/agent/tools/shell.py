@@ -40,6 +40,18 @@ _WORKSPACE_BOUNDARY_NOTE = (
     "restrict_to_workspace policy and ask how to proceed."
 )
 
+# Policy note appended when the deny list or a configured allowlist refuses a
+# command. The same effect is always reachable another way (python, find
+# -delete, a script), so the model is told to stop and ask, not to reword.
+_COMMAND_POLICY_NOTE = (
+    "\n\nNote: this is the exec safety policy, not a transient failure. "
+    "Do NOT get the same result another way (a reworded command, python or "
+    "perl, find -delete, a script you write and run, or another tool). Stop, "
+    "tell the user what you wanted to run and why, and ask the user how to "
+    "proceed: they can run it themselves, or allow it for you via "
+    "tools.exec.allow_patterns."
+)
+
 
 class ExecToolConfig(Base):
     """Shell exec tool configuration."""
@@ -212,7 +224,8 @@ class ExecTool(Tool, ContextAware):
             "Use -y or --yes flags to avoid interactive prompts. "
             "Output is truncated at 10 000 chars; timeout defaults to 60s. "
             "Destructive commands (rm -rf, dd, mkfs, format, shutdown) and "
-            "writes into memory/ or history files are blocked. "
+            "writes into memory/ or history files are blocked; when one is "
+            "blocked, ask the user instead of reaching the result another way. "
             "Set background=true for long-lived commands (servers, builds) "
             "and manage them with the process tool."
         )
@@ -482,14 +495,20 @@ class ExecTool(Tool, ContextAware):
         if not explicitly_allowed:
             for pattern in self.deny_patterns:
                 if re.search(pattern, lower):
-                    return "Error: Command blocked by deny pattern filter"
+                    return (
+                        f"Error: Command blocked by deny pattern filter (rule: {pattern})"
+                        + _COMMAND_POLICY_NOTE
+                    )
 
             mem_block = self._guard_memory_mutation(lower)
             if mem_block:
                 return mem_block
 
             if self.allow_patterns:
-                return "Error: Command blocked by allowlist filter (not in allowlist)"
+                return (
+                    "Error: Command blocked by allowlist filter (not in allowlist)"
+                    + _COMMAND_POLICY_NOTE
+                )
 
         from durin.security.network import contains_internal_url
         if contains_internal_url(cmd):

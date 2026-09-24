@@ -242,3 +242,42 @@ async def test_runner_throttles_repeated_workspace_bypass_attempts():
         "expected at least one escalated workspace_violation event, got: "
         f"{result.tool_events}"
     )
+
+
+@pytest.mark.asyncio
+async def test_policy_blocked_command_gets_no_retry_hint():
+    """The generic "try a different approach" hint must not follow a command
+    the exec policy refused: that hint coached the model into deleting a
+    blocked path with python instead of asking the user."""
+    from durin.agent.runner import AgentRunner, AgentRunSpec
+    from durin.agent.tools.shell import ExecTool
+
+    blocked = ExecTool()._guard_command("rm -rf /w/old", "/w")
+    provider = MagicMock()
+    provider.chat_with_retry = AsyncMock(side_effect=[
+        LLMResponse(
+            content="deleting",
+            tool_calls=[ToolCallRequest(
+                id="call_rm", name="exec", arguments={"command": "rm -rf /w/old"},
+            )],
+        ),
+        LLMResponse(content="That deletion needs your OK.", tool_calls=[]),
+    ])
+    tools = MagicMock()
+    tools.get_definitions.return_value = []
+    tools.execute = AsyncMock(return_value=blocked)
+
+    runner = AgentRunner(provider)
+    result = await runner.run(AgentRunSpec(
+        initial_messages=[],
+        tools=tools,
+        model="test-model",
+        max_iterations=3,
+        max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+    ))
+
+    assert result.stop_reason == "completed"
+    tool_messages = [m for m in result.messages if m.get("role") == "tool"]
+    assert "try a different approach" not in tool_messages[0]["content"]
+    assert "ask the user" in tool_messages[0]["content"].lower()
+    assert result.tool_events[0]["detail"].startswith("command_policy:")

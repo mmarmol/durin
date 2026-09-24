@@ -14,6 +14,7 @@ from unittest.mock import MagicMock
 
 from durin.utils.helpers import (
     build_assistant_message,
+    estimate_prompt_tokens,
     estimate_prompt_tokens_chain,
     latest_prompt_tokens_anchor,
 )
@@ -118,16 +119,38 @@ def test_estimate_uses_anchored_when_stamp_present():
     provider_counter.assert_not_called()
 
 
-def test_estimate_returns_anchor_value_exact_when_tail_empty():
-    """If the anchored message is the last one, the answer is the
-    stamp itself — no tail to estimate."""
+def test_estimate_counts_the_anchored_message_itself():
+    """The stamp is the prompt that PRODUCED the anchored message, so that
+    message is not in it: the next prompt is the stamp plus the anchored
+    message plus whatever came after."""
+    reply = "long reply " * 200
     msgs = [
         {"role": "user", "content": "ask"},
-        {"role": "assistant", "content": "last", "usage_prompt_tokens": 800},
+        {"role": "assistant", "content": reply, "usage_prompt_tokens": 800},
     ]
     tokens, source = estimate_prompt_tokens_chain(MagicMock(), "m", msgs)
-    assert tokens == 800
+    assert tokens == 800 + estimate_prompt_tokens([msgs[1]])
+    assert tokens > 1000
     assert source == "anchored"
+
+
+def test_anchored_estimate_does_not_recount_tool_schema():
+    """The provider's prompt count already includes the tool definitions it
+    was sent. Adding them again on top of the stamp double-counts them."""
+    tools = [{
+        "type": "function",
+        "function": {"name": "big", "description": "word " * 5000,
+                     "parameters": {"type": "object", "properties": {}}},
+    }]
+    msgs = [
+        {"role": "user", "content": "ask"},
+        {"role": "assistant", "content": "calling", "usage_prompt_tokens": 9000},
+        {"role": "tool", "tool_call_id": "c1", "content": "tool output"},
+    ]
+    tokens, source = estimate_prompt_tokens_chain(MagicMock(), "m", msgs, tools=tools)
+    assert source == "anchored"
+    assert tokens == 9000 + estimate_prompt_tokens(msgs[1:])
+    assert tokens < 9000 + estimate_prompt_tokens([], tools)
 
 
 def test_estimate_falls_back_to_provider_counter_without_anchor():

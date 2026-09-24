@@ -297,7 +297,7 @@ grants access to the tool that produced the result.
 | `tools.exec.enable` | `bool` | `true` | Enables/disables the `exec` shell tool |
 | `tools.exec.timeout` | `int` | `60` | Default subprocess timeout in seconds (max 600). On POSIX the command runs as its own process group, so a timeout or a cancelled turn kills everything it started, not just the shell |
 | `tools.exec.sandbox` | `str` | `""` | Sandbox backend (`bwrap`, `docker`, `testbed`, or empty for none) |
-| `tools.exec.deny_patterns` | `list[str]` | (hardcoded set) | Regex patterns that block matching commands before execution |
+| `tools.exec.deny_patterns` | `list[str]` | (hardcoded set) | Regex patterns that block matching commands before execution; the refusal names the rule and tells the model to ask the user rather than reach the same result another way |
 | `tools.exec.allow_patterns` | `list[str]` | `[]` | Regex patterns that exempt matching commands from the deny list |
 | `tools.exec.allowed_env_keys` | `list[str]` | `[]` | Extra env vars forwarded to subprocesses (beyond the minimal curated set) |
 | `tools.my.enable` | `bool` | `true` | Enables/disables the `my` self-inspection tool |

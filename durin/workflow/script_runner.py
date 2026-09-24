@@ -3,7 +3,9 @@
 Plugs into WorkflowEngine as the ``script_runner``, the peer of AgentNodeRunner.
 The contract is Unix-plain: stdin carries the upstream edge text. A start-position
 node (no upstream) receives the run's task instead, since the run's input text is
-the incoming edge of the start node. Upstream producers that emit an empty string
+the incoming edge of the start node. That task is exactly what the caller passed:
+the workflow's input/output descriptions frame the task for agent nodes only, never
+for a script, which parses its input as data. Upstream producers that emit an empty string
 produce empty stdin (no fallback). Small run metadata in DURIN_* env vars, cwd is
 the run's shared working folder (the file channel), stdout (capped) becomes the
 edge text to the next node. The subprocess environment is a minimal allowlist plus
@@ -168,9 +170,10 @@ class ScriptNodeRunner:
             Path(cwd).mkdir(parents=True, exist_ok=True)
         env = self._base_env(node)
         env.update(self._declared_secrets(req))
+        task = req.raw_task if req.raw_task is not None else req.task
         # DURIN_* metadata is set last so a declared secret can never shadow it.
         env.update({
-            "DURIN_TASK": (req.task or "")[:_MAX_TASK_ENV_CHARS],
+            "DURIN_TASK": (task or "")[:_MAX_TASK_ENV_CHARS],
             "DURIN_RUN_ID": req.run_id,
             "DURIN_NODE_ID": node.id,
             "DURIN_ITERATION": str(req.iteration),
@@ -186,7 +189,7 @@ class ScriptNodeRunner:
             )
         except (FileNotFoundError, PermissionError, OSError) as exc:
             raise NodeExecutionError(node.id, req.iteration, None, exc) from exc
-        stdin_data = (req.upstream_output if req.upstream_output is not None else req.task) or ""
+        stdin_data = (req.upstream_output if req.upstream_output is not None else task) or ""
         deadline = time.monotonic() + timeout
         try:
             stdout, stderr = proc.communicate(input=stdin_data, timeout=min(_POLL_SLICE_SECONDS, timeout))

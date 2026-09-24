@@ -174,3 +174,103 @@ async def test_estimator_exception_does_not_break_turn(monkeypatch):
 
     assert result.stop_reason == "completed"
     assert result.final_content == "recovered"
+
+
+@pytest.mark.asyncio
+async def test_tool_schema_is_not_counted_twice_after_the_first_call(monkeypatch):
+    """Real estimator, no stub. From the second call of a turn the estimate
+    is anchored on the provider's own prompt count, which already includes
+    the tool definitions. Adding the schema again made a turn that fits
+    abort with a false "prompt overflow"."""
+    from durin.agent.runner import AgentRunner, AgentRunSpec
+    from durin.providers.base import LLMProvider, ToolCallRequest
+
+    telemetry = _RecordingTelemetry()
+    _bind_telemetry(monkeypatch, telemetry)
+
+    calls = {"n": 0}
+
+    async def chat_with_retry(*, messages, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return LLMResponse(
+                content="reading",
+                tool_calls=[ToolCallRequest(id="c1", name="big", arguments={})],
+                usage={"prompt_tokens": 45_000, "completion_tokens": 10},
+            )
+        return LLMResponse(content="done", tool_calls=[], usage={})
+
+    provider = MagicMock(spec=LLMProvider)
+    provider.chat_with_retry = chat_with_retry
+    tools = MagicMock()
+    # About 20K tokens of schema: fits once (45K real prompt), not twice.
+    tools.get_definitions.return_value = [{
+        "type": "function",
+        "function": {"name": "big", "description": "word " * 20_000,
+                     "parameters": {"type": "object", "properties": {}}},
+    }]
+    tools.execute = AsyncMock(return_value="small result")
+
+    runner = AgentRunner(provider)
+    result = await runner.run(AgentRunSpec(
+        initial_messages=[{"role": "user", "content": "go"}],
+        tools=tools,
+        model="test-model",
+        max_iterations=3,
+        max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+        context_window_tokens=60_000,
+        max_tokens=2000,
+    ))
+
+    assert result.stop_reason == "completed"
+    assert result.final_content == "done"
+    assert calls["n"] == 2
+    assert [e for e in telemetry.events if e[0] == "mid_turn_precheck.overflow"] == []
+
+
+@pytest.mark.asyncio
+async def test_overflow_after_the_model_ran_says_the_request_is_unfinished(monkeypatch):
+    """An abort at iteration > 0 happens after the model already worked on the
+    request, and nothing re-sends it later. The user-facing error and the
+    persisted placeholder must say the request was not finished, not that the
+    model never ran or that a retry will happen by itself."""
+    from durin.agent import runner as runner_mod
+    from durin.agent.runner import AgentRunner, AgentRunSpec
+    from durin.providers.base import ToolCallRequest
+
+    telemetry = _RecordingTelemetry()
+    _bind_telemetry(monkeypatch, telemetry)
+
+    def _estimate(_provider, _model, messages, _tools=None):
+        # Over budget only once a tool result exists: iteration 1, not 0.
+        over = any(m.get("role") == "tool" for m in messages)
+        return (500_000 if over else 1000), "test-counter"
+
+    monkeypatch.setattr(runner_mod, "estimate_prompt_tokens_chain", _estimate)
+    provider = MagicMock()
+    provider.chat_with_retry = AsyncMock(return_value=LLMResponse(
+        content="reading",
+        tool_calls=[ToolCallRequest(id="c1", name="read_file", arguments={})],
+    ))
+    tools = MagicMock()
+    tools.get_definitions.return_value = []
+    tools.execute = AsyncMock(return_value="result")
+
+    runner = AgentRunner(provider)
+    result = await runner.run(AgentRunSpec(
+        initial_messages=[{"role": "user", "content": "go"}],
+        tools=tools,
+        model="test-model",
+        max_iterations=3,
+        max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+        context_window_tokens=10_000,
+        max_tokens=2000,
+    ))
+
+    assert result.stop_reason == "mid_turn_precheck_overflow"
+    assert provider.chat_with_retry.await_count == 1  # the model did run
+    assert "not finished" in result.error
+    assert "will retry" not in result.error
+    placeholder = result.messages[-1]["content"]
+    assert "before the model ran" not in placeholder
+    assert "not finished" in placeholder

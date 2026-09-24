@@ -35,12 +35,16 @@ input becomes the start node's task; input files are placed in the run's shared 
 start node (and every later step) reads them there. Multiple input files pair naturally
 with dynamic fan-out (a worker per file). The terminal node's text output and the shared working folder are
 exposed in the run result. Absent ⇒ today's text-task behavior. The optional free-text `description`
-is a lightweight contract: the engine frames every node's task with the input description (what the
-run received) and the output description (what it must deliver), so the agents are steered and the
-interface is documented — descriptions are hints, not enforced. The output descriptor may
+is a lightweight contract: the engine frames every agent node's task with the input description (what
+the run received) and the output description (what it must deliver), so the agents are steered and the
+interface is documented — descriptions are hints, not enforced. Script nodes never see the framing: they
+get the task exactly as the caller passed it (`NodeRunRequest.raw_task`), because a script parses its
+input as data and an example in a description would read as a value. A subworkflow node at the start
+position likewise hands the child the unframed task, so the child frames it once, with its own
+descriptions. The output descriptor may
 additionally declare **`artifacts`** — a list of `{path, description?}` naming the files (relative
 to the run's working folder) the run promises to produce. Declared paths are validated at parse
-time (relative, no `..`, no duplicates), ride in every node's framing as the file contract, and
+time (relative, no `..`, no duplicates), ride in every agent node's framing as the file contract, and
 after a completed run the engine reports the ones not produced as `missing_artifacts` on the
 result and manifest — a **warning, never a failure** — so an orchestrating caller or a composed
 downstream stage learns immediately which promised file is absent instead of failing confusingly
@@ -140,7 +144,8 @@ field (`model`, `persona`, `context`, `session`, `prompt`, `mode`, `tools`, `ski
 interpreter, a `.sh` script under `bash`, anything else must be directly executable (a
 shebang); an inline `command` always runs via `bash -c`. **stdin** carries the upstream
 edge text — a node at the **start** position (no upstream output yet) receives the
-run's task instead, since the run's task is the incoming edge of the start node; an
+run's task instead, since the run's task is the incoming edge of the start node — the
+task as the caller passed it, without the input/output framing agent nodes get; an
 upstream node that produced an empty string stays empty (no fallback). Small run
 metadata rides in `DURIN_TASK`/`DURIN_RUN_ID`/`DURIN_NODE_ID`/`DURIN_ITERATION`/
 `DURIN_WORK_DIR` env vars (`DURIN_TASK` is capped — env values have platform size
