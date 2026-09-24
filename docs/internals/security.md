@@ -63,13 +63,16 @@ the run, which is what makes it delegable. `durin.agent.approval` owns this
 classification, and `pending_answers.can_block` (the blocking `ask_user_question`
 wait) delegates to it — a context that cannot authorize cannot answer either.
 
-**Layered skill import gates.** Importing a skill passes two independent scan
-stages. The first is deterministic: a regex and AST pass that always runs.
-The second is an optional LLM semantic judge, which handles non-English and
-paraphrased threats that regex cannot reach. The judge is capped at a configurable
-severity ceiling and can never block a skill on its own — only the deterministic
-scan produces a blocking verdict. A human confirmation step sits between a
-suspicious scan result and installation.
+**Layered skill gates.** Importing a skill passes two independent scan stages.
+The first is deterministic: a regex and AST pass that always runs. The second is
+an optional LLM semantic judge, which handles non-English and paraphrased threats
+that regex cannot reach. The judge is capped at a configurable severity ceiling
+and can never block a skill on its own — only the deterministic scan produces a
+blocking verdict. Between a flagged scan result and installation sits a decision
+the model cannot make: the operator's `install_policy: auto` (never for a
+dangerous verdict), the configured judge within strict limits, or a person —
+asked in the chat, or later from Pending. The same deterministic scan runs on
+every write that changes an installed skill, before the write lands.
 
 **Execution policy as defense-in-depth.** The shell execution path is not a
 single wall; it is a sequence of independent checks. A command that clears one
@@ -96,8 +99,8 @@ flowchart TD
         FETCH --> SCAN["scan_skill()\ndeterministic:\nregex + AST + OSV"]
         SCAN --> JUDGE{"LLM judge\n(if configured)"}
         JUDGE --> VERDICT["ScanReport.verdict\n(safe / caution / dangerous)"]
-        VERDICT -->|"dangerous"| BLOCK["Blocked"]
-        VERDICT -->|"caution or\ncarries code"| CONFIRM["Human confirm\nrequired"]
+        VERDICT -->|"dangerous"| BLOCK["Person only\n(chat or Pending)"]
+        VERDICT -->|"caution, code or\nuntrusted source"| CONFIRM["Approval:\npolicy / judge / person"]
         VERDICT -->|"safe +\nallowlisted"| INSTALL["install_imported_skill()"]
     end
 
@@ -281,14 +284,43 @@ means the judge can force a confirmation step but can never produce a `dangerous
 verdict on its own — only the deterministic scan does that. If the judge errors or
 times out, the deterministic report stands unchanged.
 
+**The judge as an approver.** Besides raising a verdict at fetch time, the judge
+may clear an approval request, within limits: only a `confirm` install, or an
+edit to an `auto` skill whose post-edit scan is `caution`. Never `dangerous`,
+never a `manual` skill's edit (the owner's consent is not a safety question),
+never dependency installs, MCP changes or exec. It runs on the exact tree (a
+throwaway copy of the post-edit tree for an edit) and may clear only what it
+read: every file must be `SKILL.md` or under `scripts/`, every finding must point
+at one of them, no install specs may be declared (the frontmatter is outside its
+view), and the content must fit its character budget. A `safe` verdict that
+still lists a finding above `info` does not clear. An unavailable or failing
+judge falls through to a person. A cleared request is recorded with
+`decided_by: judge` (`durin/agent/approval_kinds_skills.py`).
+
 `ScanReport.verdict` merges both scans: when a `judge_verdict` is present it takes
 precedence (within the severity cap), otherwise the findings list determines the
 verdict.
 
-Installation is governed by a `decide_action` gate in `durin/agent/skills_import.py`:
-`dangerous` blocks unconditionally; `caution`, code-carrying skills, or sources
-not matching the allowlist require explicit human confirmation; safe allowlisted
-skills install without a confirmation step.
+Installation is governed by a `decide_action` gate in `durin/agent/skills_import.py`
+(`install_gate` computes it exactly as the install enforces it): `allow` for a
+safe, allowlisted skill without code; `confirm` for caution, code-carrying, or
+out-of-allowlist skills; `block` for `dangerous`. `allow` installs directly from
+any context. Anything else is a `skill_install` approval request the model cannot
+resolve — `skill_import` has no `confirm` or `override` argument. It is decided,
+in order, by:
+
+- `skills.install_policy: auto`, which pre-authorizes `confirm` installs (never `block`);
+- the skills judge, for a `confirm` install only (see above);
+- the person in the chat (a card in the webui and TUI, a yes/no reply on text channels);
+- otherwise a pending record, resolved later from Pending or `durin approvals`.
+
+The request is bound to the quarantine's content hash (`.scan.json` excluded), so
+a re-fetched quarantine makes it stale. At execution the install re-derives the
+gate and grants `override` only when the verdict the approver saw was
+`dangerous`: a verdict that rose after the approval makes the install fail
+instead of landing. Provenance and `import-audit.log` record `approval_id` and
+`approved_by` (`user`, `judge`, `operator`, or `policy`; empty when no decision
+was needed), and the commit carries `Approved-by` / `Approval` trailers.
 
 **Skill reviews** (`durin/security/skill_reviews.py`): a user or the LLM judge
 can mark an active flagged skill as reviewed. Each acked finding is stored as
@@ -315,10 +347,37 @@ A weaker provenance verdict never lowers the live scan's verdict — the scanner
 current view of the content wins. A user review adopts the skill: the review
 endpoint stamps `provenance.verdict_cleared = {by, at}` into `SKILL.md`
 (committed to the skills store; the original `verdict` stays as the audit
-trail), which disables the pin permanently — only an explicit user review
-clears it, the LLM audit path never does. The deterministic scanner keeps
-running on every listing regardless, so new or edited content is still judged
-on its own.
+trail), which disables the pin until a later write adds findings (see Re-scan on
+skill writes) — only an explicit user review clears it, the LLM audit path never
+does. The deterministic scanner keeps running on every listing regardless, so new
+or edited content is still judged on its own.
+
+**Re-scan on skill writes.** Every write that changes an installed skill's
+`SKILL.md` or a code file is scanned before it lands: `scan_skill_write`
+(`durin/agent/skills_store.py`) scans a throwaway copy with the write applied,
+next to the skill as it stands. A write needs review when the result is not
+`safe` and it is either worse than the current verdict or carries a finding the
+current skill does not have; keeping an already accepted risk as it was passes.
+What happens then depends on who writes:
+
+- `skill_edit` (the agent): an `auto` skill's edit that needs no review lands.
+  Otherwise, and always for a `manual` skill, it becomes a `skill_edit` approval
+  request (the judge for a `caution` edit to an `auto` skill, then the person,
+  then Pending). The request is bound to the target file's content (durin's own
+  provenance and curation stamps in the frontmatter excluded) plus the change.
+- Curation `evolve` (nobody to ask): the judge may clear a `caution` edit;
+  otherwise a pending `skill_edit` request is filed and nothing is written.
+- Dream restructure: a whole-body rewrite cannot be filed as a bounded edit, so a
+  result that needs review is refused with its findings and the live skill stays
+  as it was.
+- New skills (`skill_write`, `skill_publish`, a fuse target) are scanned whether
+  or not they bundle files; a verdict other than `safe` quarantines them.
+- A person's save in the web editor, or a suggestion they accepted: a result that
+  needs review and is `dangerous` is refused with its findings; a `caution` one
+  is saved and its findings are returned.
+
+Any write that adds findings drops `provenance.verdict_cleared`, so the
+import-time verdict pin returns until someone reviews the skill again.
 
 ### Shell execution policy
 
@@ -476,6 +535,9 @@ only callers with system-write authority can manage other tokens.
 | `JudgeOutcome` | `durin/security/skill_judge.py` | LLM judge result: `findings` (severity-capped), `verdict`, `summary`, `tools` |
 | `judge_skill` | `durin/security/skill_judge.py` | Runs the LLM judge; capped at `max_severity`; raises `JudgeError` on parse failure (never blocks on error) |
 | `audit_skill` | `durin/security/skill_judge.py` | Convenience entry point: deterministic scan merged with optional LLM judge |
+| `install_gate` | `durin/agent/skills_import.py` | The import gate's decision (verdict, action, findings) computed exactly as `install_imported_skill` enforces it |
+| `WriteScan` / `scan_skill_write` | `durin/agent/skills_store.py` | Scan of a skill before and after a proposed write; `needs_review` is the shared write gate |
+| `approval_kinds_skills` (module) | `durin/agent/approval_kinds_skills.py` | `skill_install` / `skill_edit` / `skill_deps` approval kinds (prepare, hash, execute) and the skills judge as a limited approver |
 | `ExecTool` | `durin/agent/tools/shell.py` | Shell execution tool; applies `_guard_command()`, builds scrubbed env via `_build_env()`, wraps with sandbox |
 | `_guard_command` | `durin/agent/tools/shell.py` | Layered guard: deny/allow patterns → memory vault → SSRF URL → workspace boundary |
 | `_guard_memory_mutation` | `durin/agent/tools/shell.py` | Blocks rm/mv/cp/tee/sed -i/dd/redirect targeting `memory/` paths |
@@ -503,7 +565,8 @@ only callers with system-write authority can manage other tokens.
 | `tools.restrict_to_workspace` | `false` | When true, absolute paths in exec commands and the `working_dir` parameter are blocked outside the configured workspace root |
 | `tools.ssrf_whitelist` | `[]` | CIDR ranges (e.g. `100.64.0.0/10` for Tailscale) to exempt from the SSRF private-address block |
 | `skills.security.allowlist` | (vendor defaults) | Source-ref prefixes (e.g. `github:anthropics/`) that skip the source confirmation step; verdict and code gates have no opt-out |
-| `skills.security.llm_judge.trigger` | `"off"` | When the LLM judge auto-runs: `off`, `uncertain` (only for caution/code-carrying/out-of-allowlist skills), or `always` |
+| `skills.security.llm_judge.trigger` | `"off"` | When the LLM judge runs: `off` (only on demand; it never clears approvals), `uncertain` (at fetch time for caution/code-carrying/out-of-allowlist skills) or `always`; when not `off` it is also consulted for the approvals it may clear |
+| `skills.install_policy` | `"approve"` | Who authorizes flagged skill installs and dependency installs: `approve` (the user; the judge may clear a non-dangerous install), `auto` (pre-authorized; a dangerous skill still needs the user), `never` (dependency installs only reported) |
 | `skills.security.llm_judge.max_severity` | `"caution"` | Maximum severity the judge may assign (`caution` or `dangerous`) |
 | `skills.security.llm_judge.model` | `""` | Aux model for the judge; empty resolves to the configured default |
 | `skills.security.max_files` | `100` | Maximum files in a fetched skill archive |
@@ -561,7 +624,14 @@ therefore comes without increasing the false-positive rate for clean skills.
 **Why is the LLM judge severity-capped?** A judge that could block unconditionally
 would be a denial-of-service vector: a malicious or misconfigured model could
 prevent all skill imports. The cap (default: `caution`) limits the judge to forcing
-a confirmation step — the human remains in the loop for the final install decision.
+a decision step instead of deciding the block itself.
+
+**Why may the judge clear approvals at all?** An unattended run (cron, dream) that
+needs a flagged but benign change would otherwise wait for a person every time.
+The judge clears only `confirm` installs and `caution` edits to `auto` skills,
+only content it actually read, and never what only a person may accept
+(`dangerous`, a `manual` skill's edit, dependency installs). A wrong `safe` from
+the judge therefore admits at most what the deterministic scan rates `caution`.
 
 **Why is the memory vault blocked from shell?** The FTS and vector indices maintain
 pointers to memory files. A raw `rm` or redirect that removes or overwrites a file

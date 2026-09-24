@@ -499,7 +499,7 @@ See [docs/internals/skills/](../internals/skills/) for architecture details.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `install_policy` | `approve` | How `skill_install_deps` runs declared install specs: `never` (report only), `approve` (dry-run then confirm), or `auto` (run without per-call confirm) |
+| `install_policy` | `approve` | Who authorizes flagged skill installs and dependency installs: `approve` (you approve each one in the chat or from Pending; the skills judge may clear a non-dangerous install), `auto` (pre-authorized, except a dangerous skill), `never` (dependency installs are only reported) |
 
 **`skills.security`** — import security floor:
 
@@ -515,7 +515,7 @@ See [docs/internals/skills/](../internals/skills/) for architecture details.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `trigger` | `off` | When to auto-run: `off`, `uncertain` (only when gate is already unsure), or `always` |
+| `trigger` | `off` | When to auto-run: `off` (never; it never clears approvals), `uncertain` (only when gate is already unsure), or `always`; when not `off` it is also consulted for the approvals it may clear |
 | `max_severity` | `caution` | Cap on how high the judge may raise the verdict: `caution` or `dangerous` |
 | `model` | `""` | Aux model name; empty = default |
 

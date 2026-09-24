@@ -1,7 +1,7 @@
 """skill_import tool — resolve / fetch / install / reject over the security scan floor.
 Driven with LOCAL sources so the pipeline runs fully offline. An install the gate
-flags is decided by the server (policy, judge, the person in the chat, or
-Pending), never by a tool argument."""
+flags is decided by the server (policy, judge, the person in the chat, or a
+pending record resolved later from `durin approvals`), never by a tool argument."""
 from __future__ import annotations
 
 import asyncio

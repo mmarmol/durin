@@ -176,14 +176,13 @@ SKILL.md, and a draft promoted via `skill_publish` carries whatever files the
 agent already wrote under `skill-drafts/<name>/` — either way, this is the
 authoring path for scripts the doctrine prefers over prose steps. Bundled
 paths are confined to the skill directory (relative-only, no parent escapes),
-and `_finalize_skill` (`00_overview.md` §4) runs `scan_skill` on any skill
-carrying bundled files — the same scanner imports pass through — **before the
+and `_finalize_skill` (`00_overview.md` §4) runs `scan_skill` on every new
+skill, bundled files or not — the same scanner imports pass through — **before the
 skill activates**: a `safe` verdict installs with the verdict stamped in
 provenance; `caution`/`dangerous` relocates the whole directory to the import
 quarantine with a `.scan.json` (`source: "authored:agent"`), where the
-existing approve/reject surfaces review it. Self-authored prose is trusted;
-self-authored *code* earns the same gate as third-party code, regardless of
-which ramp produced it.
+existing approve/reject surfaces review it. Self-authored prose and code both
+pass the same scan third-party skills do, whichever ramp produced them.
 
 A quarantined skill whose `SKILL.md` is itself **invalid** (unparseable YAML
 frontmatter — classically an unquoted `": "` inside a plain multi-line
@@ -241,8 +240,11 @@ gate's reason, and an accept action that IS the user's explicit override
 (`apply_suggestion` replays it with `composition_override=True`, actor=user).
 A later compliant landing of the same skill name clears the stale card
 (`clear_gate_bounces`), so only genuinely unresolved bounces await review. Curation `evolve`
-output is not re-gated: the curation judge itself carries the doctrine and the
-catalog in its prompt, so gating its output would re-judge the same judge.
+output is not re-gated for composition: the curation judge itself carries the doctrine and the
+catalog in its prompt, so gating its output would re-judge the same judge. It is security-scanned,
+though: an `evolve` whose result needs review is not written — the skills judge may clear a
+`caution` one, otherwise it waits in Pending as a `skill_edit` request (`../security.md`,
+Re-scan on skill writes).
 
 ### Skill signals: hindsight corrections and gaps
 
@@ -398,8 +400,8 @@ before it is applied:
 
 | Action | Effect | Guard |
 |---|---|---|
-| `evolve` | `apply_skill_edit` — bounded find/replace on the skill body | target must be in `selected` |
-| `restructure` | `restructure_skill_agentic` — the judge supplies only an `intent`; an agentic sub-agent authors the fix (bundle a script, author a workflow to delegate to) in an **isolated staging copy** using real tools, the result is validated (integrity floor + composition gate + security scan), and only a validated, complete skill is applied to live via the locked commit — else discarded, live untouched | target must be in `selected`; requires a non-empty `intent`; the judge never emits whole artifacts inline (that shape corrupted a skill when a completion truncated) |
+| `evolve` | `apply_skill_edit` — bounded find/replace on the skill body; scanned first, and a riskier result is filed for approval instead of written | target must be in `selected` |
+| `restructure` | `restructure_skill_agentic` — the judge supplies only an `intent`; an agentic sub-agent authors the fix (bundle a script, author a workflow to delegate to) in an **isolated staging copy** using real tools, the result is validated (integrity floor + composition gate + security scan), and only a validated, complete skill is applied to live via the locked commit — else discarded, live untouched; a result the scan flags is refused and live is untouched | target must be in `selected`; requires a non-empty `intent`; the judge never emits whole artifacts inline (that shape corrupted a skill when a completion truncated) |
 | `fuse` | `dream_fuse_skills` — merge multiple skills into a new one, preserving source bundled scripts | every source must be in `selected`; `dream_fuse_skills` itself refuses any `manual` source, refuses a source anything **depends on** (below), and runs the composition gate + scan on the merged result |
 | `retire` | `remove_skill` — delete outright (git-recoverable) | target must be in `selected`, and nothing may depend on it (below) |
 | `principle` | `add_principle` | capped at `PRINCIPLES_CAP` |
@@ -432,7 +434,12 @@ with the generic `skills/` write-guard (`00_overview.md`) turned off for the
 copy specifically: the copy mirrors `skills/<name>/` only so the sub-agent's
 path references line up, and the guard exists to protect the live registry,
 which this copy never touches directly — the validated result reaches
-`skills/` only through the locked commit above. `retire`
+`skills/` only through the locked commit above. A restructure the security scan
+flags is refused outright rather than filed as a pending approval — a
+whole-body rewrite is not one bounded edit, so there is no approval kind that
+fits it — and the refusal is logged as an `improvement` observation carrying
+the judge's `intent`, so it re-enters the next curation pass instead of being
+silently lost. `retire`
 exists as a distinct action from `evolve` because an `evolve`-only model can only
 push a fully-obsolete skill toward an empty body, leaving dead clutter;
 `remove_skill` is the same git-recoverable delete used by the manual admin
@@ -524,7 +531,11 @@ manual mode means the skill is the user's to control. Instead:
    Inbox for the user to accept or reject.
 
 Accepting a suggestion replays the recorded action against the live skill
-(`skill_suggestions.apply_suggestion`) and removes it from the queue. A failed
+(`skill_suggestions.apply_suggestion`) and removes it from the queue. An
+accepted `evolve` is a person's write: it lands on a `manual` skill (the
+acceptance is the owner's consent) with an `Approved-by: user` trailer, but one
+that makes the skill `dangerous` is refused with its findings (a 409), and a
+`caution` one lands. A failed
 replay leaves the suggestion queued (retriable) and surfaces the concrete
 reason as a 409 whose `detail` the webui shows verbatim. One failure mode gets
 a machine-readable shape: when the suggestion's skill has meanwhile been swept

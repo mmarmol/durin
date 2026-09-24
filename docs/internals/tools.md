@@ -138,6 +138,17 @@ recurse from a background worker), standing-state creators (`cron`,
 `skill_import`). Those classes declare `_scopes = {"core"}` explicitly, with
 the reason in a comment, rather than relying on the base default.
 
+**Approval-gated tools.** `skill_import` (install), `skill_edit` and
+`skill_install_deps` take no `confirm` or `override` argument: nothing the model
+writes can authorize them. When an action needs a decision the tool files an
+approval request (`durin/agent/approval.py`) and the server decides — operator
+policy, the skills judge within its limits (never for dependency installs), the
+person in the chat (the turn waits up to `agents.defaults.ask_user_answer_timeout_s`),
+or a pending record resolved later from Pending. The tool result carries `status`
+(`applied`, `rejected`, `pending`, `failed`, `stale`, `refused`), `approval_id`,
+and a `message` that, on `rejected` or `pending`, tells the model to continue
+without the action and not to reach the same effect another way.
+
 External tools can be registered via `entry_points(group="durin.tools")` in a
 package's `pyproject.toml`; the loader discovers these after built-ins.
 

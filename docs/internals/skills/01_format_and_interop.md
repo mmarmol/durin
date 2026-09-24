@@ -114,7 +114,7 @@ durin keeps its own fields under `metadata.durin`, following the same
 | Field | Meaning |
 |---|---|
 | `metadata.durin.mode` | `manual` (dream only *proposes* edits, via the suggestion Inbox) or `auto` (dream may author and patch it directly). The mode governs the **dream/system** side only — it is not a user lock. The user can edit a skill in either mode from the web editor; a user edit to an `auto` skill stays `auto` and is committed with `Actor: user`, which the curation judge is told to respect. Default by origin: dream-created → auto, user-created → manual, imported → manual. |
-| `metadata.durin.provenance` | `{ source, created_at, content_hash, … }` — where the skill came from and the gate decision at install. `source: "dream"` means crystallized from session experience; `source: "github:owner/repo/…"` means imported. |
+| `metadata.durin.provenance` | `{ source, created_at, content_hash, approval_id, approved_by, … }` — where the skill came from and who authorized a gated install (`approval_id`/`approved_by`: `user`, `judge`, `operator`, or `policy`; both absent when the gate needed no decision). `source: "dream"` means crystallized from session experience; `source: "github:owner/repo/…"` means imported. |
 | `metadata.durin.requires` | `{ bins: [...], env: [...] }` — availability gate. A skill with an unmet CLI tool or missing env var is shown as `(unavailable: …)` and excluded from retrieval. |
 | `metadata.durin.always` | Truthy → full SKILL.md body is injected into the stable system prompt every turn (the always-on tier), not just name and description. |
 | `metadata.durin.curated` | Dream-curation bookkeeping (last-curated timestamp, body hash). Read by `needs_curation`; not meaningful to authors. |
