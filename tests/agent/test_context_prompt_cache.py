@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import datetime as datetime_module
 from datetime import datetime as real_datetime
 from importlib.resources import files as pkg_files
 from pathlib import Path
 
 from durin.agent.context import ContextBuilder
+from durin.utils import helpers
+from durin.utils.helpers import current_time_str
 
 
 class _FakeDatetime(real_datetime):
@@ -33,17 +34,24 @@ def test_bootstrap_files_are_backed_by_templates() -> None:
 
 def test_system_prompt_stays_stable_when_clock_changes(tmp_path, monkeypatch) -> None:
     """System prompt should not change just because wall clock minute changes."""
-    monkeypatch.setattr(datetime_module, "datetime", _FakeDatetime)
+    # Patch the clock where the prompt code reads it, never the global
+    # datetime class: a module first imported while that is patched (dateutil,
+    # pulled in lazily by croniter) keeps the fake class for the rest of the
+    # process and then rejects every real datetime.
+    monkeypatch.setattr(helpers, "datetime", _FakeDatetime)
 
     workspace = _make_workspace(tmp_path)
     builder = ContextBuilder(workspace)
 
     _FakeDatetime.current = real_datetime(2026, 2, 24, 13, 59)
     prompt1 = builder.build_system_prompt()
+    clock1 = current_time_str()
 
     _FakeDatetime.current = real_datetime(2026, 2, 24, 14, 0)
     prompt2 = builder.build_system_prompt()
+    clock2 = current_time_str()
 
+    assert clock1 != clock2, "the fake clock never reached the code under test"
     assert prompt1 == prompt2
 
 
