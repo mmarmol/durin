@@ -9,22 +9,24 @@ Source-agnostic: a local path, a direct ``https://…/SKILL.md``, or
 - ``fetch``    — download ONE candidate into ``.durin/import-quarantine/`` and
   run the security scan. If the source resolves to many, returns the candidate
   list to pick from instead.
-- ``install``  — install a quarantined skill THROUGH THE GATE: ``confirm`` is
-  required when it carries code / is caution / is out-of-allowlist; ``override``
-  is required when the verdict is dangerous. The refusal is enforced in
-  :func:`install_imported_skill`, not here.
+- ``install``  — install a quarantined skill through the import gate. Nothing
+  the model passes can authorize it: a skill the gate allows installs at once;
+  a flagged one installs when ``skills.install_policy`` is ``auto`` (never for a
+  dangerous verdict), when the configured skills judge clears it, or when a
+  person approves it — asked in this chat, or later from ``durin approvals``.
 - ``reject``   — discard a quarantined skill.
 """
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
 from durin.agent import approval
+from durin.agent import approval_kinds_skills as kinds
+from durin.agent.approval_executors import ExecDeps
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.context import ContextAware, RequestContext
 from durin.agent.tools.schema import BooleanSchema, StringSchema, tool_parameters_schema
@@ -46,16 +48,6 @@ _PARAMETERS = tool_parameters_schema(
         "Quarantined skill name for install/reject (the 'quarantined' value a "
         "prior fetch returned)."
     ),
-    confirm=BooleanSchema(
-        description=("install: confirm a skill that carries code / is caution / is "
-                     "out-of-allowlist. Does NOT bypass a dangerous verdict."),
-        default=False,
-    ),
-    override=BooleanSchema(
-        description=("install: explicitly override a DANGEROUS verdict. Only set this "
-                     "when the user has explicitly told you to force the install."),
-        default=False,
-    ),
     replace=BooleanSchema(
         description=("install: overwrite an existing skill of the same name. Without "
                      "this, install refuses when the name already exists."),
@@ -64,7 +56,10 @@ _PARAMETERS = tool_parameters_schema(
     description=(
         "Import a skill from any source (local path, URL, github:owner/repo) "
         "through the security floor: resolve -> fetch (quarantine+scan) -> "
-        "install (gated by verdict) / reject."
+        "install / reject. When the gate flags a skill, install asks the user to "
+        "approve it by itself — do not ask for that approval yourself. If the "
+        "result is pending or rejected, continue without the skill and do not "
+        "reach the same effect another way."
     ),
 )
 
@@ -80,19 +75,19 @@ class SkillImportTool(Tool, ContextAware):
                  caps: tuple[int, int, int] | None = None,
                  judge: tuple[str, str, str] | None = None,
                  install_policy: str = "approve",
-                 exec_run: Any = None) -> None:
+                 exec_run: Any = None,
+                 chat: kinds.ChatHandles | None = None) -> None:
         self._workspace = Path(workspace).expanduser()
         self._allowlist = list(allowlist or [])
         self._caps = caps or (100, 3 * 1024 * 1024, 1024 * 1024)
         self._judge = judge or ("off", "", "caution")  # trigger off unless config says otherwise
         self._install_policy = install_policy
         self._exec_run = exec_run
-        self._session: ContextVar[str | None] = ContextVar("skill_import_session", default=None)
-        self._model: ContextVar[str | None] = ContextVar("skill_import_model", default=None)
+        self._chat = chat or kinds.ChatHandles()
+        self._ctx: ContextVar[RequestContext | None] = ContextVar("skill_import_ctx", default=None)
 
     def set_context(self, ctx: RequestContext) -> None:
-        self._session.set(ctx.session_key)
-        self._model.set((ctx.metadata or {}).get("model"))
+        self._ctx.set(ctx)
 
     @property
     def name(self) -> str:
@@ -135,7 +130,8 @@ class SkillImportTool(Tool, ContextAware):
         except Exception:  # noqa: BLE001
             pass
         return cls(workspace=ctx.workspace, allowlist=allowlist, caps=caps, judge=judge,
-                   install_policy=install_policy, exec_run=exec_run)
+                   install_policy=install_policy, exec_run=exec_run,
+                   chat=kinds.ChatHandles.from_tool_context(ctx))
 
     @property
     def _qroot(self) -> Path:
@@ -148,10 +144,8 @@ class SkillImportTool(Tool, ContextAware):
     async def execute(self, **kwargs: Any) -> Any:
         from durin.agent.skill_resolve import resolve_candidates
         from durin.agent.skills_import import (
-            SkillImportRefused,
             decide_action,
             fetch_candidate,
-            install_imported_skill,
             reject_quarantined,
             validate_skill,
         )
@@ -160,24 +154,7 @@ class SkillImportTool(Tool, ContextAware):
         action = (str(kwargs.get("action") or "resolve")).strip()
         source = str(kwargs.get("source", "")).strip()
         name = str(kwargs.get("name", "")).strip()
-        confirm = bool(kwargs.get("confirm", False))
-        override = bool(kwargs.get("override", False))
         replace = bool(kwargs.get("replace", False))
-        # `confirm` is a claim written by the model, not evidence that a person
-        # approved: installing a skill adds executable content, so with nobody
-        # reachable (cron, dream, workflow, sub-agent) the request is recorded
-        # for out-of-band approval instead of running.
-        if action == "install":
-            session_key = self._session.get()
-            if self._install_policy != "auto" and not approval.human_reachable(session_key):
-                decision = approval.gate(
-                    self._workspace, "skills", action="import",
-                    summary=f"install skill {name or source!r}",
-                    detail={"source": source, "name": name,
-                            "override": override, "replace": replace},
-                    session_key=session_key)
-                return {"staged_for_approval": decision.record["id"],
-                        "note": decision.message}
 
         if action == "resolve":
             if not source:
@@ -219,51 +196,7 @@ class SkillImportTool(Tool, ContextAware):
             }
 
         if action == "install":
-            if not name:
-                return {"error": "name is required for install"}
-            qdir = self._qroot / name
-            if not (qdir / "SKILL.md").is_file():
-                return {"error": f"not in quarantine: {name}"}
-            src = name
-            sj = qdir / ".scan.json"
-            if sj.is_file():
-                try:
-                    src = json.loads(sj.read_text()).get("source", name)
-                except Exception:  # noqa: BLE001
-                    pass
-            try:
-                from durin.agent.skills_store import Attribution
-                attribution = Attribution(actor="import", session=self._session.get(),
-                                         agent=self._model.get())
-                result = await asyncio.to_thread(
-                    install_imported_skill, self._workspace, qdir,
-                    source=src, allowlist=self._allowlist,
-                    confirmed=confirm, override=override, replace=replace,
-                    attribution=attribution)
-                # Auto-install deps if policy is "auto"
-                if self._install_policy == "auto" and self._exec_run is not None \
-                        and isinstance(result, dict) and not result.get("refused"):
-                    skill_name = result.get("name") or name
-                    skill_dir = self._workspace / ".durin" / "skills" / skill_name
-                    if not skill_dir.is_dir():
-                        skill_dir = self._workspace / "skills" / skill_name
-                    if skill_dir.is_dir():
-                        try:
-                            from durin.agent.skills_import import (
-                                run_install_specs,
-                                runnable_install_specs,
-                            )
-                            specs = runnable_install_specs(skill_dir)
-                            if specs:
-                                deps_results = await run_install_specs(
-                                    specs, exec_run=self._exec_run)
-                                if deps_results:
-                                    result["deps_installed"] = deps_results
-                        except Exception:  # noqa: BLE001
-                            pass
-                return result
-            except SkillImportRefused as exc:
-                return {"refused": exc.action, "verdict": exc.verdict, "message": str(exc)}
+            return await self._install(name, replace)
 
         if action == "reject":
             if not name:
@@ -271,3 +204,82 @@ class SkillImportTool(Tool, ContextAware):
             return await asyncio.to_thread(reject_quarantined, self._workspace, name)
 
         return {"error": f"unknown action: {action!r}"}
+
+    async def _install(self, name: str, replace: bool) -> Any:
+        from durin.agent.skills_import import (
+            SkillImportRefused,
+            _safe_qname,
+            install_gate,
+            install_imported_skill,
+        )
+        from durin.agent.skills_store import Attribution
+
+        if not name:
+            return {"error": "name is required for install"}
+        if not _safe_qname(name):
+            return {"error": "invalid name"}
+        qdir = self._qroot / name
+        if not (qdir / "SKILL.md").is_file():
+            return {"error": f"not in quarantine: {name}"}
+        src = kinds.quarantine_source(qdir, default=name)
+        gate = await asyncio.to_thread(install_gate, qdir, source=src, allowlist=self._allowlist)
+        if not gate["valid"]:
+            return {"refused": "invalid", "verdict": "",
+                    "message": f"invalid skill: {gate['errors']}"}
+        if not replace and (self._workspace / "skills" / gate["name"]).exists():
+            # Refuse before anyone is asked: an approval would only fail later.
+            return {"refused": "exists", "verdict": gate["verdict"],
+                    "message": f"skill already exists: {gate['name']}; "
+                               "pass replace=true to overwrite it"}
+        ctx = self._ctx.get()
+        session_key = ctx.session_key if ctx else None
+        attribution = Attribution(actor="import", session=session_key,
+                                  agent=(ctx.metadata or {}).get("model") if ctx else None)
+        action = gate["action"]
+        if action == "allow" or (action == "confirm" and self._install_policy == "auto"):
+            # Nothing to decide (safe, trusted, no code), or the operator granted
+            # flagged installs ahead of time in config. A dangerous verdict is
+            # never covered by policy: only a person can accept that one.
+            try:
+                result = await asyncio.to_thread(
+                    install_imported_skill, self._workspace, qdir, source=src,
+                    allowlist=self._allowlist, confirmed=True, replace=replace,
+                    attribution=attribution,
+                    approved_by=None if action == "allow" else "policy")
+            except SkillImportRefused as exc:
+                return {"refused": exc.action, "verdict": exc.verdict, "message": str(exc)}
+        else:
+            prepared = kinds.prepare_skill_install(
+                self._workspace, qdir, gate=gate, source=src, replace=replace,
+                attribution=attribution)
+            outcome = await approval.request(
+                self._workspace, prepared, session_key=session_key,
+                deps=ExecDeps(exec_run=self._exec_run, attribution=attribution),
+                judge=kinds.install_judge(qdir, action=action, findings=gate["findings"],
+                                          settings=self._judge),
+                ask=self._chat.asker(ctx))
+            result = approval.outcome_to_tool_result(outcome)
+            if outcome.status != "applied":
+                return result
+        await self._auto_install_deps(gate["name"], result)
+        return result
+
+    async def _auto_install_deps(self, skill_name: str, result: dict) -> None:
+        """With ``install_policy: auto`` the operator pre-authorized dependency
+        runs: install the new skill's declared specs through the exec runner."""
+        if self._install_policy != "auto" or self._exec_run is None:
+            return
+        skill_dir = self._workspace / ".durin" / "skills" / skill_name
+        if not skill_dir.is_dir():
+            skill_dir = self._workspace / "skills" / skill_name
+        if not skill_dir.is_dir():
+            return
+        try:
+            from durin.agent.skills_import import run_install_specs, runnable_install_specs
+            specs = runnable_install_specs(skill_dir)
+            if specs:
+                deps_results = await run_install_specs(specs, exec_run=self._exec_run)
+                if deps_results:
+                    result["deps_installed"] = deps_results
+        except Exception:  # noqa: BLE001 — a dependency failure never undoes the install
+            pass

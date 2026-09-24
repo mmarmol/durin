@@ -233,8 +233,8 @@ async def _run_approved(workspace: Path | str, record: dict, deps: ExecDeps) -> 
 
 
 def _pending_outcome(record: dict, *, asked: bool) -> Outcome:
-    where = ("it is waiting for the user's approval (Pending section / `durin approvals`)"
-             if not asked else "the user did not answer; it stays in Pending")
+    where = ("waiting for approval (`durin approvals`)" if not asked
+             else "the user did not answer; it is still waiting for approval (`durin approvals`)")
     return Outcome("pending", record, None, (
         f"Not done yet: {record['summary']} — {where}, id {record['id']}. Continue "
         "without it; do not retry, and do not reach the same effect another way."))
