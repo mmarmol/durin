@@ -1842,7 +1842,9 @@ class WebSocketChannel(BaseChannel):
                 self.logger.debug("no active subscribers for chat_id={}", msg.chat_id)
             else:
                 self.logger.warning("no active subscribers for chat_id={}", msg.chat_id)
-            return
+            # Fall through: live-state frames are dropped by their senders, but a
+            # reply or a turn_end is still persisted, so a client that reattaches
+            # rebuilds the turn from the transcript.
         if msg.metadata.get("_goal_state_sync"):
             blob = msg.metadata.get("goal_state")
             await self.send_goal_state(msg.chat_id, blob if isinstance(blob, dict) else {"active": False})
@@ -1939,11 +1941,11 @@ class WebSocketChannel(BaseChannel):
             and not msg.metadata.get("_tool_hint")
             and not msg.metadata.get("_progress")
         )
-        if final_reply and msg.chat_id in self._voice:
+        if final_reply and conns and msg.chat_id in self._voice:
             sess = self._voice[msg.chat_id]
             sess.cancel_speak()
             sess.speak_task = asyncio.create_task(self._speak(msg.chat_id, msg.content))
-        elif final_reply and self._voice:
+        elif final_reply and conns and self._voice:
             # A voice session is active but this reply's chat_id isn't one of them —
             # the agent answered on a different chat than the orb is listening on
             # (the class of bug behind "voice replies only in text").
@@ -1964,7 +1966,7 @@ class WebSocketChannel(BaseChannel):
         until the matching ``reasoning_end`` arrives.
         """
         conns = list(self._subs.get(chat_id, ()))
-        if not conns or not delta:
+        if not delta:
             return
         meta = metadata or {}
         body: dict[str, Any] = {
@@ -1975,7 +1977,11 @@ class WebSocketChannel(BaseChannel):
         stream_id = meta.get("_stream_id")
         if stream_id is not None:
             body["stream_id"] = stream_id
+        # Persisted even when nobody watches: a client that reattaches rebuilds
+        # the turn from the transcript, not from frames it never received.
         self._try_append_webui_transcript(chat_id, body)
+        if not conns:
+            return
         raw = json.dumps(body, ensure_ascii=False)
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" reasoning ")
@@ -1987,8 +1993,6 @@ class WebSocketChannel(BaseChannel):
     ) -> None:
         """Close the current reasoning stream segment for in-place renderers."""
         conns = list(self._subs.get(chat_id, ()))
-        if not conns:
-            return
         meta = metadata or {}
         body: dict[str, Any] = {
             "event": "reasoning_end",
@@ -1998,6 +2002,8 @@ class WebSocketChannel(BaseChannel):
         if stream_id is not None:
             body["stream_id"] = stream_id
         self._try_append_webui_transcript(chat_id, body)
+        if not conns:
+            return
         raw = json.dumps(body, ensure_ascii=False)
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" reasoning_end ")
@@ -2009,14 +2015,13 @@ class WebSocketChannel(BaseChannel):
         metadata: dict[str, Any] | None = None,
     ) -> None:
         conns = list(self._subs.get(chat_id, ()))
-        if not conns:
-            return
         meta = metadata or {}
         # Voice mode: the assistant reply reaches the webui as a stream of deltas,
         # NOT a single send() with content — so accumulate it here and speak the
         # full text when the stream ends (this is the real reply path; the send()
         # hook never fires for streamed replies, which is why voice stayed silent).
-        sess = self._voice.get(chat_id)
+        # Nobody listening means nothing to speak; the text is still persisted below.
+        sess = self._voice.get(chat_id) if conns else None
         if sess is not None:
             if meta.get("_stream_end"):
                 spoken_text = sess.take_reply()
@@ -2039,6 +2044,8 @@ class WebSocketChannel(BaseChannel):
         if meta.get("_stream_id") is not None:
             body["stream_id"] = meta["_stream_id"]
         self._try_append_webui_transcript(chat_id, body)
+        if not conns:
+            return
         raw = json.dumps(body, ensure_ascii=False)
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" stream ")
@@ -2052,14 +2059,14 @@ class WebSocketChannel(BaseChannel):
     ) -> None:
         """Signal that the agent has fully finished processing the current turn."""
         conns = list(self._subs.get(chat_id, ()))
-        if not conns:
-            return
         body: dict[str, Any] = {"event": "turn_end", "chat_id": chat_id}
         if latency_ms is not None:
             body["latency_ms"] = int(latency_ms)
         if goal_state is not None:
             body["goal_state"] = goal_state
         self._try_append_webui_transcript(chat_id, body)
+        if not conns:
+            return
         raw = json.dumps(body, ensure_ascii=False)
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" turn_end ")
