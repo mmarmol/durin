@@ -1229,8 +1229,8 @@ class AutomationsConfig(Base):
 class GatewayConfig(Base):
     """Gateway/server configuration."""
 
-    host: str = Field(default="127.0.0.1", description="Bind address; local-only by default")
-    port: int = Field(default=18790, description="Gateway listen port")
+    host: str = Field(default="127.0.0.1", description="Bind address of the /health endpoint; local-only by default. The dashboard and APIs bind channels.websocket.host")
+    port: int = Field(default=18790, description="Port of the /health endpoint. The dashboard and APIs listen on channels.websocket.port")
     # Opt-in because the foreground mode is easier to debug on first install.
     daemon: bool = Field(default=False, description="Run `durin gateway` detached (PID file + log file) so the terminal isn't locked")
     # Defaults to True because most users running `durin gateway` want the
