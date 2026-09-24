@@ -331,3 +331,22 @@ def test_exec_allows_format_in_url_and_args(command):
     tool = ExecTool()
     result = tool._guard_command(command, "/tmp")
     assert result is None
+
+
+@pytest.mark.parametrize("tool,command", [
+    (ExecTool(), "rm -rf /w/x"),
+    (ExecTool(allow_patterns=[r"^ls\b"]), "cat /w/x"),
+])
+def test_policy_block_is_a_boundary_the_model_must_not_route_around(tool, command):
+    """A blocked command must read as a boundary: which rule refused it, and
+    that the same result may not be reached another way (python, find -delete,
+    a script) — the model stops and asks the user instead."""
+    result = tool._guard_command(command, "/w").lower()
+    assert "do not get the same result another way" in result
+    assert "ask the user" in result
+    assert "tools.exec.allow_patterns" in result
+
+
+def test_deny_block_names_the_matched_rule():
+    result = ExecTool()._guard_command("rm -rf /w/x", "/w")
+    assert r"\brm\s+-[rf]{1,2}\b" in result

@@ -64,6 +64,10 @@ class NodeRunRequest:
     # When set, the node's file tools operate here (a private branch copy) instead of
     # the shared workspace — used by writing-in-parallel so branches don't collide.
     workspace_override: str | None = None
+    # The run's task exactly as the caller gave it. ``task`` carries the workflow's
+    # I/O framing, which steers agent nodes; a script parses its input as data, so
+    # it gets this instead (examples in the input description must never reach it).
+    raw_task: str | None = None
     # Engine-provided working folder for this node: read earlier steps' files here and
     # write yours here. Under the run's one shared working folder this is the same path
     # for every sequential node, so files accumulate and each stage sees the prior work.
@@ -520,6 +524,7 @@ class WorkflowEngine:
             try:
                 result = self._walk(
                     workflow, self._frame_task(workflow, task, output_format), run_id, runs,
+                    raw_task=task,
                     root_session_key=root_session_key,
                     input_files=None if resume else input_files,
                     update_manifest=_update,
@@ -720,7 +725,9 @@ class WorkflowEngine:
         """Frame the task with the workflow's optional I/O descriptions: the input
         description as a prefix (what the workflow received) and the output description
         as a suffix (what it must ultimately deliver). Both are free-text hints that
-        steer the node agents and document the interface — they are not enforced. A
+        steer the node agents and document the interface — they are not enforced.
+        Script nodes and a start-position subworkflow get the unframed task instead
+        (``NodeRunRequest.raw_task``): a program parses its input as data. A
         call-time ``output_format`` (the caller's delivery instruction for THIS run)
         overrides the workflow's default output description. When neither an output
         nor an input applies the task is returned unchanged."""
@@ -751,6 +758,7 @@ class WorkflowEngine:
         run_id: str,
         runs: list[NodeRun],
         *,
+        raw_task: str | None = None,
         root_session_key: str | None = None,
         input_files: list[str] | None = None,
         update_manifest: Callable[[], None] | None = None,
@@ -915,7 +923,7 @@ class WorkflowEngine:
                         detached_input = self._compose_inputs(node, runs, upstream_output, resume_outputs)
                     self._launch_detached(
                         detached_tracker, node, task, detached_input, run_id,
-                        iteration, root_session_key, work_dir)
+                        iteration, root_session_key, work_dir, raw_task=raw_task)
                 current = node.next
 
             elif isinstance(node, (WorkNode, ScriptNode)):
@@ -946,6 +954,7 @@ class WorkflowEngine:
                 req = NodeRunRequest(
                     node=node,
                     task=task,
+                    raw_task=raw_task,
                     upstream_output=node_input,
                     # 'own' nodes are isolated from the shared buffer; 'shared'
                     # nodes read it (a copy, so the runner can't mutate ours). A
@@ -1198,8 +1207,10 @@ class WorkflowEngine:
                         f"node {node.id!r} is a subworkflow but the engine has no subworkflow_runner"
                     )
                 sub_t0 = time.monotonic()
+                # The child run frames its own task; handing it ours would frame twice.
                 outcome = self._subworkflow_runner(
-                    node.workflow, upstream_output or task, root_session_key,
+                    node.workflow, upstream_output or (raw_task if raw_task is not None else task),
+                    root_session_key,
                     work_dir=work_dir, parent_run_id=run_id,
                     progress_emit=self._progress_emit, cancel_check=self._cancel_check,
                     hard_cancel_check=self._hard_cancel_check,
@@ -1278,11 +1289,11 @@ class WorkflowEngine:
                         merged, abort = self._run_parallel(
                             workflow, node, task, run_id, iteration, root_session_key,
                             upstream_output, runs, work_dir=work_dir,
-                            branch_ids=resolved)
+                            branch_ids=resolved, raw_task=raw_task)
                 else:
                     merged, abort = self._run_parallel(
                         workflow, node, task, run_id, iteration, root_session_key,
-                        upstream_output, runs, work_dir=work_dir)
+                        upstream_output, runs, work_dir=work_dir, raw_task=raw_task)
                 runs.append(NodeRun(node_id=node.id, iteration=iteration, output=merged))
                 # Branches/workers run concurrently in their own (possibly forked,
                 # possibly shared) folders, so a per-branch diff here would be racy or
@@ -1442,7 +1453,7 @@ class WorkflowEngine:
         return "\n\n".join(blocks)
 
     def _launch_detached(self, tracker, node, task, upstream, run_id, iteration,
-                         root_key, work_dir):
+                         root_key, work_dir, raw_task=None):
         """Submit a detached node to the run's tracker. The callable mirrors branch
         execution (same kind dispatch, working-folder anchoring) but captures every
         failure into the returned NodeRun: a side effect must never sink the run."""
@@ -1451,7 +1462,7 @@ class WorkflowEngine:
             try:
                 resp = self._run_one_branch(
                     node, task, upstream, run_id, iteration, root_key,
-                    None, out_dir=work_dir)
+                    None, out_dir=work_dir, raw_task=raw_task)
                 return NodeRun(
                     node_id=node.id, iteration=iteration, output=resp.output,
                     session_key=resp.session_key,
@@ -1473,7 +1484,7 @@ class WorkflowEngine:
         tracker.launch(_execute)
 
     def _run_one_branch(self, branch, task, upstream, run_id, iteration, root_key,
-                        workspace_override, out_dir=None):
+                        workspace_override, out_dir=None, raw_task=None):
         # Same kind dispatch as the linear walk: a script branch runs the script
         # contract (stdin = the parallel's upstream text, cwd = out_dir) beside
         # the agent branches.
@@ -1484,7 +1495,7 @@ class WorkflowEngine:
             )
         runner = self._script_runner if is_script else self._node_runner
         return runner(NodeRunRequest(
-            node=branch, task=task, upstream_output=upstream, shared_context=[],
+            node=branch, task=task, raw_task=raw_task, upstream_output=upstream, shared_context=[],
             run_id=run_id, iteration=iteration, root_session_key=root_key,
             workspace_override=workspace_override,
             output_dir=out_dir if (is_script or getattr(branch, "tools", "none") == "default") else None,
@@ -1703,7 +1714,7 @@ class WorkflowEngine:
                             "session='persistent' (concurrent units have per-unit sessions)")
         return ids, None
 
-    def _run_parallel(self, workflow, node, task, run_id, iteration, root_key, upstream, runs, work_dir=None, branch_ids=None):
+    def _run_parallel(self, workflow, node, task, run_id, iteration, root_key, upstream, runs, work_dir=None, branch_ids=None, raw_task=None):
         """Run a parallel node's branches concurrently and reconcile their writes.
 
         Returns ``(merged_output, abort_message)``; ``abort_message`` is None on
@@ -1801,7 +1812,7 @@ class WorkflowEngine:
                 try:
                     resp = self._run_one_branch(
                         workflow.nodes[bid], task, upstream, run_id, iteration, root_key,
-                        None, out_dir=work_dir)
+                        None, out_dir=work_dir, raw_task=raw_task)
                     with _branch_lock:
                         branch_status[bid] = "done"
                     _emit_branches()
@@ -1846,7 +1857,7 @@ class WorkflowEngine:
             try:
                 resp = self._run_one_branch(
                     workflow.nodes[bid], task, upstream, run_id, iteration, root_key,
-                    str(fork_dir), out_dir=str(fork_dir))
+                    str(fork_dir), out_dir=str(fork_dir), raw_task=raw_task)
                 with _branch_lock:
                     branch_status[bid] = "done"
                 _emit_branches()

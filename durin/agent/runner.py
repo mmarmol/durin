@@ -48,8 +48,9 @@ from durin.utils.tool_result_validation import validate_tool_result_blocks
 _DEFAULT_ERROR_MESSAGE = "Sorry, I encountered an error calling the AI model."
 _PERSISTED_MODEL_ERROR_PLACEHOLDER = "[Assistant reply unavailable due to model error.]"
 _PERSISTED_OVERFLOW_PLACEHOLDER = (
-    "[Turn skipped before the model ran: the prompt exceeded the input budget "
-    "even after emergency trimming. The next turn retries with a compacted context.]"
+    "[Turn stopped before the next model call: the prompt exceeded the input "
+    "budget even after emergency trimming. The request was not finished; the "
+    "next turn starts from a compacted context.]"
 )
 _MAX_EMPTY_RETRIES = 2
 _MAX_LENGTH_RECOVERIES = 3
@@ -630,7 +631,8 @@ class AgentRunner:
                         final_content = (
                             "Error: prompt overflow before LLM call "
                             f"(estimated {estimate_tokens} tokens, budget {budget_tokens}). "
-                            "The next turn will retry with a freshly-compacted context."
+                            "The request was not finished; send it again and the next "
+                            "turn runs on a freshly-compacted context."
                         )
                         stop_reason = "mid_turn_precheck_overflow"
                         error = final_content
@@ -1933,6 +1935,7 @@ class AgentRunner:
                 event=event,
                 tool_call=tool_call,
                 workspace_violation_counts=workspace_violation_counts,
+                fail_on_tool_error=spec.fail_on_tool_error,
             )
             if handled is not None:
                 return handled
@@ -1965,6 +1968,7 @@ class AgentRunner:
                 event=event,
                 tool_call=tool_call,
                 workspace_violation_counts=workspace_violation_counts,
+                fail_on_tool_error=spec.fail_on_tool_error,
             )
             if handled is not None:
                 return handled
@@ -1990,6 +1994,7 @@ class AgentRunner:
                 event=event,
                 tool_call=tool_call,
                 workspace_violation_counts=workspace_violation_counts,
+                fail_on_tool_error=spec.fail_on_tool_error,
             )
             if handled is not None:
                 return handled
@@ -2031,6 +2036,21 @@ class AgentRunner:
         "path traversal detected",
     )
 
+    # Exec policy refusals (deny list, configured allowlist). The tool's own
+    # message says to stop and ask the user; the generic "try a different
+    # approach" hint would contradict it and coach a workaround.
+    _COMMAND_POLICY_MARKERS: tuple[str, ...] = (
+        "blocked by deny pattern filter",
+        "blocked by allowlist filter",
+    )
+
+    @classmethod
+    def _is_command_policy_block(cls, text: str) -> bool:
+        if not text:
+            return False
+        lowered = text.lower()
+        return any(marker in lowered for marker in cls._COMMAND_POLICY_MARKERS)
+
     @classmethod
     def _is_ssrf_violation(cls, text: str) -> bool:
         if not text:
@@ -2056,6 +2076,7 @@ class AgentRunner:
         event: dict[str, str],
         tool_call: ToolCallRequest,
         workspace_violation_counts: dict[str, int],
+        fail_on_tool_error: bool = False,
     ) -> tuple[Any, dict[str, str], BaseException | None] | None:
         """Classify safety-boundary failures, or return ``None`` to pass through."""
         if self._is_ssrf_violation(raw_text):
@@ -2085,6 +2106,10 @@ class AgentRunner:
                 )
                 return escalation, event, None
             return soft_payload, event, None
+
+        if self._is_command_policy_block(raw_text):
+            event["detail"] = self._event_detail("command_policy: ", raw_text)
+            return raw_text, event, (RuntimeError(raw_text) if fail_on_tool_error else None)
 
         return None
 

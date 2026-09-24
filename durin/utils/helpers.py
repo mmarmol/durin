@@ -651,10 +651,11 @@ def estimate_prompt_tokens_chain(
 
     1. **Usage anchor** — if any message carries ``usage_prompt_tokens``
        (set by the runner when a real provider response was received),
-       use that count as the baseline for everything up to and
-       including that message, and only tiktoken-estimate the messages
-       after it. This is the cheapest AND most accurate path on long
-       sessions. Source label: ``"anchored"``.
+       use that count as the baseline — it covers the system prompt, the
+       tool definitions and every message *before* the stamped one — and
+       only tiktoken-estimate the stamped message and the ones after it,
+       without the tool definitions. This is the cheapest AND most
+       accurate path on long sessions. Source label: ``"anchored"``.
     2. **Provider counter** — if the provider exposes
        ``estimate_prompt_tokens(messages, tools, model)``, call it.
        Source label: ``"provider_counter"`` (or whatever the provider
@@ -666,14 +667,12 @@ def estimate_prompt_tokens_chain(
     anchor = latest_prompt_tokens_anchor(messages)
     if anchor is not None:
         anchor_idx, anchor_tokens = anchor
-        # Estimate the tail (everything after the anchor) with tiktoken.
-        # The anchor itself counts the prompt as the provider saw it,
-        # which includes everything up to AND including that message,
-        # so the tail starts at anchor_idx + 1.
-        tail = messages[anchor_idx + 1:]
-        if not tail:
-            return anchor_tokens, "anchored"
-        tail_tokens = estimate_prompt_tokens(tail, tools)
+        # The stamp is the provider's count for the prompt that PRODUCED the
+        # anchored message: the system prompt, the tool definitions and every
+        # message before it. The anchored message itself and everything after
+        # it are new, so they are estimated; the tool definitions are already
+        # in the stamp and must not be added again.
+        tail_tokens = estimate_prompt_tokens(messages[anchor_idx:])
         return anchor_tokens + tail_tokens, "anchored"
 
     provider_counter = getattr(provider, "estimate_prompt_tokens", None)

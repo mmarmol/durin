@@ -246,6 +246,21 @@ class TestSubtreeMode:
         assert s.auto_commit("noop") is None
         assert s.log()[0].message == "skill(a): create"
 
+    def test_commit_ids_are_real_git_ids(self, tmp_path):
+        # The ids the store reports must be the repository's own commit ids,
+        # so they match `git log` and a real short id resolves.
+        from dulwich.repo import Repo
+
+        root = tmp_path / "skills"
+        s = self._store(root)
+        _write(root, "a/SKILL.md", "# a\n")
+        sha = s.auto_commit("skill(a): create")
+        with Repo(str(root)) as repo:
+            head = repo.head().decode("ascii")
+        assert head.startswith(sha)
+        assert s.log()[0].sha == sha
+        assert s.commit_diff(head[:7]) is not None
+
     def test_revert_undoes_modification_and_addition(self, tmp_path):
         root = tmp_path / "skills"
         s = self._store(root)

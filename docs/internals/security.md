@@ -25,8 +25,12 @@ architecture. It covers six interlocking layers:
   hashes; each token's scopes are checked against a fine-grained `Scope` catalog
   at every service route.
 
-Each layer stands alone and also reinforces the others. No single configuration
-mistake, LLM-generated command, or malicious skill can bypass all layers.
+Each layer stands alone and also reinforces the others. The command filters in
+particular are pattern-based and best-effort: they stop the common destructive
+spellings, not every way to reach the same effect (an interpreter one-liner or a
+script the agent writes and then runs is not matched). What keeps a refused
+operation refused is the instruction that comes with the refusal — stop and ask
+the user — together with the sandbox and workspace restriction where configured.
 
 ## 2 Mental model
 
@@ -335,7 +339,12 @@ protection, then SSRF URL detection, then workspace boundary on absolute paths.
   configured (the default), the list is an opt-out — matching commands are blocked
   unless an `allow_patterns` entry explicitly exempts them. Hardcoded deny patterns
   cover `rm -rf`, `dd`, disk operations, power commands, fork bombs, and direct
-  writes to the append-only `history.jsonl` archive.
+  writes to the append-only `history.jsonl` archive. A refusal names the matched
+  rule and tells the model this is the exec safety policy: it must not reach the
+  same result another way, and should tell the user and ask (the user can run the
+  command, or exempt it with `allow_patterns`). The runner recognizes these
+  refusals as a policy boundary, like SSRF and workspace blocks, so it does not
+  append its generic "try a different approach" retry hint to them.
 
 - *Memory vault protection* (`_guard_memory_mutation()`): mutations of the
   `memory/` directory via `rm`, `mv`, `cp`, `tee`, `sed -i`, `dd`, and redirect
