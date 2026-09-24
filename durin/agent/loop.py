@@ -1773,6 +1773,28 @@ class AgentLoop:
         else:
             logger.warning("Command '{}' matched but dispatch returned None", raw)
 
+    async def _publish_turn_end(
+        self, msg: InboundMessage, session_key: str, outcome: str,
+    ) -> None:
+        """Tell websocket watchers the turn is over and how it ended.
+
+        Every websocket turn gets exactly one — ``completed``, ``stopped`` or
+        ``failed`` — so a client never waits on a turn that already ended.
+        The inbound metadata rides along, which carries the ``client_msg_id``
+        of the message that opened the turn."""
+        if msg.channel != "websocket":
+            return
+        metadata: dict[str, Any] = {**msg.metadata, "_turn_end": True, "outcome": outcome}
+        latency = self._pending_turn_latency_ms.pop(session_key, None)
+        if latency is not None:
+            metadata["latency_ms"] = int(latency)
+        with suppress(Exception):
+            session = self.sessions.get_or_create(session_key)
+            metadata["goal_state"] = goal_state_ws_blob(session.metadata)
+        await self.bus.publish_outbound(OutboundMessage(
+            channel=msg.channel, chat_id=msg.chat_id, content="", metadata=metadata,
+        ))
+
     async def _notify_queued(self, msg: InboundMessage) -> None:
         """Tell the sender's surface its message was deferred (queued) mid-turn.
 
@@ -2359,6 +2381,7 @@ class AgentLoop:
                         channel=msg.channel, chat_id=msg.chat_id,
                         content=_SESSION_BUSY_NOTICE,
                     ))
+                    await self._publish_turn_end(msg, session_key, "failed")
                     return
                 try:
                     self.sessions.reload(session_key)  # load-per-turn: refresh from disk under the lease
@@ -2410,20 +2433,11 @@ class AgentLoop:
                                 channel=msg.channel, chat_id=msg.chat_id,
                                 content="", metadata=msg.metadata or {},
                             ))
+                        # Signal that the turn is fully complete (all tools executed,
+                        # final text streamed).  This lets WS clients know when to
+                        # definitively stop the loading indicator.
+                        await self._publish_turn_end(msg, session_key, "completed")
                         if msg.channel == "websocket":
-                            # Signal that the turn is fully complete (all tools executed,
-                            # final text streamed).  This lets WS clients know when to
-                            # definitively stop the loading indicator.
-                            turn_lat = self._pending_turn_latency_ms.pop(session_key, None)
-                            turn_metadata: dict[str, Any] = {**msg.metadata, "_turn_end": True}
-                            if turn_lat is not None:
-                                turn_metadata["latency_ms"] = int(turn_lat)
-                            sess_turn = self.sessions.get_or_create(session_key)
-                            turn_metadata["goal_state"] = goal_state_ws_blob(sess_turn.metadata)
-                            await self.bus.publish_outbound(OutboundMessage(
-                                channel=msg.channel, chat_id=msg.chat_id,
-                                content="", metadata=turn_metadata,
-                            ))
                             if msg.metadata.get("webui") is True:
                                 async def _generate_title_and_notify() -> None:
                                     generated = await maybe_generate_webui_title_after_turn(
@@ -2468,6 +2482,8 @@ class AgentLoop:
                                 session_key,
                                 exc_info=True,
                             )
+                        with suppress(Exception):
+                            await self._publish_turn_end(msg, session_key, "stopped")
                         raise
                     except Exception:
                         logger.exception("Error processing message for session {}", session_key)
@@ -2475,6 +2491,7 @@ class AgentLoop:
                             channel=msg.channel, chat_id=msg.chat_id,
                             content="Sorry, I encountered an error.",
                         ))
+                        await self._publish_turn_end(msg, session_key, "failed")
                 finally:
                     await turn_lease_cm.__aexit__(None, None, None)
         finally:

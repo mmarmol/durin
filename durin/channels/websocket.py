@@ -253,6 +253,7 @@ def _parse_inbound_payload(raw: str) -> str | None:
 # Accept UUIDs and short scoped keys like "unified:default". Keeps the capability
 # namespace small enough to rule out path traversal / quote injection tricks.
 _CHAT_ID_RE = re.compile(r"^[A-Za-z0-9_:-]{1,64}$")
+_TURN_OUTCOMES = frozenset({"completed", "stopped", "failed"})
 
 
 def _is_live_progress_only(payload: dict[str, Any]) -> bool:
@@ -1876,7 +1877,13 @@ class WebSocketChannel(BaseChannel):
             lat_i = int(lat) if isinstance(lat, (int, float)) else None
             gs = msg.metadata.get("goal_state")
             gs_blob = gs if isinstance(gs, dict) else None
-            await self.send_turn_end(msg.chat_id, latency_ms=lat_i, goal_state=gs_blob)
+            outcome = msg.metadata.get("outcome")
+            client_msg_id = msg.metadata.get("client_msg_id")
+            await self.send_turn_end(
+                msg.chat_id, latency_ms=lat_i, goal_state=gs_blob,
+                outcome=outcome if outcome in _TURN_OUTCOMES else None,
+                client_msg_id=client_msg_id if isinstance(client_msg_id, str) and client_msg_id else None,
+            )
             return
         if msg.metadata.get("_session_updated"):
             await self.send_session_updated(msg.chat_id)
@@ -2056,14 +2063,24 @@ class WebSocketChannel(BaseChannel):
         latency_ms: int | None = None,
         *,
         goal_state: dict[str, Any] | None = None,
+        outcome: str | None = None,
+        client_msg_id: str | None = None,
     ) -> None:
-        """Signal that the agent has fully finished processing the current turn."""
+        """Signal that the agent has fully finished processing the current turn.
+
+        ``outcome`` says how it ended (``completed``, ``stopped``, ``failed``);
+        ``client_msg_id`` names the message that opened the turn, so a client
+        waiting on its own message can tell this turn from an earlier one."""
         conns = list(self._subs.get(chat_id, ()))
         body: dict[str, Any] = {"event": "turn_end", "chat_id": chat_id}
         if latency_ms is not None:
             body["latency_ms"] = int(latency_ms)
         if goal_state is not None:
             body["goal_state"] = goal_state
+        if outcome is not None:
+            body["outcome"] = outcome
+        if client_msg_id is not None:
+            body["client_msg_id"] = client_msg_id
         self._try_append_webui_transcript(chat_id, body)
         if not conns:
             return

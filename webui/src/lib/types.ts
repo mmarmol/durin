@@ -426,6 +426,10 @@ export type InboundEvent =
       latency_ms?: number;
       /** Authoritative sustained-goal snapshot for this chat (same shape as ``goal_state`` events). */
       goal_state?: GoalStateWsPayload;
+      /** How the turn ended; every turn sends exactly one ``turn_end``. */
+      outcome?: "completed" | "stopped" | "failed";
+      /** ``client_msg_id`` of the message that opened the turn, when it had one. */
+      client_msg_id?: string;
     }
   | {
       event: "goal_status";
