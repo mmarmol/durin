@@ -18,8 +18,11 @@ import asyncio
 import difflib
 import hashlib
 import json
+from contextlib import nullcontext
 from pathlib import Path
+from typing import Any, Callable, ContextManager
 
+from durin.agent import approval
 from durin.agent import skills_import as si
 from durin.agent import skills_store as ss
 from durin.agent.approval_executors import ApprovalExecError, ExecDeps, Prepared, register
@@ -324,6 +327,111 @@ async def execute_deps(workspace: Path, payload: dict, deps: ExecDeps) -> dict:
     if failed:
         raise ApprovalExecError(f"install failed: {', '.join(failed)}")
     return {"ran": True, "results": results}
+
+
+# --- the skills judge as an approver ---------------------------------------------
+
+JudgeSettings = tuple[str, str, str]  # (trigger, model, max_severity)
+
+
+def judge_settings(app_config: Any = None) -> JudgeSettings:
+    """(trigger, model, max_severity) of ``skills.security.llm_judge`` from the
+    given config, else from the loaded one."""
+    try:
+        j = app_config.skills.security.llm_judge
+        return (str(j.trigger or "off"), str(j.model or ""), str(j.max_severity or "caution"))
+    except AttributeError:
+        return ss._import_judge()
+
+
+def judge_sees_all(tree: Path, findings: list[dict]) -> bool:
+    """True when the judge reads everything it would be clearing.
+
+    ``judge_skill`` reads SKILL.md's body and the files under ``scripts/``, up
+    to a character budget. A clearance is only worth something for content it
+    read, so: every file is SKILL.md or under ``scripts/``, every finding points
+    at one of them, no install specs are declared (they live in the
+    frontmatter, which the judge does not read), and nothing is cut at the
+    budget."""
+    from durin.security.skill_judge import _BODY_BUDGET, _gather_content
+
+    tree = Path(tree)
+    for p in tree.rglob("*"):
+        if not p.is_file():
+            continue
+        rel = p.relative_to(tree)
+        if rel.as_posix() in ("SKILL.md", ".scan.json") or rel.parts[0] == "scripts":
+            continue
+        return False
+    for f in findings:
+        where = str(f.get("where") or "")
+        if where != "SKILL.md" and not where.startswith("scripts/"):
+            return False
+    md = tree / "SKILL.md"
+    if md.is_file():
+        data, _ = split_frontmatter(md.read_text(encoding="utf-8", errors="replace"))
+        meta = data.get("metadata")
+        if isinstance(meta, dict) and any(isinstance(b, dict) and b.get("install")
+                                          for b in meta.values()):
+            return False
+    _name, content = _gather_content(tree)
+    return len(content) <= _BODY_BUDGET
+
+
+def _judge_tree(tree_cm: Callable[[], ContextManager[Path]], findings: list[dict],
+                model: str, max_severity: str, llm_invoke: Any) -> str | None:
+    """Run ``judge_skill`` over the tree the request would produce."""
+    from durin.security.skill_judge import judge_skill
+
+    invoke = llm_invoke
+    if invoke is None:
+        from durin.memory.llm_invoke import judge_llm_invoke
+        invoke = judge_llm_invoke
+    with tree_cm() as tree:
+        if not judge_sees_all(tree, findings):
+            return None
+        outcome = judge_skill(tree, llm_invoke=invoke, model=model, max_severity=max_severity)
+    # A "safe" verdict that still names a concrete problem is not a clearance:
+    # only "safe" with no finding above info level clears the request.
+    if outcome.verdict == "safe":
+        return "safe" if all(f.severity == "info" for f in outcome.findings) else "caution"
+    return outcome.verdict or "caution"
+
+
+def _judge_fn(tree_cm: Callable[[], ContextManager[Path]], *, findings: list[dict],
+              settings: JudgeSettings, llm_invoke: Any) -> approval.JudgeFn | None:
+    trigger, model, max_severity = settings
+    if trigger == "off":
+        return None
+
+    async def judge() -> str | None:
+        return await asyncio.to_thread(_judge_tree, tree_cm, findings, model,
+                                       max_severity, llm_invoke)
+
+    return judge
+
+
+def install_judge(qdir: Path, *, action: str, findings: list[dict], settings: JudgeSettings,
+                  llm_invoke: Any = None) -> approval.JudgeFn | None:
+    """The judge for a skill install, or None when it may not decide: only a
+    ``confirm`` install is eligible (``block`` means dangerous, which only a
+    person can accept), and only while the judge is enabled."""
+    if action != "confirm":
+        return None
+    return _judge_fn(lambda: nullcontext(Path(qdir)), findings=findings,
+                     settings=settings, llm_invoke=llm_invoke)
+
+
+def edit_judge(skill_dir: Path, *, file: str, content: str, mode: str, scan: "ss.WriteScan",
+               settings: JudgeSettings, llm_invoke: Any = None) -> approval.JudgeFn | None:
+    """The judge for a skill edit, or None when it may not decide: only an
+    ``auto`` skill (a ``manual`` skill's owner consents, not a model) whose
+    post-edit scan is ``caution`` (never ``dangerous``). It reads a throwaway
+    copy of the skill with the edit applied."""
+    if mode != "auto" or scan.after != "caution":
+        return None
+    return _judge_fn(lambda: ss.post_write_tree(skill_dir, {file: content}),
+                     findings=scan.findings, settings=settings, llm_invoke=llm_invoke)
 
 
 def register_all() -> None:
