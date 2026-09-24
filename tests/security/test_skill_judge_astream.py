@@ -11,7 +11,8 @@ def _skill(tmp_path):
 
 
 def test_judge_astream_streams_reasoning_and_parses(tmp_path):
-    raw = "===SUMMARY===\nReviewed; clean.\n===VERDICT===\nsafe\n===FINDINGS===\nnone\n===END===\n"
+    raw = ("===SUMMARY===\nReviewed; clean.\n===VERDICT===\nsafe\n===FINDINGS===\nnone\n"
+          "===TOOLS===\nnone\n===END===\n")
 
     async def fake_astream(prompt, *, model, on_reasoning=None, on_content=None):
         for piece in ("look", "ing"):

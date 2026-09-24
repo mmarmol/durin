@@ -318,7 +318,9 @@ async def test_judge_runs_on_quarantined_skill(tmp_path: Path, monkeypatch: pyte
     _make_quarantine(ws, "cand")
     monkeypatch.setattr(
         "durin.memory.llm_invoke.judge_llm_invoke",
-        lambda prompt, *, model=None: "===FINDINGS===\n===END===\n",
+        lambda prompt, *, model=None: (
+            "===SUMMARY===\nClean.\n===VERDICT===\nsafe\n===FINDINGS===\nnone\n"
+            "===TOOLS===\nnone\n===END===\n"),
     )
     svc = _svc(ws)
     result = await svc.judge(SkillJudgeQuery(name="cand"), Principal.local())

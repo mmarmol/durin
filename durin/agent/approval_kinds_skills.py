@@ -347,12 +347,16 @@ def judge_settings(app_config: Any = None) -> JudgeSettings:
 def judge_sees_all(tree: Path, findings: list[dict]) -> bool:
     """True when the judge reads everything it would be clearing.
 
-    ``judge_skill`` reads SKILL.md's body and the files under ``scripts/``, up
-    to a character budget. A clearance is only worth something for content it
-    read, so: every file is SKILL.md or under ``scripts/``, every finding points
-    at one of them, no install specs are declared (they live in the
-    frontmatter, which the judge does not read), and nothing is cut at the
-    budget."""
+    ``judge_skill`` reads SKILL.md's full text and the files under
+    ``scripts/`` (a plain top-level file named "scripts", not a directory,
+    does not count — the judge never opens it), up to a character budget. A
+    clearance is only worth something for content it actually read, so: every
+    file is SKILL.md or under a ``scripts/`` directory, every one of those
+    files decodes cleanly as text (a binary file comes back as replacement
+    characters — that is not a read), every finding points at one of them, no
+    install specs are declared (they live in the frontmatter, which the judge
+    now reads, but a declared install command still runs outside anything the
+    judge inspects), and nothing is cut at the budget."""
     from durin.security.skill_judge import _BODY_BUDGET, _gather_content
 
     tree = Path(tree)
@@ -360,9 +364,14 @@ def judge_sees_all(tree: Path, findings: list[dict]) -> bool:
         if not p.is_file():
             continue
         rel = p.relative_to(tree)
-        if rel.as_posix() in ("SKILL.md", ".scan.json") or rel.parts[0] == "scripts":
+        posix = rel.as_posix()
+        if posix == ".scan.json":
             continue
-        return False
+        under_scripts = len(rel.parts) > 1 and rel.parts[0] == "scripts"
+        if posix != "SKILL.md" and not under_scripts:
+            return False
+        if not ss._is_text_bytes(p.read_bytes()):
+            return False
     for f in findings:
         where = str(f.get("where") or "")
         if where != "SKILL.md" and not where.startswith("scripts/"):
@@ -380,8 +389,15 @@ def judge_sees_all(tree: Path, findings: list[dict]) -> bool:
 
 def _judge_tree(tree_cm: Callable[[], ContextManager[Path]], findings: list[dict],
                 model: str, max_severity: str, llm_invoke: Any) -> str | None:
-    """Run ``judge_skill`` over the tree the request would produce."""
+    """Run ``judge_skill`` over the tree the request would produce.
+
+    Eligibility is a security boundary, so it is never taken on the caller's
+    word: the tree is re-scanned deterministically here, and a tree that
+    scans ``dangerous`` is not judge-eligible no matter what action, mode or
+    scan the caller believed applied — a caller's mistaken or stale claim
+    must not let the judge clear something a live re-scan would block."""
     from durin.security.skill_judge import judge_skill
+    from durin.security.skill_scan import scan_skill
 
     invoke = llm_invoke
     if invoke is None:
@@ -389,6 +405,8 @@ def _judge_tree(tree_cm: Callable[[], ContextManager[Path]], findings: list[dict
         invoke = judge_llm_invoke
     with tree_cm() as tree:
         if not judge_sees_all(tree, findings):
+            return None
+        if scan_skill(tree).verdict == "dangerous":
             return None
         outcome = judge_skill(tree, llm_invoke=invoke, model=model, max_severity=max_severity)
     # A "safe" verdict that still names a concrete problem is not a clearance:
@@ -422,13 +440,23 @@ def install_judge(qdir: Path, *, action: str, findings: list[dict], settings: Ju
                      settings=settings, llm_invoke=llm_invoke)
 
 
-def edit_judge(skill_dir: Path, *, file: str, content: str, mode: str, scan: "ss.WriteScan",
+def edit_judge(workspace: Path, name: str, *, file: str, content: str,
                settings: JudgeSettings, llm_invoke: Any = None) -> approval.JudgeFn | None:
     """The judge for a skill edit, or None when it may not decide: only an
     ``auto`` skill (a ``manual`` skill's owner consents, not a model) whose
     post-edit scan is ``caution`` (never ``dangerous``). It reads a throwaway
-    copy of the skill with the edit applied."""
-    if mode != "auto" or scan.after != "caution":
+    copy of the skill with the edit applied, never the live skill on disk.
+
+    Eligibility is a security boundary, so the skill's mode and the scan are
+    read here, from the live, pre-edit skill, rather than accepted as
+    arguments: an edit that flips ``metadata.durin.mode`` to ``auto`` on a
+    ``manual`` skill must not thereby make itself judge-eligible, and a stale
+    or wrongly-computed scan the caller believed applied must not either."""
+    skill_dir = ss._resolve_skill_dir(Path(workspace), name)
+    if skill_dir is None or ss.read_mode(Path(workspace), name) != "auto":
+        return None
+    scan = ss.scan_skill_write(skill_dir, {file: content})
+    if scan.after != "caution":
         return None
     return _judge_fn(lambda: ss.post_write_tree(skill_dir, {file: content}),
                      findings=scan.findings, settings=settings, llm_invoke=llm_invoke)

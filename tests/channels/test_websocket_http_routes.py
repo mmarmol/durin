@@ -555,7 +555,9 @@ def test_skill_judge_route_runs_on_demand(
     monkeypatch.setattr("durin.config.loader.load_config", lambda *a, **k: cfg)
     monkeypatch.setattr(
         "durin.memory.llm_invoke.judge_llm_invoke",
-        lambda prompt, *, model=None: "===FINDINGS===\ncaution | intent | SKILL.md | reads an API key quietly\n===END===\n")
+        lambda prompt, *, model=None: (
+            "===SUMMARY===\nQuiet key read.\n===VERDICT===\ncaution\n===FINDINGS===\n"
+            "caution | intent | SKILL.md | reads an API key quietly\n===TOOLS===\nnone\n===END===\n"))
     monkeypatch.setattr("durin.config.paths.get_data_dir", lambda: tmp_path)
     client = _make_client(bus)
 

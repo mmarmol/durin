@@ -80,8 +80,10 @@ def validate_skill(skill_dir: Path) -> ValidationReport:
 def decide_action(source: str, *, verdict: str, carries_code: bool, allowlist: list[str]) -> str:
     """Import security trust×verdict gate. Returns 'allow' | 'confirm' | 'block'.
     'block' needs an explicit override; 'confirm' needs confirmation. The
-    dangerous-block and carries-code-confirm have no opt-out; only the source
-    check is loosened by the allowlist."""
+    dangerous-block has no opt-out; the carries-code-confirm can be cleared by
+    the skills judge (when enabled and it reads the install as safe) instead
+    of a person, but nothing skips it outright. Only the source check is
+    loosened by the allowlist."""
     if verdict == "dangerous":
         return "block"
     allowlisted = any(source.startswith(p) for p in allowlist if p)
