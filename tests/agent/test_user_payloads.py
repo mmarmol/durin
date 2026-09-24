@@ -135,6 +135,18 @@ def test_format_interactive_tool_event_ignores_plumbing():
     assert format_interactive_tool_event({"name": "read_file", "arguments": {}}) is None
     assert format_interactive_tool_event(None) is None
 
+def test_serialize_pending_approval_includes_cwd():
+    meta = {
+        "pending_approval": {
+            "summary": "run `rm -rf build`",
+            "detail": {"command": "rm -rf build", "cwd": "/w"},
+        }
+    }
+    out = serialize_pending_interactions(meta)
+    assert len(out) == 1
+    assert "cwd: /w" in out[0]
+
+
 def test_serialize_pending_secret_request_update_variant():
     meta = {
         "pending_secret_request": {

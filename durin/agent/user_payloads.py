@@ -23,6 +23,7 @@ RICH_PAYLOAD_CHANNELS = {"websocket", "cli"}
 
 PENDING_SECRET_KEY = "pending_secret_request"
 PENDING_PLAN_KEY = "pending_plan_review"
+PENDING_APPROVAL_KEY = "pending_approval"
 
 # Digest per payload key of what the text fallback already published, so a
 # payload that outlives its turn is not re-sent on every later turn.
@@ -98,10 +99,28 @@ def _serialize_plan_review(payload: Mapping[str, Any]) -> str | None:
     )
 
 
+def _serialize_approval(payload: Mapping[str, Any]) -> str | None:
+    summary = str(payload.get("summary") or "").strip()
+    if not summary:
+        return None
+    lines = [f"🔐 Approval needed: {summary}"]
+    detail = payload.get("detail") or {}
+    for key in ("command", "cwd", "rule", "verdict", "source", "server", "packages"):
+        value = detail.get(key) if isinstance(detail, Mapping) else None
+        if value:
+            lines.append(f"{key}: {value}")
+    diff = detail.get("diff") if isinstance(detail, Mapping) else None
+    if diff:
+        lines.append(str(diff)[:1500])
+    lines.append("Reply *yes* to approve or *no* to reject.")
+    return "\n".join(lines)
+
+
 _SERIALIZERS = (
     ("pending_question", _serialize_question),
     (PENDING_SECRET_KEY, _serialize_secret_request),
     (PENDING_PLAN_KEY, _serialize_plan_review),
+    (PENDING_APPROVAL_KEY, _serialize_approval),
 )
 
 
