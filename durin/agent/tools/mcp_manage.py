@@ -101,7 +101,8 @@ class McpManageTool(Tool, ContextAware):
 
         Authority comes from the execution context, never from ``kwargs``: a
         confirm written by the model is a claim, not evidence that a person
-        approved. With nobody reachable (cron, dream, workflow, sub-agent) the
+        approved. With nobody who can approve — no person reachable (cron,
+        dream, workflow, sub-agent), or a turn driven by an API token — the
         action is staged for out-of-band approval instead of running.
         """
         if action not in _GATED:
@@ -113,7 +114,7 @@ class McpManageTool(Tool, ContextAware):
         # watching. Everything below needs a person in the loop.
         if self._policy == "auto":
             return "run"
-        if not approval.human_reachable(self._session_key()):
+        if not approval.can_authorize(self._session_key()):
             return "stage"
         if str(kwargs.get("confirm", "")).lower() == "true":
             return "run"

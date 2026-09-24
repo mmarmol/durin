@@ -54,8 +54,10 @@ A person's context loses that authority for a turn that received input from an
 API token. A message sent through the native chat routes carries
 `origin: "api"`; the agent loop marks the turn (`approval.note_turn_input`, a
 context variable set in the turn's own task, for the opening message and for
-any message injected into the turn), and the gate then stages privileged
-actions as it does for an autonomous context. A `chat:write` token may hold a
+any message injected into the turn). The privileged tools decide with
+`approval.can_authorize` — a person reachable *and* no API input in the turn —
+so such a turn stages their actions as an autonomous context does, and the
+staged note says why. A `chat:write` token may hold a
 conversation in the dashboard's sessions, but it is a program, and it must not
 carry the person's authority to install or rewrite executable state.
 

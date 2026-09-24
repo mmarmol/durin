@@ -78,10 +78,11 @@ class SkillEditTool(Tool, ContextAware):
         if not name:
             return {"error": "name is required"}
         # An applied edit rewrites executable skill content, and `confirm` is
-        # written by the model — not evidence a person agreed. With nobody
-        # reachable, record the request instead of applying it.
+        # written by the model — not evidence a person agreed. With nobody who
+        # can approve (no person reachable, or a turn driven by an API token),
+        # record the request instead of applying it.
         session_key = self._session.get()
-        if kwargs.get("confirm") and not approval.human_reachable(session_key):
+        if kwargs.get("confirm") and not approval.can_authorize(session_key):
             decision = approval.gate(
                 self._workspace, "skills", action="edit",
                 summary=f"apply an edit to skill {name!r}",

@@ -36,6 +36,7 @@ __all__ = [
     "discard_pending",
     "gate",
     "human_reachable",
+    "can_authorize",
     "list_pending",
     "note_turn_input",
 ]
@@ -104,6 +105,16 @@ def note_turn_input(metadata: dict[str, Any] | None) -> None:
         _TURN_HAS_API_INPUT.set(True)
 
 
+def can_authorize(session_key: str | None) -> bool:
+    """True when the current turn may approve a privileged action itself.
+
+    That takes a person reachable in this context (``human_reachable``) and a
+    turn with no input from an API token. Privileged tools decide with this;
+    waiting for an answer (``ask_user``) only needs ``human_reachable``, so an
+    API client can still answer a question."""
+    return human_reachable(session_key) and not _TURN_HAS_API_INPUT.get()
+
+
 def gate(
     workspace: Path | str,
     subsystem: str,
@@ -118,18 +129,22 @@ def gate(
     ``detail`` is recorded verbatim for the operator's review and is never
     consulted for the decision — a request cannot authorize itself.
     """
-    if human_reachable(session_key) and not _TURN_HAS_API_INPUT.get():
+    if can_authorize(session_key):
         return Decision(allow=True)
     record = _stage(workspace, subsystem, action=action, summary=summary,
                     detail=detail or {}, session_key=session_key)
+    why = (
+        "This turn includes input from an API token, which cannot approve it"
+        if human_reachable(session_key)
+        else f"This context has no user to approve it (session {session_key or 'unknown'})"
+    )
     return Decision(
         staged=True,
         record=record,
         message=(
-            f"Not run: {summary}. This context has no user to approve it "
-            f"(session {session_key or 'unknown'}), so the request was "
-            f"recorded for approval as {subsystem}/{record['id']}. Tell the "
-            "user it is waiting for them; do not retry."
+            f"Not run: {summary}. {why}, so the request was recorded for "
+            f"approval as {subsystem}/{record['id']}. Tell the user it is "
+            "waiting for them; do not retry."
         ),
     )
 
