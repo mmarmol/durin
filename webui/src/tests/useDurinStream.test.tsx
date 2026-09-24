@@ -1193,4 +1193,37 @@ describe("useDurinStream", () => {
 
     expect(result.current.messages).toHaveLength(1);
   });
+
+  it("puts the answer after a tool that ran between reasoning and the answer", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(() => useDurinStream("chat-order", EMPTY_MESSAGES), {
+      wrapper: wrap(fake.client),
+    });
+    const toolEvent = (phase: string) => ({
+      version: 1, phase, call_id: "call-1", name: "exec",
+      arguments: { command: "sleep 1" }, result: phase === "end" ? "ok" : null, error: null,
+    });
+
+    act(() => {
+      fake.emit("chat-order", { event: "reasoning_delta", chat_id: "chat-order", text: "I should run it." });
+      fake.emit("chat-order", { event: "reasoning_end", chat_id: "chat-order" });
+      fake.emit("chat-order", { event: "stream_end", chat_id: "chat-order" });
+      fake.emit("chat-order", {
+        event: "message", chat_id: "chat-order", text: "exec", kind: "tool_hint",
+        tool_events: [toolEvent("start")],
+      } as InboundEvent);
+      fake.emit("chat-order", {
+        event: "message", chat_id: "chat-order", text: "", kind: "progress",
+        tool_events: [toolEvent("end")],
+      } as InboundEvent);
+      fake.emit("chat-order", { event: "delta", chat_id: "chat-order", text: "done" });
+      fake.emit("chat-order", { event: "turn_end", chat_id: "chat-order" });
+    });
+
+    const rows = result.current.messages.map((m) =>
+      m.kind === "trace" ? "trace" : `${m.role}:${m.content}`,
+    );
+    // Same order as the history replay: the reasoning step, the tool, the answer.
+    expect(rows).toEqual(["assistant:", "trace", "assistant:done"]);
+  });
 });

@@ -21,10 +21,20 @@ interface StreamBuffer {
 
 /** Scan upward from the bottom skipping trace rows so tool breadcrumbs don't steal the stream target. */
 function findStreamingAssistantId(prev: UIMessage[]): string | null {
+  let passedTrace = false;
   for (let i = prev.length - 1; i >= 0; i -= 1) {
     const m = prev[i];
-    if (m.kind === "trace") continue;
-    if (m.role === "assistant" && m.isStreaming) return m.id;
+    if (m.kind === "trace") {
+      passedTrace = true;
+      continue;
+    }
+    if (m.role === "assistant" && m.isStreaming) {
+      // A reasoning-only row followed by tool traces is that step's own turn
+      // (the live twin of a persisted tool-call message): text after the
+      // tools is a new reply below them, the order the history replay shows.
+      if (passedTrace && m.content.length === 0) return null;
+      return m.id;
+    }
     if (m.role === "user") break;
   }
   return null;
