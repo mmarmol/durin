@@ -5,6 +5,7 @@ Pending), never by a tool argument."""
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from pathlib import Path
 from types import SimpleNamespace
@@ -234,6 +235,89 @@ def test_an_existing_name_is_refused_before_anyone_is_asked(tmp_path):
     out = _run(_tool(ws, session="cron:nightly"), action="install", name="a")
     assert out["refused"] == "exists"
     assert approval_store.list_records(ws, include_legacy=False) == []
+
+
+def test_replace_over_an_existing_skill_needs_a_person_even_when_allow(tmp_path):
+    """Overwriting an existing (manual) skill is an ownership decision, not a
+    safety one: even a safe+trusted install that would otherwise land at once
+    must not replace it without a person — replacing skips neither the
+    `allow` shortcut nor an `auto` policy pre-authorization."""
+    src = _src_skill(tmp_path / "src", "a")
+    ws = tmp_path / "ws"
+    allow = [str((tmp_path / "src").resolve())]
+    tool = _tool(ws, session="cron:nightly", allowlist=allow)
+    _run(tool, action="fetch", source=str(src))
+    first = _run(tool, action="install", name="a")
+    assert first["ok"] is True
+    original = (ws / "skills" / "a" / "SKILL.md").read_text()
+
+    _run(tool, action="fetch", source=str(src))
+    out = _run(tool, action="install", name="a", replace=True)
+    assert out["status"] == "pending"
+    assert (ws / "skills" / "a" / "SKILL.md").read_text() == original
+
+
+def test_confirm_replace_still_needs_a_person_even_when_the_judge_would_clear_it(
+        tmp_path, monkeypatch):
+    import durin.memory.llm_invoke as li
+
+    calls: list = []
+
+    def _invoke(prompt, *, model=None, **kw):
+        calls.append(prompt)
+        return _judge_llm_invoke(prompt, model=model, **kw)
+
+    monkeypatch.setattr(li, "judge_llm_invoke", _invoke)
+    src = _src_skill(tmp_path / "src", "a", scripts={"run.sh": "echo hi\n"})
+    ws = tmp_path / "ws"
+    fetcher = _tool(ws, session="cron:nightly")
+    _run(fetcher, action="fetch", source=str(src))
+    tool = _tool(ws, session="cron:nightly", judge=("uncertain", "", "caution"))
+    first = _run(tool, action="install", name="a")
+    assert first["status"] == "applied" and len(calls) == 1
+    original = (ws / "skills" / "a" / "SKILL.md").read_text()
+
+    _run(fetcher, action="fetch", source=str(src))
+    held = _run(tool, action="install", name="a", replace=True)
+    assert held["status"] == "pending"
+    assert len(calls) == 1  # the judge was never consulted for the replace
+    assert (ws / "skills" / "a" / "SKILL.md").read_text() == original
+
+
+def test_legacy_confirm_override_kwargs_are_ignored(tmp_path):
+    """confirm/override left the model-writable schema; passing them anyway
+    (a stale caller, or a model that remembers the old contract) must not
+    change anything — install still goes through the same server-side gate."""
+    src = _src_skill(tmp_path / "src", "a", scripts={"run.sh": "echo hi\n"})
+    ws = tmp_path / "ws"
+    tool = _tool(ws, session="cron:nightly")
+    _run(tool, action="fetch", source=str(src))
+    out = _run(tool, action="install", name="a", confirm=True, override=True)
+    assert out["status"] == "pending" and not (ws / "skills" / "a").exists()
+
+
+def test_fetched_credentials_never_reach_an_approval_record(tmp_path, monkeypatch):
+    """A source URL's userinfo/query (a token embedded for a private fetch)
+    must not leak into the filed approval record via the quarantine's
+    recorded source."""
+    import durin.agent.skills_import as si_mod
+    from durin.agent.skill_resolve import SkillCandidate
+
+    monkeypatch.setattr(si_mod, "_http_get_bytes",
+                        lambda url: b"---\nname: web\ndescription: d\n---\nok\n")
+    ws = tmp_path / "ws"
+    ws.mkdir(parents=True, exist_ok=True)
+    si_mod.fetch_candidate(
+        SkillCandidate("web", "https://user:tok@host/x/SKILL.md?token=abc", "https"),
+        quarantine_root=ws / ".durin" / "import-quarantine")
+
+    tool = _tool(ws, session="cron:nightly")
+    held = _run(tool, action="install", name="web")
+    assert held["status"] == "pending"
+    [rec] = approval_store.list_records(ws, status="pending", include_legacy=False)
+    blob = json.dumps(rec)
+    assert "tok" not in blob and "token=abc" not in blob
+    assert "https://host/x/SKILL.md" in blob
 
 
 def test_reject(tmp_path):

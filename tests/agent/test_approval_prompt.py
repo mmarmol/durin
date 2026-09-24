@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from durin.agent import pending_answers as pa
-from durin.agent.approval_prompt import make_chat_asker
+from durin.agent.approval_prompt import ChatHandles, make_chat_asker
 from durin.agent.user_payloads import PENDING_APPROVAL_KEY, pending_interaction_items
 
 
@@ -110,3 +110,19 @@ async def test_timeout_racing_a_landed_resolve_still_returns_the_verdict(monkeyp
     sessions, bus = _Sessions(), _Bus()
     ask = make_chat_asker(sessions=sessions, bus=bus, request_ctx=_ctx("websocket"), timeout_s=0)
     assert await ask(REC) == "approve"
+
+
+def test_chat_handles_from_tool_context_reads_the_configured_timeout():
+    sessions, bus = _Sessions(), _Bus()
+    ctx = SimpleNamespace(
+        sessions=sessions, bus=bus,
+        app_config=SimpleNamespace(agents=SimpleNamespace(
+            defaults=SimpleNamespace(ask_user_answer_timeout_s=42))))
+    handles = ChatHandles.from_tool_context(ctx)
+    assert handles.sessions is sessions and handles.bus is bus
+    assert handles.timeout_s == 42.0
+
+
+def test_chat_handles_from_tool_context_falls_back_to_300_without_config():
+    ctx = SimpleNamespace(sessions=_Sessions(), bus=None)  # no app_config at all
+    assert ChatHandles.from_tool_context(ctx).timeout_s == 300.0

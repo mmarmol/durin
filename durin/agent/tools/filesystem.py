@@ -122,6 +122,10 @@ class _FsTool(Tool, ContextAware):
         - `.approvals/` → no door at all: these records are written only by the
           server, and a writable record would let the model forge or rewrite
           its own approval
+        - `.durin/import-quarantine/` → no door at all: it is written only by
+          `skill_import`'s fetch step. A writable `.scan.json` there would let
+          the model forge the recorded source/verdict and buy a trusted,
+          no-questions-asked install for content nobody actually scanned.
 
         Without this the guarantee is only an instruction in a skill, and a
         generic write lands unvalidated and unversioned — which is how workflow
@@ -129,6 +133,7 @@ class _FsTool(Tool, ContextAware):
         """
         denied = (
             [self._workspace / d for d in ("skills", "workflows", "automations", ".approvals")]
+            + [self._workspace / ".durin" / "import-quarantine"]
             if self._guard_registry_dirs and self._workspace is not None
             else None
         )

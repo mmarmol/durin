@@ -30,6 +30,7 @@ _REGISTRY_DOORS = {
 # why the agent can't write there.
 _NO_DOOR_REASONS = {
     ".approvals": "approval records are written only by the server",
+    "import-quarantine": "the import quarantine is written only by the fetch step",
 }
 
 

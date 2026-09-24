@@ -8,6 +8,7 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Awaitable, Callable
+from urllib.parse import urlsplit, urlunsplit
 
 import durin.agent.skill_resolve as _resolve
 from durin.agent.skill_resolve import SkillCandidate
@@ -249,6 +250,23 @@ def _should_judge(skill_dir: Path, source: str, trigger: str, allowlist: list[st
                          carries_code=vr.carries_code, allowlist=allowlist) == "confirm"
 
 
+def _scan_source(ref: str) -> str:
+    """``ref`` with any userinfo, query string and fragment stripped, for
+    recording in ``.scan.json``. That field is read back into the approval
+    summary/detail/payload and the skill's provenance, all of which reach
+    chat text and durable records — an ``https://user:tok@host/…?token=abc``
+    source would otherwise leak the credential into every one of them. The
+    literal ``cand.ref`` (never this stripped form) is what actually fetches
+    the content, so the download itself is unaffected."""
+    parts = urlsplit(ref)
+    if parts.scheme not in ("http", "https"):
+        return ref
+    netloc = parts.hostname or ""
+    if parts.port:
+        netloc = f"{netloc}:{parts.port}"
+    return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
+
+
 def fetch_candidate(cand: SkillCandidate, *, quarantine_root: Path,
                     max_files: int = _DEFAULT_MAX_FILES,
                     max_total_bytes: int = _DEFAULT_MAX_TOTAL_BYTES,
@@ -288,7 +306,7 @@ def fetch_candidate(cand: SkillCandidate, *, quarantine_root: Path,
 
     req_manifest = extract_requirements(qdir, llm_tools=getattr(rep, "tools", []))
     (qdir / ".scan.json").write_text(json.dumps({
-        "source": cand.ref,
+        "source": _scan_source(cand.ref),
         "verdict": rep.verdict,
         "findings": [{"category": f.category, "severity": f.severity,
                       "where": f.where, "detail": f.detail} for f in rep.findings],

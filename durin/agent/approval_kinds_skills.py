@@ -19,7 +19,6 @@ import difflib
 import hashlib
 import json
 from contextlib import nullcontext
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, ContextManager
 
@@ -27,6 +26,11 @@ from durin.agent import approval
 from durin.agent import skills_import as si
 from durin.agent import skills_store as ss
 from durin.agent.approval_executors import ApprovalExecError, ExecDeps, Prepared, register
+
+# Re-exported for existing ``kinds.ChatHandles`` uses: it lives in
+# ``approval_prompt`` (next to ``make_chat_asker``, the function it wraps) so
+# exec/MCP tools can build one without importing this skill-kinds module.
+from durin.agent.approval_prompt import ChatHandles as ChatHandles
 from durin.agent.skills_frontmatter import frontmatter_broken, split_frontmatter
 
 # Session key recorded on requests filed by autonomous skill maintenance
@@ -503,35 +507,6 @@ def request_edit_autonomously(workspace: Path, name: str, *, old: str, new: str,
     return {"error": outcome.message,
             "pending_approval": (outcome.record or {}).get("id"),
             "verdict": scan.after, "findings": scan.findings}
-
-
-# --- asking in the current chat ----------------------------------------------------
-
-@dataclass(frozen=True)
-class ChatHandles:
-    """What a gated tool needs to ask the person in the current chat: the
-    session store, the bus (text channels get the request as a message) and how
-    long the turn waits (``agents.defaults.ask_user_answer_timeout_s``)."""
-
-    sessions: Any = None
-    bus: Any = None
-    timeout_s: float = 300.0
-
-    @classmethod
-    def from_tool_context(cls, ctx: Any) -> "ChatHandles":
-        timeout_s = 300.0
-        try:
-            timeout_s = float(ctx.app_config.agents.defaults.ask_user_answer_timeout_s)
-        except AttributeError:
-            pass
-        return cls(sessions=getattr(ctx, "sessions", None), bus=getattr(ctx, "bus", None),
-                   timeout_s=timeout_s)
-
-    def asker(self, request_ctx: Any):
-        """The in-chat asker for this turn, or None when nobody can answer."""
-        from durin.agent.approval_prompt import make_chat_asker
-        return make_chat_asker(sessions=self.sessions, bus=self.bus,
-                               request_ctx=request_ctx, timeout_s=self.timeout_s)
 
 
 def register_all() -> None:

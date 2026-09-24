@@ -236,14 +236,22 @@ class SkillImportTool(Tool, ContextAware):
         attribution = Attribution(actor="import", session=session_key,
                                   agent=(ctx.metadata or {}).get("model") if ctx else None)
         action = gate["action"]
-        if action == "allow" or (action == "confirm" and self._install_policy == "auto"):
+        # Overwriting an existing skill is an ownership decision, not a safety
+        # one: even a scan-safe/trusted or judge-clearable install must not
+        # replace something already there without a person saying so. Both
+        # shortcuts below (the direct "allow" install and the "auto" policy
+        # pre-authorization) apply only to a fresh name; replacing routes
+        # through approval.request with no judge, same as any other request.
+        replacing = replace and (self._workspace / "skills" / gate["name"]).exists()
+        if not replacing and (action == "allow"
+                              or (action == "confirm" and self._install_policy == "auto")):
             # Nothing to decide (safe, trusted, no code), or the operator granted
             # flagged installs ahead of time in config. A dangerous verdict is
             # never covered by policy: only a person can accept that one.
             try:
                 result = await asyncio.to_thread(
                     install_imported_skill, self._workspace, qdir, source=src,
-                    allowlist=self._allowlist, confirmed=True, replace=replace,
+                    allowlist=self._allowlist, confirmed=(action == "confirm"), replace=replace,
                     attribution=attribution,
                     approved_by=None if action == "allow" else "policy")
             except SkillImportRefused as exc:
@@ -252,12 +260,12 @@ class SkillImportTool(Tool, ContextAware):
             prepared = kinds.prepare_skill_install(
                 self._workspace, qdir, gate=gate, source=src, replace=replace,
                 attribution=attribution)
+            judge = None if replacing else kinds.install_judge(
+                qdir, action=action, findings=gate["findings"], settings=self._judge)
             outcome = await approval.request(
                 self._workspace, prepared, session_key=session_key,
                 deps=ExecDeps(exec_run=self._exec_run, attribution=attribution),
-                judge=kinds.install_judge(qdir, action=action, findings=gate["findings"],
-                                          settings=self._judge),
-                ask=self._chat.asker(ctx))
+                judge=judge, ask=self._chat.asker(ctx))
             result = approval.outcome_to_tool_result(outcome)
             if outcome.status != "applied":
                 return result

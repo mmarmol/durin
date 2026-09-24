@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
+from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
 from durin.agent import pending_answers
@@ -20,6 +21,36 @@ from durin.agent.user_payloads import (
 )
 
 AskFn = Callable[[dict], Awaitable[str | None]]
+
+
+@dataclass(frozen=True)
+class ChatHandles:
+    """What a gated tool needs to ask the person in the current chat: the
+    session store, the bus (text channels get the request as a message) and how
+    long the turn waits (``agents.defaults.ask_user_answer_timeout_s``).
+
+    The one builder for these handles — every gated tool (skill install,
+    skill edit, MCP change, exec) constructs its asker through this class
+    rather than re-deriving ``sessions``/``bus``/timeout by hand."""
+
+    sessions: Any = None
+    bus: Any = None
+    timeout_s: float = 300.0
+
+    @classmethod
+    def from_tool_context(cls, ctx: Any) -> "ChatHandles":
+        timeout_s = 300.0
+        try:
+            timeout_s = float(ctx.app_config.agents.defaults.ask_user_answer_timeout_s)
+        except AttributeError:
+            pass
+        return cls(sessions=getattr(ctx, "sessions", None), bus=getattr(ctx, "bus", None),
+                   timeout_s=timeout_s)
+
+    def asker(self, request_ctx: Any) -> AskFn | None:
+        """The in-chat asker for this turn, or None when nobody can answer."""
+        return make_chat_asker(sessions=self.sessions, bus=self.bus,
+                               request_ctx=request_ctx, timeout_s=self.timeout_s)
 
 
 def make_chat_asker(*, sessions: Any, bus: Any, request_ctx: Any,
