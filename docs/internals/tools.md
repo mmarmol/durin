@@ -295,7 +295,7 @@ grants access to the tool that produced the result.
 |---|---|---|---|
 | `tools.restrict_to_workspace` | `bool` | `false` | Prevents all file and shell tools from accessing paths outside the session workspace |
 | `tools.exec.enable` | `bool` | `true` | Enables/disables the `exec` shell tool |
-| `tools.exec.timeout` | `int` | `60` | Default subprocess timeout in seconds (max 600) |
+| `tools.exec.timeout` | `int` | `60` | Default subprocess timeout in seconds (max 600). On POSIX the command runs as its own process group, so a timeout or a cancelled turn kills everything it started, not just the shell |
 | `tools.exec.sandbox` | `str` | `""` | Sandbox backend (`bwrap`, `docker`, `testbed`, or empty for none) |
 | `tools.exec.deny_patterns` | `list[str]` | (hardcoded set) | Regex patterns that block matching commands before execution |
 | `tools.exec.allow_patterns` | `list[str]` | `[]` | Regex patterns that exempt matching commands from the deny list |
