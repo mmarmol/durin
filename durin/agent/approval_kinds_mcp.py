@@ -1,0 +1,288 @@
+"""Approval kind ``mcp_change``: add, update, install or enable an MCP server.
+
+Each of these puts a server's command or endpoint into the agent's tool
+surface, so ``mcp_manage`` files it as an approval request instead of doing it
+on the model's word. The request records the exact change: the full server
+config for add, update and install (an install is resolved against the
+registry when it is requested, so the person approves the config that will be
+written, not a registry ref whose content could change underneath), or just
+the server name for enable. Its hash covers the server's current config entry,
+so a request whose server changed after it was filed is stale instead of
+overwriting that change.
+
+A request never holds a credential. ``secret_safe_config`` turns a value that
+equals a stored secret into that secret's ``${secret:NAME}`` reference and
+refuses any other credential, pointing the model at ``request_secret``.
+
+Execution uses the ``McpService`` handed in as ``ExecDeps.mcp``. Without one
+(an approval decided from the CLI, or any process without the gateway's live
+MCP connections) it builds a config-only ``McpService``: the change is written
+to config, and the running gateway applies it when it restarts or when the
+server is reconnected.
+"""
+from __future__ import annotations
+
+import copy
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+from durin.agent.approval_executors import (
+    ApprovalExecError,
+    ExecDeps,
+    Prepared,
+    register,
+)
+
+KIND = "mcp_change"
+
+# Header names that carry a credential whatever their value looks like.
+_AUTH_HEADERS = frozenset({"authorization", "proxy-authorization", "cookie",
+                           "x-api-key", "api-key"})
+# Values shorter than this are never treated as credentials: they are too
+# likely to be ordinary settings ("true", "30"). The secret redactor uses the
+# same floor for the same reason.
+_MIN_SECRET_LEN = 8
+
+_CONFIG_ONLY_NOTE = (
+    "Saved to config. This process has no live MCP connections, so the running "
+    "gateway applies the change when it restarts or when the server is "
+    "reconnected from the MCP page."
+)
+
+
+class SecretValueError(ValueError):
+    """A server config holds a credential that is not a stored-secret reference."""
+
+
+def as_dict(result: Any) -> dict:
+    """A service result as a plain dict."""
+    if hasattr(result, "model_dump"):
+        return result.model_dump()
+    if isinstance(result, dict):
+        return result
+    return {"status": getattr(result, "status", None), "ok": getattr(result, "ok", None)}
+
+
+def _is_credential(key: str, value: str) -> bool:
+    from durin.security.secrets import CREDENTIAL_KEY_RE, SecretRedactor
+
+    if len(value) < _MIN_SECRET_LEN:
+        return False
+    if key.lower() in _AUTH_HEADERS or CREDENTIAL_KEY_RE.search(key):
+        return True
+    # A credential-shaped value under a neutral key: a vendor token prefix, a
+    # bearer token, a JWT, a private key block.
+    return SecretRedactor({}, patterns=True).redact_text(value) != value
+
+
+def secret_safe_config(server: str, config: dict) -> dict:
+    """A copy of *config* whose env, header and OAuth values hold no credential.
+
+    A value equal to a stored secret becomes that secret's ``${secret:NAME}``
+    reference. A reference to a secret that is not stored, a redaction marker
+    read back from a tool result, or any other credential raises
+    ``SecretValueError``: a credential enters durin only from the user,
+    through ``request_secret`` or the dashboard. The message names the fields,
+    never their values.
+    """
+    from durin.security.secrets import (
+        REDACTION_MARKER_PREFIX,
+        get_secret_store,
+        make_ref,
+        parse_secret_ref,
+    )
+
+    store = get_secret_store(reload=True)
+    by_value: dict[str, str] = {}
+    for name, entry in sorted(store.all().items()):
+        if len(entry.value) >= _MIN_SECRET_LEN:
+            by_value.setdefault(entry.value, name)
+    safe = copy.deepcopy(config)
+    problems: list[str] = []
+    for section in ("env", "headers", "oauth"):
+        mapping = safe.get(section)
+        if not isinstance(mapping, dict):
+            continue
+        for key, value in list(mapping.items()):
+            if not isinstance(value, str) or not value:
+                continue
+            ref = parse_secret_ref(value)
+            if ref is not None:
+                if store.get(ref) is None:
+                    problems.append(f"{section}.{key} (no stored secret named {ref})")
+                continue
+            if value in by_value:
+                mapping[key] = make_ref(by_value[value])
+            elif REDACTION_MARKER_PREFIX in value or _is_credential(str(key), value):
+                problems.append(f"{section}.{key}")
+    if problems:
+        raise SecretValueError(
+            f"Not done: {', '.join(problems)} of MCP server {server!r} must be a "
+            "stored secret. A credential never goes into an MCP config or an "
+            "approval request as plain text. Call request_secret so the user "
+            "stores it, then pass the whole value as ${secret:NAME} (a prefix "
+            "such as 'Bearer ' is part of the stored value).")
+    return safe
+
+
+def _current_entry(name: str) -> dict | None:
+    from durin.config.loader import load_config
+
+    sc = load_config().tools.mcp_servers.get(name)
+    return sc.model_dump(mode="json") if sc is not None else None
+
+
+def change_hash(payload: dict) -> str:
+    """sha256 over the server's current config entry plus the request."""
+    blob = json.dumps(
+        {"current": _current_entry(str(payload.get("name") or "")), "payload": payload},
+        sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def _target(config: dict) -> str:
+    command = str(config.get("command") or "")
+    if command:
+        return " ".join([command, *(str(a) for a in config.get("args") or [])])
+    return str(config.get("url") or "")
+
+
+def _prepared(action: str, name: str, *, summary: str, payload: dict,
+              detail: dict) -> Prepared:
+    full = {"action": action, "name": name, **payload}
+    return Prepared(kind=KIND, summary=summary,
+                    detail={"action": action, "name": name, **detail},
+                    payload=full, change_hash=change_hash(full))
+
+
+def prepare_upsert(action: str, name: str, config: dict) -> Prepared:
+    """An ``add`` or ``update`` of server *name* with *config*."""
+    from durin.config.schema import MCPServerConfig
+
+    safe = secret_safe_config(name, config)
+    sc = MCPServerConfig.model_validate(safe)
+    if not sc.command and not sc.url:
+        raise ValueError("a server needs a command (stdio) or a url (http)")
+    target = _target(safe)
+    return _prepared(action, name, summary=f"{action} MCP server {name!r}",
+                     payload={"config": safe},
+                     detail={"server": f"{name} → {target}", "target": target,
+                             "config": safe})
+
+
+def prepare_enable(name: str) -> Prepared:
+    """Switching configured server *name* back on."""
+    from durin.config.loader import load_config
+
+    sc = load_config().tools.mcp_servers.get(name)
+    if sc is None:
+        raise ValueError(f"no MCP server named {name!r}")
+    target = " ".join([sc.command, *sc.args]).strip() if sc.command else sc.url
+    return _prepared("enable", name, summary=f"enable MCP server {name!r}", payload={},
+                     detail={"server": f"{name} → {target}", "target": target})
+
+
+async def prepare_install(detail: Any, *, ref: str, prefer: str) -> Prepared:
+    """An install of registry server *detail*, resolved to the config it writes."""
+    from durin.agent import mcp_install
+
+    name = (ref.rsplit("/", 1)[-1] or ref).strip()
+    use_local = (prefer == "local" and detail.packages) or (
+        not detail.remotes and detail.packages)
+    runtime_plan: dict | None = None
+    if use_local:
+        rt = mcp_install.package_runtime(detail.packages[0])
+        if not mcp_install.runtime_present(rt):
+            cmd = mcp_install.runtime_install_command(rt)
+            runtime_plan = {"runtime": rt, "command": cmd, "auto_installable": cmd is not None}
+    sc = mcp_install.build_server_config_from_detail(detail, prefer=prefer, secret_env_refs={})
+    await mcp_install.autodetect_oauth(
+        sc, has_declared_headers=bool(detail.remotes and detail.remotes[0].headers))
+    config = secret_safe_config(name, sc.model_dump(mode="json", exclude_defaults=True))
+    target = _target(config)
+    return _prepared(
+        "install", name, summary=f"install MCP server {name!r} from {ref}",
+        payload={"ref": ref, "config": config, "runtime_plan": runtime_plan},
+        detail={"server": f"{name} → {target}", "target": target, "source": ref,
+                "config": config, "runtime_plan": runtime_plan})
+
+
+async def _install_runtime(plan: dict | None, deps: ExecDeps) -> str | None:
+    """Run an install's runtime-install command, if any.
+
+    A blocked command, a timeout, or a non-zero exit fails the whole install
+    (``ApprovalExecError``) instead of silently proceeding to add a server
+    whose runtime never actually got installed. Reuses
+    ``skills_import._install_step_failed`` for that judgment rather than
+    re-deriving it: the same ExecTool return shapes (a blocked-command
+    string, a timeout string, an "Exit code: N" tail) apply here.
+    """
+    from durin.agent.skills_import import _install_step_failed
+
+    if not plan:
+        return None
+    command = plan.get("command")
+    runtime = plan.get("runtime")
+    if command and deps.exec_run is not None:
+        output = str(await deps.exec_run(command=command))
+        if _install_step_failed(output):
+            raise ApprovalExecError(
+                f"installing the '{runtime}' runtime failed: {output[-2000:]}")
+        return f"ran: {command}"
+    if command:
+        return (f"runtime '{runtime}' is missing: run `{command}` on the host, then "
+                "reconnect the server")
+    return f"runtime '{runtime}' missing and not auto-installable — install it manually"
+
+
+def _without_config(info: dict) -> dict:
+    # The stored server config can hold a credential typed into the dashboard
+    # as a literal, and this result is kept in the approval record.
+    return {k: v for k, v in info.items() if k != "config"}
+
+
+async def apply(payload: dict, deps: ExecDeps) -> dict:
+    """Perform one recorded MCP change.
+
+    ``mcp_manage`` also calls this directly under ``install_policy: auto``,
+    where no approval record exists.
+    """
+    from durin.config.schema import MCPServerConfig
+    from durin.service.mcp import McpServerNameCommand, McpServerUpsertCommand, McpService
+    from durin.service.principal import Principal
+
+    action = payload.get("action")
+    name = str(payload.get("name") or "")
+    service = deps.mcp if deps.mcp is not None else McpService()
+    principal = Principal.local()
+    out: dict[str, Any] = {"name": name}
+    if action == "enable":
+        result = await service.enable(McpServerNameCommand(name=name), principal)
+    elif action in ("add", "update", "install"):
+        if action == "install":
+            out["runtime"] = await _install_runtime(payload.get("runtime_plan"), deps)
+        sc = MCPServerConfig.model_validate(payload.get("config") or {})
+        method = service.update if action == "update" else service.add
+        result = await method(McpServerUpsertCommand(name=name, config=sc), principal)
+    else:
+        raise ApprovalExecError(f"unknown MCP change {action!r}")
+    info = as_dict(result)
+    out["result"] = _without_config(info)
+    if action == "install":
+        out["needs_oauth"] = info.get("status") == "needs_auth"
+    if deps.mcp is None:
+        out["note"] = _CONFIG_ONLY_NOTE
+    return out
+
+
+def _hash(workspace: Path, payload: dict) -> str:
+    return change_hash(payload)
+
+
+async def _execute(workspace: Path, payload: dict, deps: ExecDeps) -> dict:
+    return await apply(payload, deps)
+
+
+register(KIND, hash_fn=_hash, execute_fn=_execute)
