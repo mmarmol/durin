@@ -6,6 +6,7 @@ import asyncio
 import os
 import re
 import shutil
+import signal
 import sys
 from contextlib import suppress
 from pathlib import Path
@@ -372,12 +373,24 @@ class ExecTool(Tool, ContextAware):
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
             env=env,
+            start_new_session=True,  # own process group → group kill works
         )
 
     @staticmethod
     async def _kill_process(process: asyncio.subprocess.Process) -> None:
-        """Kill a subprocess and reap it to prevent zombies."""
-        process.kill()
+        """Kill a subprocess and everything it started, then reap it.
+
+        On POSIX the command leads its own process group (``_spawn``), so the
+        group kill also reaches children the shell forked — ``a && b`` runs
+        ``a`` as a child. Killing only the shell would orphan them, and an
+        orphan holding the output pipes stalls the reap below until its
+        timeout.
+        """
+        if _IS_WINDOWS:
+            process.kill()
+        else:
+            with suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
         try:
             with suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(process.wait(), timeout=5.0)
