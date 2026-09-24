@@ -604,8 +604,8 @@ migrated. Both legacy sections are otherwise inert.
 
 ### The write barrier
 
-`automations/` is one of the three registry directories (`skills`, `workflows`,
-`automations`) a generic filesystem write tool refuses to touch
+`automations/` is one of the directories (`skills`, `workflows`, `automations`,
+`.approvals`) a generic filesystem write tool refuses to touch
 (`durin/agent/tools/filesystem.py`'s `_resolve_write`) — reads stay legitimate, but a
 definition can only be written through the door that validates and versions it: the
 `automations` tool's `create`/`enable`/`pause` actions, the webui's automations
@@ -615,6 +615,9 @@ function (directly for the agent tool; through `AutomationsService.save` /
 `PUT /api/v1/automations/{name}` for the webui editor and direct API callers), so
 validation and versioning happen exactly once regardless of the door. This closes
 the same gap that once let workflow edits land unvalidated and unversioned.
+`.approvals/` sits in the same denied list but for a different reason: it owns no
+write door at all, since approval records are written only by the server and a
+writable record would let the model forge its own approval.
 
 ### Service surface
 

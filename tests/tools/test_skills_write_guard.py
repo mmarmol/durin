@@ -101,6 +101,19 @@ async def test_write_tool_guard_registry_dirs_false_allows_isolated_staging_writ
     assert "Successfully wrote" in result
 
 
+@pytest.mark.asyncio
+async def test_write_tool_refuses_approvals(tmp_path):
+    """Approval records are written only by the server; the model must not be
+    able to forge or rewrite one through its own file tools."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / ".approvals").mkdir()
+    tool = WriteFileTool(workspace=ws, allowed_dir=ws)
+    result = await tool.execute(path=".approvals/fake123.json", content="{}")
+    assert "Error" in result
+    assert not (ws / ".approvals" / "fake123.json").exists()
+
+
 @pytest.mark.parametrize(
     ("registry", "path", "door"),
     [

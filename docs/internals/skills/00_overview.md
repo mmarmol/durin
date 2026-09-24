@@ -249,7 +249,9 @@ validated, versioned write door — `workflows/` (use `workflow_write` /
 `workflow_edit`, and `workflow_script_write` for the scripts a script node runs)
 and `automations/` (use the automations tool) — because otherwise the rule is
 only an instruction in a skill, and a generic write lands unvalidated and
-unversioned.
+unversioned. `.approvals/` is denied the same way but owns no door at all:
+approval records are written only by the server, and letting the model write
+there would let it forge or rewrite its own approval.
 The guard lives in the agent-facing tools themselves
 (`durin/agent/tools/filesystem.py`, `.../notebook.py`); durin's own store
 operations write to `skills/` directly through `skills_store.py` and never go

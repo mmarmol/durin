@@ -119,13 +119,16 @@ class _FsTool(Tool, ContextAware):
           `workflow_script_write` for `workflows/scripts/`
         - `automations/` → the automations tool (`create`/`enable`/`pause`), or the
           webui's automations editor
+        - `.approvals/` → no door at all: these records are written only by the
+          server, and a writable record would let the model forge or rewrite
+          its own approval
 
         Without this the guarantee is only an instruction in a skill, and a
         generic write lands unvalidated and unversioned — which is how workflow
         edits went missing from history.
         """
         denied = (
-            [self._workspace / d for d in ("skills", "workflows", "automations")]
+            [self._workspace / d for d in ("skills", "workflows", "automations", ".approvals")]
             if self._guard_registry_dirs and self._workspace is not None
             else None
         )
