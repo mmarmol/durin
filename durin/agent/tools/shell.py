@@ -68,13 +68,18 @@ _HARD_FLOOR_NOTE = (
 # matched, so the refusal names the setting the command is missing from.
 _ALLOWLIST_RULE = "tools.exec.allow_patterns"
 
-# A command position: the start of the command, right after a separator, or
-# after a wrapper that runs its argument as a command (sudo, exec, systemctl…),
-# with an optional path prefix. Anchoring there keeps a word such as
-# "shutdown" inside an argument (a grep pattern, a test file name) off the floor.
+# A command position: the start of the command, right after a separator
+# (including a backtick or an opening brace, for `` `cmd` `` and `{ cmd; }`),
+# after a wrapper that runs its argument as a command (sudo, env, nice, time,
+# systemctl…), or after a `sh`/`bash`/`dash`/`zsh`/`ksh -c '...'` shell
+# wrapper (with its own flags, e.g. `bash -lc`), with an optional path prefix.
+# Anchoring there keeps a word such as "shutdown" inside an argument (a grep
+# pattern, a test file name, a path component with more path after it) off
+# the floor, while still catching the command inside a shell wrapper.
 _CMD_START = (
-    r"(?:^|[;&|(\n]\s*|\b(?:sudo|doas|exec|nohup|command|systemctl)\s+"
-    r"(?:-\S+\s+(?:[^-\s]\S*\s+)?)*)(?:\S*/)?"
+    r"(?:^|[;&|(\n`{]\s*|\b(?:sudo|doas|exec|nohup|command|systemctl|env|nice|time)\s+"
+    r"(?:-\S+\s+(?:[^-\s]\S*\s+)?)*|\b(?:ba|da|z|k)?sh\s+(?:-\w+\s+)*-\w*c\w*\s+[\"']?\s*)"
+    r"(?:\S*/)?"
 )
 # Whole-disk block devices (Linux, macOS).
 _RAW_DISK = r"/dev/(?:sd[a-z]|hd[a-z]|vd[a-z]|xvd[a-z]|nvme\d|mmcblk\d|disk\d|rdisk\d)"
@@ -89,21 +94,39 @@ _RAW_DISK = r"/dev/(?:sd[a-z]|hd[a-z]|vd[a-z]|xvd[a-z]|nvme\d|mmcblk\d|disk\d|rd
 # exempts them.
 _HARD_FLOOR_PATTERNS: tuple[str, ...] = (
     # rm with a recursive flag whose target is exactly /, /*, ~, ~/, ~/*,
-    # $HOME or ${HOME} (optionally quoted, options before or after).
+    # $HOME or ${HOME} (optionally quoted around the whole target, or with
+    # the closing quote right after "HOME"/"}", options before or after).
     r"\brm\b(?=[^;&|\n]*\s(?:-[a-z]*r[a-z]*|--recursive)(?:\s|$))"
-    r"[^;&|\n]*\s[\"']?(?:/\*?|~/?\*?|\$\{?home\}?/?\*?)[\"']?(?=\s|$|[;&|])",
-    _CMD_START + r"(?:mkfs(?:\.[a-z0-9]+)?|diskpart)(?![\w.-])",
+    r"[^;&|\n]*\s[\"']?(?:/\*?|~/?\*?|\$\{?home\}?[\"']?/?\*?)[\"']?(?=\s|$|[;&|])",
+    # (?![\w./-]) rejects a directory or file name that merely starts with
+    # this word (a "shutdown" or "mkfs" worktree/directory, a ".sh" suffix):
+    # the word must end the path, not continue into more of it.
+    _CMD_START + r"(?:mkfs(?:\.[a-z0-9]+)?|diskpart)(?![\w./-])",
     r"\bdd\b[^;&|\n]*\bof=" + _RAW_DISK,
     r">\s*" + _RAW_DISK,
     r"\\\\\.\\physicaldrive\d",  # Windows raw disk: \\.\PhysicalDriveN
     # Fork bomb: a function that pipes itself into itself in the background.
-    r"(?P<fn>[\w:]+)\s*\(\)\s*\{\s*(?P=fn)\s*\|\s*(?P=fn)\s*&\s*;?\s*\}\s*;\s*(?P=fn)",
-    _CMD_START + r"(?:shutdown|reboot|poweroff)(?![\w.-])",
-    # "durin approvals approve/reject", wherever it appears in the command:
-    # a bare invocation, "python -m durin approvals ...", or nested inside
-    # `bash -c '...'`. Not anchored to the command start on purpose, and
-    # tolerant of extra whitespace between the words.
-    r"\bdurin\b\s+\bapprovals\b\s+\b(?:approve|reject)\b",
+    # (?<![\w:]) keeps the function-name group from starting mid-word, so it
+    # cannot backtrack character-by-character over a long unrelated word
+    # (quadratic time on a long argument that merely contains no fork bomb).
+    r"(?<![\w:])(?P<fn>[\w:]+)\s*\(\)\s*\{\s*(?P=fn)\s*\|\s*(?P=fn)\s*&\s*;?\s*\}\s*;\s*(?P=fn)",
+    _CMD_START + r"(?:shutdown|reboot|poweroff|halt)(?![\w./-])",
+    # SysV runlevel 0 ("init 0") halts/powers off the host, same as the
+    # commands above. Command position only, so "npm init 0" (a made-up
+    # package version, not a runlevel) is unaffected.
+    _CMD_START + r"init\s+0\b",
+    # "durin approvals approve/reject" at command position — a bare
+    # invocation, "python -m durin approvals ...", or nested inside a shell
+    # wrapper (`` `...` ``, `{ ...; }`, `bash -c '...'`, `sh -c "..."`) — so
+    # the model cannot approve its own pending request through a shell. The
+    # CLI's own TTY requirement (approve/reject refuse to run without one) is
+    # a second, independent layer behind this one. Tolerant of the CLI's own
+    # options (-w/--workspace/--all/-c/...) and of a quoted "approvals" or
+    # "approve"/"reject" token, and of extra whitespace between the words.
+    # Anchored at command position so "grep 'durin approvals approve' docs/"
+    # or a commit message mentioning the phrase is not refused.
+    _CMD_START + r"(?:\S*python\S*\s+-m\s+)?durin\b\s+[\"']?approvals[\"']?"
+    r"(?:\s+-\S+(?:\s+[^-\s]\S*)?)*\s+[\"']?(?:approve|reject)\b",
 )
 
 

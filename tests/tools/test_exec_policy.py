@@ -49,6 +49,24 @@ FLOOR = [
     "systemctl poweroff",
     "/sbin/reboot",
     "poweroff",
+    # Shell wrappers: the wrapped command must still hit the floor (fix
+    # round 1, finding 1).
+    "bash -c 'mkfs.ext4 /dev/sda'",
+    'sh -c "reboot"',
+    "bash -lc 'shutdown now'",
+    "`reboot`",
+    "{ reboot; }",
+    "env reboot",
+    "time mkfs.ext4 /dev/sda",
+    "sudo sh -c 'mkfs.ext4 /dev/sda'",
+    # $HOME quoted with the closing quote right after HOME, not around the
+    # whole target (fix round 1, finding 6).
+    'rm -rf "$HOME"/*',
+    # halt / init 0 / systemctl halt|poweroff|reboot (fix round 1, finding 7).
+    "halt",
+    "init 0",
+    "systemctl halt",
+    "systemctl reboot",
 ]
 
 NOT_FLOOR = [
@@ -69,11 +87,25 @@ NOT_FLOOR = [
     "./shutdown.sh",
     "echo reboot",
     "systemctl status reboot.target",
+    # A word on the floor that is only a path component, not the whole
+    # command name — the rest of the path continues past it (fix round 1,
+    # finding 4, direction 2: a folder name must not hit the floor).
+    "/w/shutdown/reboot.sh",
+    "./reboot/run.sh",
+    "sudo /opt/mkfs/bin/tool",
+    "/Users/me/durin-worktrees/shutdown/.venv/bin/python -m pytest -q",
+    "cd /x && /Users/me/durin-worktrees/reboot/.venv/bin/python -c 1",
+    # "init 0" is command position only: a version number after a real
+    # subcommand is not a runlevel (fix round 1, finding 7).
+    "npm init 0",
+    "git init",
 ]
 
 # Reasonable spellings of the command that would let the model approve its own
 # pending request through a shell: a bare invocation, extra whitespace,
-# "python -m durin ...", and the command nested inside "bash -c '...'".
+# "python -m durin ...", the command nested inside "bash -c '...'", the CLI's
+# own options (-w/--workspace/--all/-c) between "approvals" and the verb, and
+# a quoted "approvals" or "approve"/"reject" token (fix round 1, finding 2).
 APPROVALS_BYPASS = [
     "durin approvals approve req-123",
     "durin approvals reject req-123",
@@ -82,6 +114,12 @@ APPROVALS_BYPASS = [
     "python3 -m durin approvals reject req-123",
     "bash -c 'durin approvals approve req-123'",
     'bash -c "durin approvals approve req-123"',
+    "durin approvals -w /ws approve req-123",
+    "durin approvals --workspace /ws approve req-123",
+    "durin approvals --all approve req-123",
+    "durin approvals -c cfg.json reject req-123",
+    "durin 'approvals' approve req-123",
+    'durin approvals "approve" req-123',
 ]
 
 
@@ -177,7 +215,30 @@ def test_approvals_cli_floor_holds_against_any_approval():
     "durin approvals list",
     "durin approvals discard req-123",
     "echo 'approving requests is done via durin approvals'",
+    # The rule is anchored at command position: the phrase appearing inside
+    # a commit message or a grep pattern must not be refused (fix round 1,
+    # finding 5).
+    "git commit -m 'durin approvals approve flow'",
+    "grep -rn 'durin approvals approve' docs/",
 ])
 def test_approvals_near_misses_are_not_on_the_floor(command):
     refusal = ExecTool()._check(command, "/w")
     assert refusal is None or refusal.kind != "hard_floor"
+
+
+def test_fork_bomb_pattern_is_not_quadratic_on_a_long_word():
+    """A long argument with no fork bomb in it must not stall the guard: the
+    (?<![\\w:]) lookbehind stops the function-name group from restarting the
+    match at every character of a long word (fix round 1, finding 3)."""
+    import re
+    import time
+
+    fork_bomb_pattern = next(p for p in _HARD_FLOOR_PATTERNS if "(?P<fn>" in p)
+    command = ("echo " + "a" * 40_000).lower()
+
+    start = time.perf_counter()
+    result = re.search(fork_bomb_pattern, command)
+    elapsed = time.perf_counter() - start
+
+    assert result is None
+    assert elapsed < 1.0
