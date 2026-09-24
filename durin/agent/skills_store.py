@@ -862,10 +862,15 @@ def gate_skill_edit(workspace: Path, name: str, *, old: str, new: str, rationale
     shares this one decision, so "auto and no review → write, else go through
     approval" is made in one place.
 
-    Returns ``{"error"}``, or ``{"plan", "scan", "write"}`` where ``scan`` is
-    ``None`` for a manual skill (nothing was scanned; the caller never writes
-    it) and ``write`` is True only when the caller may call
-    ``write_skill_edit`` straight away."""
+    Returns exactly ``{"error"}`` on a bad edit (an invalid name, an ``old``
+    not found, …) — the same shape ``plan_skill_edit`` returns, unchanged.
+    Otherwise returns exactly ``{"plan", "scan", "write"}``: ``plan`` is
+    ``plan_skill_edit``'s result; ``scan`` is ``None`` for a manual skill
+    (nothing was scanned — its owner decides, so the caller never writes it
+    itself) or the ``WriteScan`` of the proposed write for an auto skill;
+    ``write`` is True only when the caller may call ``write_skill_edit``
+    straight away — False means go through approval (autonomously or by
+    asking a person), using ``plan`` and ``scan`` to build that request."""
     plan = plan_skill_edit(workspace, name, old=old, new=new, rationale=rationale, file=file)
     if "error" in plan:
         return plan

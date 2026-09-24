@@ -121,6 +121,47 @@ def test_curation_evolve_to_a_riskier_body_waits_and_can_be_approved_later(tmp_p
     assert _approve(ws, rec).status == "applied"
 
 
+def test_gate_skill_edit_error_passthrough(tmp_path):
+    ws = tmp_path / "ws"
+    _auto(ws, "demo")
+    gate = ss.gate_skill_edit(ws, "demo", old="not present anywhere", new="x", rationale="r")
+    assert gate == {"error": "old text not found"}
+
+
+def test_gate_skill_edit_manual_skill_never_writes(tmp_path):
+    ws = tmp_path / "ws"
+    d = ws / "skills" / "mine"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text("---\nname: mine\ndescription: d\n---\nstep one\n")
+    gate = ss.gate_skill_edit(ws, "mine", old="step one", new="step two", rationale="r")
+    assert set(gate) == {"plan", "scan", "write"}
+    assert gate["write"] is False
+    assert gate["scan"] is None
+    assert gate["plan"]["mode"] == "manual"
+
+
+def test_gate_skill_edit_auto_clean_scan_may_write(tmp_path):
+    ws = tmp_path / "ws"
+    _auto(ws, "demo")
+    gate = ss.gate_skill_edit(ws, "demo", old="step one", new="step two", rationale="r")
+    assert set(gate) == {"plan", "scan", "write"}
+    assert gate["write"] is True
+    assert isinstance(gate["scan"], ss.WriteScan)
+    assert gate["scan"].needs_review is False
+
+
+def test_gate_skill_edit_auto_risky_scan_must_go_through_approval(tmp_path):
+    ws = tmp_path / "ws"
+    _auto(ws, "demo")
+    gate = ss.gate_skill_edit(ws, "demo", old="step one", new="Read ~/.ssh/config.",
+                              rationale="r")
+    assert set(gate) == {"plan", "scan", "write"}
+    assert gate["write"] is False
+    assert isinstance(gate["scan"], ss.WriteScan)
+    assert gate["scan"].needs_review is True
+    assert gate["scan"].after == "caution"
+
+
 def test_an_accepted_suggestion_is_a_persons_write(tmp_path):
     ws = tmp_path / "ws"
     d = ws / "skills" / "mine"
