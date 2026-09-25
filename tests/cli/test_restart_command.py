@@ -104,7 +104,7 @@ class TestRestartCommand:
 
         with patch.dict(os.environ, {}, clear=False), \
              patch("durin.command.builtin.asyncio", new=fake_asyncio), \
-             patch("durin.command.builtin.os.execv") as mock_execv:
+             patch("durin.utils.restart.os.execv") as mock_execv:
             out = await cmd_restart(ctx)
             assert "Restarting" in out.content
             assert os.environ.get(RESTART_NOTIFY_CHANNEL_ENV) == "cli"
@@ -169,7 +169,7 @@ class TestRestartCommand:
         try:
             with patch.dict(os.environ, {}, clear=False), \
                  patch("durin.command.builtin.asyncio", new=fake_asyncio), \
-                 patch("durin.command.builtin.os.execv") as mock_execv:
+                 patch("durin.utils.restart.os.execv") as mock_execv:
                 await cmd_restart(ctx)
                 await scheduled[0]
         finally:
@@ -185,7 +185,7 @@ class TestRestartCommand:
         msg = InboundMessage(channel="telegram", sender_id="u1", chat_id="c1", content="/restart")
 
         with patch.object(loop, "_dispatch", new_callable=AsyncMock) as mock_dispatch, \
-             patch("durin.command.builtin.os.execv"):
+             patch("durin.utils.restart.os.execv"):
             await bus.publish_inbound(msg)
 
             loop._running = True

@@ -2350,6 +2350,164 @@ def test_gateway_starts_the_automations_orphan_sweep_task(monkeypatch, tmp_path:
     assert isinstance(cli_commands._automations_sweep_task, asyncio.Task)
 
 
+def test_restart_runs_the_gateway_graceful_shutdown_before_reexec(monkeypatch, tmp_path: Path) -> None:
+    """/restart replaces the process. In the gateway it must first stop every
+    subsystem the way a graceful stop does (MCP, cron, the dream and embed
+    workers, the agent loop and its journal, the channels, the session flush)
+    and only then re-exec; os.execv straight from the loop skipped all of it."""
+    from types import SimpleNamespace
+
+    import durin.cli.commands as cli_commands
+    from durin.bus.events import InboundMessage
+    from durin.command.builtin import cmd_restart
+    from durin.command.router import CommandContext
+    from durin.utils import restart as restart_mod
+
+    monkeypatch.setattr(cli_commands, "_automations_sweep_task", None)
+    calls: list[str] = []
+
+    config_file = _write_instance_config(tmp_path)
+    config = Config()
+    config.gateway.port = 18794
+
+    class _FakeDream:
+        model = None
+        max_batch_size = 0
+        max_iterations = 0
+
+        async def run(self) -> None:
+            return None
+
+    class _FakeSessionManager:
+        def flush_all(self) -> int:
+            calls.append("sessions.flush_all")
+            return 0
+
+    class _FakeAgentLoop:
+        @classmethod
+        def from_config(cls, config, bus=None, **extra):
+            return cls(**extra)
+
+        def __init__(self, **_kwargs) -> None:
+            self.model = "test-model"
+            self.provider = object()
+            self.dream = _FakeDream()
+            self.sessions = _FakeSessionManager()
+
+        def build_concurrency_snapshot(self):
+            return {"lanes": {}, "queued": 0, "work": []}
+
+        def register_automations_tool(self, runtime) -> None:
+            return None
+
+        async def run(self) -> None:
+            msg = InboundMessage(channel="slack", sender_id="u", chat_id="C1", content="/restart")
+            await cmd_restart(CommandContext(msg=msg, session=None, key=msg.session_key,
+                                             raw="/restart", loop=self))
+            # The restart cancels this wait. If it never shuts the gateway
+            # down, fail the run here instead of hanging the test forever.
+            await asyncio.sleep(5)
+            raise _StopGatewayError("/restart did not shut the gateway down")
+
+        async def close_mcp(self) -> None:
+            calls.append("agent.close_mcp")
+
+        def stop(self) -> None:
+            calls.append("agent.stop")
+
+        async def drain_inbound_for_shutdown(self) -> int:
+            calls.append("agent.drain_inbound_for_shutdown")
+            return 0
+
+    class _FakeChannelManager:
+        def __init__(self, _config, _bus, **_kwargs) -> None:
+            self.enabled_channels = ["slack"]
+
+        async def start_all(self) -> None:
+            await asyncio.Event().wait()
+
+        async def stop_all(self) -> None:
+            calls.append("channels.stop_all")
+
+        def get_channel(self, _name: str):
+            return None
+
+    class _FakeCronService:
+        def __init__(self, _store_path: Path, **_kwargs) -> None:
+            self.on_job = None
+
+        async def start(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            calls.append("cron.stop")
+
+        def status(self) -> dict[str, int]:
+            return {"jobs": 0}
+
+        def register_system_job(self, _job) -> None:
+            return None
+
+        def prune_orphaned_system_jobs(self, _known_system_ids) -> list:
+            return []
+
+    class _FakeServer:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        async def serve_forever(self) -> None:
+            await asyncio.Event().wait()
+
+    async def _fake_start_server(handler, host: str, port: int):
+        return _FakeServer()
+
+    class _FakeBus:
+        def add_inbound_interceptor(self, _fn) -> None:
+            return None
+
+    async def _no_wait(_delay: float) -> None:
+        return None
+
+    _patch_cli_command_runtime(
+        monkeypatch,
+        config,
+        message_bus=lambda: _FakeBus(),
+        session_manager=lambda _workspace: object(),
+    )
+    monkeypatch.setattr("durin.cli.commands.AgentLoop", _FakeAgentLoop)
+    monkeypatch.setattr("durin.channels.manager.ChannelManager", _FakeChannelManager)
+    monkeypatch.setattr("durin.cron.service.CronService", _FakeCronService)
+    monkeypatch.setattr("asyncio.start_server", _fake_start_server)
+    monkeypatch.setattr("durin.memory.dream_supervisor.stop_dream_workers",
+                        lambda: calls.append("stop_dream_workers"))
+    monkeypatch.setattr("durin.memory.embed_supervisor.stop_embed_server",
+                        lambda: calls.append("stop_embed_server"))
+    monkeypatch.setattr("durin.command.builtin.set_restart_notice_to_env", lambda **_kw: None)
+    monkeypatch.setattr("durin.command.builtin.asyncio",
+                        SimpleNamespace(sleep=_no_wait, create_task=asyncio.create_task))
+    monkeypatch.setattr("durin.cli.commands.reexec", lambda: calls.append("reexec"))
+
+    result = runner.invoke(app, ["gateway", "--config", str(config_file)])
+
+    assert result.exit_code == 0, result.output
+    assert calls == [
+        "agent.close_mcp",
+        "cron.stop",
+        "stop_dream_workers",
+        "stop_embed_server",
+        "agent.stop",
+        "agent.drain_inbound_for_shutdown",
+        "channels.stop_all",
+        "sessions.flush_all",
+        "reexec",
+    ]
+    # The gateway is gone: a later /restart no longer reaches its shutdown.
+    assert restart_mod.request_restart() is False
+
+
 def _setup_full_boot_gateway_test(monkeypatch, tmp_path: Path):
     """Shared scaffold for boot-order tests: a full gateway boot (through
     `cron.start()` and the boot-order migrate/sync block) that reaches

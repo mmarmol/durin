@@ -126,6 +126,8 @@ from durin.utils.helpers import sync_workspace_templates
 from durin.utils.restart import (
     consume_restart_notice_from_env,
     format_restart_completed_message,
+    reexec,
+    set_restart_handler,
     should_show_cli_restart_notice,
 )
 
@@ -1705,6 +1707,10 @@ def _run_gateway(
     # the same cancelled/aborted result.
     _shutdown_requested = False
 
+    # Set by /restart (durin.utils.restart.request_restart): once the graceful
+    # shutdown below has run, the process re-execs itself.
+    _restart_requested = False
+
     automations_runtime = AutomationsRuntime(
         config.workspace_path,
         workflow_exec=_automations_workflows_service.execute,
@@ -2116,6 +2122,18 @@ def _run_gateway(
             except (NotImplementedError, RuntimeError):
                 pass  # add_signal_handler is unsupported on Windows
 
+        def _request_restart() -> None:
+            # /restart takes the same graceful shutdown as a signal and
+            # re-execs afterwards. A stop already under way wins: a /restart
+            # landing during it must not turn the stop into a restart.
+            nonlocal _restart_requested
+            if _shutdown_requested:
+                return
+            _restart_requested = True
+            _request_shutdown("/restart")
+
+        set_restart_handler(_request_restart)
+
         try:
             await cron.start()
 
@@ -2250,7 +2268,14 @@ def _run_gateway(
             if flushed:
                 logger.info("Shutdown: flushed {} session(s) to disk", flushed)
 
-    asyncio.run(run())
+    try:
+        asyncio.run(run())
+    finally:
+        set_restart_handler(None)
+    if _restart_requested:
+        # Every subsystem is down now, as a graceful stop leaves it; a fresh
+        # process takes this one's place.
+        reexec()
 
 
 # ============================================================================

@@ -1,10 +1,13 @@
-"""Helpers for restart notification messages."""
+"""Restart helpers: the notice shown after a restart, and how this process
+restarts itself."""
 
 from __future__ import annotations
 
 import json
 import os
+import sys
 import time
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any
@@ -13,6 +16,10 @@ RESTART_NOTIFY_CHANNEL_ENV = "DURIN_RESTART_NOTIFY_CHANNEL"
 RESTART_NOTIFY_CHAT_ID_ENV = "DURIN_RESTART_NOTIFY_CHAT_ID"
 RESTART_NOTIFY_METADATA_ENV = "DURIN_RESTART_NOTIFY_METADATA"
 RESTART_STARTED_AT_ENV = "DURIN_RESTART_STARTED_AT"
+
+# How this process restarts itself, when something owns an orderly shutdown
+# (the gateway). None: the caller shuts down what it can and re-execs.
+_RESTART_HANDLER: Callable[[], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -31,6 +38,30 @@ def format_restart_completed_message(started_at_raw: str) -> str:
             elapsed_s = max(0.0, time.time() - float(started_at_raw))
             elapsed_suffix = f" in {elapsed_s:.1f}s"
     return f"Restart completed{elapsed_suffix}."
+
+
+def set_restart_handler(handler: Callable[[], None] | None) -> None:
+    """Install how this process restarts itself, or clear it with None.
+
+    The gateway installs one that runs its graceful shutdown (the same one a
+    SIGTERM runs) and re-execs afterwards.
+    """
+    global _RESTART_HANDLER
+    _RESTART_HANDLER = handler
+
+
+def request_restart() -> bool:
+    """Hand a restart to the installed handler; False when none is installed."""
+    handler = _RESTART_HANDLER
+    if handler is None:
+        return False
+    handler()
+    return True
+
+
+def reexec() -> None:
+    """Replace this process with a fresh ``python -m durin`` on the same argv."""
+    os.execv(sys.executable, [sys.executable, "-m", "durin"] + sys.argv[1:])
 
 
 def set_restart_notice_to_env(
