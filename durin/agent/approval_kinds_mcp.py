@@ -11,8 +11,8 @@ update, so a config that drifted onto it out of band is visible to the
 reviewer rather than hidden behind a bare "name -> target" line). Its hash
 covers the server's current config entry, so a request whose server changed
 after it was filed is stale instead of overwriting that change. ``apply``
-writes an enable's reviewed snapshot back before connecting, rather than
-trusting whatever the disk says at that later moment.
+enables with the reviewed snapshot itself (persisted and connected as that
+object), rather than trusting whatever the disk says at that later moment.
 
 A request never holds a credential. ``secret_safe_config`` scans every field
 that can carry one — ``env``, ``headers``, ``url``, ``args``, ``oauth``,
@@ -543,13 +543,13 @@ def prepare_enable(name: str) -> Prepared:
     command/URL — so a reviewer sees exactly what is about to run,
     including anything that drifted onto this server out of band since it
     was last approved (a bare "name -> target" line would hide, say, an
-    injected `env.NODE_OPTIONS`). ``apply`` writes this EXACT snapshot back
-    before connecting, rather than trusting whatever the disk says at that
-    later moment — see its own docstring.
+    injected `env.NODE_OPTIONS`). ``apply`` persists and connects this EXACT
+    snapshot, rather than trusting whatever the disk says at that later
+    moment.
 
     Refuses a server that is already enabled: enabling is "start what is
     off," not a second way to edit a running one's config (`update` is that
-    door, and it is what actually gets applied here too).
+    door).
     """
     from durin.config.loader import load_config
 
@@ -645,17 +645,15 @@ async def apply(payload: dict, deps: ExecDeps) -> dict:
     principal = Principal.local()
     out: dict[str, Any] = {"name": name}
     if action == "enable":
-        # Write the EXACT reviewed snapshot back first — never trust
-        # whatever config.json happens to say at this later moment, which
-        # may have drifted (out of band, or a race with another writer)
-        # since prepare_enable captured it. A record with no snapshot at
-        # all (a legacy record filed before this) falls back to enabling
-        # whatever is currently on disk, same as before.
+        # Enable with the EXACT reviewed snapshot: the service persists it
+        # and connects that same object, never a re-read of config.json,
+        # which may have drifted (out of band, or a race with another
+        # writer) since prepare_enable captured it. A record with no
+        # snapshot at all (a legacy record filed before this) falls back to
+        # enabling whatever is currently on disk, same as before.
         snapshot = payload.get("config")
-        if snapshot:
-            sc = MCPServerConfig.model_validate(snapshot)
-            await service.update(McpServerUpsertCommand(name=name, config=sc), principal)
-        result = await service.enable(McpServerNameCommand(name=name), principal)
+        sc = MCPServerConfig.model_validate(snapshot) if snapshot else None
+        result = await service.enable(McpServerNameCommand(name=name), principal, config=sc)
     elif action in ("add", "update", "install"):
         if action == "install":
             out["runtime"] = await _install_runtime(payload.get("runtime_plan"), deps)

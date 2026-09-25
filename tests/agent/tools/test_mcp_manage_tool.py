@@ -53,8 +53,11 @@ class _FakeService:
         self.calls.append(("remove", cmd.name))
         return _Result(ok=True)
 
-    async def enable(self, cmd, principal):
+    async def enable(self, cmd, principal, *, config=None):
         self.calls.append(("enable", cmd.name))
+        if config is not None:
+            self._persist(cmd.name, config)
+            self._approved[cmd.name] = config
         return _Result(name=cmd.name, status="connected")
 
     async def disable(self, cmd, principal):

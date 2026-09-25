@@ -58,24 +58,16 @@ def protected_durin_store_paths() -> list[Path]:
     ``durin.pairing.store``, whose stores all default to a sibling file in
     the same directory as the config file.
 
-    The ``.d/`` directory is created here (idempotent) if it doesn't already
-    exist, so ``is_under``'s identity check always has a real entry to
-    compare against — the previous plain-text fallback for an absent
-    directory let a case variant (``CONFIG.JSON.D/tools.json`` on a
-    case-insensitive filesystem) slip straight through on a fresh instance
-    that had never split its config. An empty ``config.json.d/`` is inert
-    for config LOADING (``durin.config.loader._load_config_uncached`` reads
-    the monolith instead when the split dir has no data) — only ``.d/`` is a
-    directory among these paths; the config/secrets/tokens/pairing FILES are
-    deliberately left uncreated (see ``is_under``'s own file-vs-directory
-    handling).
+    Nothing is created here: ``is_under`` compares a path that does not
+    exist yet by its nearest existing ancestor. An empty ``config.json.d/``
+    is not inert — its mere presence makes the config readers treat a
+    single-file config as split.
     """
     from durin.config.loader import get_config_path
 
     config_path = get_config_path()
     data_dir = config_path.parent
     split_dir = config_path.with_suffix(config_path.suffix + ".d")
-    split_dir.mkdir(parents=True, exist_ok=True)
     return [
         config_path,
         split_dir,  # config.json.d/
@@ -106,85 +98,76 @@ def _same_entry(a: Path, b: Path) -> bool:
     return (sa.st_dev, sa.st_ino) == (sb.st_dev, sb.st_ino)
 
 
-def _fs_case_insensitive(directory: Path) -> bool:
-    """True when the filesystem *directory* lives on folds case for its own
-    name — detected by swapping the case of *directory*'s name and checking
-    whether the swapped spelling still resolves to the exact same entry
-    (``_same_entry``), the same mechanism a real case-insensitive
-    filesystem uses to alias ``CONFIG.JSON`` onto ``config.json``.
+def _existing_prefix(path: Path) -> tuple[Path, tuple[str, ...]]:
+    """Split *path* into its nearest existing ancestor (symlinks resolved)
+    and the components below it that do not exist yet."""
+    path = Path(os.path.realpath(path))
+    rest: list[str] = []
+    while not os.path.exists(path) and path != path.parent:
+        rest.append(path.name)
+        path = path.parent
+    return path, tuple(reversed(rest))
 
-    Needs something real to test identity against, so when *directory*
-    itself does not exist yet (a guarded FILE — ``config.json`` and
-    friends — before durin has ever written it) this falls back to
-    *directory*'s parent, which always exists (DURIN_HOME). Case-folding is
-    a per-volume property in virtually every real filesystem, so the
-    nearest existing ancestor is an accurate proxy for a descendant that
-    isn't there yet.
 
-    A name with nothing case-able in it (all digits/symbols), or no parent
-    to compare within, teaches nothing — treated as case-SENSITIVE, the
-    safer default: it means the casefold comparison in ``is_under`` is
-    skipped rather than applied on a guess.
+def _fs_case_insensitive(path: Path) -> bool:
+    """True when the filesystem at *path* folds case.
+
+    Swaps the case of an existing entry's name and checks whether the
+    swapped spelling resolves to the same entry. Starts at *path*'s nearest
+    existing ancestor and walks up to the first one whose name has letters
+    to swap: a directory named ``12345`` teaches nothing on its own, and
+    stopping there answered "case-sensitive" on a volume that folds case.
+    The lookup of a name happens in its parent directory, so this reads the
+    volume of that parent — the same volume unless a mount point sits
+    exactly there. No lettered ancestor at all: treated as case-sensitive.
     """
-    target = directory if directory.exists() else directory.parent
-    swapped = target.name.swapcase()
-    if swapped == target.name or not target.parent.exists():
+    current, _ = _existing_prefix(path)
+    while current != current.parent:
+        swapped = current.name.swapcase()
+        if swapped != current.name:
+            return _same_entry(current.parent / swapped, current)
+        current = current.parent
+    return False
+
+
+def _names_match(names: tuple[str, ...], expected: tuple[str, ...], fold: bool) -> bool:
+    if len(names) < len(expected):
         return False
-    variant = target.parent / swapped
-    return _same_entry(variant, target)
+    if fold:
+        return all(a.casefold() == b.casefold() for a, b in zip(names, expected))
+    return names[:len(expected)] == expected
 
 
 def is_under(path: Path, directory: Path) -> bool:
-    """True when *path* resolves under *directory* — by FILESYSTEM IDENTITY,
-    not path text, so a case variant of any segment (``CONFIG.JSON``,
-    ``Config.json.d``, ``.DURIN``) cannot slip past a guard written against
-    the canonical spelling: on a case-insensitive filesystem (macOS APFS by
-    default, most Windows volumes) the OS itself treats those as the exact
-    same entry as the real one, so a plain text/``relative_to`` comparison
-    (which durin used to rely on here) never even sees the collision.
+    """True when *path* is *directory* or lies under it — by FILESYSTEM
+    IDENTITY, not path text, so a case variant of any segment
+    (``CONFIG.JSON``, ``Config.json.d``, ``.APPROVALS``) cannot slip past a
+    guard written against the canonical spelling on a case-insensitive
+    filesystem (macOS APFS by default, most Windows volumes).
 
-    Walks every ancestor of *path* that already exists on disk (*path*
-    itself included, when it exists) and checks each against *directory*
-    for identity. When *path* does not exist at all yet — the target is a
-    brand-new file under a GUARDED FILE's own name (``config.json`` itself,
-    not a directory it lives under) — no ancestor walk can "see" it to stat
-    it, so it is instead proven identical by comparing the parent directory
-    (by identity) plus the basename (casefolded, since that's exactly what a
-    case-insensitive filesystem does when it eventually creates the file).
-
-``directory`` not existing on disk at all is handled two ways: a not-yet-
-    created ordinary directory (a workspace's own session work dir) has no
-    reserved name to defend, so it degrades to the previous, purely textual
-    containment check; a guarded FILE (``config.json`` and friends) is a
-    small, fixed, always-reserved set of names, so the parent+casefold
-    comparison below still applies even before durin has ever written it (a
-    fresh instance) — every guarded DIRECTORY is created eagerly by its own
-    caller before this ever runs (see ``protected_durin_store_paths`` and
-    ``filesystem._resolve_write``), so it never needs this fallback.
-
-    The casefold comparison only fires when ``_fs_case_insensitive(directory)``
-    says this filesystem actually folds case for that name — it must, since
-    on an ordinary case-SENSITIVE filesystem a differently-cased path is a
-    genuinely different, unrelated file (this is also what keeps a
-    restrict_to_workspace check from treating ``<home>/WORKSPACE`` as inside
-    ``<home>/workspace`` on such a filesystem).
+    Either path may not exist yet (a fresh workspace has no ``.approvals/``,
+    a fresh instance no ``config.json``), so each is split into its nearest
+    existing ancestor plus the components that do not exist. *path* is
+    under *directory* when some existing ancestor of *path* is the same
+    entry as *directory*'s existing ancestor (``_same_entry``), and the
+    components of *path* below that point begin with *directory*'s missing
+    components — compared by name, casefolded only when that filesystem
+    folds case (on a case-sensitive one ``.APPROVALS`` and ``.approvals``
+    are two unrelated directories). Symlinks are resolved on both sides.
     """
-    directory = directory.resolve()
-    for ancestor in (path, *path.parents):
-        if ancestor.exists() and directory.exists() and _same_entry(ancestor, directory):
+    t_base, t_rest = _existing_prefix(path)
+    g_base, g_rest = _existing_prefix(directory)
+    fold: bool | None = None
+    for ancestor in (t_base, *t_base.parents):
+        if not _same_entry(ancestor, g_base):
+            continue
+        if not g_rest:
             return True
-    if not path.exists():
-        parent, gparent = path.parent, directory.parent
-        if (parent.exists() and gparent.exists() and _same_entry(parent, gparent)
-                and _fs_case_insensitive(directory)
-                and path.name.casefold() == directory.name.casefold()):
+        if fold is None:
+            fold = _fs_case_insensitive(g_base)
+        below = t_base.relative_to(ancestor).parts + t_rest
+        if _names_match(below, g_rest, fold):
             return True
-    if not directory.exists():
-        try:
-            path.relative_to(directory)
-            return True
-        except ValueError:
-            return False
     return False
 
 

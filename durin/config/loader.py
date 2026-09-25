@@ -288,13 +288,10 @@ def _load_config_uncached(path: Path) -> Config:
                 logger.warning("Using default configuration.")
             _apply_ssrf_whitelist(config)
             return config
-        # The directory exists but holds no topic files at all yet — an
-        # empty config.json.d/ can appear without ever being migrated into
-        # (the write guard creates it eagerly so a case-variant write has a
-        # real target to compare filesystem identity against; see
-        # path_utils.protected_durin_store_paths). Falling through to Path B
-        # below instead of returning defaults here matters ONLY when a
-        # monolith with real settings is still sitting on disk — an empty
+        # The directory exists but holds no topic files at all yet (created
+        # ahead of a save that never happened, or emptied by hand). Fall
+        # through to Path B instead of returning defaults: a monolith with
+        # real settings may still be sitting on disk, and an empty
         # directory must never shadow it.
 
     # Path B: legacy monolith exists (or Path A's split dir was empty).

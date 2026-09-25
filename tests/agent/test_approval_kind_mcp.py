@@ -126,9 +126,9 @@ def test_enable_snapshot_shows_a_drifted_env_the_bare_target_would_hide():
 @pytest.mark.asyncio
 async def test_enable_applies_exactly_the_reviewed_snapshot_not_whatever_is_on_disk():
     """The executor must not trust config.json at run time: even if it
-    drifted again after the request was filed, ``apply`` writes the
-    reviewed snapshot back first, so the server ends up running EXACTLY
-    what was shown, not a mix of the two."""
+    drifted again after the request was filed, ``apply`` enables with the
+    reviewed snapshot itself, so the server ends up running EXACTLY what
+    was shown, not a mix of the two."""
     _seed({"x": MCPServerConfig(
         command="npx", env={"NODE_OPTIONS": "--require /tmp/implant.js"}, enabled=False)})
     p = mk.prepare_enable("x")
@@ -180,21 +180,48 @@ async def test_a_given_handle_is_used():
     calls = []
 
     class _Svc:
-        async def update(self, cmd, principal):
-            calls.append(("update", cmd.name))
-            return {"name": cmd.name, "status": "disabled"}
-
-        async def enable(self, cmd, principal):
-            calls.append(("enable", cmd.name))
+        async def enable(self, cmd, principal, *, config=None):
+            calls.append(("enable", cmd.name, config.command if config else None))
             return {"name": cmd.name, "status": "connected"}
 
     _seed({"x": MCPServerConfig(command="npx", enabled=False)})
     p = mk.prepare_enable("x")
     out = await ex.execute("/ws", _record(p), ex.ExecDeps(mcp=_Svc()))
-    # enable now writes its reviewed snapshot back (via update) before
-    # actually enabling, so both calls go through the SAME given handle.
-    assert calls == [("update", "x"), ("enable", "x")]
+    # One call on the given handle, carrying the reviewed snapshot itself.
+    assert calls == [("enable", "x", "npx")]
     assert out["result"]["status"] == "connected" and "note" not in out
+
+
+@pytest.mark.asyncio
+async def test_enable_connects_the_reviewed_snapshot_even_if_the_disk_changes_first():
+    """Another writer lands on config.json right after the executor persists
+    the reviewed snapshot: what gets CONNECTED must still be the snapshot,
+    never a fresh re-read of the disk."""
+    from durin.service.mcp import McpService
+
+    connected = []
+
+    class _Runtime:
+        def live_status(self):
+            return {}
+
+        def connect_errors(self):
+            return {}
+
+        def mark_approved(self, name, cfg):
+            # runs between the executor's write and its connect
+            _seed({name: MCPServerConfig(command="evil", args=["--pwn"], enabled=True)})
+
+        async def connect(self, name, cfg):
+            connected.append((name, cfg.command, list(cfg.args), dict(cfg.env)))
+
+    _seed({"x": MCPServerConfig(
+        command="npx", args=["-y", "@x/srv"], env={"LOG_LEVEL": "debug"}, enabled=False)})
+    p = mk.prepare_enable("x")
+
+    await ex.execute("/ws", _record(p), ex.ExecDeps(mcp=McpService(mcp_runtime=_Runtime())))
+
+    assert connected == [("x", "npx", ["-y", "@x/srv"], {"LOG_LEVEL": "debug"})]
 
 
 class _LocalDetail:

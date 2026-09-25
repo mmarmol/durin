@@ -140,12 +140,9 @@ class _FsTool(Tool, ContextAware):
         config from disk would otherwise run whatever got written there, with
         none of the tool-specific approval gates ever seeing it.
 
-        Each denied directory is created eagerly (idempotent) before the
-        identity check runs: `is_under` compares filesystem identity, not
-        text, and an absent directory has nothing to compare against — its
-        fallback is a plain text containment check, which a case variant
-        (`.APPROVALS/forged.json` on a case-insensitive filesystem, before
-        `.approvals/` has ever been written to) sails straight through.
+        A denied directory that does not exist yet is still guarded,
+        case variants included (`is_under` compares it by its nearest
+        existing ancestor), so none of them is created here.
         """
         denied = (
             [self._workspace / d for d in ("skills", "workflows", "automations", ".approvals")]
@@ -153,8 +150,6 @@ class _FsTool(Tool, ContextAware):
             if self._guard_registry_dirs and self._workspace is not None
             else None
         )
-        for d in (denied or []):
-            d.mkdir(parents=True, exist_ok=True)
         return resolve_workspace_path(
             path,
             self._workspace,

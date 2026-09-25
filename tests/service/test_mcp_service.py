@@ -341,6 +341,31 @@ async def test_disable_persists_and_disconnects_when_live(config_path) -> None:
     assert detail.status == "disabled"
 
 
+async def test_enable_with_a_config_persists_and_connects_exactly_that_config(config_path) -> None:
+    """An approval executor enables with the snapshot a person reviewed: that
+    object is what gets persisted and connected, not a later re-read."""
+    _seed({"e": MCPServerConfig(command="old", enabled=False)})
+    reviewed = MCPServerConfig(command="npx", args=["-y", "@x/e"], env={"A": "1"}, enabled=True)
+    runtime = _FakeRuntime()
+    detail = await McpService(mcp_runtime=runtime).enable(
+        McpServerNameCommand(name="e"), LOCAL, config=reviewed
+    )
+    stored = _stored()["e"]
+    assert (stored.enabled, stored.command, stored.args, stored.env) == (
+        True, "npx", ["-y", "@x/e"], {"A": "1"})
+    assert runtime.connected == [("e", reviewed)]
+    assert runtime.approved_config("e") is reviewed
+    assert detail.enabled is True
+
+
+async def test_enable_with_a_config_still_needs_the_server_configured(config_path) -> None:
+    with pytest.raises(NotFoundError):
+        await McpService().enable(
+            McpServerNameCommand(name="ghost"), LOCAL,
+            config=MCPServerConfig(command="npx", enabled=True))
+    assert "ghost" not in _stored()
+
+
 async def test_enable_without_runtime_persists(config_path) -> None:
     _seed({"e": MCPServerConfig(url="https://e/mcp", enabled=False)})
     detail = await McpService().enable(McpServerNameCommand(name="e"), LOCAL)

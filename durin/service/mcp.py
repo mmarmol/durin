@@ -824,14 +824,22 @@ class McpService:
             await self._runtime.disconnect(cmd.name)
         return McpOkResult(ok=True)
 
-    def _set_enabled(self, name: str, enabled: bool) -> MCPServerConfig:
-        """Persist a server's enabled flag; return the (mutated) config."""
+    def _set_enabled(
+        self, name: str, enabled: bool, config: MCPServerConfig | None = None
+    ) -> MCPServerConfig:
+        """Persist a server's enabled flag; return the (mutated) config.
+
+        With *config*, that object replaces the stored entry in the same
+        write and is the one returned, so the caller connects exactly it.
+        """
         from durin.config.loader import get_config_path, load_config, save_config
 
         cfg = load_config()
-        sc = cfg.tools.mcp_servers.get(name)
-        if sc is None:
+        if name not in cfg.tools.mcp_servers:
             raise NotFoundError("no such MCP server", details={"name": name})
+        if config is not None:
+            cfg.tools.mcp_servers[name] = config
+        sc = cfg.tools.mcp_servers[name]
         sc.enabled = enabled
         save_config(cfg, get_config_path())
         return sc
@@ -845,10 +853,19 @@ class McpService:
         summary="Enable a server and connect it",
     )
     async def enable(
-        self, cmd: McpServerNameCommand, principal: Principal
+        self,
+        cmd: McpServerNameCommand,
+        principal: Principal,
+        *,
+        config: MCPServerConfig | None = None,
     ) -> McpServerDetail:
+        # ``config`` is for an approval executor enabling the snapshot a
+        # person reviewed: it is persisted and connected as that object, so
+        # a write landing on config.json in between cannot change what runs.
         principal.require(Scope.MCP_WRITE)
-        sc = self._set_enabled(cmd.name, True)
+        if config is not None:
+            _validate_upsert(cmd.name, config)
+        sc = self._set_enabled(cmd.name, True, config)
         if self._runtime is not None:
             self._runtime.mark_approved(cmd.name, sc)
             await self._runtime.connect(cmd.name, sc)

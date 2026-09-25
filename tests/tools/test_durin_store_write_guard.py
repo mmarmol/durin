@@ -81,3 +81,30 @@ async def test_write_file_still_works_in_the_workspace(tmp_path, durin_home):
     out = await tool.execute(path="notes.txt", content="hi")
     assert "Successfully wrote" in out
     assert (ws / "notes.txt").read_text(encoding="utf-8") == "hi"
+
+
+@pytest.mark.asyncio
+async def test_an_agent_write_keeps_a_single_file_config_single_file(tmp_path, durin_home):
+    """The guard must not create ``config.json.d/`` to have something to
+    compare against: an empty split dir makes every "is the config split?"
+    reader (``read_persisted_config``, ``durin config set``, backups, the
+    secrets migration) treat a single-file config as split, and the next
+    ``config set`` overwrote the user's config with the split marker."""
+    import json
+
+    from durin.config.loader import _is_split_layout, read_persisted_config
+
+    (durin_home / "config.json").write_text(
+        json.dumps({"agents": {"defaults": {"model": "custom-model-KEEP"}}}), encoding="utf-8")
+    ws = tmp_path / "ws"
+    ws.mkdir()
+
+    out = await WriteFileTool(workspace=ws).execute(path="notes.txt", content="hi")
+    assert "Successfully wrote" in out
+    refused = await WriteFileTool(workspace=ws).execute(
+        path=str(durin_home / "config.json.d" / "tools.json"), content="{}")
+    assert "durin's configuration is changed by the person" in refused
+
+    assert sorted(p.name for p in durin_home.iterdir()) == ["config.json"]
+    assert _is_split_layout() is False
+    assert read_persisted_config()["agents"]["defaults"]["model"] == "custom-model-KEEP"

@@ -73,9 +73,4 @@ async def test_agent_writes_land_in_session_work_dir(tmp_path):
     # Nothing leaked to the workspace root.
     assert not (workspace / "report.md").exists()
     assert not (workspace / "out.txt").exists()
-    # The write guard eagerly creates its own protected directories
-    # (skills/, workflows/, automations/, .approvals/, .durin/) so a
-    # case-variant write always has a real target to compare filesystem
-    # identity against — expected clutter here, not a work-dir leak.
-    guard_dirs = {"skills", "workflows", "automations", ".approvals", ".durin"}
-    assert {p.name for p in workspace.iterdir()} - guard_dirs == {"work"}
+    assert [p.name for p in workspace.iterdir()] == ["work"]
