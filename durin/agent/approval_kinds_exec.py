@@ -20,11 +20,12 @@ It runs only inside the turn that asked. ``ExecTool`` passes its own runner as
 ``prepare`` has redacted it into the record. The executor re-redacts that
 literal and checks it against the recorded (redacted) command: a match
 confirms the turn is running the same command the person approved, without
-the literal ever needing to be on disk. Either handle missing — no in-turn
-runner, or no literal to run — fails with a clear message: approving the
-record from anywhere else (Pending, the CLI, the API) has no live turn behind
-it, and a shell command replayed outside the run that needed it has no
-defined meaning anyway.
+the literal ever needing to be on disk. Approving the record from anywhere
+else (``durin approvals``, a webui click after the turn stopped waiting) is
+refused by ``approval.decide`` before the record changes: nothing outside the
+turn holds the literal, and a shell command replayed outside the run that
+needed it has no defined meaning anyway. The executor still refuses to run
+with either handle missing, so no other path can run it either.
 
 The command's output goes back to the turn the same way, in memory, as
 ``deps.extra["exec_output"]``; the record's result is only ``{"ran": True}``.

@@ -121,7 +121,9 @@ AskFn = Callable[[dict], Awaitable[str | None]]
 
 @dataclass(frozen=True)
 class Outcome:
-    status: str  # applied | rejected | pending | failed | stale | refused
+    # applied | rejected | pending | failed | stale | refused, or approved
+    # while another process is still carrying out a decision made meanwhile.
+    status: str
     record: dict | None = None
     result: dict | None = None
     message: str = ""
@@ -228,6 +230,13 @@ async def request(workspace: Path | str, prepared: Prepared, *, session_key: str
         return _pending_outcome(record, asked=False, api_input=turn_has_api_input())
     answer = await ask(record)
     if answer not in ("approve", "reject"):
+        # The wait ended with no verdict for this turn (a timeout, a fall
+        # back). Someone outside it may have decided the record meanwhile —
+        # the CLI, from its own process, cannot reach this turn's waiter —
+        # so report what the record came to rather than "still pending".
+        current = approval_store.get(workspace, record["id"])
+        if current is not None and current.get("status") != "pending":
+            return _decided_meanwhile(current)
         return _pending_outcome(record, asked=True)
     # A verdict handed off from `decide` (CLI, webui click) carries its real
     # decider; a verdict typed straight into this chat has none queued, so it
@@ -257,6 +266,42 @@ async def _apply_decision(workspace: Path | str, approval_id: str, decision: str
     return await _run_approved(workspace, rec, deps)
 
 
+def _decider_label(decided_by: dict | None) -> str:
+    """Who decided a record, in words the model can repeat to the person."""
+    if not decided_by:
+        return "someone outside this chat"
+    kind = decided_by.get("kind") or "someone"
+    channel = decided_by.get("channel")
+    return f"the {kind} via {channel}" if channel else f"the {kind}"
+
+
+def _decided_meanwhile(rec: dict) -> Outcome:
+    """What a request decided outside the turn that asked came to, read from
+    its record once that turn's wait ended."""
+    who = _decider_label(rec.get("decided_by"))
+    summary = rec.get("summary") or rec.get("id")
+    status = rec.get("status")
+    if status == "applied":
+        return Outcome("applied", rec, rec.get("result"),
+                       f"Done: {summary} — approved by {who} while this chat waited.")
+    if status == "rejected":
+        return Outcome("rejected", rec, None, (
+            f"Declined by {who}: {summary}. Do not retry, and do not reach the same "
+            "effect another way."))
+    if status == "failed":
+        error = (rec.get("result") or {}).get("error") or "unknown error"
+        return Outcome("failed", rec, None,
+                       f"Approved by {who}, but running it failed: {error}")
+    if status == "approved":
+        # Approved and still being carried out by whoever decided it.
+        return Outcome("approved", rec, None, (
+            f"Approved by {who}: {summary} is being carried out outside this chat; "
+            "`durin approvals --all` shows how it ends. Do not retry it."))
+    return Outcome("stale", rec, None, (
+        f"Not done: {summary} — the request closed as {status} while this chat waited. "
+        "Ask again if it is still needed."))
+
+
 def _already_decided(workspace: Path | str, approval_id: str) -> Outcome:
     rec = approval_store.get(workspace, approval_id)
     if rec is None:
@@ -265,13 +310,24 @@ def _already_decided(workspace: Path | str, approval_id: str) -> Outcome:
                    f"Approval {approval_id} was already decided ({rec.get('status')}).")
 
 
+# Why an exec request cannot be approved from outside the turn that asked:
+# the literal command exists only in that turn's memory (the record holds a
+# redacted copy), so nothing else could run it.
+_EXEC_OUT_OF_TURN = ("an exec request can only be approved in the chat that asked; "
+                     "it closes when that turn stops waiting")
+
+
 async def decide(workspace: Path | str, approval_id: str, decision: str, *,
                  decided_by: dict, deps: ExecDeps) -> Outcome:
-    """Resolve a request from outside the turn that filed it (Pending, CLI, API,
-    a webui click). A pending record past its TTL is expired here instead of
-    decided, since a person could otherwise approve a stale request nobody
-    re-checked. If that turn is still waiting on it, hand the verdict to the
-    waiter so the turn runs it and continues. Otherwise decide and run here."""
+    """Resolve a request from outside the turn that filed it (``durin
+    approvals``, a webui click). A pending record past its TTL is expired
+    here instead of decided, since a person could otherwise approve a stale
+    request nobody re-checked. If that turn is still waiting on it in this
+    process (a webui click on its card), hand the verdict to the waiter so
+    the turn runs it and continues. Otherwise decide and run it here; a turn
+    in another process still waiting on it sees the result when its wait
+    ends. An exec request is approved only by its own turn: approving one
+    from here is refused and the record is left as it was."""
     if decision not in ("approve", "reject"):
         return Outcome("refused", None, None, f"Unknown decision {decision!r}.")
     rec = approval_store.get(workspace, approval_id)
@@ -302,6 +358,12 @@ async def decide(workspace: Path | str, approval_id: str, decision: str, *,
         # No live waiter actually consumed it (e.g. it just finished on its
         # own) — nothing will ever pop this entry, so drop it here.
         _HANDOFF_DECIDED_BY.pop(approval_id, None)
+    if (decision == "approve" and rec.get("kind") == "exec_command"
+            and rec.get("status") == "pending"
+            and (deps.exec_run is None or not deps.extra.get("exec_command"))):
+        # Refused before the record moves: approving it would only reach
+        # "approved" and then fail, since no literal command is here to run.
+        return Outcome("refused", rec, None, _EXEC_OUT_OF_TURN)
     return await _apply_decision(workspace, approval_id, decision,
                                  decided_by=decided_by, deps=deps)
 

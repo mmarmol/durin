@@ -86,9 +86,13 @@ async def test_typed_reply_in_chat_records_the_chat_user_not_a_hand_off(tmp_path
 
 @pytest.mark.asyncio
 async def test_decide_hand_off_to_a_waiting_turn_records_the_real_decider(tmp_path):
-    # The turn's `ask` mirrors the production chat asker: it registers a live
-    # `pending_answers` waiter and blocks on it, so `decide`'s `resolve` call
-    # is what actually delivers the verdict back into `request`.
+    # A webui Approve click on the card of a turn still waiting on it: the
+    # socket handler and the turn share one process, so `decide` hands the
+    # verdict to the turn's live `pending_answers` waiter. The turn's `ask`
+    # mirrors the production chat asker, registering that waiter and blocking
+    # on it, so `decide`'s `resolve` call is what actually delivers the
+    # verdict back into `request`. (The CLI runs in its own process and can
+    # never reach this waiter.)
     session_key = "websocket:s10"
 
     async def ask(record):
@@ -102,13 +106,60 @@ async def test_decide_hand_off_to_a_waiting_turn_records_the_real_decider(tmp_pa
     assert rid is not None
 
     handoff = await approval.decide(
-        tmp_path, rid, "approve", decided_by={"kind": "operator", "channel": "cli"},
+        tmp_path, rid, "approve", decided_by={"kind": "user", "channel": "websocket"},
         deps=ex.ExecDeps())
     assert handoff.status == "pending" and "waiting turn" in handoff.message
 
     result = await task
     assert result.status == "applied" and len(RUNS) == 1
-    assert result.record["decided_by"] == {"kind": "operator", "channel": "cli"}
+    assert result.record["decided_by"] == {"kind": "user", "channel": "websocket"}
+
+
+def _asker_decided_elsewhere(tmp_path, decision):
+    """A turn's asker whose wait ends with no verdict (a timeout, a fall
+    back) after someone outside the turn decided the record meanwhile — the
+    CLI, which runs in its own process and cannot reach the waiter."""
+    async def ask(record):
+        await approval.decide(tmp_path, record["id"], decision,
+                              decided_by={"kind": "operator", "channel": "cli"},
+                              deps=ex.ExecDeps())
+        return None
+    return ask
+
+
+@pytest.mark.asyncio
+async def test_a_turn_that_stops_waiting_reports_an_approval_made_meanwhile(tmp_path):
+    out = await approval.request(tmp_path, PREP, session_key="websocket:s11",
+                                 deps=ex.ExecDeps(),
+                                 ask=_asker_decided_elsewhere(tmp_path, "approve"))
+    assert out.status == "applied"
+    assert len(RUNS) == 1  # run once, by the CLI; the turn did not run it again
+    assert out.record["decided_by"] == {"kind": "operator", "channel": "cli"}
+    assert out.result == {"ok": True}
+    assert "operator via cli" in out.message and "pending" not in out.message
+
+
+@pytest.mark.asyncio
+async def test_a_turn_that_stops_waiting_reports_a_rejection_made_meanwhile(tmp_path):
+    out = await approval.request(tmp_path, PREP, session_key="websocket:s12",
+                                 deps=ex.ExecDeps(),
+                                 ask=_asker_decided_elsewhere(tmp_path, "reject"))
+    assert out.status == "rejected" and RUNS == []
+    assert "operator via cli" in out.message
+    assert "do not retry" in out.message.lower()
+
+
+@pytest.mark.asyncio
+async def test_a_turn_that_stops_waiting_reports_a_run_that_failed_meanwhile(tmp_path, monkeypatch):
+    async def _boom(ws, payload, deps):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setitem(ex._REGISTRY, "skill_edit", (lambda ws, payload: STATE["hash"], _boom))
+    out = await approval.request(tmp_path, PREP, session_key="websocket:s13",
+                                 deps=ex.ExecDeps(),
+                                 ask=_asker_decided_elsewhere(tmp_path, "approve"))
+    assert out.status == "failed"
+    assert "disk full" in out.message and "operator via cli" in out.message
 
 
 @pytest.mark.asyncio

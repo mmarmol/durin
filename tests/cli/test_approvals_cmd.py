@@ -191,3 +191,109 @@ def test_discard_missing_id_exits_nonzero(tmp_path, monkeypatch):
     ws.mkdir()
     out = runner.invoke(app, ["approvals", "discard", "nope"])
     assert out.exit_code == 1
+
+
+_DEPS_SPEC = [{"kind": "pip", "value": "requests", "command": "pip install requests",
+               "needs_privileges": False}]
+
+
+def _deps_record(ws, monkeypatch):
+    """A real skill_deps record, as the skill_install_deps tool files it in a
+    context with no person (a cron run)."""
+    monkeypatch.setattr("durin.agent.skills_import.runnable_install_specs",
+                        lambda _d: list(_DEPS_SPEC))
+    kinds.register_all()
+    p = kinds.prepare_skill_deps(ws, "demo", list(_DEPS_SPEC))
+    return st.create(ws, kind=p.kind, summary=p.summary, detail=p.detail, payload=p.payload,
+                     change_hash=p.change_hash, session_key="cron:x", context="autonomous")
+
+
+def test_approve_skill_deps_runs_the_install_through_an_exec_runner(tmp_path, monkeypatch):
+    """The CLI builds the exec tool the gateway builds, from the loaded config,
+    and runs the install through its non-asking runner — the same guards
+    (deny rules, the hard floor, the workspace boundary) apply."""
+    from durin.agent.tools.shell import ExecTool
+
+    monkeypatch.setenv("DURIN_HOME", str(tmp_path))
+    monkeypatch.setattr("durin.cli.commands._stdin_is_interactive", lambda: True)
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    rec = _deps_record(ws, monkeypatch)
+    calls = []
+
+    async def _run(self, command, working_dir=None, timeout=None, background=False, *,
+                   approved_rules=frozenset(), ask=False):
+        calls.append({"command": command, "ask": ask, "working_dir": self.working_dir})
+        return "Successfully installed requests\n\nExit code: 0"
+
+    monkeypatch.setattr(ExecTool, "_run", _run)
+
+    out = runner.invoke(app, ["approvals", "approve", rec["id"]])
+    assert out.exit_code == 0, out.output
+    assert calls == [{"command": "pip install requests", "ask": False,
+                      "working_dir": str(ws)}]
+    stored = st.get(ws, rec["id"])
+    assert stored["status"] == "applied"
+    assert stored["decided_by"] == {"kind": "operator", "channel": "cli"}
+
+
+def test_approve_refuses_before_touching_the_record_when_no_runner_can_be_built(
+    tmp_path, monkeypatch,
+):
+    from durin.agent.tools.shell import ExecTool
+
+    monkeypatch.setenv("DURIN_HOME", str(tmp_path))
+    monkeypatch.setattr("durin.cli.commands._stdin_is_interactive", lambda: True)
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    rec = _deps_record(ws, monkeypatch)
+
+    def _broken(cls, ctx):
+        raise RuntimeError("bad exec config")
+
+    monkeypatch.setattr(ExecTool, "create", classmethod(_broken))
+
+    out = runner.invoke(app, ["approvals", "approve", rec["id"]])
+    assert out.exit_code == 1
+    assert "bad exec config" in out.output
+    stored = st.get(ws, rec["id"])
+    assert stored["status"] == "pending" and stored["decided_by"] is None
+
+
+def test_approve_of_an_exec_request_is_refused_and_leaves_it_pending(tmp_path, monkeypatch):
+    from durin.agent import approval_kinds_exec as kx
+
+    monkeypatch.setenv("DURIN_HOME", str(tmp_path))
+    monkeypatch.setattr("durin.cli.commands._stdin_is_interactive", lambda: True)
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    p = kx.prepare(command="rm -rf build", cwd=str(ws), rules=(r"\brm\s+-[rf]{1,2}\b",),
+                   session_key="websocket:c1", timeout=None, background=False)
+    rec = st.create(ws, kind=p.kind, summary=p.summary, detail=p.detail, payload=p.payload,
+                    change_hash=p.change_hash, session_key="websocket:c1",
+                    context="interactive")
+
+    out = runner.invoke(app, ["approvals", "approve", rec["id"]])
+    assert out.exit_code == 1
+    assert "only be approved in the chat that asked" in out.output
+    assert st.get(ws, rec["id"])["status"] == "pending"
+
+
+def test_approve_prints_the_executor_note(tmp_path, monkeypatch):
+    """With no live gateway handle the MCP change is saved to config only;
+    the person at the terminal is told when it takes effect."""
+    from durin.agent import approval_kinds_mcp as mk
+
+    monkeypatch.setenv("DURIN_HOME", str(tmp_path))
+    monkeypatch.setattr("durin.cli.commands._stdin_is_interactive", lambda: True)
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    p = mk.prepare_upsert("add", "fs", {"command": "npx", "args": ["-y", "@x/fs"]})
+    rec = st.create(ws, kind=p.kind, summary=p.summary, detail=p.detail, payload=p.payload,
+                    change_hash=p.change_hash, session_key="cron:x", context="autonomous")
+
+    out = runner.invoke(app, ["approvals", "approve", rec["id"]])
+    assert out.exit_code == 0, out.output
+    assert st.get(ws, rec["id"])["status"] == "applied"
+    assert "Done:" in out.output
+    assert "restarts" in out.output and "reconnected" in out.output

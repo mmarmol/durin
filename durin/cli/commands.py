@@ -3505,10 +3505,30 @@ approvals_app = typer.Typer(
 app.add_typer(approvals_app, name="approvals")
 
 
-def _approvals_workspace(ctx: typer.Context) -> Path:
+def _approvals_config(ctx: typer.Context) -> Config:
     opts = ctx.obj or {}
-    cfg = _load_runtime_config(opts.get("config"), opts.get("workspace"))
-    return Path(cfg.workspace_path).expanduser()
+    return _load_runtime_config(opts.get("config"), opts.get("workspace"))
+
+
+def _approvals_workspace(ctx: typer.Context) -> Path:
+    return Path(_approvals_config(ctx).workspace_path).expanduser()
+
+
+def _approvals_exec_deps(cfg: Config) -> Any:
+    """Handles for running an approved request from this terminal.
+
+    The exec tool is built from the loaded config the way the gateway builds
+    it, and only its non-asking runner is handed over, so a dependency or
+    runtime install runs past the same guards (deny rules, the hard floor,
+    the workspace boundary) and can never open a second approval. There is
+    no live MCP handle here: an MCP change is saved to config, and the
+    executor says when the gateway applies it."""
+    from durin.agent.approval_executors import ExecDeps
+    from durin.agent.tools.context import ToolContext
+    from durin.agent.tools.shell import ExecTool
+
+    tool_ctx = ToolContext(config=cfg.tools, workspace=str(cfg.workspace_path), app_config=cfg)
+    return ExecDeps(exec_run=ExecTool.create(tool_ctx)._run)
 
 
 def _approval_age(requested_at: str) -> str:
@@ -3591,11 +3611,30 @@ def _approvals_decide(ctx: typer.Context, approval_id: str, decision: str) -> No
     from durin.agent import approval
     from durin.agent.approval_executors import ExecDeps
 
-    ws = _approvals_workspace(ctx)
+    cfg = _approvals_config(ctx)
+    ws = Path(cfg.workspace_path).expanduser()
+    deps = ExecDeps()
+    if decision == "approve":
+        # Built before the record is touched: a runner that cannot be built
+        # must refuse the approval, never leave the request approved and then
+        # failed for want of it.
+        try:
+            deps = _approvals_exec_deps(cfg)
+        except Exception as exc:  # noqa: BLE001 — any build failure refuses the approval
+            console.print(f"Not approved: could not set up the exec runner: {exc}",
+                          style="red", markup=False)
+            raise typer.Exit(1) from None
+    # This process can never hand a verdict to a turn waiting in the gateway
+    # (its waiters live in the gateway's process): the decision is made and
+    # run here, and a chat turn still waiting on it reads the record when its
+    # wait ends.
     outcome = asyncio.run(approval.decide(
         ws, approval_id, decision,
-        decided_by={"kind": "operator", "channel": "cli"}, deps=ExecDeps()))
-    console.print(outcome.message)
+        decided_by={"kind": "operator", "channel": "cli"}, deps=deps))
+    console.print(outcome.message, markup=False)
+    note = (outcome.result or {}).get("note") if isinstance(outcome.result, dict) else None
+    if note:
+        console.print(note, markup=False)
     if outcome.status in ("refused", "failed", "stale"):
         raise typer.Exit(1)
 

@@ -227,8 +227,9 @@ the same note.
     waiting, it runs the recorded request on the gateway with
     `AgentLoop.approval_exec_deps` (the live `exec` tool and an MCP service
     bound to the live connections), except an `exec_command`, which runs
-    only inside the turn that asked: deciding it later fails without
-    running anything. The decision runs as a background task, so the
+    only inside the turn that asked: approving it later is refused
+    (`refused`, `ok: false`), nothing runs, and the record is left as it
+    was until that turn closes it. The decision runs as a background task, so the
     socket keeps serving frames. The reply is an `approval_decided` event
     (`request_id`, `approval_id`, `ok`, `status`, `message`), where `status`
     `pending` means the waiting turn took it. When the socket closes, the

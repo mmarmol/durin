@@ -250,9 +250,9 @@ async def test_click_hands_the_verdict_to_the_waiting_turn(tmp_path):
 async def test_click_after_the_turn_stopped_waiting_runs_with_the_gateway_handles(
     tmp_path, monkeypatch,
 ):
-    """X1: an out-of-turn click executes with the gateway's live handles for
-    every OTHER kind — retargeted from ``exec_command`` (which never runs
-    out of turn; see the dedicated test below) to ``mcp_change``."""
+    """An out-of-turn click executes with the gateway's live handles for
+    every kind but ``exec_command``, which never runs out of turn (see the
+    dedicated test below); ``mcp_change`` stands in for them here."""
     seen: list = []
 
     async def _execute(workspace, payload, deps):
@@ -275,15 +275,15 @@ async def test_click_after_the_turn_stopped_waiting_runs_with_the_gateway_handle
 
 
 @pytest.mark.asyncio
-async def test_click_after_the_turn_stopped_waiting_on_exec_command_fails_without_running(
+async def test_click_after_the_turn_stopped_waiting_on_exec_command_is_refused(
     tmp_path,
 ):
-    """X1: an ``exec_command`` approval runs only inside the chat turn that
-    asked for it. A click that lands after that turn stopped waiting must not
-    hand the request the gateway's live ``exec_run`` — even though the
-    gateway's own ExecDeps carries one for other, in-turn uses — so nothing
-    ever runs from an out-of-turn click, and the record ends ``failed``
-    (the exec executor's own guard: no in-turn literal, no run)."""
+    """An ``exec_command`` approval runs only inside the chat turn that asked
+    for it. A click that lands after that turn stopped waiting must not hand
+    the request the gateway's live ``exec_run`` — even though the gateway's
+    own ExecDeps carries one for other, in-turn uses. It is refused with the
+    same answer the CLI gets, nothing runs, and the record stays pending
+    until the turn that asked closes it."""
     from durin.agent.approval_kinds_exec import exec_hash
 
     calls: list = []
@@ -304,9 +304,12 @@ async def test_click_after_the_turn_stopped_waiting_on_exec_command_fails_withou
 
     reply = await _decide(channel, ws, approval_id=rec["id"], decision="approve")
 
-    assert reply["ok"] is False and reply["status"] == "failed"
+    assert reply["ok"] is False and reply["status"] == "refused"
+    assert reply["message"] == (
+        "an exec request can only be approved in the chat that asked; "
+        "it closes when that turn stops waiting")
     assert calls == []
-    assert approval_store.get(tmp_path, rec["id"])["status"] == "failed"
+    assert approval_store.get(tmp_path, rec["id"])["status"] == "pending"
 
 
 @pytest.mark.asyncio

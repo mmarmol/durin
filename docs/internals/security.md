@@ -72,7 +72,11 @@ None of them takes a value the model writes as consent: their schemas carry no
    reply the loop parses itself (`parse_approval_reply`), which is also what a
    TUI Approve / Reject row sends. Any other reply, the answer timeout, or a
    webui chat nobody watches ends the wait and leaves the request pending; an
-   exec request that gets no verdict is closed as `expired` instead.
+   exec request that gets no verdict is closed as `expired` instead. When a
+   wait ends with no verdict, the turn re-reads the record first: if someone
+   decided it meanwhile (with `durin approvals`, from its own process), the
+   model is told what it came to — applied, rejected or failed — and by whom,
+   not that it is still pending.
 5. Otherwise the request becomes a durable record in
    `<workspace>/.approvals/<id>.json`, bound by a `change_hash` to what was
    reviewed, and a person decides it later with `durin approvals`. An exec
@@ -134,10 +138,20 @@ A decided record stores who decided it in `decided_by`, with the channel that
 made the call: `{"kind": "operator", "channel": "cli"}` for `durin approvals`
 on the CLI, `{"kind": "user", "channel": "websocket"}` for a webui click,
 `{"kind": "user", "channel": <session key>}` for a reply typed in the chat
-itself, and `{"kind": "judge"}` for the skills judge. A CLI decision or webui
-click that lands while the turn that filed the request is still waiting
-hands its verdict to that turn (`pending_answers`) so it can run there, but
-the record still carries the real decider, not the chat it was asked in. An
+itself, and `{"kind": "judge"}` for the skills judge. A webui click that
+lands while the turn that filed the request is still waiting hands its
+verdict to that turn (`pending_answers`, in the same gateway process) so it
+runs there, and the record still carries the real decider, not the chat it
+was asked in. `durin approvals` runs in its own process and never reaches a
+waiting turn: the CLI decides and runs the request itself, through an exec
+tool built from the loaded config the way the gateway builds it (its
+non-asking runner, so the same guards apply and no second approval opens),
+and a chat turn still waiting on the request sees the result when its wait
+ends. If that runner cannot be built, the approval is refused before the
+record changes. An exec request can only be approved in the chat that
+asked: `approval.decide` refuses to approve one from the CLI or a late webui
+click and leaves the record as it was, since only that turn holds the literal
+command; the record closes when that turn stops waiting. An
 action that `install_policy: auto` allowed files no record; a skill installed
 that way carries `approved_by: policy` in its provenance and commit trailers.
 `durin approvals approve` and `reject` refuse to run without a terminal (TTY),

@@ -2026,7 +2026,9 @@ class WebSocketChannel(BaseChannel):
         attached to. ``approval.decide`` hands the verdict to the turn still
         waiting on it. When that turn stopped waiting (the click came after
         its timeout), ``decide`` runs the recorded request here with the
-        gateway's live handles. That run can take minutes (an MCP install), so
+        gateway's live handles, except an exec request, which only its own
+        turn can approve: that click is refused and the record left as it
+        was. That run can take minutes (an MCP install), so
         it proceeds as a background task and the socket keeps serving frames.
         The ``approval_decided`` event reports the outcome when it lands.
         """

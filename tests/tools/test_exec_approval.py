@@ -131,6 +131,31 @@ async def test_unanswered_request_is_dropped_and_nothing_runs(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_a_rejection_from_outside_the_turn_is_reported_when_the_wait_ends(tmp_path):
+    """`durin approvals reject` runs in its own process and cannot reach the
+    turn's waiter; the turn reads the record when its wait times out and
+    tells the model the command was declined, not that nobody answered."""
+    from durin.agent import approval
+    from durin.agent.approval_executors import ExecDeps
+
+    (tmp_path / "build").mkdir()
+    run = asyncio.create_task(_tool(tmp_path, timeout_s=0.3).execute(
+        command="rm -rf build", working_dir=str(tmp_path)))
+    await _wait_until_asked()
+    [rec] = _records(tmp_path)
+    # Not the in-process hand-off: the waiter is left alone, as the CLI's
+    # separate process would leave it.
+    rejected = await approval._apply_decision(
+        tmp_path, rec["id"], "reject", decided_by={"kind": "operator", "channel": "cli"},
+        deps=ExecDeps())
+    assert rejected.status == "rejected"
+    out = await run
+    assert (tmp_path / "build").is_dir()
+    assert "declined" in out and "did not answer" not in out
+    assert [r["status"] for r in _records(tmp_path)] == ["rejected"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("session_key", ["cron:nightly", "workflow:abc:root", "subagent:x"])
 async def test_autonomous_context_keeps_the_policy_refusal(tmp_path, session_key):
     out = await _tool(tmp_path, session_key=session_key).execute(

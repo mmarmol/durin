@@ -97,8 +97,12 @@ async def test_no_literal_fails_without_running():
         await ex.execute("/ws", {"kind": p.kind, "payload": p.payload}, deps)
 
 
+OUT_OF_TURN = ("an exec request can only be approved in the chat that asked; "
+               "it closes when that turn stops waiting")
+
+
 @pytest.mark.asyncio
-async def test_approving_later_outside_the_turn_fails_without_running(tmp_path):
+async def test_approving_later_outside_the_turn_is_refused_and_leaves_it_pending(tmp_path):
     p = _prep()
     rec = approval_store.create(tmp_path, kind=p.kind, summary=p.summary, detail=p.detail,
                                 payload=p.payload, change_hash=p.change_hash,
@@ -106,22 +110,37 @@ async def test_approving_later_outside_the_turn_fails_without_running(tmp_path):
     out = await approval.decide(tmp_path, rec["id"], "approve",
                                 decided_by={"kind": "operator", "channel": "cli"},
                                 deps=ex.ExecDeps())
-    assert out.status == "failed"
-    assert "inside the chat turn" in out.message
-    assert approval_store.get(tmp_path, rec["id"])["status"] == "failed"
+    assert out.status == "refused"
+    assert out.message == OUT_OF_TURN
+    # Untouched: not approved-then-failed, and no decider stamped on it.
+    stored = approval_store.get(tmp_path, rec["id"])
+    assert stored["status"] == "pending" and stored["decided_by"] is None
 
 
 @pytest.mark.asyncio
-async def test_a_live_but_out_of_turn_exec_run_still_fails_without_running(tmp_path):
-    """A webui click that lands after the turn stopped waiting hands the
-    executor a live exec_run (the gateway's approval_exec_deps()), but never
-    the literal command — only the turn that filed the request holds that.
-    A live runner is not enough: it must still fail, and never run.
+async def test_rejecting_later_outside_the_turn_still_closes_it(tmp_path):
+    """Rejecting runs nothing, so it needs no in-turn runner: the waiting
+    turn, if any, learns of it when its wait ends."""
+    p = _prep()
+    rec = approval_store.create(tmp_path, kind=p.kind, summary=p.summary, detail=p.detail,
+                                payload=p.payload, change_hash=p.change_hash,
+                                session_key="websocket:s", context="interactive")
+    out = await approval.decide(tmp_path, rec["id"], "reject",
+                                decided_by={"kind": "operator", "channel": "cli"},
+                                deps=ex.ExecDeps())
+    assert out.status == "rejected"
+    assert approval_store.get(tmp_path, rec["id"])["status"] == "rejected"
 
-    The runner records its calls instead of raising: ``_run_approved``
-    catches any exception from the executor and records ``failed`` either
-    way, so a raise-based runner cannot tell "never called" apart from
-    "called and blew up" — only an empty ``calls`` list can.
+
+@pytest.mark.asyncio
+async def test_a_live_but_out_of_turn_exec_run_is_still_refused(tmp_path):
+    """A decision from outside the turn may carry a live exec_run (the
+    gateway's approval_exec_deps()), but never the literal command — only the
+    turn that filed the request holds that. A live runner is not enough: it
+    is refused, the record stays pending, and nothing runs.
+
+    The runner records its calls instead of raising, so an empty ``calls``
+    list proves it was never called.
     """
     calls = []
 
@@ -137,6 +156,5 @@ async def test_a_live_but_out_of_turn_exec_run_still_fails_without_running(tmp_p
                                 decided_by={"kind": "user", "channel": "websocket:s"},
                                 deps=ex.ExecDeps(exec_run=run))
     assert calls == []
-    assert out.status == "failed"
-    assert "inside the chat turn" in out.message
-    assert approval_store.get(tmp_path, rec["id"])["status"] == "failed"
+    assert out.status == "refused" and out.message == OUT_OF_TURN
+    assert approval_store.get(tmp_path, rec["id"])["status"] == "pending"

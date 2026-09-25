@@ -87,9 +87,14 @@ durin approvals discard <id>   # delete the record without deciding it
 `approve` and `reject` refuse to run without a real terminal, and the agent's
 shell tool never runs them, so the agent cannot approve its own request. Each
 decided record keeps who decided it: you on the command line, a click in the
-webui, a reply typed in the chat, or the skills judge — even when the click or
-command line hands its verdict to a turn still waiting in a chat, the record
-keeps the real decider, not that chat. A change your `install_policy` already
+webui, a reply typed in the chat, or the skills judge. `approve` runs the
+request right here, with the same shell guards the gateway applies (it
+refuses if it cannot set them up, and the request stays pending); a chat
+still waiting on the same request sees the result when its wait ends, and
+the command prints any note on when the change takes effect (an MCP change
+applies when the gateway restarts or reconnects the server). A shell command
+can only be approved in the chat that asked for it: `approve` refuses it and
+leaves it as it was, and it closes when that chat stops waiting. A change your `install_policy` already
 pre-authorized files no record at all; a skill installed that way is stamped
 `approved_by: policy` instead. A request recorded by an earlier durin version
 is listed as `legacy:mcp` or `legacy:skills` and can only be discarded; ask
