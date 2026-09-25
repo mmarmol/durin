@@ -1994,6 +1994,26 @@
       "sent": "答案已傳送",
       "answered": "已於下方回答"
     },
+    "approval": {
+      "title": "需要你的核准",
+      "hint": "在你決定之前不會執行任何操作。",
+      "approve": "核准",
+      "reject": "拒絕",
+      "sending": "傳送中…",
+      "handedOff": "已傳送 — 代理將繼續。",
+      "applied": "已核准並完成。",
+      "rejected": "已拒絕 — 不會執行。",
+      "verdict": "掃描結論",
+      "findings": "發現的問題",
+      "newFindings": "新發現的問題",
+      "kind": {
+        "skill_install": "安裝技能",
+        "skill_edit": "修改技能",
+        "skill_deps": "安裝技能相依套件",
+        "mcp_change": "修改 MCP 伺服器",
+        "exec_command": "執行命令"
+      }
+    },
     "reqSecret": {
       "placeholder": "貼上密鑰值",
       "save": "儲存",

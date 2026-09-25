@@ -1994,6 +1994,26 @@
       "sent": "답변을 보냈습니다",
       "answered": "아래에 답변함"
     },
+    "approval": {
+      "title": "승인이 필요합니다",
+      "hint": "결정하기 전까지는 아무것도 실행되지 않습니다.",
+      "approve": "승인",
+      "reject": "거부",
+      "sending": "보내는 중…",
+      "handedOff": "보냈습니다 — 에이전트가 계속합니다.",
+      "applied": "승인되어 실행되었습니다.",
+      "rejected": "거부했습니다 — 실행되지 않습니다.",
+      "verdict": "스캔 판정",
+      "findings": "발견 사항",
+      "newFindings": "새 발견 사항",
+      "kind": {
+        "skill_install": "스킬 설치",
+        "skill_edit": "스킬 변경",
+        "skill_deps": "스킬 의존성 설치",
+        "mcp_change": "MCP 서버 변경",
+        "exec_command": "명령 실행"
+      }
+    },
     "reqSecret": {
       "placeholder": "시크릿 값을 붙여넣으세요",
       "save": "저장",

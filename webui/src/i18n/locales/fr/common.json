@@ -1994,6 +1994,26 @@
       "sent": "Réponse envoyée",
       "answered": "Répondu ci-dessous"
     },
+    "approval": {
+      "title": "Approbation requise",
+      "hint": "Rien ne s’exécute tant que vous n’avez pas décidé.",
+      "approve": "Approuver",
+      "reject": "Refuser",
+      "sending": "Envoi…",
+      "handedOff": "Envoyé — l’agent continue.",
+      "applied": "Approuvé et effectué.",
+      "rejected": "Refusé — cela ne sera pas exécuté.",
+      "verdict": "Verdict de l’analyse",
+      "findings": "Constats",
+      "newFindings": "Nouveaux constats",
+      "kind": {
+        "skill_install": "Installer un skill",
+        "skill_edit": "Modifier un skill",
+        "skill_deps": "Installer les dépendances d’un skill",
+        "mcp_change": "Modifier un serveur MCP",
+        "exec_command": "Exécuter une commande"
+      }
+    },
     "reqSecret": {
       "placeholder": "Collez la valeur du secret",
       "save": "Enregistrer",
