@@ -116,6 +116,69 @@ class TestRestartCommand:
             mock_execv.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_restart_journals_the_turns_in_flight_before_exec(self, tmp_path):
+        """os.execv discards everything in memory. /restart must journal the
+        turns in flight first, like a graceful shutdown, or a turn waiting on
+        the user's answer is lost instead of replayed by the new process."""
+        from durin.agent import pending_answers
+        from durin.agent.loop import AgentLoop
+        from durin.agent.tools.ask_user import AskUserQuestionTool
+        from durin.bus.queue import MessageBus
+        from durin.command.builtin import cmd_restart
+        from durin.command.router import CommandContext
+
+        provider = MagicMock()
+        provider.get_default_model.return_value = "test-model"
+        with patch("durin.agent.loop.ContextBuilder"), \
+             patch("durin.agent.loop.SessionManager"), \
+             patch("durin.agent.loop.SubagentManager"):
+            loop = AgentLoop(bus=MessageBus(), provider=provider, workspace=tmp_path)
+        pending_answers.reset()
+        pending_answers.set_consumer_active(True)
+        ask = AskUserQuestionTool(sessions=MagicMock(), blocking=True, answer_timeout_s=60)
+
+        async def fake_dispatch(msg, pending=None):
+            # Park on the real blocking-answer wait, as ask_user_question does.
+            await ask._await_answer(msg.session_key, "q")
+
+        loop._dispatch = fake_dispatch  # type: ignore[method-assign]
+        loop._start_turn_task(
+            InboundMessage(channel="websocket", sender_id="u", chat_id="c1", content="deploy it?"),
+            "websocket:c1",
+        )
+        for _ in range(100):
+            if pending_answers.is_waiting("websocket:c1"):
+                break
+            await asyncio.sleep(0)
+        assert pending_answers.is_waiting("websocket:c1")
+
+        restart = InboundMessage(channel="websocket", sender_id="u", chat_id="c2", content="/restart")
+        ctx = CommandContext(msg=restart, session=None, key=restart.session_key,
+                             raw="/restart", loop=loop)
+        scheduled: list[asyncio.Task] = []
+
+        async def _fast_sleep(_delay: float) -> None:
+            return None
+
+        def _capture_task(coro):
+            task = asyncio.create_task(coro)
+            scheduled.append(task)
+            return task
+
+        fake_asyncio = SimpleNamespace(sleep=_fast_sleep, create_task=_capture_task)
+        try:
+            with patch.dict(os.environ, {}, clear=False), \
+                 patch("durin.command.builtin.asyncio", new=fake_asyncio), \
+                 patch("durin.command.builtin.os.execv") as mock_execv:
+                await cmd_restart(ctx)
+                await scheduled[0]
+        finally:
+            pending_answers.reset()
+
+        mock_execv.assert_called_once()
+        assert [m.content for m in loop._inbound_journal.drain()] == ["deploy it?"]
+
+    @pytest.mark.asyncio
     async def test_restart_intercepted_in_run_loop(self):
         """Verify /restart is handled at the run-loop level, not inside _dispatch."""
         loop, bus = _make_loop()

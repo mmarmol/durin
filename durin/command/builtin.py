@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from loguru import logger
+
 from durin import __version__
 from durin.bus.events import OutboundMessage
 from durin.command.router import CommandContext, CommandRouter
@@ -301,8 +303,10 @@ async def cmd_stop(ctx: CommandContext) -> OutboundMessage:
 
 
 async def cmd_restart(ctx: CommandContext) -> OutboundMessage:
-    """Restart the process in-place via os.execv."""
+    """Restart the process in place via os.execv, after journaling the turns
+    in flight the way a graceful shutdown does."""
     msg = ctx.msg
+    loop = ctx.loop
     set_restart_notice_to_env(
         channel=msg.channel,
         chat_id=msg.chat_id,
@@ -311,6 +315,18 @@ async def cmd_restart(ctx: CommandContext) -> OutboundMessage:
 
     async def _do_restart():
         await asyncio.sleep(1)
+        # execv discards everything in memory: the turns in flight (one
+        # blocked on the user's answer among them) and the messages queued
+        # behind them. Journal them first, as the gateway's graceful shutdown
+        # does, so the new process replays them when it starts.
+        if loop is not None:
+            loop.stop()
+            try:
+                await loop.drain_inbound_for_shutdown()
+            except Exception:
+                logger.exception("/restart: journaling the turns in flight failed")
+            with suppress(Exception):
+                loop.sessions.flush_all()
         os.execv(sys.executable, [sys.executable, "-m", "durin"] + sys.argv[1:])
 
     _spawn_background(_do_restart())
