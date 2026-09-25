@@ -226,10 +226,11 @@ the same note.
     hands the verdict to the waiting turn. When that turn has stopped
     waiting, it runs the recorded request on the gateway with
     `AgentLoop.approval_exec_deps` (the live `exec` tool and an MCP service
-    bound to the live connections), except an `exec_command`, which runs
-    only inside the turn that asked: approving it later is refused
-    (`refused`, `ok: false`), nothing runs, and the record is left as it
-    was until that turn closes it. The decision runs as a background task, so the
+    bound to the live connections). A request those handles cannot run is
+    refused (`refused`, `ok: false`) before the record moves, and nothing
+    runs: an `exec_command`, which runs only inside the turn that asked (the
+    record stays pending until that turn closes it), and a dependency
+    install when exec is disabled. The decision runs as a background task, so the
     socket keeps serving frames. The reply is an `approval_decided` event
     (`request_id`, `approval_id`, `ok`, `status`, `message`), where `status`
     `pending` means the waiting turn took it. When the socket closes, the

@@ -29,10 +29,12 @@ from loguru import logger
 
 from durin.agent import approval_store
 from durin.agent.approval_executors import (
+    ApprovalExecError,
     ExecDeps,
     Prepared,
     current_hash,
     execute,
+    missing_handles,
 )
 
 __all__ = [
@@ -293,6 +295,17 @@ async def _apply_decision(workspace: Path | str, approval_id: str, decision: str
             "same effect another way."))
     if decision != "approve":
         return Outcome("refused", None, None, f"Unknown decision {decision!r}.")
+    current = approval_store.get(workspace, approval_id)
+    if current is not None and current.get("status") == "pending":
+        # Refused before the record moves when this process lacks what the
+        # kind needs to run: approving would only reach "approved" and then
+        # fail. The reason names where it can be approved instead.
+        try:
+            missing = missing_handles(current["kind"], deps)
+        except ApprovalExecError:
+            missing = None  # an unknown kind fails its run below, as before
+        if missing:
+            return Outcome("refused", current, None, missing)
     rec = approval_store.transition(workspace, approval_id, expect=("pending",),
                                     to="approved", decided_by=decided_by)
     if rec is None:
@@ -344,13 +357,6 @@ def _already_decided(workspace: Path | str, approval_id: str) -> Outcome:
                    f"Approval {approval_id} was already decided ({rec.get('status')}).")
 
 
-# Why an exec request cannot be approved from outside the turn that asked:
-# the literal command exists only in that turn's memory (the record holds a
-# redacted copy), so nothing else could run it.
-_EXEC_OUT_OF_TURN = ("an exec request can only be approved in the chat that asked; "
-                     "it closes when that turn stops waiting")
-
-
 async def decide(workspace: Path | str, approval_id: str, decision: str, *,
                  decided_by: dict, deps: ExecDeps) -> Outcome:
     """Resolve a request from outside the turn that filed it (``durin
@@ -360,8 +366,9 @@ async def decide(workspace: Path | str, approval_id: str, decision: str, *,
     process (a webui click on its card), hand the verdict to the waiter so
     the turn runs it and continues. Otherwise decide and run it here; a turn
     in another process still waiting on it sees the result when its wait
-    ends. An exec request is approved only by its own turn: approving one
-    from here is refused and the record is left as it was."""
+    ends. Approving a request whose kind needs a handle *deps* lacks (an exec
+    request outside its own turn, a dependency install with no shell runner)
+    is refused and the record is left as it was."""
     if decision not in ("approve", "reject"):
         return Outcome("refused", None, None, f"Unknown decision {decision!r}.")
     rec = approval_store.get(workspace, approval_id)
@@ -392,12 +399,6 @@ async def decide(workspace: Path | str, approval_id: str, decision: str, *,
         # No live waiter actually consumed it (e.g. it just finished on its
         # own) — nothing will ever pop this entry, so drop it here.
         _HANDOFF_DECIDED_BY.pop(approval_id, None)
-    if (decision == "approve" and rec.get("kind") == "exec_command"
-            and rec.get("status") == "pending"
-            and (deps.exec_run is None or not deps.extra.get("exec_command"))):
-        # Refused before the record moves: approving it would only reach
-        # "approved" and then fail, since no literal command is here to run.
-        return Outcome("refused", rec, None, _EXEC_OUT_OF_TURN)
     return await _apply_decision(workspace, approval_id, decision,
                                  decided_by=decided_by, deps=deps)
 

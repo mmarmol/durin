@@ -6,8 +6,6 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
-from tests.conftest import write_webui_transcript
 from starlette.testclient import TestClient
 from websockets.exceptions import ConnectionClosed
 from websockets.frames import Close
@@ -28,6 +26,7 @@ from durin.channels.websocket import (
 )
 from durin.config.loader import load_config, save_config
 from durin.config.schema import Config
+from tests.conftest import write_webui_transcript
 
 # -- Shared helpers (aligned with test_websocket_integration.py) ---------------
 

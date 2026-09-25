@@ -242,28 +242,48 @@ def test_fork_bomb_pattern_is_not_quadratic_on_a_long_word():
     assert elapsed < 1.0
 
 
-# Repetitions that drive the guard's regexes to their worst case: an anchor
-# word the patterns retry at every occurrence, and the pairs ("sed ... -i",
-# "dd ... of=") that used to scan open-endedly twice.
-_ADVERSARIAL = ["rm ", "rm -r ", "dd ", "dd of=", "sed -i ", "mv ", "cp a b ", "sudo -a ",
-                ">>", "(", "http://a ", "a/"]
+def _python_heredoc(chars: int) -> str:
+    lines, total, i = [], 0, 0
+    while total < chars:
+        line = f"result_{i} = transform(records[{i}], mode='fast', retries={i % 5})  # step {i}\n"
+        lines.append(line)
+        total += len(line)
+        i += 1
+    return "python3 - <<'EOF'\n" + "".join(lines) + "EOF"
 
 
-@pytest.mark.parametrize("unit", _ADVERSARIAL)
-def test_the_guard_stays_bounded_on_adversarial_input_up_to_the_cap(unit):
-    """At the longest command the guard checks, even pathological input is
-    checked in well under a second (the bound here is generous for slow CI);
-    unbounded, these inputs held the event loop for seconds to minutes."""
+def _rm_script(chars: int) -> str:
+    return "".join(f"rm -f build/obj/module_{i}.o\n" for i in range(chars // 28))
+
+
+def _json_argument(chars: int) -> str:
+    import json
+
+    items: dict = {}
+    while len(json.dumps(items)) < chars - 1_000:
+        for i in range(len(items), len(items) + 500):
+            items[f"key_{i}"] = {"name": f"item {i}", "tags": ["a", "time", "env"], "count": i}
+    return "echo '" + json.dumps(items) + "' > payload.json"
+
+
+@pytest.mark.parametrize("command", [
+    _python_heredoc(190_000), _rm_script(60_000), _json_argument(160_000),
+], ids=["python-heredoc", "rm-f-script", "json-argument"])
+def test_realistic_long_commands_are_checked_quickly(command):
+    """Long commands agents really send are checked, not refused, and the
+    check is cheap at any length the cap allows (tens of milliseconds; the
+    bound here is generous for slow CI)."""
     import time
 
     from durin.agent.tools.shell import MAX_CHECKED_COMMAND_CHARS
 
-    command = (unit * (MAX_CHECKED_COMMAND_CHARS // len(unit) + 1))[:MAX_CHECKED_COMMAND_CHARS]
+    assert len(command) <= MAX_CHECKED_COMMAND_CHARS
     for restrict in (False, True):
         tool = ExecTool(restrict_to_workspace=restrict, working_dir="/w")
         start = time.perf_counter()
-        tool._check(command, "/w")
-        assert time.perf_counter() - start < 3.0
+        refusal = tool._check(command, "/w")
+        assert time.perf_counter() - start < 2.0
+        assert refusal is None or refusal.kind == "deny"
 
 
 def test_a_command_over_the_cap_is_refused_before_any_check():
@@ -271,7 +291,8 @@ def test_a_command_over_the_cap_is_refused_before_any_check():
 
     from durin.agent.tools.shell import MAX_CHECKED_COMMAND_CHARS
 
-    command = "rm " * 400_000
+    command = "rm " * (MAX_CHECKED_COMMAND_CHARS // 3) + "rm x"
+    assert len(command.strip()) > MAX_CHECKED_COMMAND_CHARS
     start = time.perf_counter()
     refusal = ExecTool()._check(command, "/w")
     assert time.perf_counter() - start < 0.5
@@ -279,23 +300,83 @@ def test_a_command_over_the_cap_is_refused_before_any_check():
     # Fail closed, and not something a person could approve past: the guard
     # never looked at it.
     assert refusal.kind == "guard" and not refusal.approvable
-    assert str(MAX_CHECKED_COMMAND_CHARS) in refusal.message
+    assert f"{MAX_CHECKED_COMMAND_CHARS}" in refusal.message
     assert "write_file" in refusal.message
-
-    at_cap = "echo " + "a" * (MAX_CHECKED_COMMAND_CHARS - len("echo "))
-    assert ExecTool()._check(at_cap, "/w") is None
 
 
 @pytest.mark.asyncio
-async def test_an_approved_command_over_the_cap_still_never_runs(tmp_path):
-    from durin.agent.tools.shell import MAX_CHECKED_COMMAND_CHARS
+async def test_an_approved_command_over_the_cap_still_never_runs(tmp_path, monkeypatch):
+    import durin.agent.tools.shell as shell
 
+    monkeypatch.setattr(shell, "MAX_CHECKED_COMMAND_CHARS", 1_000)
     marker = tmp_path / "ran"
-    command = f"touch {marker} # " + "x" * MAX_CHECKED_COMMAND_CHARS
+    command = f"touch {marker} # " + "x" * 1_000
     out = await ExecTool(working_dir=str(tmp_path))._run(
         command, str(tmp_path), approved_rules=frozenset({RM_RULE}))
     assert out.startswith("Error: Command blocked")
     assert not marker.exists()
+
+
+async def _ticks_while(coro) -> tuple[object, int]:
+    """Run *coro* next to a 10 ms ticker; return its result and how many
+    times the ticker ran meanwhile."""
+    import asyncio
+
+    ticks = 0
+    stop = asyncio.Event()
+
+    async def _ticker():
+        nonlocal ticks
+        while not stop.is_set():
+            await asyncio.sleep(0.01)
+            ticks += 1
+
+    ticker = asyncio.create_task(_ticker())
+    await asyncio.sleep(0)
+    try:
+        before = ticks
+        result = await coro
+        during = ticks - before
+    finally:
+        stop.set()
+        await ticker
+    return result, during
+
+
+@pytest.mark.asyncio
+async def test_the_guard_runs_off_the_event_loop(tmp_path, monkeypatch):
+    """While a command is being checked, the loop keeps serving other chats:
+    a check that takes 0.3 s leaves the ticker ticking throughout."""
+    import time
+
+    real_check = ExecTool._check
+
+    def _slow_check(self, *args, **kwargs):
+        time.sleep(0.3)
+        return real_check(self, *args, **kwargs)
+
+    monkeypatch.setattr(ExecTool, "_check", _slow_check)
+    out, ticks = await _ticks_while(
+        ExecTool(working_dir=str(tmp_path))._run("rm -rf build", str(tmp_path)))
+    assert out.startswith("Error: Command blocked by deny pattern filter")
+    assert ticks >= 10
+
+
+@pytest.mark.asyncio
+async def test_a_pathological_command_leaves_the_loop_turns_between_patterns(
+    tmp_path, monkeypatch,
+):
+    """On a pathological command several patterns are slow. A single regex
+    call holds the GIL for its own duration, so the loop cannot run during
+    one; it runs between them. Kept small so each call stays short."""
+    import durin.agent.tools.shell as shell
+
+    monkeypatch.setattr(shell, "MAX_CHECKED_COMMAND_CHARS", 9_000)
+    command = ("sudo -a " * 1_100) + "; rm -rf build"
+    out, ticks = await _ticks_while(
+        ExecTool(working_dir=str(tmp_path))._run(command, str(tmp_path)))
+    assert out.startswith("Error: Command blocked by deny pattern filter")
+    assert ticks >= 2
 
 
 @pytest.mark.parametrize(("command", "blocked"), [

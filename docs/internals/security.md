@@ -156,10 +156,16 @@ tool built from the loaded config the way the gateway builds it (its
 non-asking runner, so the same guards apply and no second approval opens),
 and a chat turn still waiting on the request sees the result when its wait
 ends. If that runner cannot be built, the approval is refused before the
-record changes. An exec request can only be approved in the chat that
-asked: `approval.decide` refuses to approve one from the CLI or a late webui
-click and leaves the record as it was, since only that turn holds the literal
-command; the record closes when that turn stops waiting. An
+record changes. Each kind declares what it needs from the handles it runs
+with (`requires`, registered next to its executor in
+`durin/agent/approval_executors.py`), and `approval.decide` checks it before a
+record moves from `pending` to `approved`: a decision made where a handle is
+missing is refused, the record is left as it was, and the refusal says where
+it can be approved. An exec request can only be approved in the chat that
+asked, since only that turn holds the literal command, so the CLI and a late
+webui click are refused; the record closes when that turn stops waiting. A
+dependency install needs a shell runner, so a late webui click on a gateway
+with exec disabled is refused and points to `durin approvals approve`. An
 action that `install_policy: auto` allowed files no record; a skill installed
 that way carries `approved_by: policy` in its provenance and commit trailers.
 `durin approvals approve` and `reject` refuse to run without a terminal (TTY),
@@ -569,11 +575,17 @@ workspace root before any guard runs. An LLM-supplied directory outside the
 workspace is rejected immediately, preventing a caller from using `working_dir`
 as a bypass.
 
-**`_check()`**: refuses first, unchecked, a command longer than
-`MAX_CHECKED_COMMAND_CHARS`: the guard's regexes run on the event loop and
-several are quadratic in the worst case, so an unbounded command could hold
-the loop for seconds. The refusal is not approvable (nothing checked the
-command) and tells the model to put a long script in a file and run it. Then
+**`_check()`**: runs in a worker thread (`_check_off_loop`, via
+`asyncio.to_thread`), so a slow check — a long command, the DNS lookups of the
+private-URL guard — delays its own call while the event loop keeps serving
+other chats between the guard's steps. A single regex call holds the GIL for
+its duration, so the loop runs between pattern calls, not during one. Real
+long commands are cheap (a heredoc of a couple of hundred thousand characters
+checks in tens of milliseconds); only adversarial repetition of an anchor word
+is quadratic for several patterns. A command longer than
+`MAX_CHECKED_COMMAND_CHARS` is refused first, unchecked. The refusal is not
+approvable (nothing checked the command) and tells the model to put a long
+script in a file and run it. Then
 it applies the hard floor, then deny and allow patterns, then
 memory vault protection, then SSRF URL detection, then workspace boundary on
 absolute paths. It returns a `CommandRefusal` naming the kind of refusal and,

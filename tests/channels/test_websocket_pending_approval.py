@@ -313,6 +313,31 @@ async def test_click_after_the_turn_stopped_waiting_on_exec_command_is_refused(
 
 
 @pytest.mark.asyncio
+async def test_click_after_the_turn_stopped_waiting_on_deps_without_exec_is_refused(
+    tmp_path, monkeypatch,
+):
+    """With exec disabled the gateway has no shell runner to hand a late
+    click. Approving a dependency install is refused before the record moves,
+    rather than moving it to approved and then failing."""
+    from durin.agent import approval_kinds_skills as kinds
+
+    spec = [{"kind": "pip", "value": "requests", "command": "pip install requests",
+             "needs_privileges": False}]
+    monkeypatch.setattr("durin.agent.skills_import.runnable_install_specs", lambda _d: spec)
+    p = kinds.prepare_skill_deps(tmp_path, "demo", spec)
+    rec = approval_store.create(
+        tmp_path, kind=p.kind, summary=p.summary, detail=p.detail, payload=p.payload,
+        change_hash=p.change_hash, session_key="websocket:c1", context="interactive")
+    channel, ws = _channel(tmp_path, approval_deps=lambda: ex.ExecDeps(exec_run=None))
+
+    reply = await _decide(channel, ws, approval_id=rec["id"], decision="approve")
+
+    assert reply["ok"] is False and reply["status"] == "refused"
+    assert "durin approvals approve" in reply["message"]
+    assert approval_store.get(tmp_path, rec["id"])["status"] == "pending"
+
+
+@pytest.mark.asyncio
 async def test_click_on_another_chats_approval_is_refused(tmp_path):
     channel, ws = _channel(tmp_path)
     rec = _record(tmp_path, session_key="websocket:other")

@@ -258,11 +258,17 @@ def test_deps_run_through_the_provided_exec_runner(tmp_path):
     assert audit[-1]["action"] == "install_deps" and audit[-1]["approval_id"] == rec["id"]
 
 
-def test_deps_without_an_exec_runner_fail_clearly(tmp_path):
+def test_deps_without_an_exec_runner_are_refused_before_approval(tmp_path):
+    """No shell runner here: the approval is refused and the record stays
+    pending, instead of moving to approved and then failing."""
     specs = _deps_skill(tmp_path)
     rec = _file(tmp_path, kinds.prepare_skill_deps(tmp_path, "gh-tool", specs))
     out = _decide(tmp_path, rec)
-    assert out.status == "failed" and "gateway" in out.message
+    assert out.status == "refused" and "durin approvals approve" in out.message
+    assert approval_store.get(tmp_path, rec["id"])["status"] == "pending"
+    # The executor keeps its own guard for any path that reaches it anyway.
+    with pytest.raises(ex.ApprovalExecError, match="gateway"):
+        asyncio.run(ex.execute(tmp_path, rec, ExecDeps()))
 
 
 def test_deps_approval_is_stale_when_the_declared_specs_change(tmp_path):

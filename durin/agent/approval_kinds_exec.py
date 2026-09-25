@@ -22,10 +22,11 @@ literal and checks it against the recorded (redacted) command: a match
 confirms the turn is running the same command the person approved, without
 the literal ever needing to be on disk. Approving the record from anywhere
 else (``durin approvals``, a webui click after the turn stopped waiting) is
-refused by ``approval.decide`` before the record changes: nothing outside the
-turn holds the literal, and a shell command replayed outside the run that
-needed it has no defined meaning anyway. The executor still refuses to run
-with either handle missing, so no other path can run it either.
+refused before the record changes, through the kind's ``requires`` check:
+nothing outside the turn holds the literal, and a shell command replayed
+outside the run that needed it has no defined meaning anyway. The executor
+still refuses to run with either handle missing, so no other path can run it
+either.
 
 The command's output goes back to the turn the same way, in memory, as
 ``deps.extra["exec_output"]``; the record's result is only ``{"ran": True}``.
@@ -129,6 +130,20 @@ def _hash(workspace: Path, payload: dict) -> str:
                      payload.get("session_key"))
 
 
+# Why an exec request cannot be approved from outside the turn that asked:
+# the literal command exists only in that turn's memory (the record holds a
+# redacted copy), so nothing else could run it.
+OUT_OF_TURN = ("an exec request can only be approved in the chat that asked; "
+               "it closes when that turn stops waiting")
+
+
+def _requires(deps: ExecDeps) -> str | None:
+    """Only the asking turn hands over both the runner and the literal."""
+    if deps.exec_run is None or not deps.extra.get("exec_command"):
+        return OUT_OF_TURN
+    return None
+
+
 async def _execute(workspace: Path, payload: dict, deps: ExecDeps) -> dict:
     literal = deps.extra.get("exec_command")
     if deps.exec_run is None or not literal:
@@ -154,4 +169,4 @@ async def _execute(workspace: Path, payload: dict, deps: ExecDeps) -> dict:
     return {"ran": True}
 
 
-register(KIND, hash_fn=_hash, execute_fn=_execute)
+register(KIND, hash_fn=_hash, execute_fn=_execute, requires=_requires)

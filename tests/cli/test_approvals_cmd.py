@@ -297,3 +297,42 @@ def test_approve_prints_the_executor_note(tmp_path, monkeypatch):
     assert st.get(ws, rec["id"])["status"] == "applied"
     assert "Done:" in out.output
     assert "restarts" in out.output and "reconnected" in out.output
+
+
+async def test_a_deps_approval_without_a_runner_is_refused_and_stays_pending(tmp_path, monkeypatch):
+    """Where the process has no shell runner (a webui click on a gateway with
+    exec disabled), approving a dependency install is refused before the
+    record moves, and names where it can be approved instead."""
+    from durin.agent import approval
+    from durin.agent.approval_executors import ExecDeps
+
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    rec = _deps_record(ws, monkeypatch)
+    out = await approval.decide(ws, rec["id"], "approve",
+                                decided_by={"kind": "user", "channel": "websocket"},
+                                deps=ExecDeps())
+    assert out.status == "refused"
+    assert "shell runner" in out.message and "durin approvals approve" in out.message
+    stored = st.get(ws, rec["id"])
+    assert stored["status"] == "pending" and stored["decided_by"] is None
+
+
+async def test_a_deps_approval_with_a_runner_applies(tmp_path, monkeypatch):
+    from durin.agent import approval
+    from durin.agent.approval_executors import ExecDeps
+
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    rec = _deps_record(ws, monkeypatch)
+    ran = []
+
+    async def _run(*, command):
+        ran.append(command)
+        return "ok\n\nExit code: 0"
+
+    out = await approval.decide(ws, rec["id"], "approve",
+                                decided_by={"kind": "user", "channel": "websocket"},
+                                deps=ExecDeps(exec_run=_run))
+    assert out.status == "applied" and ran == ["pip install requests"]
+    assert st.get(ws, rec["id"])["status"] == "applied"

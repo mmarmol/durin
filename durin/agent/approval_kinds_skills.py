@@ -299,6 +299,17 @@ def prepare_skill_deps(workspace: Path, name: str, specs: list[dict]) -> Prepare
     )
 
 
+def deps_requires(deps: ExecDeps) -> str | None:
+    """A dependency install runs through a shell runner. A process without
+    one (a gateway with exec disabled) cannot approve it; the CLI builds its
+    own."""
+    if deps.exec_run is None:
+        return ("installing dependencies needs a shell runner, which is not available "
+                "here (exec is disabled); approve it from a terminal with "
+                "`durin approvals approve`, which sets up its own")
+    return None
+
+
 async def execute_deps(workspace: Path, payload: dict, deps: ExecDeps) -> dict:
     """Run the approved commands through the exec runner the caller provided
     (the gateway's ExecTool, with its own guards).
@@ -513,7 +524,8 @@ def register_all() -> None:
     """Register the three skill kinds with the approval executor registry."""
     register("skill_install", hash_fn=install_hash, execute_fn=execute_install)
     register("skill_edit", hash_fn=edit_hash, execute_fn=execute_edit)
-    register("skill_deps", hash_fn=deps_hash, execute_fn=execute_deps)
+    register("skill_deps", hash_fn=deps_hash, execute_fn=execute_deps,
+             requires=deps_requires)
 
 
 register_all()

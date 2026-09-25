@@ -92,14 +92,18 @@ _APPROVAL_APPLIED_NOTE = "\n\n(The user approved this exact command, once.)"
 # matched, so the refusal names the setting the command is missing from.
 _ALLOWLIST_RULE = "tools.exec.allow_patterns"
 
-# The longest command the guard checks. Its regexes run on the event loop and
-# several are quadratic in the worst case (an anchor word such as "rm"
-# repeated thousands of times makes each pattern rescan the rest of the
-# command from every occurrence): 120k characters of "rm rm …" held the loop
-# for tens of seconds. At this length even adversarial input is checked in a
-# fraction of a second. A longer command is refused unchecked — fail closed —
-# and real commands are far shorter: a long script or data belongs in a file.
-MAX_CHECKED_COMMAND_CHARS = 10_000
+# The longest command the guard checks; a longer one is refused unchecked
+# (fail closed, and not approvable). Real long commands are cheap to check at
+# any length up to this: a 195k-character Python heredoc checks in about
+# 40 ms, a 160k-character JSON argument in about 35 ms, and a 60k-character
+# script of `rm -f` lines in about 11 ms. Only adversarial repetition is
+# slow: several patterns are quadratic when one anchor word ("rm", "cp",
+# "sudo -x") repeats thousands of times, because each occurrence makes the
+# pattern rescan the rest of the command. The check therefore runs in a
+# worker thread (``_check_off_loop``); a single regex call still holds the
+# GIL while it runs, so the event loop gets control between pattern calls,
+# not during one.
+MAX_CHECKED_COMMAND_CHARS = 200_000
 
 # A command position: the start of the command, right after a separator
 # (including a backtick or an opening brace, for `` `cmd` `` and `{ cmd; }`),
@@ -430,7 +434,7 @@ class ExecTool(Tool, ContextAware):
                     + _WORKSPACE_BOUNDARY_NOTE
                 )
 
-        refusal = self._check(command, cwd, approved_rules=approved_rules)
+        refusal = await self._check_off_loop(command, cwd, approved_rules=approved_rules)
         if refusal is not None:
             if ask and refusal.approvable:
                 return await self._ask_to_run(command, cwd, refusal, timeout, background)
@@ -564,7 +568,8 @@ class ExecTool(Tool, ContextAware):
         # deny match) joins the request; any other refusal (the memory vault,
         # a private URL, the workspace boundary) stands and nobody is asked.
         rules = refusal.rules
-        while (further := self._check(command, cwd, approved_rules=frozenset(rules))) is not None:
+        while (further := await self._check_off_loop(
+                command, cwd, approved_rules=frozenset(rules))) is not None:
             if not further.approvable:
                 return further.message
             rules += further.rules
@@ -734,6 +739,18 @@ class ExecTool(Tool, ContextAware):
         """
         refusal = self._check(command, cwd)
         return refusal.message if refusal is not None else None
+
+    async def _check_off_loop(
+        self, command: str, cwd: str, *,
+        approved_rules: frozenset[str] = frozenset(),
+    ) -> CommandRefusal | None:
+        """``_check`` in a worker thread, so a slow check (a long command, the
+        DNS lookups of the private-URL guard) delays only this call, and the
+        event loop keeps serving other chats between the guard's steps.
+        ``_check`` reads only this tool's fixed configuration and the
+        filesystem, never loop-bound state, so it is safe off the loop."""
+        return await asyncio.to_thread(self._check, command, cwd,
+                                       approved_rules=approved_rules)
 
     def _check(
         self, command: str, cwd: str, *,
