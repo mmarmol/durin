@@ -332,6 +332,11 @@ _MAX_DOCUMENTS_PER_MESSAGE = 3
 # same session; short enough that a truly closed tab frees it promptly.
 _VOICE_GRACE_S = 30.0
 
+# Grace window before a turn blocked on the user's answer in a chat nobody is
+# watching stops waiting and yields. A page refresh or a network blip
+# re-subscribes within seconds and keeps the wait; a closed tab ends it.
+_ANSWER_GRACE_S = 30.0
+
 # Image MIME whitelist — matches the Composer's ``accept`` list. SVG is
 # explicitly excluded to avoid the XSS surface inside embedded scripts.
 _IMAGE_MIME_ALLOWED: frozenset[str] = frozenset({
@@ -584,6 +589,11 @@ class WebSocketChannel(BaseChannel):
         # re-subscribes cancels it, so a transient blip never ends the call.
         self._voice_cleanup: dict[str, asyncio.Task] = {}
         self._voice_grace_s: float = _VOICE_GRACE_S
+        # chat_id -> pending release of a turn waiting on that chat's answer,
+        # scheduled when its last subscriber leaves and cancelled by a
+        # re-subscribe within the grace window.
+        self._answer_fallback: dict[str, asyncio.Task] = {}
+        self._answer_grace_s: float = _ANSWER_GRACE_S
         # connection -> chat_ids it is subscribed to (O(1) cleanup on disconnect).
         self._conn_chats: dict[Any, set[str]] = {}
         # connection -> default chat_id for legacy frames that omit routing.
@@ -664,6 +674,10 @@ class WebSocketChannel(BaseChannel):
         task = self._voice_cleanup.pop(chat_id, None)
         if task is not None:
             task.cancel()
+        # ...and keeps a turn waiting on this chat's answer waiting.
+        release = self._answer_fallback.pop(chat_id, None)
+        if release is not None:
+            release.cancel()
 
     def _cleanup_connection(self, connection: Any) -> None:
         """Remove *connection* from every subscription set; safe to call multiple times."""
@@ -675,6 +689,7 @@ class WebSocketChannel(BaseChannel):
             subs.discard(connection)
             if not subs:
                 self._subs.pop(cid, None)
+                self._schedule_answer_fallback(cid)
         # Defer voice-session teardown by a grace period rather than killing it
         # on the disconnect: a transient socket drop (wifi blip, backgrounded
         # tab) would otherwise end the conversation and discard the in-flight
@@ -709,6 +724,36 @@ class WebSocketChannel(BaseChannel):
             sess = self._voice.pop(chat_id, None)
             if sess is not None:
                 sess.cancel_speak()
+
+    def _schedule_answer_fallback(self, chat_id: str) -> None:
+        """Stop a turn waiting on *chat_id*'s answer once nobody has watched
+        the chat for the grace window, unless a client re-subscribes first.
+
+        Without this, a turn blocked on ask_user in a closed tab waits out
+        the whole answer timeout. Falling back makes the tool yield: its
+        question stays in the session and the user's next message answers
+        it. Idempotent while a release is already scheduled.
+        """
+        if chat_id in self._answer_fallback:
+            return
+        from durin.agent import pending_answers
+
+        session_key = f"websocket:{chat_id}"
+
+        async def _release() -> None:
+            try:
+                await asyncio.sleep(self._answer_grace_s)
+            except asyncio.CancelledError:
+                return
+            self._answer_fallback.pop(chat_id, None)
+            if not self._subs.get(chat_id):
+                pending_answers.fallback(session_key)
+
+        try:
+            self._answer_fallback[chat_id] = asyncio.ensure_future(_release())
+        except RuntimeError:
+            # No running loop (sync teardown path): release at once.
+            pending_answers.fallback(session_key)
 
     def _goal_state_session_key(self, chat_id: str) -> str:
         """The session key goal-state/pending-approval metadata actually lives
@@ -1914,6 +1959,9 @@ class WebSocketChannel(BaseChannel):
         for task in self._voice_cleanup.values():
             task.cancel()
         self._voice_cleanup.clear()
+        for task in self._answer_fallback.values():
+            task.cancel()
+        self._answer_fallback.clear()
         for sess in self._voice.values():
             sess.cancel_speak()
         self._voice.clear()

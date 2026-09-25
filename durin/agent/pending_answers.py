@@ -3,7 +3,8 @@
 The ask_user tool awaits a Future that is resolved by the agent loop when
 the user replies, allowing the same turn to continue with the answer as the
 tool result. A waiter that cannot be answered falls back to yield semantics
-(``FALLBACK``) on the answer timeout or a media reply: the question stays in
+(``FALLBACK``) on the answer timeout, a media reply, or when the webui chat
+it waits in has had no viewer for a grace window: the question stays in
 session metadata and the user's next message answers it in a new turn.
 
 A blocked turn does not survive a restart. At shutdown ``AgentLoop.stop``
