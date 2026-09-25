@@ -851,6 +851,11 @@ class SlackChannel(BaseChannel):
         thread_ts, session_key = self._thread_scope(
             chat_id, channel_type, event_ts, raw_thread_ts,
         )
+        if thread_ts and not raw_thread_ts and sender_allowed and not is_bot:
+            # This message opens its own reply thread, and that thread's
+            # session starts with it: a later reply there must not re-inject
+            # the history the session already holds.
+            self._mark_thread_context_known(f"{chat_id}:{thread_ts}")
         # A mention pulls the bot into the (possibly new) channel thread: keep
         # answering follow-ups there without requiring a re-mention each turn.
         if (
@@ -1013,22 +1018,31 @@ class SlackChannel(BaseChannel):
     ) -> tuple[str | None, str | None]:
         """Where a message at ``ts`` gets its reply, and which session it joins.
 
-        Returns ``(reply_thread_ts, session_key)``. A message inside a real
-        thread (``raw_thread_ts`` set) joins that thread's own session, so
-        context does not bleed across thread boundaries; a top-level message
-        keeps the conversation's default session (``None``). Outside DMs,
+        Returns ``(reply_thread_ts, session_key)``. The reply goes into the
+        thread the message is in (``raw_thread_ts``). Outside DMs,
         ``reply_in_thread`` opens a reply thread under a top-level message; in
         a DM it does not, since that would bury every reply under "1 reply".
 
-        Typed messages and button clicks both key through here, so a click
-        lands in the same session as a reply typed in the same place, which
-        is where a turn blocked on that answer is waiting.
+        A message whose reply lands in a thread joins that thread's session:
+        the top-level mention that opened the thread, every reply typed there
+        and every button clicked there are one conversation, so a question
+        the turn asks in the thread is answered in the session it waits in,
+        and context does not bleed across threads. A message answered at the
+        top level (a top-level DM) keeps the conversation's default session
+        (``None``). Typed messages and clicks both key through here.
         """
         thread_ts = raw_thread_ts
         if self.config.reply_in_thread and not thread_ts and channel_type != "im":
             thread_ts = ts
-        session_key = f"slack:{chat_id}:{thread_ts}" if thread_ts and raw_thread_ts else None
+        session_key = f"slack:{chat_id}:{thread_ts}" if thread_ts else None
         return thread_ts, session_key
+
+    def _mark_thread_context_known(self, key: str) -> None:
+        """Record that thread *key* ("chat_id:thread_ts") needs no history
+        fetch: it was fetched once already, or its session holds it."""
+        if len(self._thread_context_attempted) >= self._THREAD_CONTEXT_CACHE_LIMIT:
+            self._thread_context_attempted.clear()
+        self._thread_context_attempted.add(key)
 
     async def _with_thread_context(
         self,
@@ -1054,9 +1068,7 @@ class SlackChannel(BaseChannel):
         key = f"{chat_id}:{thread_ts}"
         if key in self._thread_context_attempted:
             return text
-        if len(self._thread_context_attempted) >= self._THREAD_CONTEXT_CACHE_LIMIT:
-            self._thread_context_attempted.clear()
-        self._thread_context_attempted.add(key)
+        self._mark_thread_context_known(key)
 
         try:
             response = await self._web_client.conversations_replies(
