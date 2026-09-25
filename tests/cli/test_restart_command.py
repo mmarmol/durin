@@ -183,10 +183,12 @@ class TestRestartCommand:
     async def test_a_stuck_fallback_restart_still_reexecs_after_the_deadline(self, tmp_path):
         """The fallback path (no gateway — TUI, legacy REPL) has nothing at
         the asyncio level bounding ``close_mcp``. A real, synchronous
-        thread-level block (a ``threading.Event``, not an ``asyncio`` one) is
-        immune to any timeout or cancellation the event loop could apply —
-        only a genuinely separate OS thread can still make progress while
-        it's stuck. The watchdog's daemon thread is exactly that: it must
+        thread-level block (a bare ``threading.Event.wait()``, called
+        directly — not via ``asyncio.to_thread``, which would keep the loop
+        free and prove nothing) actually freezes the event loop: nothing at
+        the asyncio level — a timeout, a cancellation — could rescue this.
+        Only a genuinely separate OS thread can still make progress while
+        it's frozen. The watchdog's daemon thread is exactly that: it must
         still call reexec once its deadline passes, the same way SIGKILL
         rescues a stuck SIGTERM. The mocked ``reexec`` releases the block
         itself once it fires, the way the real one would end everything by
@@ -200,24 +202,32 @@ class TestRestartCommand:
         replacing this test process, the fallback's own call once released
         would be a second, legitimate "loser" call that then hangs this test
         forever. A plain mock has no such contract to honor.
+
+        Because the event loop is genuinely frozen once ``close_mcp`` blocks,
+        this test cannot poll from its own coroutine (nothing on that thread
+        runs until the freeze ends) — it offloads its own wait to a worker
+        thread via ``asyncio.to_thread`` instead, which keeps working
+        independently of whatever state the main thread is in.
         """
         from durin.command.builtin import cmd_restart
         from durin.command.router import CommandContext
 
         stuck = threading.Event()  # only the mocked reexec below ever sets this
+        reexec_called = threading.Event()
+        call_info: dict[str, object] = {}
+        loop_thread = threading.current_thread()
 
         class _StuckLoop:
             def __init__(self) -> None:
                 self.sessions = MagicMock()
 
             async def close_mcp(self) -> None:
-                # A real OS-thread block via to_thread, not an asyncio wait:
-                # nothing at the asyncio level could rescue this, only a
-                # separate real thread (the watchdog) can. The 10s cap is a
-                # last-resort safety net for this test process, well past
-                # the patched 0.1s deadline below — it must never be what
-                # actually makes the assertion true.
-                await asyncio.to_thread(stuck.wait, 10)
+                # A direct, synchronous threading.Event.wait() — not wrapped
+                # in to_thread — actually freezes this event loop's thread.
+                # The 10s cap is a last-resort safety net for this test
+                # process, well past the patched 0.1s deadline below — it
+                # must never be what actually makes the assertions true.
+                stuck.wait(10)
 
             def stop(self) -> None:
                 pass
@@ -233,31 +243,38 @@ class TestRestartCommand:
             return None
 
         fake_asyncio = SimpleNamespace(sleep=_fast_sleep, create_task=asyncio.create_task)
-        mock_reexec = MagicMock(side_effect=lambda: stuck.set())
+
+        def _on_reexec() -> None:
+            if not reexec_called.is_set():
+                call_info["thread"] = threading.current_thread()
+                call_info["elapsed"] = time.monotonic() - call_info["start"]
+            stuck.set()
+            reexec_called.set()
+
+        mock_reexec = MagicMock(side_effect=_on_reexec)
 
         with patch.dict(os.environ, {}, clear=False), \
              patch("durin.command.builtin.asyncio", new=fake_asyncio), \
              patch("durin.utils.restart.RESTART_SHUTDOWN_DEADLINE_S", 0.1), \
              patch("durin.utils.restart.reexec", mock_reexec), \
              patch("durin.command.builtin.reexec", mock_reexec):
+            call_info["start"] = time.monotonic()
             await cmd_restart(ctx)
-            fired_within_deadline_window = False
-            for _ in range(40):  # 2s, well under close_mcp's 10s safety cap
-                if mock_reexec.called:
-                    fired_within_deadline_window = True
-                    break
-                await asyncio.sleep(0.05)
+            # This coroutine's own thread is about to freeze inside
+            # close_mcp's direct block; wait for the outcome from a
+            # separate worker thread instead of polling here, which is
+            # what actually lets this test observe a watchdog running on
+            # yet another (the real) OS thread while the loop is frozen.
+            fired = await asyncio.to_thread(reexec_called.wait, 2)
 
-            # The watchdog's own call — proof it fired well within its
-            # patched deadline, long before close_mcp's 10s safety cap. Once
-            # released, the fallback's own path also reaches its end-of-
-            # sequence reexec() call in this same window (a second, harmless
-            # call to this plain mock, unlike the real idempotent reexec —
-            # see the class docstring above), so this doesn't assert an
-            # exact count, only that the watchdog's own call happened.
-            assert fired_within_deadline_window, (
-                "reexec did not run within the patched deadline window"
+            assert fired, "reexec did not run within the patched deadline window"
+            assert call_info["thread"] is not loop_thread, (
+                "reexec ran on the event loop's own thread — it could not "
+                "have fired while that thread was frozen inside close_mcp"
             )
+            # Comfortably under close_mcp's 10s safety cap, close to the
+            # patched 0.1s deadline.
+            assert call_info["elapsed"] < 2.0
             # Let the fallback's own path finish naturally so nothing leaks
             # past this patched context.
             await asyncio.sleep(0.1)

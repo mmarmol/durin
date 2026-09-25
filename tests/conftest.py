@@ -244,10 +244,21 @@ def _reset_reexec_guard():
     exercises the real ``reexec()`` (even with ``os.execv`` mocked away), it
     stays tripped for the rest of the suite, and a later test's own restart
     path would then silently skip its ``os.execv`` call.
+
+    The lock is reset too, fresh, every test: the loser of the race decides
+    under it but blocks forever outside it, so the lock itself is never held
+    long-term by a legitimate call — but a test is exactly what deliberately
+    drives a loser into that forever-block, and starting every test on a
+    known-fresh ``Lock()`` (rather than whatever the previous test method
+    left behind) is a one-line guarantee against a class of hang that a
+    single flag reset wouldn't catch.
     """
+    import threading
+
     import durin.utils.restart as _restart_mod
 
     _restart_mod._reexeced = False
+    _restart_mod._reexec_lock = threading.Lock()
 
 
 @pytest.fixture(autouse=True)

@@ -77,6 +77,28 @@ def request_restart() -> bool:
     return True
 
 
+def _flush_logs_before_exit(timeout_s: float = 2.0) -> None:
+    """Give the log sink's queue a bounded chance to flush before ``os._exit``,
+    which skips it (and any atexit hook) entirely otherwise — the gateway's
+    file sink queues writes (``enqueue=True``, ``durin/cli/gateway_logging.py``),
+    so the record just written could otherwise never reach disk.
+
+    ``logger.complete()`` is documented safe to call from non-async code (its
+    own multiprocessing example does exactly that, unawaited) and its
+    enqueued-message wait is synchronous either way; run it on its own thread
+    with a bounded join anyway, in case the sink itself is what's stuck.
+    """
+    done = threading.Event()
+
+    def _complete() -> None:
+        with suppress(Exception):
+            logger.complete()
+        done.set()
+
+    threading.Thread(target=_complete, daemon=True).start()
+    done.wait(timeout=timeout_s)
+
+
 def reexec() -> None:
     """Replace this process with a fresh ``python -m durin`` on the same argv.
 
@@ -92,10 +114,17 @@ def reexec() -> None:
     """
     global _reexeced
     with _reexec_lock:
-        if _reexeced:
-            threading.Event().wait()
-            return  # pragma: no cover - unreachable; the winner's execv ends this process first
+        # Decide under the lock, block outside it: blocking here while still
+        # holding it would leave _reexec_lock held forever, and any later
+        # caller in the same process (another restart attempt, a test) would
+        # then hang acquiring it too — long after a real winner's execv
+        # would already have ended everything, but not in a process where
+        # execv is mocked away (tests) or genuinely failed.
+        lost = _reexeced
         _reexeced = True
+    if lost:
+        threading.Event().wait()
+        return  # pragma: no cover - unreachable; the winner's execv ends this process first
     try:
         os.execv(sys.executable, [sys.executable, "-m", "durin"] + sys.argv[1:])
     except Exception:
@@ -106,6 +135,7 @@ def reexec() -> None:
         # gateway restarted. Exit hard so a supervisor (systemd, launchd)
         # restarts the process instead of it limping on unrestarted.
         logger.exception("reexec: os.execv failed; exiting so the supervisor restarts us")
+        _flush_logs_before_exit()
         os._exit(1)
 
 
