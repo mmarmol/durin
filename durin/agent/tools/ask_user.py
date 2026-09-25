@@ -247,8 +247,12 @@ class AskUserQuestionTool(Tool, ContextAware):
         await self._push_session_state()
         started = time.monotonic()
         try:
-            answer = await asyncio.wait_for(fut, timeout=self._answer_timeout_s)
-        except asyncio.TimeoutError:
+            # asyncio.timeout, not wait_for: on Python 3.11 wait_for returns
+            # the answer and swallows a cancel (a /stop, a shutdown) that
+            # lands in the same step, so the turn would run on.
+            async with asyncio.timeout(self._answer_timeout_s):
+                answer = await fut
+        except TimeoutError:
             self._emit("ask_user.answer_timeout", {
                 "question_id": question_id,
                 "timeout_s": int(self._answer_timeout_s),

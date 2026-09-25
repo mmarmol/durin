@@ -194,6 +194,32 @@ async def test_blocking_returns_user_answer_in_same_turn(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_a_stop_landing_with_the_answer_still_cancels_the_turn(tmp_path):
+    """A /stop or shutdown that lands in the same loop step as the answer must
+    still cancel the turn. On Python 3.11 ``asyncio.wait_for`` returns the
+    answer instead and swallows the cancel, so the turn would run on."""
+    from durin.agent import pending_answers as pa
+
+    pa.reset()
+    sm = SessionManager(tmp_path)
+    tool = _blocking_tool(sm)
+    turn = asyncio.create_task(tool.execute(question="Which color?"))
+    for _ in range(100):
+        await asyncio.sleep(0.01)
+        if pa.is_waiting("cli:d"):
+            break
+    else:
+        raise AssertionError("tool never registered a waiter")
+
+    assert pa.resolve("cli:d", "green") is True
+    turn.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await turn
+    pa.reset()
+
+
+@pytest.mark.asyncio
 async def test_blocking_times_out_to_yield_semantics(tmp_path):
     from durin.agent import pending_answers as pa
 
