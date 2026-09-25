@@ -2,7 +2,7 @@
 
 Exposes the same operations as the webui's automations surface
 (``durin.service.automations``) to the agent: list/inspect automations, fire a
-run, answer a run paused for an operator or counterpart reply, toggle
+run, answer a run paused on a question for an operator or counterpart, toggle
 enabled/paused, and create a new automation from a JSON definition — all
 through ``durin.automations.store`` + ``durin.automations.run_log`` + the live
 ``AutomationsRuntime``, so an automation the agent creates in chat goes
@@ -46,13 +46,8 @@ _PARAMETERS = tool_parameters_schema(
         "Optional task text for action='fire', overriding a schedule trigger's "
         "default task for this one run."
     ),
-    answer=StringSchema("REQUIRED for action='answer': the reply to a run paused for an answer."),
+    answer=StringSchema("REQUIRED for action='answer': the reply to a run paused on a question."),
     run_id=StringSchema("REQUIRED for action='answer': the run id (from a previous fire/status)."),
-    resolution=StringSchema(
-        "Optional for action='answer', only when the paused run is an APPROVAL: bypasses "
-        "keyword parsing of 'answer' and resolves it directly.",
-        enum=["approve", "revise", "reject"],
-    ),
     definition=StringSchema(
         "REQUIRED for action='create': the full automation definition as a JSON string "
         "— {name, workflow, triggers?, delivery?, help?, life?, concurrency?}."
@@ -64,7 +59,8 @@ _PARAMETERS = tool_parameters_schema(
         "result. This tool is the single source of truth for automations; their schedule "
         "triggers also appear in `cron list` as read-only `automation:*` system jobs — "
         "never manage them there. list/status inspect definitions and runs; fire manually starts a run; "
-        "answer replies to a run paused for an operator or counterpart reply; "
+        "answer replies to a run paused on a question for an operator or counterpart "
+        "(a run paused for a person's APPROVAL is theirs to decide and is refused here); "
         "enable/pause toggle a definition's triggers; create defines a new automation "
         "from a JSON definition (same validation as the webui) — sending 'create' again "
         "with an existing name replaces that definition wholesale. SINGLE-CASE DOCTRINE: "
@@ -144,7 +140,6 @@ class AutomationsTool(Tool):
         task: str | None = None,
         answer: str | None = None,
         run_id: str | None = None,
-        resolution: str | None = None,
         definition: str | None = None,
         **kwargs: Any,
     ) -> str:
@@ -161,7 +156,7 @@ class AutomationsTool(Tool):
         if action == "answer":
             if not name or not run_id or not answer:
                 return "Error: answer requires 'name', 'run_id', and 'answer'"
-            return await self._answer(name, run_id, answer, resolution)
+            return await self._answer(name, run_id, answer)
         if action == "enable":
             if not name:
                 return "Error: enable requires 'name'"
@@ -319,8 +314,9 @@ class AutomationsTool(Tool):
                 "automations: could not report the failed fire of automation '{}' run {}", name, run_id,
             )
 
-    async def _answer(self, name: str, run_id: str, answer: str, resolution: str | None) -> str:
-        """Resume a paused run and return; the outcome arrives as a follow-up.
+    async def _answer(self, name: str, run_id: str, answer: str) -> str:
+        """Resume a run paused on a question and return; the outcome arrives
+        as a follow-up.
 
         Mirrors `_fire`: the resume is a full workflow run and can take as
         long as the original fire would have, so the tool call must not
@@ -329,9 +325,25 @@ class AutomationsTool(Tool):
         docstring) — no extra asyncio.create_task wrapping needed here,
         just await its quick synchronous prologue and report that it
         resumed.
+
+        A run paused for an approval is refused. Approving, revising or
+        rejecting it is a person's decision, and a value in this tool call
+        is the model's claim, never evidence that anyone agreed. People
+        decide it through the answer route (the automations inbox) or by
+        replying in the thread the request was posted to.
         """
+        record = run_log.read_run(self._ws, name, run_id)
+        if record is not None and record.get("ask_kind") == "approval":
+            return (
+                f"Refused: run {run_id} of automation '{name}' is waiting for a person's "
+                "approval. Approving, revising or rejecting it is their decision, not "
+                "yours: they decide it from the automations inbox in the webui, or by "
+                "replying in the thread where the request was posted. Tell the user it "
+                "is waiting for them; do not retry, and do not reach the same effect "
+                "another way."
+            )
         try:
-            record = await self._runtime.answer_nowait(name, run_id, answer, action=resolution, by="agent")
+            record = await self._runtime.answer_nowait(name, run_id, answer, by="agent")
         except AutomationNotFound as exc:
             return f"Error: {exc}"
         except ValueError as exc:

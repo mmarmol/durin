@@ -286,10 +286,11 @@ should block for it:
   `running` run as an orphan), and releases the claim *before* resuming — if the
   resumed workflow immediately asks another tagged question, `_park` registers a
   fresh claim, so releasing first never races a just-registered one. For an
-  `ask_kind == "approval"` pause, an explicit `action` (the agent tool's `resolution`
-  parameter, the webui Automations inbox's Approve/Revise/Reject, or any other caller
-  of the HTTP answer route passing one) bypasses free-text parsing and synthesizes the
-  canonical resume text (`"approve"`/`"reject"`); with no explicit action,
+  `ask_kind == "approval"` pause, an explicit `action` (the webui Automations inbox's
+  Approve/Revise/Reject, or any other caller of the HTTP answer route passing one —
+  the agent tool cannot: it refuses to answer an approval pause at all) bypasses
+  free-text parsing and synthesizes the canonical resume text (`"approve"`/`"reject"`);
+  with no explicit action,
   `durin.workflow.approval.parse_approval_reply` interprets the reply text, defaulting
   to `"revise"` when it doesn't parse as approve/reject — the same one algorithm a
   direct workflow resume uses, so there is exactly one place free text becomes an

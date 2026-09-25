@@ -156,39 +156,31 @@ async def test_answer_resumes_run(tmp_path):
     assert rl.read_run(tmp_path, "a1", run_id)["status"] == "completed"
 
 
-async def test_answer_forwards_resolution_and_by_agent(tmp_path):
-    """An explicit resolution bypasses keyword parsing of the free-text
-    answer and must be attributed to the agent (the chat surface that
-    answered), not to a human operator — verified against the run's own
-    recorded approval, not a mock."""
+async def test_answer_refuses_an_approval_pause(tmp_path):
+    """An approval is a person's decision. Whatever the model writes in the
+    tool call, the run stays paused with no verdict recorded, for a person
+    to decide."""
     save_automation(tmp_path, parse_automation({"name": "a1", "workflow": "w1"}))
-    rt = _runtime(tmp_path, [
-        _wr("needs_input", out="approve this?", ask_kind="approval"),
-        _wr("completed"),
-    ])
+    rt = _runtime(tmp_path, [_wr("needs_input", out="approve this?", ask_kind="approval")])
     tool = AutomationsTool.create(_ctx(tmp_path, runtime=rt))
 
     await tool.execute(action="fire", name="a1")
     await asyncio.gather(*tool._fires)
     run_id = rl.list_runs(tmp_path, "a1", limit=1)[0]["run_id"]
 
-    out = await tool.execute(
-        action="answer", name="a1", run_id=run_id,
-        answer="whatever, ignored by an explicit resolution", resolution="approve",
-    )
+    for reply in ("approve", "sí", "reject", "please change the subject line"):
+        out = await tool.execute(action="answer", name="a1", run_id=run_id, answer=reply)
+        assert out.startswith("Refused"), out
+        assert "person" in out
 
-    assert "resumed in the background" in out
-    # Recorded in the prologue, before the resume even starts — already on
-    # the run record even though the resume itself is still backgrounded.
     record = rl.read_run(tmp_path, "a1", run_id)
-    assert record["approval"]["action"] == "approve"
-    assert record["approval"]["by"] == "agent"
+    assert record["status"] == "paused"
+    assert not record.get("approval")
 
-    # answer_nowait backgrounds the resume on the RUNTIME's own _bg_tasks,
-    # not tool._fires (that set is _fire's own backgrounding) — wait for it
-    # directly rather than sleep(0), same reasoning as above.
-    await asyncio.gather(*rt._bg_tasks)
-    assert rl.read_run(tmp_path, "a1", run_id)["status"] == "completed"
+
+def test_answer_schema_offers_no_approval_verdict(tmp_path):
+    tool = AutomationsTool.create(_ctx(tmp_path, runtime=_runtime(tmp_path, [])))
+    assert "resolution" not in tool.parameters["properties"]
 
 
 async def test_pause_syncs_cron_jobs_off(tmp_path):
