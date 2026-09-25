@@ -8,12 +8,14 @@ instead of showing a phantom card that a click could no longer resolve.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from durin.agent import approval_store
+from durin.agent import approval_executors as ex
+from durin.agent import approval_store, pending_answers
 from durin.agent.loop import AgentLoop
 from durin.bus.queue import MessageBus
 from durin.channels.websocket import WebSocketChannel
@@ -193,3 +195,182 @@ async def test_attach_drops_an_expired_approval_under_the_unified_session_key(
     assert goal == []
     session = sm.get_or_create("unified:default")
     assert "pending_approval" not in session.metadata
+
+
+@pytest.fixture(autouse=True)
+def _reset_waiters():
+    pending_answers.reset()
+    yield
+    pending_answers.reset()
+
+
+def _channel(tmp_path, **kwargs):
+    channel = WebSocketChannel(
+        {"enabled": True, "allowFrom": ["*"]}, MagicMock(),
+        session_manager=SessionManager(tmp_path), **kwargs,
+    )
+    ws = AsyncMock()
+    channel._attach(ws, "c1")
+    return channel, ws
+
+
+def _record(tmp_path, session_key="websocket:c1", kind="exec_command"):
+    return approval_store.create(
+        tmp_path, kind=kind, summary="run `make clean`",
+        detail={"command": "make clean"},
+        payload={"command": "make clean", "cwd": str(tmp_path)},
+        change_hash="h1", session_key=session_key, context="interactive",
+    )
+
+
+async def _decide(channel, ws, **fields):
+    """Send one approval_decision frame and return the approval_decided reply."""
+    await channel._dispatch_envelope(
+        ws, "client-1", {"type": "approval_decision", "request_id": "r1", **fields})
+    await asyncio.gather(*list(channel._approval_tasks))
+    return json.loads(ws.send_text.await_args.args[0])
+
+
+@pytest.mark.asyncio
+async def test_click_hands_the_verdict_to_the_waiting_turn(tmp_path):
+    channel, ws = _channel(tmp_path)
+    rec = _record(tmp_path)
+    fut = pending_answers.create("websocket:c1", kind="approval", ref=rec["id"])
+
+    reply = await _decide(channel, ws, approval_id=rec["id"], decision="approve")
+
+    assert await fut == "approve"
+    assert reply["event"] == "approval_decided" and reply["request_id"] == "r1"
+    assert reply["ok"] is True and reply["status"] == "pending"
+    # The waiting turn runs it; the socket handler did not.
+    assert approval_store.get(tmp_path, rec["id"])["status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_click_after_the_turn_stopped_waiting_runs_with_the_gateway_handles(
+    tmp_path, monkeypatch,
+):
+    """X1: an out-of-turn click executes with the gateway's live handles for
+    every OTHER kind — retargeted from ``exec_command`` (which never runs
+    out of turn; see the dedicated test below) to ``mcp_change``."""
+    seen: list = []
+
+    async def _execute(workspace, payload, deps):
+        seen.append(deps)
+        return {"ok": True}
+
+    monkeypatch.setitem(
+        ex._REGISTRY, "mcp_change", (lambda workspace, payload: "h1", _execute))
+    gateway_deps = ex.ExecDeps(extra={"from": "gateway"})
+    channel, ws = _channel(tmp_path, approval_deps=lambda: gateway_deps)
+    rec = _record(tmp_path, kind="mcp_change")
+
+    reply = await _decide(channel, ws, approval_id=rec["id"], decision="approve")
+
+    assert reply["ok"] is True and reply["status"] == "applied"
+    assert seen == [gateway_deps]
+    stored = approval_store.get(tmp_path, rec["id"])
+    assert stored["status"] == "applied"
+    assert stored["decided_by"] == {"kind": "user", "channel": "websocket"}
+
+
+@pytest.mark.asyncio
+async def test_click_after_the_turn_stopped_waiting_on_exec_command_fails_without_running(
+    tmp_path,
+):
+    """X1: an ``exec_command`` approval runs only inside the chat turn that
+    asked for it. A click that lands after that turn stopped waiting must not
+    hand the request the gateway's live ``exec_run`` — even though the
+    gateway's own ExecDeps carries one for other, in-turn uses — so nothing
+    ever runs from an out-of-turn click, and the record ends ``failed``
+    (the exec executor's own guard: no in-turn literal, no run)."""
+    from durin.agent.approval_kinds_exec import exec_hash
+
+    calls: list = []
+
+    async def run(**kw):
+        calls.append(kw)
+        return "should never happen"
+
+    gateway_deps = ex.ExecDeps(exec_run=run)
+    channel, ws = _channel(tmp_path, approval_deps=lambda: gateway_deps)
+    payload = {"command": "make clean", "cwd": str(tmp_path)}
+    rec = approval_store.create(
+        tmp_path, kind="exec_command", summary="run `make clean`",
+        detail={"command": "make clean"}, payload=payload,
+        change_hash=exec_hash("make clean", str(tmp_path), None),
+        session_key="websocket:c1", context="interactive",
+    )
+
+    reply = await _decide(channel, ws, approval_id=rec["id"], decision="approve")
+
+    assert reply["ok"] is False and reply["status"] == "failed"
+    assert calls == []
+    assert approval_store.get(tmp_path, rec["id"])["status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_click_on_another_chats_approval_is_refused(tmp_path):
+    channel, ws = _channel(tmp_path)
+    rec = _record(tmp_path, session_key="websocket:other")
+
+    reply = await _decide(channel, ws, approval_id=rec["id"], decision="approve")
+
+    assert reply["ok"] is False and reply["status"] == "refused"
+    assert "another chat" in reply["message"]
+    assert approval_store.get(tmp_path, rec["id"])["status"] == "pending"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fields", [
+    {"approval_id": "../../secrets", "decision": "approve"},
+    {"approval_id": "a1b2c3d4e5f6", "decision": "maybe"},
+    {"approval_id": "a1b2c3d4e5f6", "decision": "approve"},  # no such record
+])
+async def test_malformed_or_unknown_decision_is_refused(tmp_path, fields):
+    channel, ws = _channel(tmp_path)
+    reply = await _decide(channel, ws, **fields)
+    assert reply["ok"] is False and reply["status"] == "refused"
+
+
+@pytest.mark.asyncio
+async def test_unified_mode_matches_the_shared_session_key(tmp_path):
+    channel, ws = _channel(tmp_path, session_turn_key=lambda key: "unified:default")
+    rec = _record(tmp_path, session_key="unified:default")
+    fut = pending_answers.create("unified:default", kind="approval", ref=rec["id"])
+
+    reply = await _decide(channel, ws, approval_id=rec["id"], decision="reject")
+
+    assert reply["ok"] is True
+    assert await fut == "reject"
+
+
+@pytest.mark.asyncio
+async def test_stop_cancels_and_awaits_a_decision_still_running(tmp_path, monkeypatch):
+    """X13: a decision blocked inside its executor when the process shuts down
+    must not leave the record stuck ``approved`` forever — ``stop()`` cancels
+    and awaits every task in ``_approval_tasks`` before the rest of its own
+    cleanup, and ``_run_approved`` (core) turns that cancellation into
+    ``failed`` rather than leaving the record mid-flight."""
+    entered = asyncio.Event()
+
+    async def _execute(workspace, payload, deps):
+        entered.set()
+        await asyncio.sleep(10)
+        return {"ok": True}  # pragma: no cover — cancelled before returning
+
+    monkeypatch.setitem(
+        ex._REGISTRY, "mcp_change", (lambda workspace, payload: "h1", _execute))
+    channel, ws = _channel(tmp_path)
+    await channel.start()
+    rec = _record(tmp_path, kind="mcp_change")
+
+    await channel._dispatch_envelope(
+        ws, "client-1", {"type": "approval_decision", "request_id": "r1",
+                        "approval_id": rec["id"], "decision": "approve"})
+    await entered.wait()
+
+    await channel.stop()
+
+    assert channel._approval_tasks == set()
+    assert approval_store.get(tmp_path, rec["id"])["status"] == "failed"

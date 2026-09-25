@@ -254,6 +254,11 @@ def _parse_inbound_payload(raw: str) -> str | None:
 # namespace small enough to rule out path traversal / quote injection tricks.
 _CHAT_ID_RE = re.compile(r"^[A-Za-z0-9_:-]{1,64}$")
 _TURN_OUTCOMES = frozenset({"completed", "stopped", "failed"})
+# Approval ids are server-minted 12-hex-char tokens. Anything else is refused
+# before it can name a path under ``.approvals/``.
+_APPROVAL_ID_RE = re.compile(r"^[0-9a-f]{12}$")
+# Decision outcomes meaning the click did what the person asked.
+_APPROVAL_OK = frozenset({"applied", "rejected", "pending"})
 
 
 def _is_live_progress_only(payload: dict[str, Any]) -> bool:
@@ -603,6 +608,8 @@ class WebSocketChannel(BaseChannel):
         # How the agent loop keys a chat's turns (one shared key in unified
         # mode), so an approval frame is matched to the chat that filed it.
         self._session_turn_key = session_turn_key
+        # Strong refs to approval decisions still running (else GC'd mid-run).
+        self._approval_tasks: set[asyncio.Task] = set()
         # Strong refs to fire-and-forget run-now tasks (else GC'd mid-run).
         self._background_run_tasks: set[asyncio.Task] = set()
         # Persistent HMAC secret for media URL signing.  Lives in the token
@@ -1642,6 +1649,9 @@ class WebSocketChannel(BaseChannel):
         if t == "secret_store":
             await self._handle_secret_store_envelope(connection, client_id, envelope)
             return
+        if t == "approval_decision":
+            await self._handle_approval_decision_envelope(connection, envelope)
+            return
         if t == "skill_judge":
             name = envelope.get("name")
             if not isinstance(name, str) or not name:
@@ -1816,10 +1826,88 @@ class WebSocketChannel(BaseChannel):
                 is_dm=False,
             )
 
+    def _connection_session_keys(self, connection: Any) -> set[str]:
+        """Session keys of the chats *connection* is attached to, keyed the way
+        the agent loop keys their turns (one shared key in unified mode)."""
+        return {self._goal_state_session_key(cid) for cid in self._conn_chats.get(connection, ())}
+
+    async def _handle_approval_decision_envelope(
+        self, connection: Any, envelope: dict[str, Any],
+    ) -> None:
+        """Resolve an approval from an Approve / Reject click.
+
+        The verdict never becomes a chat message, so the model can neither see
+        nor forge it. The record must belong to a chat this connection is
+        attached to. ``approval.decide`` hands the verdict to the turn still
+        waiting on it. When that turn stopped waiting (the click came after
+        its timeout), ``decide`` runs the recorded request here with the
+        gateway's live handles. That run can take minutes (an MCP install), so
+        it proceeds as a background task and the socket keeps serving frames.
+        The ``approval_decided`` event reports the outcome when it lands.
+        """
+        import dataclasses
+
+        from durin.agent import approval, approval_store
+        from durin.agent.approval_executors import ExecDeps
+
+        request_id = str(envelope.get("request_id") or "")
+        approval_id = str(envelope.get("approval_id") or "").strip()
+        decision = envelope.get("decision")
+
+        async def _reply(status: str, message: str) -> None:
+            await self._send_event(
+                connection, "approval_decided", request_id=request_id,
+                approval_id=approval_id, ok=status in _APPROVAL_OK,
+                status=status, message=message,
+            )
+
+        if decision not in ("approve", "reject") or not _APPROVAL_ID_RE.match(approval_id):
+            await _reply("refused", "Invalid approval decision.")
+            return
+        workspace = self._endpoint_workspace()
+        record = approval_store.get(workspace, approval_id)
+        if record is None:
+            await _reply("refused", f"No approval request {approval_id}.")
+            return
+        if record.get("requested_by_session") not in self._connection_session_keys(connection):
+            await _reply("refused", "This approval belongs to another chat.")
+            return
+        deps = self._approval_deps() if self._approval_deps is not None else ExecDeps()
+        if record.get("kind") == "exec_command":
+            # An exec_command runs only inside the turn that asked for it — the
+            # literal command lives solely in that turn's ExecDeps.extra, never
+            # on disk. Strip the runner so an out-of-turn click cannot run a
+            # DIFFERENT live command under the record's approval, even though
+            # the gateway's own ExecDeps carries one for in-turn use elsewhere.
+            deps = dataclasses.replace(deps, exec_run=None)
+
+        async def _decide() -> None:
+            try:
+                outcome = await approval.decide(
+                    workspace, approval_id, decision,
+                    decided_by={"kind": "user", "channel": "websocket"}, deps=deps,
+                )
+            except Exception as exc:  # noqa: BLE001 — the click still owes the client an answer
+                self.logger.exception("approval decision {} failed", approval_id)
+                await _reply("failed", f"Could not decide {approval_id}: {exc}")
+                return
+            await _reply(outcome.status, outcome.message)
+
+        task = asyncio.create_task(_decide())
+        self._approval_tasks.add(task)
+        task.add_done_callback(self._approval_tasks.discard)
+
     async def stop(self) -> None:
         if not self._running:
             return
         self._running = False
+        approval_tasks = list(self._approval_tasks)
+        for task in approval_tasks:
+            task.cancel()
+        if approval_tasks:
+            # A decision blocked inside its executor must not abort the rest
+            # of shutdown — gather it as one of possibly several cancellations.
+            await asyncio.gather(*approval_tasks, return_exceptions=True)
         for task in self._voice_cleanup.values():
             task.cancel()
         self._voice_cleanup.clear()
