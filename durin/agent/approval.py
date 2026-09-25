@@ -84,6 +84,15 @@ def human_reachable(session_key: str | None) -> bool:
 # in their own task, so the flag never outlives the turn that set it.
 _TURN_HAS_API_INPUT: ContextVar[bool] = ContextVar("approval_turn_has_api_input", default=False)
 
+# Approval id -> decider, set by ``decide`` just before it hands a verdict to
+# a waiting turn's ``pending_answers`` future. The turn's ``ask`` call then
+# returns that verdict inside ``request``, which would otherwise attribute
+# the decision to the chat user (the session key it is already asking) even
+# when a CLI operator or a webui click actually made it. Both sides run in
+# the same process — a hand-off only ever exists in-process — so a plain
+# module dict is enough; each entry is popped on every path so nothing leaks.
+_HANDOFF_DECIDED_BY: dict[str, dict] = {}
+
 
 def note_turn_input(metadata: dict[str, Any] | None) -> None:
     """Record that the current turn received input from *metadata*'s sender.
@@ -220,9 +229,13 @@ async def request(workspace: Path | str, prepared: Prepared, *, session_key: str
     answer = await ask(record)
     if answer not in ("approve", "reject"):
         return _pending_outcome(record, asked=True)
+    # A verdict handed off from `decide` (CLI, webui click) carries its real
+    # decider; a verdict typed straight into this chat has none queued, so it
+    # is the chat user answering.
+    decided_by = (_HANDOFF_DECIDED_BY.pop(record["id"], None)
+                 or {"kind": "user", "channel": session_key})
     return await _apply_decision(workspace, record["id"], answer,
-                                 decided_by={"kind": "user", "channel": session_key},
-                                 deps=deps)
+                                 decided_by=decided_by, deps=deps)
 
 
 async def _apply_decision(workspace: Path | str, approval_id: str, decision: str, *,
@@ -283,8 +296,12 @@ async def decide(workspace: Path | str, approval_id: str, decision: str, *,
     from durin.agent import pending_answers
 
     if session_key and pending_answers.waiting_ref(session_key) == approval_id:
+        _HANDOFF_DECIDED_BY[approval_id] = decided_by
         if pending_answers.resolve(session_key, decision):
             return Outcome("pending", rec, None, "Handed to the waiting turn.")
+        # No live waiter actually consumed it (e.g. it just finished on its
+        # own) — nothing will ever pop this entry, so drop it here.
+        _HANDOFF_DECIDED_BY.pop(approval_id, None)
     return await _apply_decision(workspace, approval_id, decision,
                                  decided_by=decided_by, deps=deps)
 

@@ -86,10 +86,14 @@ durin approvals discard <id>   # delete the record without deciding it
 
 `approve` and `reject` refuse to run without a real terminal, and the agent's
 shell tool never runs them, so the agent cannot approve its own request. Each
-decided record keeps who decided it: you on the command line, a click or reply
-in the chat, or the skills judge. A request recorded by an earlier durin
-version is listed as `legacy:mcp` or `legacy:skills` and can only be discarded;
-ask the agent again if it is still needed.
+decided record keeps who decided it: you on the command line, a click in the
+webui, a reply typed in the chat, or the skills judge — even when the click or
+command line hands its verdict to a turn still waiting in a chat, the record
+keeps the real decider, not that chat. A change your `install_policy` already
+pre-authorized files no record at all; a skill installed that way is stamped
+`approved_by: policy` instead. A request recorded by an earlier durin version
+is listed as `legacy:mcp` or `legacy:skills` and can only be discarded; ask
+the agent again if it is still needed.
 
 A pending request expires 14 days after it was filed and can no longer be
 decided; ask the agent again if it is still wanted. A resolved record (decided

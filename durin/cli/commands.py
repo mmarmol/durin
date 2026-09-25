@@ -3582,7 +3582,7 @@ def approvals_list_cmd(
 
 def _approvals_decide(ctx: typer.Context, approval_id: str, decision: str) -> None:
     # The agent's exec tool runs commands with stdin as a pipe, so a model
-    # could otherwise approve its own staged request by shelling out to this
+    # could otherwise approve its own pending request by shelling out to this
     # very command. Refusing outside a real terminal keeps that decision with
     # a person at a keyboard.
     if not _stdin_is_interactive():

@@ -130,11 +130,16 @@ run paused for approval. A person resolves it from the automations inbox, the
 workflow's runs in the webui, the API, or a reply in the thread where it was
 posted.
 
-A decided record stores who decided it in `decided_by`: `operator` for
-`durin approvals` on the CLI, `user` (with the channel) for a webui click or a
-reply in the chat, `judge` for the skills judge. An action that
-`install_policy: auto` allowed files no record; a skill installed that way
-carries `approved_by: policy` in its provenance and commit trailers.
+A decided record stores who decided it in `decided_by`, with the channel that
+made the call: `{"kind": "operator", "channel": "cli"}` for `durin approvals`
+on the CLI, `{"kind": "user", "channel": "websocket"}` for a webui click,
+`{"kind": "user", "channel": <session key>}` for a reply typed in the chat
+itself, and `{"kind": "judge"}` for the skills judge. A CLI decision or webui
+click that lands while the turn that filed the request is still waiting
+hands its verdict to that turn (`pending_answers`) so it can run there, but
+the record still carries the real decider, not the chat it was asked in. An
+action that `install_policy: auto` allowed files no record; a skill installed
+that way carries `approved_by: policy` in its provenance and commit trailers.
 `durin approvals approve` and `reject` refuse to run without a terminal (TTY),
 and the exec hard floor refuses them at command position, so the agent cannot
 decide its own request through a shell.

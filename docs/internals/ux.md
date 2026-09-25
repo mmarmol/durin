@@ -244,7 +244,7 @@ the same note.
     (a Slack thread, a Telegram topic) rather than at the surface's top
     level. The reply is parsed by the loop.
   - **Legacy REPL**: cannot take a reply mid-turn, so it never waits; a
-    skill or MCP change becomes a pending request, decided with
+    skill, dependency or MCP change becomes a pending request, decided with
     `durin approvals`, and an exec command that needs approval is refused.
 
   In a webui chat the wait ends like a blocking question's: once the last

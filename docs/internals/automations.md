@@ -631,7 +631,7 @@ writable record would let the model forge its own approval, and a writable
 `.scan.json` its own import verdict. The same tools also refuse durin's own
 configuration and secret stores under `DURIN_HOME` (`config.json` and its
 `config.json.d/` directory, `secrets.json`, `api_tokens.json`, `pairing.json`),
-which the person changes through the dashboard or `durin config`.
+which the person changes through the dashboard or durin's own CLI.
 
 ### Service surface
 

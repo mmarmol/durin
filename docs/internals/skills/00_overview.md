@@ -260,7 +260,7 @@ let the model forge or rewrite its own approval, or the source and verdict of
 an import nobody scanned. The same tools also refuse durin's own configuration
 and secret stores under `DURIN_HOME` (`config.json` and its `config.json.d/`
 directory, `secrets.json`, `api_tokens.json`, `pairing.json`), which the person
-changes through the dashboard or `durin config`.
+changes through the dashboard or durin's own CLI.
 The guard lives in the agent-facing tools themselves
 (`durin/agent/tools/filesystem.py`, `.../notebook.py`); durin's own store
 operations write to `skills/` directly through `skills_store.py` and never go

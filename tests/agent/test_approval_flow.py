@@ -73,6 +73,45 @@ async def test_interactive_yes_applies_no_rejects(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_typed_reply_in_chat_records_the_chat_user_not_a_hand_off(tmp_path):
+    # No `decide` call is involved here: the loop parses a yes/no typed
+    # straight into the chat and resolves the waiter itself, so there is
+    # nothing in `_HANDOFF_DECIDED_BY` to consume — the decider is whoever is
+    # on the other end of `session_key`.
+    out = await approval.request(tmp_path, PREP, session_key="websocket:s9", deps=ex.ExecDeps(),
+                                 ask=_asker("approve"))
+    assert out.status == "applied"
+    assert out.record["decided_by"] == {"kind": "user", "channel": "websocket:s9"}
+
+
+@pytest.mark.asyncio
+async def test_decide_hand_off_to_a_waiting_turn_records_the_real_decider(tmp_path):
+    # The turn's `ask` mirrors the production chat asker: it registers a live
+    # `pending_answers` waiter and blocks on it, so `decide`'s `resolve` call
+    # is what actually delivers the verdict back into `request`.
+    session_key = "websocket:s10"
+
+    async def ask(record):
+        fut = pa.create(session_key, kind="approval", ref=record["id"])
+        return await fut
+
+    task = asyncio.ensure_future(
+        approval.request(tmp_path, PREP, session_key=session_key, deps=ex.ExecDeps(), ask=ask))
+    await asyncio.sleep(0)
+    rid = pa.waiting_ref(session_key)
+    assert rid is not None
+
+    handoff = await approval.decide(
+        tmp_path, rid, "approve", decided_by={"kind": "operator", "channel": "cli"},
+        deps=ex.ExecDeps())
+    assert handoff.status == "pending" and "waiting turn" in handoff.message
+
+    result = await task
+    assert result.status == "applied" and len(RUNS) == 1
+    assert result.record["decided_by"] == {"kind": "operator", "channel": "cli"}
+
+
+@pytest.mark.asyncio
 async def test_no_answer_or_autonomous_leaves_it_pending_without_duplicates(tmp_path):
     a = await approval.request(tmp_path, PREP, session_key="websocket:s", deps=ex.ExecDeps(),
                                ask=_asker(None))
