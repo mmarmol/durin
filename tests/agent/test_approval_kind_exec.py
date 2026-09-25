@@ -116,9 +116,18 @@ async def test_a_live_but_out_of_turn_exec_run_still_fails_without_running(tmp_p
     """A webui click that lands after the turn stopped waiting hands the
     executor a live exec_run (the gateway's approval_exec_deps()), but never
     the literal command — only the turn that filed the request holds that.
-    A live runner is not enough: it must still fail, and never run."""
+    A live runner is not enough: it must still fail, and never run.
+
+    The runner records its calls instead of raising: ``_run_approved``
+    catches any exception from the executor and records ``failed`` either
+    way, so a raise-based runner cannot tell "never called" apart from
+    "called and blew up" — only an empty ``calls`` list can.
+    """
+    calls = []
+
     async def run(**kw):
-        raise AssertionError("must not run — no literal, no turn behind it")
+        calls.append(kw)
+        return "should never happen"
 
     p = _prep()
     rec = approval_store.create(tmp_path, kind=p.kind, summary=p.summary, detail=p.detail,
@@ -127,5 +136,7 @@ async def test_a_live_but_out_of_turn_exec_run_still_fails_without_running(tmp_p
     out = await approval.decide(tmp_path, rec["id"], "approve",
                                 decided_by={"kind": "user", "channel": "websocket:s"},
                                 deps=ex.ExecDeps(exec_run=run))
+    assert calls == []
     assert out.status == "failed"
+    assert "inside the chat turn" in out.message
     assert approval_store.get(tmp_path, rec["id"])["status"] == "failed"

@@ -132,13 +132,13 @@ def emit_memory_usage_rollup(
 
 
 if TYPE_CHECKING:
+    from durin.agent.approval_executors import ExecDeps
     from durin.config.schema import (
         ChannelsConfig,
         MemoryEagerSurfaceConfig,
         MemoryPrefetchConfig,
         ToolsConfig,
     )
-    from durin.agent.approval_executors import ExecDeps
     from durin.cron.service import CronService
     from durin.jobs.registry import JobRegistry
     from durin.memory.eager_surface import EagerSnapshot
