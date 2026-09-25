@@ -140,8 +140,8 @@ class McpManageTool(Tool, ContextAware):
             # watching.
             return await mcp_kind.apply(prepared.payload, deps)
         # The person in this chat decides. With nobody to ask (cron, workflow,
-        # sub-agent, no live consumer) the asker is None and the request waits in
-        # Pending.
+        # sub-agent, no live consumer, or a turn with input from an API token)
+        # the asker is None and the request waits in Pending.
         ask = self._chat.asker(self._ctx.get())
         outcome = await approval.request(self._workspace, prepared,
                                          session_key=self._session_key(),

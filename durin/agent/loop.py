@@ -1607,7 +1607,8 @@ class AgentLoop:
 
         Returns True when the message was consumed as the in-turn answer.
         Slash commands and notices flagged ``INBOUND_META_NOT_AN_ANSWER`` are
-        never consumed. A media-bearing reply cannot be
+        never consumed, and a message from an API token never answers an
+        approval. A media-bearing reply cannot be
         carried through a tool result — the waiter falls back to yield
         semantics and the message continues through normal routing.
         """
@@ -1621,6 +1622,13 @@ class AgentLoop:
         if msg.metadata.get(INBOUND_META_NOT_AN_ANSWER):
             # Posted for the user, not typed by them (a stored-secret notice):
             # the question keeps waiting and the notice routes on.
+            return False
+        if (msg.metadata.get("origin") == "api"
+                and pending_answers.waiting_kind(session_key) == "approval"):
+            # A message from an API token never decides an approval, nor
+            # makes it stop waiting: only the person may. The approval keeps
+            # waiting for them, and the message routes on like any other sent
+            # during the turn. An API client may still answer a question.
             return False
         if msg.media:
             pending_answers.fallback(session_key)

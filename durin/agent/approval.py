@@ -14,10 +14,10 @@ three paths:
 ``applied``  a judge cleared it, or a person in this chat answered "approve"
              — the request ran and returned its result.
 ``rejected`` a person in this chat answered "reject".
-``pending``  nobody could be asked (autonomous context, or no answer came
-             back). The request is recorded under ``<workspace>/.approvals/``
-             and the action does NOT run — it is resolved later out of band
-             via ``decide``.
+``pending``  nobody could be asked (autonomous context, a turn with input
+             from an API token, or no answer came back). The request is
+             recorded under ``<workspace>/.approvals/`` and the action does
+             NOT run — it is resolved later out of band via ``decide``.
 
 Staging rather than refusing matters: an autonomous run that needed something
 leaves a durable record instead of losing the work.
@@ -56,6 +56,7 @@ __all__ = [
     "note_turn_input",
     "outcome_to_tool_result",
     "request",
+    "turn_has_api_input",
 ]
 
 # Session-key prefixes the runtime uses for contexts with no person attached.
@@ -117,20 +118,31 @@ def note_turn_input(metadata: dict[str, Any] | None) -> None:
     """Record that the current turn received input from *metadata*'s sender.
 
     Called for the message that opens a turn and for every message injected
-    into it; input marked ``origin: "api"`` makes ``gate`` stage privileged
-    actions for the rest of the turn."""
+    into it. Input marked ``origin: "api"`` makes ``turn_has_api_input`` true
+    for the rest of the turn."""
     if metadata and metadata.get("origin") == "api":
         _TURN_HAS_API_INPUT.set(True)
+
+
+def turn_has_api_input() -> bool:
+    """True once the current turn received input from an API token.
+
+    Such a turn never puts a privileged request to the person in the chat:
+    the in-chat asker is withheld, so skill and MCP changes are filed as
+    pending and an exec command that needs approval is refused, as in a
+    context with no person. The operator's standing policy (a judge,
+    ``install_policy: auto``) still applies; it is not the turn's authority."""
+    return _TURN_HAS_API_INPUT.get()
 
 
 def can_authorize(session_key: str | None) -> bool:
     """True when the current turn may approve a privileged action itself.
 
     That takes a person reachable in this context (``human_reachable``) and a
-    turn with no input from an API token. Privileged tools decide with this;
-    waiting for an answer (``ask_user``) only needs ``human_reachable``, so an
-    API client can still answer a question."""
-    return human_reachable(session_key) and not _TURN_HAS_API_INPUT.get()
+    turn with no input from an API token. Waiting for an answer (``ask_user``)
+    only needs ``human_reachable``, so an API client can still answer a
+    question."""
+    return human_reachable(session_key) and not turn_has_api_input()
 
 
 def gate(
@@ -267,9 +279,16 @@ async def _run_approved(workspace: Path | str, record: dict, deps: ExecDeps) -> 
     return Outcome("applied", rec, result, f"Done: {record['summary']}.")
 
 
-def _pending_outcome(record: dict, *, asked: bool) -> Outcome:
-    where = ("waiting for approval (`durin approvals`)" if not asked
-             else "the user did not answer; it is still waiting for approval (`durin approvals`)")
+def _pending_outcome(record: dict, *, asked: bool, api_input: bool = False) -> Outcome:
+    if asked:
+        where = "the user did not answer; it is still waiting for approval (`durin approvals`)"
+    elif api_input:
+        # Say why nobody was asked, so the model can tell the person where
+        # the request waits instead of retrying it in the chat.
+        where = ("this turn includes input from an API token, which cannot approve it, "
+                 "so it is waiting for a person's approval (`durin approvals`)")
+    else:
+        where = "waiting for approval (`durin approvals`)"
     return Outcome("pending", record, None, (
         f"Not done yet: {record['summary']} — {where}, id {record['id']}. Continue "
         "without it; do not retry, and do not reach the same effect another way."))
@@ -321,7 +340,7 @@ async def request(workspace: Path | str, prepared: Prepared, *, session_key: str
         session_key=session_key, context=context)
 
     if ask is None:
-        return _pending_outcome(record, asked=False)
+        return _pending_outcome(record, asked=False, api_input=turn_has_api_input())
     answer = await ask(record)
     if answer not in ("approve", "reject"):
         return _pending_outcome(record, asked=True)

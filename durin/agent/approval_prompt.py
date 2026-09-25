@@ -12,7 +12,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
-from durin.agent import pending_answers
+from durin.agent import approval, pending_answers
 from durin.agent.user_payloads import (
     PENDING_APPROVAL_KEY,
     channel_renders_tool_payloads,
@@ -55,9 +55,16 @@ class ChatHandles:
 
 def make_chat_asker(*, sessions: Any, bus: Any, request_ctx: Any,
                     timeout_s: float) -> AskFn | None:
-    """An asker bound to this turn's chat, or None when no person can answer."""
+    """An asker bound to this turn's chat, or None when no person can answer.
+
+    None too in a turn with input from an API token: a program took part in
+    it, so its privileged requests are not put to the chat as the person's
+    decision. Without an asker they take the no-person path (filed as
+    pending, or refused for exec)."""
     session_key = getattr(request_ctx, "session_key", None)
     if sessions is None or not session_key or not pending_answers.can_block(session_key):
+        return None
+    if approval.turn_has_api_input():
         return None
     channel = getattr(request_ctx, "channel", None)
     chat_id = getattr(request_ctx, "chat_id", None)

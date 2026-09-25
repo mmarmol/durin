@@ -530,7 +530,8 @@ class ExecTool(Tool, ContextAware):
 
         Approved, it runs once, past only the policy rules that refused it.
         With nobody to ask (cron, workflow, sub-agent, a chat with no live
-        consumer: the asker is None unless ``approval.human_reachable``), the
+        consumer: the asker is None unless ``approval.human_reachable``; and in
+        a turn with input from an API token, which never asks in the chat), the
         refusal stands and nothing is filed: a shell command replayed outside
         the run that needed it has no defined meaning. A filed request is
         never left pending either: declined, it is rejected; unanswered, or

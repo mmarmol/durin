@@ -267,9 +267,11 @@ the same reason.
 folds the key into the unified session when `unified_session` is on, then
 `AgentLoop.cancel_session_turns` cancels the turn and its subagents.
 
-**Authority.** A turn with input from a token (`origin: "api"`) stages
-privileged actions for approval instead of running them — see the approval
-gate in the security internals.
+**Authority.** A turn with input from a token (`origin: "api"`) never asks the
+person in the chat to approve a privileged action: skill and MCP changes
+become pending requests for `durin approvals`, an exec command that needs
+approval is refused, and a token's message never answers an approval the turn
+waits on — see authority by context in the security internals.
 
 ### OpenAI-compatible `/v1` surface
 

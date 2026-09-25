@@ -59,12 +59,26 @@ A person's context loses that authority for a turn that received input from an
 API token. A message sent through the native chat routes carries
 `origin: "api"`; the agent loop marks the turn (`approval.note_turn_input`, a
 context variable set in the turn's own task, for the opening message and for
-any message injected into the turn). The privileged tools decide with
-`approval.can_authorize` — a person reachable *and* no API input in the turn —
-so such a turn stages their actions as an autonomous context does, and the
-staged note says why. A `chat:write` token may hold a
-conversation in the dashboard's sessions, but it is a program, and it must not
-carry the person's authority to install or rewrite executable state.
+any message injected into the turn), and `approval.turn_has_api_input` reads
+the mark. Such a turn never asks in the chat: `make_chat_asker` returns no
+asker, so each privileged tool takes the path of a context with no person. A
+skill install, edit or dependency install and an MCP change become pending
+requests that a person decides with `durin approvals`, and the pending note
+tells the model why; an exec command that needs approval is refused, with
+nothing filed. The operator's standing policy still applies — the configured
+skills judge, and `install_policy: auto` — because it is not the turn's
+authority. An API message never answers an approval either: while a turn
+waits on one, a message marked `origin: "api"` neither decides it nor ends the
+wait, and routes on like any other message sent during the turn. The Approve /
+Reject click travels on the webui socket, and a token from the API token store
+cannot open that socket: the handshake takes only the configured static
+`token` (the operator's own secret) or a single-use token minted by
+`/webui/bootstrap`. With `websocket_requires_token` off and no static `token`,
+the handshake takes every connection that reaches the socket, token or not —
+the operator's choice, which no API token changes. A `chat:write`
+token may hold a conversation in the dashboard's sessions, but it is a
+program, and it must not carry the person's authority to install or rewrite
+executable state.
 
 A `confirm` field in the tool call is a claim by the model, never evidence
 that a person agreed, so it can only ever *narrow* the decision: it is
@@ -78,9 +92,9 @@ that authority was granted by the operator in config, out of band and ahead of
 the run, which is what makes it delegable. `durin.agent.approval` owns this
 classification, and `pending_answers.can_block` (the blocking `ask_user_question`
 wait) delegates to its `human_reachable` — a context with no person cannot
-answer either. The API-input rule narrows only authorization, not answering: a
-turn driven through the API may still wait for an answer, which the API client
-sends as a plain message.
+answer either. The API-input rule narrows only approval, not answering: a turn
+driven through the API may still wait for the answer to a question, which the
+API client sends as a plain message.
 
 **Layered skill gates.** Importing a skill passes two independent scan stages.
 The first is deterministic: a regex and AST pass that always runs. The second is
