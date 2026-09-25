@@ -156,7 +156,10 @@ class TestBridgeSupervisor:
                                auth_dir=tmp_path, media_dir=tmp_path, logger=None)
         sup._initial_delay = 0.05
         await sup.start()
-        await asyncio.sleep(0.5)
+        # The supervisor's run task returns once it decides not to restart.
+        # Wait for that decision, not a fixed window a slow spawn can outlast.
+        async with asyncio.timeout(10):
+            await sup._task
         assert sup.needs_login is True
         assert marker.read_text().count("run") == 1
         await sup.stop()
@@ -172,7 +175,10 @@ class TestBridgeSupervisor:
                                auth_dir=tmp_path, media_dir=tmp_path, logger=None)
         sup._initial_delay = 0.05
         await sup.start()
-        await asyncio.sleep(0.5)
+        # The supervisor's run task returns once it decides not to restart.
+        # Wait for that decision, not a fixed window a slow spawn can outlast.
+        async with asyncio.timeout(10):
+            await sup._task
         assert sup.needs_login is False
         assert marker.read_text().count("run") == 1
         await sup.stop()
