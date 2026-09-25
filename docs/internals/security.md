@@ -13,11 +13,14 @@ architecture. It covers six interlocking layers:
   values at execution time.
 - **Skill and MCP import gates** — every externally-sourced skill passes a
   deterministic static scan before installation; an optional LLM semantic judge
-  provides multilingual coverage.
-- **Shell execution policy** — a layered guard pipeline (deny patterns, memory
-  vault protection, workspace boundary, SSRF URL detection) runs before every
-  subprocess; the environment is scrubbed to a minimal set plus explicitly
-  authorized secrets.
+  provides multilingual coverage. Adding, updating, installing or enabling an
+  MCP server goes through the same authority-by-context approval channel, and
+  a request can never carry a literal credential.
+- **Shell execution policy** — a layered guard pipeline (hard floor, deny
+  patterns, memory vault protection, workspace boundary, SSRF URL detection)
+  runs before every subprocess; in a chat the person can approve one refused
+  command once, and the hard floor never runs regardless; the environment is
+  scrubbed to a minimal set plus explicitly authorized secrets.
 - **SSRF network protection** — all outbound HTTP fetches resolve the target
   hostname once, validate it against a private-network blocklist, and pin the
   connection to the validated IP to close DNS-rebinding races.
@@ -31,6 +34,8 @@ spellings, not every way to reach the same effect (an interpreter one-liner or a
 script the agent writes and then runs is not matched). What keeps a refused
 operation refused is the instruction that comes with the refusal — stop and ask
 the user — together with the sandbox and workspace restriction where configured.
+In a chat the exec tool does the asking itself: the person sees the exact
+command and approves or declines it.
 
 ## 2 Mental model
 
@@ -76,10 +81,13 @@ every write that changes an installed skill, before the write lands.
 
 **Execution policy as defense-in-depth.** The shell execution path is not a
 single wall; it is a sequence of independent checks. A command that clears one
-check still faces the next. Deny patterns, memory vault protection, workspace
-boundary enforcement, and SSRF URL detection run in sequence. The subprocess
-environment is assembled from scratch (no ambient API keys), with only explicitly
-authorized values added back.
+check still faces the next. The hard floor, deny patterns, memory vault
+protection, workspace boundary enforcement, and SSRF URL detection run in
+sequence. Only the deny list and a configured allowlist can be lifted, and only
+by a person in the chat approving that exact command once; the approval lifts
+the rules that matched and nothing else — every other check still runs. The
+subprocess environment is assembled from scratch (no ambient API keys), with
+only explicitly authorized values added back.
 
 ## 3 Diagram
 
@@ -105,13 +113,18 @@ flowchart TD
     end
 
     subgraph "Shell execution policy"
-        CMD["exec command"] --> GC["_guard_command()"]
-        GC -->|"deny pattern\nmatch"| ERR1["Error: blocked"]
+        CMD["exec command"] --> GC["_check()"]
+        GC -->|"hard floor"| ERR0["Error: never runs"]
+        GC -->|"deny pattern match\nor allowlist miss"| ASK{"person in\nthis chat?"}
+        ASK -->|"no"| ERR1["Error: blocked,\nask the user"]
+        ASK -->|"yes: approval card\nor yes/no reply"| DEC{"answer"}
+        DEC -->|"approve"| GC2["_check() past the\nmatched rules only"]
+        DEC -->|"decline / no answer"| ERR3["Error: declined,\ndo not retry"]
         GC -->|"memory/\nmutation"| ERR2["Error: use memory tools"]
-        GC -->|"allow_patterns\nallowlist miss"| ERR3["Error: not in allowlist"]
         GC -->|"internal URL"| ERR4["Error: SSRF target"]
         GC -->|"path outside\nworkspace"| ERR5["Error: workspace boundary"]
         GC -->|"pass"| BE["_build_env()\nminimal + allowed_env_keys\n+ scoped secrets"]
+        GC2 -->|"pass"| BE
         BE --> SW["sandbox wrap\n(if configured)"]
         SW --> PROC["subprocess"]
     end
@@ -379,6 +392,67 @@ What happens then depends on who writes:
 Any write that adds findings drops `provenance.verdict_cleared`, so the
 import-time verdict pin returns until someone reviews the skill again.
 
+### MCP server changes
+
+`mcp_manage` (`durin/agent/tools/mcp_manage.py`) adds, updates, installs,
+enables, disables, reconnects and removes MCP servers. Add, update, install and
+enable put a server's command or endpoint into the agent's tool surface, so
+they go through `tools.mcp_discovery.install_policy`: `never` refuses, `auto`
+runs (authority the operator granted in config ahead of time), and `approve`
+(the default) files an `mcp_change` approval request. In a chat the person
+approves or declines it there; with nobody to ask it waits in Pending
+(`durin approvals`). The tool has no `confirm` parameter: nothing in a call can
+approve it. Remove, disable and reconnect add no executable state and are not
+gated — except that the agent's own `reconnect` refuses instead of connecting
+whenever the on-disk config does not match the config a person or an approved
+request last put in place (`McpRuntime.approved_config`, tracked from boot and
+kept current on every add/update/enable and every actual connect); a person's
+own dashboard/REST reconnect always applies whatever is on disk.
+
+The request records the exact change (`durin/agent/approval_kinds_mcp.py`). An
+install is resolved against the registry when it is requested, so the person
+approves the config that will be written, not a ref whose content could change
+underneath; enable carries a full snapshot of the server's current config, the
+same detail shown for add/update, and applies that exact snapshot rather than
+whatever the disk says when it runs. The request's hash covers the server's
+current config entry, so a request whose server changed after it was filed is
+stale and does not run. A request never holds a credential:
+`secret_safe_config` replaces an env, header or OAuth value that equals a
+stored secret with its `${secret:NAME}` reference (only `env`/`headers` are
+ever resolved back from a reference), and refuses any other credential outright
+— by key name, or by the shapes the redactor recognizes — telling the model to
+call `request_secret` instead. A missing local runtime for a stdio install runs
+through the exec tool's own non-asking entry point (the same one
+`skill_install_deps` uses), so it never opens a second approval nested inside
+the one already being carried out. An approval decided outside the running
+gateway (the CLI) writes the config only; the gateway applies it on restart or
+when the server is reconnected.
+
+### File-tools write guard
+
+The write-capable file tools (`write_file`, `edit_file`, `notebook_edit`)
+refuse a path under a registry that owns its own validated, versioned write
+door (`skills/`, `workflows/`, `automations/` — see
+[skills/00_overview.md](skills/00_overview.md) and
+[automations.md](automations.md)), under `.approvals/` or
+`.durin/import-quarantine/` (neither owns a door at all — a writable record in
+either would let the model forge its own approval or its own import scan
+verdict), or under durin's own config/secret/token/pairing stores wherever
+`DURIN_HOME` actually is (`config.json` and its `.d/` split-layout directory,
+`secrets.json`, `api_tokens.json`, `pairing.json`): an out-of-band edit there,
+followed by an ungated action that reloads config from disk (an MCP
+`reconnect`, say), would otherwise run whatever got written with none of the
+tool-specific approval gates ever seeing it. The comparison is by filesystem
+identity (`is_under()` in `durin/agent/tools/path_utils.py`), not path text, so
+a case variant of any segment (`CONFIG.JSON`, `.APPROVALS`) cannot slip past
+the guard on a case-insensitive filesystem (macOS APFS by default, most
+Windows volumes); a denied path that does not exist yet is still guarded, by
+its nearest existing ancestor. Reads are unaffected. Only writes through these
+tools are covered — a shell command run via `exec` could still overwrite
+`config.json` directly, which is why the MCP reconnect gate above checks for
+config drift independently; guarding that path is an exec sandbox's job, not
+this guard's.
+
 ### Shell execution policy
 
 `ExecTool.execute()` (`durin/agent/tools/shell.py`) runs every shell command
@@ -390,20 +464,45 @@ workspace root before any guard runs. An LLM-supplied directory outside the
 workspace is rejected immediately, preventing a caller from using `working_dir`
 as a bypass.
 
-**`_guard_command()`**: applies deny and allow patterns, then memory vault
-protection, then SSRF URL detection, then workspace boundary on absolute paths.
+**`_check()`**: applies the hard floor, then deny and allow patterns, then
+memory vault protection, then SSRF URL detection, then workspace boundary on
+absolute paths. It returns a `CommandRefusal` naming the kind of refusal and,
+for the policy checks, the rules that matched; `_guard_command()` (kept for
+callers that only want the text) wraps it.
+
+- *Hard floor* (`_HARD_FLOOR_PATTERNS`): recursive `rm` of `/`, `/*`, `~` or
+  `$HOME`; `mkfs` and `diskpart`; `dd` or a redirect onto a whole-disk device;
+  a fork bomb; `shutdown`, `reboot`, `poweroff` and `init 0` in command
+  position; and `durin approvals approve`/`reject` itself (so the model cannot
+  approve its own pending request through a shell — the CLI's own TTY
+  requirement behind it is a second, independent layer). These never run: not
+  with `allow_patterns`, not with the user's approval. The refusal says so and
+  tells the model the user must run it outside durin if it is really needed.
 
 - *Deny/allow logic*: when `allow_patterns` are configured they form an allowlist
   (commands not matching any pattern are blocked). When only `deny_patterns` are
   configured (the default), the list is an opt-out — matching commands are blocked
   unless an `allow_patterns` entry explicitly exempts them. Hardcoded deny patterns
   cover `rm -rf`, `dd`, disk operations, power commands, fork bombs, and direct
-  writes to the append-only `history.jsonl` archive. A refusal names the matched
+  writes to the append-only `history.jsonl` archive. A refusal names every matched
   rule and tells the model this is the exec safety policy: it must not reach the
-  same result another way, and should tell the user and ask (the user can run the
-  command, or exempt it with `allow_patterns`). The runner recognizes these
-  refusals as a policy boundary, like SSRF and workspace blocks, so it does not
+  same result another way. The runner recognizes these refusals (and the hard
+  floor's) as a policy boundary, like SSRF and workspace blocks, so it does not
   append its generic "try a different approach" retry hint to them.
+
+- *Approval in a chat*: when a person is reachable in the session
+  (`approval.human_reachable`), a deny match or allowlist miss becomes an
+  `exec_command` approval request instead of a refusal
+  (`durin/agent/approval_kinds_exec.py`). The person sees the command, its
+  working directory and the matched rules; the record itself holds only a
+  redacted copy of the command (known secrets, plus common inline-credential
+  shapes such as a bearer token or a `user:pass@` URL) and never the command's
+  output. Approved, the command runs once, past exactly those rules — the hard
+  floor and every other guard still apply. Declined or unanswered, the model
+  gets the refusal plus a "do not retry" note, and the request is closed: an
+  exec request never waits in Pending, because replaying a shell command
+  outside the turn that needed it has no defined meaning. In cron, workflow and
+  sub-agent runs nobody is asked and the refusal stands.
 
 - *Memory vault protection* (`_guard_memory_mutation()`): mutations of the
   `memory/` directory via `rm`, `mv`, `cp`, `tee`, `sed -i`, `dd`, and redirect
@@ -538,10 +637,18 @@ only callers with system-write authority can manage other tokens.
 | `install_gate` | `durin/agent/skills_import.py` | The import gate's decision (verdict, action, findings) computed exactly as `install_imported_skill` enforces it |
 | `WriteScan` / `scan_skill_write` | `durin/agent/skills_store.py` | Scan of a skill before and after a proposed write; `needs_review` is the shared write gate |
 | `approval_kinds_skills` (module) | `durin/agent/approval_kinds_skills.py` | `skill_install` / `skill_edit` / `skill_deps` approval kinds (prepare, hash, execute) and the skills judge as a limited approver |
-| `ExecTool` | `durin/agent/tools/shell.py` | Shell execution tool; applies `_guard_command()`, builds scrubbed env via `_build_env()`, wraps with sandbox |
-| `_guard_command` | `durin/agent/tools/shell.py` | Layered guard: deny/allow patterns → memory vault → SSRF URL → workspace boundary |
+| `ExecTool` | `durin/agent/tools/shell.py` | Shell execution tool; applies `_check()`, asks the person in a chat to approve a deny/allowlist refusal, builds scrubbed env via `_build_env()`, wraps with sandbox |
+| `_check` / `_guard_command` | `durin/agent/tools/shell.py` | Layered guard: hard floor → deny/allow patterns → memory vault → SSRF URL → workspace boundary; `_check` returns a `CommandRefusal` with the matched rules, `_guard_command` its text |
+| `_HARD_FLOOR_PATTERNS` | `durin/agent/tools/shell.py` | Commands that never run, not even when approved |
 | `_guard_memory_mutation` | `durin/agent/tools/shell.py` | Blocks rm/mv/cp/tee/sed -i/dd/redirect targeting `memory/` paths |
 | `_build_env` | `durin/agent/tools/shell.py` | Constructs minimal subprocess env + `allowed_env_keys` + scoped secrets |
+| `approval` (module) | `durin/agent/approval.py` | Authority-by-context gate: `human_reachable`, `request` (judge / person / pending), `decide` (resolve from outside the turn), `gate` (the older stage-or-allow primitive) |
+| `approval_store` (module) | `durin/agent/approval_store.py` | Persists approval records under `<workspace>/.approvals/`; `create`, `find_pending`, `transition` (compare-and-swap on status), `get`, `list_records` |
+| `approval_executors` (module) | `durin/agent/approval_executors.py` | Per-kind hash + execute registry (`register`, `execute`, `current_hash`); `ExecDeps` carries the runtime handles (`exec_run`, `mcp`, `extra`) an executor needs |
+| `approval_prompt` (module) | `durin/agent/approval_prompt.py` | `ChatHandles` / `make_chat_asker`: asks the person in the current chat and waits, bounded by `agents.defaults.ask_user_answer_timeout_s` |
+| `approval_kinds_exec` (module) | `durin/agent/approval_kinds_exec.py` | `exec_command` approval kind: redacts the command before it is ever recorded, binds the request to command + cwd + session, runs only inside the turn that asked |
+| `approval_kinds_mcp` (module) | `durin/agent/approval_kinds_mcp.py` | `mcp_change` approval kind: resolved server config, hash over the current config entry, `secret_safe_config` credential scrub |
+| `is_under` / `resolve_workspace_path` | `durin/agent/tools/path_utils.py` | Filesystem-identity containment check (case-insensitive-safe) behind the file tools' registry, `.approvals/`, import-quarantine and durin-store write guards |
 | `Principal` | `durin/service/principal.py` | Immutable identity + authorization: `subject`, `scopes` (frozenset), `kind`; `require()` raises `ForbiddenError` |
 | `Scope` | `durin/service/principal.py` | Enum of permission scopes (`domain:read`/`domain:write` pairs + `admin`) |
 | `ApiTokenStore` | `durin/security/api_tokens.py` | File-backed hashed token store (mode 0600); `issue()` returns plaintext once; `resolve()` uses HMAC timing-safe compare |
@@ -559,11 +666,12 @@ only callers with system-write authority can manage other tokens.
 | `tools.exec.timeout` | `60` | Subprocess timeout in seconds (max 600) |
 | `tools.exec.sandbox` | `""` | Sandbox backend (`bwrap`, `docker`, `testbed`, or empty for none) |
 | `tools.exec.allowed_env_keys` | `[]` | Ambient `os.environ` keys to forward to the subprocess; all others are excluded |
-| `tools.exec.allow_patterns` | `[]` | Regex patterns; when non-empty, become an allowlist (commands not matching any pattern are blocked) |
+| `tools.exec.allow_patterns` | `[]` | Regex patterns; when non-empty, become an allowlist (commands not matching any pattern are blocked, or put to the person in a chat). They never exempt the hard floor |
 | `tools.exec.deny_patterns` | `[]` | Regex patterns appended to the hardcoded deny list |
 | `tools.exec.path_append` | `""` | Directory prepended to `PATH` inside the subprocess |
 | `tools.restrict_to_workspace` | `false` | When true, absolute paths in exec commands and the `working_dir` parameter are blocked outside the configured workspace root |
 | `tools.ssrf_whitelist` | `[]` | CIDR ranges (e.g. `100.64.0.0/10` for Tailscale) to exempt from the SSRF private-address block |
+| `tools.mcp_discovery.install_policy` | `"approve"` | `mcp_manage` add/update/install/enable: `never` refuses, `approve` needs a person's approval (asked in chat, else Pending), `auto` runs |
 | `skills.security.allowlist` | (vendor defaults) | Source-ref prefixes (e.g. `github:anthropics/`) that skip the source confirmation step; verdict and code gates have no opt-out |
 | `skills.security.llm_judge.trigger` | `"off"` | When the LLM judge runs: `off` (only on demand; it never clears approvals), `uncertain` (at fetch time for caution/code-carrying/out-of-allowlist skills) or `always`; when not `off` it is also consulted for the approvals it may clear |
 | `skills.install_policy` | `"approve"` | Who authorizes flagged skill installs and dependency installs: `approve` (the user; the judge may clear a non-dangerous install), `auto` (pre-authorized; a dangerous skill still needs the user), `never` (dependency installs only reported) |

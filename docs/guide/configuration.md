@@ -621,6 +621,13 @@ See [docs/internals/tools.md](../internals/tools.md) for architecture details.
 | `allow_patterns` | `[]` | Shell command glob-allow patterns |
 | `deny_patterns` | `[]` | Shell command glob-deny patterns |
 
+When you chat with the agent and a command is refused by `deny_patterns` or
+missing from `allow_patterns`, you are shown the exact command and asked to
+approve it; approving runs that command once. A short list of commands never
+runs, even when approved: recursively removing `/` or your home directory,
+formatting or overwriting a whole disk, a fork bomb, and shutdown or reboot. In
+scheduled or background runs nobody is asked and the command is refused.
+
 **`tools.web`** — web search and fetch tools:
 
 | Key | Default | Meaning |
@@ -712,7 +719,7 @@ MCP server sampling (server-initiated LLM calls) is governed by `sampling` under
 
 | Key | Default | Meaning |
 |---|---|---|
-| `install_policy` | `approve` | `never`, `approve`, or `auto` |
+| `install_policy` | `approve` | `never` (the agent cannot add, update, install or enable a server), `approve` (you approve each change: in a chat you are asked; otherwise it waits in Pending), or `auto` |
 | `quality` | `official` | Default discovery view: `official` (star/first-party gate) or `all` |
 | `min_stars` | `100` | Star floor for the `official` gate |
 | `search_limit` | `10` | Max results per search |
