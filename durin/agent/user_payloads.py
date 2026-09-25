@@ -178,6 +178,18 @@ def mark_interactions_delivered(
     metadata[_DELIVERED_KEY] = delivered
 
 
+def forget_delivery(metadata: dict[str, Any], key: str) -> None:
+    """Drop the delivered mark for *key*.
+
+    Called when a new payload replaces the one under *key*, so it is
+    delivered even when its text matches one sent earlier (the same question
+    asked again after the first was answered).
+    """
+    delivered = metadata.get(_DELIVERED_KEY)
+    if isinstance(delivered, dict):
+        delivered.pop(key, None)
+
+
 _EVENT_SERIALIZERS = {
     "ask_user_question": _serialize_question,
     "request_secret": _serialize_secret_request,

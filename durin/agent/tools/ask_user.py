@@ -45,7 +45,9 @@ from durin.agent.tools.schema import (
 )
 from durin.agent.user_payloads import (
     channel_renders_tool_payloads,
-    serialize_pending_interactions,
+    forget_delivery,
+    mark_interactions_delivered,
+    undelivered_interactions,
 )
 from durin.telemetry.logger import current_telemetry
 
@@ -186,6 +188,9 @@ class AskUserQuestionTool(Tool, ContextAware):
                 "question": question,
                 "options": cleaned_options or [],
             }
+            # A new question, even one worded like an earlier one, has not
+            # been delivered yet.
+            forget_delivery(session.metadata, PENDING_QUESTION_KEY)
             self._sessions.save(session)
 
         self._emit("ask_user.question_asked", {
@@ -260,7 +265,9 @@ class AskUserQuestionTool(Tool, ContextAware):
 
         Rich channels already rendered the panel from the start tool_event;
         the turn-end fallback serializer never fires while we block, so dumb
-        channels need the serialized question published here.
+        channels need the serialized question published here. What is
+        published is marked delivered, so when the wait times out and the
+        turn ends, the turn-end fallback does not send it a second time.
         """
         ctx = self._ctx.get()
         if self._bus is None or ctx is None:
@@ -269,18 +276,23 @@ class AskUserQuestionTool(Tool, ContextAware):
         if channel_renders_tool_payloads(channel):
             return
         session = self._session()
-        if session is None:
+        if session is None or session.metadata is None:
             return
-        texts = serialize_pending_interactions(session.metadata)
-        for text in texts:
-            with suppress(Exception):
-                from durin.bus.events import OutboundMessage
+        items = undelivered_interactions(session.metadata)
+        if not items:
+            return
+        from durin.bus.events import OutboundMessage
 
+        for _key, text in items:
+            with suppress(Exception):
                 await self._bus.publish_outbound(OutboundMessage(
                     channel=channel,
                     chat_id=ctx.chat_id,
                     content=text,
                 ))
+        with suppress(Exception):
+            mark_interactions_delivered(session.metadata, items)
+            self._sessions.save(session)
 
     @staticmethod
     def _emit(event_type: str, data: dict[str, Any]) -> None:
