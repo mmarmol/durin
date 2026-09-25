@@ -563,6 +563,8 @@ class WebSocketChannel(BaseChannel):
         runtime_model_preset: Callable[[], str | None] | None = None,
         runtime_concurrency_snapshot: Callable[[], dict[str, Any]] | None = None,
         cron_service: "CronService | None" = None,
+        approval_deps: Callable[[], Any] | None = None,
+        session_turn_key: Callable[[str], str] | None = None,
     ):
         if isinstance(config, dict):
             config = WebSocketConfig.model_validate(config)
@@ -594,6 +596,13 @@ class WebSocketChannel(BaseChannel):
         # endpoint so a manual trigger reaches the live scheduler + its
         # in-process overlap guard. None outside the gateway (tests).
         self._cron_service = cron_service
+        # Live handles (exec tool, MCP service) that an approval decided from
+        # this socket runs with when its turn is no longer waiting on it.
+        # None outside the gateway: such a decision then reports what it lacks.
+        self._approval_deps = approval_deps
+        # How the agent loop keys a chat's turns (one shared key in unified
+        # mode), so an approval frame is matched to the chat that filed it.
+        self._session_turn_key = session_turn_key
         # Strong refs to fire-and-forget run-now tasks (else GC'd mid-run).
         self._background_run_tasks: set[asyncio.Task] = set()
         # Persistent HMAC secret for media URL signing.  Lives in the token
@@ -694,6 +703,17 @@ class WebSocketChannel(BaseChannel):
             if sess is not None:
                 sess.cancel_speak()
 
+    def _goal_state_session_key(self, chat_id: str) -> str:
+        """The session key goal-state/pending-approval metadata actually lives
+        under: normally "websocket:<chat_id>", but the loop's own turn key
+        (e.g. "unified:default") when agents.defaults.unified_session folds
+        every channel's conversation into one session — the asker saves
+        pending_approval under that same effective key, not this channel's."""
+        base = f"websocket:{chat_id}"
+        if self._session_turn_key is not None:
+            return self._session_turn_key(base)
+        return base
+
     async def _maybe_push_active_goal_state(self, chat_id: str) -> None:
         """Replay an active sustained goal from session metadata after *chat_id* is subscribed.
 
@@ -703,11 +723,12 @@ class WebSocketChannel(BaseChannel):
         """
         if self._session_manager is None:
             return
-        row = self._session_manager.read_session_file(f"websocket:{chat_id}")
+        session_key = self._goal_state_session_key(chat_id)
+        row = self._session_manager.read_session_file(session_key)
         meta = row.get("metadata", {}) if isinstance(row, dict) else {}
         if not isinstance(meta, dict):
             meta = {}
-        self._drop_stale_pending_approval(chat_id, meta)
+        self._drop_stale_pending_approval(session_key, meta)
         blob = goal_state_ws_blob(meta)
         # An approval the turn waits on is replayed too, so a refresh while
         # the gated tool blocks brings its card back.
@@ -715,7 +736,7 @@ class WebSocketChannel(BaseChannel):
             return
         await self.send_goal_state(chat_id, blob)
 
-    def _drop_stale_pending_approval(self, chat_id: str, meta: dict[str, Any]) -> None:
+    def _drop_stale_pending_approval(self, session_key: str, meta: dict[str, Any]) -> None:
         """A crash can kill the turn between the asker writing ``pending_approval``
         into metadata and its ``finally`` popping it back out, so the saved
         record can outlive the waiter that would ever resolve it. Replay it on
@@ -735,7 +756,7 @@ class WebSocketChannel(BaseChannel):
         if isinstance(record, dict) and record.get("status") == "pending":
             return
         meta.pop("pending_approval", None)
-        session = self._session_manager.get_or_create(f"websocket:{chat_id}")
+        session = self._session_manager.get_or_create(session_key)
         stored = session.metadata.get("pending_approval") if session.metadata else None
         if isinstance(stored, dict) and stored.get("approval_id") == approval_id:
             session.metadata.pop("pending_approval", None)

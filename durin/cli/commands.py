@@ -1778,6 +1778,8 @@ def _run_gateway(
         webui_runtime_model_preset=_webui_runtime_model_preset,
         webui_runtime_concurrency_snapshot=agent.build_concurrency_snapshot,
         cron_service=cron,
+        webui_approval_deps=getattr(agent, "approval_exec_deps", None),
+        webui_session_turn_key=getattr(agent, "bus_turn_key", None),
     )
 
     if channels.enabled_channels:

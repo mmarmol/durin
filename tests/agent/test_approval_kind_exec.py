@@ -109,3 +109,23 @@ async def test_approving_later_outside_the_turn_fails_without_running(tmp_path):
     assert out.status == "failed"
     assert "inside the chat turn" in out.message
     assert approval_store.get(tmp_path, rec["id"])["status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_a_live_but_out_of_turn_exec_run_still_fails_without_running(tmp_path):
+    """A webui click that lands after the turn stopped waiting hands the
+    executor a live exec_run (the gateway's approval_exec_deps()), but never
+    the literal command — only the turn that filed the request holds that.
+    A live runner is not enough: it must still fail, and never run."""
+    async def run(**kw):
+        raise AssertionError("must not run — no literal, no turn behind it")
+
+    p = _prep()
+    rec = approval_store.create(tmp_path, kind=p.kind, summary=p.summary, detail=p.detail,
+                                payload=p.payload, change_hash=p.change_hash,
+                                session_key="websocket:s", context="interactive")
+    out = await approval.decide(tmp_path, rec["id"], "approve",
+                                decided_by={"kind": "user", "channel": "websocket:s"},
+                                deps=ex.ExecDeps(exec_run=run))
+    assert out.status == "failed"
+    assert approval_store.get(tmp_path, rec["id"])["status"] == "failed"

@@ -89,6 +89,8 @@ class ChannelManager:
         webui_runtime_model_preset: Callable[[], str | None] | None = None,
         webui_runtime_concurrency_snapshot: Callable[[], dict] | None = None,
         cron_service: "CronService | None" = None,
+        webui_approval_deps: Callable[[], Any] | None = None,
+        webui_session_turn_key: Callable[[str], str] | None = None,
     ):
         self.config = config
         self.bus = bus
@@ -100,6 +102,11 @@ class ChannelManager:
         # websocket channel so its run-now endpoint reaches the live scheduler
         # (and its in-process overlap guard), not a fresh action-log copy.
         self._cron_service = cron_service
+        # Live approval handles and the loop's turn-key function, handed to
+        # the websocket channel so an approval click is matched to its chat
+        # and, when its turn stopped waiting, runs with the gateway's handles.
+        self._webui_approval_deps = webui_approval_deps
+        self._webui_session_turn_key = webui_session_turn_key
         self.channels: dict[str, BaseChannel] = {}
         if bus is not None:
             self.bus.set_inbound_authorizer(self._authorize_inbound)
@@ -186,6 +193,10 @@ class ChannelManager:
                 kwargs["runtime_concurrency_snapshot"] = self._webui_runtime_concurrency_snapshot
             if self._cron_service is not None:
                 kwargs["cron_service"] = self._cron_service
+            if self._webui_approval_deps is not None:
+                kwargs["approval_deps"] = self._webui_approval_deps
+            if self._webui_session_turn_key is not None:
+                kwargs["session_turn_key"] = self._webui_session_turn_key
 
         channel = cls(_resolve_section_secrets(section), self.bus, **kwargs)
         channel.transcription_provider = transcription_provider

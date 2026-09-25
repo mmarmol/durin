@@ -138,6 +138,7 @@ if TYPE_CHECKING:
         MemoryPrefetchConfig,
         ToolsConfig,
     )
+    from durin.agent.approval_executors import ExecDeps
     from durin.cron.service import CronService
     from durin.jobs.registry import JobRegistry
     from durin.memory.eager_surface import EagerSnapshot
@@ -1878,6 +1879,27 @@ class AgentLoop:
         """The key a bus turn for *session_key* is registered under: unified
         mode folds every channel's conversation into one session."""
         return UNIFIED_SESSION_KEY if self._unified_session else session_key
+
+    def approval_exec_deps(self) -> "ExecDeps":
+        """Live handles for running an approved request outside the turn that
+        filed it: a click that lands after that turn stopped waiting, or a
+        later decision made through the gateway.
+
+        ``exec_run`` is the registered ``exec`` tool's non-asking ``_run``
+        (never ``execute`` — an out-of-turn decision must not be able to open
+        a second, nested approval), or None when exec is disabled. ``mcp`` is
+        an MCP service bound to this loop's live connections, so an approved
+        server change connects without a restart.
+        """
+        from durin.agent.approval_executors import ExecDeps
+        from durin.agent.mcp_runtime import McpRuntime
+        from durin.service.mcp import McpService
+
+        exec_tool = self.tools.get("exec")
+        return ExecDeps(
+            exec_run=exec_tool._run if exec_tool is not None else None,
+            mcp=McpService(mcp_runtime=McpRuntime(self)),
+        )
 
     async def _dispatch_priority_command(self, msg: InboundMessage, raw: str) -> None:
         """Run a priority command (/stop, /status, /restart) outside the turn
