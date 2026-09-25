@@ -2,9 +2,14 @@
 
 The ask_user tool awaits a Future that is resolved by the agent loop when
 the user replies, allowing the same turn to continue with the answer as the
-tool result. A blocked turn cannot survive a restart — on timeout or
-disconnect, the tool falls back to yielding, using session metadata to
-maintain state.
+tool result. A waiter that cannot be answered falls back to yield semantics
+(``FALLBACK``) on the answer timeout or a media reply: the question stays in
+session metadata and the user's next message answers it in a new turn.
+
+A blocked turn does not survive a restart. At shutdown ``AgentLoop.stop``
+cancels the waiters; the gateway journals the message each turn in flight
+was answering and replays it on the next start, so the question is asked
+again.
 """
 
 from __future__ import annotations
@@ -133,7 +138,7 @@ def discard(session_key: str, fut: asyncio.Future) -> None:
 
 
 def reset() -> None:
-    """Clear all waiters and the consumer flag (tests)."""
+    """Cancel all waiters and clear the consumer flag (shutdown and tests)."""
     global _CONSUMER_ACTIVE
     for fut in _WAITERS.values():
         if not fut.done():

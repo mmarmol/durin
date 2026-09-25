@@ -102,3 +102,47 @@ async def test_a_trigger_only_turn_in_flight_is_not_journaled(tmp_path: Path) ->
     await turn_started.wait()
 
     assert await loop.drain_inbound_for_shutdown() == 0
+
+
+@pytest.mark.asyncio
+async def test_every_turn_blocked_on_an_answer_is_journaled_at_shutdown(tmp_path: Path) -> None:
+    """``stop()`` cancels the ask_user waits, and a turn whose wait is
+    cancelled ends at its next step. The drain must record every turn in
+    flight before it awaits any of them: awaiting the first let the others
+    end unseen, and their messages were dropped instead of replayed."""
+    from durin.agent import pending_answers
+    from durin.agent.tools.ask_user import AskUserQuestionTool
+
+    loop, _bus = _make_loop(tmp_path)
+    pending_answers.reset()
+    pending_answers.set_consumer_active(True)
+    ask = AskUserQuestionTool(sessions=MagicMock(), blocking=True, answer_timeout_s=60)
+
+    async def fake_dispatch(msg, pending=None):
+        # Park on the real blocking-answer wait, as ask_user_question does.
+        await ask._await_answer(msg.session_key, "q")
+
+    loop._dispatch = fake_dispatch  # type: ignore[method-assign]
+    keys = [f"websocket:c{i}" for i in (1, 2, 3)]
+    for i, key in enumerate(keys, start=1):
+        loop._start_turn_task(
+            InboundMessage(channel="websocket", sender_id="u", chat_id=f"c{i}",
+                           content=f"question {i}"),
+            key,
+        )
+    for _ in range(100):
+        if all(pending_answers.is_waiting(k) for k in keys):
+            break
+        await asyncio.sleep(0)
+    assert all(pending_answers.is_waiting(k) for k in keys)
+
+    try:
+        loop.stop()
+        journaled = await loop.drain_inbound_for_shutdown()
+    finally:
+        pending_answers.reset()
+
+    assert journaled == 3
+    assert [m.content for m in loop._inbound_journal.drain()] == [
+        "question 1", "question 2", "question 3",
+    ]

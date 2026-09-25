@@ -2649,8 +2649,11 @@ class AgentLoop:
         from durin.agent import pending_answers
 
         self._running = False
-        # The inbound consumer is going away — release any blocked ask_user
-        # waiters to yield semantics instead of letting them ride the timeout.
+        # The inbound consumer is going away, so no answer can reach a turn
+        # blocked on ask_user. Its wait is cancelled, which ends the turn;
+        # the gateway's shutdown drain (drain_inbound_for_shutdown) journals
+        # the message that turn was answering and the next start replays it,
+        # so the question is asked again after the restart.
         pending_answers.set_consumer_active(False)
         pending_answers.reset()
         # Drain memory background services so the watchdog Observer and
@@ -2667,10 +2670,13 @@ class AgentLoop:
 
         The turns in flight are cancelled and awaited first: a turn's own
         ``finally`` is what hands its pending queues back to the bus, and the
-        bus is where they are collected from. Queues no task handed back
-        (their turn died before its ``finally``) are collected directly. The
-        message each cancelled turn was answering goes first, ahead of the
-        follow-ups queued behind it, so the next start answers it in order
+        bus is where they are collected from. Every turn is recorded and
+        cancelled before any is awaited, so a turn blocked on ask_user (whose
+        wait ``stop()`` cancels) is journaled like any other. Queues no task
+        handed back (their turn died before its ``finally``) are collected
+        directly. The message each cancelled turn was answering goes first,
+        ahead of the follow-ups queued behind it, so the next start answers it
+        in order
         instead of leaving it closed as "interrupted" with no reply ever
         given. Trigger-only messages are not journaled: they were published
         for automation triggers to see, never to become a conversation, and a
@@ -2680,17 +2686,23 @@ class AgentLoop:
         if self._inbound_journal is None:
             return 0
         owed: list[InboundMessage] = []
+        cancelled: list[asyncio.Task] = []
+        # Record and cancel every turn before awaiting any of them. Awaiting
+        # one turn lets the others run, and a turn that ends in that window
+        # (a turn whose ask_user wait ``stop()`` just cancelled ends at its
+        # next step) no longer looks in flight, so its message would be lost
+        # instead of journaled.
         for key in list(self._active_tasks):
-            tasks = self._active_tasks.pop(key, [])
-            for task in tasks:
+            for task in self._active_tasks.pop(key, []):
                 if not task.done():
-                    in_flight = self._in_flight_messages.get(task)
-                    if in_flight is not None:
-                        owed.append(in_flight)
+                    message = self._in_flight_messages.get(task)
+                    if message is not None:
+                        owed.append(message)
                     task.cancel()
-            for task in tasks:
-                with suppress(asyncio.CancelledError, Exception):
-                    await asyncio.wait_for(task, timeout=10)
+                cancelled.append(task)
+        for task in cancelled:
+            with suppress(asyncio.CancelledError, Exception):
+                await asyncio.wait_for(task, timeout=10)
         while True:
             try:
                 owed.append(self.bus.inbound.get_nowait())
