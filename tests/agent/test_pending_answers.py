@@ -69,3 +69,14 @@ async def test_resolve_on_done_future_is_safe():
     # Registry entry still points at the cancelled future — resolve must
     # not raise and must report no live waiter.
     assert pa.resolve("k", "x") is False
+
+
+def test_no_blocking_when_replies_cannot_arrive_mid_turn():
+    pa.set_consumer_active(True)
+    assert pa.can_block("cli:direct") is True
+    pa.set_mid_turn_replies(False)
+    assert pa.can_block("cli:direct") is False
+    # reset() restores the default for the next surface (and test).
+    pa.reset()
+    pa.set_consumer_active(True)
+    assert pa.can_block("cli:direct") is True

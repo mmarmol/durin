@@ -863,6 +863,35 @@ def test_agent_uses_default_config_when_no_workspace_or_config_flags(mock_agent_
     )
 
 
+def test_legacy_repl_tells_the_agent_not_to_wait_for_mid_turn_answers(
+    mock_agent_runtime, tmp_path: Path,
+):
+    """The legacy REPL reads the next line only after the turn ends, so a
+    question the agent waits on mid-turn would stall for the whole timeout."""
+    from durin.agent import pending_answers
+
+    seen: list[bool] = []
+
+    async def _run() -> None:
+        pending_answers.set_consumer_active(True)
+        seen.append(pending_answers.can_block("cli:direct"))
+
+    agent_loop = mock_agent_runtime["agent_loop"]
+    agent_loop.run = _run
+    agent_loop.workspace = tmp_path
+    try:
+        with patch("durin.cli.commands._init_prompt_session"), \
+             patch("durin.cli.commands._read_interactive_input_async",
+                   AsyncMock(side_effect=EOFError)), \
+             patch("signal.signal"):
+            result = runner.invoke(app, ["agent", "--legacy"])
+    finally:
+        pending_answers.reset()
+
+    assert result.exit_code == 0, result.output
+    assert seen == [False]
+
+
 def test_agent_uses_explicit_config_path(mock_agent_runtime, tmp_path: Path):
     config_path = tmp_path / "agent-config.json"
     config_path.write_text("{}")

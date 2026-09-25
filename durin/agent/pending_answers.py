@@ -43,15 +43,27 @@ _CONSUMER_ACTIVE = False
 # always end in a useless timeout.
 NON_INTERACTIVE_SESSION_PREFIXES = ("cron:", "system:")
 
+# False while the only surface in this process cannot send a reply until the
+# turn ends: the legacy prompt_toolkit REPL reads its next line only after the
+# turn finishes, so a wait there could only end in the full timeout.
+_MID_TURN_REPLIES = True
+
 
 def set_consumer_active(active: bool) -> None:
     global _CONSUMER_ACTIVE
     _CONSUMER_ACTIVE = active
 
 
+def set_mid_turn_replies(enabled: bool) -> None:
+    """Declare whether this process's surface can send a reply mid-turn."""
+    global _MID_TURN_REPLIES
+    _MID_TURN_REPLIES = enabled
+
+
 def consumer_active() -> bool:
-    """True while an inbound consumer is alive to deliver a user's answer."""
-    return _CONSUMER_ACTIVE
+    """True while an inbound consumer is alive and a user's answer can reach
+    it before the turn ends."""
+    return _CONSUMER_ACTIVE and _MID_TURN_REPLIES
 
 
 def can_block(session_key: str | None) -> bool:
@@ -140,10 +152,11 @@ def discard(session_key: str, fut: asyncio.Future) -> None:
 
 def reset() -> None:
     """Cancel all waiters and clear the consumer flag (shutdown and tests)."""
-    global _CONSUMER_ACTIVE
+    global _CONSUMER_ACTIVE, _MID_TURN_REPLIES
     for fut in _WAITERS.values():
         if not fut.done():
             fut.cancel()
     _WAITERS.clear()
     _KINDS.clear()
     _CONSUMER_ACTIVE = False
+    _MID_TURN_REPLIES = True

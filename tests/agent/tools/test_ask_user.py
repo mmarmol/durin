@@ -275,3 +275,23 @@ async def test_blocking_skipped_for_non_interactive_sessions(tmp_path):
     assert "presented to the user" in out
     assert "STOP" in out
     pa.reset()
+
+
+@pytest.mark.asyncio
+async def test_blocking_skipped_when_replies_cannot_arrive_mid_turn(tmp_path):
+    """The legacy REPL reads the next line only after the turn ends, so the
+    tool must yield now instead of waiting out the whole timeout."""
+    from durin.agent import pending_answers as pa
+
+    pa.reset()
+    pa.set_consumer_active(True)
+    pa.set_mid_turn_replies(False)
+    sm = SessionManager(tmp_path)
+    tool = AskUserQuestionTool(sessions=sm, blocking=True, answer_timeout_s=60)
+    tool.set_context(RequestContext(channel="cli", chat_id="d", session_key="cli:d", metadata={}))
+    try:
+        out = await asyncio.wait_for(tool.execute(question="Anyone?"), timeout=5)
+    finally:
+        pa.reset()
+    assert "presented to the user" in out
+    assert "STOP" in out

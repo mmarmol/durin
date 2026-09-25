@@ -226,6 +226,8 @@ the same note.
   - **Text channels**: the serialized request is published on every ask,
     including a repeat of the same request after a timeout. The reply is
     parsed by the loop.
+  - **Legacy REPL**: cannot take a reply mid-turn, so it never waits; a
+    gated action becomes a pending request, decided with durin approvals.
 - **Secret redaction**: `SecretRedactor` processes every tool result before it
   reaches the model or is spilled to disk. Two layers: value-based (exact stored
   secret values become `«redacted:NAME»`) and pattern-based (credential-shaped

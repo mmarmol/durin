@@ -2526,6 +2526,11 @@ def agent(
 
         async def run_interactive():
             nonlocal cli_chat_id
+            # This REPL reads the next line only after the turn ends, so an
+            # answer can never arrive mid-turn: the agent must not wait on one.
+            from durin.agent import pending_answers
+
+            pending_answers.set_mid_turn_replies(False)
             bus_task = asyncio.create_task(agent_loop.run())
             turn_done = asyncio.Event()
             turn_done.set()
