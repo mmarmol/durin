@@ -566,7 +566,10 @@ streaming path, `_claim_status_message` hands the same message over, so a
 status line is never stranded above the answer it was announcing.
 
 The status message never overwrites answer text: once a buffer holds real
-content, later hints are dropped rather than painted over it.
+content, later hints are dropped rather than painted over it. A message that
+asks the person something the turn is waiting on is the one exception: it
+posts fresh so it notifies (an edit does not), and it retires the status
+line it replaces so the thread keeps its order.
 
 ### Resolving where a stream goes
 

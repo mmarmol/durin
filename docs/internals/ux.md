@@ -198,7 +198,9 @@ the same note.
   behalf (the "secret stored" note after a `request_secret` form) carries
   `INBOUND_META_NOT_AN_ANSWER` and is never taken as the answer; the waiting
   question keeps waiting. A text channel gets the question once per ask, and
-  again when the same question is asked anew.
+  again when the same question is asked anew, carrying the turn's own
+  metadata so it lands in the conversation the turn belongs to (a Slack
+  thread, a Telegram topic) rather than at the surface's top level.
 - **Approvals in chat**: a privileged action that needs a person waits
   in-turn for a verdict the model cannot write. While the wait lasts,
   `session.metadata["pending_approval"]` holds `{approval_id, kind, summary,
@@ -231,8 +233,10 @@ the same note.
     `no` as the user's next message, which the loop parses as the verdict
     (see **Approval bubble** under Work-visibility surfaces (TUI)).
   - **Text channels**: the serialized request is published on every ask,
-    including a repeat of the same request after a timeout. The reply is
-    parsed by the loop.
+    including a repeat of the same request after a timeout. It carries the
+    turn's own metadata, so it lands in the conversation the turn belongs to
+    (a Slack thread, a Telegram topic) rather than at the surface's top
+    level. The reply is parsed by the loop.
   - **Legacy REPL**: cannot take a reply mid-turn, so it never waits; a
     gated action becomes a pending request, decided with durin approvals.
 - **Secret redaction**: `SecretRedactor` processes every tool result before it

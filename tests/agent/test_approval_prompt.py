@@ -8,6 +8,7 @@ import pytest
 from durin.agent import pending_answers as pa
 from durin.agent.approval_prompt import ChatHandles, make_chat_asker
 from durin.agent.user_payloads import PENDING_APPROVAL_KEY, pending_interaction_items
+from durin.bus.events import OUTBOUND_META_ASKS_PERSON
 
 
 class _Sessions:
@@ -41,8 +42,11 @@ def _consumer():
     pa.reset()
 
 
-def _ctx(channel):
-    return SimpleNamespace(session_key=f"{channel}:c1", channel=channel, chat_id="c1")
+def _ctx(channel, metadata=None):
+    ns = SimpleNamespace(session_key=f"{channel}:c1", channel=channel, chat_id="c1")
+    if metadata is not None:
+        ns.metadata = metadata
+    return ns
 
 
 @pytest.mark.asyncio
@@ -73,6 +77,27 @@ async def test_text_channel_gets_the_question_once_and_timeout_returns_none():
     assert "Approval needed" in bus.out[0].content and "yes" in bus.out[0].content
     # Delivered once: the turn-end fallback has nothing left to re-send.
     assert pending_interaction_items(sessions.s.metadata) == []
+
+
+@pytest.mark.asyncio
+async def test_text_channel_publishes_the_turns_metadata_and_the_asks_person_flag():
+    """The published copy must carry the turn's own metadata (so the channel
+    can place it in the right thread/topic) plus the flag that tells Slack to
+    notify instead of silently editing a status line."""
+    sessions, bus = _Sessions(), _Bus()
+    turn_metadata = {"slack": {"thread_ts": "200.000"}, "message_thread_id": 7}
+    ask = make_chat_asker(
+        sessions=sessions, bus=bus,
+        request_ctx=_ctx("slack", metadata=turn_metadata), timeout_s=0.05,
+    )
+    assert await ask(REC) is None
+    assert len(bus.out) == 1
+    sent_meta = bus.out[0].metadata
+    assert sent_meta["slack"] == {"thread_ts": "200.000"}
+    assert sent_meta["message_thread_id"] == 7
+    assert sent_meta[OUTBOUND_META_ASKS_PERSON] is True
+    # The context's own metadata dict must never be mutated or reused.
+    assert sent_meta is not turn_metadata
 
 
 @pytest.mark.asyncio

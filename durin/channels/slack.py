@@ -28,7 +28,7 @@ try:
 except ImportError:  # optional extra `durin-ai[slack]` not installed
     SLACK_AVAILABLE = False
 
-from durin.bus.events import OutboundMessage, SendReceipt
+from durin.bus.events import OUTBOUND_META_ASKS_PERSON, OutboundMessage, SendReceipt
 from durin.bus.queue import MessageBus
 from durin.channels.base import BaseChannel
 from durin.channels.dedup import MessageDeduplicator
@@ -346,8 +346,12 @@ class SlackChannel(BaseChannel):
                 chunks = split_message(mrkdwn, SLACK_MAX_MESSAGE_LEN)
                 # A status line left over from this turn becomes the answer, so
                 # the reader never ends up with a stale "working on it" sitting
-                # above the reply it was waiting for.
-                claimed = await self._claim_status_message(msg.chat_id)
+                # above the reply it was waiting for. A question the turn
+                # blocks on is the one exception: taking over the status line
+                # would deliver it via chat_update, which raises no
+                # notification, so it always posts fresh instead.
+                asks_person = bool((msg.metadata or {}).get(OUTBOUND_META_ASKS_PERSON))
+                claimed = None if asks_person else await self._claim_status_message(msg.chat_id)
                 for index, chunk in enumerate(chunks):
                     kwargs: dict[str, Any] = dict(
                         channel=target_chat_id, text=chunk, thread_ts=thread_ts_param,
@@ -374,6 +378,12 @@ class SlackChannel(BaseChannel):
                         # replied into, not to itself.
                         ts = thread_ts_param or resp.get("ts")
                         receipt = SendReceipt(thread_key=f"slack:{target_chat_id}:{ts}")
+
+                if asks_person:
+                    # The question now on screen makes the old "working on
+                    # it" line redundant; later progress opens a new one
+                    # below it, so the thread still reads in order.
+                    await self._retire_status_message(msg.chat_id)
 
             for media_path in msg.media or []:
                 try:
@@ -573,6 +583,25 @@ class SlackChannel(BaseChannel):
             return None
         self._stream_bufs.pop(chat_id, None)
         return buf.target, buf.ts
+
+    async def _retire_status_message(self, chat_id: str) -> None:
+        """Delete a pending "working on it" line once a question that
+        notifies has posted fresh in its place, rather than leave it
+        stranded above a question it no longer describes progress towards.
+
+        Only a still-showing status line is touched — a buffer already
+        holding real (non-status) content is a mid-stream answer and is
+        left alone. Deletion is best effort: a failure only means a stale
+        line stays visible, never worth failing the send over.
+        """
+        buf = self._stream_bufs.get(chat_id)
+        if buf is None or not buf.status_only or not buf.ts or not buf.target:
+            return
+        self._stream_bufs.pop(chat_id, None)
+        try:
+            await self._web_client.chat_delete(channel=buf.target, ts=buf.ts)
+        except Exception as e:
+            self.logger.debug("status message delete failed: {}", e)
 
     async def _replace_stream_message(
         self, chat_id: str, ts: str, text: str, thread_ts: str | None

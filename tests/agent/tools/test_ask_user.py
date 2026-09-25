@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import pytest
 
 from durin.agent.tools.ask_user import PENDING_QUESTION_KEY, AskUserQuestionTool
 from durin.agent.tools.context import RequestContext
+from durin.bus.events import OUTBOUND_META_ASKS_PERSON
 from durin.session.manager import SessionManager
 
 
@@ -275,6 +277,50 @@ async def test_blocking_skipped_for_non_interactive_sessions(tmp_path):
     assert "presented to the user" in out
     assert "STOP" in out
     pa.reset()
+
+
+class _Outbox:
+    """Records the full published message, not just its text, so a test can
+    check the metadata a text-channel publish carries."""
+
+    def __init__(self) -> None:
+        self.sent: list[Any] = []
+
+    async def publish_outbound(self, msg) -> None:
+        self.sent.append(msg)
+
+
+@pytest.mark.asyncio
+async def test_blocking_question_on_a_text_channel_carries_the_turns_metadata(tmp_path):
+    """A blocking question on a text channel (e.g. slack) must land in the
+    conversation the turn belongs to (a thread/topic), which means the
+    published copy carries the turn's own metadata, plus the flag Slack uses
+    to notify instead of silently editing a status line."""
+    from durin.agent import pending_answers as pa
+
+    pa.reset()
+    pa.set_consumer_active(True)
+    sm = SessionManager(tmp_path)
+    outbox = _Outbox()
+    turn_metadata = {"slack": {"thread_ts": "200.000"}, "message_thread_id": 7}
+    tool = AskUserQuestionTool(
+        sessions=sm, bus=outbox, blocking=True, answer_timeout_s=0.05,
+    )
+    tool.set_context(RequestContext(
+        channel="slack", chat_id="C1", session_key="slack:C1", metadata=turn_metadata,
+    ))
+    try:
+        await tool.execute(question="Which color?")
+    finally:
+        pa.reset()
+
+    assert len(outbox.sent) == 1
+    sent_meta = outbox.sent[0].metadata
+    assert sent_meta["slack"] == {"thread_ts": "200.000"}
+    assert sent_meta["message_thread_id"] == 7
+    assert sent_meta[OUTBOUND_META_ASKS_PERSON] is True
+    # The context's own metadata dict must never be mutated or reused.
+    assert sent_meta is not turn_metadata
 
 
 @pytest.mark.asyncio

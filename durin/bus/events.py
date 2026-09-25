@@ -9,6 +9,13 @@ from typing import Any
 # render it and other channels may ignore unknown keys.
 OUTBOUND_META_AGENT_UI = "_agent_ui"
 
+# Optional ``OutboundMessage.metadata`` flag marking a message that asks the
+# person something the running turn is waiting on. Channels that otherwise
+# deliver progress by silently editing a status line (Slack) must instead
+# post this one fresh and notify, since an edit raises no notification and a
+# person who stepped away would never see it before the turn's wait times out.
+OUTBOUND_META_ASKS_PERSON = "_asks_person"
+
 # Optional ``InboundMessage.metadata`` flag for a message posted into a chat on
 # the user's behalf rather than typed by them (a stored-secret notice). It is
 # not the user's reply, so it never answers a turn waiting on one.

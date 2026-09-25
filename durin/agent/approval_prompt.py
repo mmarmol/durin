@@ -96,12 +96,18 @@ def make_chat_asker(*, sessions: Any, bus: Any, request_ctx: Any,
                 # from sending a second copy.
                 items = [i for i in pending_interaction_items(session.metadata)
                          if i[0] == PENDING_APPROVAL_KEY]
-                from durin.bus.events import OutboundMessage
+                from durin.bus.events import OUTBOUND_META_ASKS_PERSON, OutboundMessage
 
+                # Carry the turn's own metadata (thread_ts, forum topic id, …)
+                # so the request lands in the conversation the turn belongs
+                # to rather than at the surface's top level, and flag it so
+                # Slack notifies instead of silently editing a status line.
+                turn_metadata = getattr(request_ctx, "metadata", None) or {}
                 for _key, text in items:
                     with suppress(Exception):
                         await bus.publish_outbound(OutboundMessage(
-                            channel=channel, chat_id=chat_id, content=text))
+                            channel=channel, chat_id=chat_id, content=text,
+                            metadata={**dict(turn_metadata), OUTBOUND_META_ASKS_PERSON: True}))
                 with suppress(Exception):
                     mark_interactions_delivered(session.metadata, items)
             fut = pending_answers.create(session_key, kind="approval", ref=record["id"])

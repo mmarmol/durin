@@ -281,14 +281,20 @@ class AskUserQuestionTool(Tool, ContextAware):
         items = undelivered_interactions(session.metadata)
         if not items:
             return
-        from durin.bus.events import OutboundMessage
+        from durin.bus.events import OUTBOUND_META_ASKS_PERSON, OutboundMessage
 
+        # Carry the turn's own metadata (thread_ts, forum topic id, …) so the
+        # question lands in the conversation the turn belongs to rather than
+        # at the surface's top level, and flag it so Slack notifies instead
+        # of silently editing a status line.
+        turn_metadata = ctx.metadata
         for _key, text in items:
             with suppress(Exception):
                 await self._bus.publish_outbound(OutboundMessage(
                     channel=channel,
                     chat_id=ctx.chat_id,
                     content=text,
+                    metadata={**dict(turn_metadata), OUTBOUND_META_ASKS_PERSON: True},
                 ))
         with suppress(Exception):
             mark_interactions_delivered(session.metadata, items)
