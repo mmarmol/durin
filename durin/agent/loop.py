@@ -224,6 +224,14 @@ _last_job_prune_at: float | None = None
 # sub-agents to deliver results before giving up (seconds).
 _SUBAGENT_WAIT_TIMEOUT = 300
 
+# How long the shutdown drain waits, once, for every cancelled turn to unwind
+# (seconds). A turn whose dispatch swallows CancelledError never finishes; a
+# per-task wait_for would then charge the drain this timeout again for every
+# such turn, holding the whole shutdown open a multiple of it. Waiting once
+# on all of them together bounds the pass to this one interval regardless of
+# how many turns are stuck.
+_DRAIN_CANCEL_WAIT_S = 10.0
+
 _STEER_FRAMING = (
     "[Steer — the user sent this while you were working. Treat it as "
     "guidance for the work in progress: adjust course if it changes the "
@@ -2691,13 +2699,18 @@ class AgentLoop:
         instead of leaving it closed as "interrupted" with no reply ever
         given. Trigger-only messages are not journaled: they were published
         for automation triggers to see, never to become a conversation, and a
-        stale alert replayed later would fire out of time. Returns the number
-        of messages written.
+        stale alert replayed later would fire out of time. The cancelled
+        turns are then awaited together, once, for at most
+        ``_DRAIN_CANCEL_WAIT_S``: a turn whose dispatch swallows
+        ``CancelledError`` never finishes, and this drain still returns
+        instead of waiting on it forever (or, with one wait per task, that
+        timeout again for every such turn). Returns the number of messages
+        written.
         """
         if self._inbound_journal is None:
             return 0
         owed: list[InboundMessage] = []
-        cancelled: list[asyncio.Task] = []
+        cancelled: list[tuple[str, asyncio.Task]] = []
         # Record and cancel every turn before awaiting any of them. Awaiting
         # one turn lets the others run, and a turn that ends in that window
         # (a turn whose ask_user wait ``stop()`` just cancelled ends at its
@@ -2710,10 +2723,26 @@ class AgentLoop:
                     if message is not None:
                         owed.append(message)
                     task.cancel()
-                cancelled.append(task)
-        for task in cancelled:
-            with suppress(asyncio.CancelledError, Exception):
-                await asyncio.wait_for(task, timeout=10)
+                cancelled.append((key, task))
+        if cancelled:
+            # One wait for the whole batch, not one per task (see the
+            # docstring): a stuck turn's wait_for used to cost the drain its
+            # own timeout again for every such turn instead of bounding the
+            # pass once. Cancellation of this drain itself is not swallowed
+            # here — only each turn's own outcome is.
+            done, stuck = await asyncio.wait(
+                [task for _key, task in cancelled], timeout=_DRAIN_CANCEL_WAIT_S,
+            )
+            for task in done:
+                if not task.cancelled():
+                    with suppress(Exception):
+                        task.exception()
+            if stuck:
+                stuck_keys = [key for key, task in cancelled if task in stuck]
+                logger.warning(
+                    "Shutdown: drain gave up on {} turn(s) past {}s (keys: {})",
+                    len(stuck), _DRAIN_CANCEL_WAIT_S, stuck_keys,
+                )
         while True:
             try:
                 owed.append(self.bus.inbound.get_nowait())

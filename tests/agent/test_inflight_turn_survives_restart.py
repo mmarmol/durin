@@ -11,6 +11,7 @@ replay at the next start runs it again in order.
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -146,3 +147,57 @@ async def test_every_turn_blocked_on_an_answer_is_journaled_at_shutdown(tmp_path
     assert [m.content for m in loop._inbound_journal.drain()] == [
         "question 1", "question 2", "question 3",
     ]
+
+
+@pytest.mark.asyncio
+async def test_drain_waits_the_bound_once_not_once_per_stuck_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cancelled turn that takes longer than the bound to unwind must not
+    cost the drain that bound again for every such turn: a per-task
+    ``wait_for(timeout=...)`` did, one after another; a single
+    ``asyncio.wait`` over the whole batch pays it once, however many turns
+    are stuck, and still journals their messages."""
+    import durin.agent.loop as loop_module
+
+    monkeypatch.setattr(loop_module, "_DRAIN_CANCEL_WAIT_S", 0.2)
+    loop, _bus = _make_loop(tmp_path)
+    started = [asyncio.Event() for _ in range(3)]
+
+    async def fake_dispatch(msg, pending=None):
+        index = int(msg.chat_id[1:]) - 1
+        started[index].set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            # A slow, but finite, unwind — past the patched 0.2s bound but
+            # far under the old hardcoded 10s one.
+            await asyncio.sleep(0.5)
+
+    loop._dispatch = fake_dispatch  # type: ignore[method-assign]
+    tasks = [
+        loop._start_turn_task(
+            InboundMessage(channel="telegram", sender_id="u", chat_id=f"c{i}",
+                           content=f"stuck {i}"),
+            f"telegram:c{i}",
+        )
+        for i in range(1, 4)
+    ]
+    for event in started:
+        await event.wait()
+
+    start = time.monotonic()
+    journaled = await loop.drain_inbound_for_shutdown()
+    elapsed = time.monotonic() - start
+
+    # Three turns whose unwind takes 0.5s: one wait_for(10s) per task, run
+    # one after another, would take ~1.5s; the bound applies once to the
+    # whole batch, so this stays close to the patched 0.2s.
+    assert elapsed < 1.0
+    assert journaled == 3
+    assert sorted(m.content for m in loop._inbound_journal.drain()) == [
+        "stuck 1", "stuck 2", "stuck 3",
+    ]
+
+    # Let the turns actually finish their slow unwind before the test ends.
+    await asyncio.gather(*tasks, return_exceptions=True)
