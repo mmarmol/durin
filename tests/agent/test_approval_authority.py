@@ -1,8 +1,8 @@
-"""Authority-by-context approval gate.
+"""Authority by context for privileged actions.
 
 A privileged action must never be authorized by a value the model wrote. The
-gate reads the execution context (the runtime-generated session key) and, when
-no human can be asked, records the request instead of running it.
+runtime reads the execution context (the runtime-generated session key) and,
+when no human can be asked, records the request instead of running it.
 """
 from __future__ import annotations
 
@@ -48,63 +48,6 @@ def test_chat_session_without_a_live_consumer_has_no_human(monkeypatch) -> None:
 
     monkeypatch.setattr(pending_answers, "_CONSUMER_ACTIVE", False)
     assert approval.human_reachable("websocket:abc") is False
-
-
-def test_gate_stages_in_an_autonomous_context(tmp_path) -> None:
-    decision = approval.gate(
-        tmp_path, "mcp",
-        action="update",
-        summary="update MCP server 'playwright'",
-        detail={"command": "npx"},
-        session_key="cron_dream",
-    )
-    assert decision.staged is True
-    assert decision.allow is False
-    assert "approval" in decision.message.lower()
-
-    pending = approval.list_pending(tmp_path, "mcp")
-    assert len(pending) == 1
-    assert pending[0]["action"] == "update"
-    assert pending[0]["session_key"] == "cron_dream"
-    assert pending[0]["detail"] == {"command": "npx"}
-
-
-def test_staged_requests_survive_on_disk(tmp_path) -> None:
-    approval.gate(tmp_path, "mcp", action="add", summary="add server x",
-                  detail={}, session_key="cron:nightly")
-    files = list((tmp_path / ".approvals" / "mcp").glob("*.json"))
-    assert len(files) == 1
-    record = json.loads(files[0].read_text(encoding="utf-8"))
-    assert record["subsystem"] == "mcp"
-    assert record["status"] == "pending"
-
-
-def test_gate_never_reads_a_model_supplied_confirm(tmp_path) -> None:
-    # The whole point: no argument can turn a staged decision into an allow.
-    decision = approval.gate(
-        tmp_path, "skills", action="import", summary="import skill",
-        detail={"confirm": True, "approved": "true"}, session_key="cron_dream")
-    assert decision.staged is True
-
-
-def test_gate_allows_when_a_human_is_present(tmp_path, monkeypatch) -> None:
-    from durin.agent import pending_answers
-
-    monkeypatch.setattr(pending_answers, "_CONSUMER_ACTIVE", True)
-    decision = approval.gate(tmp_path, "mcp", action="add", summary="add x",
-                             detail={}, session_key="websocket:abc")
-    assert decision.allow is True
-    assert decision.staged is False
-    assert approval.list_pending(tmp_path, "mcp") == []
-
-
-def test_discard_pending(tmp_path) -> None:
-    approval.gate(tmp_path, "mcp", action="add", summary="s", detail={},
-                  session_key="cron:x")
-    [record] = approval.list_pending(tmp_path, "mcp")
-    assert approval.discard_pending(tmp_path, "mcp", record["id"]) is True
-    assert approval.list_pending(tmp_path, "mcp") == []
-    assert approval.discard_pending(tmp_path, "mcp", record["id"]) is False
 
 
 def test_pending_answers_shares_the_autonomous_classification() -> None:
@@ -199,20 +142,27 @@ async def test_skill_edit_files_a_request_without_a_human(tmp_path) -> None:
 
 
 def test_cli_lists_and_discards_pending(tmp_path) -> None:
-    # A staged request the operator can never see is a black hole; the CLI is
+    # A pending request the operator can never see is a black hole; the CLI is
     # the surface that makes it real. Driven through the REAL config loader via
     # --workspace: a hand-rolled config double would have its own attribute
     # names and would pass while the shipped command raised AttributeError.
-    # The record here uses the earlier per-subsystem layout (approval.gate);
-    # the new store lists and discards it as a legacy row.
+    # The record is written in the earlier per-subsystem layout
+    # (.approvals/<subsystem>/<id>.json); the store lists and discards it as a
+    # legacy row.
     from typer.testing import CliRunner
 
     from durin.cli.commands import app
 
     ws = tmp_path / "ws"
-    ws.mkdir()
-    approval.gate(ws, "mcp", action="add", summary="add server playwright",
-                  detail={}, session_key="cron:nightly")
+    legacy_dir = ws / ".approvals" / "mcp"
+    legacy_dir.mkdir(parents=True)
+    legacy = legacy_dir / "0123456789ab.json"
+    legacy.write_text(json.dumps({
+        "id": "0123456789ab", "subsystem": "mcp", "action": "add",
+        "summary": "add server playwright", "detail": {},
+        "session_key": "cron:nightly",
+        "requested_at": "2026-07-24T00:00:00+00:00", "status": "pending",
+    }), encoding="utf-8")
 
     runner = CliRunner()
     listed = runner.invoke(app, ["approvals", "--workspace", str(ws)])
@@ -220,10 +170,9 @@ def test_cli_lists_and_discards_pending(tmp_path) -> None:
     assert "add server playwright" in listed.stdout
     assert "legacy:mcp" in listed.stdout
 
-    [record] = approval.list_pending(ws, "mcp")
     dropped = runner.invoke(
-        app, ["approvals", "--workspace", str(ws), "discard", record["id"]])
+        app, ["approvals", "--workspace", str(ws), "discard", "0123456789ab"])
     assert dropped.exit_code == 0, dropped.output
-    assert approval.list_pending(ws, "mcp") == []
+    assert not legacy.exists()
     empty = runner.invoke(app, ["approvals", "--workspace", str(ws)])
     assert "No pending approvals" in empty.stdout

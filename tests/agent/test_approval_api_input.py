@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -48,24 +47,26 @@ def _asker():
 async def test_a_person_s_turn_is_asked_in_the_chat() -> None:
     async def _turn():
         approval.note_turn_input({"webui": True})
-        return _asker(), approval.turn_has_api_input(), approval.can_authorize("websocket:abc")
+        return _asker(), approval.turn_has_api_input(), approval.human_reachable("websocket:abc")
 
-    asker, api_input, can_authorize = await asyncio.create_task(_turn())
-    assert asker is not None
+    asker, api_input, reachable = await asyncio.create_task(_turn())
+    assert reachable is True
     assert api_input is False
-    assert can_authorize is True
+    assert asker is not None
 
 
 @pytest.mark.asyncio
 async def test_a_turn_with_api_input_is_never_asked_in_the_chat() -> None:
+    # A person is reachable in this chat, yet the turn cannot put a request to
+    # them: its API input withholds the asker.
     async def _turn():
         approval.note_turn_input({"webui": True, "origin": "api"})
-        return _asker(), approval.turn_has_api_input(), approval.can_authorize("websocket:abc")
+        return _asker(), approval.turn_has_api_input(), approval.human_reachable("websocket:abc")
 
-    asker, api_input, can_authorize = await asyncio.create_task(_turn())
-    assert asker is None
+    asker, api_input, reachable = await asyncio.create_task(_turn())
+    assert reachable is True
     assert api_input is True
-    assert can_authorize is False
+    assert asker is None
 
 
 @pytest.mark.asyncio
@@ -89,17 +90,3 @@ def test_api_input_does_not_change_whether_the_agent_may_wait_for_an_answer() ->
                 pending_answers.can_block("websocket:abc"))
 
     assert contextvars.copy_context().run(_turn) == (True, True)
-
-
-@pytest.mark.asyncio
-async def test_the_legacy_gate_stages_under_api_input_and_says_why(tmp_path: Path) -> None:
-    # ``gate`` stays until its last caller is gone; it keeps the same rule.
-    async def _turn():
-        approval.note_turn_input({"webui": True, "origin": "api"})
-        return approval.gate(tmp_path, "mcp", action="install", summary="install a server",
-                             session_key="websocket:abc")
-
-    decision = await asyncio.create_task(_turn())
-    assert decision.allow is False
-    assert decision.staged is True
-    assert "API token" in decision.message
