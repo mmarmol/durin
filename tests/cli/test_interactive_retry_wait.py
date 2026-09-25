@@ -173,3 +173,28 @@ async def test_interactive_ask_user_question_printed_once_with_single_mark():
     assert len(question_prints) == 1                 # printed once, not duplicated
     assert question_prints[0].count("❓") == 1        # single mark
     assert "1. Rojo" in question_prints[0]           # options surfaced
+
+
+@pytest.mark.asyncio
+async def test_state_snapshot_is_not_read_as_the_end_of_the_turn():
+    """A goal-state snapshot (goal banner, approval card) has nothing to draw
+    in the legacy REPL. It must be handled here, or its empty content reaches
+    the branch that treats a plain message as the turn's reply."""
+    printed: list[str] = []
+    msg = SimpleNamespace(
+        content="",
+        metadata={"_goal_state_sync": True, "goal_state": {
+            "active": False, "pending_approval": {"approval_id": "a1b2c3d4e5f6"}}},
+    )
+
+    async def fake_print(text: str, thinking: object | None, renderer=None) -> None:
+        printed.append(text)
+
+    with patch("durin.cli.commands._print_interactive_progress_line", side_effect=fake_print):
+        handled = await commands._maybe_print_interactive_progress(
+            msg, None, SimpleNamespace(send_progress=True, send_tool_hints=True,
+                                       show_reasoning=True),
+        )
+
+    assert handled is True
+    assert printed == []

@@ -56,7 +56,12 @@ async def test_asker_waits_and_returns_the_verdict():
     pa.resolve("websocket:c1", "approve")
     assert await task == "approve"
     assert PENDING_APPROVAL_KEY not in sessions.s.metadata
-    assert bus.out == []  # rich channel: no text copy
+    # A rich channel gets no text copy. It gets two state snapshots instead:
+    # the card appears, then it clears once the verdict is in.
+    assert [m.metadata.get("_goal_state_sync") for m in bus.out] == [True, True]
+    assert all(m.content == "" for m in bus.out)
+    assert bus.out[0].metadata["goal_state"]["pending_approval"]["approval_id"] == "r1"
+    assert "pending_approval" not in bus.out[1].metadata["goal_state"]
 
 
 @pytest.mark.asyncio

@@ -463,6 +463,11 @@ async def _maybe_print_interactive_progress(
     renderer: StreamRenderer | None = None,
 ) -> bool:
     metadata = msg.metadata or {}
+    # Session-state snapshots drive the TUI's and the webui's panels (goal
+    # banner, approval card). This surface has no such panel, and the
+    # frame's empty content would otherwise read as the end of the turn.
+    if metadata.get("_goal_state_sync"):
+        return True
     if metadata.get("_retry_wait"):
         await _print_interactive_progress_line(msg.content, thinking, renderer)
         return True

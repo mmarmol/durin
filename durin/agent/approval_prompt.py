@@ -62,6 +62,22 @@ def make_chat_asker(*, sessions: Any, bus: Any, request_ctx: Any,
     channel = getattr(request_ctx, "channel", None)
     chat_id = getattr(request_ctx, "chat_id", None)
 
+    async def push_card_state(session: Any) -> None:
+        """Rich channels draw the approval card from session state, which
+        they otherwise receive only at turn end. Push the snapshot now so the
+        card appears while the turn waits, and clears once it is answered."""
+        if bus is None or not chat_id or not channel_renders_tool_payloads(channel):
+            return
+        from durin.bus.events import OutboundMessage
+        from durin.session.goal_state import goal_state_ws_blob
+
+        with suppress(Exception):
+            await bus.publish_outbound(OutboundMessage(
+                channel=channel, chat_id=chat_id, content="",
+                metadata={"_goal_state_sync": True,
+                          "goal_state": goal_state_ws_blob(session.metadata)},
+            ))
+
     async def ask(record: dict) -> str | None:
         session = sessions.get_or_create(session_key)
         if session.metadata is not None:
@@ -71,6 +87,7 @@ def make_chat_asker(*, sessions: Any, bus: Any, request_ctx: Any,
             }
             sessions.save(session)
         try:
+            await push_card_state(session)
             if bus is not None and not channel_renders_tool_payloads(channel):
                 # Sent on every ask, ignoring the delivered mark: a request
                 # asked again after a timeout has the same text, so filtering
@@ -110,5 +127,6 @@ def make_chat_asker(*, sessions: Any, bus: Any, request_ctx: Any,
             if session.metadata is not None:
                 session.metadata.pop(PENDING_APPROVAL_KEY, None)
                 sessions.save(session)
+            await push_card_state(session)
 
     return ask
