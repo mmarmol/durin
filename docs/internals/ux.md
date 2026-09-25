@@ -222,7 +222,7 @@ the same note.
     attach shows the result.
   - **TUI**: an approval bubble with Approve / Reject rows that send `yes` /
     `no` as the user's next message, which the loop parses as the verdict
-    (see **Approval bubble** under Work-visibility surfaces).
+    (see **Approval bubble** under Work-visibility surfaces (TUI)).
   - **Text channels**: the serialized request is published on every ask,
     including a repeat of the same request after a timeout. The reply is
     parsed by the loop.
