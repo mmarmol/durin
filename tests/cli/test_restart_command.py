@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
 import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -181,21 +182,42 @@ class TestRestartCommand:
     @pytest.mark.asyncio
     async def test_a_stuck_fallback_restart_still_reexecs_after_the_deadline(self, tmp_path):
         """The fallback path (no gateway — TUI, legacy REPL) has nothing at
-        the asyncio level bounding ``close_mcp``: if it never resolves, the
-        fallback's own ``reexec()`` at the end never runs either. The
-        watchdog armed for the restart must still call reexec once its
-        deadline passes, from its own OS thread, the same way SIGKILL
-        rescues a stuck SIGTERM."""
-        from durin.command.builtin import _BACKGROUND_TASKS, cmd_restart
+        the asyncio level bounding ``close_mcp``. A real, synchronous
+        thread-level block (a ``threading.Event``, not an ``asyncio`` one) is
+        immune to any timeout or cancellation the event loop could apply —
+        only a genuinely separate OS thread can still make progress while
+        it's stuck. The watchdog's daemon thread is exactly that: it must
+        still call reexec once its deadline passes, the same way SIGKILL
+        rescues a stuck SIGTERM. The mocked ``reexec`` releases the block
+        itself once it fires, the way the real one would end everything by
+        replacing the process.
+
+        This patches ``reexec`` itself rather than ``os.execv``: the real
+        ``reexec`` makes the loser of a race block forever instead of
+        returning (see ``tests/utils/test_restart.py``), which is safe in
+        production — the winner's real ``execv`` ends that thread along with
+        everything else moments later — but here, with nothing actually
+        replacing this test process, the fallback's own call once released
+        would be a second, legitimate "loser" call that then hangs this test
+        forever. A plain mock has no such contract to honor.
+        """
+        from durin.command.builtin import cmd_restart
         from durin.command.router import CommandContext
+
+        stuck = threading.Event()  # only the mocked reexec below ever sets this
 
         class _StuckLoop:
             def __init__(self) -> None:
                 self.sessions = MagicMock()
-                self.never_resolves = asyncio.Event()
 
             async def close_mcp(self) -> None:
-                await self.never_resolves.wait()  # never set — a true hang
+                # A real OS-thread block via to_thread, not an asyncio wait:
+                # nothing at the asyncio level could rescue this, only a
+                # separate real thread (the watchdog) can. The 10s cap is a
+                # last-resort safety net for this test process, well past
+                # the patched 0.1s deadline below — it must never be what
+                # actually makes the assertion true.
+                await asyncio.to_thread(stuck.wait, 10)
 
             def stop(self) -> None:
                 pass
@@ -211,25 +233,103 @@ class TestRestartCommand:
             return None
 
         fake_asyncio = SimpleNamespace(sleep=_fast_sleep, create_task=asyncio.create_task)
+        mock_reexec = MagicMock(side_effect=lambda: stuck.set())
 
-        try:
-            with patch.dict(os.environ, {}, clear=False), \
-                 patch("durin.command.builtin.asyncio", new=fake_asyncio), \
-                 patch("durin.utils.restart.RESTART_SHUTDOWN_DEADLINE_S", 0.1), \
-                 patch("durin.utils.restart.os.execv") as mock_execv:
-                await cmd_restart(ctx)
-                for _ in range(40):  # 2s — the fallback's own steps never
-                    if mock_execv.called:  # unblock close_mcp on their own
-                        break
-                    await asyncio.sleep(0.05)
+        with patch.dict(os.environ, {}, clear=False), \
+             patch("durin.command.builtin.asyncio", new=fake_asyncio), \
+             patch("durin.utils.restart.RESTART_SHUTDOWN_DEADLINE_S", 0.1), \
+             patch("durin.utils.restart.reexec", mock_reexec), \
+             patch("durin.command.builtin.reexec", mock_reexec):
+            await cmd_restart(ctx)
+            fired_within_deadline_window = False
+            for _ in range(40):  # 2s, well under close_mcp's 10s safety cap
+                if mock_reexec.called:
+                    fired_within_deadline_window = True
+                    break
+                await asyncio.sleep(0.05)
 
-                assert mock_execv.call_count == 1
-        finally:
-            # The fallback's own `close_mcp` await is still pending (nothing
-            # in this test ever resolves it) — only the watchdog's reexec
-            # ran. Cancel it so it doesn't leak past this test.
-            for task in list(_BACKGROUND_TASKS):
-                task.cancel()
+            # The watchdog's own call — proof it fired well within its
+            # patched deadline, long before close_mcp's 10s safety cap. Once
+            # released, the fallback's own path also reaches its end-of-
+            # sequence reexec() call in this same window (a second, harmless
+            # call to this plain mock, unlike the real idempotent reexec —
+            # see the class docstring above), so this doesn't assert an
+            # exact count, only that the watchdog's own call happened.
+            assert fired_within_deadline_window, (
+                "reexec did not run within the patched deadline window"
+            )
+            # Let the fallback's own path finish naturally so nothing leaks
+            # past this patched context.
+            await asyncio.sleep(0.1)
+
+    @pytest.mark.asyncio
+    async def test_a_cancelled_restart_cancels_its_own_watchdog(self, tmp_path):
+        """The TUI quitting mid-restart cancels ``_do_restart``'s own task
+        (``asyncio.run`` tears it down). Nobody is restarting anymore at
+        that point, so the watchdog armed for it must not survive to
+        re-launch durin later, well after the user already quit."""
+        import durin.utils.restart as restart_mod
+        from durin.command.builtin import cmd_restart
+        from durin.command.router import CommandContext
+
+        started = asyncio.Event()
+
+        class _SlowLoop:
+            def __init__(self) -> None:
+                self.sessions = MagicMock()
+
+            async def close_mcp(self) -> None:
+                started.set()
+                await asyncio.Event().wait()  # the test cancels before this resolves
+
+        loop = _SlowLoop()
+        msg = InboundMessage(channel="cli", sender_id="user", chat_id="direct", content="/restart")
+        ctx = CommandContext(msg=msg, session=None, key=msg.session_key, raw="/restart", loop=loop)
+
+        scheduled: list[asyncio.Task] = []
+
+        async def _fast_sleep(_delay: float) -> None:
+            return None
+
+        def _capture_task(coro):
+            task = asyncio.create_task(coro)
+            scheduled.append(task)
+            return task
+
+        # cmd_restart's own `except asyncio.CancelledError` needs the real
+        # exception type too — this test is the first to actually reach
+        # that branch through a fully replaced `asyncio` reference.
+        fake_asyncio = SimpleNamespace(
+            sleep=_fast_sleep, create_task=_capture_task, CancelledError=asyncio.CancelledError,
+        )
+        created_timers: list[threading.Timer] = []
+        real_arm_restart_deadline = restart_mod.arm_restart_deadline
+
+        def _tracking_arm(*args, **kwargs):
+            timer = real_arm_restart_deadline(*args, **kwargs)
+            created_timers.append(timer)
+            return timer
+
+        with patch.dict(os.environ, {}, clear=False), \
+             patch("durin.command.builtin.asyncio", new=fake_asyncio), \
+             patch("durin.command.builtin.arm_restart_deadline", _tracking_arm), \
+             patch("durin.utils.restart.os.execv") as mock_execv:
+            await cmd_restart(ctx)
+            await started.wait()
+            task = scheduled[0]
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+            # Captured before this test's own cleanup (none needed here,
+            # since the code under test must already have cancelled it) —
+            # `finished` is set by a real fire OR a cancel, but the timer's
+            # real deadline (30s, unpatched) cannot have elapsed in this
+            # test's runtime, so True here can only mean the code cancelled
+            # it.
+            assert created_timers, "no watchdog timer was armed"
+            assert [t.finished.is_set() for t in created_timers] == [True]
+        mock_execv.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_restart_intercepted_in_run_loop(self):

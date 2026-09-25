@@ -330,18 +330,26 @@ async def cmd_restart(ctx: CommandContext) -> OutboundMessage:
         # them when it starts. A hang in any of that (close_mcp, the drain)
         # must still end in a re-exec, so arm the same watchdog the gateway
         # path uses before starting them.
-        arm_restart_deadline()
-        if loop is not None:
-            with suppress(Exception):
-                await loop.close_mcp()
-            loop.stop()
-            try:
-                await loop.drain_inbound_for_shutdown()
-            except Exception:
-                logger.exception("/restart: journaling the turns in flight failed")
-            with suppress(Exception):
-                loop.sessions.flush_all()
-        reexec()
+        timer = arm_restart_deadline()
+        try:
+            if loop is not None:
+                with suppress(Exception):
+                    await loop.close_mcp()
+                loop.stop()
+                try:
+                    await loop.drain_inbound_for_shutdown()
+                except Exception:
+                    logger.exception("/restart: journaling the turns in flight failed")
+                with suppress(Exception):
+                    loop.sessions.flush_all()
+            reexec()
+        except asyncio.CancelledError:
+            # This task itself was torn down (e.g. the TUI quit mid-restart
+            # and asyncio.run cancelled it) — nobody is restarting anymore,
+            # so the watchdog must not re-launch durin later on its own,
+            # after the user has already quit.
+            timer.cancel()
+            raise
 
     _spawn_background(_do_restart())
     return OutboundMessage(

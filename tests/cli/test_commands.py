@@ -2699,6 +2699,12 @@ def test_a_signal_during_a_restart_shutdown_wins_and_does_not_reexec(
 
     try:
         result = runner.invoke(app, ["gateway", "--config", str(config_file)])
+        # Captured before this test's own cleanup below touches the timers:
+        # `.cancel()` in the finally would set `finished` on its own, which
+        # would make this pass even if the fix under test never cancelled
+        # anything — this must observe the state _request_shutdown left it
+        # in, not the safety net's.
+        finished_flags = [t.finished.is_set() for t in created_timers]
     finally:
         # Whatever the fix under test does, this test never lets a real
         # watchdog thread outlive it — it could fire a real os.execv in the
@@ -2709,6 +2715,7 @@ def test_a_signal_during_a_restart_shutdown_wins_and_does_not_reexec(
     assert result.exit_code == 0, result.output
     assert "reexec" not in calls
     assert calls.count("agent.drain_inbound_for_shutdown") == 1
+    assert finished_flags == [True], "the watchdog armed for the restart was never cancelled"
 
 
 def test_a_restart_landing_during_a_signal_shutdown_does_not_reexec(

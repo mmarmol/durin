@@ -13,6 +13,8 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any
 
+from loguru import logger
+
 RESTART_NOTIFY_CHANNEL_ENV = "DURIN_RESTART_NOTIFY_CHANNEL"
 RESTART_NOTIFY_CHAT_ID_ENV = "DURIN_RESTART_NOTIFY_CHAT_ID"
 RESTART_NOTIFY_METADATA_ENV = "DURIN_RESTART_NOTIFY_METADATA"
@@ -80,16 +82,31 @@ def reexec() -> None:
 
     Idempotent: only the first caller execs. The normal restart path and the
     ``arm_restart_deadline`` watchdog can both reach this around the same
-    moment, from different threads; the loser returns having done nothing,
-    since by then the process image it expected to still be running here is
-    already gone (or is about to be, from the winner's ``execv``).
+    moment, from different threads. The loser blocks forever rather than
+    returning: ``execv`` needs a moment to actually swap the process image,
+    and a caller that returns could let this process reach its own exit —
+    exit 0, most likely — in that window, before the winner's ``execv`` ever
+    takes effect. Blocking costs nothing, since the winner's ``execv``
+    replaces this thread along with everything else in the process the
+    instant it succeeds.
     """
     global _reexeced
     with _reexec_lock:
         if _reexeced:
-            return
+            threading.Event().wait()
+            return  # pragma: no cover - unreachable; the winner's execv ends this process first
         _reexeced = True
-    os.execv(sys.executable, [sys.executable, "-m", "durin"] + sys.argv[1:])
+    try:
+        os.execv(sys.executable, [sys.executable, "-m", "durin"] + sys.argv[1:])
+    except Exception:
+        # execv failing (a bad interpreter path, a resource limit) is rare,
+        # but nothing else here will retry it — this can be running on the
+        # watchdog's own thread, where just returning ends that thread
+        # silently and leaves the process running stale code with no
+        # gateway restarted. Exit hard so a supervisor (systemd, launchd)
+        # restarts the process instead of it limping on unrestarted.
+        logger.exception("reexec: os.execv failed; exiting so the supervisor restarts us")
+        os._exit(1)
 
 
 def arm_restart_deadline(deadline_s: float | None = None) -> threading.Timer:

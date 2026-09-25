@@ -224,11 +224,11 @@ def _cancel_restart_watchdogs_after_test(monkeypatch):
     monkeypatch.setattr(_restart_mod, "arm_restart_deadline", _tracking_arm)
     # Both call sites import the name directly, so each holds its own
     # binding to the original function — patching the defining module
-    # above does not reach them.
-    monkeypatch.setattr("durin.cli.commands.arm_restart_deadline", _tracking_arm, raising=False)
-    monkeypatch.setattr(
-        "durin.command.builtin.arm_restart_deadline", _tracking_arm, raising=False
-    )
+    # above does not reach them. Default raising=True: if either import
+    # ever gets renamed, this must fail loudly rather than silently stop
+    # covering that call site.
+    monkeypatch.setattr("durin.cli.commands.arm_restart_deadline", _tracking_arm)
+    monkeypatch.setattr("durin.command.builtin.arm_restart_deadline", _tracking_arm)
     yield
     for timer in created:
         timer.cancel()

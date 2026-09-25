@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import os
+import threading
+from unittest.mock import MagicMock
 
 from durin.utils.restart import (
     RestartNotice,
     consume_restart_notice_from_env,
     format_restart_completed_message,
+    reexec,
     set_restart_notice_to_env,
     should_show_cli_restart_notice,
 )
@@ -70,6 +73,43 @@ def test_restart_notice_clears_stale_metadata(monkeypatch):
 def test_format_restart_completed_message_with_elapsed(monkeypatch):
     monkeypatch.setattr("durin.utils.restart.time.time", lambda: 102.0)
     assert format_restart_completed_message("100.0") == "Restart completed in 2.0s."
+
+
+def test_reexec_exits_hard_when_execv_fails(monkeypatch):
+    """A restart running on the watchdog's own thread that hits a failing
+    os.execv must not just quietly end that thread — nothing else would
+    ever retry it. It logs and exits hard so a supervisor (systemd,
+    launchd) restarts the process instead of it running on with the
+    restart request silently lost."""
+    monkeypatch.setattr("durin.utils.restart.os.execv", MagicMock(side_effect=OSError("boom")))
+    exit_calls: list[int] = []
+    monkeypatch.setattr("durin.utils.restart.os._exit", exit_calls.append)
+
+    reexec()
+
+    assert exit_calls == [1]
+
+
+def test_reexec_blocks_instead_of_returning_when_it_loses_the_race(monkeypatch):
+    """The loser of the reexec race (the normal restart path or the
+    watchdog, whichever calls second) must never return: returning could
+    let this process reach its own exit before the winner's execv actually
+    replaces it. Blocking is safe regardless — the winner's execv ends this
+    thread along with everything else in the process the instant it
+    succeeds."""
+    monkeypatch.setattr("durin.utils.restart._reexeced", True)  # the winner "already" ran
+    returned = threading.Event()
+
+    def _call_reexec() -> None:
+        reexec()
+        returned.set()  # only reached if reexec() incorrectly returns
+
+    thread = threading.Thread(target=_call_reexec, daemon=True)
+    thread.start()
+    thread.join(timeout=0.3)
+
+    assert thread.is_alive(), "reexec() returned instead of blocking — the loser must never return"
+    assert not returned.is_set()
 
 
 def test_should_show_cli_restart_notice():

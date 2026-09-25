@@ -153,26 +153,33 @@ async def test_every_turn_blocked_on_an_answer_is_journaled_at_shutdown(tmp_path
 async def test_drain_waits_the_bound_once_not_once_per_stuck_task(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A cancelled turn that takes longer than the bound to unwind must not
-    cost the drain that bound again for every such turn: a per-task
-    ``wait_for(timeout=...)`` did, one after another; a single
-    ``asyncio.wait`` over the whole batch pays it once, however many turns
-    are stuck, and still journals their messages."""
+    """A turn whose dispatch truly swallows ``CancelledError`` never unwinds
+    on its own. On Python 3.11, a per-task ``wait_for(timeout=...)`` waits
+    WITHOUT LIMIT past its own timeout for a cancelled task to actually
+    finish — so that turn alone hangs the drain forever, and three of them
+    hang it three times over. A single ``asyncio.wait`` over the whole batch
+    bounds the pass once, regardless of how many turns are stuck, and still
+    journals their messages. The drain runs as its own task here, and this
+    test's own ``asyncio.wait(..., timeout=2)`` is the safety net that keeps
+    a regression from hanging the test suite instead of just failing it."""
     import durin.agent.loop as loop_module
 
     monkeypatch.setattr(loop_module, "_DRAIN_CANCEL_WAIT_S", 0.2)
     loop, _bus = _make_loop(tmp_path)
     started = [asyncio.Event() for _ in range(3)]
+    release = asyncio.Event()
 
     async def fake_dispatch(msg, pending=None):
         index = int(msg.chat_id[1:]) - 1
         started[index].set()
-        try:
-            await asyncio.Event().wait()
-        except asyncio.CancelledError:
-            # A slow, but finite, unwind — past the patched 0.2s bound but
-            # far under the old hardcoded 10s one.
-            await asyncio.sleep(0.5)
+        # Really swallows cancellation: it keeps re-awaiting instead of
+        # ever letting a CancelledError end the turn, so nothing about this
+        # task resolves on its own — only the drain's own bound can move on.
+        while not release.is_set():
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                pass
 
     loop._dispatch = fake_dispatch  # type: ignore[method-assign]
     tasks = [
@@ -186,18 +193,24 @@ async def test_drain_waits_the_bound_once_not_once_per_stuck_task(
     for event in started:
         await event.wait()
 
-    start = time.monotonic()
-    journaled = await loop.drain_inbound_for_shutdown()
-    elapsed = time.monotonic() - start
+    drain = asyncio.create_task(loop.drain_inbound_for_shutdown())
+    try:
+        start = time.monotonic()
+        done, _pending = await asyncio.wait([drain], timeout=2)
+        elapsed = time.monotonic() - start
 
-    # Three turns whose unwind takes 0.5s: one wait_for(10s) per task, run
-    # one after another, would take ~1.5s; the bound applies once to the
-    # whole batch, so this stays close to the patched 0.2s.
-    assert elapsed < 1.0
-    assert journaled == 3
-    assert sorted(m.content for m in loop._inbound_journal.drain()) == [
-        "stuck 1", "stuck 2", "stuck 3",
-    ]
-
-    # Let the turns actually finish their slow unwind before the test ends.
-    await asyncio.gather(*tasks, return_exceptions=True)
+        assert drain in done, "the drain did not return within the bound — it hung"
+        # Three turns that never unwind: three sequential wait_for(10s) each
+        # waiting without limit past its own timeout would never return at
+        # all; the bound applies once to the whole batch, so this stays
+        # close to the patched 0.2s.
+        assert elapsed < 1.0
+        assert drain.result() == 3
+        assert sorted(m.content for m in loop._inbound_journal.drain()) == [
+            "stuck 1", "stuck 2", "stuck 3",
+        ]
+    finally:
+        release.set()
+        if not drain.done():
+            drain.cancel()
+        await asyncio.gather(drain, *tasks, return_exceptions=True)
