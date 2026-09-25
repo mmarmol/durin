@@ -70,10 +70,10 @@ skills judge, and `install_policy: auto` — because it is not the turn's
 authority. An API message never answers an approval either: while a turn
 waits on one, a message marked `origin: "api"` neither decides it nor ends the
 wait, and routes on like any other message sent during the turn. The Approve /
-Reject click travels on the webui socket, and a token from the API token store
-cannot open that socket: the handshake takes only the configured static
-`token` (the operator's own secret) or a single-use token minted by
-`/webui/bootstrap`. With `websocket_requires_token` off and no static `token`,
+Reject click travels on the webui socket, and a token issued for the API (a
+`chat:write` token, say) cannot open that socket: the handshake takes only the
+configured static `token` (the operator's own secret) or the single-use token
+`/webui/bootstrap` just minted. With `websocket_requires_token` off and no static `token`,
 the handshake takes every connection that reaches the socket, token or not —
 the operator's choice, which no API token changes. A `chat:write`
 token may hold a conversation in the dashboard's sessions, but it is a

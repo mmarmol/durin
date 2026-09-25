@@ -293,6 +293,16 @@ def _is_valid_chat_id(value: Any) -> bool:
     return isinstance(value, str) and _CHAT_ID_RE.match(value) is not None
 
 
+def _answers_approvals(connection: Any) -> bool:
+    """True for a watcher that can answer an approval the chat waits on.
+
+    A socket connection can (the webui's Approve / Reject). A watcher that
+    only reads the chat's frames declares ``answers_approvals = False``: the
+    API's SSE subscriber, whose client may answer a question with a plain
+    message but whose messages never decide an approval."""
+    return bool(getattr(connection, "answers_approvals", True))
+
+
 def _parse_envelope(raw: str) -> dict[str, Any] | None:
     """Return a typed envelope dict if the frame is a new-style JSON envelope, else None.
 
@@ -675,9 +685,14 @@ class WebSocketChannel(BaseChannel):
         task = self._voice_cleanup.pop(chat_id, None)
         if task is not None:
             task.cancel()
-        # ...and keeps a turn waiting on this chat's answer waiting.
-        release = self._answer_fallback.pop(chat_id, None)
-        if release is not None:
+        # ...and keeps a turn waiting on this chat's answer waiting, when this
+        # viewer could answer what it waits on (see _can_answer_waiter).
+        release = self._answer_fallback.get(chat_id)
+        if release is not None and (
+            _answers_approvals(connection)
+            or self._waiting_kind(chat_id) != "approval"
+        ):
+            self._answer_fallback.pop(chat_id, None)
             release.cancel()
 
     def _cleanup_connection(self, connection: Any) -> None:
@@ -690,6 +705,13 @@ class WebSocketChannel(BaseChannel):
             subs.discard(connection)
             if not subs:
                 self._subs.pop(cid, None)
+                self._schedule_answer_fallback(cid)
+            elif _answers_approvals(connection) and not any(
+                _answers_approvals(c) for c in subs
+            ):
+                # The last webui tab left while API watchers remain: they may
+                # hold a question, never an approval, which the release
+                # decides when it fires.
                 self._schedule_answer_fallback(cid)
         # Defer voice-session teardown by a grace period rather than killing it
         # on the disconnect: a transient socket drop (wifi blip, backgrounded
@@ -734,6 +756,10 @@ class WebSocketChannel(BaseChannel):
         the whole answer timeout. Falling back makes the tool yield: its
         question stays in the session and the user's next message answers
         it. Idempotent while a release is already scheduled.
+
+        Whether a remaining watcher holds the wait is decided when the release
+        fires, since the turn may have moved from a question to an approval in
+        the meantime (see _can_answer_waiter).
         """
         if chat_id in self._answer_fallback:
             return
@@ -747,14 +773,31 @@ class WebSocketChannel(BaseChannel):
             except asyncio.CancelledError:
                 return
             self._answer_fallback.pop(chat_id, None)
-            if not self._subs.get(chat_id):
+            if not self._can_answer_waiter(chat_id):
                 pending_answers.fallback(session_key)
 
         try:
             self._answer_fallback[chat_id] = asyncio.ensure_future(_release())
         except RuntimeError:
             # No running loop (sync teardown path): release at once.
-            pending_answers.fallback(session_key)
+            if not self._can_answer_waiter(chat_id):
+                pending_answers.fallback(session_key)
+
+    def _waiting_kind(self, chat_id: str) -> str | None:
+        """What a turn waits on in *chat_id* (``question`` / ``approval``), keyed
+        the way the unwatched-chat release keys it."""
+        from durin.agent import pending_answers
+
+        return pending_answers.waiting_kind(f"websocket:{chat_id}")
+
+    def _can_answer_waiter(self, chat_id: str) -> bool:
+        """True while someone watching *chat_id* could answer what its turn
+        waits on. Any watcher can answer a question; an approval takes a
+        webui tab, since an API watcher's message never decides one."""
+        subs = self._subs.get(chat_id) or ()
+        if self._waiting_kind(chat_id) == "approval":
+            return any(_answers_approvals(c) for c in subs)
+        return bool(subs)
 
     def _goal_state_session_key(self, chat_id: str) -> str:
         """The session key goal-state/pending-approval metadata actually lives

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import pytest
 from starlette.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from durin.bus.queue import MessageBus
 from durin.service.principal import Scope
@@ -53,10 +54,16 @@ def _chat_write_token(auth) -> str:
 
 
 def _refused(client, path: str, headers: dict | None = None) -> None:
-    # The server closes with 1008 before accept; the test client raises.
-    with pytest.raises(Exception):
+    # The handshake closes with 1008 (policy violation) before accepting.
+    with pytest.raises(WebSocketDisconnect) as refused:
         with client.websocket_connect(path, headers=headers or {}) as ws:
             ws.receive_text()
+    assert refused.value.code == 1008
+
+
+def _accepted(client, path: str) -> None:
+    with client.websocket_connect(path) as ws:
+        assert ws.receive_json()["event"] == "ready"
 
 
 @pytest.mark.parametrize("cfg", [{}, {"token": "s3cr3t-static"}])
@@ -67,9 +74,14 @@ def test_a_chat_write_token_cannot_open_the_socket(tmp_path, monkeypatch, cfg) -
     _refused(client, "/", headers={"Authorization": f"Bearer {token}"})
 
 
+def test_the_static_token_still_opens_it(tmp_path, monkeypatch) -> None:
+    # The same app, refusing the API token above, takes the operator's secret.
+    _, client = _app(tmp_path, monkeypatch, token="s3cr3t-static")
+    _accepted(client, "/?token=s3cr3t-static")
+
+
 def test_the_dashboard_s_bootstrap_token_still_opens_it(tmp_path, monkeypatch) -> None:
     # The refusal above is specific to API tokens, not a closed socket.
     _, client = _app(tmp_path, monkeypatch)
     token = client.get("/webui/bootstrap").json()["token"]
-    with client.websocket_connect(f"/?token={token}") as ws:
-        assert ws.receive_json()["event"] == "ready"
+    _accepted(client, f"/?token={token}")

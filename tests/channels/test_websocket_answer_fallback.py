@@ -69,3 +69,78 @@ async def test_a_second_viewer_still_watching_keeps_the_turn_waiting() -> None:
 
     assert not fut.done()
     fut.cancel()
+
+
+# An API client following the chat over SSE can answer a question with a plain
+# message, but never an approval: for an approval only a webui tab (a socket
+# connection) is a viewer.
+
+
+def _sse():
+    from durin.api.chat_stream import SseSubscriber
+
+    return SseSubscriber()
+
+
+@pytest.mark.asyncio
+async def test_an_sse_viewer_does_not_hold_an_approval_after_the_last_tab_leaves() -> None:
+    channel = _channel(0.02)
+    tab, sse = AsyncMock(), _sse()
+    channel._attach(tab, "c1")
+    channel._attach(sse, "c1")
+    fut = pending_answers.create("websocket:c1", kind="approval", ref="r1")
+
+    channel._cleanup_connection(tab)
+    assert not fut.done()  # still inside the grace window
+
+    async with asyncio.timeout(5):
+        assert await fut is pending_answers.FALLBACK
+    assert sse in channel._subs["c1"]  # the API client keeps following
+
+
+@pytest.mark.asyncio
+async def test_an_sse_viewer_still_holds_a_question_after_the_last_tab_leaves() -> None:
+    channel = _channel(0.02)
+    tab, sse = AsyncMock(), _sse()
+    channel._attach(tab, "c1")
+    channel._attach(sse, "c1")
+    fut = pending_answers.create("websocket:c1")
+
+    channel._cleanup_connection(tab)
+    await asyncio.sleep(0.1)
+
+    assert not fut.done()
+    assert pending_answers.resolve("websocket:c1", "green") is True
+    assert await fut == "green"
+
+
+@pytest.mark.asyncio
+async def test_an_sse_attach_inside_the_grace_does_not_keep_an_approval_waiting() -> None:
+    channel = _channel(0.05)
+    tab = AsyncMock()
+    channel._attach(tab, "c1")
+    fut = pending_answers.create("websocket:c1", kind="approval", ref="r1")
+
+    channel._cleanup_connection(tab)
+    channel._attach(_sse(), "c1")  # an API client starts following the chat
+
+    async with asyncio.timeout(5):
+        assert await fut is pending_answers.FALLBACK
+
+
+@pytest.mark.asyncio
+async def test_a_question_turned_approval_inside_the_grace_is_released_without_a_tab() -> None:
+    # The release checks what is waiting when it fires, not when it was set.
+    channel = _channel(0.05)
+    tab, sse = AsyncMock(), _sse()
+    channel._attach(tab, "c1")
+    channel._attach(sse, "c1")
+    question = pending_answers.create("websocket:c1")
+
+    channel._cleanup_connection(tab)
+    assert pending_answers.resolve("websocket:c1", "green") is True
+    assert await question == "green"
+    approval_wait = pending_answers.create("websocket:c1", kind="approval", ref="r1")
+
+    async with asyncio.timeout(5):
+        assert await approval_wait is pending_answers.FALLBACK

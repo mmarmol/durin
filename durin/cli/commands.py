@@ -3556,8 +3556,8 @@ def approvals_root(
     A cron job, dream, workflow or sub-agent has no user to ask, and a turn
     driven by an API token has no person's authority, so an action that would
     add or change executable state (an MCP server, a skill, a dependency
-    install) is recorded instead of run; an exec command that needs approval
-    is refused there instead. This is where they wait: bare `durin approvals`
+    install) is recorded instead of run (an exec command that needs approval
+    is refused, not recorded). This is where they wait: bare `durin approvals`
     lists pending ones (`--all` for everything too); `approve`/`reject <id>`
     decide one; `discard <id>` deletes a record without deciding it.
     """
