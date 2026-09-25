@@ -124,7 +124,7 @@ The durin-owned catalog lives in `durin/agent/data/mcp_catalog.json` (the vendor
 
 For install, `McpRegistryDescribeQuery` retrieves full `McpServerDetail` from a registry adapter. `build_server_config_from_detail` selects a local package (stdio via npx/uvx/docker) or a remote endpoint, pins the package version, and builds an `MCPServerConfig`. Secret environment variables are stored in durin's secret store under `${secret:NAME}` references — resolved to plaintext at spawn time, never persisted in config. For remote servers with no declared auth header, `autodetect_oauth` probes the endpoint with an unauthenticated MCP `initialize` request; a `401 Bearer` response sets `oauth=True` on the config so the SDK's sign-in flow takes over.
 
-Agent-side, this path is exposed through `mcp_search` (read-only) and `mcp_manage` (install/add/update gated by `tools.mcp_discovery.install_policy`); the `mcp` builtin skill (`durin/skills/mcp/SKILL.md`) carries the agent-facing guidance — trust decisions, the dry-run→confirm gate, human-owned credentials, and the OAuth hand-off.
+Agent-side, this path is exposed through `mcp_search` (read-only) and `mcp_manage` (install/add/update/enable gated by `tools.mcp_discovery.install_policy` through the approval channel — a person in the chat approves or rejects, or the request waits for approval, `durin approvals`); the `mcp` builtin skill (`durin/skills/mcp/SKILL.md`) carries the agent-facing guidance — trust decisions, the approval gate, human-owned credentials, and the OAuth hand-off.
 
 ### OAuth flow
 
@@ -192,7 +192,7 @@ MCP servers can request sampling (asking durin's LLM to generate text), declare 
 | `tools.mcp_servers` | `dict[str, MCPServerConfig]` | `{}` | Configured servers; keyed by server name |
 | `tools.mcp_deferral.enabled` | `bool` | `True` | Gate for tool deferral behind bridge tools |
 | `tools.mcp_deferral.threshold_tokens` | `int` | `20000` | Hide MCP tool definitions when aggregate schema exceeds this; 0 disables |
-| `tools.mcp_discovery.install_policy` | `str` | `"approve"` | Gate on installing a discovered server: `never` / `approve` (per-install confirm) / `auto` |
+| `tools.mcp_discovery.install_policy` | `str` | `"approve"` | Gate on the agent adding, updating, installing or enabling an MCP server: `never` / `approve` (a person approves each change) / `auto` |
 | `tools.mcp_discovery.quality` | `str` | `"official"` | Discovery view: `official` (star/first-party gate) or `all` (full registry) |
 | `tools.mcp_discovery.min_stars` | `int` | `100` | Star floor for the `official` gate |
 | `tools.mcp_discovery.registries` | `list` | `[official]` | MCP registries to search, in order |

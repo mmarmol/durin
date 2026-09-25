@@ -1735,7 +1735,12 @@ def _get_exec_run(workspace: Path):
     ``ExecTool.create`` reads ``ctx.config.exec`` / ``.restrict_to_workspace`` /
     ``.process`` — all fields of ``ToolsConfig`` — so the ctx must carry the tools
     sub-config, NOT the top-level ``Config`` (which has no ``exec`` and raised
-    AttributeError → HTTP 500 on any install_deps approve)."""
+    AttributeError → HTTP 500 on any install_deps approve).
+
+    Returns the non-asking ``_run``, not ``execute``: this runs mid-approval, on
+    the web skill's approve path, with no chat turn to ask in — a step that hits
+    the deny list must fail with the refusal text, never open a second, nested
+    approval."""
     from durin.agent.tools.shell import ExecTool
     from durin.config.loader import load_config
 
@@ -1746,7 +1751,7 @@ def _get_exec_run(workspace: Path):
             self.workspace = ws
             self.config = config
 
-    return ExecTool.create(_Ctx(workspace, tools_cfg)).execute
+    return ExecTool.create(_Ctx(workspace, tools_cfg))._run
 
 
 def _spec_for_bin(skill_dir: Path, bin_name: str) -> list[dict]:

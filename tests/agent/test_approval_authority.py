@@ -136,22 +136,25 @@ def _mcp_tool(tmp_path, session_key):
 
 
 @pytest.mark.asyncio
-async def test_mcp_manage_stages_in_a_cron_context(tmp_path) -> None:
+async def test_mcp_manage_files_a_pending_request_in_a_cron_context(tmp_path) -> None:
+    from durin.agent import approval_store
+
     tool = _mcp_tool(tmp_path, "cron_dream")
     out = await tool.execute(action="add", name="playwright",
                              config='{"type":"stdio","command":"npx"}')
-    assert "staged_for_approval" in out
-    assert approval.list_pending(tmp_path, "mcp")[0]["action"] == "add"
+    assert out["status"] == "pending"
+    [rec] = approval_store.list_records(tmp_path, include_legacy=False)
+    assert rec["kind"] == "mcp_change" and rec["payload"]["action"] == "add"
 
 
 @pytest.mark.asyncio
 async def test_mcp_manage_self_confirm_cannot_run_without_a_human(tmp_path) -> None:
     # The exact 2026-07-24 sequence: the model passes confirm=true itself.
-    # With no reachable user the action must stage, never execute.
+    # With no reachable user the action must wait for approval, never execute.
     tool = _mcp_tool(tmp_path, "workflow:abc:root")
     out = await tool.execute(action="update", name="playwright", confirm="true",
                              config='{"type":"stdio","command":"npx"}')
-    assert "staged_for_approval" in out
+    assert out["status"] == "pending"
 
 
 @pytest.mark.asyncio

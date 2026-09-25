@@ -737,7 +737,7 @@ class McpDiscoveryConfig(Base):
         description="MCP registries to search, in order",
     )
     search_limit: int = Field(default=10, description="Max results returned per MCP server search")
-    install_policy: Literal["never", "approve", "auto"] = Field(default="approve", description='Gate on installing a discovered MCP server: "never", "approve" (per-install confirm), or "auto"')
+    install_policy: Literal["never", "approve", "auto"] = Field(default="approve", description='Gate on the agent adding, updating, installing or enabling an MCP server: "never", "approve" (a person approves each change), or "auto"')
     quality: Literal["official", "all"] = Field(default="official", description="Default discovery view. 'official' applies the star/first-party gate; 'all' returns the full registry")
     min_stars: int = Field(default=100, description="Star floor for the 'official' gate")
 

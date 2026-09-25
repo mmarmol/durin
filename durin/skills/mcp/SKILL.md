@@ -21,27 +21,33 @@ config files yourself.
    via `ask_user_question`.
 
 3. **Install through the gate.** `mcp_manage(action="install", ref=<ref>)`.
-   Under the default `install_policy: approve` the first call returns a
-   **dry-run preview** — review it with the user, then call again with
-   `confirm="true"`. `never` refuses (relay that); `auto` proceeds directly.
+   Under the default `install_policy: approve` the user approves the exact
+   server config: in a chat they are asked right away and the call returns
+   their answer in `status` (`applied`, `rejected`, or `pending` when they did
+   not answer); in a run with nobody to ask it returns `pending` and the request
+   waits for approval (`durin approvals`). After `rejected` or `pending`, tell
+   the user and do not retry or reach the same result another way. `never`
+   refuses (relay that); `auto` proceeds directly.
    - `prefer` is `"remote"` by default; pass `"local"` for the stdio package
      (npx / uvx / docker) when the user wants it or no remote exists. A missing
-     local runtime comes back as a `runtime_plan`: auto-installable commands run
-     through the exec gate, otherwise relay the manual install to the user.
+     local runtime is part of the request as a `runtime_plan`: an approved
+     install runs an auto-installable command through the exec gate, otherwise
+     relay the manual install to the user.
 
 4. **Credentials are the human's, never yours.** You never supply, invent, or
    forward a credential value.
    - Token/API-key servers: `request_secret(name=..., service=...)` lets the user
-     provide it into durin's secret store; server config then carries a
-     `${secret:NAME}` reference, resolved only at spawn time. The web dashboard's
-     MCP panel install form collects the same inputs.
+     provide it into durin's secret store; pass `${secret:NAME}` as the whole
+     value in the server config, resolved only at spawn time. A plain credential
+     in `config` is refused. The web dashboard's MCP panel install form collects
+     the same inputs.
    - OAuth servers: a result with `needs_oauth: true` (status `needs_auth`) means
      the user must sign in out of band — `durin mcp login <server>` in a terminal,
      or the sign-in button in the dashboard's MCP panel. Agent runs are headless:
      you never open a browser or touch the authorization code.
 
-5. **Verify.** Read the install result's `status`. `connected` → the server's
-   tools are registered as native tools; exercise one to prove the integration.
+5. **Verify.** Read the server's status in the install result. `connected` → the
+   server's tools are registered as native tools; exercise one to prove the integration.
    `needs_auth` → step 4. `failed` → diagnose (runtime, URL, credentials), then
    `mcp_manage(action="reconnect", name=...)`.
 
@@ -49,13 +55,14 @@ config files yourself.
 
 The user gives you an endpoint URL or a command instead of a registry ref:
 `mcp_manage(action="add", name=<name>, config=<MCPServerConfig JSON>)` — same
-dry-run → confirm gate. `action="update"` edits an existing server's config the
-same way (e.g. raise a timeout, change the URL).
+approval gate. `action="update"` edits an existing server's config the same way
+(e.g. raise a timeout, change the URL).
 
 ## Lifecycle
 
-`mcp_manage(action=..., name=...)` with `remove`, `enable`, `disable`, or
-`reconnect` — these are not gated. A 401 or OAuth error on a tool call mid-run
+`mcp_manage(action=..., name=...)` with `remove`, `disable`, or `reconnect` —
+these are not gated. `enable` goes through the approval gate, since it starts a
+switched-off server again. A 401 or OAuth error on a tool call mid-run
 means the server needs re-auth: point the user at `durin mcp login <server>`
 (or the dashboard sign-in) instead of retrying the call.
 
@@ -63,8 +70,8 @@ means the server needs re-auth: point the user at `durin mcp login <server>`
 
 - The install gate is a real security control: adding a server hands an external
   party a tool surface inside the agent, so an injected prompt must never slip one
-  in silently. Surface every dry-run preview and refusal to the user verbatim;
-  do not work around the gate.
+  in silently. Surface every refusal and approval outcome to the user
+  verbatim; do not work around the gate.
 - Prefer verified-tier hits; when the user picks a community server, make sure
   they know what they are trusting.
 - Secrets are entered by the human (OAuth login, `request_secret`, or the
