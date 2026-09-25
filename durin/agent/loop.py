@@ -1606,9 +1606,10 @@ class AgentLoop:
         """Divert an inbound message to a blocked ask_user waiter.
 
         Returns True when the message was consumed as the in-turn answer.
-        Slash commands and notices flagged ``INBOUND_META_NOT_AN_ANSWER`` are
-        never consumed, and a message from an API token never answers an
-        approval. A media-bearing reply cannot be
+        Slash commands, system results (a sub-agent's, a background
+        workflow's, an automation's) and notices flagged
+        ``INBOUND_META_NOT_AN_ANSWER`` are never consumed, and a message from
+        an API token never answers an approval. A media-bearing reply cannot be
         carried through a tool result — the waiter falls back to yield
         semantics and the message continues through normal routing.
         """
@@ -1618,6 +1619,12 @@ class AgentLoop:
             return False
         text = (msg.content or "").strip()
         if text.startswith("/"):
+            return False
+        if msg.channel == "system" or msg.metadata.get("injected_event"):
+            # A sub-agent's result, a background workflow's result or an
+            # automation's outcome, posted under this chat's key by durin
+            # itself. It is not the person's reply: it neither answers a
+            # question nor ends an approval wait, and routes on into the turn.
             return False
         if msg.metadata.get(INBOUND_META_NOT_AN_ANSWER):
             # Posted for the user, not typed by them (a stored-secret notice):

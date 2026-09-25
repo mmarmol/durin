@@ -202,7 +202,11 @@ any other text makes it fall back, and the message continues as a normal
 message. Slash commands and messages flagged `INBOUND_META_NOT_AN_ANSWER` (a
 stored-secret note posted for the user) never answer a waiter, a message from
 an API token (`origin: "api"`) never answers an approval, and a media reply
-makes the waiter fall back.
+makes the waiter fall back. A system message (channel `system`, or any message
+carrying `injected_event`: a sub-agent's result, a background workflow's
+result, an automation's outcome, all published under the chat's session key)
+neither answers a waiter nor makes it fall back; it routes on into the running
+turn like any system result, and the wait goes on.
 
 A waiter only exists where it could be answered (`pending_answers.can_block`):
 an interactive session, a live inbound consumer, and a surface that can send a

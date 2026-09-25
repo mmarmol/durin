@@ -128,3 +128,99 @@ async def test_a_notice_posted_for_the_user_is_not_the_answer(tmp_path):
     assert not fut.done()
     assert loop._maybe_resolve_pending_answer(_msg("green"), key) is True
     assert fut.result() == "green"
+
+
+# What the three in-process publishers put on the bus under the parent chat's
+# session key: a sub-agent's result, a background workflow's result and an
+# automation's outcome. Each is posted by durin, never typed by the person.
+_SYSTEM_RESULTS = [
+    pytest.param("system", {"injected_event": "subagent_result", "subagent_task_id": "t1"},
+                 "[Subagent 'x' completed]\n\nyes", id="subagent"),
+    pytest.param("system", {"injected_event": "workflow_background_result", "workflow": "w"},
+                 "[Background workflow 'w' finished]\n\nyes", id="workflow"),
+    pytest.param("system", {"injected_event": "automation_outcome", "automation": "a"},
+                 "[Automation 'a' finished]\n\nyes", id="automation"),
+    # The injected-event marker alone is enough, whatever channel carries it.
+    pytest.param("websocket", {"injected_event": "subagent_result"}, "yes",
+                 id="injected-on-a-chat-channel"),
+]
+
+
+def _system_msg(channel: str, metadata: dict, content: str) -> InboundMessage:
+    return InboundMessage(
+        channel=channel, sender_id="subagent", chat_id="websocket:42", content=content,
+        metadata=dict(metadata), session_key_override="websocket:42",
+    )
+
+
+@pytest.mark.parametrize(("channel", "metadata", "content"), _SYSTEM_RESULTS)
+@pytest.mark.asyncio
+async def test_a_system_result_leaves_an_approval_waiting(tmp_path, channel, metadata, content):
+    loop = _make_loop(tmp_path)
+    fut = pa.create("websocket:42", kind="approval", ref="r1")
+    assert loop._maybe_resolve_pending_answer(
+        _system_msg(channel, metadata, content), "websocket:42") is False
+    # Neither decided nor told to fall back: the card stays up and the
+    # person can still answer it.
+    assert not fut.done()
+    assert pa.waiting_kind("websocket:42") == "approval"
+    assert loop._maybe_resolve_pending_answer(_msg("yes"), "websocket:42") is True
+    assert await fut == "approve"
+
+
+@pytest.mark.parametrize(("channel", "metadata", "content"), _SYSTEM_RESULTS)
+@pytest.mark.asyncio
+async def test_a_system_result_never_answers_a_question(tmp_path, channel, metadata, content):
+    loop = _make_loop(tmp_path)
+    fut = pa.create("websocket:42")
+    assert loop._maybe_resolve_pending_answer(
+        _system_msg(channel, metadata, content), "websocket:42") is False
+    assert not fut.done()
+    assert loop._maybe_resolve_pending_answer(_msg("green"), "websocket:42") is True
+    assert await fut == "green"
+
+
+@pytest.mark.asyncio
+async def test_a_system_result_during_a_wait_routes_into_the_running_turn(tmp_path):
+    """The consumer does not take the result as the answer: it goes where a
+    system result always goes while a turn runs, the turn's inject queue."""
+    import asyncio
+
+    loop = _make_loop(tmp_path)
+    waiting = asyncio.Event()
+    release = asyncio.Event()
+    waiter: list[asyncio.Future] = []
+
+    async def fake_dispatch(msg, *args, **kwargs):
+        # A turn blocked on an approval card.
+        waiter.append(pa.create("websocket:42", kind="approval", ref="r1"))
+        waiting.set()
+        await release.wait()
+
+    async def _noop(*_a, **_kw):
+        return None
+
+    loop._dispatch = fake_dispatch  # type: ignore[method-assign]
+    loop._connect_mcp = _noop  # type: ignore[method-assign]
+    loop._warmup_memory_embedding = _noop  # type: ignore[method-assign]
+    runner = asyncio.create_task(loop.run())
+    try:
+        await loop.bus.publish_inbound(_msg("delete the old logs"))
+        await asyncio.wait_for(waiting.wait(), 5)
+        await loop.bus.publish_inbound(_system_msg(
+            "system", {"injected_event": "subagent_result"}, "[Subagent 'x' completed]"))
+        queues = loop._pending_queues["websocket:42"]
+        for _ in range(400):
+            if queues.inject.qsize():
+                break
+            await asyncio.sleep(0.005)
+        assert queues.inject.qsize() == 1
+        routed = queues.inject.get_nowait()
+        assert routed.metadata["injected_event"] == "subagent_result"
+        assert not waiter[0].done()
+    finally:
+        loop._running = False
+        release.set()
+        runner.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await runner
