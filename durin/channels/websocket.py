@@ -707,10 +707,39 @@ class WebSocketChannel(BaseChannel):
         meta = row.get("metadata", {}) if isinstance(row, dict) else {}
         if not isinstance(meta, dict):
             meta = {}
+        self._drop_stale_pending_approval(chat_id, meta)
         blob = goal_state_ws_blob(meta)
-        if not blob.get("active"):
+        # An approval the turn waits on is replayed too, so a refresh while
+        # the gated tool blocks brings its card back.
+        if not blob.get("active") and "pending_approval" not in blob:
             return
         await self.send_goal_state(chat_id, blob)
+
+    def _drop_stale_pending_approval(self, chat_id: str, meta: dict[str, Any]) -> None:
+        """A crash can kill the turn between the asker writing ``pending_approval``
+        into metadata and its ``finally`` popping it back out, so the saved
+        record can outlive the waiter that would ever resolve it. Replay it on
+        attach only while the approval store still says it is pending; otherwise
+        drop it from *meta* (in place) and from the saved session, so a stale
+        card does not haunt every future attach.
+        """
+        pa = meta.get("pending_approval")
+        if not isinstance(pa, dict):
+            return
+        approval_id = str(pa.get("approval_id") or "")
+        if not approval_id:
+            return
+        from durin.agent import approval_store
+
+        record = approval_store.get(self._endpoint_workspace(), approval_id)
+        if isinstance(record, dict) and record.get("status") == "pending":
+            return
+        meta.pop("pending_approval", None)
+        session = self._session_manager.get_or_create(f"websocket:{chat_id}")
+        stored = session.metadata.get("pending_approval") if session.metadata else None
+        if isinstance(stored, dict) and stored.get("approval_id") == approval_id:
+            session.metadata.pop("pending_approval", None)
+            self._session_manager.save(session)
 
     async def _maybe_push_turn_run_wall_clock(self, chat_id: str) -> None:
         """Replay ``goal_status: running`` when a turn is still active (same-process refresh)."""
