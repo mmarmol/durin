@@ -260,19 +260,19 @@ def _json_argument(chars: int) -> str:
     import json
 
     items: dict = {}
-    while len(json.dumps(items)) < chars - 1_000:
-        for i in range(len(items), len(items) + 500):
-            items[f"key_{i}"] = {"name": f"item {i}", "tags": ["a", "time", "env"], "count": i}
+    while len(json.dumps(items)) < chars - 200:
+        i = len(items)
+        items[f"key_{i}"] = {"name": f"item {i}", "tags": ["a", "time", "env"], "count": i}
     return "echo '" + json.dumps(items) + "' > payload.json"
 
 
 @pytest.mark.parametrize("command", [
-    _python_heredoc(190_000), _rm_script(60_000), _json_argument(160_000),
+    _python_heredoc(9_500), _rm_script(9_500), _json_argument(9_500),
 ], ids=["python-heredoc", "rm-f-script", "json-argument"])
 def test_realistic_long_commands_are_checked_quickly(command):
-    """Long commands agents really send are checked, not refused, and the
-    check is cheap at any length the cap allows (tens of milliseconds; the
-    bound here is generous for slow CI)."""
+    """Long commands agents really send, up to the cap, are checked, not
+    refused, and the check is cheap (milliseconds; the bound here is generous
+    for slow CI)."""
     import time
 
     from durin.agent.tools.shell import MAX_CHECKED_COMMAND_CHARS

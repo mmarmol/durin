@@ -580,12 +580,12 @@ as a bypass.
 private-URL guard — delays its own call while the event loop keeps serving
 other chats between the guard's steps. A single regex call holds the GIL for
 its duration, so the loop runs between pattern calls, not during one. Real
-long commands are cheap (a heredoc of a couple of hundred thousand characters
-checks in tens of milliseconds); only adversarial repetition of an anchor word
-is quadratic for several patterns. A command longer than
-`MAX_CHECKED_COMMAND_CHARS` is refused first, unchecked. The refusal is not
-approvable (nothing checked the command) and tells the model to put a long
-script in a file and run it. Then
+long commands are cheap to check, but adversarial repetition of an anchor word
+is quadratic for several patterns, and a thread cannot preempt a regex call. So
+`MAX_CHECKED_COMMAND_CHARS` is sized to that worst case, and a longer command
+is refused first, unchecked. The refusal is not approvable (nothing checked the
+command) and tells the model to write long content with `write_file` and run
+the file. Then
 it applies the hard floor, then deny and allow patterns, then
 memory vault protection, then SSRF URL detection, then workspace boundary on
 absolute paths. It returns a `CommandRefusal` naming the kind of refusal and,

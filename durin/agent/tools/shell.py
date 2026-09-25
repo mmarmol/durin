@@ -93,17 +93,17 @@ _APPROVAL_APPLIED_NOTE = "\n\n(The user approved this exact command, once.)"
 _ALLOWLIST_RULE = "tools.exec.allow_patterns"
 
 # The longest command the guard checks; a longer one is refused unchecked
-# (fail closed, and not approvable). Real long commands are cheap to check at
-# any length up to this: a 195k-character Python heredoc checks in about
-# 40 ms, a 160k-character JSON argument in about 35 ms, and a 60k-character
-# script of `rm -f` lines in about 11 ms. Only adversarial repetition is
-# slow: several patterns are quadratic when one anchor word ("rm", "cp",
-# "sudo -x") repeats thousands of times, because each occurrence makes the
-# pattern rescan the rest of the command. The check therefore runs in a
-# worker thread (``_check_off_loop``); a single regex call still holds the
-# GIL while it runs, so the event loop gets control between pattern calls,
-# not during one.
-MAX_CHECKED_COMMAND_CHARS = 200_000
+# (fail closed, and not approvable) with a pointer to write_file, the tool for
+# long content. The bound comes from the guard's worst case, not its typical
+# one: realistic long commands check in tens of milliseconds even at 100k+
+# characters, but several patterns are quadratic when one anchor word ("rm",
+# "cp", "sudo -x") repeats thousands of times, since each occurrence makes the
+# pattern rescan the rest of the command. A single regex call holds the GIL
+# for its whole run, so checking in a worker thread (``_check_off_loop``) lets
+# other chats run between pattern calls but not during one: at 25k characters
+# one such call already takes over a second, while at this bound the whole
+# adversarial check stays near a third of a second.
+MAX_CHECKED_COMMAND_CHARS = 10_000
 
 # A command position: the start of the command, right after a separator
 # (including a backtick or an opening brace, for `` `cmd` `` and `{ cmd; }`),
