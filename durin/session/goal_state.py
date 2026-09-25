@@ -166,7 +166,7 @@ def goal_state_ws_blob(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
         blob = {"active": False}
     if metadata:
         # Non-default agent mode and a pending question ride this frame so
-        # the webui composer can render badges/strips (Tasks C2/D4).
+        # the webui composer can render its badges and strips.
         from durin.agent.agent_mode import DEFAULT_MODE, SESSION_MODE_KEY
 
         mode = str(metadata.get(SESSION_MODE_KEY) or "")
