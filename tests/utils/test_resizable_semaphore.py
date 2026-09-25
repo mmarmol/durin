@@ -159,3 +159,21 @@ def test_unlimited_to_limited_with_overshoot():
         assert run2["max"] == 2  # converged to the new cap
 
     asyncio.run(run())
+
+
+def test_going_unlimited_lets_queued_waiters_through():
+    """A waiter queued on the capped gate must not be stranded when the cap is
+    turned off: nothing would ever release the old semaphore it waits on."""
+    async def run():
+        sem = ResizableSemaphore(1)
+        await sem.__aenter__()
+        waiter = asyncio.create_task(sem.__aenter__())
+        for _ in range(100):
+            await asyncio.sleep(0)
+            if sem.waiting == 1:
+                break
+        sem.set_limit(0)
+        await asyncio.wait_for(waiter, 1)
+        assert sem.active == 2 and sem.waiting == 0
+
+    asyncio.run(run())

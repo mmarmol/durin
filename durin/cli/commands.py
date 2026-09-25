@@ -3600,6 +3600,27 @@ def approvals_list_cmd(
     _approvals_list(ctx, all_)
 
 
+def _approval_needs_exec_runner(workspace: Path, approval_id: str) -> bool:
+    """True when an exec runner is what request *approval_id* lacks to run
+    here, so the CLI builds one only for such kinds: a broken exec config must
+    not block approving a change that never runs a shell command. An exec
+    request needs more than a runner (it runs only in the chat that asked), so
+    it is left to ``decide`` to refuse with its own message."""
+    from durin.agent import approval_store
+    from durin.agent.approval_executors import ExecDeps, missing_handles
+
+    record = approval_store.get(workspace, approval_id)
+    if record is None or record.get("legacy"):
+        return False
+    kind = record.get("kind") or ""
+    try:
+        without = missing_handles(kind, ExecDeps())
+        with_runner = missing_handles(kind, ExecDeps(exec_run=lambda **_: None))
+    except Exception:  # noqa: BLE001 — an unknown kind is decide's to refuse
+        return False
+    return without is not None and with_runner is None
+
+
 def _approvals_decide(ctx: typer.Context, approval_id: str, decision: str) -> None:
     # The agent's exec tool runs commands with stdin as a pipe, so a model
     # could otherwise approve its own pending request by shelling out to this
@@ -3614,7 +3635,7 @@ def _approvals_decide(ctx: typer.Context, approval_id: str, decision: str) -> No
     cfg = _approvals_config(ctx)
     ws = Path(cfg.workspace_path).expanduser()
     deps = ExecDeps()
-    if decision == "approve":
+    if decision == "approve" and _approval_needs_exec_runner(ws, approval_id):
         # Built before the record is touched: a runner that cannot be built
         # must refuse the approval, never leave the request approved and then
         # failed for want of it.

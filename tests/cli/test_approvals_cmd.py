@@ -260,6 +260,32 @@ def test_approve_refuses_before_touching_the_record_when_no_runner_can_be_built(
     assert stored["status"] == "pending" and stored["decided_by"] is None
 
 
+def test_approve_that_needs_no_shell_never_builds_the_exec_runner(tmp_path, monkeypatch):
+    """A broken exec config must not block approving a skill edit, which never
+    runs a shell command."""
+    from durin.agent.tools.shell import ExecTool
+
+    kinds.register_all()
+    monkeypatch.setenv("DURIN_HOME", str(tmp_path))
+    monkeypatch.setattr("durin.cli.commands._stdin_is_interactive", lambda: True)
+
+    def _broken(cls, ctx):
+        raise RuntimeError("bad exec config")
+
+    monkeypatch.setattr(ExecTool, "create", classmethod(_broken))
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    _skill(ws, "mine", "step one\n")
+    prep = _prep_edit(ws, "mine", "step one", "step two")
+    rec = st.create(ws, kind=prep.kind, summary=prep.summary, detail=prep.detail,
+                    payload=prep.payload, change_hash=prep.change_hash,
+                    session_key="cron:nightly", context="autonomous")
+
+    out = runner.invoke(app, ["approvals", "approve", rec["id"]])
+    assert out.exit_code == 0, out.output
+    assert st.get(ws, rec["id"])["status"] == "applied"
+
+
 def test_approve_of_an_exec_request_is_refused_and_leaves_it_pending(tmp_path, monkeypatch):
     from durin.agent import approval_kinds_exec as kx
 

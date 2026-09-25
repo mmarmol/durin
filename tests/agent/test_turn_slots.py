@@ -240,3 +240,22 @@ async def test_once_the_turn_is_over_a_late_wait_takes_no_slot():
         turn_slots.unbind(token)
     assert slots.held == (False, False)
     assert lane.active == 0 and _free(lane) == 1 and _free(ceiling) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_turn_closed_while_queued_gives_back_the_slot_it_gets():
+    """The turn ended while a late wait was queued to take a slot back: when
+    the gate grants it, nobody would ever give it back, so it is returned."""
+    lane = ResizableSemaphore(1, name="interactive")
+    other = turn_slots.TurnSlots(lane, session_key=B)
+    await other.__aenter__()
+
+    slots = turn_slots.TurnSlots(lane, session_key=A)
+    queued = asyncio.create_task(slots.acquire())
+    await _until(lambda: lane.waiting == 1, "the lane queue")
+    slots.closed = True
+    await other.__aexit__(None, None, None)
+    await queued
+
+    assert slots.held == (False,)
+    assert lane.active == 0 and _free(lane) == 1

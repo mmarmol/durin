@@ -286,6 +286,24 @@ def test_realistic_long_commands_are_checked_quickly(command):
         assert refusal is None or refusal.kind == "deny"
 
 
+@pytest.mark.parametrize("unit", ["rm ", "cp ", "sudo -x ", "http://a ", "mv x "],
+                         ids=["rm", "cp", "sudo", "url", "mv"])
+def test_adversarial_repetition_at_the_cap_is_still_checked_quickly(unit):
+    """The cap exists for the guard's worst case: an anchor word repeated up to
+    the cap makes several patterns quadratic. At the cap that must stay well
+    under a few seconds of work (a fraction of a second on a dev machine; the
+    bound is generous for slow CI)."""
+    import time
+
+    from durin.agent.tools.shell import MAX_CHECKED_COMMAND_CHARS
+
+    command = (unit * (MAX_CHECKED_COMMAND_CHARS // len(unit)))[:MAX_CHECKED_COMMAND_CHARS]
+    assert len(command.strip()) <= MAX_CHECKED_COMMAND_CHARS
+    start = time.perf_counter()
+    ExecTool(restrict_to_workspace=True, working_dir="/w")._check(command, "/w")
+    assert time.perf_counter() - start < 3.0
+
+
 def test_a_command_over_the_cap_is_refused_before_any_check():
     import time
 

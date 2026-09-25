@@ -58,6 +58,11 @@ class TurnSlots:
                 # No suspension point between the gate granting the slot and
                 # this line, so a cancellation cannot fall between them.
                 self._held[i] = True
+                if self.closed:
+                    # The turn ended while this was queued: nobody will give
+                    # these slots back, so they go back now.
+                    await self.release()
+                    return
 
     async def release(self) -> None:
         """Give back every held slot, in reverse order."""
