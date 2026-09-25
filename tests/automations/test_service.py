@@ -730,3 +730,27 @@ def test_stop_route_of_an_unknown_run_is_404_over_http(tmp_path):
         headers={"Authorization": "Bearer test-token"},
     )
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_operator_still_approves_through_the_answer_route(tmp_path):
+    """The model lost the power to resolve an approval; the person did not.
+    A plain "sí" through the answer route (what the inbox or a thread reply
+    sends) approves the run, recorded as the operator's."""
+    import asyncio
+
+    rt, calls = _runtime(tmp_path, [
+        _wr("needs_input", out="proceed?", needs_input_node="gate", ask_kind="approval"),
+        _wr("completed"),
+    ])
+    svc, p = _svc(tmp_path, runtime=rt), Principal.local()
+    await svc.save(AutomationSaveCommand(name="a1", definition=_VALID), p)
+    fired = await svc.fire(AutomationFireCommand(name="a1"), p)
+    run_id = fired.run["run_id"]
+
+    result = await svc.answer(AutomationAnswerCommand(name="a1", run_id=run_id, text="sí"), p)
+
+    assert result.run["approval"]["action"] == "approve"
+    assert result.run["approval"]["by"] == "operator"
+    await asyncio.gather(*rt._bg_tasks)
+    assert automation_run_log.read_run(tmp_path, "a1", run_id)["status"] == "completed"

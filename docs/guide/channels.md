@@ -282,7 +282,7 @@ group_policy = "mention"  # "open", "mention", or "allowlist"
 | `open_channels` | `[]` | Channels where the bot replies to every message, regardless of `group_policy` — mix open rooms with mention-only rooms |
 | `persona` | `""` | Default persona for sessions born on this channel (empty = global default) |
 | `chat_personas` | `{}` | Per-conversation persona overrides (`{"C0123": "ops"}`); managed from the guided panel's channel list |
-| `reply_in_thread` | `true` | Reply in the originating thread |
+| `reply_in_thread` | `true` | Reply in the originating thread; each thread is its own conversation |
 | `react_emoji` | `"eyes"` | Reaction added while processing |
 | `done_emoji` | `"white_check_mark"` | Reaction added when done |
 | `include_thread_context` | `true` | Prepend thread history on first mention in a thread |

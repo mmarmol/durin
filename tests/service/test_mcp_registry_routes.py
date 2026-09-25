@@ -510,6 +510,9 @@ async def test_registry_install_does_not_block_on_connect(config_path, monkeypat
         def connect_errors(self):
             return {}
 
+        def mark_approved(self, name, cfg):
+            pass
+
         async def connect(self, name, cfg):
             connected.set()
             await asyncio.Event().wait()  # never returns

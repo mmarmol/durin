@@ -14,6 +14,7 @@ payloads themselves and (b) how each pending payload serializes to text.
 from __future__ import annotations
 
 import hashlib
+from contextlib import suppress
 from typing import Any, Mapping
 
 # Channels whose UI renders tool payloads (question panels, plan cards,
@@ -23,6 +24,7 @@ RICH_PAYLOAD_CHANNELS = {"websocket", "cli"}
 
 PENDING_SECRET_KEY = "pending_secret_request"
 PENDING_PLAN_KEY = "pending_plan_review"
+PENDING_APPROVAL_KEY = "pending_approval"
 
 # Digest per payload key of what the text fallback already published, so a
 # payload that outlives its turn is not re-sent on every later turn.
@@ -38,6 +40,29 @@ def _digest(text: str) -> str:
 def channel_renders_tool_payloads(channel: str | None) -> bool:
     """True when *channel* renders structured tool payloads in its own UI."""
     return bool(channel) and channel in RICH_PAYLOAD_CHANNELS
+
+
+async def push_session_state(bus: Any, channel: str | None, chat_id: str | None,
+                             metadata: Mapping[str, Any] | None) -> None:
+    """Push the session-state snapshot a rich channel draws from, mid-turn.
+
+    Rich channels (webui, TUI) otherwise receive it only at turn end. A turn
+    that waits on the person (a blocking question, an in-chat approval)
+    pushes it when the wait starts, so the question or approval card shows
+    while the turn waits and the webui channel learns something is pending
+    (a chat no tab is watching then stops waiting after a grace window), and
+    again when the wait ends, so it clears. Best effort: a failed push never
+    breaks the turn."""
+    if bus is None or not chat_id or not channel_renders_tool_payloads(channel):
+        return
+    from durin.bus.events import OutboundMessage
+    from durin.session.goal_state import goal_state_ws_blob
+
+    with suppress(Exception):
+        await bus.publish_outbound(OutboundMessage(
+            channel=channel, chat_id=chat_id, content="",
+            metadata={"_goal_state_sync": True, "goal_state": goal_state_ws_blob(metadata)},
+        ))
 
 
 def _serialize_question(payload: Mapping[str, Any]) -> str | None:
@@ -98,10 +123,29 @@ def _serialize_plan_review(payload: Mapping[str, Any]) -> str | None:
     )
 
 
+def _serialize_approval(payload: Mapping[str, Any]) -> str | None:
+    summary = str(payload.get("summary") or "").strip()
+    if not summary:
+        return None
+    lines = [f"🔐 Approval needed: {summary}"]
+    detail = payload.get("detail") or {}
+    for key in ("command", "cwd", "rule", "verdict", "source", "server", "packages",
+                "env", "headers", "security", "runtime"):
+        value = detail.get(key) if isinstance(detail, Mapping) else None
+        if value:
+            lines.append(f"{key}: {value}")
+    diff = detail.get("diff") if isinstance(detail, Mapping) else None
+    if diff:
+        lines.append(str(diff)[:1500])
+    lines.append("Reply *yes* to approve or *no* to reject.")
+    return "\n".join(lines)
+
+
 _SERIALIZERS = (
     ("pending_question", _serialize_question),
     (PENDING_SECRET_KEY, _serialize_secret_request),
     (PENDING_PLAN_KEY, _serialize_plan_review),
+    (PENDING_APPROVAL_KEY, _serialize_approval),
 )
 
 
@@ -156,6 +200,18 @@ def mark_interactions_delivered(
     for key, text in items:
         delivered[key] = _digest(text)
     metadata[_DELIVERED_KEY] = delivered
+
+
+def forget_delivery(metadata: dict[str, Any], key: str) -> None:
+    """Drop the delivered mark for *key*.
+
+    Called when a new payload replaces the one under *key*, so it is
+    delivered even when its text matches one sent earlier (the same question
+    asked again after the first was answered).
+    """
+    delivered = metadata.get(_DELIVERED_KEY)
+    if isinstance(delivered, dict):
+        delivered.pop(key, None)
 
 
 _EVENT_SERIALIZERS = {

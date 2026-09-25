@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from contextvars import ContextVar
 from collections.abc import Callable
+from contextvars import ContextVar
 from typing import Any
 
 from durin.agent.tools.base import Tool, tool_parameters
@@ -107,7 +107,8 @@ _PARAMETERS = {
                 "pass the user's answers as 'task': the run resumes at the node that asked. "
                 "For an aborted run (e.g. a transient API failure), the failed node is "
                 "retried with the exact input it had. Both keep the same working folder, "
-                "sessions and visit counts — nothing completed re-runs."
+                "sessions and visit counts — nothing completed re-runs. A run paused for a "
+                "person's APPROVAL cannot be resumed from here: that is their decision."
             ),
         },
         "work_key": {
@@ -141,22 +142,57 @@ def _background_launch_message(name: str, run_id: str) -> str:
     )
 
 
-def _format_result(result: Any, output_files: bool = False) -> str:
+def _approval_refusal(name: str, run_id: str, node: str | None) -> str:
+    """What the agent gets when it tries to resume an approval pause."""
+    at = f" at node '{node}'" if node else ""
+    return (
+        f"Refused: run '{run_id}' of workflow '{name}' is paused{at} for a person's "
+        "approval. Approving, revising or rejecting it is their decision, not yours: "
+        "they resume it from the workflow's runs in the webui or through the API. Tell "
+        "the user it is waiting for them; do not retry, and do not reach the same effect "
+        "another way."
+    )
+
+
+def _format_result(result: Any, output_files: bool = False, *, human_reachable: bool = True) -> str:
+    """The run summary the agent reads.
+
+    ``human_reachable`` says whether a person can be asked in the calling
+    context. Without one, a question pause must not send the agent to ask the
+    user, since nobody would ever answer.
+    """
     lines = [f"Workflow run {result.run_id}: {result.status}"]
 
-    if result.status == "needs_input":
+    if result.status == "needs_input" and getattr(result, "ask_kind", None) == "approval":
         lines.append(
-            "The workflow needs more information before it can finish — it did NOT fail. "
-            "You own the conversation with the user, so ask them the questions below "
-            "(via ask_user_question or just in your reply), then call this workflow again."
+            "The workflow paused for a person's APPROVAL of the proposal below — it did "
+            "NOT fail. Approving, revising or rejecting it is their decision, not yours: "
+            "they resume it from the workflow's runs in the webui or through the API, and "
+            "this tool refuses to. Tell the user it is waiting for them."
         )
+        if result.final_output:
+            lines.append(f"\nProposal awaiting approval:\n{result.final_output}")
+    elif result.status == "needs_input":
+        if human_reachable:
+            lines.append(
+                "The workflow needs more information before it can finish — it did NOT fail. "
+                "You own the conversation with the user, so ask them the questions below "
+                "(via ask_user_question or just in your reply), then call this workflow again."
+            )
+        else:
+            lines.append(
+                "The workflow needs more information before it can finish — it did NOT fail. "
+                "No person can be asked in this context, so do not ask the user. If what you "
+                "were given already answers the questions below, call this workflow again "
+                "with those answers; otherwise stop and report that the run is waiting for input."
+            )
         if result.final_output:
             lines.append(f"\nNeeds clarification:\n{result.final_output}")
         # A needs_input result without a needs_input_node has no manifest to resume from
         # (e.g. an engine pre-flight check) — only offer resume when one is set.
         if result.needs_input_node:
             lines.append(
-                f"\nTo continue after the user answers, call run_workflow again with "
+                f"\nTo continue, call run_workflow again with "
                 f"resume_run_id='{result.run_id}' and the answers as the task."
             )
     elif result.status != "completed":
@@ -299,9 +335,10 @@ class RunWorkflowTool(Tool, ContextAware):
             "Returns a run summary. Pass input_files (absolute paths) to hand the workflow files "
             "to work on — they are placed in the run's shared working folder for every node to read. "
             "If the summary says the workflow needs more information, "
-            "it ENDED asking for clarification (it did not fail) — ask the user those questions "
-            "and call this tool again with resume_run_id set to the run's id and the user's "
-            "answers as the task. "
+            "it ENDED asking for clarification (it did not fail) — get the answers (from the "
+            "user when one can be asked) and call this tool again with resume_run_id set to "
+            "the run's id and the answers as the task. A run paused for a person's APPROVAL "
+            "is theirs to decide: this tool refuses to resume it. "
             "By default it runs in the background and its result is delivered to you "
             "automatically as a follow-up message — do not poll for it; end your turn. "
             "Pass background=false to block and get the result inline only when you need it "
@@ -338,9 +375,8 @@ class RunWorkflowTool(Tool, ContextAware):
             )
         content = (
             f"[Background workflow '{name}' finished]\n\n{summary}\n\n"
-            "Summarize the outcome for the user. If it says the workflow needs more "
-            "information, ask the user those questions and re-run the workflow with "
-            "resume_run_id set to the run's id and their answers as the task."
+            "Summarize the outcome for the user, and follow what the summary says about "
+            "continuing the run."
         )
         msg = InboundMessage(
             channel="system",
@@ -356,6 +392,7 @@ class RunWorkflowTool(Tool, ContextAware):
             pass
 
     async def execute(self, name: str, task: str, output_format: str = "", input_files: list[str] | None = None, background: bool = True, resume_run_id: str = "", work_key: str = "") -> str:  # type: ignore[override]
+        from durin.agent.approval import is_interactive
         from durin.agent.runner import AgentRunner
         from durin.providers.factory import make_provider
         from durin.workflow.artifacts import safe_key
@@ -410,48 +447,12 @@ class RunWorkflowTool(Tool, ContextAware):
                         f"needs_input run (with the answers as task) or an aborted run "
                         f"(retried at its failed node) can.")
             if manifest.get("ask_kind") == "approval":
-                from durin.workflow.approval import build_approval_resume, parse_approval_reply
-                from durin.workflow.result import WorkflowResult
-
-                action = parse_approval_reply(task) or "revise"
-                if action == "reject":
-                    # No engine call at all: the approver declined it, which is not
-                    # a failure — finalize 'cancelled' with rejected=True directly,
-                    # IN PLACE on the existing manifest (preserves its per-node
-                    # trace and work_dir; finalize_run would instead rewrite them
-                    # away from this minimal result's empty runs=[]).
-                    run_log.finalize_short_circuit(
-                        self._workspace, name, resume_run_id,
-                        status="cancelled", final_output=manifest.get("final_output"),
-                        rejected=True,
-                    )
-                    result = WorkflowResult(
-                        status="cancelled", ask_kind=None,
-                        final_output=manifest.get("final_output"),
-                        run_id=resume_run_id, rejected=True,
-                    )
-                    return _format_result(
-                        result, output_files=bool((workflow.output or {}).get("file")))
-                approval_resume = build_approval_resume(
-                    workflow, manifest, action, task if action == "revise" else "")
-                if approval_resume is None:
-                    # Approve on a terminal approval node (no `next`): the run
-                    # completes now, with the proposal as the final output — again
-                    # no engine call, there is nowhere left for it to resume into.
-                    run_log.finalize_short_circuit(
-                        self._workspace, name, resume_run_id,
-                        status="completed", final_output=manifest.get("final_output"),
-                    )
-                    result = WorkflowResult(
-                        status="completed", final_output=manifest.get("final_output"),
-                        final_output_node=manifest.get("needs_input_node"),
-                        run_id=resume_run_id,
-                    )
-                    return _format_result(
-                        result, output_files=bool((workflow.output or {}).get("file")))
-                resume = approval_resume
-            else:
-                resume = build_resume_state(manifest, task)
+                # Approving, revising or rejecting is a person's decision, and a
+                # value in this tool call is the model's claim, never evidence
+                # that anyone agreed. People resume it through the workflows
+                # service (the webui's runs view, or the API).
+                return _approval_refusal(name, resume_run_id, manifest.get("needs_input_node"))
+            resume = build_resume_state(manifest, task)
             task = manifest.get("task") or task
 
         # Snapshot the current definitions into the workflow version history (captures
@@ -572,7 +573,10 @@ class RunWorkflowTool(Tool, ContextAware):
                     )
                     if progress_emit is not None:
                         progress_emit(_terminal_progress_payload(workflow, run_id, result))
-                    summary = _format_result(result, output_files=output_files)
+                    summary = _format_result(
+                        result, output_files=output_files,
+                        human_reachable=is_interactive(root_session_key),
+                    )
                 except Exception as exc:  # noqa: BLE001
                     # Clear the work item even on failure so it doesn't hang on "running".
                     if progress_emit is not None:
@@ -621,4 +625,7 @@ class RunWorkflowTool(Tool, ContextAware):
             raise
         if progress_emit is not None:
             progress_emit(_terminal_progress_payload(workflow, run_id, result))
-        return _format_result(result, output_files=output_files)
+        return _format_result(
+            result, output_files=output_files,
+            human_reachable=is_interactive(root_session_key),
+        )

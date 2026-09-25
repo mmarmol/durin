@@ -132,3 +132,21 @@ async def test_approve_on_terminal_approval_finalizes_completed_preserving_the_m
     assert manifest["ask_kind"] is None
     assert [r["node_id"] for r in manifest["runs"]] == [r["node_id"] for r in before["runs"]]
     assert manifest["work_dir"] == before["work_dir"]
+
+
+@pytest.mark.asyncio
+async def test_the_run_route_still_resumes_an_approval_pause_for_a_person(tmp_path):
+    """run_workflow refuses approval pauses; the route a person's resume goes
+    through (the webui posts it) still resolves them."""
+    from durin.service.principal import Principal
+    from durin.service.workflows import WorkflowRunCommand
+
+    _write_approval_workflow(tmp_path, "w4")
+    run_id = await _pause_at_approval(tmp_path, "w4", proposal="the drafted email")
+
+    result = await _svc(tmp_path).run(
+        WorkflowRunCommand(name="w4", task="approve", resume_run_id=run_id), Principal.local(),
+    )
+
+    assert result.status == "completed"
+    assert result.final_output == "the drafted email"

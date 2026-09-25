@@ -1,4 +1,6 @@
 import type {
+  ApprovalDecision,
+  ApprovalDecisionResult,
   ConnectionStatus,
   InboundEvent,
   Outbound,
@@ -87,6 +89,12 @@ interface PendingSecretStore {
   timer: ReturnType<typeof setTimeout>;
 }
 
+interface PendingApprovalDecision {
+  resolve: (result: ApprovalDecisionResult) => void;
+  reject: (err: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
 /** In-flight ``audio_transcribe`` calls, keyed by request_id, awaiting the
  *  server's ``audio_transcript`` reply (spec §5.4). */
 interface PendingTranscription {
@@ -147,6 +155,8 @@ export class DurinClient {
   private pendingInboundByChat = new Map<string, InboundEvent[]>();
   /** In-flight `storeSecret` calls, keyed by request_id, awaiting their ack. */
   private pendingSecretStores = new Map<string, PendingSecretStore>();
+  /** In-flight `sendApprovalDecision` calls, keyed by request_id. */
+  private pendingApprovalDecisions = new Map<string, PendingApprovalDecision>();
   /** In-flight `audio_transcribe` calls, keyed by request_id, awaiting
    *  their ``audio_transcript`` reply (spec §5.4). */
   private pendingTranscriptions = new Map<string, PendingTranscription>();
@@ -470,6 +480,37 @@ export class DurinClient {
     });
   }
 
+  /**
+   * Approve or reject an approval the agent is waiting on. The verdict rides
+   * its own frame and never becomes a chat message, so the model can neither
+   * see nor forge it. Resolves with the server's outcome (``pending`` =
+   * handed to the waiting turn). Rejects when the server refuses it (unknown
+   * id, another chat's approval, already decided) or on timeout. The timeout
+   * is long because a decision taken after the turn stopped waiting runs the
+   * request on the server before it answers.
+   */
+  sendApprovalDecision(
+    approvalId: string,
+    decision: ApprovalDecision,
+  ): Promise<ApprovalDecisionResult> {
+    const requestId =
+      globalThis.crypto?.randomUUID?.() ??
+      `apv-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    return new Promise<ApprovalDecisionResult>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingApprovalDecisions.delete(requestId);
+        reject(new Error("approval decision timed out"));
+      }, 120_000);
+      this.pendingApprovalDecisions.set(requestId, { resolve, reject, timer });
+      this.queueSend({
+        type: "approval_decision",
+        request_id: requestId,
+        approval_id: approvalId,
+        decision,
+      });
+    });
+  }
+
   // -- internals ---------------------------------------------------------
 
   private setStatus(status: ConnectionStatus): void {
@@ -553,6 +594,16 @@ export class DurinClient {
         this.pendingSecretStores.delete(parsed.request_id);
         if (parsed.ok) pending.resolve();
         else pending.reject(new Error(parsed.detail || "secret store failed"));
+      }
+      return;
+    }
+    if (parsed.event === "approval_decided") {
+      const pending = this.pendingApprovalDecisions.get(parsed.request_id);
+      if (pending) {
+        clearTimeout(pending.timer);
+        this.pendingApprovalDecisions.delete(parsed.request_id);
+        if (parsed.ok) pending.resolve({ status: parsed.status, message: parsed.message ?? "" });
+        else pending.reject(new Error(parsed.message || "approval decision failed"));
       }
       return;
     }
@@ -662,6 +713,15 @@ export class DurinClient {
         pending.reject(new Error("socket closed"));
       }
       this.pendingTranscriptions.clear();
+    }
+    // A decision awaiting the server's ack must not sit on the 120 s timeout
+    // once the socket is gone — reject every in-flight decision immediately.
+    if (this.pendingApprovalDecisions.size > 0) {
+      for (const pending of this.pendingApprovalDecisions.values()) {
+        clearTimeout(pending.timer);
+        pending.reject(new Error("connection closed before the decision was confirmed"));
+      }
+      this.pendingApprovalDecisions.clear();
     }
     // Surface structured reasons *before* reconnect logic so the UI can
     // display the error even while the client transparently reconnects.

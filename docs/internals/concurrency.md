@@ -173,6 +173,17 @@ A turn is the whole `RESTORE..SAVE` span of handling one inbound message. The
    [loop](loop.md)). None of these do I/O; the session lock guarantees that
    within one process, two turns on the same session run one at a time, while the
    two semaphores bound how many turns and subagents run at once process-wide.
+   The two slots are one per-turn object (`durin/agent/turn_slots.py`,
+   `TurnSlots`) with a held flag for each. A turn waiting on a person (an
+   approval card, a blocking `ask_user_question`) gives its lane and ceiling
+   slots back for the wait (`released_while_waiting`) and takes them again,
+   lane first, before it continues, so unanswered requests cannot stall every
+   other chat; it keeps the session lock, since it still owns its session.
+   Because every release and acquire goes through the flags, a cancellation
+   during the wait or while queued to take a slot back never releases a slot
+   twice or leaks one: the turn gives back on exit only what it holds. A
+   cancelled wait does not take its slots back at all — the turn is ending,
+   and a `/stop` must not queue behind other chats.
 
 2. **Cross-process turn lease.** Still inside that lock, the loop enters
    `session_turn_lease(session_path)`
@@ -437,6 +448,7 @@ The snapshot is bound by a cost contract:
   a single build+publish on the next loop tick (a `loop.call_soon` guarded by a
   flag), so a burst of boundary events collapses to one frame. It is marked dirty
   at the sparse boundaries where occupancy changes: interactive turn start/end,
+  a turn giving its slots back to wait on a person and taking them again,
   sub-agent spawn/finish, and config hot-reload. No polling timer.
 - **Subscriber-gated.** The frame fans out through the existing outbound-bus →
   websocket path (mirroring `dream_progress`) and is dropped when no connection

@@ -560,3 +560,44 @@ class TestStopCommandWithUnifiedSession:
 
         assert _make_loop(tmp_path, unified_session=True).bus_turn_key("cli:direct") == UNIFIED_SESSION_KEY
         assert _make_loop(tmp_path, unified_session=False).bus_turn_key("cli:direct") == "cli:direct"
+
+    def test_bus_turn_key_matches_effective_session_key_for_an_injected_outcome(
+        self, tmp_path: Path,
+    ):
+        """bus_turn_key(session_key) always folds to the
+        unified key (or returns session_key unchanged), while
+        _effective_session_key(msg) instead RESPECTS msg.session_key_override
+        when one is set. An automation/subagent/workflow outcome (cli/commands.py,
+        agent/subagent.py, agent/tools/run_workflow.py) injects a follow-up
+        InboundMessage with session_key_override set to the origin turn's own
+        already-resolved session key — never a fresh, unrelated one. So for
+        that origin's own (channel, chat_id), the override always equals what
+        bus_turn_key computes fresh from "channel:chat_id" — the two never
+        diverge for the same origin, in either mode. This pins that invariant
+        down as a property, for both unified settings, so the websocket
+        channel's attach replay (which always calls bus_turn_key fresh on the
+        chat's own id, never with a pre-existing override) can never read a
+        different session than an asker running inside such an injected
+        turn actually wrote to.
+        """
+        for unified in (True, False):
+            loop = _make_loop(tmp_path, unified_session=unified)
+            origin_msg = _make_msg(channel="websocket", chat_id="c9")
+            # What the ORIGINAL turn (no override) resolved its session to —
+            # this is exactly what an origin dict like cli/commands.py's
+            # AutomationsTool.set_context captures as "session_key".
+            origin_effective_key = loop._effective_session_key(origin_msg)
+
+            # The follow-up turn injected back into that same origin, the way
+            # _on_automation_outcome / subagent.py / run_workflow.py build it:
+            # channel="system", but session_key_override carries the origin's
+            # already-resolved key forward verbatim.
+            injected_msg = _make_msg(
+                channel="system", chat_id="websocket:c9",
+                session_key_override=origin_effective_key,
+            )
+
+            assert loop._effective_session_key(injected_msg) == origin_effective_key
+            # The property under test: this equals what the websocket channel's
+            # attach replay independently computes from the origin chat_id.
+            assert loop.bus_turn_key("websocket:c9") == origin_effective_key

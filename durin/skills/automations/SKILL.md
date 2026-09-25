@@ -151,15 +151,15 @@ also fails to start, you are told that too.
   not heard back. Use `action="status"` only if the user asks for an update. On a surface
   with no conversation origin wired, the tool says so up front instead of promising a
   follow-up.
-- `automations(action="answer", name=…, run_id=…, answer=…, resolution?)` — reply to a
-  paused run. **Like `fire`, it does not wait for the resume to finish** — the reply
-  resumes a full workflow run, which can take as long as the original fire did. It
-  returns once the run has resumed (status `running`); the outcome arrives on its own
-  as a follow-up when the resume actually finishes. Do not poll for it; use
-  `action="status"` only if the user asks for an update. `resolution`
-  (`approve`/`revise`/`reject`) bypasses keyword parsing for a run paused on an
-  **approval** specifically; leave it unset for a plain question and let the free-text
-  `answer` carry the reply.
+- `automations(action="answer", name=…, run_id=…, answer=…)` — reply to a run paused
+  on a **question**. **Like `fire`, it does not wait for the resume to finish** — the
+  reply resumes a full workflow run, which can take as long as the original fire did.
+  It returns once the run has resumed (status `running`); the outcome arrives on its
+  own as a follow-up when the resume actually finishes. Do not poll for it; use
+  `action="status"` only if the user asks for an update. A run paused for an
+  **approval** is refused: approving, revising or rejecting it is the person's
+  decision, made in the automations inbox or by replying in the thread where the
+  request was posted. Tell the user it is waiting for them.
 - `automations(action="enable"/"pause", name=…)` — pause removes the standing triggers;
   the definition and its run history stay.
 - `automations(action="create", definition=<JSON>)` — same validation as the webui,

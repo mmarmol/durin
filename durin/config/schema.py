@@ -628,19 +628,22 @@ class SkillsHotTierConfig(Base):
 
 
 class SkillJudgeConfig(Base):
-    """LLM semantic-audit pass over an imported skill, after the deterministic
-    AST scan. ``trigger`` decides WHEN it auto-runs:
-    ``off`` (default) — never auto; invoke on-demand per skill ("Audit with LLM").
-    ``uncertain`` — only when the gate is already unsure (carries code / caution /
-    out-of-allowlist), to break the tie; clean allowlisted skills skip it (zero
-    tax). ``always`` — every import. An LLM call per import is overkill for the
-    common case (the human already reviews + approves), hence ``off`` default.
-    Degrades gracefully (skips, never errors/blocks) when no aux model resolves.
-    ``max_severity`` caps how high the judge may raise the verdict: ``caution``
-    (default) lets it force a confirm but never block on its own — only the
-    deterministic rules block. ``model`` names an aux model; empty → default."""
+    """LLM semantic-audit pass over a skill install or edit, after the
+    deterministic scan. ``trigger`` decides WHEN it runs: ``off`` (default) —
+    never auto; still invocable on demand ("Audit with LLM"). ``uncertain`` —
+    only when the deterministic gate is already unsure, to break the tie.
+    ``always`` — every eligible request. Degrades gracefully (skips, never
+    errors/blocks) when no aux model resolves. ``max_severity`` caps how high
+    it may raise a verdict: ``caution`` (default) can force a confirm but
+    never block; only deterministic rules block. Beyond raising severity, it
+    may also clear an eligible request without asking a person: a skill
+    install the gate marked ``confirm``, or an auto-mode skill's edit whose
+    post-edit scan is ``caution`` — only when it read every finding, and only
+    on a strict ``safe`` verdict. It never clears a ``dangerous`` verdict, a
+    manual skill's edit, a dependency install, an MCP action, or exec.
+    ``model`` names an aux model; empty → default."""
 
-    trigger: Literal["off", "uncertain", "always"] = Field(default="off", description='When the LLM audit auto-runs on import: "off" = only on demand, "uncertain" = only when the deterministic gate is unsure, "always" = every import')
+    trigger: Literal["off", "uncertain", "always"] = Field(default="off", description='When the LLM judge auto-runs: "off" = only on demand, "uncertain" = only when the deterministic gate is unsure, "always" = every eligible skill install or edit')
     max_severity: Literal["caution", "dangerous"] = Field(default="caution", description='Cap on how high the judge may raise the verdict: "caution" can force a confirm but never block; only deterministic rules block')
     model: str = Field(default="", description="Aux model name for the judge; empty = default aux model")
     provider: str = Field(default="auto", description='Provider for the judge model; "auto" detects it from the model name among the configured providers (a bare model name is meaningless without its provider)')
@@ -734,7 +737,7 @@ class McpDiscoveryConfig(Base):
         description="MCP registries to search, in order",
     )
     search_limit: int = Field(default=10, description="Max results returned per MCP server search")
-    install_policy: Literal["never", "approve", "auto"] = Field(default="approve", description='Gate on installing a discovered MCP server: "never", "approve" (per-install confirm), or "auto"')
+    install_policy: Literal["never", "approve", "auto"] = Field(default="approve", description='Gate on the agent adding, updating, installing or enabling an MCP server: "never", "approve" (a person approves each change), or "auto"')
     quality: Literal["official", "all"] = Field(default="official", description="Default discovery view. 'official' applies the star/first-party gate; 'all' returns the full registry")
     min_stars: int = Field(default=100, description="Star floor for the 'official' gate")
 
@@ -749,7 +752,7 @@ class SkillsConfig(Base):
     discovery: SkillsDiscoveryConfig = Field(default_factory=SkillsDiscoveryConfig, description="Skill discovery registries and search limits")
     install_policy: Literal["never", "approve", "auto"] = Field(
         default="approve",
-        description="How `skill_install_deps` runs a skill's declared install specs: 'never' = report only, 'approve' = dry-run then run on confirm, 'auto' = run without a per-call confirm; all policies still execute through ExecTool's gate",
+        description="Who authorizes a skill install the import gate flags and a skill's declared dependency installs: 'approve' = the user approves each one in the chat, or later from `durin approvals` (the skills judge may clear a non-dangerous skill install); 'auto' = pre-authorized here, except a dangerous skill, which always needs the user; 'never' = dependency installs are only reported and skill installs behave as with 'approve'. Dependency installs always run through ExecTool's gate",
     )
 
 

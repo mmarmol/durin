@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 from loguru import logger
 
 from durin.agent import model_presets as preset_helpers
-from durin.agent.approval import AUTONOMOUS_SESSION_PREFIXES, note_turn_input
+from durin.agent.approval import AUTONOMOUS_SESSION_PREFIXES, begin_turn_input, note_turn_input
 from durin.agent.aux_bridges import build_aux_providers
 from durin.agent.context import ContextBuilder
 from durin.agent.hook import AgentHook, CompositeHook
@@ -31,13 +31,21 @@ from durin.agent.tools.file_state import FileStateStore, bind_file_states, reset
 from durin.agent.tools.message import MessageTool
 from durin.agent.tools.registry import ToolRegistry
 from durin.agent.tools.self import MyTool
+from durin.agent.turn_slots import TurnSlots
+from durin.agent.turn_slots import bind as bind_turn_slots
+from durin.agent.turn_slots import unbind as unbind_turn_slots
 from durin.agent.user_payloads import (
     PENDING_SECRET_KEY,
     channel_renders_tool_payloads,
     mark_interactions_delivered,
     undelivered_interactions,
 )
-from durin.bus.events import OUTBOUND_META_AGENT_UI, InboundMessage, OutboundMessage
+from durin.bus.events import (
+    INBOUND_META_NOT_AN_ANSWER,
+    OUTBOUND_META_AGENT_UI,
+    InboundMessage,
+    OutboundMessage,
+)
 from durin.bus.journal import InboundJournal
 from durin.bus.queue import MessageBus
 from durin.command import CommandContext, CommandRouter, register_builtin_commands
@@ -132,6 +140,7 @@ def emit_memory_usage_rollup(
 
 
 if TYPE_CHECKING:
+    from durin.agent.approval_executors import ExecDeps
     from durin.config.schema import (
         ChannelsConfig,
         MemoryEagerSurfaceConfig,
@@ -217,6 +226,14 @@ _last_job_prune_at: float | None = None
 # How long the final injection drain stays alive waiting for running
 # sub-agents to deliver results before giving up (seconds).
 _SUBAGENT_WAIT_TIMEOUT = 300
+
+# How long the shutdown drain waits, once, for every cancelled turn to unwind
+# (seconds). A turn whose dispatch swallows CancelledError never finishes; a
+# per-task wait_for would then charge the drain this timeout again for every
+# such turn, holding the whole shutdown open a multiple of it. Waiting once
+# on all of them together bounds the pass to this one interval regardless of
+# how many turns are stuck.
+_DRAIN_CANCEL_WAIT_S = 10.0
 
 _STEER_FRAMING = (
     "[Steer — the user sent this while you were working. Treat it as "
@@ -1232,6 +1249,7 @@ class AgentLoop:
 
     def _register_default_tools(self) -> None:
         """Register the default set of tools via plugin loader."""
+        from durin.agent.mcp_runtime import McpRuntime
         from durin.agent.tools.context import ToolContext
         from durin.agent.tools.loader import ToolLoader
 
@@ -1248,6 +1266,11 @@ class AgentLoop:
             aux_providers=self._aux_providers,
             app_config=self.app_config,
             live_tool_registry=self.tools,
+            # Same handle the REST service registry gets (cli/commands.py's
+            # unified-gateway wiring) — McpManageTool.create hands it to its
+            # McpService so an agent reconnect has a real approved-config
+            # record to check against instead of always seeing no runtime.
+            mcp_runtime=McpRuntime(self),
         )
         loader = ToolLoader()
         registered = loader.load(ctx, self.tools)
@@ -1586,7 +1609,10 @@ class AgentLoop:
         """Divert an inbound message to a blocked ask_user waiter.
 
         Returns True when the message was consumed as the in-turn answer.
-        Slash commands are never consumed. A media-bearing reply cannot be
+        Slash commands, system results (a sub-agent's, a background
+        workflow's, an automation's) and notices flagged
+        ``INBOUND_META_NOT_AN_ANSWER`` are never consumed, and a message from
+        an API token never answers an approval. A media-bearing reply cannot be
         carried through a tool result — the waiter falls back to yield
         semantics and the message continues through normal routing.
         """
@@ -1597,15 +1623,46 @@ class AgentLoop:
         text = (msg.content or "").strip()
         if text.startswith("/"):
             return False
+        if msg.channel == "system" or msg.metadata.get("injected_event"):
+            # A sub-agent's result, a background workflow's result or an
+            # automation's outcome, posted under this chat's key by durin
+            # itself. It is not the person's reply: it neither answers a
+            # question nor ends an approval wait, and routes on into the turn.
+            return False
+        if msg.metadata.get(INBOUND_META_NOT_AN_ANSWER):
+            # Posted for the user, not typed by them (a stored-secret notice):
+            # the question keeps waiting and the notice routes on.
+            return False
+        if (msg.metadata.get("origin") == "api"
+                and pending_answers.waiting_kind(session_key) == "approval"):
+            # A message from an API token never decides an approval, nor
+            # makes it stop waiting: only the person may. The approval keeps
+            # waiting for them, and the message routes on like any other sent
+            # during the turn. An API client may still answer a question.
+            return False
         if msg.media:
             pending_answers.fallback(session_key)
             return False
         if not text:
             return False
-        return pending_answers.resolve(session_key, text)
+        if pending_answers.waiting_kind(session_key) == "approval":
+            # An approval takes only a verdict. Anything else is a normal
+            # message: the request stays pending instead of being guessed.
+            from durin.workflow.approval import parse_approval_reply
+
+            verdict = parse_approval_reply(text)
+            if verdict is None:
+                pending_answers.fallback(session_key)
+                return False
+            return pending_answers.resolve(session_key, verdict,
+                                           origin=msg.metadata.get("origin"))
+        # The answer enters the waiting turn as input, so its origin goes with
+        # it: an API client's answer marks the turn as API input.
+        return pending_answers.resolve(session_key, text, origin=msg.metadata.get("origin"))
 
     async def _answer_pending_question(self, msg: InboundMessage, session_key: str) -> bool:
-        """Deliver *msg* as the answer to a blocked ask_user, if one is waiting.
+        """Deliver *msg* as the answer to a turn waiting on one (a blocking
+        ask_user or an in-chat approval), if one is waiting.
 
         The answer enters the running turn, so it is acknowledged the way a
         consumed queued message is: a client waiting on this message then
@@ -1886,6 +1943,27 @@ class AgentLoop:
         """Cancel the running turns and subagents registered under *key*;
         return how many were cancelled."""
         return await self._cancel_active_tasks(key)
+
+    def approval_exec_deps(self) -> "ExecDeps":
+        """Live handles for running an approved request outside the turn that
+        filed it: a click that lands after that turn stopped waiting, or a
+        later decision made through the gateway.
+
+        ``exec_run`` is the registered ``exec`` tool's non-asking ``_run``
+        (never ``execute`` — an out-of-turn decision must not be able to open
+        a second, nested approval), or None when exec is disabled. ``mcp`` is
+        an MCP service bound to this loop's live connections, so an approved
+        server change connects without a restart.
+        """
+        from durin.agent.approval_executors import ExecDeps
+        from durin.agent.mcp_runtime import McpRuntime
+        from durin.service.mcp import McpService
+
+        exec_tool = self.tools.get("exec")
+        return ExecDeps(
+            exec_run=exec_tool._run if exec_tool is not None else None,
+            mcp=McpService(mcp_runtime=McpRuntime(self)),
+        )
 
     async def _dispatch_priority_command(self, msg: InboundMessage, raw: str) -> None:
         """Run a priority command (/stop, /status, /restart) outside the turn
@@ -2306,10 +2384,12 @@ class AgentLoop:
                 await self._dispatch_priority_command(msg, raw)
                 continue
             effective_key = self._effective_session_key(msg)
-            # Blocking ask_user: a turn may be paused awaiting the user's
-            # answer. A plain-text reply resolves the in-turn waiter and is
-            # consumed here; anything else (commands, media) tells the waiter
-            # to fall back to yield semantics and routes on.
+            # A turn may be paused awaiting the user's answer (blocking
+            # ask_user, or an in-chat approval). When this message is that
+            # answer, _answer_pending_question hands it to the waiting turn
+            # and it stops here. Which messages count, and which make the
+            # waiter fall back instead, is decided in
+            # _maybe_resolve_pending_answer.
             if await self._answer_pending_question(msg, effective_key):
                 continue
             # A literal "[steer]" prefix marks a steer (older TUI clients and
@@ -2401,7 +2481,9 @@ class AgentLoop:
         if session_key != msg.session_key:
             msg = dataclasses.replace(msg, session_key_override=session_key)
         # This task is the turn: a message from an API token drops a person's
-        # authority to approve privileged actions for all of it.
+        # authority to approve privileged actions for all of it. The fresh
+        # cell is shared with the tasks the turn starts for its tools.
+        begin_turn_input()
         note_turn_input(msg.metadata)
         lock = self._session_locks.setdefault(session_key, asyncio.Lock())
 
@@ -2411,6 +2493,12 @@ class AgentLoop:
 
         session_path = self.sessions._get_session_path(session_key)
         turn_ended = False
+        # This turn's lane and ceiling slots. While a tool waits on a person
+        # (an approval card, a blocking question) it gives them back and
+        # takes them again before continuing; the session lock stays held.
+        slots = TurnSlots(self._interactive_lane, self._ceiling, session_key=session_key,
+                          on_change=self.mark_concurrency_dirty)
+        slots_token = bind_turn_slots(slots)
 
         async def _end_turn(outcome: str) -> None:
             # Exactly one turn_end per turn, whichever way it exits.
@@ -2421,7 +2509,7 @@ class AgentLoop:
             await self._publish_turn_end(msg, session_key, outcome)
 
         try:
-            async with lock, self._interactive_lane, self._ceiling:
+            async with lock, slots:
                 try:
                     turn_lease_cm = session_turn_lease(session_path)
                     await turn_lease_cm.__aenter__()
@@ -2555,6 +2643,10 @@ class AgentLoop:
                 await _end_turn("failed")
             raise
         finally:
+            # The turn is over, even when it never got its slots: a task it
+            # started that outlives it must not take one on its behalf.
+            slots.closed = True
+            unbind_turn_slots(slots_token)
             # Drain any messages still in the pending queues and re-publish
             # them to the bus so they are processed as fresh inbound messages
             # rather than silently lost. System results first — they complete
@@ -2641,8 +2733,11 @@ class AgentLoop:
         from durin.agent import pending_answers
 
         self._running = False
-        # The inbound consumer is going away — release any blocked ask_user
-        # waiters to yield semantics instead of letting them ride the timeout.
+        # The inbound consumer is going away, so no answer can reach a turn
+        # blocked on ask_user. Its wait is cancelled, which ends the turn;
+        # the gateway's shutdown drain (drain_inbound_for_shutdown) journals
+        # the message that turn was answering and the next start replays it,
+        # so the question is asked again after the restart.
         pending_answers.set_consumer_active(False)
         pending_answers.reset()
         # Drain memory background services so the watchdog Observer and
@@ -2659,30 +2754,60 @@ class AgentLoop:
 
         The turns in flight are cancelled and awaited first: a turn's own
         ``finally`` is what hands its pending queues back to the bus, and the
-        bus is where they are collected from. Queues no task handed back
-        (their turn died before its ``finally``) are collected directly. The
-        message each cancelled turn was answering goes first, ahead of the
-        follow-ups queued behind it, so the next start answers it in order
+        bus is where they are collected from. Every turn is recorded and
+        cancelled before any is awaited, so a turn blocked on ask_user (whose
+        wait ``stop()`` cancels) is journaled like any other. Queues no task
+        handed back (their turn died before its ``finally``) are collected
+        directly. The message each cancelled turn was answering goes first,
+        ahead of the follow-ups queued behind it, so the next start answers it
+        in order
         instead of leaving it closed as "interrupted" with no reply ever
         given. Trigger-only messages are not journaled: they were published
         for automation triggers to see, never to become a conversation, and a
-        stale alert replayed later would fire out of time. Returns the number
-        of messages written.
+        stale alert replayed later would fire out of time. The cancelled
+        turns are then awaited together, once, for at most
+        ``_DRAIN_CANCEL_WAIT_S``: a turn whose dispatch swallows
+        ``CancelledError`` never finishes, and this drain still returns
+        instead of waiting on it forever (or, with one wait per task, that
+        timeout again for every such turn). Returns the number of messages
+        written.
         """
         if self._inbound_journal is None:
             return 0
         owed: list[InboundMessage] = []
+        cancelled: list[tuple[str, asyncio.Task]] = []
+        # Record and cancel every turn before awaiting any of them. Awaiting
+        # one turn lets the others run, and a turn that ends in that window
+        # (a turn whose ask_user wait ``stop()`` just cancelled ends at its
+        # next step) no longer looks in flight, so its message would be lost
+        # instead of journaled.
         for key in list(self._active_tasks):
-            tasks = self._active_tasks.pop(key, [])
-            for task in tasks:
+            for task in self._active_tasks.pop(key, []):
                 if not task.done():
-                    in_flight = self._in_flight_messages.get(task)
-                    if in_flight is not None:
-                        owed.append(in_flight)
+                    message = self._in_flight_messages.get(task)
+                    if message is not None:
+                        owed.append(message)
                     task.cancel()
-            for task in tasks:
-                with suppress(asyncio.CancelledError, Exception):
-                    await asyncio.wait_for(task, timeout=10)
+                cancelled.append((key, task))
+        if cancelled:
+            # One wait for the whole batch, not one per task (see the
+            # docstring): a stuck turn's wait_for used to cost the drain its
+            # own timeout again for every such turn instead of bounding the
+            # pass once. Cancellation of this drain itself is not swallowed
+            # here — only each turn's own outcome is.
+            done, stuck = await asyncio.wait(
+                [task for _key, task in cancelled], timeout=_DRAIN_CANCEL_WAIT_S,
+            )
+            for task in done:
+                if not task.cancelled():
+                    with suppress(Exception):
+                        task.exception()
+            if stuck:
+                stuck_keys = [key for key, task in cancelled if task in stuck]
+                logger.warning(
+                    "Shutdown: drain gave up on {} turn(s) past {}s (keys: {})",
+                    len(stuck), _DRAIN_CANCEL_WAIT_S, stuck_keys,
+                )
         while True:
             try:
                 owed.append(self.bus.inbound.get_nowait())

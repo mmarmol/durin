@@ -132,10 +132,11 @@ counterpart-tagged question, on the triggering thread itself) for a reply:
   "approve", "reject", or free text describing what to change all work; free text
   that isn't a clear approve/reject is treated as a revision request back to the
   workflow.
-- **Reply via the `automations` tool** (`action="answer"`) — the same mechanism the
-  chat agent uses on your behalf, and what a script or another agent talks to
-  directly. An explicit `resolution` (`approve`/`revise`/`reject`) is only for an
-  approval pause, and skips free-text interpretation entirely.
+- **Answer a question through the chat agent.** The agent's `automations` tool
+  (`action="answer"`) resumes a run paused on a question with the answer you give
+  it. It refuses a run paused for an approval: approving, revising or rejecting is
+  your decision, never the agent's, so you make it with a channel reply or from
+  the dashboard.
 
 Either path resumes the exact paused run — same workflow state, same working
 folder — not a new one.
@@ -147,8 +148,8 @@ what it runs, and its life condition — with a "Needs you" tray for pending
 approvals and questions. Review/Answer expands the selected one inline
 into a resolution card: an approval shows the exact proposal quoted and offers
 approve / correct-with-a-comment / reject, a question is a free-text answer —
-the same three-way resolution a channel reply or the `automations` tool
-drives, just from the dashboard. A secondary "Stop this run" control on the
+the same three-way resolution a channel reply drives, just from the
+dashboard. A secondary "Stop this run" control on the
 same card ends it instead, without a reply — the deterministic case: nothing
 is running to wait for, so it stops immediately and does not resume. Resolving
 one refreshes it out of the tray immediately. The section also has an editor

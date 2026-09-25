@@ -1,19 +1,19 @@
 """End-to-end tests for the embedded webui's HTTP routes on the WebSocket channel."""
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
-from tests.conftest import write_webui_transcript
 from starlette.testclient import TestClient
 
 from durin.api.asgi import build_gateway_http_app
 from durin.channels.websocket import WebSocketChannel
 from durin.service.types import UnauthenticatedError
 from durin.session.manager import Session, SessionManager
+from tests.conftest import write_webui_transcript
 
 
 def _ch(
@@ -553,9 +553,15 @@ def test_skill_judge_route_runs_on_demand(
     (q / ".scan.json").write_text(json.dumps({"source": "github:o/r", "verdict": "safe", "findings": []}))
     cfg = _real_cfg_at(ws)
     monkeypatch.setattr("durin.config.loader.load_config", lambda *a, **k: cfg)
-    monkeypatch.setattr(
-        "durin.memory.llm_invoke.judge_llm_invoke",
-        lambda prompt, *, model=None: "===FINDINGS===\ncaution | intent | SKILL.md | reads an API key quietly\n===END===\n")
+    def _judge_reply(prompt, *, model=None):
+        # skill_judge's END marker must repeat the random per-call token
+        # embedded in its own prompt.
+        tok = re.search(r"^([0-9a-f]{16})$", prompt, re.MULTILINE).group(1)
+        return ("===SUMMARY===\nQuiet key read.\n===VERDICT===\ncaution\n===FINDINGS===\n"
+                f"caution | intent | SKILL.md | reads an API key quietly\n===TOOLS===\nnone\n"
+                f"===END {tok}===\n")
+
+    monkeypatch.setattr("durin.memory.llm_invoke.judge_llm_invoke", _judge_reply)
     monkeypatch.setattr("durin.config.paths.get_data_dir", lambda: tmp_path)
     client = _make_client(bus)
 

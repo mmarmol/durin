@@ -23,7 +23,7 @@ from loguru import logger
 from pydantic import Field, field_validator, model_validator
 from websockets.exceptions import ConnectionClosed
 
-from durin.bus.events import OUTBOUND_META_AGENT_UI, OutboundMessage
+from durin.bus.events import INBOUND_META_NOT_AN_ANSWER, OUTBOUND_META_AGENT_UI, OutboundMessage
 from durin.bus.queue import MessageBus
 from durin.channels.base import BaseChannel
 from durin.config.paths import get_media_dir
@@ -254,6 +254,11 @@ def _parse_inbound_payload(raw: str) -> str | None:
 # namespace small enough to rule out path traversal / quote injection tricks.
 _CHAT_ID_RE = re.compile(r"^[A-Za-z0-9_:-]{1,64}$")
 _TURN_OUTCOMES = frozenset({"completed", "stopped", "failed"})
+# Approval ids are server-minted 12-hex-char tokens. Anything else is refused
+# before it can name a path under ``.approvals/``.
+_APPROVAL_ID_RE = re.compile(r"^[0-9a-f]{12}$")
+# Decision outcomes meaning the click did what the person asked.
+_APPROVAL_OK = frozenset({"applied", "rejected", "pending"})
 
 
 def _is_live_progress_only(payload: dict[str, Any]) -> bool:
@@ -286,6 +291,16 @@ def _is_live_only_event(event: Any) -> bool:
 
 def _is_valid_chat_id(value: Any) -> bool:
     return isinstance(value, str) and _CHAT_ID_RE.match(value) is not None
+
+
+def _answers_approvals(connection: Any) -> bool:
+    """True for a watcher that can answer an approval the chat waits on.
+
+    A socket connection can (the webui's Approve / Reject). A watcher that
+    only reads the chat's frames declares ``answers_approvals = False``: the
+    API's SSE subscriber, whose client may answer a question with a plain
+    message but whose messages never decide an approval."""
+    return bool(getattr(connection, "answers_approvals", True))
 
 
 def _parse_envelope(raw: str) -> dict[str, Any] | None:
@@ -326,6 +341,11 @@ _MAX_DOCUMENTS_PER_MESSAGE = 3
 # ride out a wifi blip / backgrounded tab and let the browser reconnect onto the
 # same session; short enough that a truly closed tab frees it promptly.
 _VOICE_GRACE_S = 30.0
+
+# Grace window before a turn blocked on the user's answer in a chat nobody is
+# watching stops waiting and yields. A page refresh or a network blip
+# re-subscribes within seconds and keeps the wait; a closed tab ends it.
+_ANSWER_GRACE_S = 30.0
 
 # Image MIME whitelist — matches the Composer's ``accept`` list. SVG is
 # explicitly excluded to avoid the XSS surface inside embedded scripts.
@@ -563,6 +583,8 @@ class WebSocketChannel(BaseChannel):
         runtime_model_preset: Callable[[], str | None] | None = None,
         runtime_concurrency_snapshot: Callable[[], dict[str, Any]] | None = None,
         cron_service: "CronService | None" = None,
+        approval_deps: Callable[[], Any] | None = None,
+        session_turn_key: Callable[[str], str] | None = None,
     ):
         if isinstance(config, dict):
             config = WebSocketConfig.model_validate(config)
@@ -577,6 +599,11 @@ class WebSocketChannel(BaseChannel):
         # re-subscribes cancels it, so a transient blip never ends the call.
         self._voice_cleanup: dict[str, asyncio.Task] = {}
         self._voice_grace_s: float = _VOICE_GRACE_S
+        # chat_id -> pending release of a turn waiting on that chat's answer,
+        # scheduled when its last subscriber leaves and cancelled by a
+        # re-subscribe within the grace window.
+        self._answer_fallback: dict[str, asyncio.Task] = {}
+        self._answer_grace_s: float = _ANSWER_GRACE_S
         # connection -> chat_ids it is subscribed to (O(1) cleanup on disconnect).
         self._conn_chats: dict[Any, set[str]] = {}
         # connection -> default chat_id for legacy frames that omit routing.
@@ -594,6 +621,15 @@ class WebSocketChannel(BaseChannel):
         # endpoint so a manual trigger reaches the live scheduler + its
         # in-process overlap guard. None outside the gateway (tests).
         self._cron_service = cron_service
+        # Live handles (exec tool, MCP service) that an approval decided from
+        # this socket runs with when its turn is no longer waiting on it.
+        # None outside the gateway: such a decision then reports what it lacks.
+        self._approval_deps = approval_deps
+        # How the agent loop keys a chat's turns (one shared key in unified
+        # mode), so an approval frame is matched to the chat that filed it.
+        self._session_turn_key = session_turn_key
+        # Strong refs to approval decisions still running (else GC'd mid-run).
+        self._approval_tasks: set[asyncio.Task] = set()
         # Strong refs to fire-and-forget run-now tasks (else GC'd mid-run).
         self._background_run_tasks: set[asyncio.Task] = set()
         # Persistent HMAC secret for media URL signing.  Lives in the token
@@ -649,6 +685,15 @@ class WebSocketChannel(BaseChannel):
         task = self._voice_cleanup.pop(chat_id, None)
         if task is not None:
             task.cancel()
+        # ...and keeps a turn waiting on this chat's answer waiting, when this
+        # viewer could answer what it waits on (see _can_answer_waiter).
+        release = self._answer_fallback.get(chat_id)
+        if release is not None and (
+            _answers_approvals(connection)
+            or self._waiting_kind(chat_id) != "approval"
+        ):
+            self._answer_fallback.pop(chat_id, None)
+            release.cancel()
 
     def _cleanup_connection(self, connection: Any) -> None:
         """Remove *connection* from every subscription set; safe to call multiple times."""
@@ -660,6 +705,14 @@ class WebSocketChannel(BaseChannel):
             subs.discard(connection)
             if not subs:
                 self._subs.pop(cid, None)
+                self._schedule_answer_fallback(cid)
+            elif _answers_approvals(connection) and not any(
+                _answers_approvals(c) for c in subs
+            ):
+                # The last webui tab left while API watchers remain: they may
+                # hold a question, never an approval, which the release
+                # decides when it fires.
+                self._schedule_answer_fallback(cid)
         # Defer voice-session teardown by a grace period rather than killing it
         # on the disconnect: a transient socket drop (wifi blip, backgrounded
         # tab) would otherwise end the conversation and discard the in-flight
@@ -695,6 +748,87 @@ class WebSocketChannel(BaseChannel):
             if sess is not None:
                 sess.cancel_speak()
 
+    def _schedule_answer_fallback(self, chat_id: str) -> None:
+        """Stop a turn waiting on *chat_id*'s answer once nobody has watched
+        the chat for the grace window, unless a client re-subscribes first.
+
+        Without this, a turn blocked on ask_user in a closed tab waits out
+        the whole answer timeout. Falling back makes the tool yield: its
+        question stays in the session and the user's next message answers
+        it. Idempotent while a release is already scheduled.
+
+        Whether a remaining watcher holds the wait is decided when the release
+        fires, since the turn may have moved from a question to an approval in
+        the meantime (see _can_answer_waiter).
+        """
+        if chat_id in self._answer_fallback:
+            return
+        from durin.agent import pending_answers
+
+        session_key = f"websocket:{chat_id}"
+
+        async def _release() -> None:
+            try:
+                await asyncio.sleep(self._answer_grace_s)
+            except asyncio.CancelledError:
+                return
+            self._answer_fallback.pop(chat_id, None)
+            if not self._can_answer_waiter(chat_id):
+                pending_answers.fallback(session_key)
+
+        try:
+            self._answer_fallback[chat_id] = asyncio.ensure_future(_release())
+        except RuntimeError:
+            # No running loop (sync teardown path): release at once.
+            if not self._can_answer_waiter(chat_id):
+                pending_answers.fallback(session_key)
+
+    def _release_unwatched_ask(self, chat_id: str, blob: dict[str, Any]) -> None:
+        """Start the grace window for an ask nobody watching can answer.
+
+        A closing tab starts the window, but a question or approval asked
+        after the last tab closed (that window already spent) would otherwise
+        hold the turn for the whole answer timeout. The snapshot the turn
+        pushes when it starts waiting says what is pending. A tab that loads
+        inside the window cancels the release, as a returning tab does; the
+        release still decides by what is waiting when it fires."""
+        subs = self._subs.get(chat_id) or ()
+        if blob.get("pending_approval"):
+            watched = any(_answers_approvals(c) for c in subs)
+        elif blob.get("pending_question"):
+            watched = bool(subs)
+        else:
+            return
+        if not watched:
+            self._schedule_answer_fallback(chat_id)
+
+    def _waiting_kind(self, chat_id: str) -> str | None:
+        """What a turn waits on in *chat_id* (``question`` / ``approval``), keyed
+        the way the unwatched-chat release keys it."""
+        from durin.agent import pending_answers
+
+        return pending_answers.waiting_kind(f"websocket:{chat_id}")
+
+    def _can_answer_waiter(self, chat_id: str) -> bool:
+        """True while someone watching *chat_id* could answer what its turn
+        waits on. Any watcher can answer a question; an approval takes a
+        webui tab, since an API watcher's message never decides one."""
+        subs = self._subs.get(chat_id) or ()
+        if self._waiting_kind(chat_id) == "approval":
+            return any(_answers_approvals(c) for c in subs)
+        return bool(subs)
+
+    def _goal_state_session_key(self, chat_id: str) -> str:
+        """The session key goal-state/pending-approval metadata actually lives
+        under: normally "websocket:<chat_id>", but the loop's own turn key
+        (e.g. "unified:default") when agents.defaults.unified_session folds
+        every channel's conversation into one session — the asker saves
+        pending_approval under that same effective key, not this channel's."""
+        base = f"websocket:{chat_id}"
+        if self._session_turn_key is not None:
+            return self._session_turn_key(base)
+        return base
+
     async def _maybe_push_active_goal_state(self, chat_id: str) -> None:
         """Replay an active sustained goal from session metadata after *chat_id* is subscribed.
 
@@ -704,14 +838,44 @@ class WebSocketChannel(BaseChannel):
         """
         if self._session_manager is None:
             return
-        row = self._session_manager.read_session_file(f"websocket:{chat_id}")
+        session_key = self._goal_state_session_key(chat_id)
+        row = self._session_manager.read_session_file(session_key)
         meta = row.get("metadata", {}) if isinstance(row, dict) else {}
         if not isinstance(meta, dict):
             meta = {}
+        self._drop_stale_pending_approval(session_key, meta)
         blob = goal_state_ws_blob(meta)
-        if not blob.get("active"):
+        # An approval the turn waits on is replayed too, so a refresh while
+        # the gated tool blocks brings its card back.
+        if not blob.get("active") and "pending_approval" not in blob:
             return
         await self.send_goal_state(chat_id, blob)
+
+    def _drop_stale_pending_approval(self, session_key: str, meta: dict[str, Any]) -> None:
+        """A crash can kill the turn between the asker writing ``pending_approval``
+        into metadata and its ``finally`` popping it back out, so the saved
+        record can outlive the waiter that would ever resolve it. Replay it on
+        attach only while the approval store still says it is pending; otherwise
+        drop it from *meta* (in place) and from the saved session, so a stale
+        card does not haunt every future attach.
+        """
+        pa = meta.get("pending_approval")
+        if not isinstance(pa, dict):
+            return
+        approval_id = str(pa.get("approval_id") or "")
+        if not approval_id:
+            return
+        from durin.agent import approval_store
+
+        record = approval_store.get(self._endpoint_workspace(), approval_id)
+        if isinstance(record, dict) and record.get("status") == "pending":
+            return
+        meta.pop("pending_approval", None)
+        session = self._session_manager.get_or_create(session_key)
+        stored = session.metadata.get("pending_approval") if session.metadata else None
+        if isinstance(stored, dict) and stored.get("approval_id") == approval_id:
+            session.metadata.pop("pending_approval", None)
+            self._session_manager.save(session)
 
     async def _maybe_push_turn_run_wall_clock(self, chat_id: str) -> None:
         """Replay ``goal_status: running`` when a turn is still active (same-process refresh)."""
@@ -1668,6 +1832,9 @@ class WebSocketChannel(BaseChannel):
         if t == "secret_store":
             await self._handle_secret_store_envelope(connection, client_id, envelope)
             return
+        if t == "approval_decision":
+            await self._handle_approval_decision_envelope(connection, envelope)
+            return
         if t == "skill_judge":
             name = envelope.get("name")
             if not isinstance(name, str) or not name:
@@ -1838,17 +2005,105 @@ class WebSocketChannel(BaseChannel):
                 sender_id=client_id,
                 chat_id=cid,
                 content=note,
-                metadata={"webui": True},
+                # Not the user's reply: a question the agent is waiting on
+                # must not take this note as its answer.
+                metadata={"webui": True, INBOUND_META_NOT_AN_ANSWER: True},
                 is_dm=False,
             )
+
+    def _connection_session_keys(self, connection: Any) -> set[str]:
+        """Session keys of the chats *connection* is attached to, keyed the way
+        the agent loop keys their turns (one shared key in unified mode)."""
+        return {self._goal_state_session_key(cid) for cid in self._conn_chats.get(connection, ())}
+
+    async def _handle_approval_decision_envelope(
+        self, connection: Any, envelope: dict[str, Any],
+    ) -> None:
+        """Resolve an approval from an Approve / Reject click.
+
+        The verdict never becomes a chat message, so the model can neither see
+        nor forge it. The record must belong to a chat this connection is
+        attached to. ``approval.decide`` hands the verdict to the turn still
+        waiting on it. When that turn stopped waiting (the click came after
+        its timeout), ``decide`` runs the recorded request here with the
+        gateway's live handles, except an exec request, which only its own
+        turn can approve: that click is refused and the record left as it
+        was. That run can take minutes (an MCP install), so
+        it proceeds as a background task and the socket keeps serving frames.
+        The ``approval_decided`` event reports the outcome when it lands.
+        """
+        import dataclasses
+
+        from durin.agent import approval, approval_store
+        from durin.agent.approval_executors import ExecDeps
+
+        request_id = str(envelope.get("request_id") or "")
+        approval_id = str(envelope.get("approval_id") or "").strip()
+        decision = envelope.get("decision")
+
+        async def _reply(status: str, message: str) -> None:
+            await self._send_event(
+                connection, "approval_decided", request_id=request_id,
+                approval_id=approval_id, ok=status in _APPROVAL_OK,
+                status=status, message=message,
+            )
+
+        if not _APPROVAL_ID_RE.match(approval_id):
+            await _reply("refused", "Invalid approval id.")
+            return
+        if decision not in ("approve", "reject"):
+            await _reply("refused", "Invalid decision: expected approve or reject.")
+            return
+        workspace = self._endpoint_workspace()
+        record = approval_store.get(workspace, approval_id)
+        if record is None:
+            await _reply("refused", f"No approval request {approval_id}.")
+            return
+        if record.get("requested_by_session") not in self._connection_session_keys(connection):
+            await _reply("refused", "This approval belongs to another chat.")
+            return
+        deps = self._approval_deps() if self._approval_deps is not None else ExecDeps()
+        if record.get("kind") == "exec_command":
+            # An exec_command runs only inside the turn that asked for it — the
+            # literal command lives solely in that turn's ExecDeps.extra, never
+            # on disk. Strip the runner so an out-of-turn click cannot run a
+            # DIFFERENT live command under the record's approval, even though
+            # the gateway's own ExecDeps carries one for in-turn use elsewhere.
+            deps = dataclasses.replace(deps, exec_run=None)
+
+        async def _decide() -> None:
+            try:
+                outcome = await approval.decide(
+                    workspace, approval_id, decision,
+                    decided_by={"kind": "user", "channel": "websocket"}, deps=deps,
+                )
+            except Exception as exc:  # noqa: BLE001 — the click still owes the client an answer
+                self.logger.exception("approval decision {} failed", approval_id)
+                await _reply("failed", f"Could not decide {approval_id}: {exc}")
+                return
+            await _reply(outcome.status, outcome.message)
+
+        task = asyncio.create_task(_decide())
+        self._approval_tasks.add(task)
+        task.add_done_callback(self._approval_tasks.discard)
 
     async def stop(self) -> None:
         if not self._running:
             return
         self._running = False
+        approval_tasks = list(self._approval_tasks)
+        for task in approval_tasks:
+            task.cancel()
+        if approval_tasks:
+            # A decision blocked inside its executor must not abort the rest
+            # of shutdown — gather it as one of possibly several cancellations.
+            await asyncio.gather(*approval_tasks, return_exceptions=True)
         for task in self._voice_cleanup.values():
             task.cancel()
         self._voice_cleanup.clear()
+        for task in self._answer_fallback.values():
+            task.cancel()
+        self._answer_fallback.clear()
         for sess in self._voice.values():
             sess.cancel_speak()
         self._voice.clear()
@@ -1914,7 +2169,9 @@ class WebSocketChannel(BaseChannel):
             self.logger.debug("no active subscribers for chat_id={}", msg.chat_id)
         if msg.metadata.get("_goal_state_sync"):
             blob = msg.metadata.get("goal_state")
-            await self.send_goal_state(msg.chat_id, blob if isinstance(blob, dict) else {"active": False})
+            blob = blob if isinstance(blob, dict) else {"active": False}
+            self._release_unwatched_ask(msg.chat_id, blob)
+            await self.send_goal_state(msg.chat_id, blob)
             return
         if msg.metadata.get("_goal_status"):
             status = msg.metadata.get("goal_status")

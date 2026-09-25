@@ -1994,6 +1994,26 @@
       "sent": "回答を送信しました",
       "answered": "下で回答済み"
     },
+    "approval": {
+      "title": "承認が必要です",
+      "hint": "決定するまで何も実行されません。",
+      "approve": "承認",
+      "reject": "拒否",
+      "sending": "送信中…",
+      "handedOff": "送信しました — エージェントが続行します。",
+      "applied": "承認され、実行されました。",
+      "rejected": "拒否しました — 実行されません。",
+      "verdict": "スキャン判定",
+      "findings": "検出事項",
+      "newFindings": "新たな検出事項",
+      "kind": {
+        "skill_install": "スキルをインストール",
+        "skill_edit": "スキルを変更",
+        "skill_deps": "スキルの依存関係をインストール",
+        "mcp_change": "MCP サーバーを変更",
+        "exec_command": "コマンドを実行"
+      }
+    },
     "reqSecret": {
       "placeholder": "シークレットの値を貼り付け",
       "save": "保存",

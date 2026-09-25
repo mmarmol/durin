@@ -30,6 +30,15 @@ class _StopGatewayError(RuntimeError):
     pass
 
 
+class _NoopTimer:
+    """Stand-in for arm_restart_deadline's threading.Timer in tests that
+    don't exercise the restart watchdog itself: no real thread, nothing to
+    outlive the test."""
+
+    def cancel(self) -> None:
+        pass
+
+
 @pytest.fixture
 def mock_paths():
     """Mock config/workspace paths for test isolation."""
@@ -861,6 +870,35 @@ def test_agent_uses_default_config_when_no_workspace_or_config_flags(mock_agent_
     mock_agent_runtime["print_response"].assert_called_once_with(
         "mock-response", render_markdown=True, metadata={},
     )
+
+
+def test_legacy_repl_tells_the_agent_not_to_wait_for_mid_turn_answers(
+    mock_agent_runtime, tmp_path: Path,
+):
+    """The legacy REPL reads the next line only after the turn ends, so a
+    question the agent waits on mid-turn would stall for the whole timeout."""
+    from durin.agent import pending_answers
+
+    seen: list[bool] = []
+
+    async def _run() -> None:
+        pending_answers.set_consumer_active(True)
+        seen.append(pending_answers.can_block("cli:direct"))
+
+    agent_loop = mock_agent_runtime["agent_loop"]
+    agent_loop.run = _run
+    agent_loop.workspace = tmp_path
+    try:
+        with patch("durin.cli.commands._init_prompt_session"), \
+             patch("durin.cli.commands._read_interactive_input_async",
+                   AsyncMock(side_effect=EOFError)), \
+             patch("signal.signal"):
+            result = runner.invoke(app, ["agent", "--legacy"])
+    finally:
+        pending_answers.reset()
+
+    assert result.exit_code == 0, result.output
+    assert seen == [False]
 
 
 def test_agent_uses_explicit_config_path(mock_agent_runtime, tmp_path: Path):
@@ -2348,6 +2386,485 @@ def test_gateway_starts_the_automations_orphan_sweep_task(monkeypatch, tmp_path:
     assert result.exit_code == 0
     assert cli_commands._automations_sweep_task is not None
     assert isinstance(cli_commands._automations_sweep_task, asyncio.Task)
+
+
+def test_restart_runs_the_gateway_graceful_shutdown_before_reexec(monkeypatch, tmp_path: Path) -> None:
+    """/restart replaces the process. In the gateway it must first stop every
+    subsystem the way a graceful stop does (MCP, cron, the dream and embed
+    workers, the agent loop and its journal, the channels, the session flush)
+    and only then re-exec; os.execv straight from the loop skipped all of it."""
+    from types import SimpleNamespace
+
+    import durin.cli.commands as cli_commands
+    from durin.bus.events import InboundMessage
+    from durin.command.builtin import cmd_restart
+    from durin.command.router import CommandContext
+    from durin.utils import restart as restart_mod
+
+    monkeypatch.setattr(cli_commands, "_automations_sweep_task", None)
+    calls: list[str] = []
+
+    config_file = _write_instance_config(tmp_path)
+    config = Config()
+    config.gateway.port = 18794
+
+    class _FakeDream:
+        model = None
+        max_batch_size = 0
+        max_iterations = 0
+
+        async def run(self) -> None:
+            return None
+
+    class _FakeSessionManager:
+        def flush_all(self) -> int:
+            calls.append("sessions.flush_all")
+            return 0
+
+    class _FakeAgentLoop:
+        @classmethod
+        def from_config(cls, config, bus=None, **extra):
+            return cls(**extra)
+
+        def __init__(self, **_kwargs) -> None:
+            self.model = "test-model"
+            self.provider = object()
+            self.dream = _FakeDream()
+            self.sessions = _FakeSessionManager()
+
+        def build_concurrency_snapshot(self):
+            return {"lanes": {}, "queued": 0, "work": []}
+
+        def register_automations_tool(self, runtime) -> None:
+            return None
+
+        async def run(self) -> None:
+            msg = InboundMessage(channel="slack", sender_id="u", chat_id="C1", content="/restart")
+            await cmd_restart(CommandContext(msg=msg, session=None, key=msg.session_key,
+                                             raw="/restart", loop=self))
+            # The restart cancels this wait. If it never shuts the gateway
+            # down, fail the run here instead of hanging the test forever.
+            await asyncio.sleep(5)
+            raise _StopGatewayError("/restart did not shut the gateway down")
+
+        async def close_mcp(self) -> None:
+            calls.append("agent.close_mcp")
+
+        def stop(self) -> None:
+            calls.append("agent.stop")
+
+        async def drain_inbound_for_shutdown(self) -> int:
+            calls.append("agent.drain_inbound_for_shutdown")
+            return 0
+
+    class _FakeChannelManager:
+        def __init__(self, _config, _bus, **_kwargs) -> None:
+            self.enabled_channels = ["slack"]
+
+        async def start_all(self) -> None:
+            await asyncio.Event().wait()
+
+        async def stop_all(self) -> None:
+            calls.append("channels.stop_all")
+
+        def get_channel(self, _name: str):
+            return None
+
+    class _FakeCronService:
+        def __init__(self, _store_path: Path, **_kwargs) -> None:
+            self.on_job = None
+
+        async def start(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            calls.append("cron.stop")
+
+        def status(self) -> dict[str, int]:
+            return {"jobs": 0}
+
+        def register_system_job(self, _job) -> None:
+            return None
+
+        def prune_orphaned_system_jobs(self, _known_system_ids) -> list:
+            return []
+
+    class _FakeServer:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        async def serve_forever(self) -> None:
+            await asyncio.Event().wait()
+
+    async def _fake_start_server(handler, host: str, port: int):
+        return _FakeServer()
+
+    class _FakeBus:
+        def add_inbound_interceptor(self, _fn) -> None:
+            return None
+
+    async def _no_wait(_delay: float) -> None:
+        return None
+
+    _patch_cli_command_runtime(
+        monkeypatch,
+        config,
+        message_bus=lambda: _FakeBus(),
+        session_manager=lambda _workspace: object(),
+    )
+    monkeypatch.setattr("durin.cli.commands.AgentLoop", _FakeAgentLoop)
+    monkeypatch.setattr("durin.channels.manager.ChannelManager", _FakeChannelManager)
+    monkeypatch.setattr("durin.cron.service.CronService", _FakeCronService)
+    monkeypatch.setattr("asyncio.start_server", _fake_start_server)
+    monkeypatch.setattr("durin.memory.dream_supervisor.stop_dream_workers",
+                        lambda: calls.append("stop_dream_workers"))
+    monkeypatch.setattr("durin.memory.embed_supervisor.stop_embed_server",
+                        lambda: calls.append("stop_embed_server"))
+    monkeypatch.setattr("durin.command.builtin.set_restart_notice_to_env", lambda **_kw: None)
+    monkeypatch.setattr("durin.command.builtin.asyncio",
+                        SimpleNamespace(sleep=_no_wait, create_task=asyncio.create_task))
+    monkeypatch.setattr("durin.cli.commands.reexec", lambda: calls.append("reexec"))
+    # This test doesn't exercise the I2 restart-deadline watchdog: a real
+    # one would outlive this test (its default deadline is 30s) and could
+    # fire a real os.execv in the middle of a later test in this process.
+    monkeypatch.setattr("durin.cli.commands.arm_restart_deadline", lambda *_a, **_k: _NoopTimer())
+
+    result = runner.invoke(app, ["gateway", "--config", str(config_file)])
+
+    assert result.exit_code == 0, result.output
+    assert calls == [
+        "agent.close_mcp",
+        "cron.stop",
+        "stop_dream_workers",
+        "stop_embed_server",
+        "agent.stop",
+        "agent.drain_inbound_for_shutdown",
+        "channels.stop_all",
+        "sessions.flush_all",
+        "reexec",
+    ]
+    # The gateway is gone: a later /restart no longer reaches its shutdown.
+    assert restart_mod.request_restart() is False
+
+
+def test_a_signal_during_a_restart_shutdown_wins_and_does_not_reexec(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A SIGTERM landing while a /restart's shutdown is already running must
+    turn it into a plain stop: before this fix, ``_restart_requested`` stayed
+    True across the signal, so the process (or its I2 watchdog) would still
+    re-exec even though the operator asked it to just stop."""
+    import signal
+    import threading
+    from types import SimpleNamespace
+
+    import durin.cli.commands as cli_commands
+    from durin.utils import restart as restart_mod
+
+    monkeypatch.setattr(cli_commands, "_automations_sweep_task", None)
+    calls: list[str] = []
+    created_timers: list[threading.Timer] = []
+    real_arm_restart_deadline = restart_mod.arm_restart_deadline
+
+    def _tracking_arm(*a, **k):
+        # The real watchdog, so this test can prove it gets cancelled — but
+        # tracked so the test can force-cancel it too, regardless of what
+        # the fix under test actually does.
+        timer = real_arm_restart_deadline(*a, **k)
+        created_timers.append(timer)
+        return timer
+
+    config_file = _write_instance_config(tmp_path)
+    config = Config()
+    config.gateway.port = 18796
+
+    class _FakeDream:
+        model = None
+        max_batch_size = 0
+        max_iterations = 0
+
+        async def run(self) -> None:
+            return None
+
+    class _FakeSessionManager:
+        def flush_all(self) -> int:
+            calls.append("sessions.flush_all")
+            return 0
+
+    class _FakeAgentLoop:
+        @classmethod
+        def from_config(cls, config, bus=None, **extra):
+            return cls(**extra)
+
+        def __init__(self, **_kwargs) -> None:
+            self.model = "test-model"
+            self.provider = object()
+            self.dream = _FakeDream()
+            self.sessions = _FakeSessionManager()
+
+        def build_concurrency_snapshot(self):
+            return {"lanes": {}, "queued": 0, "work": []}
+
+        def register_automations_tool(self, runtime) -> None:
+            return None
+
+        async def run(self) -> None:
+            restart_mod.request_restart()
+            signal.raise_signal(signal.SIGTERM)
+            await asyncio.sleep(5)
+            raise _StopGatewayError("the signal override did not shut the gateway down")
+
+        async def close_mcp(self) -> None:
+            calls.append("agent.close_mcp")
+
+        def stop(self) -> None:
+            calls.append("agent.stop")
+
+        async def drain_inbound_for_shutdown(self) -> int:
+            calls.append("agent.drain_inbound_for_shutdown")
+            return 0
+
+    class _FakeChannelManager:
+        def __init__(self, _config, _bus, **_kwargs) -> None:
+            self.enabled_channels = ["slack"]
+
+        async def start_all(self) -> None:
+            await asyncio.Event().wait()
+
+        async def stop_all(self) -> None:
+            calls.append("channels.stop_all")
+
+        def get_channel(self, _name: str):
+            return None
+
+    class _FakeCronService:
+        def __init__(self, _store_path: Path, **_kwargs) -> None:
+            self.on_job = None
+
+        async def start(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            calls.append("cron.stop")
+
+        def status(self) -> dict[str, int]:
+            return {"jobs": 0}
+
+        def register_system_job(self, _job) -> None:
+            return None
+
+        def prune_orphaned_system_jobs(self, _known_system_ids) -> list:
+            return []
+
+    class _FakeServer:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        async def serve_forever(self) -> None:
+            await asyncio.Event().wait()
+
+    async def _fake_start_server(handler, host: str, port: int):
+        return _FakeServer()
+
+    class _FakeBus:
+        def add_inbound_interceptor(self, _fn) -> None:
+            return None
+
+    async def _no_wait(_delay: float) -> None:
+        return None
+
+    _patch_cli_command_runtime(
+        monkeypatch,
+        config,
+        message_bus=lambda: _FakeBus(),
+        session_manager=lambda _workspace: object(),
+    )
+    monkeypatch.setattr("durin.cli.commands.AgentLoop", _FakeAgentLoop)
+    monkeypatch.setattr("durin.channels.manager.ChannelManager", _FakeChannelManager)
+    monkeypatch.setattr("durin.cron.service.CronService", _FakeCronService)
+    monkeypatch.setattr("asyncio.start_server", _fake_start_server)
+    monkeypatch.setattr("durin.memory.dream_supervisor.stop_dream_workers", lambda: None)
+    monkeypatch.setattr("durin.memory.embed_supervisor.stop_embed_server", lambda: None)
+    monkeypatch.setattr("durin.command.builtin.set_restart_notice_to_env", lambda **_kw: None)
+    monkeypatch.setattr("durin.command.builtin.asyncio",
+                        SimpleNamespace(sleep=_no_wait, create_task=asyncio.create_task))
+    monkeypatch.setattr("durin.cli.commands.reexec", lambda: calls.append("reexec"))
+    monkeypatch.setattr("durin.cli.commands.arm_restart_deadline", _tracking_arm)
+
+    try:
+        result = runner.invoke(app, ["gateway", "--config", str(config_file)])
+        # Captured before this test's own cleanup below touches the timers:
+        # `.cancel()` in the finally would set `finished` on its own, which
+        # would make this pass even if the fix under test never cancelled
+        # anything — this must observe the state _request_shutdown left it
+        # in, not the safety net's.
+        finished_flags = [t.finished.is_set() for t in created_timers]
+    finally:
+        # Whatever the fix under test does, this test never lets a real
+        # watchdog thread outlive it — it could fire a real os.execv in the
+        # middle of a later test in this same process.
+        for timer in created_timers:
+            timer.cancel()
+
+    assert result.exit_code == 0, result.output
+    assert "reexec" not in calls
+    assert calls.count("agent.drain_inbound_for_shutdown") == 1
+    assert finished_flags == [True], "the watchdog armed for the restart was never cancelled"
+
+
+def test_a_restart_landing_during_a_signal_shutdown_does_not_reexec(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The reverse of the case above: a /restart landing while a signal's
+    shutdown is already running must not turn the stop into a restart. The
+    guard in ``_request_restart`` (``if _shutdown_requested: return``) was
+    called untestable when written; ``request_restart()``'s return value
+    (True whenever a handler is installed, regardless of what it does) shows
+    the call reached the handler, while the absence of a re-exec shows the
+    guard actually fired."""
+    import signal
+    from types import SimpleNamespace
+
+    import durin.cli.commands as cli_commands
+    from durin.utils import restart as restart_mod
+
+    monkeypatch.setattr(cli_commands, "_automations_sweep_task", None)
+    calls: list[str] = []
+
+    config_file = _write_instance_config(tmp_path)
+    config = Config()
+    config.gateway.port = 18797
+
+    class _FakeDream:
+        model = None
+        max_batch_size = 0
+        max_iterations = 0
+
+        async def run(self) -> None:
+            return None
+
+    class _FakeSessionManager:
+        def flush_all(self) -> int:
+            calls.append("sessions.flush_all")
+            return 0
+
+    class _FakeAgentLoop:
+        @classmethod
+        def from_config(cls, config, bus=None, **extra):
+            return cls(**extra)
+
+        def __init__(self, **_kwargs) -> None:
+            self.model = "test-model"
+            self.provider = object()
+            self.dream = _FakeDream()
+            self.sessions = _FakeSessionManager()
+
+        def build_concurrency_snapshot(self):
+            return {"lanes": {}, "queued": 0, "work": []}
+
+        def register_automations_tool(self, runtime) -> None:
+            return None
+
+        async def run(self) -> None:
+            signal.raise_signal(signal.SIGTERM)
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                calls.append(f"request_restart_returned_{restart_mod.request_restart()}")
+                raise
+
+        async def close_mcp(self) -> None:
+            calls.append("agent.close_mcp")
+
+        def stop(self) -> None:
+            calls.append("agent.stop")
+
+        async def drain_inbound_for_shutdown(self) -> int:
+            calls.append("agent.drain_inbound_for_shutdown")
+            return 0
+
+    class _FakeChannelManager:
+        def __init__(self, _config, _bus, **_kwargs) -> None:
+            self.enabled_channels = ["slack"]
+
+        async def start_all(self) -> None:
+            await asyncio.Event().wait()
+
+        async def stop_all(self) -> None:
+            calls.append("channels.stop_all")
+
+        def get_channel(self, _name: str):
+            return None
+
+    class _FakeCronService:
+        def __init__(self, _store_path: Path, **_kwargs) -> None:
+            self.on_job = None
+
+        async def start(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            calls.append("cron.stop")
+
+        def status(self) -> dict[str, int]:
+            return {"jobs": 0}
+
+        def register_system_job(self, _job) -> None:
+            return None
+
+        def prune_orphaned_system_jobs(self, _known_system_ids) -> list:
+            return []
+
+    class _FakeServer:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        async def serve_forever(self) -> None:
+            await asyncio.Event().wait()
+
+    async def _fake_start_server(handler, host: str, port: int):
+        return _FakeServer()
+
+    class _FakeBus:
+        def add_inbound_interceptor(self, _fn) -> None:
+            return None
+
+    async def _no_wait(_delay: float) -> None:
+        return None
+
+    _patch_cli_command_runtime(
+        monkeypatch,
+        config,
+        message_bus=lambda: _FakeBus(),
+        session_manager=lambda _workspace: object(),
+    )
+    monkeypatch.setattr("durin.cli.commands.AgentLoop", _FakeAgentLoop)
+    monkeypatch.setattr("durin.channels.manager.ChannelManager", _FakeChannelManager)
+    monkeypatch.setattr("durin.cron.service.CronService", _FakeCronService)
+    monkeypatch.setattr("asyncio.start_server", _fake_start_server)
+    monkeypatch.setattr("durin.memory.dream_supervisor.stop_dream_workers", lambda: None)
+    monkeypatch.setattr("durin.memory.embed_supervisor.stop_embed_server", lambda: None)
+    monkeypatch.setattr("durin.command.builtin.set_restart_notice_to_env", lambda **_kw: None)
+    monkeypatch.setattr("durin.command.builtin.asyncio",
+                        SimpleNamespace(sleep=_no_wait, create_task=asyncio.create_task))
+    monkeypatch.setattr("durin.cli.commands.reexec", lambda: calls.append("reexec"))
+    monkeypatch.setattr("durin.cli.commands.arm_restart_deadline", lambda *_a, **_k: _NoopTimer())
+
+    result = runner.invoke(app, ["gateway", "--config", str(config_file)])
+
+    assert result.exit_code == 0, result.output
+    assert "request_restart_returned_True" in calls
+    assert "reexec" not in calls
+    assert calls.count("agent.drain_inbound_for_shutdown") == 1
 
 
 def _setup_full_boot_gateway_test(monkeypatch, tmp_path: Path):

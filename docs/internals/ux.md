@@ -191,7 +191,75 @@ the same note.
   as the tool result and the model continues without a turn boundary. On answer
   timeout, media reply, absent loop consumer, or non-interactive session
   (`cron:`/`system:` prefixes), the tool degrades to yield semantics: it
-  returns early and the next user message carries the answer.
+  returns early and the next user message carries the answer. The same happens
+  when a webui chat has had no viewer for a short grace window (the last tab
+  closed and none came back), and in the legacy REPL, which cannot take a reply
+  while a turn runs and so never waits. The window also starts when the
+  question is asked in a chat no tab is watching: on a rich channel the tool
+  pushes a `_goal_state_sync` snapshot when its wait starts (carrying
+  `pending_question`) and again when it ends, and the webui channel starts the
+  window when that snapshot finds nobody attached. A tab that loads inside the
+  window keeps the wait. An API client following the chat over SSE counts as a
+  viewer of a question, since it may answer one. A notice durin posts on the user's
+  behalf (the "secret stored" note after a `request_secret` form) carries
+  `INBOUND_META_NOT_AN_ANSWER` and is never taken as the answer; the waiting
+  question keeps waiting. A text channel gets the question once per ask, and
+  again when the same question is asked anew, carrying the turn's own
+  metadata so it lands in the conversation the turn belongs to (a Slack
+  thread, a Telegram topic) rather than at the surface's top level.
+- **Approvals in chat**: a privileged action that needs a person waits
+  in-turn for a verdict the model cannot write. While the wait lasts,
+  `session.metadata["pending_approval"]` holds `{approval_id, kind, summary,
+  detail}`. The asker pushes a `_goal_state_sync` snapshot whose `goal_state`
+  blob carries it when the wait starts and again when it ends. The websocket
+  channel replays it when a client attaches to the chat, so a refresh brings
+  the card back. By surface:
+  - **webui**: an approval card docked above the composer, so it stays in
+    view while the thread scrolls. It shows the summary and the kind, then
+    the detail: scan verdict, findings, command, every other detail key as
+    a row, and the diff. Approve / Reject send an `approval_decision` socket
+    frame (`request_id`, `approval_id`, `decision`) that never becomes a chat
+    message. The channel refuses a malformed id, an unknown record, and a
+    record whose `requested_by_session` is not one of the chats this
+    connection is attached to. Chats are keyed the way the loop keys turns,
+    so in unified mode they share one key. Otherwise `approval.decide`
+    hands the verdict to the waiting turn. When that turn has stopped
+    waiting, it runs the recorded request on the gateway with
+    `AgentLoop.approval_exec_deps` (the live `exec` tool and an MCP service
+    bound to the live connections). A request those handles cannot run is
+    refused (`refused`, `ok: false`) before the record moves, and nothing
+    runs: an `exec_command`, which runs only inside the turn that asked (the
+    record stays pending until that turn closes it), and a dependency
+    install when exec is disabled. The decision runs as a background task, so the
+    socket keeps serving frames. The reply is an `approval_decided` event
+    (`request_id`, `approval_id`, `ok`, `status`, `message`), where `status`
+    `pending` means the waiting turn took it. When the socket closes, the
+    client rejects any decision still waiting on its `approval_decided`
+    reply at once; the server still carries the decision out, and the next
+    attach shows the result.
+  - **TUI**: an approval bubble with Approve / Reject rows that send `yes` /
+    `no` as the user's next message, which the loop parses as the verdict
+    (see **Approval bubble** under Work-visibility surfaces (TUI)).
+  - **Text channels**: the serialized request is published on every ask,
+    including a repeat of the same request after a timeout. It carries the
+    turn's own metadata, so it lands in the conversation the turn belongs to
+    (a Slack thread, a Telegram topic) rather than at the surface's top
+    level. The reply is parsed by the loop.
+  - **Legacy REPL**: cannot take a reply mid-turn, so it never waits; a
+    skill, dependency or MCP change becomes a pending request, decided with
+    `durin approvals`, and an exec command that needs approval is refused.
+
+  In a webui chat the wait ends like a blocking question's: once the last
+  webui tab has been closed for the grace window, the request stays pending
+  (an exec request is closed as `expired`) and the turn continues. For an
+  approval that window starts when the last tab closes, whether or not an API
+  client is following the chat over SSE: an
+  API message never decides an approval, so such a watcher does not hold the
+  wait, and its attaching does not stop the window. It also starts when the
+  approval is asked in a chat no webui tab is watching (the asker's snapshot
+  finds no tab attached); a tab that loads inside the window keeps the wait.
+  The release checks what the turn waits on when it fires, so a question that
+  becomes an approval inside the window is released too.
 - **Secret redaction**: `SecretRedactor` processes every tool result before it
   reaches the model or is spilled to disk. Two layers: value-based (exact stored
   secret values become `«redacted:NAME»`) and pattern-based (credential-shaped
@@ -305,7 +373,8 @@ the sustained objective it is working toward — surfaces as a compact strip doc
 above the composer: the objective's short label plus an expand control that opens
 the full objective in a panel. It shows only while a goal is active and draws from
 the `_turn_end` frame's `goal_state` field and the dedicated `_goal_state_sync`
-push.
+push. The same snapshot carries `pending_approval`. While a turn waits on the
+person, the composer area shows the approval card (see **Approvals in chat**).
 
 **Work panel.** A collapsible side panel docked to the right of the chat thread,
 toggled from a button in the chat header (next to the theme toggle). A badge on
@@ -376,9 +445,11 @@ carries the run-level status and, for a `needs_input` run, the questions as a
 capped `detail` field. The TUI keeps a paused run in the active list — glyph
 `?`, "waiting" count in the WORK header, first question line under the item —
 and additionally raises a warning toast plus a system note in chat carrying the
-questions. The user answers in chat and the agent resumes the run
-(`run_workflow` with `resume_run_id`); the sidebar entry is a signal, not an
-input surface, matching the webui's "the agent owns resume" design.
+questions. For a question pause the user answers in chat and the agent resumes
+the run (`run_workflow` with `resume_run_id`); the sidebar entry is a signal,
+not an input surface. An approval pause is the person's decision: the agent's
+`run_workflow` refuses it, and the person resumes it from the workflow's runs
+in the webui.
 
 **Live turn diagnostics (footer).** While a turn is in flight the footer shows
 a ticking elapsed clock (1s interval, only active during the turn) instead of
@@ -392,6 +463,20 @@ soon as reasoning/content/tool events flow again or the turn ends.
 active goal, drawn from the `goal_state` blob carried on turn-end frames and
 on the dedicated goal-state sync push (`_goal_state_sync`). The banner is
 hidden when there is no active goal.
+
+**Approval bubble.** The `goal_state` blob also carries `pending_approval`
+(`approval_id`, `kind`, `summary`, `detail`) whenever the running turn is
+waiting on a risky-action approval. A `ToolCallBubble` for the synthetic
+`approval` tool renders it — expanded by default, since a collapsed preview
+could hide what is being approved — with inline `Approve` / `Reject` rows.
+The bubble mounts directly in the chat, not inside the activity cluster, so
+collapsing the cluster at turn end never hides it. Clicking a row publishes a
+plain `yes` / `no` as the user's next message, through the same inbound path
+a typed reply takes; the loop parses it with
+`durin.workflow.approval.parse_approval_reply`, so the model never sees or
+decides the verdict. A goal-state sync without `pending_approval` means the
+approval was answered or timed out: the bubble's action rows are retired so a
+stale click can't answer whatever the turn asks next.
 
 ### Memory browser (WebUI)
 
@@ -514,8 +599,10 @@ operations are safe from both async channel handlers and sync CLI contexts.
 | `resolve_secret` / `SecretRedactor` | `durin/security/secrets.py` | `resolve_secret()` dereferences `${secret:NAME}` at use; `SecretRedactor` applies value-based + pattern-based redaction on tool results |
 | `handle_pairing_command` | `durin/pairing/store.py` | Pure function executing `/pairing` subcommands (list / approve / deny / revoke); `generate_code` / `approve_code` / `revoke` manage `~/.durin/pairing.json` under `threading.Lock` + `cross_process_lock` |
 | `ask_user_question` / `request_secret` / `exit_plan_mode` / `todo_write` | `durin/agent/tools/ask_user.py`, `durin/agent/tools/secrets.py`, `durin/agent/tools/plan_mode.py`, `durin/agent/tools/todos.py` | Interactive tools; payload-canonical contract (arguments carry display content); rich channels render widgets, dumb channels get serialized fallback |
-| `pending_answers` | `durin/agent/pending_answers.py` | Per-session `asyncio.Future` registry for blocking `ask_user_question`; `can_block()` gates in-turn blocking by checking consumer activity and session prefix |
+| `pending_answers` | `durin/agent/pending_answers.py` | Per-session registry of typed (`question` / `approval`) waits on the user; `can_block()` allows one only for an interactive session with a live consumer that can take a reply mid-turn |
 | `RICH_PAYLOAD_CHANNELS` | `durin/agent/user_payloads.py` | Set of channel names that render structured tool payloads natively: `{"websocket", "cli"}` |
+| `ApprovalCard` | `webui/src/components/thread/ApprovalCard.tsx` | The approval a turn waits on: summary, reviewed detail, Approve / Reject; decides only through its `onDecide` prop (the socket frame in a chat) |
+| `AgentLoop.approval_exec_deps` | `durin/agent/loop.py` | Live handles (exec tool, MCP service on the live runtime) for an approval decided after its turn stopped waiting |
 | `theme.py` / `tokens.css` | `durin/cli/theme.py` / `design/tokens.css` | Six Textual themes (ithildin/forge/mithril × light/dark) mirroring the CSS token values; a test pins the two together so they cannot drift |
 | `process_dragged_paths` | `durin/cli/dragdrop.py` | Scans input for absolute file paths; copies media to `<workspace>/.media/<sha>.<ext>`; returns `(cleaned_text, media_list)` |
 

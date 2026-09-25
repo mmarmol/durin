@@ -256,14 +256,15 @@ def mark_suggested(workspace: Path, name: str) -> None:
 
 def apply_suggestion(workspace: Path, action: dict) -> dict:
     """Replay an accepted action through the same apply functions curation uses.
-    For a manual evolve, confirm=True (the user approved it in the bandeja)."""
+    An evolve is a person's write: they accepted the diff, which is the owner's
+    consent for a manual skill (see ``skills_store.apply_accepted_edit``)."""
     from durin.agent import skills_store as ss
     t = action.get("type")
     if t == "evolve":
-        return ss.apply_skill_edit(
+        return ss.apply_accepted_edit(
             workspace, action["name"], old=action["old"], new=action["new"],
             rationale=action.get("rationale", "evolve"),
-            file=action.get("file", "SKILL.md"), confirm=True,
+            file=action.get("file", "SKILL.md"),
             attribution=ss.Attribution(actor="curation"))
     if t == "retire":
         return ss.remove_skill(workspace, action["name"])

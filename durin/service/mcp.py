@@ -352,6 +352,13 @@ class McpService:
     def _live(self) -> dict[str, "RawConnState"]:
         return self._runtime.live_status() if self._runtime is not None else {}
 
+    def approved_config(self, name: str) -> MCPServerConfig | None:
+        """The config a person or an approved request most recently put in
+        place for *name* (``McpRuntime.approved_config``), or ``None`` with
+        no live runtime — nothing tracks it, so the caller (``mcp_manage``'s
+        agent-facing reconnect) treats that the same as "never approved"."""
+        return self._runtime.approved_config(name) if self._runtime is not None else None
+
     def _connect_errors(self) -> dict[str, str]:
         if self._runtime is None:
             return {}
@@ -456,10 +463,9 @@ class McpService:
         self, query: McpRegistryDescribeQuery, principal: Principal
     ) -> McpRegistryServerDetail:
         principal.require(Scope.MCP_READ)
+        from durin.agent.mcp_install import apply_auth_help
         from durin.agent.mcp_registry import build_mcp_adapters
         from durin.config.loader import load_config
-
-        from durin.agent.mcp_install import apply_auth_help
 
         for adapter in build_mcp_adapters(load_config().tools.mcp_discovery.registries):
             detail = await adapter.describe(query.ref)
@@ -750,6 +756,14 @@ class McpService:
             raise ConflictError("MCP server already exists", details={"name": cmd.name})
         cfg.tools.mcp_servers[cmd.name] = cmd.config
         save_config(cfg, get_config_path())
+        if self._runtime is not None:
+            # This call is a person's REST/dashboard action or an approval
+            # executor applying an already-approved mcp_manage request —
+            # either way, an authority the agent's own bare `reconnect` does
+            # not have on its own. Record it so a later agent reconnect can
+            # tell "picking up what was approved" from "picking up a change
+            # nobody here ever approved" (see McpRuntime.approved_config).
+            self._runtime.mark_approved(cmd.name, cmd.config)
         # ``connect=False`` lets a caller persist now and settle the connection itself
         # (e.g. registry_install backgrounds it so a slow/auth-walled connect can't hang
         # the request). Status is derived from config either way (oauth → needs_auth).
@@ -777,8 +791,13 @@ class McpService:
             raise NotFoundError("no such MCP server", details={"name": cmd.name})
         cfg.tools.mcp_servers[cmd.name] = cmd.config
         save_config(cfg, get_config_path())
-        # Persist-only: a live connection keeps running with its current config
-        # until the next enable/disable toggle re-applies it.
+        if self._runtime is not None:
+            # Persist-only: a live connection keeps running with its current
+            # config until the next enable/disable toggle re-applies it — but
+            # this IS an approved change (a person's PATCH, or an approval
+            # executor applying an approved request), so it must be on record
+            # as such even though nothing gets connected here.
+            self._runtime.mark_approved(cmd.name, cmd.config)
         return await self._build_detail(cmd.name, cmd.config)
 
     @route(
@@ -804,14 +823,22 @@ class McpService:
             await self._runtime.disconnect(cmd.name)
         return McpOkResult(ok=True)
 
-    def _set_enabled(self, name: str, enabled: bool) -> MCPServerConfig:
-        """Persist a server's enabled flag; return the (mutated) config."""
+    def _set_enabled(
+        self, name: str, enabled: bool, config: MCPServerConfig | None = None
+    ) -> MCPServerConfig:
+        """Persist a server's enabled flag; return the (mutated) config.
+
+        With *config*, that object replaces the stored entry in the same
+        write and is the one returned, so the caller connects exactly it.
+        """
         from durin.config.loader import get_config_path, load_config, save_config
 
         cfg = load_config()
-        sc = cfg.tools.mcp_servers.get(name)
-        if sc is None:
+        if name not in cfg.tools.mcp_servers:
             raise NotFoundError("no such MCP server", details={"name": name})
+        if config is not None:
+            cfg.tools.mcp_servers[name] = config
+        sc = cfg.tools.mcp_servers[name]
         sc.enabled = enabled
         save_config(cfg, get_config_path())
         return sc
@@ -825,11 +852,21 @@ class McpService:
         summary="Enable a server and connect it",
     )
     async def enable(
-        self, cmd: McpServerNameCommand, principal: Principal
+        self,
+        cmd: McpServerNameCommand,
+        principal: Principal,
+        *,
+        config: MCPServerConfig | None = None,
     ) -> McpServerDetail:
+        # ``config`` is for an approval executor enabling the snapshot a
+        # person reviewed: it is persisted and connected as that object, so
+        # a write landing on config.json in between cannot change what runs.
         principal.require(Scope.MCP_WRITE)
-        sc = self._set_enabled(cmd.name, True)
+        if config is not None:
+            _validate_upsert(cmd.name, config)
+        sc = self._set_enabled(cmd.name, True, config)
         if self._runtime is not None:
+            self._runtime.mark_approved(cmd.name, sc)
             await self._runtime.connect(cmd.name, sc)
         return await self._build_detail(cmd.name, sc)
 
@@ -867,8 +904,20 @@ class McpService:
         sc = load_config().tools.mcp_servers.get(cmd.name)
         if sc is None:
             raise NotFoundError("no such MCP server", details={"name": cmd.name})
-        # Apply the current config to the live connection (and retry failures).
-        # A disabled server has nothing to (re)connect.
+        # This is the person's own action (dashboard / REST) — reconnect
+        # applies whatever is currently on disk, config changes included, as
+        # the route summary says. It intentionally trusts the caller: a
+        # person editing config.json (or updating via the PATCH endpoint,
+        # which is deliberately persist-only) and then clicking Reconnect is
+        # exactly how a config change is meant to take effect.
+        #
+        # The AUTONOMOUS counterpart — the agent's own `mcp_manage
+        # (action="reconnect")` — must not get that same trust for free: it
+        # checks the on-disk config against `McpRuntime.approved_config`
+        # BEFORE ever calling this method (see mcp_manage.py), so an
+        # unattended reconnect can only ever repeat a config a person or an
+        # approved request already put in place. A disabled server has
+        # nothing to (re)connect.
         if self._runtime is not None and sc.enabled:
             await self._runtime.disconnect(cmd.name)
             await self._runtime.connect(cmd.name, sc)

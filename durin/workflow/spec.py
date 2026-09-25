@@ -97,7 +97,7 @@ class WorkNode:
     max_turns: int | None = None         # agentic tool-round budget for this node (None = global default)
     max_reentries: int = 0               # self re-entries after exhausting max_turns (0 = go straight to synthesis)
     reentry_prompt: str = ""             # author steering appended on each re-entry (empty = engine default)
-    approval: bool = False               # require explicit human approval before this node runs
+    approval: bool = False               # pause after this node runs: a person approves, revises or rejects its output
     detached: bool = False               # launch and continue: side-effect node off the critical path
     inputs_from: tuple[str, ...] = ()    # named sources composed (labeled) into this node's input
     output_schema: dict | None = None    # JSON Schema the node's output must satisfy (forced deliver tool)

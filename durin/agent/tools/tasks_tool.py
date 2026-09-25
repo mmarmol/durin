@@ -38,7 +38,7 @@ from typing import Any
 
 from durin.agent.background_tasks import collect_tasks
 from durin.agent.tools.base import Tool, tool_parameters
-from durin.agent.tools.context import ContextAware, RequestContext
+from durin.agent.tools.context import ContextAware, RequestContext, RequestContextVar
 from durin.agent.tools.schema import BooleanSchema, StringSchema, tool_parameters_schema
 
 _MAX_TOOL_HISTORY = 8
@@ -106,7 +106,8 @@ class TasksTool(Tool, ContextAware):
         self._manager = subagent_manager
         self._sessions = sessions
         self._jobs = jobs
-        self._request_ctx: RequestContext | None = None
+        # This turn's context: the instance is shared by concurrent turns.
+        self._ctx = RequestContextVar("tasks_tool_request_ctx")
 
     @classmethod
     def enabled(cls, ctx: Any) -> bool:
@@ -128,10 +129,10 @@ class TasksTool(Tool, ContextAware):
         )
 
     def set_context(self, ctx: RequestContext) -> None:
-        self._request_ctx = ctx
+        self._ctx.set(ctx)
 
     def _session_key(self) -> str | None:
-        ctx = self._request_ctx
+        ctx = self._ctx.get()
         if ctx is None:
             return None
         if ctx.session_key:

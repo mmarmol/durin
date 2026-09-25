@@ -6,8 +6,6 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
-from tests.conftest import write_webui_transcript
 from starlette.testclient import TestClient
 from websockets.exceptions import ConnectionClosed
 from websockets.frames import Close
@@ -28,6 +26,7 @@ from durin.channels.websocket import (
 )
 from durin.config.loader import load_config, save_config
 from durin.config.schema import Config
+from tests.conftest import write_webui_transcript
 
 # -- Shared helpers (aligned with test_websocket_integration.py) ---------------
 
@@ -1254,6 +1253,35 @@ async def test_secret_store_valid_new_secret_emits_ok_and_agent_resume(
     assert resume.chat_id == "chat-abc"
     assert "MY_TOKEN" in resume.content
     assert "s3cr3t-value" not in resume.content
+
+
+@pytest.mark.asyncio
+async def test_secret_store_resume_is_flagged_as_not_an_answer(
+    bus: MagicMock, monkeypatch, tmp_path
+) -> None:
+    """The resume note is posted into the chat for the agent, not typed by the
+    user, so a question the agent is waiting on must not take it as the reply."""
+    from durin.bus.events import INBOUND_META_NOT_AN_ANSWER
+
+    monkeypatch.setattr(
+        "durin.config.loader._current_config_path", tmp_path / "config.json"
+    )
+    channel = _ch(bus)
+    await channel._handle_secret_store_envelope(
+        _FakeConn(),
+        "client-1",
+        {
+            "type": "secret_store",
+            "request_id": "r2",
+            "name": "MY_TOKEN",
+            "service": "github",
+            "value": "s3cr3t-value",
+            "scope": ["exec"],
+            "chat_id": "chat-abc",
+        },
+    )
+    resume = bus.publish_inbound.call_args[0][0]
+    assert resume.metadata[INBOUND_META_NOT_AN_ANSWER] is True
 
 
 @pytest.mark.asyncio

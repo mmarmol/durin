@@ -138,6 +138,46 @@ recurse from a background worker), standing-state creators (`cron`,
 `skill_import`). Those classes declare `_scopes = {"core"}` explicitly, with
 the reason in a comment, rather than relying on the base default.
 
+**Approval-gated tools.** `skill_import` (install), `skill_edit`,
+`skill_install_deps`, `exec` (a command the deny list or a configured
+allowlist refuses) and `mcp_manage` (`install`/`add`/`update`/`enable`) take no
+`confirm` or `override` argument: nothing the model writes can authorize them.
+When an action needs a decision the tool files an approval request
+(`durin/agent/approval.py`) and the server decides — operator policy, the
+skills judge within its limits (never for dependency installs, exec commands or
+MCP changes), the person in the chat (the turn waits up to
+`agents.defaults.ask_user_answer_timeout_s`), or a pending record resolved
+later with `durin approvals`. The tool result carries `status`
+(`applied`, `rejected`, `pending`, `failed`, `stale`, `refused`, or `approved`
+when a decision made from outside the turn while it waited is still being
+carried out), `approval_id`,
+and a `message` that, on `rejected` or `pending`, tells the model to continue
+without the action and not to reach the same effect another way.
+
+`exec`'s approval is scoped to the single turn that asked for it: an approved
+command runs once, past only the deny/allowlist rules that refused it —
+every other guard still applies, including a hard floor of commands that never
+run regardless of approval (recursively removing `/` or the home directory,
+formatting or overwriting a whole disk, a fork bomb, shutdown/reboot, and
+running `durin approvals approve`/`reject` through the shell). Declined or
+unanswered, the request is closed rather than left pending: replaying a shell
+command outside the turn that needed it has no defined meaning. In an
+autonomous context (cron, workflow, sub-agent) the refusal stands and nothing
+is filed. A runtime-install step that a gated tool needs mid-approval (an
+MCP server's missing local package, a skill's declared dependency) runs
+through the exec tool's own non-asking entry point, so it never opens a
+second, nested approval inside the one already being carried out.
+
+`mcp_manage`'s `install`, `add`, `update` and `enable` put a server's command
+or endpoint into the agent's tool surface, so they go through
+`tools.mcp_discovery.install_policy`. `remove`, `disable` and `reconnect` add
+no executable state and are ungated, except that the agent's own `reconnect`
+refuses unless the on-disk config still matches the one a person or an
+approved request last put in place (a person's dashboard/REST reconnect
+always applies whatever is on disk). A request never carries a credential:
+`secret_safe_config` turns a matching env/header value into a
+`${secret:NAME}` reference and refuses any other credential outright.
+
 External tools can be registered via `entry_points(group="durin.tools")` in a
 package's `pyproject.toml`; the loader discovers these after built-ins.
 
@@ -214,6 +254,29 @@ For each tool call, `_run_tool()` applies checks in this order:
    `"Error: ..."` return values are both recorded in `seen_failed_calls` so
    identical retries are short-circuited.
 
+### Per-turn request context (`ContextAware`)
+
+A registry holds one instance of each tool, and that instance is shared by
+every turn running at the same time — the interactive lane runs several chats
+concurrently, and `process_direct` (cron, automations, the HTTP API) reuses the
+same instances. A tool that needs to know which chat called it (a session key
+for metadata, a channel/chat id to publish an out-of-band message, a per-chat
+work directory) cannot keep that as a plain attribute: whichever turn's
+`set_context()` ran last would win, so a question, a file write, a secret
+request or a todo list could land in a different chat than the one that asked
+for it.
+
+A context-aware tool instead implements the `ContextAware` protocol
+(`durin/agent/tools/context.py`) and stores its context in a
+`RequestContextVar` — a small wrapper around a `contextvars.ContextVar`.
+Before each tool batch, the loop builds a `RequestContext` (channel, chat id,
+session key, metadata) for the turn and calls `set_context()` on every
+registered tool that implements `ContextAware`. Because a `ContextVar` value is
+scoped to the asyncio task that set it (and copied into any child task
+started afterward, e.g. via `asyncio.gather` or `asyncio.to_thread`), each
+turn's task reads back only the context it set, even while another turn's task
+calls `set_context()` on the same shared instance in between.
+
 ### Message-history sanitization
 
 Before each LLM call, the runner sanitizes the message history to satisfy provider
@@ -278,7 +341,7 @@ grants access to the tool that produced the result.
 | `Tool` | `durin/agent/tools/base.py` | Abstract base class; defines `name`, `description`, `parameters`, `execute`, `cast_params`, `validate_params`, `to_schema`, `llm_visible`, `read_only`, `exclusive`, `concurrency_safe` |
 | `tool_parameters` | `durin/agent/tools/base.py` | Class decorator that attaches a JSON Schema to a `Tool` subclass without writing a `@property` |
 | `ToolLoader` | `durin/agent/tools/loader.py` | Package scanner that discovers, filters, and registers all built-in `Tool` subclasses at startup; also discovers external plugins via `entry_points` |
-| `ExecTool` | `durin/agent/tools/shell.py` | Shell command execution (`exec` tool); implements deny patterns, workspace boundary enforcement, sandbox wrapping, background process support, and per-output spill |
+| `ExecTool` | `durin/agent/tools/shell.py` | Shell command execution (`exec` tool); implements the hard floor, deny/allow patterns (a refused command is put to the person in a chat for a one-time approval), workspace boundary enforcement, sandbox wrapping, background process support, and per-output spill |
 | `truncate_with_spill` | `durin/agent/tools/output_spill.py` | Overflow helper: writes full content to `.durin/spills/`, returns head+tail+spill-ref rendering |
 | `emit_tool_event` | `durin/agent/tools/_telemetry.py` | Free function for structured telemetry from tool code; privacy-trims free-text fields; silently no-ops when no session logger is bound |
 | `AgentMode` | `durin/agent/agent_mode.py` | Frozen dataclass holding `name`, `description`, `allowed` / `denied` frozensets, and `prompt_suffix`; `is_tool_allowed(name)` is the single permission check called by both the definition filter and the execution gate |
@@ -297,8 +360,8 @@ grants access to the tool that produced the result.
 | `tools.exec.enable` | `bool` | `true` | Enables/disables the `exec` shell tool |
 | `tools.exec.timeout` | `int` | `60` | Default subprocess timeout in seconds (max 600). On POSIX the command runs as its own process group, so a timeout or a cancelled turn kills everything it started, not just the shell |
 | `tools.exec.sandbox` | `str` | `""` | Sandbox backend (`bwrap`, `docker`, `testbed`, or empty for none) |
-| `tools.exec.deny_patterns` | `list[str]` | (hardcoded set) | Regex patterns that block matching commands before execution; the refusal names the rule and tells the model to ask the user rather than reach the same result another way |
-| `tools.exec.allow_patterns` | `list[str]` | `[]` | Regex patterns that exempt matching commands from the deny list |
+| `tools.exec.deny_patterns` | `list[str]` | (hardcoded set) | Regex patterns that block matching commands before execution. In a chat the person is asked to approve the refused command once; elsewhere the refusal names the rule and tells the model to ask the user rather than reach the same result another way |
+| `tools.exec.allow_patterns` | `list[str]` | `[]` | Regex patterns that exempt matching commands from the deny list; when set, a command matching none is refused like a deny match. Nothing exempts the hard floor |
 | `tools.exec.allowed_env_keys` | `list[str]` | `[]` | Extra env vars forwarded to subprocesses (beyond the minimal curated set) |
 | `tools.my.enable` | `bool` | `true` | Enables/disables the `my` self-inspection tool |
 | `tools.my.allow_set` | `bool` | `false` | When `true`, `my(action="set", ...)` can mutate config values at runtime |
@@ -333,14 +396,14 @@ controls which MCP tools are registered.
 | Filesystem | `read_file` (text reads open with up to `memory.artifact_recall.max_notes` memory entries that mention the file — a header block, because an over-cap result is truncated from the tail), `write_file`, `edit_file`, `list_dir` |
 | Document reading | `convert_to_markdown` (local document → markdown via markitdown, with local OCR transcribing scanned PDF pages when enabled; returned into the current turn — transient, persists nothing. A document needing more OCR than the inline budget is not read this way — `memory_ingest` it instead, which enqueues a [background job](jobs.md)) |
 | Search | `grep`, `repo_overview`, `dependents` (what references a skill, a workflow script or a workflow — the reverse edges of the definition graph) |
-| Shell | `exec`, `process` |
+| Shell | `exec` (a command the deny list or allowlist refuses is put to the person in a chat for a one-time approval; hard-floor commands never run), `process` |
 | Web | `web_search`, `web_fetch` |
 | Memory | `memory_search`, `memory_forget`, `memory_ingest`, `memory_drill` (a drill into an ingested document carries the entities distilled from it, under the same `memory.artifact_recall` gate), `memory_upsert_entity`, `memory_read_entity`, `memory_entity_lineage`, `memory_source_session` |
 | Session & planning | `session_search` (searches the live session, or any earlier session by key (`session_key`), read-only), `todo_write`, `enter_plan_mode`, `exit_plan_mode`, `note_decision` |
 | Agent control | `ask_user_question`, `long_task`, `complete_goal`, `sleep`, `message` |
 | Background work | `spawn`, `run_workflow`, `list_workflows`, `workflow_write`, `workflow_edit`, `workflow_script_write` (the code a `script` node runs — the generic file tools cannot write under `workflows/`, so this door validates the name, writes under the editor's lock and commits to the workflow version history), `tasks` (list / status / stop, over sub-agents + workflow runs + [jobs](jobs.md), scoped to this session), `workflow_runs` (read-only `search` (date-filterable via `since`/`until`) / `show` / `cost` (per-run token table, including child sub-workflow runs) over every past workflow run recorded in the workspace — across every session, not just this one — so a question about prior work can be answered by reading a manifest and its artifact files instead of re-running the workflow; when answering from a prior run, state the run's date and flag a producer model/version that differs from the current configuration, and prefer re-running when the user asked for a fresh investigation), `subagent_monitor`, `subagent_output` |
 | Skills | `skills_list`, `skill_view`, `skill_search`, `skill_import`, `skill_write`, `skill_edit`, `skill_audit`, `skill_observe`, `skill_acquire_seed`, `skill_install_deps`, `skill_publish` (promote a draft under `skill-drafts/<name>/` into the active registry, through the composition gate and security scan), `skill_discard` (drop a draft; active skills are untouched) |
-| MCP management | `mcp_manage`, `mcp_search` |
+| MCP management | `mcp_manage` (`install`/`add`/`update`/`enable` need the user's approval under `install_policy: approve`; `remove`/`disable`/`reconnect` are not gated), `mcp_search` |
 | Capability bridges | `interpret_image`, `interpret_audio`, `execute_code`, `notebook_edit` |
 | Secrets | `list_secrets`, `request_secret` (`update=true` asks the user to replace an existing secret's value; the agent never sees values) |
 | Scheduling | `cron` |

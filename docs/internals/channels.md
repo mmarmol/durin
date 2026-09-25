@@ -347,6 +347,22 @@ The agent loop (`AgentLoop.run()`) consumes from `bus.inbound`. The
 or `"{channel}:{chat_id}"` otherwise. This lets thread-scoped sessions (for
 example, Slack threads) share a distinct session from the channel-level one.
 
+Slack keys a conversation by where the reply lands. A top-level DM keeps the
+DM session `slack:<D>`, since `reply_in_thread` never opens a thread in a DM.
+A channel message or mention answered in a thread — `reply_in_thread`, the
+default — opens the session `slack:<C>:<thread ts>`, and that one session is
+shared by the message that opened the thread, every reply typed there, and
+every button click there, so a question the turn asks in the thread is
+answered in the session it is waiting in. A consequence: two separate
+top-level mentions in the same channel are two conversations, not one, and a
+thread-keyed message carries a session override that keeps it out of
+`unified_session`, like any other thread reply. The message that opens a
+thread also marks that thread's history as already known, so the first reply
+in it does not re-fetch context the session already holds. A Telegram tap
+inside a forum topic follows the same rule: it keeps the topic's session, the
+same one a message typed in that topic uses, and its reply goes back into the
+topic.
+
 ### Inbound deduplication
 
 Several transports redeliver events the gateway already handled: a
@@ -550,7 +566,10 @@ streaming path, `_claim_status_message` hands the same message over, so a
 status line is never stranded above the answer it was announcing.
 
 The status message never overwrites answer text: once a buffer holds real
-content, later hints are dropped rather than painted over it.
+content, later hints are dropped rather than painted over it. A message that
+asks the person something the turn is waiting on is the one exception: it
+posts fresh so it notifies (an edit does not), and it retires the status
+line it replaces so the thread keeps its order.
 
 ### Resolving where a stream goes
 
@@ -920,7 +939,14 @@ will be discovered at startup and can be enabled with
   channel; `revoke <channel> <user_id>` targets a specific channel.
 - **Webui** — the WebSocket channel hosts the embedded single-page app at the
   configured `host:port/path`. Authentication is handled via `token` or
-  `token_issue_secret` (reverse-proxy path).
+  `token_issue_secret` (reverse-proxy path). Besides chat messages, the socket
+  carries control frames that never enter the conversation: `secret_store`
+  writes a credential, and `approval_decision` answers an approval the agent
+  is waiting on (see [ux.md](ux.md)). The gateway hands the channel two
+  runtime callables through `ChannelManager`. `webui_approval_deps` supplies
+  the live handles a decision runs with after its turn stopped waiting.
+  `webui_session_turn_key` tells the channel how the loop keys a chat's
+  turns, so an approval is matched to its chat in unified mode.
 - **HTTP chat** — the native chat routes (`/api/v1/sessions/{key}/messages`,
   `…/events`, `…/stop`) are a second transport into the same channel. A message
   enters through `WebSocketChannel.validate_chat_message` and

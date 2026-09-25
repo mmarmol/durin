@@ -28,7 +28,7 @@ try:
 except ImportError:  # optional extra `durin-ai[slack]` not installed
     SLACK_AVAILABLE = False
 
-from durin.bus.events import OutboundMessage, SendReceipt
+from durin.bus.events import OUTBOUND_META_ASKS_PERSON, OutboundMessage, SendReceipt
 from durin.bus.queue import MessageBus
 from durin.channels.base import BaseChannel
 from durin.channels.dedup import MessageDeduplicator
@@ -346,8 +346,12 @@ class SlackChannel(BaseChannel):
                 chunks = split_message(mrkdwn, SLACK_MAX_MESSAGE_LEN)
                 # A status line left over from this turn becomes the answer, so
                 # the reader never ends up with a stale "working on it" sitting
-                # above the reply it was waiting for.
-                claimed = await self._claim_status_message(msg.chat_id)
+                # above the reply it was waiting for. A question the turn
+                # blocks on is the one exception: taking over the status line
+                # would deliver it via chat_update, which raises no
+                # notification, so it always posts fresh instead.
+                asks_person = bool((msg.metadata or {}).get(OUTBOUND_META_ASKS_PERSON))
+                claimed = None if asks_person else await self._claim_status_message(msg.chat_id)
                 for index, chunk in enumerate(chunks):
                     kwargs: dict[str, Any] = dict(
                         channel=target_chat_id, text=chunk, thread_ts=thread_ts_param,
@@ -374,6 +378,12 @@ class SlackChannel(BaseChannel):
                         # replied into, not to itself.
                         ts = thread_ts_param or resp.get("ts")
                         receipt = SendReceipt(thread_key=f"slack:{target_chat_id}:{ts}")
+
+                if asks_person:
+                    # The question now on screen makes the old "working on
+                    # it" line redundant; later progress opens a new one
+                    # below it, so the thread still reads in order.
+                    await self._retire_status_message(msg.chat_id)
 
             for media_path in msg.media or []:
                 try:
@@ -573,6 +583,25 @@ class SlackChannel(BaseChannel):
             return None
         self._stream_bufs.pop(chat_id, None)
         return buf.target, buf.ts
+
+    async def _retire_status_message(self, chat_id: str) -> None:
+        """Delete a pending "working on it" line once a question that
+        notifies has posted fresh in its place, rather than leave it
+        stranded above a question it no longer describes progress towards.
+
+        Only a still-showing status line is touched — a buffer already
+        holding real (non-status) content is a mid-stream answer and is
+        left alone. Deletion is best effort: a failure only means a stale
+        line stays visible, never worth failing the send over.
+        """
+        buf = self._stream_bufs.get(chat_id)
+        if buf is None or not buf.status_only or not buf.ts or not buf.target:
+            return
+        self._stream_bufs.pop(chat_id, None)
+        try:
+            await self._web_client.chat_delete(channel=buf.target, ts=buf.ts)
+        except Exception as e:
+            self.logger.debug("status message delete failed: {}", e)
 
     async def _replace_stream_message(
         self, chat_id: str, ts: str, text: str, thread_ts: str | None
@@ -848,16 +877,14 @@ class SlackChannel(BaseChannel):
 
         event_ts = event.get("ts")
         raw_thread_ts = event.get("thread_ts")
-        thread_ts = raw_thread_ts
-        # In DMs we don't auto-open a thread on top-level messages (it would
-        # bury replies under "1 reply"). But if the user explicitly opened a
-        # thread inside the DM, raw_thread_ts is set and we honor it.
-        if (
-            self.config.reply_in_thread
-            and not thread_ts
-            and channel_type != "im"
-        ):
-            thread_ts = event_ts
+        thread_ts, session_key = self._thread_scope(
+            chat_id, channel_type, event_ts, raw_thread_ts,
+        )
+        if thread_ts and not raw_thread_ts and sender_allowed and not is_bot:
+            # This message opens its own reply thread, and that thread's
+            # session starts with it: a later reply there must not re-inject
+            # the history the session already holds.
+            self._mark_thread_context_known(f"{chat_id}:{thread_ts}")
         # A mention pulls the bot into the (possibly new) channel thread: keep
         # answering follow-ups there without requiring a re-mention each turn.
         if (
@@ -881,12 +908,6 @@ class SlackChannel(BaseChannel):
         except Exception as e:
             self.logger.debug("reactions_add failed: {}", e)
 
-        # Thread-scoped session key whenever the user is in a real thread
-        # (raw_thread_ts is set). DM threads get their own session, separate
-        # from the DM root, so context doesn't bleed across thread boundaries.
-        session_key = (
-            f"slack:{chat_id}:{thread_ts}" if thread_ts and raw_thread_ts else None
-        )
         media_paths: list[str] = []
         file_markers: list[str] = []
         if sender_allowed:
@@ -1001,9 +1022,10 @@ class SlackChannel(BaseChannel):
         if not sender_id or not chat_id or not value:
             return
         message_info = payload.get("message") or {}
-        thread_ts = message_info.get("thread_ts") or message_info.get("ts")
         channel_type = self._infer_channel_type(chat_id)
-        session_key = f"slack:{chat_id}:{thread_ts}" if thread_ts else None
+        thread_ts, session_key = self._thread_scope(
+            chat_id, channel_type, message_info.get("ts"), message_info.get("thread_ts"),
+        )
         try:
             await self._handle_message(
                 sender_id=sender_id,
@@ -1015,6 +1037,41 @@ class SlackChannel(BaseChannel):
             )
         except Exception:
             self.logger.exception("Error handling button click from {}", sender_id)
+
+    def _thread_scope(
+        self,
+        chat_id: str,
+        channel_type: str,
+        ts: str | None,
+        raw_thread_ts: str | None,
+    ) -> tuple[str | None, str | None]:
+        """Where a message at ``ts`` gets its reply, and which session it joins.
+
+        Returns ``(reply_thread_ts, session_key)``. The reply goes into the
+        thread the message is in (``raw_thread_ts``). Outside DMs,
+        ``reply_in_thread`` opens a reply thread under a top-level message; in
+        a DM it does not, since that would bury every reply under "1 reply".
+
+        A message whose reply lands in a thread joins that thread's session:
+        the top-level mention that opened the thread, every reply typed there
+        and every button clicked there are one conversation, so a question
+        the turn asks in the thread is answered in the session it waits in,
+        and context does not bleed across threads. A message answered at the
+        top level (a top-level DM) keeps the conversation's default session
+        (``None``). Typed messages and clicks both key through here.
+        """
+        thread_ts = raw_thread_ts
+        if self.config.reply_in_thread and not thread_ts and channel_type != "im":
+            thread_ts = ts
+        session_key = f"slack:{chat_id}:{thread_ts}" if thread_ts else None
+        return thread_ts, session_key
+
+    def _mark_thread_context_known(self, key: str) -> None:
+        """Record that thread *key* ("chat_id:thread_ts") needs no history
+        fetch: it was fetched once already, or its session holds it."""
+        if len(self._thread_context_attempted) >= self._THREAD_CONTEXT_CACHE_LIMIT:
+            self._thread_context_attempted.clear()
+        self._thread_context_attempted.add(key)
 
     async def _with_thread_context(
         self,
@@ -1040,9 +1097,7 @@ class SlackChannel(BaseChannel):
         key = f"{chat_id}:{thread_ts}"
         if key in self._thread_context_attempted:
             return text
-        if len(self._thread_context_attempted) >= self._THREAD_CONTEXT_CACHE_LIMIT:
-            self._thread_context_attempted.clear()
-        self._thread_context_attempted.add(key)
+        self._mark_thread_context_known(key)
 
         try:
             response = await self._web_client.conversations_replies(

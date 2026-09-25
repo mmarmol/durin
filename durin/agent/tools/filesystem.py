@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from durin.agent.tools.base import Tool, tool_parameters
-from durin.agent.tools.context import ContextAware, RequestContext
+from durin.agent.tools.context import ContextAware, RequestContext, RequestContextVar
 from durin.agent.tools.file_state import FileStates, _hash_file, current_file_states
 from durin.agent.tools.path_utils import resolve_workspace_path
 from durin.agent.tools.post_edit_check import run_post_edit_check
@@ -57,10 +57,11 @@ class _FsTool(Tool, ContextAware):
         # current async task, which keeps shared tool instances session-safe.
         self._explicit_file_states = file_states
         self._fallback_file_states = FileStates()
-        self._request_ctx: RequestContext | None = None
+        # This turn's context: the instance is shared by concurrent turns.
+        self._ctx = RequestContextVar("fs_request_ctx")
 
     def set_context(self, ctx: RequestContext) -> None:
-        self._request_ctx = ctx
+        self._ctx.set(ctx)
 
     def _work_dir(self) -> Path | None:
         """Return the per-session work directory path, or None when no session is set.
@@ -70,7 +71,8 @@ class _FsTool(Tool, ContextAware):
         parent.mkdir before writing), so read-only sessions never litter the
         workspace with empty work/<session>/ directories.
         """
-        sk = self._request_ctx.session_key if self._request_ctx else None
+        ctx = self._ctx.get()
+        sk = ctx.session_key if ctx else None
         if not sk or self._workspace is None:
             return None
         from durin.agent.tools.work_area import session_work_dir
@@ -119,13 +121,32 @@ class _FsTool(Tool, ContextAware):
           `workflow_script_write` for `workflows/scripts/`
         - `automations/` → the automations tool (`create`/`enable`/`pause`), or the
           webui's automations editor
+        - `.approvals/` → no door at all: these records are written only by the
+          server, and a writable record would let the model forge or rewrite
+          its own approval
+        - `.durin/import-quarantine/` → no door at all: it is written only by
+          `skill_import`'s fetch step. A writable `.scan.json` there would let
+          the model forge the recorded source/verdict and buy a trusted,
+          no-questions-asked install for content nobody actually scanned.
 
         Without this the guarantee is only an instruction in a skill, and a
         generic write lands unvalidated and unversioned — which is how workflow
         edits went missing from history.
+
+        Also always refuses durin's own config/secret stores under DURIN_HOME
+        (``deny_durin_stores=True`` — see `resolve_workspace_path`), regardless
+        of `_guard_registry_dirs`: an out-of-band edit to `config.json` (e.g.
+        an MCP server's command) followed by an ungated action that reloads
+        config from disk would otherwise run whatever got written there, with
+        none of the tool-specific approval gates ever seeing it.
+
+        A denied directory that does not exist yet is still guarded,
+        case variants included (`is_under` compares it by its nearest
+        existing ancestor), so none of them is created here.
         """
         denied = (
-            [self._workspace / d for d in ("skills", "workflows", "automations")]
+            [self._workspace / d for d in ("skills", "workflows", "automations", ".approvals")]
+            + [self._workspace / ".durin" / "import-quarantine"]
             if self._guard_registry_dirs and self._workspace is not None
             else None
         )
@@ -136,6 +157,7 @@ class _FsTool(Tool, ContextAware):
             self._extra_allowed_dirs,
             work_dir=self._work_dir(),
             denied_subdirs=denied,
+            deny_durin_stores=True,
         )
 
     def _display_path(self, fp: Path) -> str:

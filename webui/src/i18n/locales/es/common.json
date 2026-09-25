@@ -1845,6 +1845,26 @@
       "sent": "Respuesta enviada",
       "answered": "Respondida abajo"
     },
+    "approval": {
+      "title": "Necesita tu aprobación",
+      "hint": "No se ejecuta nada hasta que decidas.",
+      "approve": "Aprobar",
+      "reject": "Rechazar",
+      "sending": "Enviando…",
+      "handedOff": "Enviado — el agente continúa.",
+      "applied": "Aprobado y hecho.",
+      "rejected": "Rechazado — no se va a ejecutar.",
+      "verdict": "Veredicto del análisis",
+      "findings": "Hallazgos",
+      "newFindings": "Hallazgos nuevos",
+      "kind": {
+        "skill_install": "Instalar una skill",
+        "skill_edit": "Cambiar una skill",
+        "skill_deps": "Instalar dependencias de una skill",
+        "mcp_change": "Cambiar un servidor MCP",
+        "exec_command": "Ejecutar un comando"
+      }
+    },
     "copiedReply": "Respuesta copiada",
     "copyReply": "Copiar respuesta",
     "edit": "Editar mensaje",

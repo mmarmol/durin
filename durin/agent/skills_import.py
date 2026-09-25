@@ -8,6 +8,7 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Awaitable, Callable
+from urllib.parse import urlsplit, urlunsplit
 
 import durin.agent.skill_resolve as _resolve
 from durin.agent.skill_resolve import SkillCandidate
@@ -80,8 +81,10 @@ def validate_skill(skill_dir: Path) -> ValidationReport:
 def decide_action(source: str, *, verdict: str, carries_code: bool, allowlist: list[str]) -> str:
     """Import security trust×verdict gate. Returns 'allow' | 'confirm' | 'block'.
     'block' needs an explicit override; 'confirm' needs confirmation. The
-    dangerous-block and carries-code-confirm have no opt-out; only the source
-    check is loosened by the allowlist."""
+    dangerous-block has no opt-out; the carries-code-confirm can be cleared by
+    the skills judge (when enabled and it reads the install as safe) instead
+    of a person, but nothing skips it outright. Only the source check is
+    loosened by the allowlist."""
     if verdict == "dangerous":
         return "block"
     allowlisted = any(source.startswith(p) for p in allowlist if p)
@@ -247,6 +250,23 @@ def _should_judge(skill_dir: Path, source: str, trigger: str, allowlist: list[st
                          carries_code=vr.carries_code, allowlist=allowlist) == "confirm"
 
 
+def _scan_source(ref: str) -> str:
+    """``ref`` with any userinfo, query string and fragment stripped, for
+    recording in ``.scan.json``. That field is read back into the approval
+    summary/detail/payload and the skill's provenance, all of which reach
+    chat text and durable records — an ``https://user:tok@host/…?token=abc``
+    source would otherwise leak the credential into every one of them. The
+    literal ``cand.ref`` (never this stripped form) is what actually fetches
+    the content, so the download itself is unaffected."""
+    parts = urlsplit(ref)
+    if parts.scheme not in ("http", "https"):
+        return ref
+    netloc = parts.hostname or ""
+    if parts.port:
+        netloc = f"{netloc}:{parts.port}"
+    return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
+
+
 def fetch_candidate(cand: SkillCandidate, *, quarantine_root: Path,
                     max_files: int = _DEFAULT_MAX_FILES,
                     max_total_bytes: int = _DEFAULT_MAX_TOTAL_BYTES,
@@ -286,7 +306,7 @@ def fetch_candidate(cand: SkillCandidate, *, quarantine_root: Path,
 
     req_manifest = extract_requirements(qdir, llm_tools=getattr(rep, "tools", []))
     (qdir / ".scan.json").write_text(json.dumps({
-        "source": cand.ref,
+        "source": _scan_source(cand.ref),
         "verdict": rep.verdict,
         "findings": [{"category": f.category, "severity": f.severity,
                       "where": f.where, "detail": f.detail} for f in rep.findings],
@@ -296,6 +316,51 @@ def fetch_candidate(cand: SkillCandidate, *, quarantine_root: Path,
 
 
 # --- install (the gate invariant) --------------------------------------------
+
+def install_gate(quarantine_dir: Path, *, source: str, allowlist: list[str]) -> dict:
+    """The import gate's decision for a quarantined skill, computed the way
+    ``install_imported_skill`` enforces it: a fresh deterministic scan (never the
+    cached one, which could be stale or tampered with), raised — never lowered —
+    by the verdict cached in ``.scan.json`` (a judge finding the scanner cannot
+    reproduce), then ``decide_action``. ``findings`` merges the fresh scan with
+    every cached finding it does not reproduce, so whoever decides sees every
+    reason. ``action`` is ``invalid`` when the skill does not validate."""
+    quarantine_dir = Path(quarantine_dir)
+    vr = validate_skill(quarantine_dir)
+    out: dict = {"valid": vr.ok, "errors": list(vr.errors), "name": vr.name,
+                 "carries_code": vr.carries_code,
+                 "code_artifacts": list(vr.code_artifacts),
+                 "verdict": "", "action": "invalid", "findings": []}
+    if not vr.ok:
+        return out
+    rep = scan_skill(quarantine_dir)
+    verdict = rep.verdict
+    findings = [{"category": f.category, "severity": f.severity,
+                 "where": f.where, "detail": f.detail} for f in rep.findings]
+    sj = quarantine_dir / ".scan.json"
+    if sj.is_file():
+        try:
+            cached = json.loads(sj.read_text())
+        except Exception:  # noqa: BLE001 — an unreadable cache adds nothing
+            cached = {}
+        if isinstance(cached, dict):
+            stored = str(cached.get("verdict", ""))
+            if _VERDICT_ORDER.get(stored, 0) > _VERDICT_ORDER.get(verdict, 0):
+                verdict = stored
+            seen = {(f["category"], f["where"], f["detail"]) for f in findings}
+            for f in cached.get("findings") or []:
+                if not isinstance(f, dict):
+                    continue
+                key = (f.get("category"), f.get("where"), f.get("detail"))
+                if key not in seen:
+                    seen.add(key)
+                    findings.append({k: f.get(k) for k in
+                                     ("category", "severity", "where", "detail")})
+    out.update(verdict=verdict, findings=findings,
+               action=decide_action(source, verdict=verdict,
+                                    carries_code=vr.carries_code, allowlist=allowlist))
+    return out
+
 
 class SkillImportRefused(Exception):  # noqa: N818 — deliberate event-style name, not *Error
     """install_imported_skill refused the install. `.action` is the gate verdict
@@ -331,49 +396,45 @@ def _safe_qname(name: str) -> bool:
 def install_imported_skill(workspace: Path, quarantine_dir: Path, *, source: str,
                            allowlist: list[str], confirmed: bool = False,
                            override: bool = False, replace: bool = False,
-                           attribution: "Attribution | None" = None) -> dict:
+                           attribution: "Attribution | None" = None,
+                           approval_id: str | None = None,
+                           approved_by: str | None = None) -> dict:
     """Install a quarantined skill — but ONLY through the import security gate, enforced
     HERE in code (not in the tool/skill/UI): `block` (dangerous) needs
     `override`; `confirm` (code / caution / out-of-allowlist) needs `confirmed`
     or `override`; a name that already exists needs `replace`. On pass: copy out
     of quarantine, stamp metadata.durin.provenance + mode=manual, commit, index,
     append the audit log, and consume the quarantine dir. Raises
-    SkillImportRefused otherwise."""
+    SkillImportRefused otherwise.
+
+    `approval_id` / `approved_by` record who authorized a gated install (the
+    approval request's id; user | judge | operator | policy). Both stay None when
+    the gate needed no decision. They land in provenance, in the audit log and
+    as commit trailers."""
     from durin.agent.skills_store import (
         _skill_md,
         _store_init,
         _sync_index,
         _today,
         _update_md,
+        approval_trailers,
+        attribution_to_trailers,
         ensure_durin,
     )
 
     workspace = Path(workspace)
     quarantine_dir = Path(quarantine_dir)
-    vr = validate_skill(quarantine_dir)
-    if not vr.ok:
-        raise SkillImportRefused("invalid", "", f"invalid skill: {vr.errors}")
-    rep = scan_skill(quarantine_dir)  # fresh deterministic — the block path never trusts cache
-    verdict = rep.verdict
-    # Fold in the cached judge verdict (caps at caution → can raise to a confirm,
-    # never enable a block; the fresh deterministic re-scan above owns blocking).
-    sj = quarantine_dir / ".scan.json"
-    if sj.is_file():
-        try:
-            stored = str(json.loads(sj.read_text()).get("verdict", ""))
-            if _VERDICT_ORDER.get(stored, 0) > _VERDICT_ORDER.get(verdict, 0):
-                verdict = stored
-        except Exception:  # noqa: BLE001
-            pass
-    action = decide_action(source, verdict=verdict,
-                           carries_code=vr.carries_code, allowlist=allowlist)
+    gate = install_gate(quarantine_dir, source=source, allowlist=allowlist)
+    if not gate["valid"]:
+        raise SkillImportRefused("invalid", "", f"invalid skill: {gate['errors']}")
+    verdict, action = gate["verdict"], gate["action"]
     if action == "block" and not override:
         raise SkillImportRefused("block", verdict,
                                  "dangerous verdict; explicit override required")
     if action == "confirm" and not (confirmed or override):
         raise SkillImportRefused("confirm", verdict,
                                  "confirmation required (carries code / caution / out-of-allowlist)")
-    name = vr.name
+    name = gate["name"]
     dest = _skill_md(workspace, name).parent
     if dest.exists():
         if not replace:
@@ -391,7 +452,8 @@ def install_imported_skill(workspace: Path, quarantine_dir: Path, *, source: str
         durin["provenance"] = {
             "source": source,
             "verdict": verdict,
-            "confirmed": bool(confirmed),
+            "approval_id": approval_id,
+            "approved_by": approved_by,
             "overridden": bool(override),
             "replaced": bool(replace),
             "content_hash": chash,
@@ -408,12 +470,13 @@ def install_imported_skill(workspace: Path, quarantine_dir: Path, *, source: str
                 pass
 
     _update_md(dest / "SKILL.md", _stamp)
-    from durin.agent.skills_store import attribution_to_trailers
     sha = store.auto_commit(f"skill({name}): import from {source} [{verdict}]",
-                            trailers=attribution_to_trailers(attribution))
+                            trailers={**attribution_to_trailers(attribution),
+                                      **approval_trailers(approval_id, approved_by)})
     _sync_index(workspace, name)
     _audit(workspace, name=name, source=source, verdict=verdict, action=action,
-           confirmed=bool(confirmed), overridden=bool(override), replaced=bool(replace),
+           approval_id=approval_id, approved_by=approved_by,
+           overridden=bool(override), replaced=bool(replace),
            content_hash=chash, commit=sha)
     shutil.rmtree(quarantine_dir, ignore_errors=True)  # consumed
     return {"ok": True, "name": name, "verdict": verdict, "commit": sha}
@@ -661,14 +724,30 @@ def runnable_install_specs(skill_dir) -> list[dict]:
     return out
 
 
+_EXIT_CODE_RE = re.compile(r"Exit code: (-?\d+)\s*$")
+
+
+def _install_step_failed(output: str) -> bool:
+    """True when ``output`` — ExecTool's return value, never an exception for
+    a blocked command, a timeout, a spawn failure, or a non-zero exit — is a
+    failed step. "Error executing command: " is ExecTool's own catch-all
+    (e.g. the binary doesn't exist), returned as text rather than raised."""
+    if output.startswith(("Error: Command blocked", "Error: Command timed out",
+                          "Error executing command:")):
+        return True
+    m = _EXIT_CODE_RE.search(output)
+    return m is not None and m.group(1) != "0"
+
+
 async def run_install_specs(specs: list[dict], *,
                             exec_run: Callable[..., Awaitable[str]]) -> list[dict]:
     results: list[dict] = []
     for spec in specs:
         cmd = spec["command"]
         try:
-            output = await exec_run(command=cmd)
-            results.append({"command": cmd, "success": True, "output": str(output)[-2000:]})
+            output = str(await exec_run(command=cmd))
+            results.append({"command": cmd, "success": not _install_step_failed(output),
+                            "output": output[-2000:]})
         except Exception as exc:  # noqa: BLE001
             results.append({"command": cmd, "success": False, "error": str(exc)})
     return results

@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import tempfile
 import tomllib
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -66,6 +67,18 @@ def attribution_to_trailers(attr: "Attribution | None") -> dict[str, str]:
     for key, val in (("Actor", attr.actor), ("Session", attr.session), ("Agent", attr.agent)):
         if val is not None and str(val) != "":
             out[key] = str(val)
+    return out
+
+
+def approval_trailers(approval_id: str | None, approved_by: str | None) -> dict[str, str]:
+    """`Approved-by` / `Approval` commit trailers for a change someone authorized:
+    who decided (user | judge | operator | policy) and which approval request
+    carried the decision. Empty when the change needed no decision."""
+    out: dict[str, str] = {}
+    if approved_by:
+        out["Approved-by"] = str(approved_by)
+    if approval_id:
+        out["Approval"] = str(approval_id)
     return out
 
 
@@ -327,14 +340,20 @@ def _skill_md_integrity(content: str) -> str | None:
 def save_skill_file(workspace: Path, name: str, relpath: str, content: str, *,
                     rationale: str = "edit via web",
                     attribution: "Attribution | None" = None) -> dict:
-    """Save one text file in a skill: fork-on-write, script lint (blocking),
-    write, commit (with attribution trailers), security re-scan (non-blocking).
+    """Save one text file in a skill: script lint (blocking), security scan
+    (blocking), fork-on-write, write, commit (with attribution trailers).
 
     Editable in either mode. `manual` means "the user owns this skill"; `auto`
     means "dream may auto-improve it" — neither locks the user out of editing.
     A user edit to an `auto` skill is committed with the user's attribution and
     left `auto`, so dream keeps curating it (respecting the edit, not reverting
-    it blindly)."""
+    it blindly).
+
+    This is a person's write, and the scan gates it as one: a result that needs
+    review and is `dangerous` is refused with its findings and nothing is
+    written; a `caution` result is saved and its findings are returned for the
+    editor to show. New findings drop `provenance.verdict_cleared`. A scan that
+    cannot run at all is refused too (fail closed) instead of writing blind."""
     if not _safe_name(name):
         return {"error": "invalid skill name"}
     lint = _lint_script(relpath, content)
@@ -344,29 +363,35 @@ def save_skill_file(workspace: Path, name: str, relpath: str, content: str, *,
         bad = _skill_md_integrity(content)
         if bad is not None:
             return {"error": bad}  # integrity floor - nothing written
+    root = _resolve_skill_dir(workspace, name)
+    if root is None:
+        return {"error": f"skill not found: {name}"}
+    probe = _safe_target(root, relpath)
+    if probe is None:
+        return {"error": "file escapes skill directory"}
+    if probe.exists() and probe.is_dir():
+        return {"error": "path is a directory"}
+    try:
+        scan = scan_skill_write(root, {relpath: content})
+    except Exception as exc:  # noqa: BLE001 - fail closed: no scan, no write
+        logger.warning("save scan failed for %s: %s", name, exc)
+        return {"error": f"could not scan the change: {exc}", "scan_blocked": True}
+    if scan.needs_review and scan.after == "dangerous":
+        return _scan_refusal(scan, "save")  # security floor - nothing written
     store = _store_init(workspace)
     dest = fork_on_write(workspace, name)
     target = _safe_target(dest, relpath)
     if target is None:
         return {"error": "file escapes skill directory"}
-    if target.exists() and target.is_dir():
-        return {"error": "path is a directory"}
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
+    if scan.new_findings:
+        _void_verdict_cleared(dest / "SKILL.md")
     sha = store.auto_commit(f"skill({name}): {rationale}",
                             trailers=attribution_to_trailers(attribution))
     _sync_index(workspace, name)
-    payload = {"ok": True, "name": name, "path": relpath, "commit": sha}
-    # Non-blocking security re-scan so the UI can refresh the verdict badge.
-    try:
-        from durin.security.skill_scan import scan_skill
-        rep = scan_skill(dest)
-        payload["verdict"] = rep.verdict
-        payload["findings"] = [{"category": f.category, "severity": f.severity,
-                                "where": f.where, "detail": f.detail} for f in rep.findings]
-    except Exception as exc:  # noqa: BLE001 - scan is advisory, never fatal
-        logger.warning("post-save scan failed for %s: %s", name, exc)
-    return payload
+    return {"ok": True, "name": name, "path": relpath, "commit": sha,
+            "verdict": scan.after, "findings": scan.findings}
 
 
 def _index_skills_enabled() -> bool:
@@ -661,32 +686,19 @@ def _preview(before: str, after: str) -> str:
     ))
 
 
-def apply_skill_edit(
-    workspace: Path, name: str, *, old: str, new: str, rationale: str,
-    file: str = "SKILL.md", confirm: bool = False,
-    attribution: "Attribution | None" = None,
-) -> dict:
-    """The skill_edit operation: fork-on-write, mode gate, bounded replace, commit."""
-    if not rationale or not rationale.strip():
-        return {"error": "rationale is required"}
-    if not _safe_name(name):
-        return {"error": "invalid skill name"}
-    loader = _loader(workspace)
-    if loader.load_skill(name) is None:
-        return {"error": f"skill not found: {name}"}
-    mode = read_mode(workspace, name, loader)
-    store = _store_init(workspace)  # ensure git repo exists before mutating files
-    dest = fork_on_write(workspace, name, loader)
-    target = (dest / file).resolve()
-    if not target.is_relative_to(dest.resolve()):
+def _edit_text(root: Path, file: str, old: str, new: str) -> dict:
+    """Apply a bounded old→new replace to ``root/file`` in memory. Returns
+    ``{"before", "after"}`` or ``{"error"}``; writes nothing. An empty ``old``
+    appends ``new`` (creating the file when it does not exist yet)."""
+    target = _safe_target(root, file)
+    if target is None:
         return {"error": "file escapes skill directory"}
-    if not target.exists():
-        if old == "":
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text("", encoding="utf-8")
-        else:
-            return {"error": f"file not found: {file}"}
-    content = target.read_text(encoding="utf-8")
+    if target.exists():
+        content = target.read_text(encoding="utf-8")
+    elif old == "":
+        content = ""
+    else:
+        return {"error": f"file not found: {file}"}
     if old == "":
         updated = content + new
     else:
@@ -698,25 +710,244 @@ def apply_skill_edit(
                               "frontmatter description and the body; include "
                               "surrounding lines to pin one occurrence")}
         updated = content.replace(old, new, 1)
-
     if (file == "SKILL.md" and frontmatter_broken(updated)
             and not frontmatter_broken(content)):
         # e.g. the replacement slipped an unquoted ':' into the description —
         # persisting would hide the skill's name/description/provenance.
         return {"error": "edit would break the SKILL.md YAML frontmatter — "
                          "quote scalars that contain ': '"}
+    return {"before": content, "after": updated}
 
-    if mode == "manual" and not confirm:
+
+def plan_skill_edit(workspace: Path, name: str, *, old: str, new: str,
+                    rationale: str, file: str = "SKILL.md") -> dict:
+    """Validate one bounded edit and compute its result without writing
+    anything (a builtin is not forked). Returns ``{"error"}`` or ``{"mode",
+    "skill_dir", "file", "before", "after"}``; ``skill_dir`` is where the skill
+    is read from now (the workspace copy, else the builtin)."""
+    if not rationale or not rationale.strip():
+        return {"error": "rationale is required"}
+    if not _safe_name(name):
+        return {"error": "invalid skill name"}
+    loader = _loader(workspace)
+    if loader.load_skill(name) is None:
+        return {"error": f"skill not found: {name}"}
+    root = _resolve_skill_dir(workspace, name)
+    if root is None:
+        return {"error": f"skill not found: {name}"}
+    edit = _edit_text(root, file, old, new)
+    if "error" in edit:
+        return edit
+    return {"mode": read_mode(workspace, name, loader), "skill_dir": root,
+            "file": file, **edit}
+
+
+@dataclass(frozen=True)
+class WriteScan:
+    """Deterministic scan of a skill as it stands and as a write would leave it.
+
+    ``needs_review`` is the gate every write path shares: the result is not
+    ``safe`` AND it is either worse than the skill as it stands or carries a
+    finding the current skill does not have. A write that keeps an already
+    accepted risk as it was passes; a write that adds risk does not."""
+
+    before: str
+    after: str
+    findings: list
+    new_findings: list
+
+    @property
+    def worse(self) -> bool:
+        from durin.agent.skills_import import _VERDICT_ORDER
+        return _VERDICT_ORDER.get(self.after, 0) > _VERDICT_ORDER.get(self.before, 0)
+
+    @property
+    def needs_review(self) -> bool:
+        return self.after != "safe" and (self.worse or bool(self.new_findings))
+
+
+@contextmanager
+def post_write_tree(skill_dir: Path | None, writes: dict[str, str]):
+    """Yield a throwaway copy of ``skill_dir`` with ``writes`` (relative path →
+    text) applied, so a change can be scanned or judged before it lands. An
+    absent ``skill_dir`` starts from an empty tree. Raises ValueError when a
+    path escapes the skill directory."""
+    with tempfile.TemporaryDirectory(prefix="durin-skill-write-") as td:
+        tree = Path(td) / (Path(skill_dir).name if skill_dir is not None else "skill")
+        if skill_dir is not None and Path(skill_dir).is_dir():
+            shutil.copytree(skill_dir, tree,
+                            ignore=shutil.ignore_patterns(".git", "__pycache__"))
+        else:
+            tree.mkdir()
+        for rel, text in writes.items():
+            target = _safe_target(tree, rel)
+            if target is None:
+                raise ValueError(f"file escapes skill directory: {rel}")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(str(text), encoding="utf-8")
+        yield tree
+
+
+def scan_skill_write(skill_dir: Path | None, writes: dict[str, str]) -> WriteScan:
+    """Scan ``skill_dir`` as it is and as it would be after ``writes``."""
+    from durin.security.skill_reviews import fingerprint
+    from durin.security.skill_scan import ScanReport, scan_skill
+
+    current = (scan_skill(skill_dir) if skill_dir is not None and Path(skill_dir).is_dir()
+               else ScanReport())
+    with post_write_tree(skill_dir, writes) as tree:
+        result = scan_skill(tree)
+    seen = {fingerprint(f) for f in current.findings}
+    findings = _active_findings(result)
+    new = [f for f in findings if f["severity"] != "info" and fingerprint(f) not in seen]
+    return WriteScan(before=current.verdict, after=result.verdict,
+                     findings=findings, new_findings=new)
+
+
+def _void_verdict_cleared(md: Path) -> bool:
+    """Drop ``provenance.verdict_cleared``: a user's review adopted the skill as
+    it was, not the findings a later write brings, so the import-time verdict
+    pin comes back until someone reviews again. A frontmatter that does not
+    parse is left alone, since rewriting it would lose its hand-written fields."""
+    text = md.read_text(encoding="utf-8")
+    if frontmatter_broken(text):
+        return False
+    prov = _durin_blob(text).get("provenance")
+    if not isinstance(prov, dict) or "verdict_cleared" not in prov:
+        return False
+
+    def _drop(data: dict) -> None:
+        p = ensure_durin(data).get("provenance")
+        if isinstance(p, dict):
+            p.pop("verdict_cleared", None)
+
+    _update_md(md, _drop)
+    return True
+
+
+def write_skill_edit(
+    workspace: Path, name: str, *, old: str, new: str, rationale: str,
+    file: str = "SKILL.md", attribution: "Attribution | None" = None,
+    approval_id: str | None = None, approved_by: str | None = None,
+) -> dict:
+    """Apply one bounded edit and commit it, whatever the skill's mode.
+
+    This is the landing step once an edit is allowed: an ``auto`` skill whose
+    scan needs no review, or an edit someone approved (``approval_id`` /
+    ``approved_by`` become commit trailers). It forks a builtin first and
+    re-applies the replace to the file as it is now, so the fork's stamped
+    frontmatter is kept. An edit that adds findings drops
+    ``provenance.verdict_cleared``."""
+    if not rationale or not rationale.strip():
+        return {"error": "rationale is required"}
+    if not _safe_name(name):
+        return {"error": "invalid skill name"}
+    loader = _loader(workspace)
+    if loader.load_skill(name) is None:
+        return {"error": f"skill not found: {name}"}
+    mode = read_mode(workspace, name, loader)
+    store = _store_init(workspace)  # ensure git repo exists before mutating files
+    dest = fork_on_write(workspace, name, loader)
+    edit = _edit_text(dest, file, old, new)
+    if "error" in edit:
+        return edit
+    scan = scan_skill_write(dest, {file: edit["after"]})
+    target = (dest / file).resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(edit["after"], encoding="utf-8")
+    if scan.new_findings:
+        _void_verdict_cleared(dest / "SKILL.md")
+    sha = store.auto_commit(f"skill({name}): {rationale.strip()}",
+                            trailers={**attribution_to_trailers(attribution),
+                                      **approval_trailers(approval_id, approved_by)})
+    _sync_index(workspace, name)
+    return {"ok": True, "name": name, "file": file, "mode": mode, "commit": sha,
+            "verdict": scan.after, "findings": scan.findings}
+
+
+def gate_skill_edit(workspace: Path, name: str, *, old: str, new: str, rationale: str,
+                    file: str = "SKILL.md") -> dict:
+    """Plan and scan one bounded skill edit, and decide whether it may write
+    directly: a ``manual`` skill never does (its owner decides); an ``auto``
+    skill does only when the write's scan needs no review. Every caller that
+    gates an edit — autonomous curation and the interactive edit tool alike —
+    shares this one decision, so "auto and no review → write, else go through
+    approval" is made in one place.
+
+    Returns exactly ``{"error"}`` on a bad edit (an invalid name, an ``old``
+    not found, …) — the same shape ``plan_skill_edit`` returns, unchanged.
+    Otherwise returns exactly ``{"plan", "scan", "write"}``: ``plan`` is
+    ``plan_skill_edit``'s result; ``scan`` is ``None`` for a manual skill
+    (nothing was scanned — its owner decides, so the caller never writes it
+    itself) or the ``WriteScan`` of the proposed write for an auto skill;
+    ``write`` is True only when the caller may call ``write_skill_edit``
+    straight away — False means go through approval (autonomously or by
+    asking a person), using ``plan`` and ``scan`` to build that request."""
+    plan = plan_skill_edit(workspace, name, old=old, new=new, rationale=rationale, file=file)
+    if "error" in plan:
+        return plan
+    if plan["mode"] == "manual":
+        return {"plan": plan, "scan": None, "write": False}
+    scan = scan_skill_write(plan["skill_dir"], {file: plan["after"]})
+    return {"plan": plan, "scan": scan, "write": not scan.needs_review}
+
+
+def apply_skill_edit(
+    workspace: Path, name: str, *, old: str, new: str, rationale: str,
+    file: str = "SKILL.md", attribution: "Attribution | None" = None,
+) -> dict:
+    """A bounded skill edit made with no person to ask (curation's ``evolve``).
+
+    A ``manual`` skill is the user's: the edit comes back as a proposed diff and
+    nothing is written. An ``auto`` skill is edited when its scan needs no
+    review. Otherwise the skills judge may clear a ``caution`` result; failing
+    that, a pending ``skill_edit`` approval request is filed and nothing is
+    written. The decision runs on its own event loop, so this must not be
+    called from a coroutine."""
+    gate = gate_skill_edit(workspace, name, old=old, new=new, rationale=rationale, file=file)
+    if "error" in gate:
+        return gate
+    plan = gate["plan"]
+    if plan["mode"] == "manual":
         return {
             "proposed": True, "mode": "manual", "name": name, "file": file,
-            "note": "skill is manual; re-call with confirm=true after the user approves",
-            "preview": _preview(content, updated),
+            "note": "skill is manual; it was not changed — its owner decides edits to it",
+            "preview": _preview(plan["before"], plan["after"]),
         }
-    target.write_text(updated, encoding="utf-8")
-    sha = store.auto_commit(f"skill({name}): {rationale.strip()}",
-                            trailers=attribution_to_trailers(attribution))
-    _sync_index(workspace, name)
-    return {"ok": True, "name": name, "file": file, "mode": mode, "commit": sha}
+    if gate["write"]:
+        return write_skill_edit(workspace, name, old=old, new=new, rationale=rationale,
+                                file=file, attribution=attribution)
+    from durin.agent.approval_kinds_skills import request_edit_autonomously
+    return request_edit_autonomously(workspace, name, old=old, new=new,
+                                     rationale=rationale, file=file,
+                                     attribution=attribution, plan=plan, scan=gate["scan"])
+
+
+def _scan_refusal(scan: "WriteScan", what: str) -> dict:
+    """The result of a write the scan refused; nothing was written."""
+    reasons = "; ".join(f"{f['detail']} ({f['where']})"
+                        for f in (scan.new_findings or scan.findings)[:3])
+    return {"error": f"{what} refused: the security scan of the result is "
+                     f"{scan.after} — {reasons}",
+            "scan_blocked": True, "verdict": scan.after, "findings": scan.findings}
+
+
+def apply_accepted_edit(workspace: Path, name: str, *, old: str, new: str, rationale: str,
+                        file: str = "SKILL.md",
+                        attribution: "Attribution | None" = None) -> dict:
+    """An edit a person accepted after reading its diff (a skill suggestion
+    accepted in the web UI). The acceptance is the owner's consent, so a
+    ``manual`` skill is written. The rule for a person's write still applies: an
+    edit that makes the skill dangerous is refused with its findings; a
+    ``caution`` one lands and its findings are returned."""
+    plan = plan_skill_edit(workspace, name, old=old, new=new, rationale=rationale, file=file)
+    if "error" in plan:
+        return plan
+    scan = scan_skill_write(plan["skill_dir"], {file: plan["after"]})
+    if scan.needs_review and scan.after == "dangerous":
+        return _scan_refusal(scan, "edit")
+    return write_skill_edit(workspace, name, old=old, new=new, rationale=rationale,
+                            file=file, attribution=attribution, approved_by="user")
 
 
 def save_skill_content(workspace: Path, name: str, content: str,
@@ -763,9 +994,10 @@ def read_bundle_files(skill_dir: Path) -> dict[str, str]:
 
 
 def _quarantine_authored_skill(workspace: Path, skill_dir: Path, rep) -> dict:
-    """Relocate a just-authored skill whose bundled code scanned caution/dangerous
-    into the import quarantine (the same surfaces review it: approve re-gates,
-    reject deletes). Returns the tool-facing result."""
+    """Relocate a just-authored skill that scanned caution/dangerous — its body,
+    its bundled code, or both — into the import quarantine (the same surfaces
+    review it: approve re-gates, reject deletes). Returns the tool-facing
+    result."""
     import shutil
 
     qroot = workspace / ".durin" / "import-quarantine"
@@ -800,30 +1032,28 @@ def _bundled_file_count(skill_dir: Path) -> int:
 def _finalize_skill(workspace: Path, name: str, skill_dir: Path, *, source: str,
                     attribution: "Attribution | None", ramp: str, composition: str,
                     commit_subject: str) -> dict:
-    """Backfill-then-scan (iff bundled files)-then-quarantine-or-(stamp+commit+
-    sync+emit) for skills/<name>/. `commit_subject` is the caller's full commit
-    subject line (each activation path keeps its own rationale-bearing message;
-    this helper does not synthesize one) — trailers are still derived from
-    `attribution`."""
+    """Backfill-then-scan-then-quarantine-or-(stamp+commit+sync+emit) for
+    skills/<name>/. `commit_subject` is the caller's full commit subject line
+    (each activation path keeps its own rationale-bearing message; this helper
+    does not synthesize one) — trailers are still derived from `attribution`."""
     from durin.agent.tools._telemetry import emit_tool_event
 
     md = skill_dir / "SKILL.md"
     _ensure_surface_frontmatter(md, name)
     files_count = _bundled_file_count(skill_dir)
-    scan_verdict = None
-    if files_count:
-        from durin.security.skill_scan import scan_skill
-        rep = scan_skill(skill_dir)
-        if rep.verdict != "safe":
-            return _quarantine_authored_skill(workspace, skill_dir, rep)
-        scan_verdict = rep.verdict
+    # Every new skill is scanned, prose-only ones included: SKILL.md is itself
+    # instructions the agent follows, so an injection needs no bundled script.
+    from durin.security.skill_scan import scan_skill
+    rep = scan_skill(skill_dir)
+    if rep.verdict != "safe":
+        return _quarantine_authored_skill(workspace, skill_dir, rep)
+    scan_verdict = rep.verdict
 
     def _stamp(data: dict) -> None:
         durin = ensure_durin(data)
         durin["mode"] = "auto"
-        durin["provenance"] = {"source": source, "created_at": _today()}
-        if scan_verdict is not None:
-            durin["provenance"]["scan_verdict"] = scan_verdict
+        durin["provenance"] = {"source": source, "created_at": _today(),
+                               "scan_verdict": scan_verdict}
 
     _update_md(md, _stamp)
     store = _store_init(workspace)
@@ -852,8 +1082,10 @@ def dream_create_skill(workspace: Path, name: str, content: str,
     commit. Refuses to overwrite an existing skill (that path is an edit,
     not a create).
 
-    Bundled `files` (path → content, e.g. scripts) send the write through the
-    same security scan imports get, BEFORE the skill activates: a `safe`
+    Every new skill's SKILL.md (plus any bundled `files`, e.g. scripts) sends
+    the write through the same security scan imports get, BEFORE the skill
+    activates — SKILL.md is itself instructions the agent follows, so a
+    prose-only injection needs no bundled script to be caught. A `safe`
     verdict installs with the verdict stamped in provenance; `caution` or
     `dangerous` relocates the whole skill to the import quarantine for review
     instead of activating it.
@@ -934,9 +1166,10 @@ def dream_restructure_skill(workspace: Path, name: str, *, content: str,
     (bounded text replace, no new bundled files) and `dream_fuse_skills` cannot
     express. Refuses `manual` skills (the user owns those) and missing skills.
 
-    On a `caution`/`dangerous` scan of the new bundled code the whole skill is
-    relocated to the import quarantine (inactive, pending review) rather than
-    activating risky code — the same posture as create."""
+    The result is scanned before anything is written. This runs with nobody to
+    ask and a whole-body rewrite cannot be filed as a bounded edit, so a result
+    that needs review (worse than the skill as it stands, or with new findings)
+    is refused with its findings and the live skill stays exactly as it was."""
     if not _safe_name(name):
         return {"error": "invalid skill name"}
     if not rationale or not rationale.strip():
@@ -961,6 +1194,18 @@ def dream_restructure_skill(workspace: Path, name: str, *, content: str,
         ok, reason = judge_composition(content, workspace, composition_judge)
         if not ok:
             return {"error": f"composition gate: {reason}", "composition_rejected": True}
+    try:
+        scan = scan_skill_write(_resolve_skill_dir(workspace, name),
+                                {"SKILL.md": content, **files})
+    except ValueError:
+        return {"error": "file escapes skill directory"}
+    if scan.needs_review:
+        # A refusal here carries away the dream's actual intent (the
+        # rationale), and there is no approval kind for a multi-file
+        # restructure to file it under — log it as an observation instead, so
+        # it surfaces in the next curation review rather than vanishing.
+        _log_restructure_refusal(workspace, name, rationale, scan)
+        return _scan_refusal(scan, "restructure")
     store = _store_init(workspace)  # ensure git repo exists before mutating files
     dest = fork_on_write(workspace, name, loader)
     md = dest / "SKILL.md"
@@ -973,29 +1218,36 @@ def dream_restructure_skill(workspace: Path, name: str, *, content: str,
         target.write_text(str(body), encoding="utf-8")
     _ensure_surface_frontmatter(md, name)
 
-    scan_verdict = None
-    if files:
-        from durin.security.skill_scan import scan_skill
-        rep = scan_skill(dest)
-        if rep.verdict != "safe":
-            _unsync_index(workspace, name)
-            return _quarantine_authored_skill(workspace, dest, rep)
-        scan_verdict = rep.verdict
-
-    if scan_verdict is not None:
-        def _stamp(data: dict) -> None:
-            durin = ensure_durin(data)
-            prov = durin.get("provenance")
-            if not isinstance(prov, dict):
-                prov = {"source": "unknown", "created_at": _today()}
-            prov["scan_verdict"] = scan_verdict
-            durin["provenance"] = prov
-        _update_md(md, _stamp)
+    def _stamp(data: dict) -> None:
+        durin = ensure_durin(data)
+        prov = durin.get("provenance")
+        if not isinstance(prov, dict):
+            prov = {"source": "unknown", "created_at": _today()}
+        prov["scan_verdict"] = scan.after
+        durin["provenance"] = prov
+    _update_md(md, _stamp)
 
     sha = store.auto_commit(f"skill({name}): {rationale.strip()} [dream]",
                             trailers=attribution_to_trailers(attribution))
     _sync_index(workspace, name)
     return {"ok": True, "name": name, "commit": sha}
+
+
+def _log_restructure_refusal(workspace: Path, name: str, rationale: str,
+                             scan: "WriteScan") -> None:
+    """Record a refused restructure as a skill observation, so the intent
+    (`rationale`) the dream put into it is not silently lost — it re-enters the
+    daily curation pass instead of ending at this refusal. Best-effort: a
+    logging failure must not turn a refusal into a crash."""
+    try:
+        from durin.agent.skill_observations import log_observation
+        findings = "; ".join(f"{f['detail']} ({f['where']})"
+                             for f in (scan.new_findings or scan.findings)[:3])
+        log_observation(workspace, skill=name, kind="improvement",
+                        issue=f"a restructure was refused: scan verdict {scan.after} — {findings}",
+                        improvement=rationale.strip())
+    except Exception:  # noqa: BLE001 — observation logging must never break a refusal
+        logger.warning("restructure refusal: could not log observation for %s", name, exc_info=True)
 
 
 def dream_fuse_skills(workspace: Path, *, target: str, content: str,
@@ -1056,23 +1308,20 @@ def dream_fuse_skills(workspace: Path, *, target: str, content: str,
         t.write_text(str(body), encoding="utf-8")
     _ensure_surface_frontmatter(md, target)
 
-    scan_verdict = None
-    if merged_files:
-        from durin.security.skill_scan import scan_skill
-        rep = scan_skill(md.parent)
-        if rep.verdict != "safe":
-            # Risky merged code: quarantine the target, leave the sources intact
-            # (the fuse is aborted for review rather than deleting working skills).
-            return _quarantine_authored_skill(workspace, md.parent, rep)
-        scan_verdict = rep.verdict
+    from durin.security.skill_scan import scan_skill
+    rep = scan_skill(md.parent)
+    if rep.verdict != "safe":
+        # A risky merged skill (body or code): quarantine the target, leave the
+        # sources intact (the fuse is aborted for review rather than deleting
+        # working skills).
+        return _quarantine_authored_skill(workspace, md.parent, rep)
+    scan_verdict = rep.verdict
 
     def _stamp(data: dict) -> None:
         durin = ensure_durin(data)
         durin["mode"] = "auto"
         durin["provenance"] = {"source": "dream", "created_at": _today(),
-                               "fused_from": list(sources)}
-        if scan_verdict is not None:
-            durin["provenance"]["scan_verdict"] = scan_verdict
+                               "fused_from": list(sources), "scan_verdict": scan_verdict}
 
     _update_md(md, _stamp)
     for s in sources:
@@ -1486,7 +1735,12 @@ def _get_exec_run(workspace: Path):
     ``ExecTool.create`` reads ``ctx.config.exec`` / ``.restrict_to_workspace`` /
     ``.process`` — all fields of ``ToolsConfig`` — so the ctx must carry the tools
     sub-config, NOT the top-level ``Config`` (which has no ``exec`` and raised
-    AttributeError → HTTP 500 on any install_deps approve)."""
+    AttributeError → HTTP 500 on any install_deps approve).
+
+    Returns the non-asking ``_run``, not ``execute``: this runs mid-approval, on
+    the web skill's approve path, with no chat turn to ask in — a step that hits
+    the deny list must fail with the refusal text, never open a second, nested
+    approval."""
     from durin.agent.tools.shell import ExecTool
     from durin.config.loader import load_config
 
@@ -1497,7 +1751,7 @@ def _get_exec_run(workspace: Path):
             self.workspace = ws
             self.config = config
 
-    return ExecTool.create(_Ctx(workspace, tools_cfg)).execute
+    return ExecTool.create(_Ctx(workspace, tools_cfg))._run
 
 
 def _spec_for_bin(skill_dir: Path, bin_name: str) -> list[dict]:
@@ -1545,9 +1799,11 @@ async def web_skill_approve(workspace: Path, name: str, *, confirm: bool,
         except Exception:  # noqa: BLE001
             pass
     try:
+        # A click in the Skills view is a person deciding, so it is recorded as one.
         res = install_imported_skill(workspace, qdir, source=source,
                                      allowlist=_import_allowlist(),
-                                     confirmed=confirm, override=override, replace=replace)
+                                     confirmed=confirm, override=override, replace=replace,
+                                     approved_by="user" if (confirm or override) else None)
     except SkillImportRefused as exc:
         return 409, {"refused": exc.action, "verdict": exc.verdict, "message": str(exc)}
 

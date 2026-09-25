@@ -133,8 +133,8 @@ no-provenance skill to a session (see `02_lifecycle_and_curation.md` /
   gate passed cleanly or was skipped by an explicit override. Always
   `"compliant"` for the backstop ramp: a swept skill was never run through the
   gate, since the sweep only attributes it.
-- `scan_verdict` is `"safe"` when bundled files were scanned and cleared, and
-  absent when the skill carries no bundled files at all. For the write/publish
+- `scan_verdict` is `"safe"` for the write/publish ramps: every new skill is
+  scanned, bundled files or not. For the write/publish
   ramps it is never `"caution"`/`"dangerous"` — a risky verdict quarantines the
   skill instead of activating it, and a quarantined skill emits no
   `skill.authored` event at all. The backstop ramp is the exception: it always

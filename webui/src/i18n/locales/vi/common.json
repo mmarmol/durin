@@ -1994,6 +1994,26 @@
       "sent": "Đã gửi câu trả lời",
       "answered": "Đã trả lời bên dưới"
     },
+    "approval": {
+      "title": "Cần phê duyệt",
+      "hint": "Không có gì được chạy cho đến khi bạn quyết định.",
+      "approve": "Phê duyệt",
+      "reject": "Từ chối",
+      "sending": "Đang gửi…",
+      "handedOff": "Đã gửi — tác tử tiếp tục.",
+      "applied": "Đã phê duyệt và thực hiện.",
+      "rejected": "Đã từ chối — sẽ không được chạy.",
+      "verdict": "Kết quả quét",
+      "findings": "Phát hiện",
+      "newFindings": "Phát hiện mới",
+      "kind": {
+        "skill_install": "Cài đặt skill",
+        "skill_edit": "Thay đổi skill",
+        "skill_deps": "Cài đặt phụ thuộc của skill",
+        "mcp_change": "Thay đổi máy chủ MCP",
+        "exec_command": "Chạy lệnh"
+      }
+    },
     "reqSecret": {
       "placeholder": "Dán giá trị secret",
       "save": "Lưu",

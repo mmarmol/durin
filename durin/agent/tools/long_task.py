@@ -25,7 +25,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from durin.agent.tools.base import Tool, tool_parameters
-from durin.agent.tools.context import ContextAware, RequestContext
+from durin.agent.tools.context import ContextAware, RequestContext, RequestContextVar
 from durin.agent.tools.schema import (
     IntegerSchema,
     StringSchema,
@@ -62,19 +62,21 @@ class _GoalToolsMixin(ContextAware):
     ) -> None:
         self._sessions = sessions
         self._bus = bus
-        self._request_ctx: RequestContext | None = None
+        # This turn's context: the instance is shared by concurrent turns.
+        self._ctx = RequestContextVar("goal_request_ctx")
         # The finished-goal breadcrumb lands in the decision log, so it has to
         # respect the same configured caps note_decision does.
         self._decision_max_entries = decision_log_max_entries
         self._decision_max_chars = decision_log_max_chars
 
     def set_context(self, ctx: RequestContext) -> None:
-        self._request_ctx = ctx
+        self._ctx.set(ctx)
 
     def _session(self):
-        if self._request_ctx is None:
+        ctx = self._ctx.get()
+        if ctx is None:
             return None
-        key = self._request_ctx.session_key
+        key = ctx.session_key
         if not key:
             return None
         return self._sessions.get_or_create(key)
@@ -107,7 +109,7 @@ class _GoalToolsMixin(ContextAware):
     async def _publish_goal_state_ws(self, metadata: dict[str, Any]) -> None:
         """Fan-out authoritative goal snapshot for this WebSocket chat only."""
         bus = self._bus
-        rc = self._request_ctx
+        rc = self._ctx.get()
         if bus is None or rc is None or rc.channel != "websocket":
             return
         cid = (rc.chat_id or "").strip()

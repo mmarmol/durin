@@ -2096,6 +2096,26 @@
       "sent": "Answer sent",
       "answered": "Answered below"
     },
+    "approval": {
+      "title": "Approval needed",
+      "hint": "Nothing runs until you decide.",
+      "approve": "Approve",
+      "reject": "Reject",
+      "sending": "Sending…",
+      "handedOff": "Sent — the agent continues.",
+      "applied": "Approved and done.",
+      "rejected": "Rejected — it will not run.",
+      "verdict": "Scan verdict",
+      "findings": "Findings",
+      "newFindings": "New findings",
+      "kind": {
+        "skill_install": "Install a skill",
+        "skill_edit": "Change a skill",
+        "skill_deps": "Install skill dependencies",
+        "mcp_change": "Change an MCP server",
+        "exec_command": "Run a command"
+      }
+    },
     "reqSecret": {
       "placeholder": "Paste the secret value",
       "save": "Save",

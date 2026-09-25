@@ -42,19 +42,25 @@ Drive everything through the `skill_import` tool. Never write to `skills/` yours
    This downloads the skill and runs the scan. Read back `verdict`, `findings`,
    and `needs`.
 
-4. **Show the user, then gate.** Surface the `verdict` and `findings` plainly with
-   `ask_user_question`. The `needs` field says what the gate requires:
-   - `needs == "allow"` → safe and trusted; you may install without extra ceremony.
+4. **Show the user what the scan found.** Surface the `verdict` and `findings`
+   plainly (a short note, not necessarily a question). The `needs` field is
+   informational — what the install gate will require next:
+   - `needs == "allow"` → safe and trusted; install lands at once.
    - `needs == "confirm"` → it carries code, is caution, or comes from a source
-     not on the allowlist. Ask the user to confirm before installing.
+     not on the allowlist.
    - `needs == "block"` → the scan found a serious risk (a prompt-injection, a
-     fetch-and-execute, a destructive command). Install is **blocked** unless the
-     user **explicitly** tells you to force it. Decide nothing about this on their
-     behalf — pass `override=true` only when the user has said, in their own words,
-     to install it anyway.
+     fetch-and-execute, a destructive command). Only a person can accept this.
 
-5. **Install (or discard).**
-   `skill_import(action="install", name="<the quarantined name>", confirm=<true if confirmed>, override=<true only on explicit user force>)`.
+5. **Install (or discard).** `skill_import(action="install", name="<the quarantined name>")`.
+   Nothing you pass authorizes a flagged install — the tool itself asks the user
+   to approve it in this chat when it needs to; do not call `ask_user_question`
+   for that. Read the `status` it returns:
+   - `applied` → installed; tell the user.
+   - `rejected` → the user declined. Continue without the skill; do not retry
+     and do not reach the same effect another way (e.g. a manual copy).
+   - `pending` → nobody could be asked right now (no live chat consumer). Tell
+     the user it is waiting for their approval (`durin approvals`) and continue
+     without it.
    - A refusal with `refused == "exists"` means a skill of that name is already
      installed. Show the user; re-run with `replace=true` only if they want to
      overwrite it.
@@ -78,10 +84,10 @@ Drive everything through the `skill_import` tool. Never write to `skills/` yours
 
 ## Rules
 
-- The gate is enforced in code: a dangerous skill will not install without
-  `override`, a code / caution / un-allowlisted skill will not install without
-  `confirm`, and an existing name will not be overwritten without `replace`. The
-  tool refuses and tells you what it needs — relay that to the user; do not try
-  to work around it.
+- The gate is enforced server-side, never by a value you pass: a flagged or
+  dangerous skill is decided by policy, by the skills judge, or by the user —
+  asked in this chat by the tool itself, or left waiting for approval
+  (`durin approvals`) when nobody is reachable. An existing name will not be
+  overwritten without `replace`.
 - You surface the verdict and the reasons. The user approves. Trust is theirs to
   grant, never yours to assume.

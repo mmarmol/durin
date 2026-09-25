@@ -67,6 +67,51 @@ durin memory forget <uri>         # delete one memory entry
 apply workflow self-improvement suggestions; `durin mcp search|install|status`
 manage MCP servers. Append `--help` to any group for its full command list.
 
+## Approvals
+
+When the agent wants to add or change an MCP server, install or edit a skill,
+or install a skill's dependencies, and your settings require a person's
+approval for it, you are asked in the chat. When nobody can be asked (a cron
+job, dream, workflow or sub-agent, or a turn driven by an API token), or you
+did not answer in the chat, the request is recorded instead of run, and these
+commands are where it waits. A shell command that needs approval never waits
+here: in a chat you are asked, and elsewhere it is refused.
+
+```bash
+durin approvals                # list pending records (--all for resolved too)
+durin approvals approve <id>   # approve and run it — needs a real terminal
+durin approvals reject <id>    # reject it — needs a real terminal
+durin approvals discard <id>   # delete the record without deciding it
+```
+
+`approve` and `reject` refuse to run without a real terminal, and the agent's
+shell tool refuses to run them. With the chat and the API, where the agent's
+own output never decides a request, that blocks the agent from approving its
+own request at every channel it controls. It is a best-effort limit, not a
+proof: the shell filters match patterns, so a roundabout command (a script
+the agent writes, say) is a known gap until shell commands run in a sandbox. Each
+decided record keeps who decided it: you on the command line, a click in the
+webui, a reply typed in the chat, or the skills judge. `approve` runs the
+request right here, with the same shell guards the gateway applies (it
+refuses if it cannot set them up, and the request stays pending); a chat
+still waiting on the same request sees the result when its wait ends, and
+the command prints any note on when the change takes effect (an MCP change
+applies when the gateway restarts or reconnects the server). A shell command
+can only be approved in the chat that asked for it: `approve` refuses it and
+leaves it as it was, and it closes when that chat stops waiting. A change your `install_policy` already
+pre-authorized files no record at all; a skill installed that way is stamped
+`approved_by: policy` instead. A request recorded by an earlier durin version
+is listed as `legacy:mcp` or `legacy:skills` and can only be discarded; ask
+the agent again if it is still needed.
+
+A pending request expires 14 days after it was filed and can no longer be
+decided; ask the agent again if it is still wanted. A resolved record is kept
+for 30 days after it was decided or expired, then pruned. A request still
+marked approved an hour after it was approved was cut off mid-run (the
+process was killed) and is marked failed. These sweeps run when you list
+requests and once when the gateway starts; deciding a request past its expiry
+expires just that one.
+
 ## Inside the TUI
 
 - `/sessions` — modal picker over saved sessions (Esc to cancel)

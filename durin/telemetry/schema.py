@@ -1732,7 +1732,7 @@ class SkillAuthoredEvent(TypedDict):
     model: NotRequired[str | None]
     ramp: str  # "write" | "publish" | "backstop"
     composition: str  # "compliant" | "overridden"
-    scan_verdict: NotRequired[str | None]  # "safe" | "caution" | "dangerous" | None (no bundled files)
+    scan_verdict: NotRequired[str | None]  # "safe" for the write/publish ramps (every new skill is scanned); the backstop ramp reports the swept skill's "caution" / "dangerous"
     files_count: int
 
 

@@ -26,6 +26,8 @@ def _voice_channel():
     ch._conn_default = {}
     ch._voice_cleanup = {}
     ch._voice_grace_s = 0.05
+    ch._answer_fallback = {}
+    ch._answer_grace_s = 0.05
     return ch
 
 

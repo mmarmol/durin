@@ -37,3 +37,65 @@ async def test_run_install_specs_partial_failure():
     assert results[0]["success"] is True
     assert results[1]["success"] is False
     assert "boom" in results[1]["error"]
+
+
+@pytest.mark.asyncio
+async def test_run_install_specs_treats_a_blocked_command_as_failed():
+    # The exec runner can refuse instead of raising: it returns the policy's
+    # own "Error: Command blocked" text as ordinary output. That refusal must
+    # not be recorded as a successful install step.
+    async def mock_exec(*, command):
+        return "Error: Command blocked by deny pattern filter (rule: rm -rf)"
+
+    specs = [{"command": "rm -rf /", "needs_privileges": False}]
+    results = await run_install_specs(specs, exec_run=mock_exec)
+    assert results[0]["success"] is False
+    assert results[0]["output"].startswith("Error: Command blocked")
+
+
+@pytest.mark.asyncio
+async def test_run_install_specs_treats_a_timeout_as_failed():
+    # ExecTool returns this text (no exception) when the command times out.
+    async def mock_exec(*, command):
+        return "Error: Command timed out after 30 seconds"
+
+    specs = [{"command": "brew install slow", "needs_privileges": False}]
+    results = await run_install_specs(specs, exec_run=mock_exec)
+    assert results[0]["success"] is False
+
+
+@pytest.mark.asyncio
+async def test_run_install_specs_treats_a_nonzero_exit_as_failed():
+    # ExecTool appends "Exit code: N" to ordinary output; a non-zero exit is a
+    # failed install step even though nothing was blocked and nothing raised.
+    async def mock_exec(*, command):
+        return "some brew output\nSTDERR:\nformula not found\n\nExit code: 1"
+
+    specs = [{"command": "brew install nope", "needs_privileges": False}]
+    results = await run_install_specs(specs, exec_run=mock_exec)
+    assert results[0]["success"] is False
+
+
+@pytest.mark.asyncio
+async def test_run_install_specs_treats_a_spawn_error_string_as_failed():
+    # ExecTool's own catch-all ("Error executing command: ...", e.g. the
+    # binary doesn't exist) is returned as text rather than raised — it must
+    # not be recorded as a successful install step either.
+    async def mock_exec(*, command):
+        return "Error executing command: [Errno 2] No such file or directory: 'brew'"
+
+    specs = [{"command": "brew install gh", "needs_privileges": False}]
+    results = await run_install_specs(specs, exec_run=mock_exec)
+    assert results[0]["success"] is False
+
+
+@pytest.mark.asyncio
+async def test_run_install_specs_zero_exit_still_succeeds():
+    # A guard against being too strict: an explicit "Exit code: 0" (the normal
+    # shape of real ExecTool output) must still count as success.
+    async def mock_exec(*, command):
+        return "installed\n\nExit code: 0"
+
+    specs = [{"command": "brew install gh", "needs_privileges": False}]
+    results = await run_install_specs(specs, exec_run=mock_exec)
+    assert results[0]["success"] is True

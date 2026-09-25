@@ -68,8 +68,15 @@ class ResizableSemaphore:
             self._limit = new_limit
             if new_limit == 0:
                 # -> unlimited: no gating, so any pending shrink is moot.
+                old = self._sem
                 self._sem = None
                 self._to_reduce = 0
+                # Coroutines queued on the old semaphore would wait forever:
+                # nothing releases a semaphore that is no longer the gate.
+                # Ungated now, they all go through.
+                if old is not None:
+                    for _ in range(self._waiting):
+                        old.release()
             else:
                 # unlimited -> N: start with the permits still free, and if more
                 # holders are already in flight than the new cap, withhold that

@@ -173,8 +173,9 @@ automation interceptors once. For each message it decides the routing in order:
   key, the key the turns they act on are registered under, so `/stop` and
   `/status` work with `unified_session` on; a command typed inside a direct
   session (`process_direct`) uses that session's own key.
-- **Pending answer?** If a turn is blocked on `ask_user_question`, a plain-text
-  reply is consumed as the answer (`_maybe_resolve_pending_answer`).
+- **Pending answer?** If a turn is waiting on the user (see "Waiting on the
+  user" below), `_maybe_resolve_pending_answer` decides whether this message
+  is the answer; a consumed message goes no further.
 - **Mid-turn follow-up?** If the effective session key already has pending
   queues, the message is routed there instead of starting a new turn (or, if it
   is itself a non-priority command, dispatched inline). Steers and system
@@ -188,6 +189,43 @@ automation interceptors once. For each message it decides the routing in order:
 The effective session key (`_effective_session_key`) collapses to a single
 unified key when `unified_session` is enabled and the message carries no
 override.
+
+### Waiting on the user
+
+A tool can hold its turn open until the person answers: `ask_user_question`
+(when `agents.defaults.ask_user_blocking` is on) and the in-chat approval
+asker (`durin/agent/approval_prompt.py`). Each registers one waiter per
+session in `durin/agent/pending_answers.py`, typed by what it takes. A
+`question` waiter takes the next plain-text reply verbatim. An `approval`
+waiter takes only a yes/no verdict the loop parses (`parse_approval_reply`);
+any other text makes it fall back, and the message continues as a normal
+message. Slash commands and messages flagged `INBOUND_META_NOT_AN_ANSWER` (a
+stored-secret note posted for the user) never answer a waiter, a message from
+an API token (`origin: "api"`) never answers an approval, and a media reply
+makes the waiter fall back. A system message (channel `system`, or any message
+carrying `injected_event`: a sub-agent's result, a background workflow's
+result, an automation's outcome, all published under the chat's session key)
+neither answers a waiter nor makes it fall back; it routes on into the running
+turn like any system result, and the wait goes on. An answer carries its
+message's `origin` through `pending_answers.resolve`, and the waiting tool
+notes it as the turn's input in the turn's own context
+(`approval.note_turn_input`), so an API client's answer to a question marks
+the turn as API input for what follows (see [security.md](security.md)).
+
+A waiter only exists where it could be answered (`pending_answers.can_block`):
+an interactive session, a live inbound consumer, and a surface that can send a
+reply before the turn ends. The legacy REPL (`durin agent --legacy`) reads its
+next line only after the turn, so it calls `set_mid_turn_replies(False)` and
+nothing waits there. A wait that gets no answer falls back on the answer
+timeout (`agents.defaults.ask_user_answer_timeout_s`), and when a webui chat
+has had nobody watching it for a grace window (`_ANSWER_GRACE_S` in the
+websocket channel; a page refresh re-subscribes inside it and keeps the wait;
+see [ux.md](ux.md) for who counts as watching). A question then yields, and an
+approval stays pending, except an exec request, which is closed as `expired`.
+
+A wait does not survive a restart. `stop()` cancels the waiters, which ends
+their turns, and the shutdown drain below journals the message each of those
+turns was answering, so the next start runs the turn again and it asks again.
 
 ### The turn: `_dispatch`
 
@@ -203,6 +241,15 @@ flock while a sibling task holds the same lock; if the lease times out (another
 notice. With the lease held, it calls `sessions.reload(session_key)` —
 load-per-turn — so the turn always sees the freshest on-disk state rather than
 a stale cached `Session`.
+
+The lane and ceiling slots are one per-turn `TurnSlots` object
+(`durin/agent/turn_slots.py`), bound to the turn's context. A turn waiting on a
+person (see "Waiting on the user" above) gives its lane back while it waits
+and takes it back before continuing: the approval asker and a blocking
+`ask_user_question` wrap their wait in `released_while_waiting`. The session
+lock and the lease stay held. A wait in a sub-agent or a background run the
+turn started (which copied its context but works under another session key)
+leaves the turn's slots alone, and so does anything after the turn ended.
 
 The ceiling is shared with `SubagentManager`, which acquires it around each
 subagent's LLM run (`_run_subagent`) — so subagents count against the same
@@ -253,10 +300,17 @@ again, and no channel redelivers (Telegram confirms its offset before the
 handler runs, Slack acks the envelope before publishing, email marks the
 message seen inside the fetch), so every restart with a turn in flight used
 to discard the follow-ups queued behind it. The gateway's shutdown now calls
-`drain_inbound_for_shutdown()`: it cancels and awaits the turns in flight (so
-their `finally` hands their queues to the bus), collects what is on the bus
-plus any queue no task handed back, drops trigger-only messages (published
-for automation triggers, never a conversation), and writes the rest to
+`drain_inbound_for_shutdown()`: it records and cancels every turn in flight
+first, across every session key, before awaiting any of them — awaiting one
+would let the others run, and a turn whose own wait (an ask_user answer, an
+approval) gets cancelled by that window ends before the drain reaches it,
+losing its message instead of journaling it. It then waits once, for a
+bounded time, for all the cancelled turns to unwind together (so their
+`finally` hands their queues to the bus); a turn stuck past that bound is
+logged and left behind rather than charging the drain its own timeout again
+for every such turn. It collects what is on the bus plus any queue no task
+handed back, drops trigger-only messages (published for automation triggers,
+never a conversation), and writes the rest to
 `sessions/.inbound_journal.jsonl` (`durin/bus/journal.py`). The message each
 cancelled turn was answering goes first (the loop keeps it per task from
 `_start_turn_task` until the task finishes), ahead of the follow-ups queued
@@ -269,6 +323,19 @@ it as "interrupted" when no runtime checkpoint materialised partial work
 first, so the history reads user message, the interruption, the same message
 replayed, the answer. That closing line is the crash path's whole recovery
 (a hard death journals nothing); the journal is what a graceful restart adds.
+
+`/restart` takes the same graceful shutdown a SIGTERM does — the gateway's
+signal handler and `/restart` both funnel through one path, so `/restart`
+also stops MCP, cron, the dream and embed workers, drains the inbound
+journal as above, stops the channels, and flushes sessions before the
+process replaces itself. Because any one of those steps could hang (a stuck
+MCP client, a turn whose dispatch never unwinds, `asyncio`'s own teardown of
+leftover tasks), a restart also arms a watchdog on its own OS thread: past a
+deadline, it re-execs the process regardless of what the graceful shutdown
+is still doing, the way SIGKILL rescues a shutdown that ignores SIGTERM. A
+real signal that lands while a restart's shutdown is running wins over it —
+the process ends as a plain stop rather than restarting, and the watchdog is
+cancelled so it can't fire a re-exec afterward.
 
 ### The state loop: `_process_message`
 

@@ -9,14 +9,16 @@ import shutil
 import signal
 import sys
 from contextlib import suppress
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
 from pydantic import Field
 
+from durin.agent.approval_prompt import ChatHandles
 from durin.agent.tools.base import Tool, tool_parameters
-from durin.agent.tools.context import ContextAware, RequestContext
+from durin.agent.tools.context import ContextAware, RequestContext, RequestContextVar
 from durin.agent.tools.sandbox import wrap_command
 from durin.agent.tools.schema import (
     BooleanSchema,
@@ -51,6 +53,144 @@ _COMMAND_POLICY_NOTE = (
     "proceed: they can run it themselves, or allow it for you via "
     "tools.exec.allow_patterns."
 )
+
+# Policy note appended when the hard floor refuses a command. These commands
+# never run through durin, not even with the user's approval, so the note
+# offers neither allow_patterns nor an approval.
+_HARD_FLOOR_NOTE = (
+    "\n\nNote: this command is on the exec hard floor: durin never runs it, "
+    "not even with the user's approval. Do NOT get the same result another "
+    "way (a reworded command, python or perl, a script you write and run, or "
+    "another tool). Tell the user what you wanted to run and why; if it is "
+    "really needed, they must run it themselves outside durin."
+)
+
+# Appended to a deny/allowlist refusal after the person in the chat was asked
+# to approve that exact command and declined.
+_APPROVAL_DECLINED_NOTE = (
+    "\n\nThe user was asked to approve this exact command and declined. Do "
+    "NOT retry it, and do NOT get the same result another way (a reworded "
+    "command, python or perl, find -delete, a script you write and run, or "
+    "another tool). Continue without it, or ask the user what they want instead."
+)
+
+# Appended when the approval request got no answer during the turn. The
+# request is closed, not left waiting: approving it later would run a shell
+# command outside the turn that needed it.
+_APPROVAL_UNANSWERED_NOTE = (
+    "\n\nThe user was asked to approve this exact command and did not answer, "
+    "so it did not run and the request was dropped. Do NOT retry it, and do "
+    "NOT get the same result another way (a reworded command, python or perl, "
+    "find -delete, a script you write and run, or another tool). Continue "
+    "without it, or ask the user."
+)
+
+# Appended to the output of a command that ran after the person approved it.
+_APPROVAL_APPLIED_NOTE = "\n\n(The user approved this exact command, once.)"
+
+# Rule name recorded when a configured allowlist refuses a command: no pattern
+# matched, so the refusal names the setting the command is missing from.
+_ALLOWLIST_RULE = "tools.exec.allow_patterns"
+
+# The longest command the guard checks; a longer one is refused unchecked
+# (fail closed, and not approvable) with a pointer to write_file, the tool for
+# long content. The bound comes from the guard's worst case, not its typical
+# one: realistic long commands check in tens of milliseconds even at 100k+
+# characters, but several patterns are quadratic when one anchor word ("rm",
+# "cp", "sudo -x") repeats thousands of times, since each occurrence makes the
+# pattern rescan the rest of the command. A single regex call holds the GIL
+# for its whole run, so checking in a worker thread (``_check_off_loop``) lets
+# other chats run between pattern calls but not during one: at 25k characters
+# one such call already takes over a second, while at this bound the whole
+# adversarial check stays near a third of a second.
+MAX_CHECKED_COMMAND_CHARS = 10_000
+
+# A command position: the start of the command, right after a separator
+# (including a backtick or an opening brace, for `` `cmd` `` and `{ cmd; }`),
+# after a wrapper that runs its argument as a command (sudo, env, nice, time,
+# systemctl…), or after a `sh`/`bash`/`dash`/`zsh`/`ksh -c '...'` shell
+# wrapper (with its own flags, e.g. `bash -lc`), with an optional path prefix.
+# Anchoring there keeps a word such as "shutdown" inside an argument (a grep
+# pattern, a test file name, a path component with more path after it) off
+# the floor, while still catching the command inside a shell wrapper.
+_CMD_START = (
+    r"(?:^|[;&|(\n`{]\s*|\b(?:sudo|doas|exec|nohup|command|systemctl|env|nice|time)\s+"
+    r"(?:-\S+\s+(?:[^-\s]\S*\s+)?)*|\b(?:ba|da|z|k)?sh\s+(?:-\w+\s+)*-\w*c\w*\s+[\"']?\s*)"
+    r"(?:\S*/)?"
+)
+# Whole-disk block devices (Linux, macOS).
+_RAW_DISK = r"/dev/(?:sd[a-z]|hd[a-z]|vd[a-z]|xvd[a-z]|nvme\d|mmcblk\d|disk\d|rdisk\d)"
+
+# Commands that never run, not even when the user approves them: removing the
+# filesystem root or the home directory recursively, formatting or overwriting
+# a whole disk, a fork bomb, powering the host off, and approving or rejecting
+# a pending approval request through the shell (which would let the model
+# authorize its own privileged action — the "durin approvals" CLI itself also
+# refuses to run without a TTY, as a second, independent layer). Matched
+# against the lowercased command before allow_patterns, so no configuration
+# exempts them.
+_HARD_FLOOR_PATTERNS: tuple[str, ...] = (
+    # rm with a recursive flag whose target is exactly /, /*, ~, ~/, ~/*,
+    # $HOME or ${HOME} (optionally quoted around the whole target, or with
+    # the closing quote right after "HOME"/"}", options before or after).
+    r"\brm\b(?=[^;&|\n]*\s(?:-[a-z]*r[a-z]*|--recursive)(?:\s|$))"
+    r"[^;&|\n]*\s[\"']?(?:/\*?|~/?\*?|\$\{?home\}?[\"']?/?\*?)[\"']?(?=\s|$|[;&|])",
+    # (?![\w./-]) rejects a directory or file name that merely starts with
+    # this word (a "shutdown" or "mkfs" worktree/directory, a ".sh" suffix):
+    # the word must end the path, not continue into more of it.
+    _CMD_START + r"(?:mkfs(?:\.[a-z0-9]+)?|diskpart)(?![\w./-])",
+    r"\bdd\b[^;&|\n]*\bof=" + _RAW_DISK,
+    r">\s*" + _RAW_DISK,
+    r"\\\\\.\\physicaldrive\d",  # Windows raw disk: \\.\PhysicalDriveN
+    # Fork bomb: a function that pipes itself into itself in the background.
+    # (?<![\w:]) keeps the function-name group from starting mid-word, so it
+    # cannot backtrack character-by-character over a long unrelated word
+    # (quadratic time on a long argument that merely contains no fork bomb).
+    r"(?<![\w:])(?P<fn>[\w:]+)\s*\(\)\s*\{\s*(?P=fn)\s*\|\s*(?P=fn)\s*&\s*;?\s*\}\s*;\s*(?P=fn)",
+    _CMD_START + r"(?:shutdown|reboot|poweroff|halt)(?![\w./-])",
+    # SysV runlevel 0 ("init 0") halts/powers off the host, same as the
+    # commands above. Command position only, so "npm init 0" (a made-up
+    # package version, not a runlevel) is unaffected.
+    _CMD_START + r"init\s+0\b",
+    # "durin approvals approve/reject" at command position — a bare
+    # invocation, "python -m durin approvals ...", or nested inside a shell
+    # wrapper (`` `...` ``, `{ ...; }`, `bash -c '...'`, `sh -c "..."`) — so
+    # the model cannot approve its own pending request through a shell. The
+    # CLI's own TTY requirement (approve/reject refuse to run without one) is
+    # a second, independent layer behind this one. Tolerant of the CLI's own
+    # options (-w/--workspace/--all/-c/...) and of a quoted "approvals" or
+    # "approve"/"reject" token, and of extra whitespace between the words.
+    # Anchored at command position so "grep 'durin approvals approve' docs/"
+    # or a commit message mentioning the phrase is not refused.
+    _CMD_START + r"(?:\S*python\S*\s+-m\s+)?durin\b\s+[\"']?approvals[\"']?"
+    r"(?:\s+-\S+(?:\s+[^-\s]\S*)?)*\s+[\"']?(?:approve|reject)\b",
+)
+
+
+@dataclass(frozen=True)
+class CommandRefusal:
+    """Why the exec guard refused a command.
+
+    ``kind`` is ``hard_floor``, ``deny`` or ``allowlist`` for the exec safety
+    policy, and ``guard`` for every other refusal (memory vault, private URL,
+    workspace boundary). ``rules`` are the policy rules that matched: a person
+    may approve running the command once past exactly those rules, except on
+    the hard floor. ``headline`` is the first line of the refusal text and
+    ``message`` the whole text the model receives.
+    """
+
+    kind: str
+    headline: str
+    note: str = ""
+    rules: tuple[str, ...] = ()
+
+    @property
+    def message(self) -> str:
+        return self.headline + self.note
+
+    @property
+    def approvable(self) -> bool:
+        return self.kind in ("deny", "allowlist")
 
 
 class ExecToolConfig(Base):
@@ -114,6 +254,7 @@ class ExecTool(Tool, ContextAware):
             allow_patterns=cfg.allow_patterns,
             deny_patterns=cfg.deny_patterns,
             process_config=getattr(ctx.config, "process", None),
+            chat=ChatHandles.from_tool_context(ctx),
         )
 
     def __init__(
@@ -127,11 +268,16 @@ class ExecTool(Tool, ContextAware):
         path_append: str = "",
         allowed_env_keys: list[str] | None = None,
         process_config: Any = None,
+        chat: ChatHandles | None = None,
     ):
         self.timeout = timeout
+        # What asking the person in the chat to approve a refused command
+        # needs; without sessions nobody is ever asked.
+        self._chat = chat or ChatHandles()
         self._process_config = process_config
         self.working_dir = working_dir
-        self._request_ctx: RequestContext | None = None
+        # This turn's context: the instance is shared by concurrent turns.
+        self._ctx = RequestContextVar("exec_request_ctx")
         self.sandbox = sandbox
         self.deny_patterns = (deny_patterns or []) + [
             r"\brm\s+-[rf]{1,2}\b",          # rm -r, rm -rf, rm -fr
@@ -158,7 +304,7 @@ class ExecTool(Tool, ContextAware):
         self.allowed_env_keys = allowed_env_keys or []
 
     def set_context(self, ctx: RequestContext) -> None:
-        self._request_ctx = ctx
+        self._ctx.set(ctx)
 
     def _work_dir(self) -> Path | None:
         """Return the per-session work directory, creating it if necessary.
@@ -167,7 +313,8 @@ class ExecTool(Tool, ContextAware):
         creates the directory before returning it. Returns None when no session
         context is set or no workspace is configured.
         """
-        sk = self._request_ctx.session_key if self._request_ctx else None
+        ctx = self._ctx.get()
+        sk = ctx.session_key if ctx else None
         if not sk or not self.working_dir:
             return None
         from durin.agent.tools.work_area import session_work_dir
@@ -210,8 +357,12 @@ class ExecTool(Tool, ContextAware):
         rf"\bcp\b{_MEMREF}",
         rf"\btruncate\b{_MEMREF}",
         rf"\btee\b{_MEMREF}",
-        rf"\bsed\b[^|;&\n]*-i{_MEMREF}",
-        r"\bdd\b[^|;&\n]*\bof=[^|;&\n]*memory/",
+        # The atomic groups commit to the first "-i" / "of=" after the command
+        # word. A later one only sees less of the same segment, so the match is
+        # the same, but the check stays quadratic instead of cubic on a long
+        # command (two open-ended scans back to back).
+        rf"\bsed\b(?>[^|;&\n]*?-i){_MEMREF}",
+        r"\bdd\b(?>[^|;&\n]*?\bof=)[^|;&\n]*memory/",
         r">>?\s*(?:[^\s'\"|;&<>]*/)?memory/",
     )
 
@@ -224,8 +375,11 @@ class ExecTool(Tool, ContextAware):
             "Use -y or --yes flags to avoid interactive prompts. "
             "Output is truncated at 10 000 chars; timeout defaults to 60s. "
             "Destructive commands (rm -rf, dd, mkfs, format, shutdown) and "
-            "writes into memory/ or history files are blocked; when one is "
-            "blocked, ask the user instead of reaching the result another way. "
+            "writes into memory/ or history files are blocked. In a chat, the "
+            "tool itself shows a blocked command to the user, who can approve "
+            "running it once; wiping / or home, formatting a disk and shutdown "
+            "never run. When a command is refused, do not reach the result "
+            "another way. "
             "Set background=true for long-lived commands (servers, builds) "
             "and manage them with the process tool."
         )
@@ -238,6 +392,27 @@ class ExecTool(Tool, ContextAware):
         self, command: str, working_dir: str | None = None,
         timeout: int | None = None, background: bool = False, **kwargs: Any,
     ) -> str:
+        # The model-facing entry, and the only caller that may ask the person
+        # to approve a refused command. Nothing else in kwargs reaches the
+        # runner, so the model cannot lift a rule by passing one.
+        return await self._run(command, working_dir, timeout, background, ask=True)
+
+    async def _run(
+        self, command: str, working_dir: str | None = None,
+        timeout: int | None = None, background: bool = False, *,
+        approved_rules: frozenset[str] = frozenset(), ask: bool = False,
+    ) -> str:
+        """Guard and run *command*.
+
+        Never opens an approval unless ``ask`` is set, and only ``execute``
+        sets it. This is the runner handed to approval executors and to the
+        skill tools: a command they run that the policy refuses fails with
+        the refusal text instead of opening a second approval in the middle
+        of the one being carried out.
+
+        ``approved_rules`` is set only when a person approved this exact
+        command: the policy rules it lifts are skipped, nothing else is.
+        """
         cwd = working_dir or str(self._work_dir() or self.working_dir or os.getcwd())
 
         # Prevent an LLM-supplied working_dir from escaping the configured
@@ -259,9 +434,11 @@ class ExecTool(Tool, ContextAware):
                     + _WORKSPACE_BOUNDARY_NOTE
                 )
 
-        guard_error = self._guard_command(command, cwd)
-        if guard_error:
-            return guard_error
+        refusal = await self._check_off_loop(command, cwd, approved_rules=approved_rules)
+        if refusal is not None:
+            if ask and refusal.approvable:
+                return await self._ask_to_run(command, cwd, refusal, timeout, background)
+            return refusal.message
 
         if self.sandbox:
             if _IS_WINDOWS:
@@ -361,6 +538,80 @@ class ExecTool(Tool, ContextAware):
 
         except Exception as e:
             return f"Error executing command: {str(e)}"
+
+    async def _ask_to_run(
+        self, command: str, cwd: str, refusal: CommandRefusal,
+        timeout: int | None, background: bool,
+    ) -> str:
+        """Ask the person in this chat to approve one refused command.
+
+        Approved, it runs once, past only the policy rules that refused it.
+        With nobody to ask (cron, workflow, sub-agent, a chat with no live
+        consumer: the asker is None unless ``approval.human_reachable``; and in
+        a turn with input from an API token, which never asks in the chat), the
+        refusal stands and nothing is filed: a shell command replayed outside
+        the run that needed it has no defined meaning. A filed request is
+        never left pending either: declined, it is rejected; unanswered, or
+        cancelled with the turn while it waits, it is closed as expired.
+        """
+        from durin.agent import approval, approval_store
+        from durin.agent.approval_executors import ExecDeps
+        from durin.agent.approval_kinds_exec import prepare
+
+        ctx = self._ctx.get()
+        ask = self._chat.asker(ctx) if self.working_dir else None
+        if ask is None:
+            return refusal.message
+
+        # Ask only for a command an approval would actually let run. With the
+        # refusing rules lifted, a further policy rule (an allowlist behind a
+        # deny match) joins the request; any other refusal (the memory vault,
+        # a private URL, the workspace boundary) stands and nobody is asked.
+        rules = refusal.rules
+        while (further := await self._check_off_loop(
+                command, cwd, approved_rules=frozenset(rules))) is not None:
+            if not further.approvable:
+                return further.message
+            rules += further.rules
+
+        session_key = ctx.session_key
+        filed: list[str] = []
+
+        async def ask_once(record: dict) -> str | None:
+            filed.append(record["id"])
+            return await ask(record)
+
+        # The literal command exists only here, in memory: the record holds a
+        # redacted copy, and the executor runs this literal after checking that
+        # it redacts to the recorded one. Its output comes back the same way.
+        deps = ExecDeps(exec_run=self._run, extra={"exec_command": command})
+        try:
+            outcome = await approval.request(
+                self.working_dir,
+                prepare(command=command, cwd=cwd, rules=rules, session_key=session_key,
+                        timeout=timeout, background=background),
+                session_key=session_key, deps=deps, ask=ask_once)
+        finally:
+            # An exec request never waits for `durin approvals`: approving it
+            # later would run a shell command outside the turn that needed it.
+            # Close it when no answer came back, including when the turn is
+            # cancelled (/stop, shutdown) while it waits. An answered request,
+            # or one decided from outside meanwhile, is no longer pending, so
+            # this leaves it alone.
+            for approval_id in filed:
+                approval_store.transition(
+                    self.working_dir, approval_id, expect=("pending",), to="expired",
+                    result={"reason": "not answered during the turn"})
+
+        if outcome.status == "applied":
+            return str(deps.extra.get("exec_output", "")) + _APPROVAL_APPLIED_NOTE
+        if outcome.status == "rejected":
+            return refusal.headline + _APPROVAL_DECLINED_NOTE
+        if outcome.status == "pending":
+            return refusal.headline + _APPROVAL_UNANSWERED_NOTE
+        if outcome.status == "failed":
+            return f"Error: {outcome.message}"
+        return f"{refusal.headline}\n\n{outcome.message}"
 
     @staticmethod
     async def _spawn(
@@ -482,9 +733,54 @@ class ExecTool(Tool, ContextAware):
         return env
 
     def _guard_command(self, command: str, cwd: str) -> str | None:
-        """Best-effort safety guard for potentially destructive commands."""
+        """Best-effort safety guard for potentially destructive commands.
+
+        The refusal text, or None when the command may run.
+        """
+        refusal = self._check(command, cwd)
+        return refusal.message if refusal is not None else None
+
+    async def _check_off_loop(
+        self, command: str, cwd: str, *,
+        approved_rules: frozenset[str] = frozenset(),
+    ) -> CommandRefusal | None:
+        """``_check`` in a worker thread, so a slow check (a long command, the
+        DNS lookups of the private-URL guard) delays only this call, and the
+        event loop keeps serving other chats between the guard's steps.
+        ``_check`` reads only this tool's fixed configuration and the
+        filesystem, never loop-bound state, so it is safe off the loop."""
+        return await asyncio.to_thread(self._check, command, cwd,
+                                       approved_rules=approved_rules)
+
+    def _check(
+        self, command: str, cwd: str, *,
+        approved_rules: frozenset[str] = frozenset(),
+    ) -> CommandRefusal | None:
+        """Run the guard pipeline: the first refusal, or None when it may run.
+
+        ``approved_rules`` are policy rules a person approved this exact
+        command past; only those are skipped. The hard floor and the other
+        guards (memory vault, private URL, workspace boundary) always apply.
+        """
         cmd = command.strip()
+        if len(cmd) > MAX_CHECKED_COMMAND_CHARS:
+            # Refused before any pattern runs, and not approvable: nothing
+            # checked it, so nobody could know what an approval would let run.
+            return CommandRefusal(
+                "guard",
+                f"Error: Command blocked by safety guard (it is {len(cmd)} characters; "
+                f"the exec guard checks at most {MAX_CHECKED_COMMAND_CHARS}). Write a "
+                "long script or data to a file with write_file, then run that file.",
+            )
         lower = cmd.lower()
+
+        floor = tuple(p for p in _HARD_FLOOR_PATTERNS if re.search(p, lower))
+        if floor:
+            return CommandRefusal(
+                "hard_floor",
+                f"Error: Command blocked by the exec hard floor (rule: {floor[0]})",
+                _HARD_FLOOR_NOTE, floor,
+            )
 
         # allow_patterns take priority over deny_patterns so that users can
         # exempt specific commands (e.g. "rm -rf" inside a build directory)
@@ -493,33 +789,43 @@ class ExecTool(Tool, ContextAware):
             re.search(p, lower) for p in self.allow_patterns
         )
         if not explicitly_allowed:
-            for pattern in self.deny_patterns:
-                if re.search(pattern, lower):
-                    return (
-                        f"Error: Command blocked by deny pattern filter (rule: {pattern})"
-                        + _COMMAND_POLICY_NOTE
-                    )
+            denied = tuple(
+                p for p in self.deny_patterns
+                if p not in approved_rules and re.search(p, lower)
+            )
+            if denied:
+                named = ", ".join(f"rule: {p}" for p in denied)
+                return CommandRefusal(
+                    "deny",
+                    f"Error: Command blocked by deny pattern filter ({named})",
+                    _COMMAND_POLICY_NOTE, denied,
+                )
 
             mem_block = self._guard_memory_mutation(lower)
             if mem_block:
-                return mem_block
+                return CommandRefusal("guard", mem_block)
 
-            if self.allow_patterns:
-                return (
-                    "Error: Command blocked by allowlist filter (not in allowlist)"
-                    + _COMMAND_POLICY_NOTE
+            if self.allow_patterns and _ALLOWLIST_RULE not in approved_rules:
+                return CommandRefusal(
+                    "allowlist",
+                    "Error: Command blocked by allowlist filter (not in allowlist)",
+                    _COMMAND_POLICY_NOTE, (_ALLOWLIST_RULE,),
                 )
 
         from durin.security.network import contains_internal_url
         if contains_internal_url(cmd):
             # The runner turns this marker into a non-retryable security hint.
-            return "Error: Command blocked by safety guard (internal/private URL detected)"
+            return CommandRefusal(
+                "guard",
+                "Error: Command blocked by safety guard (internal/private URL detected)",
+            )
 
         if self.restrict_to_workspace:
             if "..\\" in cmd or "../" in cmd:
-                return (
-                    "Error: Command blocked by safety guard (path traversal detected)"
-                    + _WORKSPACE_BOUNDARY_NOTE
+                return CommandRefusal(
+                    "guard",
+                    "Error: Command blocked by safety guard (path traversal detected)",
+                    _WORKSPACE_BOUNDARY_NOTE,
                 )
 
             cwd_path = Path(cwd).resolve()
@@ -546,9 +852,10 @@ class ExecTool(Tool, ContextAware):
                     and media_path not in p.parents
                     and p != media_path
                 ):
-                    return (
-                        "Error: Command blocked by safety guard (path outside working dir)"
-                        + _WORKSPACE_BOUNDARY_NOTE
+                    return CommandRefusal(
+                        "guard",
+                        "Error: Command blocked by safety guard (path outside working dir)",
+                        _WORKSPACE_BOUNDARY_NOTE,
                     )
 
         return None

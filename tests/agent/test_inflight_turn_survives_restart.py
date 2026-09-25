@@ -11,6 +11,7 @@ replay at the next start runs it again in order.
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -102,3 +103,114 @@ async def test_a_trigger_only_turn_in_flight_is_not_journaled(tmp_path: Path) ->
     await turn_started.wait()
 
     assert await loop.drain_inbound_for_shutdown() == 0
+
+
+@pytest.mark.asyncio
+async def test_every_turn_blocked_on_an_answer_is_journaled_at_shutdown(tmp_path: Path) -> None:
+    """``stop()`` cancels the ask_user waits, and a turn whose wait is
+    cancelled ends at its next step. The drain must record every turn in
+    flight before it awaits any of them: awaiting the first let the others
+    end unseen, and their messages were dropped instead of replayed."""
+    from durin.agent import pending_answers
+    from durin.agent.tools.ask_user import AskUserQuestionTool
+
+    loop, _bus = _make_loop(tmp_path)
+    pending_answers.reset()
+    pending_answers.set_consumer_active(True)
+    ask = AskUserQuestionTool(sessions=MagicMock(), blocking=True, answer_timeout_s=60)
+
+    async def fake_dispatch(msg, pending=None):
+        # Park on the real blocking-answer wait, as ask_user_question does.
+        await ask._await_answer(msg.session_key, "q")
+
+    loop._dispatch = fake_dispatch  # type: ignore[method-assign]
+    keys = [f"websocket:c{i}" for i in (1, 2, 3)]
+    for i, key in enumerate(keys, start=1):
+        loop._start_turn_task(
+            InboundMessage(channel="websocket", sender_id="u", chat_id=f"c{i}",
+                           content=f"question {i}"),
+            key,
+        )
+    for _ in range(100):
+        if all(pending_answers.is_waiting(k) for k in keys):
+            break
+        await asyncio.sleep(0)
+    assert all(pending_answers.is_waiting(k) for k in keys)
+
+    try:
+        loop.stop()
+        journaled = await loop.drain_inbound_for_shutdown()
+    finally:
+        pending_answers.reset()
+
+    assert journaled == 3
+    assert [m.content for m in loop._inbound_journal.drain()] == [
+        "question 1", "question 2", "question 3",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_drain_waits_the_bound_once_not_once_per_stuck_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A turn whose dispatch truly swallows ``CancelledError`` never unwinds
+    on its own. On Python 3.11, a per-task ``wait_for(timeout=...)`` waits
+    WITHOUT LIMIT past its own timeout for a cancelled task to actually
+    finish — so that turn alone hangs the drain forever, and three of them
+    hang it three times over. A single ``asyncio.wait`` over the whole batch
+    bounds the pass once, regardless of how many turns are stuck, and still
+    journals their messages. The drain runs as its own task here, and this
+    test's own ``asyncio.wait(..., timeout=2)`` is the safety net that keeps
+    a regression from hanging the test suite instead of just failing it."""
+    import durin.agent.loop as loop_module
+
+    monkeypatch.setattr(loop_module, "_DRAIN_CANCEL_WAIT_S", 0.2)
+    loop, _bus = _make_loop(tmp_path)
+    started = [asyncio.Event() for _ in range(3)]
+    release = asyncio.Event()
+
+    async def fake_dispatch(msg, pending=None):
+        index = int(msg.chat_id[1:]) - 1
+        started[index].set()
+        # Really swallows cancellation: it keeps re-awaiting instead of
+        # ever letting a CancelledError end the turn, so nothing about this
+        # task resolves on its own — only the drain's own bound can move on.
+        while not release.is_set():
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                pass
+
+    loop._dispatch = fake_dispatch  # type: ignore[method-assign]
+    tasks = [
+        loop._start_turn_task(
+            InboundMessage(channel="telegram", sender_id="u", chat_id=f"c{i}",
+                           content=f"stuck {i}"),
+            f"telegram:c{i}",
+        )
+        for i in range(1, 4)
+    ]
+    for event in started:
+        await event.wait()
+
+    drain = asyncio.create_task(loop.drain_inbound_for_shutdown())
+    try:
+        start = time.monotonic()
+        done, _pending = await asyncio.wait([drain], timeout=2)
+        elapsed = time.monotonic() - start
+
+        assert drain in done, "the drain did not return within the bound — it hung"
+        # Three turns that never unwind: three sequential wait_for(10s) each
+        # waiting without limit past its own timeout would never return at
+        # all; the bound applies once to the whole batch, so this stays
+        # close to the patched 0.2s.
+        assert elapsed < 1.0
+        assert drain.result() == 3
+        assert sorted(m.content for m in loop._inbound_journal.drain()) == [
+            "stuck 1", "stuck 2", "stuck 3",
+        ]
+    finally:
+        release.set()
+        if not drain.done():
+            drain.cancel()
+        await asyncio.gather(drain, *tasks, return_exceptions=True)

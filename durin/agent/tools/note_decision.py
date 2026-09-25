@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from durin.agent.tools._telemetry import emit_tool_event
 from durin.agent.tools.base import Tool, tool_parameters
-from durin.agent.tools.context import ContextAware, RequestContext
+from durin.agent.tools.context import ContextAware, RequestContext, RequestContextVar
 from durin.agent.tools.schema import StringSchema, tool_parameters_schema
 from durin.session.decision_log import (
     _DEFAULT_MAX_CHARS,
@@ -52,10 +52,11 @@ class NoteDecisionTool(Tool, ContextAware):
         self._sessions = sessions
         self._max_entries = max_entries
         self._max_chars = max_chars
-        self._request_ctx: RequestContext | None = None
+        # This turn's context: the instance is shared by concurrent turns.
+        self._ctx = RequestContextVar("note_decision_request_ctx")
 
     def set_context(self, ctx: RequestContext) -> None:
-        self._request_ctx = ctx
+        self._ctx.set(ctx)
 
     @classmethod
     def create(cls, ctx: Any) -> "NoteDecisionTool":
@@ -92,9 +93,10 @@ class NoteDecisionTool(Tool, ContextAware):
         )
 
     def _session(self) -> Any | None:
-        if self._request_ctx is None:
+        ctx = self._ctx.get()
+        if ctx is None:
             return None
-        key = self._request_ctx.session_key
+        key = ctx.session_key
         if not key:
             return None
         return self._sessions.get_or_create(key)

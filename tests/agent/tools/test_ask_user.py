@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import pytest
 
 from durin.agent.tools.ask_user import PENDING_QUESTION_KEY, AskUserQuestionTool
 from durin.agent.tools.context import RequestContext
+from durin.bus.events import OUTBOUND_META_ASKS_PERSON
 from durin.session.manager import SessionManager
 
 
@@ -192,6 +194,32 @@ async def test_blocking_returns_user_answer_in_same_turn(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_a_stop_landing_with_the_answer_still_cancels_the_turn(tmp_path):
+    """A /stop or shutdown that lands in the same loop step as the answer must
+    still cancel the turn. On Python 3.11 ``asyncio.wait_for`` returns the
+    answer instead and swallows the cancel, so the turn would run on."""
+    from durin.agent import pending_answers as pa
+
+    pa.reset()
+    sm = SessionManager(tmp_path)
+    tool = _blocking_tool(sm)
+    turn = asyncio.create_task(tool.execute(question="Which color?"))
+    for _ in range(100):
+        await asyncio.sleep(0.01)
+        if pa.is_waiting("cli:d"):
+            break
+    else:
+        raise AssertionError("tool never registered a waiter")
+
+    assert pa.resolve("cli:d", "green") is True
+    turn.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await turn
+    pa.reset()
+
+
+@pytest.mark.asyncio
 async def test_blocking_times_out_to_yield_semantics(tmp_path):
     from durin.agent import pending_answers as pa
 
@@ -275,3 +303,131 @@ async def test_blocking_skipped_for_non_interactive_sessions(tmp_path):
     assert "presented to the user" in out
     assert "STOP" in out
     pa.reset()
+
+
+class _Outbox:
+    """Records the full published message, not just its text, so a test can
+    check the metadata a text-channel publish carries."""
+
+    def __init__(self) -> None:
+        self.sent: list[Any] = []
+
+    async def publish_outbound(self, msg) -> None:
+        self.sent.append(msg)
+
+
+@pytest.mark.asyncio
+async def test_blocking_question_on_a_text_channel_carries_the_turns_metadata(tmp_path):
+    """A blocking question on a text channel (e.g. slack) must land in the
+    conversation the turn belongs to (a thread/topic), which means the
+    published copy carries the turn's own metadata, plus the flag Slack uses
+    to notify instead of silently editing a status line."""
+    from durin.agent import pending_answers as pa
+
+    pa.reset()
+    pa.set_consumer_active(True)
+    sm = SessionManager(tmp_path)
+    outbox = _Outbox()
+    turn_metadata = {"slack": {"thread_ts": "200.000"}, "message_thread_id": 7}
+    tool = AskUserQuestionTool(
+        sessions=sm, bus=outbox, blocking=True, answer_timeout_s=0.05,
+    )
+    tool.set_context(RequestContext(
+        channel="slack", chat_id="C1", session_key="slack:C1", metadata=turn_metadata,
+    ))
+    try:
+        await tool.execute(question="Which color?")
+    finally:
+        pa.reset()
+
+    assert len(outbox.sent) == 1
+    sent_meta = outbox.sent[0].metadata
+    assert sent_meta["slack"] == {"thread_ts": "200.000"}
+    assert sent_meta["message_thread_id"] == 7
+    assert sent_meta[OUTBOUND_META_ASKS_PERSON] is True
+    # The context's own metadata dict must never be mutated or reused.
+    assert sent_meta is not turn_metadata
+
+
+@pytest.mark.asyncio
+async def test_blocking_skipped_when_replies_cannot_arrive_mid_turn(tmp_path):
+    """The legacy REPL reads the next line only after the turn ends, so the
+    tool must yield now instead of waiting out the whole timeout."""
+    from durin.agent import pending_answers as pa
+
+    pa.reset()
+    pa.set_consumer_active(True)
+    pa.set_mid_turn_replies(False)
+    sm = SessionManager(tmp_path)
+    tool = AskUserQuestionTool(sessions=sm, blocking=True, answer_timeout_s=60)
+    tool.set_context(RequestContext(channel="cli", chat_id="d", session_key="cli:d", metadata={}))
+    try:
+        out = await asyncio.wait_for(tool.execute(question="Anyone?"), timeout=5)
+    finally:
+        pa.reset()
+    assert "presented to the user" in out
+    assert "STOP" in out
+
+
+def _snapshots(outbox: "_Outbox") -> list[dict]:
+    return [m.metadata["goal_state"] for m in outbox.sent if m.metadata.get("_goal_state_sync")]
+
+
+@pytest.mark.asyncio
+async def test_a_blocking_question_pushes_the_session_snapshot_on_a_rich_channel(tmp_path):
+    """The webui channel learns from the snapshot that a question waits, so a
+    chat nobody watches stops waiting after its grace window; the snapshot
+    after the wait clears the question."""
+    from durin.agent import pending_answers as pa
+
+    pa.reset()
+    pa.set_consumer_active(True)
+    sm = SessionManager(tmp_path)
+    outbox = _Outbox()
+    tool = AskUserQuestionTool(sessions=sm, bus=outbox, blocking=True, answer_timeout_s=5)
+    tool.set_context(RequestContext(
+        channel="websocket", chat_id="c1", session_key="websocket:c1", metadata={},
+    ))
+
+    async def _answer_when_asked():
+        for _ in range(500):
+            if pa.is_waiting("websocket:c1"):
+                assert _snapshots(outbox)[0]["pending_question"]["question"] == "Which color?"
+                assert pa.resolve("websocket:c1", "green") is True
+                return
+            await asyncio.sleep(0.01)
+        raise AssertionError("the tool never waited")
+
+    try:
+        answering = asyncio.create_task(_answer_when_asked())
+        out = await tool.execute(question="Which color?")
+        await answering
+    finally:
+        pa.reset()
+
+    assert "green" in out
+    snapshots = _snapshots(outbox)
+    assert len(snapshots) == 2
+    assert "pending_question" not in snapshots[1]
+    assert all(m.content == "" for m in outbox.sent)  # no text copy on a rich channel
+
+
+@pytest.mark.asyncio
+async def test_a_blocking_question_pushes_no_snapshot_on_a_text_channel(tmp_path):
+    from durin.agent import pending_answers as pa
+
+    pa.reset()
+    pa.set_consumer_active(True)
+    sm = SessionManager(tmp_path)
+    outbox = _Outbox()
+    tool = AskUserQuestionTool(sessions=sm, bus=outbox, blocking=True, answer_timeout_s=0.05)
+    tool.set_context(RequestContext(
+        channel="slack", chat_id="C1", session_key="slack:C1", metadata={},
+    ))
+    try:
+        await tool.execute(question="Which color?")
+    finally:
+        pa.reset()
+
+    assert _snapshots(outbox) == []
+    assert len(outbox.sent) == 1  # the question as text, once

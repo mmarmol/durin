@@ -37,7 +37,7 @@ from contextlib import suppress
 from typing import TYPE_CHECKING, Any
 
 from durin.agent.tools.base import Tool, tool_parameters
-from durin.agent.tools.context import ContextAware, RequestContext
+from durin.agent.tools.context import ContextAware, RequestContext, RequestContextVar
 from durin.agent.tools.schema import (
     ArraySchema,
     StringSchema,
@@ -45,7 +45,10 @@ from durin.agent.tools.schema import (
 )
 from durin.agent.user_payloads import (
     channel_renders_tool_payloads,
-    serialize_pending_interactions,
+    forget_delivery,
+    mark_interactions_delivered,
+    push_session_state,
+    undelivered_interactions,
 )
 from durin.telemetry.logger import current_telemetry
 
@@ -100,10 +103,11 @@ class AskUserQuestionTool(Tool, ContextAware):
         self._bus = bus
         self._blocking = blocking
         self._answer_timeout_s = answer_timeout_s
-        self._request_ctx: RequestContext | None = None
+        # This turn's context: the instance is shared by concurrent turns.
+        self._ctx = RequestContextVar("ask_user_request_ctx")
 
     def set_context(self, ctx: RequestContext) -> None:
-        self._request_ctx = ctx
+        self._ctx.set(ctx)
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
@@ -148,9 +152,10 @@ class AskUserQuestionTool(Tool, ContextAware):
         )
 
     def _session(self) -> Any | None:
-        if self._request_ctx is None:
+        ctx = self._ctx.get()
+        if ctx is None:
             return None
-        key = self._request_ctx.session_key
+        key = ctx.session_key
         if not key:
             return None
         return self._sessions.get_or_create(key)
@@ -184,6 +189,9 @@ class AskUserQuestionTool(Tool, ContextAware):
                 "question": question,
                 "options": cleaned_options or [],
             }
+            # A new question, even one worded like an earlier one, has not
+            # been delivered yet.
+            forget_delivery(session.metadata, PENDING_QUESTION_KEY)
             self._sessions.save(session)
 
         self._emit("ask_user.question_asked", {
@@ -194,13 +202,11 @@ class AskUserQuestionTool(Tool, ContextAware):
 
         # Blocking V2: wait in-turn for the answer; degrade to the V1 yield
         # contract on timeout, fallback sentinel, or missing session context.
-        session_key = self._request_ctx.session_key if self._request_ctx else None
+        ctx = self._ctx.get()
+        session_key = ctx.session_key if ctx else None
         if self._blocking and session is not None and session_key:
             answer = await self._await_answer(session_key, question_id)
             if answer is not None:
-                if session.metadata is not None:
-                    session.metadata.pop(PENDING_QUESTION_KEY, None)
-                    self._sessions.save(session)
                 return (
                     f"The user answered: {answer!r}.\n"
                     "Continue the task using this answer — do not re-ask."
@@ -226,6 +232,7 @@ class AskUserQuestionTool(Tool, ContextAware):
     async def _await_answer(self, session_key: str, question_id: str) -> str | None:
         """Block until the user's in-turn answer; None means fall back to yield."""
         from durin.agent import pending_answers
+        from durin.agent.turn_slots import released_while_waiting
 
         # No consumer (single-message mode) or non-interactive session
         # (cron): nobody can ever resolve the wait — yield now.
@@ -233,50 +240,101 @@ class AskUserQuestionTool(Tool, ContextAware):
             return None
         await self._publish_dumb_channel_question(session_key)
         fut = pending_answers.create(session_key)
+        # A rich channel draws the question from the start tool_event; the
+        # session snapshot is what the webui channel keeps as the chat's
+        # state. It tells the channel a question waits, so a chat no tab is
+        # watching stops waiting after its grace window, and it brings the
+        # question back for a tab that attaches meanwhile.
+        await self._push_session_state()
         started = time.monotonic()
         try:
-            answer = await asyncio.wait_for(fut, timeout=self._answer_timeout_s)
-        except asyncio.TimeoutError:
-            self._emit("ask_user.answer_timeout", {
-                "question_id": question_id,
-                "timeout_s": int(self._answer_timeout_s),
-            })
-            return None
+            # The turn gives its concurrency slots back while the person
+            # answers, so other chats keep running, and takes them again
+            # before it goes on.
+            async with released_while_waiting(session_key):
+                try:
+                    # asyncio.timeout, not wait_for: on Python 3.11 wait_for
+                    # returns the answer and swallows a cancel (a /stop, a
+                    # shutdown) that lands in the same step, so the turn would
+                    # run on.
+                    async with asyncio.timeout(self._answer_timeout_s):
+                        answer = await fut
+                except TimeoutError:
+                    self._emit("ask_user.answer_timeout", {
+                        "question_id": question_id,
+                        "timeout_s": int(self._answer_timeout_s),
+                    })
+                    answer = None
         finally:
             pending_answers.discard(session_key, fut)
         if answer is pending_answers.FALLBACK or not isinstance(answer, str):
+            # Yield: the question stays in the session for the next message.
+            await self._push_session_state()
             return None
+        # The answer is input to this turn: an API client's answer marks the
+        # turn as API input, here in the turn's own context.
+        from durin.agent.approval import note_turn_input
+
+        note_turn_input({"origin": pending_answers.answer_origin(fut)})
         self._emit("ask_user.answer_received", {
             "question_id": question_id,
             "wait_ms": int((time.monotonic() - started) * 1000),
         })
+        # Answered: the question is consumed, and the snapshot that ends the
+        # wait clears it.
+        session = self._session()
+        if session is not None and session.metadata is not None:
+            session.metadata.pop(PENDING_QUESTION_KEY, None)
+            self._sessions.save(session)
+        await self._push_session_state()
         return answer
+
+    async def _push_session_state(self) -> None:
+        ctx = self._ctx.get()
+        session = self._session()
+        if ctx is None or session is None:
+            return
+        await push_session_state(self._bus, ctx.channel, ctx.chat_id, session.metadata)
 
     async def _publish_dumb_channel_question(self, session_key: str) -> None:
         """Pre-block question delivery for channels without payload rendering.
 
         Rich channels already rendered the panel from the start tool_event;
         the turn-end fallback serializer never fires while we block, so dumb
-        channels need the serialized question published here.
+        channels need the serialized question published here. What is
+        published is marked delivered, so when the wait times out and the
+        turn ends, the turn-end fallback does not send it a second time.
         """
-        if self._bus is None or self._request_ctx is None:
+        ctx = self._ctx.get()
+        if self._bus is None or ctx is None:
             return
-        channel = self._request_ctx.channel
+        channel = ctx.channel
         if channel_renders_tool_payloads(channel):
             return
         session = self._session()
-        if session is None:
+        if session is None or session.metadata is None:
             return
-        texts = serialize_pending_interactions(session.metadata)
-        for text in texts:
-            with suppress(Exception):
-                from durin.bus.events import OutboundMessage
+        items = undelivered_interactions(session.metadata)
+        if not items:
+            return
+        from durin.bus.events import OUTBOUND_META_ASKS_PERSON, OutboundMessage
 
+        # Carry the turn's own metadata (thread_ts, forum topic id, …) so the
+        # question lands in the conversation the turn belongs to rather than
+        # at the surface's top level, and flag it so Slack notifies instead
+        # of silently editing a status line.
+        turn_metadata = ctx.metadata
+        for _key, text in items:
+            with suppress(Exception):
                 await self._bus.publish_outbound(OutboundMessage(
                     channel=channel,
-                    chat_id=self._request_ctx.chat_id,
+                    chat_id=ctx.chat_id,
                     content=text,
+                    metadata={**dict(turn_metadata), OUTBOUND_META_ASKS_PERSON: True},
                 ))
+        with suppress(Exception):
+            mark_interactions_delivered(session.metadata, items)
+            self._sessions.save(session)
 
     @staticmethod
     def _emit(event_type: str, data: dict[str, Any]) -> None:

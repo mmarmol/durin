@@ -1994,6 +1994,26 @@
       "sent": "Jawaban terkirim",
       "answered": "Dijawab di bawah"
     },
+    "approval": {
+      "title": "Perlu persetujuan",
+      "hint": "Tidak ada yang dijalankan sampai Anda memutuskan.",
+      "approve": "Setujui",
+      "reject": "Tolak",
+      "sending": "Mengirim…",
+      "handedOff": "Terkirim — agen melanjutkan.",
+      "applied": "Disetujui dan selesai.",
+      "rejected": "Ditolak — tidak akan dijalankan.",
+      "verdict": "Hasil pemindaian",
+      "findings": "Temuan",
+      "newFindings": "Temuan baru",
+      "kind": {
+        "skill_install": "Pasang skill",
+        "skill_edit": "Ubah skill",
+        "skill_deps": "Pasang dependensi skill",
+        "mcp_change": "Ubah server MCP",
+        "exec_command": "Jalankan perintah"
+      }
+    },
     "reqSecret": {
       "placeholder": "Tempel nilai secret",
       "save": "Simpan",

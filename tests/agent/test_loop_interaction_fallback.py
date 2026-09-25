@@ -169,3 +169,70 @@ async def test_question_still_delivered_once_per_ask(tmp_path):
     bodies = [c.args[0].content or "" for c in loop.bus.publish_outbound.call_args_list]
     assert sum("Which color?" in b for b in bodies) == 1
     assert sum("Which size?" in b for b in bodies) == 1
+
+
+class _Outbox:
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+
+    async def publish_outbound(self, msg) -> None:
+        self.sent.append(msg.content)
+
+
+def _blocking_ask_on_slack(loop: AgentLoop, outbox: _Outbox):
+    from durin.agent import pending_answers
+    from durin.agent.tools.ask_user import AskUserQuestionTool
+    from durin.agent.tools.context import RequestContext
+
+    pending_answers.reset()
+    pending_answers.set_consumer_active(True)
+    tool = AskUserQuestionTool(
+        sessions=loop.sessions, bus=outbox, blocking=True, answer_timeout_s=0.05,
+    )
+    tool.set_context(RequestContext(
+        channel="slack", chat_id="C1", session_key="slack:C1", metadata={},
+    ))
+    return tool
+
+
+@pytest.mark.asyncio
+async def test_a_timed_out_question_reaches_a_text_channel_once(tmp_path):
+    """A text channel gets the blocking question before the wait. When the
+    wait times out the turn ends, and the turn-end fallback must not send the
+    same question a second time."""
+    from durin.agent import pending_answers
+
+    loop = _make_loop(tmp_path)
+    outbox = _Outbox()
+    tool = _blocking_ask_on_slack(loop, outbox)
+    try:
+        await tool.execute(question="Which color?")
+    finally:
+        pending_answers.reset()
+    await loop._maybe_publish_interaction_fallback(
+        channel="slack", chat_id="C1", session_key="slack:C1",
+    )
+
+    assert outbox.sent == ["❓ Which color?"]
+    assert loop.bus.publish_outbound.call_args_list == []
+
+
+@pytest.mark.asyncio
+async def test_the_same_question_asked_again_is_sent_again(tmp_path):
+    """Delivery is remembered per text, so a new ask worded like an answered
+    one must still reach the channel."""
+    from durin.agent import pending_answers
+    from durin.agent.tools.ask_user import PENDING_QUESTION_KEY
+
+    loop = _make_loop(tmp_path)
+    outbox = _Outbox()
+    tool = _blocking_ask_on_slack(loop, outbox)
+    try:
+        await tool.execute(question="Which color?")
+        # The user answered; the loop clears the answered question.
+        loop.sessions.get_or_create("slack:C1").metadata.pop(PENDING_QUESTION_KEY)
+        await tool.execute(question="Which color?")
+    finally:
+        pending_answers.reset()
+
+    assert outbox.sent == ["❓ Which color?", "❓ Which color?"]

@@ -65,6 +65,26 @@ def test_fetch_https_downloads_skill_md(tmp_path, monkeypatch):
     assert json.loads((qdir / ".scan.json").read_text())["source"] == "https://x.io/web/SKILL.md"
 
 
+def test_fetch_https_strips_credentials_from_recorded_source(tmp_path, monkeypatch):
+    """The literal URL (with its userinfo/query) is still what's fetched — only
+    the recorded `.scan.json` source is scrubbed, since that field later reaches
+    the approval summary/detail/payload, chat text and provenance."""
+    import durin.agent.skills_import as I
+
+    seen_urls: list[str] = []
+
+    def _get(url):
+        seen_urls.append(url)
+        return b"---\nname: web\ndescription: d\n---\nbody\n"
+
+    monkeypatch.setattr(I, "_http_get_bytes", _get)
+    qdir = fetch_candidate(
+        SkillCandidate("web", "https://user:tok@host/x/SKILL.md?token=abc", "https"),
+        quarantine_root=tmp_path / "q")
+    assert seen_urls == ["https://user:tok@host/x/SKILL.md?token=abc"]  # fetch used the full ref
+    assert json.loads((qdir / ".scan.json").read_text())["source"] == "https://host/x/SKILL.md"
+
+
 def test_fetch_github_downloads_subtree(tmp_path, monkeypatch):
     import durin.agent.skills_import as I
 

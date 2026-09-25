@@ -46,11 +46,14 @@ def test_apply_edit_manual_without_confirm_proposes_only(tmp_path):
     assert "step one" in (ws / "skills" / "mine" / "SKILL.md").read_text()
 
 
-def test_apply_edit_manual_with_confirm_writes(tmp_path):
+def test_approved_edit_writes_a_manual_skill(tmp_path):
+    # A manual skill changes only through the landing write an approval runs;
+    # apply_skill_edit has no flag a caller can set to claim consent.
     ws = tmp_path / "ws"
     ws.mkdir()
     _user_skill(ws, "mine", body="step one\n")
-    res = ss.apply_skill_edit(ws, "mine", old="step one", new="step two", rationale="r", confirm=True)
+    res = ss.write_skill_edit(ws, "mine", old="step one", new="step two", rationale="r",
+                              approved_by="user")
     assert res["ok"] is True
     assert res["commit"]
     assert "step two" in (ws / "skills" / "mine" / "SKILL.md").read_text()
@@ -61,14 +64,14 @@ def test_apply_edit_rejects_missing_rationale_and_bad_match(tmp_path):
     ws.mkdir()
     _user_skill(ws, "mine")
     assert "error" in ss.apply_skill_edit(ws, "mine", old="x", new="y", rationale="  ")
-    assert "error" in ss.apply_skill_edit(ws, "mine", old="NOPE", new="y", rationale="r", confirm=True)
+    assert "error" in ss.apply_skill_edit(ws, "mine", old="NOPE", new="y", rationale="r")
 
 
 def test_apply_edit_rejects_non_unique_old(tmp_path):
     ws = tmp_path / "ws"
     ws.mkdir()
     _user_skill(ws, "mine", body="dup\ndup\n")  # 'dup' appears twice
-    res = ss.apply_skill_edit(ws, "mine", old="dup", new="x", rationale="r", confirm=True)
+    res = ss.apply_skill_edit(ws, "mine", old="dup", new="x", rationale="r")
     assert "error" in res
     assert "unique" in res["error"]
 

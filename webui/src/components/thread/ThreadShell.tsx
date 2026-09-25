@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { ApprovalCard } from "@/components/thread/ApprovalCard";
 import { ThreadActionsProvider } from "@/components/thread/ThreadActionsContext";
 import { ThreadComposer } from "@/components/thread/ThreadComposer";
 import { ThreadHeader } from "@/components/thread/ThreadHeader";
@@ -523,6 +524,8 @@ export function ThreadShell({
     </div>
   ) : null;
 
+  const pendingApproval = goalState?.pending_approval ?? null;
+
   const composer = (
     <>
       {streamError ? (
@@ -547,6 +550,24 @@ export function ThreadShell({
             active={work.active}
             finished={work.finished}
             onOpen={() => setPanelOpen(true)}
+          />
+        </div>
+      ) : null}
+      {session && pendingApproval ? (
+        // The turn is blocked on this decision: dock the card with the
+        // composer so it stays in view however far the thread is scrolled.
+        <div
+          className={cn(
+            "mx-auto w-full",
+            showHeroComposer ? "max-w-[58rem]" : "max-w-[49.5rem]",
+          )}
+        >
+          <ApprovalCard
+            key={pendingApproval.approval_id}
+            approval={pendingApproval}
+            onDecide={(decision) =>
+              client.sendApprovalDecision(pendingApproval.approval_id, decision)
+            }
           />
         </div>
       ) : null}

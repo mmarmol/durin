@@ -4,19 +4,24 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
-import sys
 import time
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from loguru import logger
+
 from durin import __version__
 from durin.bus.events import OutboundMessage
 from durin.command.router import CommandContext, CommandRouter
 from durin.utils.helpers import build_status_content
-from durin.utils.restart import set_restart_notice_to_env
+from durin.utils.restart import (
+    arm_restart_deadline,
+    reexec,
+    request_restart,
+    set_restart_notice_to_env,
+)
 
 # Strong refs to fire-and-forget command tasks (restart, background dream)
 # so the event loop can't GC them before they run (RUF006).
@@ -301,8 +306,9 @@ async def cmd_stop(ctx: CommandContext) -> OutboundMessage:
 
 
 async def cmd_restart(ctx: CommandContext) -> OutboundMessage:
-    """Restart the process in-place via os.execv."""
+    """Restart the process in place: an orderly shutdown, then a re-exec."""
     msg = ctx.msg
+    loop = ctx.loop
     set_restart_notice_to_env(
         channel=msg.channel,
         chat_id=msg.chat_id,
@@ -311,7 +317,39 @@ async def cmd_restart(ctx: CommandContext) -> OutboundMessage:
 
     async def _do_restart():
         await asyncio.sleep(1)
-        os.execv(sys.executable, [sys.executable, "-m", "durin"] + sys.argv[1:])
+        # The gateway restarts through its own graceful shutdown (MCP, cron,
+        # the dream and embed workers, the agent loop with its journal of the
+        # turns in flight, the channels, the session flush) and re-execs once
+        # that is done.
+        if request_restart():
+            return
+        # No gateway in this process (the TUI, the legacy REPL). execv
+        # discards everything in memory, so close what the loop owns and
+        # journal the turns in flight (one blocked on the user's answer among
+        # them) and the messages queued behind them; the new process replays
+        # them when it starts. A hang in any of that (close_mcp, the drain)
+        # must still end in a re-exec, so arm the same watchdog the gateway
+        # path uses before starting them.
+        timer = arm_restart_deadline()
+        try:
+            if loop is not None:
+                with suppress(Exception):
+                    await loop.close_mcp()
+                loop.stop()
+                try:
+                    await loop.drain_inbound_for_shutdown()
+                except Exception:
+                    logger.exception("/restart: journaling the turns in flight failed")
+                with suppress(Exception):
+                    loop.sessions.flush_all()
+            reexec()
+        except asyncio.CancelledError:
+            # This task itself was torn down (e.g. the TUI quit mid-restart
+            # and asyncio.run cancelled it) — nobody is restarting anymore,
+            # so the watchdog must not re-launch durin later on its own,
+            # after the user has already quit.
+            timer.cancel()
+            raise
 
     _spawn_background(_do_restart())
     return OutboundMessage(

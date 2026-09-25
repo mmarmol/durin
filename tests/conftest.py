@@ -75,6 +75,26 @@ def _testclient_localhost_peer():
 
 
 @pytest.fixture(autouse=True)
+def _no_one_left_waiting():
+    """Start and end every test with nobody waiting on a person.
+
+    The in-turn waiter registry (``pending_answers``) and the approval
+    hand-off map are module state. A test that fails while a turn waits on
+    an approval or a question would leave its waiter registered, and the
+    next test asking in the same chat would find a stale waiter or wait out
+    the full answer timeout. ``reset`` cancels leftover waiters and clears
+    the consumer flags; the hand-off map is emptied with them.
+    """
+    from durin.agent import approval, pending_answers
+
+    pending_answers.reset()
+    approval._HANDOFF_DECIDED_BY.clear()
+    yield
+    pending_answers.reset()
+    approval._HANDOFF_DECIDED_BY.clear()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_durin_home(tmp_path_factory, monkeypatch):
     """Run every test as a throwaway durin instance.
 
@@ -192,6 +212,73 @@ def _restore_loguru_durin_activation():
         yield
     finally:
         logger.enable("durin")
+
+
+@pytest.fixture(autouse=True)
+def _cancel_restart_watchdogs_after_test(monkeypatch):
+    """Never let a restart watchdog timer outlive its test.
+
+    ``arm_restart_deadline`` (durin/utils/restart.py) starts a real daemon
+    ``threading.Timer`` — 30s by default — that calls ``reexec()``, a real
+    ``os.execv()``, when it fires. A test that exercises ``/restart``'s
+    fallback or gateway path (most don't specifically guard against this)
+    would otherwise leave that timer ticking in the background once the
+    test itself returns; if the rest of the suite runs long enough for it
+    to fire, it replaces the whole pytest process outright — observed as
+    an abrupt, signature-less interruption partway through a full-directory
+    run, with no fix-under-test involved at all. Every call this process
+    makes during a test is tracked here and cancelled at teardown; a test
+    that wants the real firing behavior (the watchdog itself) still gets
+    it, since cancellation only matters for a timer that hasn't fired yet.
+    """
+    import durin.utils.restart as _restart_mod
+
+    created: list = []
+    real_arm = _restart_mod.arm_restart_deadline
+
+    def _tracking_arm(*args, **kwargs):
+        timer = real_arm(*args, **kwargs)
+        created.append(timer)
+        return timer
+
+    monkeypatch.setattr(_restart_mod, "arm_restart_deadline", _tracking_arm)
+    # Both call sites import the name directly, so each holds its own
+    # binding to the original function — patching the defining module
+    # above does not reach them. Default raising=True: if either import
+    # ever gets renamed, this must fail loudly rather than silently stop
+    # covering that call site.
+    monkeypatch.setattr("durin.cli.commands.arm_restart_deadline", _tracking_arm)
+    monkeypatch.setattr("durin.command.builtin.arm_restart_deadline", _tracking_arm)
+    yield
+    for timer in created:
+        timer.cancel()
+
+
+@pytest.fixture(autouse=True)
+def _reset_reexec_guard():
+    """Reset restart.py's one-shot re-exec guard before each test.
+
+    ``reexec()`` (durin/utils/restart.py) execs only once per process, so the
+    normal restart path and its watchdog timer can't both replace it. That
+    guard is a plain module-level flag with no per-test scope: once any test
+    exercises the real ``reexec()`` (even with ``os.execv`` mocked away), it
+    stays tripped for the rest of the suite, and a later test's own restart
+    path would then silently skip its ``os.execv`` call.
+
+    The lock is reset too, fresh, every test: the loser of the race decides
+    under it but blocks forever outside it, so the lock itself is never held
+    long-term by a legitimate call — but a test is exactly what deliberately
+    drives a loser into that forever-block, and starting every test on a
+    known-fresh ``Lock()`` (rather than whatever the previous test method
+    left behind) is a one-line guarantee against a class of hang that a
+    single flag reset wouldn't catch.
+    """
+    import threading
+
+    import durin.utils.restart as _restart_mod
+
+    _restart_mod._reexeced = False
+    _restart_mod._reexec_lock = threading.Lock()
 
 
 @pytest.fixture(autouse=True)

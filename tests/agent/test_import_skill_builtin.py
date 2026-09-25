@@ -25,5 +25,10 @@ def test_import_skill_drives_the_tool():
     assert "skill_import" in body
     for action in ("resolve", "fetch", "install", "reject"):
         assert action in body
-    # the gate is surfaced, not worked around
-    assert "override" in body and "confirm" in body
+    # the gate is server-decided: the doc explains outcomes (confirm/block as
+    # `needs` values, a pending install pointing at `durin approvals`), never
+    # a model-writable authority field to pass through install (there is none).
+    assert "confirm" in body and "durin approvals" in body
+    # approval is the tool's and the user's, never an argument
+    assert "approv" in body
+    assert "override=" not in body and "confirm=" not in body

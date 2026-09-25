@@ -152,17 +152,23 @@ async def _restructure_async(
         if not ok:
             return {"applied": False, "error": f"still violates doctrine: {reason}"}
 
-        # 6. Gather staged bundled files (scripts) + security-scan the staged dir.
+        # 6. Gather staged bundled files (scripts) and scan the result as it
+        # would land on LIVE — SKILL.md included, so a prose-only injection is
+        # caught too — BEFORE any side effect (a new workflow) is applied. A
+        # refusal must leave nothing half-applied, so this runs ahead of step 7.
         files = ss.read_bundle_files(stg_skill)
-        if files:
-            from durin.security.skill_scan import scan_skill
-            rep = scan_skill(stg_skill)
-            if rep.verdict != "safe":
-                return {"applied": False, "error": f"bundled code scanned {rep.verdict}"}
+        scan = ss.scan_skill_write(live_skill_dir, {"SKILL.md": staged_md, **files})
+        if scan.needs_review:
+            # This is where a curation-driven restructure actually gets refused
+            # (dream_restructure_skill's own scan below only fires for a direct
+            # caller) — log the intent here too, so it is not lost at this gate.
+            ss._log_restructure_refusal(workspace, name, intent, scan)
+            return {"applied": False, **ss._scan_refusal(scan, "restructure")}
 
         # 7. Apply any NEW workflow the sub-agent authored (staging-only) to live,
         # FIRST — a skill that delegates to a workflow that failed to land would
-        # dangle, so abort the whole restructure if a workflow apply fails.
+        # dangle, so abort the whole restructure if a workflow apply fails. Safe
+        # only now: the scan above already cleared what will delegate to it.
         applied_workflows = _apply_new_workflows(staging, workspace)
         if applied_workflows is None:
             return {"applied": False, "error": "authored workflow failed to apply"}

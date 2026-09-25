@@ -25,7 +25,7 @@ from typing import Any, Optional
 
 from durin.agent.tools._telemetry import emit_tool_event
 from durin.agent.tools.base import Tool, tool_parameters
-from durin.agent.tools.context import ContextAware, RequestContext
+from durin.agent.tools.context import ContextAware, RequestContext, RequestContextVar
 from durin.agent.tools.schema import StringSchema, tool_parameters_schema
 from durin.memory.ingestion import IngestError, ingest_artifact
 from durin.memory.vector_index import VectorIndex, vector_index_available
@@ -89,16 +89,17 @@ class MemoryIngestTool(Tool, ContextAware):
         self._embedding_model = embedding_model
         self._vector_index: Optional[VectorIndex] = None
         self._vector_index_attempted = False
-        self._request_ctx: RequestContext | None = None
+        # This turn's context: the instance is shared by concurrent turns.
+        self._ctx = RequestContextVar("memory_ingest_request_ctx")
 
     def set_context(self, ctx: RequestContext) -> None:
-        self._request_ctx = ctx
+        self._ctx.set(ctx)
 
     def _session_key(self) -> str | None:
         # Mirrors TasksTool._session_key: an ingest that triggers a background
         # OCR job must tag it with the requesting session, or the job's
         # session_key stays NULL and it is invisible to every session's tray.
-        ctx = self._request_ctx
+        ctx = self._ctx.get()
         if ctx is None:
             return None
         if ctx.session_key:

@@ -1,6 +1,7 @@
 """Runtime context for tool construction."""
 from __future__ import annotations
 
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Protocol, runtime_checkable
 
@@ -16,6 +17,26 @@ class RequestContext:
     message_id: str | None = None
     session_key: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+
+
+class RequestContextVar:
+    """Holds the current turn's :class:`RequestContext` for one tool instance.
+
+    One tool instance serves every turn running at the same time: chats run
+    concurrently, and cron and API turns share the same tools. A plain
+    attribute would hold whichever turn set it last, not the turn now calling
+    the tool. A ContextVar gives each asyncio task its own value: a turn sets
+    it before its tools run, and the tasks that run those tools inherit it.
+    """
+
+    def __init__(self, name: str = "request_ctx") -> None:
+        self._var: ContextVar[RequestContext | None] = ContextVar(name, default=None)
+
+    def set(self, ctx: RequestContext | None) -> None:
+        self._var.set(ctx)
+
+    def get(self) -> RequestContext | None:
+        return self._var.get()
 
 
 @runtime_checkable
@@ -76,3 +97,14 @@ class ToolContext:
     # about what the caller already sees in its system prompt (e.g.
     # ``memory_search`` hot-layer dedup) must key off this.
     scope: str = "core"
+    # The gateway's live MCP handle (``McpRuntime``, wrapping this same
+    # ``AgentLoop``) — the same object the REST service registry is built
+    # with (see ``cli/commands.py``'s unified-gateway wiring). Populated by
+    # ``AgentLoop._register_default_tools`` so ``McpManageTool.create`` can
+    # hand its ``McpService`` a live runtime instead of a config-only one;
+    # without it, ``McpService.approved_config``/``mark_approved`` are
+    # inert (no runtime to track against) and an agent reconnect can never
+    # succeed, even for an entirely unchanged boot config. ``None`` outside
+    # the main loop (TUI, contract generation, tests that build a bare
+    # ``ToolContext``).
+    mcp_runtime: Any | None = None

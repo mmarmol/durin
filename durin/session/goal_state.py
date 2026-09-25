@@ -166,7 +166,7 @@ def goal_state_ws_blob(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
         blob = {"active": False}
     if metadata:
         # Non-default agent mode and a pending question ride this frame so
-        # the webui composer can render badges/strips (Tasks C2/D4).
+        # the webui composer can render its badges and strips.
         from durin.agent.agent_mode import DEFAULT_MODE, SESSION_MODE_KEY
 
         mode = str(metadata.get(SESSION_MODE_KEY) or "")
@@ -177,6 +177,19 @@ def goal_state_ws_blob(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
             blob["pending_question"] = {
                 "question": str(pq.get("question") or ""),
                 "options": [str(o) for o in (pq.get("options") or [])],
+            }
+        # An approval the turn is waiting on rides the same frame: the webui
+        # draws its approval card and the TUI its approval bubble from it.
+        from durin.agent.user_payloads import PENDING_APPROVAL_KEY
+
+        pa = metadata.get(PENDING_APPROVAL_KEY)
+        if isinstance(pa, Mapping) and str(pa.get("approval_id") or ""):
+            detail = pa.get("detail")
+            blob["pending_approval"] = {
+                "approval_id": str(pa.get("approval_id")),
+                "kind": str(pa.get("kind") or ""),
+                "summary": str(pa.get("summary") or ""),
+                "detail": dict(detail) if isinstance(detail, Mapping) else {},
             }
     return blob
 

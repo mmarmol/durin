@@ -53,6 +53,9 @@ function makeClient() {
       for (const h of sessionUpdateHandlers) h(chatId);
     },
     sendMessage: vi.fn(),
+    sendApprovalDecision: vi
+      .fn()
+      .mockResolvedValue({ status: "pending", message: "Handed to the waiting turn." }),
     newChat: vi.fn(),
     attach: vi.fn(),
     connect: vi.fn(),
@@ -759,6 +762,49 @@ describe("ThreadShell", () => {
     // The reply must render EXACTLY ONCE — the live UUID row must not be
     // re-appended alongside the canonical copy.
     await waitFor(() => expect(screen.getAllByText("streamed reply body")).toHaveLength(1));
+  });
+
+  it("docks the approval card while the turn waits and sends the click to the server", async () => {
+    const client = makeClient();
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={session("chat-approval")}
+          title="Chat chat-approval"
+          onToggleSidebar={() => {}}
+          onNewChat={() => {}}
+        />,
+      ),
+    );
+    await act(async () => {
+      client._emitChat("chat-approval", {
+        event: "goal_state",
+        chat_id: "chat-approval",
+        goal_state: {
+          active: false,
+          pending_approval: {
+            approval_id: "a1b2c3d4e5f6",
+            kind: "exec_command",
+            summary: "run `make clean`",
+            detail: { command: "make clean" },
+          },
+        },
+      });
+    });
+    await waitFor(() => expect(screen.getByText("run `make clean`")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    expect(client.sendApprovalDecision).toHaveBeenCalledWith("a1b2c3d4e5f6", "approve");
+
+    await act(async () => {
+      client._emitChat("chat-approval", {
+        event: "goal_state",
+        chat_id: "chat-approval",
+        goal_state: { active: false },
+      });
+    });
+    await waitFor(() => expect(screen.queryByText("run `make clean`")).not.toBeInTheDocument());
   });
 
   it("does not refetch thread history on turn_end", async () => {

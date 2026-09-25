@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
 import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -104,7 +105,7 @@ class TestRestartCommand:
 
         with patch.dict(os.environ, {}, clear=False), \
              patch("durin.command.builtin.asyncio", new=fake_asyncio), \
-             patch("durin.command.builtin.os.execv") as mock_execv:
+             patch("durin.utils.restart.os.execv") as mock_execv:
             out = await cmd_restart(ctx)
             assert "Restarting" in out.content
             assert os.environ.get(RESTART_NOTIFY_CHANNEL_ENV) == "cli"
@@ -116,13 +117,245 @@ class TestRestartCommand:
             mock_execv.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_restart_journals_the_turns_in_flight_before_exec(self, tmp_path):
+        """os.execv discards everything in memory. /restart must journal the
+        turns in flight first, like a graceful shutdown, or a turn waiting on
+        the user's answer is lost instead of replayed by the new process."""
+        from durin.agent import pending_answers
+        from durin.agent.loop import AgentLoop
+        from durin.agent.tools.ask_user import AskUserQuestionTool
+        from durin.bus.queue import MessageBus
+        from durin.command.builtin import cmd_restart
+        from durin.command.router import CommandContext
+
+        provider = MagicMock()
+        provider.get_default_model.return_value = "test-model"
+        with patch("durin.agent.loop.ContextBuilder"), \
+             patch("durin.agent.loop.SessionManager"), \
+             patch("durin.agent.loop.SubagentManager"):
+            loop = AgentLoop(bus=MessageBus(), provider=provider, workspace=tmp_path)
+        pending_answers.reset()
+        pending_answers.set_consumer_active(True)
+        ask = AskUserQuestionTool(sessions=MagicMock(), blocking=True, answer_timeout_s=60)
+
+        async def fake_dispatch(msg, pending=None):
+            # Park on the real blocking-answer wait, as ask_user_question does.
+            await ask._await_answer(msg.session_key, "q")
+
+        loop._dispatch = fake_dispatch  # type: ignore[method-assign]
+        loop._start_turn_task(
+            InboundMessage(channel="websocket", sender_id="u", chat_id="c1", content="deploy it?"),
+            "websocket:c1",
+        )
+        for _ in range(100):
+            if pending_answers.is_waiting("websocket:c1"):
+                break
+            await asyncio.sleep(0)
+        assert pending_answers.is_waiting("websocket:c1")
+
+        restart = InboundMessage(channel="websocket", sender_id="u", chat_id="c2", content="/restart")
+        ctx = CommandContext(msg=restart, session=None, key=restart.session_key,
+                             raw="/restart", loop=loop)
+        scheduled: list[asyncio.Task] = []
+
+        async def _fast_sleep(_delay: float) -> None:
+            return None
+
+        def _capture_task(coro):
+            task = asyncio.create_task(coro)
+            scheduled.append(task)
+            return task
+
+        fake_asyncio = SimpleNamespace(sleep=_fast_sleep, create_task=_capture_task)
+        try:
+            with patch.dict(os.environ, {}, clear=False), \
+                 patch("durin.command.builtin.asyncio", new=fake_asyncio), \
+                 patch("durin.utils.restart.os.execv") as mock_execv:
+                await cmd_restart(ctx)
+                await scheduled[0]
+        finally:
+            pending_answers.reset()
+
+        mock_execv.assert_called_once()
+        assert [m.content for m in loop._inbound_journal.drain()] == ["deploy it?"]
+
+    @pytest.mark.asyncio
+    async def test_a_stuck_fallback_restart_still_reexecs_after_the_deadline(self, tmp_path):
+        """The fallback path (no gateway — TUI, legacy REPL) has nothing at
+        the asyncio level bounding ``close_mcp``. A real, synchronous
+        thread-level block (a bare ``threading.Event.wait()``, called
+        directly — not via ``asyncio.to_thread``, which would keep the loop
+        free and prove nothing) actually freezes the event loop: nothing at
+        the asyncio level — a timeout, a cancellation — could rescue this.
+        Only a genuinely separate OS thread can still make progress while
+        it's frozen. The watchdog's daemon thread is exactly that: it must
+        still call reexec once its deadline passes, the same way SIGKILL
+        rescues a stuck SIGTERM. The mocked ``reexec`` releases the block
+        itself once it fires, the way the real one would end everything by
+        replacing the process.
+
+        This patches ``reexec`` itself rather than ``os.execv``: the real
+        ``reexec`` makes the loser of a race block forever instead of
+        returning (see ``tests/utils/test_restart.py``), which is safe in
+        production — the winner's real ``execv`` ends that thread along with
+        everything else moments later — but here, with nothing actually
+        replacing this test process, the fallback's own call once released
+        would be a second, legitimate "loser" call that then hangs this test
+        forever. A plain mock has no such contract to honor.
+
+        Because the event loop is genuinely frozen once ``close_mcp`` blocks,
+        this test cannot poll from its own coroutine (nothing on that thread
+        runs until the freeze ends) — it offloads its own wait to a worker
+        thread via ``asyncio.to_thread`` instead, which keeps working
+        independently of whatever state the main thread is in.
+        """
+        from durin.command.builtin import cmd_restart
+        from durin.command.router import CommandContext
+
+        stuck = threading.Event()  # only the mocked reexec below ever sets this
+        reexec_called = threading.Event()
+        call_info: dict[str, object] = {}
+        loop_thread = threading.current_thread()
+
+        class _StuckLoop:
+            def __init__(self) -> None:
+                self.sessions = MagicMock()
+
+            async def close_mcp(self) -> None:
+                # A direct, synchronous threading.Event.wait() — not wrapped
+                # in to_thread — actually freezes this event loop's thread.
+                # The 10s cap is a last-resort safety net for this test
+                # process, well past the patched 0.1s deadline below — it
+                # must never be what actually makes the assertions true.
+                stuck.wait(10)
+
+            def stop(self) -> None:
+                pass
+
+            async def drain_inbound_for_shutdown(self) -> int:
+                return 0
+
+        loop = _StuckLoop()
+        msg = InboundMessage(channel="cli", sender_id="user", chat_id="direct", content="/restart")
+        ctx = CommandContext(msg=msg, session=None, key=msg.session_key, raw="/restart", loop=loop)
+
+        async def _fast_sleep(_delay: float) -> None:
+            return None
+
+        fake_asyncio = SimpleNamespace(sleep=_fast_sleep, create_task=asyncio.create_task)
+
+        def _on_reexec() -> None:
+            if not reexec_called.is_set():
+                call_info["thread"] = threading.current_thread()
+                call_info["elapsed"] = time.monotonic() - call_info["start"]
+            stuck.set()
+            reexec_called.set()
+
+        mock_reexec = MagicMock(side_effect=_on_reexec)
+
+        with patch.dict(os.environ, {}, clear=False), \
+             patch("durin.command.builtin.asyncio", new=fake_asyncio), \
+             patch("durin.utils.restart.RESTART_SHUTDOWN_DEADLINE_S", 0.1), \
+             patch("durin.utils.restart.reexec", mock_reexec), \
+             patch("durin.command.builtin.reexec", mock_reexec):
+            call_info["start"] = time.monotonic()
+            await cmd_restart(ctx)
+            # This coroutine's own thread is about to freeze inside
+            # close_mcp's direct block; wait for the outcome from a
+            # separate worker thread instead of polling here, which is
+            # what actually lets this test observe a watchdog running on
+            # yet another (the real) OS thread while the loop is frozen.
+            fired = await asyncio.to_thread(reexec_called.wait, 2)
+
+            assert fired, "reexec did not run within the patched deadline window"
+            assert call_info["thread"] is not loop_thread, (
+                "reexec ran on the event loop's own thread — it could not "
+                "have fired while that thread was frozen inside close_mcp"
+            )
+            # Comfortably under close_mcp's 10s safety cap, close to the
+            # patched 0.1s deadline.
+            assert call_info["elapsed"] < 2.0
+            # Let the fallback's own path finish naturally so nothing leaks
+            # past this patched context.
+            await asyncio.sleep(0.1)
+
+    @pytest.mark.asyncio
+    async def test_a_cancelled_restart_cancels_its_own_watchdog(self, tmp_path):
+        """The TUI quitting mid-restart cancels ``_do_restart``'s own task
+        (``asyncio.run`` tears it down). Nobody is restarting anymore at
+        that point, so the watchdog armed for it must not survive to
+        re-launch durin later, well after the user already quit."""
+        import durin.utils.restart as restart_mod
+        from durin.command.builtin import cmd_restart
+        from durin.command.router import CommandContext
+
+        started = asyncio.Event()
+
+        class _SlowLoop:
+            def __init__(self) -> None:
+                self.sessions = MagicMock()
+
+            async def close_mcp(self) -> None:
+                started.set()
+                await asyncio.Event().wait()  # the test cancels before this resolves
+
+        loop = _SlowLoop()
+        msg = InboundMessage(channel="cli", sender_id="user", chat_id="direct", content="/restart")
+        ctx = CommandContext(msg=msg, session=None, key=msg.session_key, raw="/restart", loop=loop)
+
+        scheduled: list[asyncio.Task] = []
+
+        async def _fast_sleep(_delay: float) -> None:
+            return None
+
+        def _capture_task(coro):
+            task = asyncio.create_task(coro)
+            scheduled.append(task)
+            return task
+
+        # cmd_restart's own `except asyncio.CancelledError` needs the real
+        # exception type too — this test is the first to actually reach
+        # that branch through a fully replaced `asyncio` reference.
+        fake_asyncio = SimpleNamespace(
+            sleep=_fast_sleep, create_task=_capture_task, CancelledError=asyncio.CancelledError,
+        )
+        created_timers: list[threading.Timer] = []
+        real_arm_restart_deadline = restart_mod.arm_restart_deadline
+
+        def _tracking_arm(*args, **kwargs):
+            timer = real_arm_restart_deadline(*args, **kwargs)
+            created_timers.append(timer)
+            return timer
+
+        with patch.dict(os.environ, {}, clear=False), \
+             patch("durin.command.builtin.asyncio", new=fake_asyncio), \
+             patch("durin.command.builtin.arm_restart_deadline", _tracking_arm), \
+             patch("durin.utils.restart.os.execv") as mock_execv:
+            await cmd_restart(ctx)
+            await started.wait()
+            task = scheduled[0]
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+            # Captured before this test's own cleanup (none needed here,
+            # since the code under test must already have cancelled it) —
+            # `finished` is set by a real fire OR a cancel, but the timer's
+            # real deadline (30s, unpatched) cannot have elapsed in this
+            # test's runtime, so True here can only mean the code cancelled
+            # it.
+            assert created_timers, "no watchdog timer was armed"
+            assert [t.finished.is_set() for t in created_timers] == [True]
+        mock_execv.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_restart_intercepted_in_run_loop(self):
         """Verify /restart is handled at the run-loop level, not inside _dispatch."""
         loop, bus = _make_loop()
         msg = InboundMessage(channel="telegram", sender_id="u1", chat_id="c1", content="/restart")
 
         with patch.object(loop, "_dispatch", new_callable=AsyncMock) as mock_dispatch, \
-             patch("durin.command.builtin.os.execv"):
+             patch("durin.utils.restart.os.execv"):
             await bus.publish_inbound(msg)
 
             loop._running = True

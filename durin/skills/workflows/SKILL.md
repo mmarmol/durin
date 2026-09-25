@@ -158,6 +158,10 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   asked, instead of restarting from scratch. **An aborted run resumes the same way** when the
   failure looks transient (a network/API error at one node): `resume_run_id=<that id>`
   retries the FAILED node with the exact input it had — completed nodes never re-run.
+  When nobody can be asked (a cron or workflow context), the summary says so: answer from
+  what you were given, or stop and report that the run waits for input. **A run paused
+  for a person's approval is not yours to resolve**: the summary says so, and
+  `run_workflow` refuses `resume_run_id` on it — tell the user it is waiting for them.
 - **Author:** call `workflow_write(name, definition, rationale)` — it validates the graph
   before anything lands (schema errors come back verbatim), refuses to overwrite an existing
   name, and records the change in the workflow version history. A successful save may still

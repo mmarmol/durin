@@ -197,6 +197,19 @@ def build_service_registry(
     except Exception:  # noqa: BLE001 - best-effort sweep
         pass
 
+    # Expire pending approval records past their TTL and prune resolved ones
+    # past their retention window. `decide` and `durin approvals list` also
+    # apply this lazily, but a workspace nobody touches between gateway
+    # restarts would otherwise keep a `.approvals/` directory that never
+    # catches up.
+    try:
+        from durin.agent import approval_store
+
+        counts = approval_store.expire_and_prune(_workspace())
+        logger.debug("approvals expire_and_prune at boot: {}", counts)
+    except Exception as exc:  # noqa: BLE001 - best-effort sweep must not block startup
+        logger.warning("approvals expire_and_prune failed at boot: {}", exc)
+
     # The boot sweep only helps when the gateway restarts; a run orphaned by
     # a crashed TUI (or any other co-owner of this workspace) would otherwise
     # stay "running" until the NEXT gateway restart. A slow periodic sweep

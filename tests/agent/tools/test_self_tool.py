@@ -1114,5 +1114,6 @@ class TestSetContext:
         from durin.agent.tools.context import RequestContext
         tool = _make_tool()
         tool.set_context(RequestContext(channel="feishu", chat_id="oc_abc123"))
-        assert tool._channel == "feishu"
-        assert tool._chat_id == "oc_abc123"
+        ctx = tool._ctx.get()
+        assert ctx.channel == "feishu"
+        assert ctx.chat_id == "oc_abc123"

@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from durin.agent.tools.base import Tool, tool_parameters
-from durin.agent.tools.context import ContextAware, RequestContext
+from durin.agent.tools.context import ContextAware, RequestContext, RequestContextVar
 from durin.agent.tools.schema import StringSchema, tool_parameters_schema
 from durin.telemetry.logger import current_telemetry
 from durin.utils.atomic_write import atomic_write_text
@@ -120,15 +120,17 @@ class _PlanModeToolBase(ContextAware):
     def __init__(self, sessions: "SessionManager", workspace: Path | None = None) -> None:
         self._sessions = sessions
         self._workspace = workspace
-        self._request_ctx: RequestContext | None = None
+        # This turn's context: the instance is shared by concurrent turns.
+        self._ctx = RequestContextVar("plan_mode_request_ctx")
 
     def set_context(self, ctx: RequestContext) -> None:
-        self._request_ctx = ctx
+        self._ctx.set(ctx)
 
     def _session(self) -> Any | None:
-        if self._request_ctx is None:
+        ctx = self._ctx.get()
+        if ctx is None:
             return None
-        key = self._request_ctx.session_key
+        key = ctx.session_key
         if not key:
             return None
         return self._sessions.get_or_create(key)
@@ -341,7 +343,8 @@ class ExitPlanModeTool(Tool, _PlanModeToolBase):
         # wiring; a /tmp fallback handles workspace-less tests. The
         # per-session subdirectory keeps plans from concurrent chats
         # separated.
-        session_key = self._request_ctx.session_key if self._request_ctx else None
+        ctx = self._ctx.get()
+        session_key = ctx.session_key if ctx else None
         plan_dir = _resolve_plan_dir(self._workspace, session_key)
         try:
             plan_dir.mkdir(parents=True, exist_ok=True)

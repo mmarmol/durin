@@ -48,8 +48,9 @@ single write path for every origin — the in-loop agent tool, the daily dream
 pass, import, and curation all converge on the same commit machinery.
 The import gate (`decide_action` in `durin/agent/skills_import.py`) is enforced
 in code, never in prompt: dangerous sources are blocked, code-carrying or
-cautioned sources require human confirmation, and only safe allowlisted sources
-auto-proceed. The gate runs again at install, even if an earlier scan said safe.
+cautioned sources need an approval the model cannot give (the user, or within
+limits the skills judge or an `auto` install policy), and only safe allowlisted
+sources auto-proceed. The gate runs again at install, even if an earlier scan said safe.
 The webui import finishes the job for an `allow` verdict (auto-install rather
 than parking in quarantine) and short-circuits an already-installed skill before
 the costly fetch. First-party **builtins** (`source == "builtin"`) are exempt
@@ -64,16 +65,16 @@ the agent builds and tests a skill with ordinary file and exec tools — a
 script, a venv, a real input — over as many turns as it needs, then a single
 `skill_publish` call promotes the finished draft. Both ramps converge on
 `_finalize_skill`, the shared activation core: composition gate, security scan
-of any bundled files, provenance stamp, attribution, `skill.authored`
+(prose-only skills included), provenance stamp, attribution, `skill.authored`
 telemetry, and the versioned commit that makes the skill visible. `skill_edit`
 (a bounded update to an already-active skill) is a separate, narrower path
-that does not re-enter this core.
+that does not re-enter this core, though it is scanned before it lands.
 
 **The registry is not a generic filesystem.** `write_file`, `edit_file`, and
 `notebook_edit` refuse any path under `skills/`, redirecting the caller to the
 draft flow instead — reads are unaffected, so an active skill's SKILL.md stays
 directly readable. The only doors into `skills/` are durin's own store
-operations: `_finalize_skill`, `apply_skill_edit`/`save_skill_content` (both
+operations: `_finalize_skill`, `apply_skill_edit`/`write_skill_edit`/`save_skill_content` (all
 fork a builtin in first), import, and dream's curation and restructure passes.
 
 **Three retrieval tiers match context cost to need.** Always-tier (`always:
@@ -170,12 +171,13 @@ whichever ramp produced the body. It first calls `_ensure_surface_frontmatter`
 to backfill a missing `name`/`description` in the frontmatter, derived from the
 body (`02_lifecycle_and_curation.md` §4) — so a body with no explicit
 `description:` field still lands with a searchable one, regardless of which
-ramp produced it. When the skill carries bundled files it then runs
-`scan_skill` — the same deterministic scanner imports pass through — and a
+ramp produced it. It then runs
+`scan_skill` on the whole directory (a prose-only SKILL.md included: its instructions are what the agent follows)
+— the same deterministic scanner imports pass through — and a
 `caution`/`dangerous` verdict quarantines the whole directory instead of
 activating it (see Sweep and quarantine below for the quarantine shape). A
-`safe` verdict (or no bundled files at all) stamps `metadata.durin.provenance`
-(`source`, `created_at`, and `scan_verdict` when a scan ran) and
+`safe` verdict stamps `metadata.durin.provenance`
+(`source`, `created_at`, `scan_verdict`) and
 `metadata.durin.mode: auto`, commits through `GitStore.auto_commit` with
 Attribution trailers (Actor, Session, Agent), calls `_sync_index` to update FTS
 and vector, and emits a `skill.authored` telemetry event — `ramp` names which
@@ -202,7 +204,9 @@ narrower path — see Evolve below and `02_lifecycle_and_curation.md`. It forks 
 builtin into the workspace via `fork_on_write` before applying the diff, so the
 builtin package is never touched, and it does not re-enter `_finalize_skill`:
 no composition re-gate, no new `skill.authored` event, because the skill is
-already active.
+already active. Before it lands the edit is scanned against the skill as it
+stands; an edit to a `manual` skill, or one whose scan needs review, becomes an
+approval request instead (see `../security.md`, Re-scan on skill writes).
 
 ### Draft and publish
 
@@ -249,7 +253,14 @@ validated, versioned write door — `workflows/` (use `workflow_write` /
 `workflow_edit`, and `workflow_script_write` for the scripts a script node runs)
 and `automations/` (use the automations tool) — because otherwise the rule is
 only an instruction in a skill, and a generic write lands unvalidated and
-unversioned.
+unversioned. `.approvals/` and `.durin/import-quarantine/` are denied the same
+way but own no door at all: approval records are written only by the server,
+and the quarantine only by `skill_import`'s fetch step, so a write there would
+let the model forge or rewrite its own approval, or the source and verdict of
+an import nobody scanned. The same tools also refuse durin's own configuration
+and secret stores under `DURIN_HOME` (`config.json` and its `config.json.d/`
+directory, `secrets.json`, `api_tokens.json`, `pairing.json`), which the person
+changes through the dashboard or durin's own CLI.
 The guard lives in the agent-facing tools themselves
 (`durin/agent/tools/filesystem.py`, `.../notebook.py`); durin's own store
 operations write to `skills/` directly through `skills_store.py` and never go
@@ -300,10 +311,12 @@ one pipeline in `durin/agent/skills_import.py`:
 5. `decide_action(source, verdict=..., carries_code=..., allowlist=...)` applies
    the trust-times-verdict gate: `dangerous` → block; `carries_code` OR
    `caution` OR source not in allowlist → confirm; safe + allowlisted → allow.
+   `allow` installs directly; `confirm`/`block` become a `skill_install` approval
+   request (`../security.md`).
 6. `install_imported_skill` re-runs the scan on the quarantined copy (fresh, in
    case of tampering since the initial scan), enforces the gate a second time in
-   code, stamps `metadata.durin.provenance`, and calls `GitStore.auto_commit`.
-   `_sync_index` updates the search indices.
+   code, stamps `metadata.durin.provenance` (with `approval_id`/`approved_by`),
+   and calls `GitStore.auto_commit`. `_sync_index` updates the search indices.
 
 The optional LLM judge (`durin/security/skill_judge.py`,
 `skills.security.llm_judge.trigger`, default `off`) adds a semantic layer after
@@ -536,10 +549,10 @@ there is no session left to credit.
 | `skills.security.max_files` | 100 | Per-fetch file count cap. |
 | `skills.security.max_total_bytes` | 3 MB | Per-fetch total size cap. |
 | `skills.security.max_file_bytes` | 1 MB | Per-file size cap. |
-| `skills.security.llm_judge.trigger` | `"off"` | When to run the semantic LLM judge: `off` (never auto), `uncertain` (when already cautioned), `always`. |
+| `skills.security.llm_judge.trigger` | `"off"` | When to run the semantic LLM judge: `off` (never auto; never clears approvals), `uncertain` (when already cautioned), `always`; when not `off` it is also consulted for the approvals it may clear. |
 | `skills.discovery.registries` | skills.sh + clawhub enabled | List of `SkillRegistryConfig` entries. Both adapters enabled by default. |
 | `skills.discovery.search_limit` | 10 | Max hits returned per registry search. |
-| `skills.install_policy` | `"approve"` | Governs `skill_install_deps`: `never` (report only), `approve` (dry-run then confirm), `auto` (run without per-call confirm). All policies execute through ExecTool. |
+| `skills.install_policy` | `"approve"` | Who authorizes flagged skill installs and dependency installs: `approve` (the user; the judge may clear a non-dangerous install), `auto` (pre-authorized; a dangerous skill still needs the user), `never` (dependency installs only reported). Dependency installs execute through ExecTool. |
 | `memory.index_skills` | `true` | Index workspace skills as a searchable memory class (FTS + vector). |
 | `agents.defaults.skills_hot_tier.enabled` | `true` | Enable the usage-ranked hot-tier. False restores full-catalog injection. |
 | `agents.defaults.skills_hot_tier.frequent` | 30 | Top N skills by call count over the frequent window. |
@@ -568,12 +581,12 @@ there is no session left to credit.
 | `skill_write` | Create a new skill (routes to `dream_create_skill`). Also registered in the dream's skill-extract sub-agent. |
 | `skill_publish` | Promote a `skill-drafts/<name>/` draft into the active registry (routes to `publish_draft_skill`). |
 | `skill_discard` | Delete a draft under `skill-drafts/<name>/`; never touches the active registry. |
-| `skill_edit` | Bounded edit (mode-gated; forks builtins). |
+| `skill_edit` | Bounded edit (forks builtins). A `manual` skill's edit, or one whose scan needs review, is approved by the user (or the judge within limits) or filed as a pending request for `durin approvals`. |
 | `skill_search` | Search registries; returns hits and refs. Never installs. |
-| `skill_import` | Import from a source through the gate. |
+| `skill_import` | Import from a source through the gate; a flagged install is approved by policy, the judge (never for dangerous) or the user. |
 | `skill_audit` | Run the static scan on an installed skill. |
 | `skills_list` | List available and quarantined skills. |
-| `skill_install_deps` | Install a skill's declared dependencies (dry-run by default; governed by `install_policy`; executes via ExecTool). |
+| `skill_install_deps` | Install a skill's declared dependencies: the user approves the exact commands (`approve`), `auto` runs them, `never` only reports; executes via ExecTool. |
 | `skill_observe` | Log live skill feedback to the observation queue. Logs only — no skill is mutated in-session. |
 
 `skill_acquire_seed` declares `_scopes={"dream"}` but is unreachable to the
@@ -634,10 +647,14 @@ and diff are native git operations. This avoids a second storage layer and keeps
 recovery human-readable.
 
 **Gate is in code, not prompt.** `decide_action` is a pure function called in
-`install_imported_skill`. The LLM judge is an optional additive layer; the
-deterministic rules (dangerous block, code/caution confirm) cannot be overridden
-by a prompt or a model output. This reflects the principle that security floors
-should not depend on model cooperation.
+`install_imported_skill`. The deterministic rules (dangerous block, code/caution
+confirm) cannot be overridden by a prompt or a model output — `skill_import`
+takes no `confirm` or `override` argument. The LLM judge is an optional additive
+layer at scan time; within its own severity cap and approval limits it may also
+clear an eligible `confirm` request (`../security.md`, The judge as an
+approver), but it can never turn a `dangerous` verdict into an install. This
+reflects the principle that security floors should not depend on model
+cooperation.
 
 **Delta-only curation.** `curate_catalog` reviews only skills whose body changed
 since the last pass or that have open observations. This means curation cost

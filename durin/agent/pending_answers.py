@@ -2,14 +2,21 @@
 
 The ask_user tool awaits a Future that is resolved by the agent loop when
 the user replies, allowing the same turn to continue with the answer as the
-tool result. A blocked turn cannot survive a restart — on timeout or
-disconnect, the tool falls back to yielding, using session metadata to
-maintain state.
+tool result. A waiter that cannot be answered falls back to yield semantics
+(``FALLBACK``) on the answer timeout, a media reply, or when the webui chat
+it waits in has had no viewer for a grace window: the question stays in
+session metadata and the user's next message answers it in a new turn.
+
+A blocked turn does not survive a restart. At shutdown ``AgentLoop.stop``
+cancels the waiters; the gateway journals the message each turn in flight
+was answering and replays it on the next start, so the question is asked
+again.
 """
 
 from __future__ import annotations
 
 import asyncio
+import weakref
 
 
 class _Fallback:
@@ -23,14 +30,25 @@ FALLBACK = _Fallback()
 
 _WAITERS: dict[str, asyncio.Future] = {}
 
+# session_key -> (kind, ref) for the live waiter registered on it. "question"
+# waiters take the user's text verbatim; "approval" waiters (ref = the
+# approval record id) accept only a yes/no verdict, parsed by the loop.
+_KINDS: dict[str, tuple[str, str | None]] = {}
+
+# waiter future -> the ``origin`` of the message that answered it ("api" for
+# an API client), read by the waiting tool so the turn learns who took part
+# in it. Weak keys: an entry goes when its future does.
+_ORIGINS: "weakref.WeakKeyDictionary[asyncio.Future, str]" = weakref.WeakKeyDictionary()
+
 # True while AgentLoop.run()'s inbound consumer is active — the only thing
 # that can ever resolve a waiter. Without it (single-message mode, tests),
 # blocking would stall for the full timeout with nobody listening.
 _CONSUMER_ACTIVE = False
 
-# Sessions that never receive interactive replies: blocking there would
-# always end in a useless timeout.
-NON_INTERACTIVE_SESSION_PREFIXES = ("cron:", "system:")
+# False while the only surface in this process cannot send a reply until the
+# turn ends: the legacy prompt_toolkit REPL reads its next line only after the
+# turn finishes, so a wait there could only end in the full timeout.
+_MID_TURN_REPLIES = True
 
 
 def set_consumer_active(active: bool) -> None:
@@ -38,9 +56,16 @@ def set_consumer_active(active: bool) -> None:
     _CONSUMER_ACTIVE = active
 
 
+def set_mid_turn_replies(enabled: bool) -> None:
+    """Declare whether this process's surface can send a reply mid-turn."""
+    global _MID_TURN_REPLIES
+    _MID_TURN_REPLIES = enabled
+
+
 def consumer_active() -> bool:
-    """True while an inbound consumer is alive to deliver a user's answer."""
-    return _CONSUMER_ACTIVE
+    """True while an inbound consumer is alive and a user's answer can reach
+    it before the turn ends."""
+    return _CONSUMER_ACTIVE and _MID_TURN_REPLIES
 
 
 def can_block(session_key: str | None) -> bool:
@@ -55,8 +80,12 @@ def can_block(session_key: str | None) -> bool:
     return human_reachable(session_key)
 
 
-def create(session_key: str) -> asyncio.Future:
+def create(session_key: str, *, kind: str = "question", ref: str | None = None) -> asyncio.Future:
     """Register a fresh waiter for *session_key*, replacing any stale one.
+
+    ``kind`` tells the loop how to read the reply: a ``question`` takes the
+    user's text verbatim, an ``approval`` (``ref`` = the record id) takes
+    only a yes/no verdict parsed by the server.
 
     Must be called from a coroutine: the future binds to the RUNNING loop
     (``get_event_loop`` could return a stale policy loop under test
@@ -67,7 +96,18 @@ def create(session_key: str) -> asyncio.Future:
         stale.cancel()
     fut: asyncio.Future = asyncio.get_running_loop().create_future()
     _WAITERS[session_key] = fut
+    _KINDS[session_key] = (kind, ref)
     return fut
+
+
+def waiting_kind(session_key: str) -> str | None:
+    """``question`` / ``approval`` for a live waiter, else None."""
+    return _KINDS[session_key][0] if is_waiting(session_key) and session_key in _KINDS else None
+
+
+def waiting_ref(session_key: str) -> str | None:
+    """The approval record id a live approval waiter is for, else None."""
+    return _KINDS[session_key][1] if is_waiting(session_key) and session_key in _KINDS else None
 
 
 def is_waiting(session_key: str) -> bool:
@@ -81,18 +121,29 @@ def _pop_live(session_key: str) -> asyncio.Future | None:
     if fut is None:
         return None
     del _WAITERS[session_key]
+    _KINDS.pop(session_key, None)
     if fut.done():
         return None
     return fut
 
 
-def resolve(session_key: str, text: str) -> bool:
-    """Deliver *text* to the waiter. True when a live waiter consumed it."""
+def resolve(session_key: str, text: str, *, origin: str | None = None) -> bool:
+    """Deliver *text* to the waiter. True when a live waiter consumed it.
+
+    *origin* is the answering message's ``origin`` metadata, kept for the
+    waiter (``answer_origin``)."""
     fut = _pop_live(session_key)
     if fut is None:
         return False
+    if origin:
+        _ORIGINS[fut] = origin
     fut.set_result(text)
     return True
+
+
+def answer_origin(fut: asyncio.Future) -> str | None:
+    """The ``origin`` of the message that answered *fut*, if it had one."""
+    return _ORIGINS.get(fut)
 
 
 def fallback(session_key: str) -> bool:
@@ -108,13 +159,16 @@ def discard(session_key: str, fut: asyncio.Future) -> None:
     """Remove *fut* from the registry if it is still the registered waiter."""
     if _WAITERS.get(session_key) is fut:
         del _WAITERS[session_key]
+        _KINDS.pop(session_key, None)
 
 
 def reset() -> None:
-    """Clear all waiters and the consumer flag (tests)."""
-    global _CONSUMER_ACTIVE
+    """Cancel all waiters and clear the consumer flag (shutdown and tests)."""
+    global _CONSUMER_ACTIVE, _MID_TURN_REPLIES
     for fut in _WAITERS.values():
         if not fut.done():
             fut.cancel()
     _WAITERS.clear()
+    _KINDS.clear()
     _CONSUMER_ACTIVE = False
+    _MID_TURN_REPLIES = True

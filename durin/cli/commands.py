@@ -5,6 +5,7 @@ import os
 import select
 import signal
 import sys
+import threading
 from collections.abc import Callable
 from contextlib import nullcontext, suppress
 from pathlib import Path
@@ -124,8 +125,11 @@ from durin.config.schema import Config
 from durin.personas import seed_example_personas
 from durin.utils.helpers import sync_workspace_templates
 from durin.utils.restart import (
+    arm_restart_deadline,
     consume_restart_notice_from_env,
     format_restart_completed_message,
+    reexec,
+    set_restart_handler,
     should_show_cli_restart_notice,
 )
 
@@ -463,6 +467,11 @@ async def _maybe_print_interactive_progress(
     renderer: StreamRenderer | None = None,
 ) -> bool:
     metadata = msg.metadata or {}
+    # Session-state snapshots drive the TUI's and the webui's panels (goal
+    # banner, approval card). This surface has no such panel, and the
+    # frame's empty content would otherwise read as the end of the turn.
+    if metadata.get("_goal_state_sync"):
+        return True
     if metadata.get("_retry_wait"):
         await _print_interactive_progress_line(msg.content, thinking, renderer)
         return True
@@ -1703,6 +1712,15 @@ def _run_gateway(
     # the same cancelled/aborted result.
     _shutdown_requested = False
 
+    # Set by /restart (durin.utils.restart.request_restart): once the graceful
+    # shutdown below has run, the process re-execs itself.
+    _restart_requested = False
+
+    # The watchdog armed for that restart (arm_restart_deadline), so a real
+    # signal landing during its shutdown can cancel it: a signal turns the
+    # restart into a plain stop, and nothing here should still re-exec.
+    _restart_timer: threading.Timer | None = None
+
     automations_runtime = AutomationsRuntime(
         config.workspace_path,
         workflow_exec=_automations_workflows_service.execute,
@@ -1776,6 +1794,8 @@ def _run_gateway(
         webui_runtime_model_preset=_webui_runtime_model_preset,
         webui_runtime_concurrency_snapshot=agent.build_concurrency_snapshot,
         cron_service=cron,
+        webui_approval_deps=getattr(agent, "approval_exec_deps", None),
+        webui_session_turn_key=getattr(agent, "bus_turn_key", None),
     )
 
     if channels.enabled_channels:
@@ -2094,8 +2114,17 @@ def _run_gateway(
         unified_server = None  # Step 4: unified uvicorn on the WS port (default path)
 
         def _request_shutdown(signame: str) -> None:
-            nonlocal _shutdown_requested
+            nonlocal _shutdown_requested, _restart_requested, _restart_timer
             _shutdown_requested = True
+            if signame != "/restart" and _restart_requested:
+                # A real signal wins over a restart already under way: this
+                # becomes a plain stop, so nothing here should re-exec —
+                # cancel the watchdog armed for that restart too, or it would
+                # fire on its own after the deadline regardless.
+                _restart_requested = False
+                if _restart_timer is not None:
+                    _restart_timer.cancel()
+                    _restart_timer = None
             logger.info("Gateway received {}; shutting down gracefully.", signame)
             if unified_server is not None:
                 unified_server.should_exit = True
@@ -2111,6 +2140,22 @@ def _run_gateway(
                 loop.add_signal_handler(_sig, _request_shutdown, _sig.name)
             except (NotImplementedError, RuntimeError):
                 pass  # add_signal_handler is unsupported on Windows
+
+        def _request_restart() -> None:
+            # /restart takes the same graceful shutdown as a signal and
+            # re-execs afterwards. A stop already under way wins: a /restart
+            # landing during it must not turn the stop into a restart.
+            nonlocal _restart_requested, _restart_timer
+            if _shutdown_requested:
+                return
+            _restart_requested = True
+            # A hang anywhere in the graceful shutdown (MCP, cron, the dream
+            # and embed workers, the drain, asyncio.run's own teardown) must
+            # still end in a re-exec; this watchdog is the backstop.
+            _restart_timer = arm_restart_deadline()
+            _request_shutdown("/restart")
+
+        set_restart_handler(_request_restart)
 
         try:
             await cron.start()
@@ -2249,7 +2294,14 @@ def _run_gateway(
             if flushed:
                 logger.info("Shutdown: flushed {} session(s) to disk", flushed)
 
-    asyncio.run(run())
+    try:
+        asyncio.run(run())
+    finally:
+        set_restart_handler(None)
+    if _restart_requested:
+        # Every subsystem is down now, as a graceful stop leaves it; a fresh
+        # process takes this one's place.
+        reexec()
 
 
 # ============================================================================
@@ -2500,6 +2552,11 @@ def agent(
 
         async def run_interactive():
             nonlocal cli_chat_id
+            # This REPL reads the next line only after the turn ends, so an
+            # answer can never arrive mid-turn: the agent must not wait on one.
+            from durin.agent import pending_answers
+
+            pending_answers.set_mid_turn_replies(False)
             bus_task = asyncio.create_task(agent_loop.run())
             turn_done = asyncio.Event()
             turn_done.set()
@@ -3440,12 +3497,81 @@ def _refresh_help_epilog() -> None:
         pass  # keep the static _HELP_EPILOG
 
 
-@app.command()
-def approvals(
-    subsystem: str = typer.Argument(
-        "", help="Only this subsystem (mcp, skills). Default: all."),
-    discard: str = typer.Option(
-        "", "--discard", help="Discard one pending request by id."),
+approvals_app = typer.Typer(
+    invoke_without_command=True,
+    no_args_is_help=False,
+    help="Privileged actions an autonomous run recorded for your approval.",
+)
+app.add_typer(approvals_app, name="approvals")
+
+
+def _approvals_config(ctx: typer.Context) -> Config:
+    opts = ctx.obj or {}
+    return _load_runtime_config(opts.get("config"), opts.get("workspace"))
+
+
+def _approvals_workspace(ctx: typer.Context) -> Path:
+    return Path(_approvals_config(ctx).workspace_path).expanduser()
+
+
+def _approvals_exec_deps(cfg: Config) -> Any:
+    """Handles for running an approved request from this terminal.
+
+    The exec tool is built from the loaded config the way the gateway builds
+    it, and only its non-asking runner is handed over, so a dependency or
+    runtime install runs past the same guards (deny rules, the hard floor,
+    the workspace boundary) and can never open a second approval. There is
+    no live MCP handle here: an MCP change is saved to config, and the
+    executor says when the gateway applies it."""
+    from durin.agent.approval_executors import ExecDeps
+    from durin.agent.tools.context import ToolContext
+    from durin.agent.tools.shell import ExecTool
+
+    tool_ctx = ToolContext(config=cfg.tools, workspace=str(cfg.workspace_path), app_config=cfg)
+    return ExecDeps(exec_run=ExecTool.create(tool_ctx)._run)
+
+
+def _approval_age(requested_at: str) -> str:
+    """Human-friendly '2h'/'3d' age label for a record's requested_at."""
+    from datetime import datetime, timezone
+    try:
+        then = datetime.fromisoformat(requested_at)
+    except (TypeError, ValueError):
+        return "?"
+    delta = max(0.0, (datetime.now(timezone.utc) - then).total_seconds())
+    if delta < 60:
+        return f"{int(delta)}s"
+    if delta < 3600:
+        return f"{int(delta / 60)}m"
+    if delta < 86400:
+        return f"{int(delta / 3600)}h"
+    return f"{int(delta / 86400)}d"
+
+
+def _approvals_list(ctx: typer.Context, show_all: bool) -> None:
+    from durin.agent import approval_store
+
+    ws = _approvals_workspace(ctx)
+    # A pending record past its TTL, or a resolved one past its retention
+    # window, must never show as pending / linger on disk just because
+    # nobody has decided or listed it since it aged out.
+    approval_store.expire_and_prune(ws)
+    records = (approval_store.list_records(ws) if show_all
+               else approval_store.list_records(ws, status="pending"))
+    if not records:
+        console.print("No approvals." if show_all else "No pending approvals.")
+        return
+    for rec in records:
+        console.print(
+            f"[bold]{rec['id']}[/bold]  {rec['kind']}  {rec['status']}  "
+            f"{_approval_age(rec.get('requested_at') or '')}  {rec['summary']}")
+
+
+@approvals_app.callback()
+def approvals_root(
+    ctx: typer.Context,
+    all_: bool = typer.Option(
+        False, "--all", help="Include resolved records too (default: pending only)."),
     config: str | None = typer.Option(None, "--config", "-c", help="Config file path."),
     workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace path."),
 ) -> None:
@@ -3454,32 +3580,118 @@ def approvals(
     A cron job, dream, workflow or sub-agent has no user to ask, and a turn
     driven by an API token has no person's authority, so an action that would
     add or change executable state (an MCP server, a skill, a dependency
-    install) is recorded instead of run. This is where they wait.
+    install) is recorded instead of run (an exec command that needs approval
+    is refused, not recorded). This is where they wait: bare `durin approvals`
+    lists pending ones (`--all` for everything too); `approve`/`reject <id>`
+    decide one; `discard <id>` deletes a record without deciding it.
     """
+    ctx.obj = {"config": config, "workspace": workspace}
+    if ctx.invoked_subcommand is None:
+        _approvals_list(ctx, all_)
+
+
+@approvals_app.command("list")
+def approvals_list_cmd(
+    ctx: typer.Context,
+    all_: bool = typer.Option(
+        False, "--all", help="Include resolved records too (default: pending only)."),
+) -> None:
+    """List approval records (pending only by default)."""
+    _approvals_list(ctx, all_)
+
+
+def _approval_needs_exec_runner(workspace: Path, approval_id: str) -> bool:
+    """True when an exec runner is what request *approval_id* lacks to run
+    here, so the CLI builds one only for such kinds: a broken exec config must
+    not block approving a change that never runs a shell command. An exec
+    request needs more than a runner (it runs only in the chat that asked), so
+    it is left to ``decide`` to refuse with its own message."""
+    from durin.agent import approval_store
+    from durin.agent.approval_executors import ExecDeps, missing_handles
+
+    record = approval_store.get(workspace, approval_id)
+    if record is None or record.get("legacy"):
+        return False
+    kind = record.get("kind") or ""
+    try:
+        without = missing_handles(kind, ExecDeps())
+        with_runner = missing_handles(kind, ExecDeps(exec_run=lambda **_: None))
+    except Exception:  # noqa: BLE001 — an unknown kind is decide's to refuse
+        return False
+    return without is not None and with_runner is None
+
+
+def _approvals_decide(ctx: typer.Context, approval_id: str, decision: str) -> None:
+    # The agent's exec tool runs commands with stdin as a pipe, so a model
+    # could otherwise approve its own pending request by shelling out to this
+    # very command. Refusing outside a real terminal keeps that decision with
+    # a person at a keyboard.
+    if not _stdin_is_interactive():
+        console.print("[red]approving requires an interactive terminal[/red]")
+        raise typer.Exit(1)
     from durin.agent import approval
+    from durin.agent.approval_executors import ExecDeps
 
-    cfg = _load_runtime_config(config, workspace)
+    cfg = _approvals_config(ctx)
     ws = Path(cfg.workspace_path).expanduser()
-    subsystems = [subsystem] if subsystem else ["mcp", "skills"]
-
-    if discard:
-        for name in subsystems:
-            if approval.discard_pending(ws, name, discard):
-                console.print(f"[green]Discarded {name}/{discard}[/green]")
-                return
-        console.print(f"[yellow]No pending request {discard!r}[/yellow]")
+    deps = ExecDeps()
+    if decision == "approve" and _approval_needs_exec_runner(ws, approval_id):
+        # Built before the record is touched: a runner that cannot be built
+        # must refuse the approval, never leave the request approved and then
+        # failed for want of it.
+        try:
+            deps = _approvals_exec_deps(cfg)
+        except Exception as exc:  # noqa: BLE001 — any build failure refuses the approval
+            console.print(f"Not approved: could not set up the exec runner: {exc}",
+                          style="red", markup=False)
+            raise typer.Exit(1) from None
+    # This process can never hand a verdict to a turn waiting in the gateway
+    # (its waiters live in the gateway's process): the decision is made and
+    # run here, and a chat turn still waiting on it reads the record when its
+    # wait ends.
+    outcome = asyncio.run(approval.decide(
+        ws, approval_id, decision,
+        decided_by={"kind": "operator", "channel": "cli"}, deps=deps))
+    console.print(outcome.message, markup=False)
+    note = (outcome.result or {}).get("note") if isinstance(outcome.result, dict) else None
+    if note:
+        console.print(note, markup=False)
+    if outcome.status in ("refused", "failed", "stale"):
         raise typer.Exit(1)
 
-    total = 0
-    for name in subsystems:
-        for record in approval.list_pending(ws, name):
-            total += 1
-            console.print(
-                f"[bold]{name}/{record['id']}[/bold]  {record['summary']}\n"
-                f"  action={record['action']}  from={record.get('session_key') or '?'}"
-                f"  at={record.get('requested_at', '')[:19]}")
-    if not total:
-        console.print("No pending approvals.")
+
+@approvals_app.command("approve")
+def approvals_approve(
+    ctx: typer.Context,
+    approval_id: str = typer.Argument(..., metavar="ID"),
+) -> None:
+    """Approve a pending request and run it (requires a real terminal)."""
+    _approvals_decide(ctx, approval_id, "approve")
+
+
+@approvals_app.command("reject")
+def approvals_reject(
+    ctx: typer.Context,
+    approval_id: str = typer.Argument(..., metavar="ID"),
+) -> None:
+    """Reject a pending request (requires a real terminal)."""
+    _approvals_decide(ctx, approval_id, "reject")
+
+
+@approvals_app.command("discard")
+def approvals_discard(
+    ctx: typer.Context,
+    approval_id: str = typer.Argument(..., metavar="ID"),
+) -> None:
+    """Delete an approval record without deciding it."""
+    from durin.agent import approval_store
+
+    ws = _approvals_workspace(ctx)
+    if approval_store.discard(ws, approval_id):
+        console.print(f"[green]Discarded {approval_id}[/green]")
+    else:
+        console.print(f"[yellow]No approval request {approval_id!r}[/yellow]")
+        raise typer.Exit(1)
 
 
 _refresh_help_epilog()

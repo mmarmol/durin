@@ -192,3 +192,16 @@ def test_ws_blob_defaults_omit_mode_and_question():
     assert "mode" not in blob
     # Default mode is omitted to keep the frame small.
     assert "mode" not in goal_state_ws_blob({"agent_mode": "build"})
+
+
+def test_ws_blob_carries_the_pending_approval():
+    """An approval the turn waits on rides the goal_state frame, so the webui
+    card and the TUI bubble can show it while the gated tool blocks."""
+    meta = {"pending_approval": {
+        "approval_id": "a1b2c3d4e5f6", "kind": "exec_command",
+        "summary": "run `make clean`", "detail": {"command": "make clean"},
+    }}
+    assert goal_state_ws_blob(meta)["pending_approval"] == meta["pending_approval"]
+    assert "pending_approval" not in goal_state_ws_blob({})
+    assert "pending_approval" not in goal_state_ws_blob(
+        {"pending_approval": {"summary": "no id"}})

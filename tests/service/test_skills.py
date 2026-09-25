@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -24,12 +25,12 @@ from durin.service.skills import (
     SkillRemoveCommand,
     SkillReviewCommand,
     SkillSaveCommand,
-    SkillUnreviewCommand,
     SkillsImportCommand,
     SkillsListQuery,
     SkillsQuarantineQuery,
     SkillsResolveQuery,
     SkillsService,
+    SkillUnreviewCommand,
 )
 from durin.service.types import (
     ConflictError,
@@ -316,10 +317,14 @@ async def test_unreview_clears_review(tmp_path: Path) -> None:
 async def test_judge_runs_on_quarantined_skill(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     ws = _make_workspace(tmp_path)
     _make_quarantine(ws, "cand")
-    monkeypatch.setattr(
-        "durin.memory.llm_invoke.judge_llm_invoke",
-        lambda prompt, *, model=None: "===FINDINGS===\n===END===\n",
-    )
+    def _judge_reply(prompt, *, model=None):
+        # skill_judge's END marker must repeat the random per-call token
+        # embedded in its own prompt.
+        tok = re.search(r"^([0-9a-f]{16})$", prompt, re.MULTILINE).group(1)
+        return (f"===SUMMARY===\nClean.\n===VERDICT===\nsafe\n===FINDINGS===\nnone\n"
+                f"===TOOLS===\nnone\n===END {tok}===\n")
+
+    monkeypatch.setattr("durin.memory.llm_invoke.judge_llm_invoke", _judge_reply)
     svc = _svc(ws)
     result = await svc.judge(SkillJudgeQuery(name="cand"), Principal.local())
     assert result.data.get("judged") is True

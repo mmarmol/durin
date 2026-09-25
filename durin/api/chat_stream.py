@@ -55,6 +55,11 @@ class SseSubscriber:
     filtered out.
     """
 
+    # The client may answer a question with a plain message, but a message
+    # from the API never decides an approval: the channel does not count this
+    # watcher as holding a turn that waits on one.
+    answers_approvals = False
+
     def __init__(self, *, limit_bytes: int = SSE_BUFFER_LIMIT_BYTES, remote: Any = None) -> None:
         self._frames: deque[tuple[str, dict[str, Any], bytes]] = deque()
         self._bytes = 0

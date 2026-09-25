@@ -1336,6 +1336,12 @@ class TelegramChannel(BaseChannel):
                 "username": user.username,
                 "first_name": user.first_name,
                 "is_callback": True,
+                # The tapped message's forum topic, so the reply goes back
+                # into that topic instead of the chat's General thread.
+                "message_thread_id": getattr(query.message, "message_thread_id", None),
             },
+            # Keyed like a message typed in the same topic: a turn blocked on
+            # this answer is registered under the topic's session.
+            session_key=self._derive_topic_session_key(query.message) if query.message else None,
             is_dm=query.message.chat.type == "private" if query.message else False,
         )

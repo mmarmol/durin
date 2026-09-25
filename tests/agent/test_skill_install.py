@@ -127,7 +127,7 @@ def test_allowlisted_safe_installs_clean_with_provenance(tmp_path):
     prov = durin["provenance"]
     assert prov["source"] == "github:x/y"
     assert prov["verdict"] == "safe"
-    assert prov["overridden"] is False and prov["confirmed"] is False
+    assert prov["overridden"] is False and prov["approved_by"] is None
     assert len(prov["content_hash"]) >= 8
     audit = (tmp_path / ".durin" / "import-audit.log").read_text()
     assert "ok" in audit and "github:x/y" in audit

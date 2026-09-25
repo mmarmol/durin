@@ -30,7 +30,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from durin.agent.tools.base import Tool, tool_parameters
-from durin.agent.tools.context import ContextAware, RequestContext
+from durin.agent.tools.context import ContextAware, RequestContext, RequestContextVar
 from durin.agent.tools.schema import IntegerSchema, StringSchema, tool_parameters_schema
 
 if TYPE_CHECKING:
@@ -52,13 +52,14 @@ class _SubagentToolBase(ContextAware):
 
     def __init__(self, manager: "SubagentManager") -> None:
         self._manager = manager
-        self._request_ctx: RequestContext | None = None
+        # This turn's context: the instance is shared by concurrent turns.
+        self._ctx = RequestContextVar("subagent_lifecycle_request_ctx")
 
     def set_context(self, ctx: RequestContext) -> None:
-        self._request_ctx = ctx
+        self._ctx.set(ctx)
 
     def _session_key(self) -> str | None:
-        ctx = self._request_ctx
+        ctx = self._ctx.get()
         if ctx is None:
             return None
         if ctx.session_key:

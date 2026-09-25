@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from durin.agent.tools.base import Tool, tool_parameters
-from durin.agent.tools.context import ContextAware, RequestContext
+from durin.agent.tools.context import ContextAware, RequestContext, RequestContextVar
 from durin.agent.tools.schema import BooleanSchema, StringSchema, tool_parameters_schema
 from durin.agent.user_payloads import PENDING_SECRET_KEY
 
@@ -114,19 +114,23 @@ class RequestSecretTool(Tool, ContextAware):
 
     def __init__(self, sessions: "SessionManager | None" = None) -> None:
         self._sessions = sessions
-        self._request_ctx: RequestContext | None = None
+        # This turn's context: the instance is shared by concurrent turns.
+        self._ctx = RequestContextVar("request_secret_request_ctx")
 
     def set_context(self, ctx: RequestContext) -> None:
-        self._request_ctx = ctx
+        self._ctx.set(ctx)
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
         return cls(sessions=getattr(ctx, "sessions", None))
 
     def _session(self) -> Any | None:
-        if self._sessions is None or self._request_ctx is None:
+        if self._sessions is None:
             return None
-        key = self._request_ctx.session_key
+        ctx = self._ctx.get()
+        if ctx is None:
+            return None
+        key = ctx.session_key
         if not key:
             return None
         return self._sessions.get_or_create(key)
