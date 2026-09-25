@@ -273,6 +273,13 @@ target that is busy (`AutomationBusy`) is queued rather than dropped, carrying i
 `chain_depth` forward so the eventual drained fire resumes the same hop count instead
 of silently restarting at zero.
 
+**Who may answer.** A question pause can be answered by the operator (the HTTP
+answer route, which the webui inbox uses), by a counterpart replying in the
+claimed thread (the matcher calls `answer_nowait`), or by the agent
+(`automations(action="answer")`). An approval pause is a person's decision:
+the agent tool refuses a run whose `ask_kind` is `"approval"` before it reaches
+the runtime, so only the answer route and a thread reply resolve one.
+
 **Answering (`answer_nowait` / `answer` / `_answer_prologue` / `_answer_continuation`)**
 resumes a `paused` run. The work splits into a synchronous prologue and a
 backgrounded continuation, because a resume is a full workflow run — the same
@@ -606,9 +613,10 @@ migrated. Both legacy sections are otherwise inert.
 ### The write barrier
 
 `automations/` is one of the directories (`skills`, `workflows`, `automations`,
-`.approvals`) a generic filesystem write tool refuses to touch
-(`durin/agent/tools/filesystem.py`'s `_resolve_write`) — reads stay legitimate, but a
-definition can only be written through the door that validates and versions it: the
+`.approvals`, `.durin/import-quarantine`) a generic filesystem write tool refuses
+to touch (`durin/agent/tools/filesystem.py`'s `_resolve_write`) — reads stay
+legitimate, but a definition can only be written through the door that validates
+and versions it: the
 `automations` tool's `create`/`enable`/`pause` actions, the webui's automations
 editor, or a script calling the HTTP API directly — see the guide's "Managing
 automations today". All three ultimately call the same `save_automation()` store
@@ -616,9 +624,14 @@ function (directly for the agent tool; through `AutomationsService.save` /
 `PUT /api/v1/automations/{name}` for the webui editor and direct API callers), so
 validation and versioning happen exactly once regardless of the door. This closes
 the same gap that once let workflow edits land unvalidated and unversioned.
-`.approvals/` sits in the same denied list but for a different reason: it owns no
-write door at all, since approval records are written only by the server and a
-writable record would let the model forge its own approval.
+`.approvals/` and `.durin/import-quarantine/` sit in the same denied list for a
+different reason: neither owns a write door at all. Approval records are written
+only by the server, and the quarantine only by `skill_import`'s fetch step; a
+writable record would let the model forge its own approval, and a writable
+`.scan.json` its own import verdict. The same tools also refuse durin's own
+configuration and secret stores under `DURIN_HOME` (`config.json` and its
+`config.json.d/` directory, `secrets.json`, `api_tokens.json`, `pairing.json`),
+which the person changes through the dashboard or `durin config`.
 
 ### Service surface
 

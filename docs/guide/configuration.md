@@ -499,7 +499,7 @@ See [docs/internals/skills/](../internals/skills/) for architecture details.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `install_policy` | `approve` | Who authorizes flagged skill installs and dependency installs: `approve` (you approve each one in the chat or from Pending; the skills judge may clear a non-dangerous install), `auto` (pre-authorized, except a dangerous skill), `never` (dependency installs are only reported) |
+| `install_policy` | `approve` | Who authorizes flagged skill installs and dependency installs: `approve` (you approve each one in the chat or with `durin approvals`; the skills judge may clear a non-dangerous install), `auto` (pre-authorized, except a dangerous skill), `never` (dependency installs are only reported) |
 
 **`skills.security`** — import security floor:
 
@@ -625,8 +625,10 @@ When you chat with the agent and a command is refused by `deny_patterns` or
 missing from `allow_patterns`, you are shown the exact command and asked to
 approve it; approving runs that command once. A short list of commands never
 runs, even when approved: recursively removing `/` or your home directory,
-formatting or overwriting a whole disk, a fork bomb, and shutdown or reboot. In
-scheduled or background runs nobody is asked and the command is refused.
+formatting or overwriting a whole disk, a fork bomb, shutdown or reboot, and
+`durin approvals approve` / `reject` (the agent cannot approve its own
+requests). In scheduled or background runs nobody is asked and the command is
+refused.
 
 **`tools.web`** — web search and fetch tools:
 
@@ -719,7 +721,7 @@ MCP server sampling (server-initiated LLM calls) is governed by `sampling` under
 
 | Key | Default | Meaning |
 |---|---|---|
-| `install_policy` | `approve` | `never` (the agent cannot add, update, install or enable a server), `approve` (you approve each change: in a chat you are asked; otherwise it waits in Pending), or `auto` |
+| `install_policy` | `approve` | `never` (the agent cannot add, update, install or enable a server), `approve` (you approve each change: in a chat you are asked; otherwise it waits for `durin approvals`), or `auto` |
 | `quality` | `official` | Default discovery view: `official` (star/first-party gate) or `all` |
 | `min_stars` | `100` | Star floor for the `official` gate |
 | `search_limit` | `10` | Max results per search |

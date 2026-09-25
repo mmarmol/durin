@@ -244,12 +244,14 @@ the same note.
     (a Slack thread, a Telegram topic) rather than at the surface's top
     level. The reply is parsed by the loop.
   - **Legacy REPL**: cannot take a reply mid-turn, so it never waits; a
-    gated action becomes a pending request, decided with durin approvals.
+    skill or MCP change becomes a pending request, decided with
+    `durin approvals`, and an exec command that needs approval is refused.
 
   In a webui chat the wait ends like a blocking question's: once the last
   webui tab has been closed for the grace window, the request stays pending
-  and the turn continues. For an approval that window starts when the last
-  tab closes, whether or not an API client is following the chat over SSE: an
+  (an exec request is closed as `expired`) and the turn continues. For an
+  approval that window starts when the last tab closes, whether or not an API
+  client is following the chat over SSE: an
   API message never decides an approval, so such a watcher does not hold the
   wait, and its attaching does not stop the window. It also starts when the
   approval is asked in a chat no webui tab is watching (the asker's snapshot
@@ -441,9 +443,11 @@ carries the run-level status and, for a `needs_input` run, the questions as a
 capped `detail` field. The TUI keeps a paused run in the active list — glyph
 `?`, "waiting" count in the WORK header, first question line under the item —
 and additionally raises a warning toast plus a system note in chat carrying the
-questions. The user answers in chat and the agent resumes the run
-(`run_workflow` with `resume_run_id`); the sidebar entry is a signal, not an
-input surface, matching the webui's "the agent owns resume" design.
+questions. For a question pause the user answers in chat and the agent resumes
+the run (`run_workflow` with `resume_run_id`); the sidebar entry is a signal,
+not an input surface. An approval pause is the person's decision: the agent's
+`run_workflow` refuses it, and the person resumes it from the workflow's runs
+in the webui.
 
 **Live turn diagnostics (footer).** While a turn is in flight the footer shows
 a ticking elapsed clock (1s interval, only active during the turn) instead of
@@ -593,7 +597,7 @@ operations are safe from both async channel handlers and sync CLI contexts.
 | `resolve_secret` / `SecretRedactor` | `durin/security/secrets.py` | `resolve_secret()` dereferences `${secret:NAME}` at use; `SecretRedactor` applies value-based + pattern-based redaction on tool results |
 | `handle_pairing_command` | `durin/pairing/store.py` | Pure function executing `/pairing` subcommands (list / approve / deny / revoke); `generate_code` / `approve_code` / `revoke` manage `~/.durin/pairing.json` under `threading.Lock` + `cross_process_lock` |
 | `ask_user_question` / `request_secret` / `exit_plan_mode` / `todo_write` | `durin/agent/tools/ask_user.py`, `durin/agent/tools/secrets.py`, `durin/agent/tools/plan_mode.py`, `durin/agent/tools/todos.py` | Interactive tools; payload-canonical contract (arguments carry display content); rich channels render widgets, dumb channels get serialized fallback |
-| `pending_answers` | `durin/agent/pending_answers.py` | Per-session `asyncio.Future` registry for blocking `ask_user_question`; `can_block()` gates in-turn blocking by checking consumer activity and session prefix |
+| `pending_answers` | `durin/agent/pending_answers.py` | Per-session registry of typed (`question` / `approval`) waits on the user; `can_block()` allows one only for an interactive session with a live consumer that can take a reply mid-turn |
 | `RICH_PAYLOAD_CHANNELS` | `durin/agent/user_payloads.py` | Set of channel names that render structured tool payloads natively: `{"websocket", "cli"}` |
 | `ApprovalCard` | `webui/src/components/thread/ApprovalCard.tsx` | The approval a turn waits on: summary, reviewed detail, Approve / Reject; decides only through its `onDecide` prop (the socket frame in a chat) |
 | `AgentLoop.approval_exec_deps` | `durin/agent/loop.py` | Live handles (exec tool, MCP service on the live runtime) for an approval decided after its turn stopped waiting |

@@ -166,7 +166,7 @@ loop. WS, HTTP and the SPA share one address, the websocket channel's
    raised `DomainError` is mapped by `_problem_response()` to an RFC
    9457 `application/problem+json` body: `type: urn:durin:error:<code>`, `title`,
    `status`, `detail`, and an optional `details` extension member carrying
-   structured domain payload (e.g. the approval gate's `{refused, verdict,
+   structured domain payload (e.g. the skill import gate's `{refused, verdict,
    message}`). `RequestIdMiddleware` stamps `X-Request-Id` on every response.
 
 ### Signed media reads

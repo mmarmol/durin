@@ -48,12 +48,46 @@ which consumers qualify.
 
 **Authority is a property of the context, not of the request.** `mcp_manage`,
 `skill_import`, `skill_edit` and `skill_install_deps` introduce or rewrite
-executable state, so they are gated. The gate reads the runtime-generated
-session key (`websocket:`, `cli:`, `slack:`… vs `cron:`, `cron_dream`,
-`workflow:`, `reactive_dream`, `system:`) — a value the model cannot write —
-plus the live-consumer flag that says an answer could actually be delivered.
-An unrecognised session kind is treated as autonomous: an unknown context is
-not a person.
+executable state, and `exec` can meet a command its safety policy refuses.
+None of them takes a value the model writes as consent: their schemas carry no
+`confirm` or `override` field. The server decides, in this order:
+
+1. The exec tool refuses a command on its hard floor outright. It never runs,
+   not even when approved.
+2. The tool applies the authority the operator granted in config, out of band
+   and ahead of the run: `install_policy: never` refuses an MCP change and only
+   reports a dependency install, `install_policy: auto` runs an MCP change, a
+   flagged skill install (never a `dangerous` one) or a dependency install, and
+   exec `allow_patterns` exempt a command from the deny list. A request with
+   nothing to decide runs as well: a clean skill install, or an edit to an
+   `auto` skill whose scan needs no review.
+3. The rest goes to `durin.agent.approval.request`. The configured skills
+   judge may clear a `confirm` skill install (never `dangerous`) or an edit to
+   an `auto` skill whose post-edit scan is `caution`; the record says
+   `decided_by: judge`. It never clears a `manual` skill's edit, an install
+   that replaces an existing skill, dependencies, MCP or exec.
+4. In an interactive context the person in the chat is asked, and the turn
+   waits on a typed `approval` waiter (`durin.agent.pending_answers`). Only
+   the server resolves it: a webui `approval_decision` frame, or a yes/no
+   reply the loop parses itself (`parse_approval_reply`), which is also what a
+   TUI Approve / Reject row sends. Any other reply, the answer timeout, or a
+   webui chat nobody watches ends the wait and leaves the request pending; an
+   exec request that gets no verdict is closed as `expired` instead.
+5. Otherwise the request becomes a durable record in
+   `<workspace>/.approvals/<id>.json`, bound by a `change_hash` to what was
+   reviewed, and a person decides it later with `durin approvals`. An exec
+   command is refused instead, with nothing filed: replaying a shell command
+   outside the run that needed it is meaningless.
+
+The context is read from the runtime-minted session key (`websocket:`,
+`cli:`, `slack:`, `unified:`… vs `cron:`, `cron_dream`, `workflow:`,
+`system:`), a value the model cannot write, plus the flag that says an answer
+could actually arrive mid-turn (a live inbound consumer on a surface that can
+send one). An unrecognised session kind is autonomous: an unknown context is
+not a person. `durin.agent.approval` owns this classification
+(`human_reachable`), and `pending_answers.can_block` (the blocking
+`ask_user_question` wait) delegates to it — a context that cannot authorize
+cannot answer either.
 
 A person's context loses that authority for a turn that received input from an
 API token. A message sent through the native chat routes carries
@@ -78,23 +112,25 @@ the handshake takes every connection that reaches the socket, token or not —
 the operator's choice, which no API token changes. A `chat:write`
 token may hold a conversation in the dashboard's sessions, but it is a
 program, and it must not carry the person's authority to install or rewrite
-executable state.
+executable state. The API-input rule narrows only approval, not answering: a
+turn driven through the API may still wait for the answer to a question, which
+the API client sends as a plain message.
 
-A `confirm` field in the tool call is a claim by the model, never evidence
-that a person agreed, so it can only ever *narrow* the decision: it is
-consulted after the context has already established that a human is reachable.
-When nobody is reachable, the action does not run — the request is staged to
-`<workspace>/.approvals/<subsystem>/<id>.json` and surfaced by
-`durin approvals`, so an autonomous run leaves a durable record instead of
-either executing unsupervised or losing the work. The one exemption is a
-policy of `auto` (`tools.mcp_discovery.install_policy`, `skills.install_policy`):
-that authority was granted by the operator in config, out of band and ahead of
-the run, which is what makes it delegable. `durin.agent.approval` owns this
-classification, and `pending_answers.can_block` (the blocking `ask_user_question`
-wait) delegates to its `human_reachable` — a context with no person cannot
-answer either. The API-input rule narrows only approval, not answering: a turn
-driven through the API may still wait for the answer to a question, which the
-API client sends as a plain message.
+Pauses that ask a person to approve follow the same rule. The model may
+answer a workflow or automation run paused on a question, but
+`automations(action="answer")` and `run_workflow(resume_run_id=…)` refuse a
+run paused for approval. A person resolves it from the automations inbox, the
+workflow's runs in the webui, the API, or a reply in the thread where it was
+posted.
+
+A decided record stores who decided it in `decided_by`: `operator` for
+`durin approvals` on the CLI, `user` (with the channel) for a webui click or a
+reply in the chat, `judge` for the skills judge. An action that
+`install_policy: auto` allowed files no record; a skill installed that way
+carries `approved_by: policy` in its provenance and commit trailers.
+`durin approvals approve` and `reject` refuse to run without a terminal (TTY),
+and the exec hard floor refuses them at command position, so the agent cannot
+decide its own request through a shell.
 
 **Layered skill gates.** Importing a skill passes two independent scan stages.
 The first is deterministic: a regex and AST pass that always runs. The second is
@@ -104,8 +140,8 @@ and can never block a skill on its own — only the deterministic scan produces 
 blocking verdict. Between a flagged scan result and installation sits a decision
 the model cannot make: the operator's `install_policy: auto` (never for a
 dangerous verdict), the configured judge within strict limits, or a person —
-asked in the chat, or later from Pending. The same deterministic scan runs on
-every write that changes an installed skill, before the write lands.
+asked in the chat, or later with `durin approvals`. The same deterministic scan
+runs on every write that changes an installed skill, before the write lands.
 
 **Execution policy as defense-in-depth.** The shell execution path is not a
 single wall; it is a sequence of independent checks. A command that clears one
@@ -135,7 +171,7 @@ flowchart TD
         FETCH --> SCAN["scan_skill()\ndeterministic:\nregex + AST + OSV"]
         SCAN --> JUDGE{"LLM judge\n(if configured)"}
         JUDGE --> VERDICT["ScanReport.verdict\n(safe / caution / dangerous)"]
-        VERDICT -->|"dangerous"| BLOCK["Person only\n(chat or Pending)"]
+        VERDICT -->|"dangerous"| BLOCK["Person only\n(chat or durin approvals)"]
         VERDICT -->|"caution, code or\nuntrusted source"| CONFIRM["Approval:\npolicy / judge / person"]
         VERDICT -->|"safe +\nallowlisted"| INSTALL["install_imported_skill()"]
     end
@@ -404,8 +440,9 @@ What happens then depends on who writes:
 - `skill_edit` (the agent): an `auto` skill's edit that needs no review lands.
   Otherwise, and always for a `manual` skill, it becomes a `skill_edit` approval
   request (the judge for a `caution` edit to an `auto` skill, then the person,
-  then Pending). The request is bound to the target file's content (durin's own
-  provenance and curation stamps in the frontmatter excluded) plus the change.
+  then a pending request for `durin approvals`). The request is bound to the
+  target file's content (durin's own provenance and curation stamps in the
+  frontmatter excluded) plus the change.
 - Curation `evolve` (nobody to ask): the judge may clear a `caution` edit;
   otherwise a pending `skill_edit` request is filed and nothing is written.
 - Dream restructure: a whole-body rewrite cannot be filed as a bounded edit, so a
@@ -527,10 +564,11 @@ callers that only want the text) wraps it.
   shapes such as a bearer token or a `user:pass@` URL) and never the command's
   output. Approved, the command runs once, past exactly those rules — the hard
   floor and every other guard still apply. Declined or unanswered, the model
-  gets the refusal plus a "do not retry" note, and the request is closed: an
-  exec request never waits in Pending, because replaying a shell command
-  outside the turn that needed it has no defined meaning. In cron, workflow and
-  sub-agent runs nobody is asked and the refusal stands.
+  gets the refusal plus a "do not retry" note, and the request is closed
+  (`rejected`, or `expired` when no verdict came back, the turn's cancellation
+  included): an exec request never stays pending, because replaying a shell
+  command outside the turn that needed it has no defined meaning. In cron,
+  workflow and sub-agent runs nobody is asked and the refusal stands.
 
 - *Memory vault protection* (`_guard_memory_mutation()`): mutations of the
   `memory/` directory via `rm`, `mv`, `cp`, `tee`, `sed -i`, `dd`, and redirect
@@ -673,8 +711,8 @@ only callers with system-write authority can manage other tokens.
 | `_HARD_FLOOR_PATTERNS` | `durin/agent/tools/shell.py` | Commands that never run, not even when approved |
 | `_guard_memory_mutation` | `durin/agent/tools/shell.py` | Blocks rm/mv/cp/tee/sed -i/dd/redirect targeting `memory/` paths |
 | `_build_env` | `durin/agent/tools/shell.py` | Constructs minimal subprocess env + `allowed_env_keys` + scoped secrets |
-| `approval` (module) | `durin/agent/approval.py` | Authority-by-context gate: `human_reachable`, `request` (judge / person / pending), `decide` (resolve from outside the turn), `gate` (the older stage-or-allow primitive) |
-| `approval_store` (module) | `durin/agent/approval_store.py` | Persists approval records under `<workspace>/.approvals/`; `create`, `find_pending`, `transition` (compare-and-swap on status), `get`, `list_records` |
+| `approval` (module) | `durin/agent/approval.py` | Authority by context: `request` (judge / person / pending) returning an `Outcome`, `outcome_to_tool_result` (what a gated tool returns), `decide` (resolve a record from outside the turn), `human_reachable` / `is_interactive` (the context classification), `note_turn_input` / `turn_has_api_input` (a turn with API-token input is never asked in the chat) |
+| `approval_store` (module) | `durin/agent/approval_store.py` | Persists approval records under `<workspace>/.approvals/`; `create`, `find_pending`, `transition` (compare-and-swap on status), `get`, `list_records`, `discard`. A record in the earlier per-subsystem layout (`.approvals/<subsystem>/<id>.json`) is listed as `legacy:<subsystem>`; it carries no payload, so it can be discarded but never approved |
 | `approval_executors` (module) | `durin/agent/approval_executors.py` | Per-kind hash + execute registry (`register`, `execute`, `current_hash`); `ExecDeps` carries the runtime handles (`exec_run`, `mcp`, `extra`) an executor needs |
 | `approval_prompt` (module) | `durin/agent/approval_prompt.py` | `ChatHandles` / `make_chat_asker`: asks the person in the current chat and waits, bounded by `agents.defaults.ask_user_answer_timeout_s` |
 | `approval_kinds_exec` (module) | `durin/agent/approval_kinds_exec.py` | `exec_command` approval kind: redacts the command before it is ever recorded, binds the request to command + cwd + session, runs only inside the turn that asked |
@@ -702,7 +740,7 @@ only callers with system-write authority can manage other tokens.
 | `tools.exec.path_append` | `""` | Directory prepended to `PATH` inside the subprocess |
 | `tools.restrict_to_workspace` | `false` | When true, absolute paths in exec commands and the `working_dir` parameter are blocked outside the configured workspace root |
 | `tools.ssrf_whitelist` | `[]` | CIDR ranges (e.g. `100.64.0.0/10` for Tailscale) to exempt from the SSRF private-address block |
-| `tools.mcp_discovery.install_policy` | `"approve"` | `mcp_manage` add/update/install/enable: `never` refuses, `approve` needs a person's approval (asked in chat, else Pending), `auto` runs |
+| `tools.mcp_discovery.install_policy` | `"approve"` | `mcp_manage` add/update/install/enable: `never` refuses, `approve` needs a person's approval (asked in chat, else a pending request for `durin approvals`), `auto` runs |
 | `skills.security.allowlist` | (vendor defaults) | Source-ref prefixes (e.g. `github:anthropics/`) that skip the source confirmation step; verdict and code gates have no opt-out |
 | `skills.security.llm_judge.trigger` | `"off"` | When the LLM judge runs: `off` (only on demand; it never clears approvals), `uncertain` (at fetch time for caution/code-carrying/out-of-allowlist skills) or `always`; when not `off` it is also consulted for the approvals it may clear |
 | `skills.install_policy` | `"approve"` | Who authorizes flagged skill installs and dependency installs: `approve` (the user; the judge may clear a non-dangerous install), `auto` (pre-authorized; a dangerous skill still needs the user), `never` (dependency installs only reported) |
@@ -722,6 +760,9 @@ durin secret rm NAME                  # remove a secret from the store
 durin secret grant NAME --to CONSUMER # add a consumer tag to a secret's scope
 durin secret revoke NAME --from CONSUMER # remove a consumer tag from a secret's scope
 durin secret migrate                  # move legacy config-embedded credentials into the store
+durin approvals                       # list pending approval records (--all for resolved too)
+durin approvals approve|reject ID     # decide one; needs a terminal (TTY), refused through exec
+durin approvals discard ID            # delete a record without deciding it
 ```
 
 ### API surfaces

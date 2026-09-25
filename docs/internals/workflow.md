@@ -261,7 +261,8 @@ read and persist, not produce files the main path consumes — nothing downstrea
 
 A work node may instead declare **`approval: true`**: after the node's own turn, the
 walk pauses on its output instead of threading it onward — the output is a **proposal**
-a human must approve, revise, or reject before the run continues. Parse-time constraints
+a person must approve, revise, or reject before the run continues (never the agent: the
+`run_workflow` tool refuses to resume an approval pause, §4g). Parse-time constraints
 (`_parse_approval`, `durin/workflow/spec.py`): the node must be linear — no
 `on_pass`/`on_fail`/`cases` (a paused node's verdict could never reach a route);
 non-detached (detached already means the walk never waits for it); and non-shared-context

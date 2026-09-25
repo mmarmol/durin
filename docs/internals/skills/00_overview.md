@@ -253,9 +253,14 @@ validated, versioned write door — `workflows/` (use `workflow_write` /
 `workflow_edit`, and `workflow_script_write` for the scripts a script node runs)
 and `automations/` (use the automations tool) — because otherwise the rule is
 only an instruction in a skill, and a generic write lands unvalidated and
-unversioned. `.approvals/` is denied the same way but owns no door at all:
-approval records are written only by the server, and letting the model write
-there would let it forge or rewrite its own approval.
+unversioned. `.approvals/` and `.durin/import-quarantine/` are denied the same
+way but own no door at all: approval records are written only by the server,
+and the quarantine only by `skill_import`'s fetch step, so a write there would
+let the model forge or rewrite its own approval, or the source and verdict of
+an import nobody scanned. The same tools also refuse durin's own configuration
+and secret stores under `DURIN_HOME` (`config.json` and its `config.json.d/`
+directory, `secrets.json`, `api_tokens.json`, `pairing.json`), which the person
+changes through the dashboard or `durin config`.
 The guard lives in the agent-facing tools themselves
 (`durin/agent/tools/filesystem.py`, `.../notebook.py`); durin's own store
 operations write to `skills/` directly through `skills_store.py` and never go
@@ -576,7 +581,7 @@ there is no session left to credit.
 | `skill_write` | Create a new skill (routes to `dream_create_skill`). Also registered in the dream's skill-extract sub-agent. |
 | `skill_publish` | Promote a `skill-drafts/<name>/` draft into the active registry (routes to `publish_draft_skill`). |
 | `skill_discard` | Delete a draft under `skill-drafts/<name>/`; never touches the active registry. |
-| `skill_edit` | Bounded edit (forks builtins). A `manual` skill's edit, or one whose scan needs review, is approved by the user (or the judge within limits) or filed in Pending. |
+| `skill_edit` | Bounded edit (forks builtins). A `manual` skill's edit, or one whose scan needs review, is approved by the user (or the judge within limits) or filed as a pending request for `durin approvals`. |
 | `skill_search` | Search registries; returns hits and refs. Never installs. |
 | `skill_import` | Import from a source through the gate; a flagged install is approved by policy, the judge (never for dangerous) or the user. |
 | `skill_audit` | Run the static scan on an installed skill. |

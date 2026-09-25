@@ -173,8 +173,9 @@ automation interceptors once. For each message it decides the routing in order:
   key, the key the turns they act on are registered under, so `/stop` and
   `/status` work with `unified_session` on; a command typed inside a direct
   session (`process_direct`) uses that session's own key.
-- **Pending answer?** If a turn is blocked on `ask_user_question`, a plain-text
-  reply is consumed as the answer (`_maybe_resolve_pending_answer`).
+- **Pending answer?** If a turn is waiting on the user (see "Waiting on the
+  user" below), `_maybe_resolve_pending_answer` decides whether this message
+  is the answer; a consumed message goes no further.
 - **Mid-turn follow-up?** If the effective session key already has pending
   queues, the message is routed there instead of starting a new turn (or, if it
   is itself a non-priority command, dispatched inline). Steers and system
@@ -188,6 +189,35 @@ automation interceptors once. For each message it decides the routing in order:
 The effective session key (`_effective_session_key`) collapses to a single
 unified key when `unified_session` is enabled and the message carries no
 override.
+
+### Waiting on the user
+
+A tool can hold its turn open until the person answers: `ask_user_question`
+(when `agents.defaults.ask_user_blocking` is on) and the in-chat approval
+asker (`durin/agent/approval_prompt.py`). Each registers one waiter per
+session in `durin/agent/pending_answers.py`, typed by what it takes. A
+`question` waiter takes the next plain-text reply verbatim. An `approval`
+waiter takes only a yes/no verdict the loop parses (`parse_approval_reply`);
+any other text makes it fall back, and the message continues as a normal
+message. Slash commands and messages flagged `INBOUND_META_NOT_AN_ANSWER` (a
+stored-secret note posted for the user) never answer a waiter, a message from
+an API token (`origin: "api"`) never answers an approval, and a media reply
+makes the waiter fall back.
+
+A waiter only exists where it could be answered (`pending_answers.can_block`):
+an interactive session, a live inbound consumer, and a surface that can send a
+reply before the turn ends. The legacy REPL (`durin agent --legacy`) reads its
+next line only after the turn, so it calls `set_mid_turn_replies(False)` and
+nothing waits there. A wait that gets no answer falls back on the answer
+timeout (`agents.defaults.ask_user_answer_timeout_s`), and when a webui chat
+has had nobody watching it for a grace window (`_ANSWER_GRACE_S` in the
+websocket channel; a page refresh re-subscribes inside it and keeps the wait;
+see [ux.md](ux.md) for who counts as watching). A question then yields, and an
+approval stays pending, except an exec request, which is closed as `expired`.
+
+A wait does not survive a restart. `stop()` cancels the waiters, which ends
+their turns, and the shutdown drain below journals the message each of those
+turns was answering, so the next start runs the turn again and it asks again.
 
 ### The turn: `_dispatch`
 

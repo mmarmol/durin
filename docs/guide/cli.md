@@ -69,9 +69,13 @@ manage MCP servers. Append `--help` to any group for its full command list.
 
 ## Approvals
 
-A cron job, dream, workflow or sub-agent has no user to ask, so a privileged
-action (an MCP server, a skill, a dependency install, an exec command) is
-recorded instead of run; these commands are where they wait.
+When the agent wants to add or change an MCP server, install or edit a skill,
+or install a skill's dependencies, and your settings require a person's
+approval for it, you are asked in the chat. When nobody can be asked (a cron
+job, dream, workflow or sub-agent, or a turn driven by an API token), or you
+did not answer in the chat, the request is recorded instead of run, and these
+commands are where it waits. A shell command that needs approval never waits
+here: in a chat you are asked, and elsewhere it is refused.
 
 ```bash
 durin approvals                # list pending records (--all for resolved too)
@@ -79,6 +83,13 @@ durin approvals approve <id>   # approve and run it — needs a real terminal
 durin approvals reject <id>    # reject it — needs a real terminal
 durin approvals discard <id>   # delete the record without deciding it
 ```
+
+`approve` and `reject` refuse to run without a real terminal, and the agent's
+shell tool never runs them, so the agent cannot approve its own request. Each
+decided record keeps who decided it: you on the command line, a click or reply
+in the chat, or the skills judge. A request recorded by an earlier durin
+version is listed as `legacy:mcp` or `legacy:skills` and can only be discarded;
+ask the agent again if it is still needed.
 
 ## Inside the TUI
 
