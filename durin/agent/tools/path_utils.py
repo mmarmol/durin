@@ -1,5 +1,6 @@
 """Shared path helpers for workspace-scoped tools."""
 
+import os
 from pathlib import Path
 
 from durin.config.paths import get_media_dir
@@ -46,15 +47,16 @@ _DURIN_STORE_REASON = (
 
 
 def protected_durin_store_paths() -> list[Path]:
-    """Absolute paths to durin's own config/secret stores, wherever DURIN_HOME
-    actually is (``$DURIN_HOME``, or ``~/.durin`` by default; a test or an
-    override via ``set_config_path`` points it elsewhere).
+    """Absolute paths to durin's own config/secret/pairing stores, wherever
+    DURIN_HOME actually is (``$DURIN_HOME``, or ``~/.durin`` by default; a
+    test or an override via ``set_config_path`` points it elsewhere).
 
     Mirrors each store's own default-path derivation instead of guessing a
     layout: ``durin.config.loader.get_config_path()`` for the config file (and
     its ``.d/`` split-layout directory alongside it), and
-    ``durin.security.secrets``/``durin.security.api_tokens``, whose stores
-    both default to a sibling file in the same directory as the config file.
+    ``durin.security.secrets``/``durin.security.api_tokens``/
+    ``durin.pairing.store``, whose stores all default to a sibling file in
+    the same directory as the config file.
     """
     from durin.config.loader import get_config_path
 
@@ -65,16 +67,83 @@ def protected_durin_store_paths() -> list[Path]:
         config_path.with_suffix(config_path.suffix + ".d"),  # config.json.d/
         data_dir / "secrets.json",
         data_dir / "api_tokens.json",
+        data_dir / "pairing.json",
     ]
 
 
-def is_under(path: Path, directory: Path) -> bool:
-    """Return True when path resolves under directory."""
+def _same_entry(a: Path, b: Path) -> bool:
+    """True when *a* and *b* name the same filesystem entry (inode), not
+    merely the same text. Tries ``os.path.samefile`` first — the standard
+    identity check, and the one a test can monkeypatch to simulate a
+    case-insensitive filesystem on a case-sensitive CI runner — then falls
+    back to a raw ``(st_dev, st_ino)`` comparison for a platform/situation
+    where ``samefile`` itself misbehaves. Either side missing (can't be
+    stat'd) means no identity claim can be made: not the same entry.
+    """
     try:
-        path.relative_to(directory.resolve())
-        return True
-    except ValueError:
+        if os.path.samefile(a, b):
+            return True
+    except OSError:
+        pass
+    try:
+        sa, sb = os.stat(a), os.stat(b)
+    except OSError:
         return False
+    return (sa.st_dev, sa.st_ino) == (sb.st_dev, sb.st_ino)
+
+
+def is_under(path: Path, directory: Path) -> bool:
+    """True when *path* resolves under *directory* — by FILESYSTEM IDENTITY,
+    not path text, so a case variant of any segment (``CONFIG.JSON``,
+    ``Config.json.d``, ``.DURIN``) cannot slip past a guard written against
+    the canonical spelling: on a case-insensitive filesystem (macOS APFS by
+    default, most Windows volumes) the OS itself treats those as the exact
+    same entry as the real one, so a plain text/``relative_to`` comparison
+    (which durin used to rely on here) never even sees the collision.
+
+    Walks every ancestor of *path* that already exists on disk (*path*
+    itself included, when it exists) and checks each against *directory*
+    for identity. When *path* does not exist at all yet — the target is a
+    brand-new file under a GUARDED FILE's own name (``config.json`` itself,
+    not a directory it lives under) — no ancestor walk can "see" it to stat
+    it, so it is instead proven identical by comparing the parent directory
+    (by identity) plus the basename (casefolded, since that's exactly what a
+    case-insensitive filesystem does when it eventually creates the file).
+
+``directory`` not existing on disk at all is handled two ways: a not-yet-
+    created ordinary directory (a workspace's own session work dir, or a
+    registry directory nothing has written into yet) has no reserved name to
+    defend, so it degrades to the previous, purely textual containment
+    check; a guarded FILE (``config.json`` and friends) is a small, fixed,
+    always-reserved set of names, so the parent+casefold comparison below
+    still applies even before durin has ever written it (a fresh instance).
+
+    The casefold comparison does not itself check whether this filesystem is
+    actually case-insensitive — it can't, portably and reliably, for every
+    filesystem/mount combination durin might run on — so it treats a
+    same-directory, casefold-matching name as a match unconditionally. On an
+    ordinary case-SENSITIVE filesystem this can refuse an unrelated file that
+    merely differs from a guarded name by case alone; that one-in-a-million
+    false refusal (the model picks a different name and moves on) is the
+    trade this guard deliberately takes over ever silently missing a real
+    collision on a case-insensitive one.
+    """
+    directory = directory.resolve()
+    for ancestor in (path, *path.parents):
+        if ancestor.exists() and directory.exists() and _same_entry(ancestor, directory):
+            return True
+    if not path.exists():
+        parent, gparent = path.parent, directory.parent
+        if (parent.exists() and gparent.exists() and _same_entry(parent, gparent)
+                and path.name.casefold() == directory.name.casefold()):
+            return True
+    if not directory.exists():
+        try:
+            path.relative_to(directory)
+            return True
+        except ValueError:
+            return False
+    return False
 
 
 def resolve_workspace_path(

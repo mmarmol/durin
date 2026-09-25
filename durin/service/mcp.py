@@ -352,6 +352,13 @@ class McpService:
     def _live(self) -> dict[str, "RawConnState"]:
         return self._runtime.live_status() if self._runtime is not None else {}
 
+    def approved_config(self, name: str) -> MCPServerConfig | None:
+        """The config a person or an approved request most recently put in
+        place for *name* (``McpRuntime.approved_config``), or ``None`` with
+        no live runtime — nothing tracks it, so the caller (``mcp_manage``'s
+        agent-facing reconnect) treats that the same as "never approved"."""
+        return self._runtime.approved_config(name) if self._runtime is not None else None
+
     def _connect_errors(self) -> dict[str, str]:
         if self._runtime is None:
             return {}
@@ -750,6 +757,14 @@ class McpService:
             raise ConflictError("MCP server already exists", details={"name": cmd.name})
         cfg.tools.mcp_servers[cmd.name] = cmd.config
         save_config(cfg, get_config_path())
+        if self._runtime is not None:
+            # This call is a person's REST/dashboard action or an approval
+            # executor applying an already-approved mcp_manage request —
+            # either way, an authority the agent's own bare `reconnect` does
+            # not have on its own. Record it so a later agent reconnect can
+            # tell "picking up what was approved" from "picking up a change
+            # nobody here ever approved" (see McpRuntime.approved_config).
+            self._runtime.mark_approved(cmd.name, cmd.config)
         # ``connect=False`` lets a caller persist now and settle the connection itself
         # (e.g. registry_install backgrounds it so a slow/auth-walled connect can't hang
         # the request). Status is derived from config either way (oauth → needs_auth).
@@ -777,8 +792,13 @@ class McpService:
             raise NotFoundError("no such MCP server", details={"name": cmd.name})
         cfg.tools.mcp_servers[cmd.name] = cmd.config
         save_config(cfg, get_config_path())
-        # Persist-only: a live connection keeps running with its current config
-        # until the next enable/disable toggle re-applies it.
+        if self._runtime is not None:
+            # Persist-only: a live connection keeps running with its current
+            # config until the next enable/disable toggle re-applies it — but
+            # this IS an approved change (a person's PATCH, or an approval
+            # executor applying an approved request), so it must be on record
+            # as such even though nothing gets connected here.
+            self._runtime.mark_approved(cmd.name, cmd.config)
         return await self._build_detail(cmd.name, cmd.config)
 
     @route(
@@ -830,6 +850,7 @@ class McpService:
         principal.require(Scope.MCP_WRITE)
         sc = self._set_enabled(cmd.name, True)
         if self._runtime is not None:
+            self._runtime.mark_approved(cmd.name, sc)
             await self._runtime.connect(cmd.name, sc)
         return await self._build_detail(cmd.name, sc)
 
@@ -867,25 +888,21 @@ class McpService:
         sc = load_config().tools.mcp_servers.get(cmd.name)
         if sc is None:
             raise NotFoundError("no such MCP server", details={"name": cmd.name})
-        # Retries the connection with the config it is ALREADY running —
-        # never a config that changed since. reconnect is deliberately
-        # ungated (see mcp_manage.py's _UNGATED): it must add no new
-        # executable state, so if the on-disk entry drifted from what the
-        # runtime last connected with (an `update` that hasn't been applied
-        # yet, or an out-of-band edit to config.json), refuse instead of
-        # silently picking up whatever is on disk now. `update` (gated,
-        # credential-scanned, approved) is the door for an actual change;
-        # `enable` (also gated) re-applies the current on-disk config with a
-        # fresh review. A disabled server has nothing to (re)connect.
+        # This is the person's own action (dashboard / REST) — reconnect
+        # applies whatever is currently on disk, config changes included, as
+        # the route summary says. It intentionally trusts the caller: a
+        # person editing config.json (or updating via the PATCH endpoint,
+        # which is deliberately persist-only) and then clicking Reconnect is
+        # exactly how a config change is meant to take effect.
+        #
+        # The AUTONOMOUS counterpart — the agent's own `mcp_manage
+        # (action="reconnect")` — must not get that same trust for free: it
+        # checks the on-disk config against `McpRuntime.approved_config`
+        # BEFORE ever calling this method (see mcp_manage.py), so an
+        # unattended reconnect can only ever repeat a config a person or an
+        # approved request already put in place. A disabled server has
+        # nothing to (re)connect.
         if self._runtime is not None and sc.enabled:
-            connected = self._runtime.connected_config(cmd.name)
-            if connected is not None and connected.model_dump(mode="json") != sc.model_dump(mode="json"):
-                raise ConflictError(
-                    "the on-disk config no longer matches what this server is "
-                    "connected with; reconnect only retries the current connection. "
-                    "Use update to change it (goes through approval)",
-                    details={"name": cmd.name},
-                )
             await self._runtime.disconnect(cmd.name)
             await self._runtime.connect(cmd.name, sc)
         return await self._build_detail(cmd.name, sc)

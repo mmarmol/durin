@@ -26,11 +26,13 @@ def test_protected_paths_track_the_config_loader(durin_home):
     assert durin_home / "config.json.d" in paths
     assert durin_home / "secrets.json" in paths
     assert durin_home / "api_tokens.json" in paths
+    assert durin_home / "pairing.json" in paths
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("rel", [
     "config.json", "config.json.d/agents.json", "secrets.json", "api_tokens.json",
+    "pairing.json",
 ])
 async def test_write_file_refuses_durin_stores_unrestricted(tmp_path, durin_home, rel):
     """No restrict_to_workspace (the common default) — this is exactly the

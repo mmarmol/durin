@@ -69,19 +69,39 @@ class McpRuntime:
     async def disconnect(self, name: str) -> None:
         await self._loop.disconnect_mcp_server(name)
 
-    def connected_config(self, name: str) -> Any | None:
-        """The config *name* was last (re)connected with, or ``None`` when the
-        loop has never held one for it (never configured, or added straight
-        to config with ``connect=False`` and never yet connected).
+    def mark_approved(self, name: str, cfg: Any) -> None:
+        """Record *cfg* as the config a person or an approved request just
+        put in place for *name*, without connecting.
 
-        ``AgentLoop._mcp_servers`` starts as the boot-time config snapshot and
-        is refreshed with the exact ``cfg`` passed to ``connect_mcp_server``
-        every time this class's own ``connect`` runs — including the initial
-        one — so it always reflects what the live connection is actually
-        running with, never a value merely persisted to disk. Used by
-        ``McpService.reconnect`` to tell "the connection dropped, retry it"
-        (config unchanged) from "the on-disk entry moved since the last
-        connect" (a real change, which must go through the gated `update`/
-        `enable` path instead of a bare reconnect).
+        ``connect_mcp_server`` already does this as a side effect of an
+        actual connect (below); this covers ``McpService`` callers that
+        persist without connecting — ``update`` is deliberately persist-only,
+        and ``add(..., connect=False)`` backgrounds the connect. Both are
+        still an authorized change (a person's REST/dashboard action, or the
+        approval executor applying an already-approved ``mcp_manage``
+        request) and must be on record as such.
+        """
+        self._loop._mcp_servers[name] = cfg
+
+    def approved_config(self, name: str) -> Any | None:
+        """The config a person or an approved request most recently put in
+        place for *name*, or ``None`` when this process holds no record for
+        it at all (e.g. it appeared in ``config.json`` through some path
+        outside durin's own write surface — a hand-edit, or a write while the
+        gateway was down).
+
+        Backed by ``AgentLoop._mcp_servers``, which starts as the boot-time
+        config snapshot (rule: whatever a person already had on disk when
+        durin started is trusted) and is kept current by ``mark_approved``
+        (``McpService.add``/``update``/``enable``/``registry_update``) and by
+        ``connect_mcp_server`` itself on every actual connect — including a
+        person's own ``reconnect`` from the dashboard, which legitimizes
+        whatever is on disk at that moment going forward.
+
+        Used by ``mcp_manage``'s agent-facing ``reconnect`` action ONLY: the
+        shared ``McpService.reconnect`` (dashboard/REST) always trusts the
+        caller and is not gated by this at all. The agent's own bare
+        reconnect has no such standing — it refuses instead of picking up a
+        config nobody here ever approved.
         """
         return getattr(self._loop, "_mcp_servers", {}).get(name)

@@ -46,12 +46,22 @@ def _seed(servers: dict) -> None:
 
 
 class _FakeRuntime:
-    def __init__(self, status: dict | None = None, errors: dict | None = None) -> None:
+    """Mirrors the bits of ``McpRuntime``/``AgentLoop`` the service touches.
+
+    ``approved`` models ``AgentLoop._mcp_servers``: seeded from a boot
+    snapshot (like ``AgentLoop.__init__``'s own ``mcp_servers`` param), and
+    kept current by ``mark_approved`` (``McpService.add``/``update``/
+    ``enable``) and by ``connect`` itself — exactly the two write paths the
+    real ``McpRuntime.approved_config`` is backed by.
+    """
+
+    def __init__(self, status: dict | None = None, errors: dict | None = None,
+                 boot_snapshot: dict | None = None) -> None:
         self._status = status or {}
         self._errors = errors or {}
         self.connected: list[tuple] = []
         self.disconnected: list[str] = []
-        self._connected_config: dict = {}
+        self._approved: dict = dict(boot_snapshot or {})
 
     def live_status(self) -> dict:
         return self._status
@@ -62,13 +72,16 @@ class _FakeRuntime:
     async def connect(self, name: str, cfg=None) -> None:
         self.connected.append((name, cfg))
         if cfg is not None:
-            self._connected_config[name] = cfg
+            self._approved[name] = cfg
 
     async def disconnect(self, name: str) -> None:
         self.disconnected.append(name)
 
-    def connected_config(self, name: str):
-        return self._connected_config.get(name)
+    def mark_approved(self, name: str, cfg) -> None:
+        self._approved[name] = cfg
+
+    def approved_config(self, name: str):
+        return self._approved.get(name)
 
 
 def _raw(breaker_state: str, error: str | None = None) -> RawConnState:
@@ -396,31 +409,54 @@ async def test_reconnect_unknown_is_not_found(config_path) -> None:
         await McpService().reconnect(McpServerNameCommand(name="ghost"), LOCAL)
 
 
-async def test_reconnect_refuses_when_the_on_disk_config_drifted(config_path) -> None:
-    """The runtime is live with the config it last connected. An out-of-band
-    edit to the on-disk entry (or an `update` that hasn't been re-applied)
-    must not be silently picked up by reconnect — that would let a config
-    change run without ever going through update's gate. Point at update."""
+async def test_reconnect_applies_a_drifted_on_disk_config(config_path) -> None:
+    """The shared McpService.reconnect (dashboard/REST) is the person's own
+    action and always trusts the caller — the route summary says it applies
+    config changes, and it must: a dashboard PATCH followed by Reconnect (or
+    even a raw on-disk edit) has to actually take effect. Gating THIS method
+    would break that legitimate flow; the agent-facing gate lives in
+    mcp_manage.py's own reconnect handling instead, one layer up."""
     _seed({"r": MCPServerConfig(url="https://r/mcp", enabled=True)})
     runtime = _FakeRuntime(status={"r": _raw("closed")})
-    await runtime.connect("r", _stored()["r"])  # the runtime's actual live config
+    await runtime.connect("r", _stored()["r"])  # an earlier connect
 
-    _seed({"r": MCPServerConfig(url="https://evil/mcp", enabled=True)})  # drifts on disk
-
-    with pytest.raises(ConflictError):
-        await McpService(mcp_runtime=runtime).reconnect(McpServerNameCommand(name="r"), LOCAL)
-    assert runtime.disconnected == []  # started no process
-    assert len(runtime.connected) == 1  # only the setup call above
-
-
-async def test_reconnect_proceeds_when_the_config_is_unchanged(config_path) -> None:
-    _seed({"r": MCPServerConfig(url="https://r/mcp", enabled=True)})
-    runtime = _FakeRuntime(status={"r": _raw("closed")})
-    await runtime.connect("r", _stored()["r"])
+    _seed({"r": MCPServerConfig(url="https://new/mcp", enabled=True)})  # drifts on disk
 
     await McpService(mcp_runtime=runtime).reconnect(McpServerNameCommand(name="r"), LOCAL)
     assert runtime.disconnected == ["r"]
-    assert len(runtime.connected) == 2
+    assert runtime.connected[-1] == ("r", _stored()["r"])  # connected with the NEW config
+
+
+# --- approved-config tracking (mark_approved) ------------------------------
+
+
+async def test_add_marks_the_config_approved(config_path) -> None:
+    runtime = _FakeRuntime()
+    cmd = McpServerUpsertCommand(name="a", config=MCPServerConfig(url="https://a/mcp"))
+    await McpService(mcp_runtime=runtime).add(cmd, LOCAL)
+    assert runtime.approved_config("a") == cmd.config
+
+
+async def test_update_marks_the_config_approved_even_though_persist_only(config_path) -> None:
+    """update() never connects, so without an explicit mark the approved
+    record would go stale the moment a legitimate edit lands — exactly the
+    bug that made an approved agent update followed by its own reconnect
+    fail in the previous round."""
+    _seed({"u": MCPServerConfig(url="https://u/mcp")})
+    runtime = _FakeRuntime()
+    new = MCPServerConfig(url="https://u2/mcp")
+    await McpService(mcp_runtime=runtime).update(
+        McpServerUpsertCommand(name="u", config=new), LOCAL)
+    assert runtime.approved_config("u") == new
+    assert runtime.connected == []  # persist-only: no connect attempted
+
+
+async def test_enable_marks_the_config_approved(config_path) -> None:
+    _seed({"e": MCPServerConfig(url="https://e/mcp", enabled=False)})
+    runtime = _FakeRuntime()
+    await McpService(mcp_runtime=runtime).enable(McpServerNameCommand(name="e"), LOCAL)
+    assert runtime.approved_config("e") is not None
+    assert runtime.approved_config("e").enabled is True
 
 
 # --- oauth login ----------------------------------------------------------

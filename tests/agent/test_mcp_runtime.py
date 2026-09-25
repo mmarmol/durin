@@ -171,11 +171,13 @@ async def test_mcp_runtime_connect_disconnect_delegate():
     loop.disconnect_mcp_server.assert_awaited_once_with("x")
 
 
-async def test_mcp_runtime_connected_config_reflects_the_last_connect(tmp_path, monkeypatch):
-    """The loop's own `_mcp_servers` — refreshed by `connect_mcp_server` with
-    the exact cfg it was handed — is what `reconnect`'s drift check compares
-    against, so it must track a real connect, not merely the config.json on
-    disk (which `McpService.reconnect` reloads separately)."""
+async def test_mcp_runtime_approved_config_reflects_the_boot_snapshot_and_connects(
+    tmp_path, monkeypatch,
+) -> None:
+    """`AgentLoop._mcp_servers` seeds from the boot-time config (whatever the
+    person already had on disk when durin started is trusted) and is
+    refreshed by every `connect_mcp_server` call, so `approved_config` sees
+    both without any extra wiring."""
     from durin.agent.mcp_runtime import McpRuntime
 
     async def fake_connect(mcp_servers, registry, **kwargs):
@@ -187,12 +189,27 @@ async def test_mcp_runtime_connected_config_reflects_the_last_connect(tmp_path, 
     loop = _loop(tmp_path, {"x": cfg})
     rt = McpRuntime(loop)
 
-    assert rt.connected_config("x") is cfg  # the boot-time snapshot
-    assert rt.connected_config("ghost") is None
+    assert rt.approved_config("x") is cfg  # the boot-time snapshot
+    assert rt.approved_config("ghost") is None
 
     other = MCPServerConfig(url="https://x2/mcp", enabled=True)
     await loop.connect_mcp_server("x", other)
-    assert rt.connected_config("x") is other  # refreshed by the explicit connect
+    assert rt.approved_config("x") is other  # refreshed by the explicit connect
+
+
+async def test_mcp_runtime_mark_approved_records_without_connecting(tmp_path) -> None:
+    """`McpService.update` is persist-only — it must still be able to record
+    an approved config without going anywhere near `connect`."""
+    from durin.agent.mcp_runtime import McpRuntime
+
+    loop = _loop(tmp_path, {"x": MCPServerConfig(url="https://x/mcp")})
+    rt = McpRuntime(loop)
+
+    new = MCPServerConfig(url="https://x-new/mcp")
+    rt.mark_approved("x", new)
+
+    assert rt.approved_config("x") is new
+    assert "x" not in loop._mcp_connections  # nothing was connected
 
 
 # --- connect-error tracking (failed servers, opencode parity) -------------

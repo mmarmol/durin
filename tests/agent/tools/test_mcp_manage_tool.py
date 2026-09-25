@@ -20,15 +20,33 @@ class _Result:
 
 
 class _FakeService:
-    def __init__(self):
+    """``approved`` mirrors ``McpRuntime.approved_config``: ``add``/``update``/
+    ``enable`` record it automatically, same as the real ``McpService`` does
+    via ``mark_approved`` — so a test can drive a real add/update through
+    ``McpManageTool`` and then check that its own later reconnect succeeds."""
+
+    def __init__(self, approved: dict | None = None):
         self.calls = []
+        self._approved = dict(approved or {})
+
+    @staticmethod
+    def _persist(name, config) -> None:
+        # The real McpService.add/update persists too; a fake that skips
+        # this would leave config.json holding the OLD entry, so a later
+        # `load_config()` read (e.g. mcp_manage's own reconnect check) would
+        # see something the fake never actually wrote.
+        _seed({name: config})
 
     async def add(self, cmd, principal):
         self.calls.append(("add", cmd.name))
+        self._persist(cmd.name, cmd.config)
+        self._approved[cmd.name] = cmd.config
         return _Result(name=cmd.name, status="needs_auth" if cmd.config.url else "connected")
 
     async def update(self, cmd, principal):
         self.calls.append(("update", cmd.name))
+        self._persist(cmd.name, cmd.config)
+        self._approved[cmd.name] = cmd.config
         return _Result(name=cmd.name, status="connected")
 
     async def remove(self, cmd, principal):
@@ -46,6 +64,9 @@ class _FakeService:
     async def reconnect(self, cmd, principal):
         self.calls.append(("reconnect", cmd.name))
         return _Result(name=cmd.name, status="connected")
+
+    def approved_config(self, name):
+        return self._approved.get(name)
 
 
 class _Reg:
@@ -212,13 +233,89 @@ async def test_enable_is_gated(tmp_path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("action", ["remove", "disable", "reconnect"])
+@pytest.mark.parametrize("action", ["remove", "disable"])
 async def test_removing_or_reapplying_is_not_gated(tmp_path, action):
     svc = _FakeService()
     await _tool("approve", svc, tmp_path, session_key="cron:nightly").execute(
         action=action, name="x")
     assert svc.calls == [(action, "x")]
     assert approval_store.list_records(tmp_path, include_legacy=False) == []
+
+
+# --- reconnect: not approval-gated, but checked against approved_config ----
+
+
+@pytest.mark.asyncio
+async def test_reconnect_succeeds_when_on_disk_matches_the_approved_config(tmp_path):
+    from durin.config.schema import MCPServerConfig
+
+    sc = MCPServerConfig(command="npx")
+    _seed({"x": sc})
+    svc = _FakeService(approved={"x": sc})
+    out = await _tool("approve", svc, tmp_path, session_key="cron:nightly").execute(
+        action="reconnect", name="x")
+    assert svc.calls == [("reconnect", "x")]
+    assert "error" not in out
+    assert approval_store.list_records(tmp_path, include_legacy=False) == []
+
+
+@pytest.mark.asyncio
+async def test_reconnect_refuses_when_never_approved(tmp_path):
+    """A server that appeared in config.json outside durin's own write paths
+    (an out-of-band edit, a hand-written entry) has no approved record at
+    all. Refuse — do not treat "no record" as "nothing to compare, allow
+    it": that is exactly the bypass this check exists to close."""
+    from durin.config.schema import MCPServerConfig
+
+    _seed({"x": MCPServerConfig(command="evil-cmd")})
+    svc = _FakeService()  # no approved record for "x"
+    out = await _tool("approve", svc, tmp_path, session_key="cron:nightly").execute(
+        action="reconnect", name="x")
+    assert svc.calls == []
+    assert "changed outside durin" in out["error"]
+
+
+@pytest.mark.asyncio
+async def test_reconnect_refuses_when_drifted_since_approval(tmp_path):
+    from durin.config.schema import MCPServerConfig
+
+    approved = MCPServerConfig(command="npx")
+    _seed({"x": MCPServerConfig(command="evil-cmd")})  # on-disk moved after approval
+    svc = _FakeService(approved={"x": approved})
+    out = await _tool("approve", svc, tmp_path, session_key="cron:nightly").execute(
+        action="reconnect", name="x")
+    assert svc.calls == []
+    assert "changed outside durin" in out["error"]
+
+
+@pytest.mark.asyncio
+async def test_reconnect_unknown_server(tmp_path):
+    svc = _FakeService()
+    out = await _tool("approve", svc, tmp_path, session_key="cron:nightly").execute(
+        action="reconnect", name="ghost")
+    assert svc.calls == []
+    assert "no such mcp server" in out["error"].lower()
+
+
+@pytest.mark.asyncio
+async def test_reconnect_succeeds_after_its_own_approved_update(tmp_path):
+    """The exact regression this round fixes: an install_policy=auto update
+    (or an approved one) marks the config approved, so the agent's own later
+    reconnect must succeed — it must not refuse just because reconnect
+    itself never connected before."""
+    from durin.config.schema import MCPServerConfig
+
+    _seed({"good": MCPServerConfig(url="https://good/mcp")})
+    svc = _FakeService()
+    auto = _tool("auto", svc, tmp_path, session_key="cron:nightly")
+
+    r1 = await auto.execute(action="update", name="good",
+                            config={"url": "https://good/mcp", "tool_timeout": 99})
+    assert "error" not in r1
+
+    r2 = await auto.execute(action="reconnect", name="good")
+    assert "error" not in r2
+    assert svc.calls[-1] == ("reconnect", "good")
 
 
 @pytest.mark.asyncio
