@@ -2327,10 +2327,11 @@ class AgentLoop:
                 await self._dispatch_priority_command(msg, raw)
                 continue
             effective_key = self._effective_session_key(msg)
-            # Blocking ask_user: a turn may be paused awaiting the user's
-            # answer. A plain-text reply resolves the in-turn waiter and is
-            # consumed here; anything else (commands, media) tells the waiter
-            # to fall back to yield semantics and routes on.
+            # A turn may be paused awaiting the user's answer (blocking
+            # ask_user, or an in-chat approval). When this message is that
+            # answer, _maybe_resolve_pending_answer hands it to the waiting
+            # turn and it stops here. Which messages count, and which make the
+            # waiter fall back instead, is decided there.
             if self._maybe_resolve_pending_answer(msg, effective_key):
                 continue
             # A literal "[steer]" prefix marks a steer (older TUI clients and

@@ -39,10 +39,6 @@ _KINDS: dict[str, tuple[str, str | None]] = {}
 # blocking would stall for the full timeout with nobody listening.
 _CONSUMER_ACTIVE = False
 
-# Sessions that never receive interactive replies: blocking there would
-# always end in a useless timeout.
-NON_INTERACTIVE_SESSION_PREFIXES = ("cron:", "system:")
-
 # False while the only surface in this process cannot send a reply until the
 # turn ends: the legacy prompt_toolkit REPL reads its next line only after the
 # turn finishes, so a wait there could only end in the full timeout.
