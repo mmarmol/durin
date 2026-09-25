@@ -867,9 +867,25 @@ class McpService:
         sc = load_config().tools.mcp_servers.get(cmd.name)
         if sc is None:
             raise NotFoundError("no such MCP server", details={"name": cmd.name})
-        # Apply the current config to the live connection (and retry failures).
-        # A disabled server has nothing to (re)connect.
+        # Retries the connection with the config it is ALREADY running —
+        # never a config that changed since. reconnect is deliberately
+        # ungated (see mcp_manage.py's _UNGATED): it must add no new
+        # executable state, so if the on-disk entry drifted from what the
+        # runtime last connected with (an `update` that hasn't been applied
+        # yet, or an out-of-band edit to config.json), refuse instead of
+        # silently picking up whatever is on disk now. `update` (gated,
+        # credential-scanned, approved) is the door for an actual change;
+        # `enable` (also gated) re-applies the current on-disk config with a
+        # fresh review. A disabled server has nothing to (re)connect.
         if self._runtime is not None and sc.enabled:
+            connected = self._runtime.connected_config(cmd.name)
+            if connected is not None and connected.model_dump(mode="json") != sc.model_dump(mode="json"):
+                raise ConflictError(
+                    "the on-disk config no longer matches what this server is "
+                    "connected with; reconnect only retries the current connection. "
+                    "Use update to change it (goes through approval)",
+                    details={"name": cmd.name},
+                )
             await self._runtime.disconnect(cmd.name)
             await self._runtime.connect(cmd.name, sc)
         return await self._build_detail(cmd.name, sc)

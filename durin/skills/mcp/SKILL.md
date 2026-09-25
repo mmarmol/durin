@@ -62,9 +62,11 @@ approval gate. `action="update"` edits an existing server's config the same way
 
 `mcp_manage(action=..., name=...)` with `remove`, `disable`, or `reconnect` —
 these are not gated. `enable` goes through the approval gate, since it starts a
-switched-off server again. A 401 or OAuth error on a tool call mid-run
-means the server needs re-auth: point the user at `durin mcp login <server>`
-(or the dashboard sign-in) instead of retrying the call.
+switched-off server again. `reconnect` only retries the connection already in
+place: it refuses if the on-disk config has moved since the server last
+connected, in which case use `update` (gated) instead. A 401 or OAuth error on
+a tool call mid-run means the server needs re-auth: point the user at
+`durin mcp login <server>` (or the dashboard sign-in) instead of retrying the call.
 
 ## Rules
 

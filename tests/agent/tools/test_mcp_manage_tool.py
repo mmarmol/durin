@@ -178,9 +178,7 @@ async def test_model_supplied_confirm_is_ignored_on_an_interactive_session(tmp_p
     about confirm itself. On an INTERACTIVE session (a live consumer, per
     ``_interactive``) the pre-fix code read ``confirm=True`` from the call and
     ran the change immediately, skipping the ask entirely. Here the user must
-    still be asked, and a decline must leave the server unwritten."""
-    from durin.config.loader import load_config
-
+    still be asked, and a decline must record the rejection, not run it."""
     svc = _FakeService()
     run = asyncio.create_task(_tool("approve", svc, tmp_path).execute(
         action="add", name="x", config={"type": "stdio", "command": "npx"},
@@ -189,7 +187,8 @@ async def test_model_supplied_confirm_is_ignored_on_an_interactive_session(tmp_p
     out = await run
     assert out["status"] == "rejected"
     assert svc.calls == []
-    assert "x" not in load_config().tools.mcp_servers
+    [rec] = approval_store.list_records(tmp_path, include_legacy=False)
+    assert rec["status"] == "rejected" and rec["decided_by"]["kind"] == "user"
 
 
 def test_confirm_is_not_in_the_schema():
@@ -333,15 +332,23 @@ async def test_create_wires_the_non_asking_exec_runner(tmp_path):
     """A runtime-install step is part of the install being approved, not a
     fresh chat turn: it must run through ExecTool's non-asking ``_run``, so a
     command that hits the deny list fails the step with the refusal text
-    instead of opening a second, nested approval mid-install."""
+    instead of opening a second, nested approval mid-install.
+
+    Asserts the wiring directly (``__func__ is ExecTool._run``): a
+    context-less ``ExecTool`` never asks either way, so a behavioral-only
+    check here would pass just as well with ``.execute`` wired in — it would
+    not have caught a regression back to the asking entry point."""
     from durin.agent.tools.context import ToolContext
+    from durin.agent.tools.shell import ExecTool
     from durin.config.schema import Config
 
     cfg = Config()
     ctx = ToolContext(config=cfg.tools, app_config=cfg, workspace=str(tmp_path))
     tool = McpManageTool.create(ctx)
 
-    out = await tool._exec_run(command="rm -rf /tmp/whatever")
+    assert tool._exec_run.__func__ is ExecTool._run
+
+    out = await tool._exec_run(command=f"rm -rf {tmp_path}/whatever")
 
     assert "blocked by deny pattern" in out
     assert approval_store.list_records(tmp_path, include_legacy=False) == []

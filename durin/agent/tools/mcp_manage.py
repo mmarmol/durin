@@ -34,8 +34,14 @@ from durin.agent.tools.schema import StringSchema, tool_parameters_schema
 # Changes that put a server's command or endpoint into the agent's tool surface.
 # enable is one of them: it starts a switched-off server's process or connection again.
 _GATED = {"install", "add", "update", "enable"}
-# These add no executable state: remove and disable take a server away, and reconnect
-# re-applies the config already in place. They stay ungated.
+# These add no executable state: remove and disable take a server away, and
+# McpService.reconnect refuses (ConflictError) whenever the on-disk config no
+# longer matches what the runtime actually connected with, so it can only ever
+# retry the SAME command/endpoint that is already running, never a new one —
+# a config change has to go through `update`/`enable` (gated) first. A shell
+# command run via exec could still overwrite config.json directly; guarding
+# that is exec's own sandbox's job (tools.exec.sandbox / deny_patterns), out
+# of scope here. They stay ungated.
 _UNGATED = {"remove", "disable", "reconnect"}
 
 _PARAMETERS = tool_parameters_schema(

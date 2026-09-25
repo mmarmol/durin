@@ -132,6 +132,13 @@ class _FsTool(Tool, ContextAware):
         Without this the guarantee is only an instruction in a skill, and a
         generic write lands unvalidated and unversioned — which is how workflow
         edits went missing from history.
+
+        Also always refuses durin's own config/secret stores under DURIN_HOME
+        (``deny_durin_stores=True`` — see `resolve_workspace_path`), regardless
+        of `_guard_registry_dirs`: an out-of-band edit to `config.json` (e.g.
+        an MCP server's command) followed by an ungated action that reloads
+        config from disk would otherwise run whatever got written there, with
+        none of the tool-specific approval gates ever seeing it.
         """
         denied = (
             [self._workspace / d for d in ("skills", "workflows", "automations", ".approvals")]
@@ -146,6 +153,7 @@ class _FsTool(Tool, ContextAware):
             self._extra_allowed_dirs,
             work_dir=self._work_dir(),
             denied_subdirs=denied,
+            deny_durin_stores=True,
         )
 
     def _display_path(self, fp: Path) -> str:

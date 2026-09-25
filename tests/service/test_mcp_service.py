@@ -51,6 +51,7 @@ class _FakeRuntime:
         self._errors = errors or {}
         self.connected: list[tuple] = []
         self.disconnected: list[str] = []
+        self._connected_config: dict = {}
 
     def live_status(self) -> dict:
         return self._status
@@ -60,9 +61,14 @@ class _FakeRuntime:
 
     async def connect(self, name: str, cfg=None) -> None:
         self.connected.append((name, cfg))
+        if cfg is not None:
+            self._connected_config[name] = cfg
 
     async def disconnect(self, name: str) -> None:
         self.disconnected.append(name)
+
+    def connected_config(self, name: str):
+        return self._connected_config.get(name)
 
 
 def _raw(breaker_state: str, error: str | None = None) -> RawConnState:
@@ -388,6 +394,33 @@ async def test_reconnect_disabled_server_is_noop(config_path) -> None:
 async def test_reconnect_unknown_is_not_found(config_path) -> None:
     with pytest.raises(NotFoundError):
         await McpService().reconnect(McpServerNameCommand(name="ghost"), LOCAL)
+
+
+async def test_reconnect_refuses_when_the_on_disk_config_drifted(config_path) -> None:
+    """The runtime is live with the config it last connected. An out-of-band
+    edit to the on-disk entry (or an `update` that hasn't been re-applied)
+    must not be silently picked up by reconnect — that would let a config
+    change run without ever going through update's gate. Point at update."""
+    _seed({"r": MCPServerConfig(url="https://r/mcp", enabled=True)})
+    runtime = _FakeRuntime(status={"r": _raw("closed")})
+    await runtime.connect("r", _stored()["r"])  # the runtime's actual live config
+
+    _seed({"r": MCPServerConfig(url="https://evil/mcp", enabled=True)})  # drifts on disk
+
+    with pytest.raises(ConflictError):
+        await McpService(mcp_runtime=runtime).reconnect(McpServerNameCommand(name="r"), LOCAL)
+    assert runtime.disconnected == []  # started no process
+    assert len(runtime.connected) == 1  # only the setup call above
+
+
+async def test_reconnect_proceeds_when_the_config_is_unchanged(config_path) -> None:
+    _seed({"r": MCPServerConfig(url="https://r/mcp", enabled=True)})
+    runtime = _FakeRuntime(status={"r": _raw("closed")})
+    await runtime.connect("r", _stored()["r"])
+
+    await McpService(mcp_runtime=runtime).reconnect(McpServerNameCommand(name="r"), LOCAL)
+    assert runtime.disconnected == ["r"]
+    assert len(runtime.connected) == 2
 
 
 # --- oauth login ----------------------------------------------------------

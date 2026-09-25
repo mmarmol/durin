@@ -68,3 +68,20 @@ class McpRuntime:
 
     async def disconnect(self, name: str) -> None:
         await self._loop.disconnect_mcp_server(name)
+
+    def connected_config(self, name: str) -> Any | None:
+        """The config *name* was last (re)connected with, or ``None`` when the
+        loop has never held one for it (never configured, or added straight
+        to config with ``connect=False`` and never yet connected).
+
+        ``AgentLoop._mcp_servers`` starts as the boot-time config snapshot and
+        is refreshed with the exact ``cfg`` passed to ``connect_mcp_server``
+        every time this class's own ``connect`` runs — including the initial
+        one — so it always reflects what the live connection is actually
+        running with, never a value merely persisted to disk. Used by
+        ``McpService.reconnect`` to tell "the connection dropped, retry it"
+        (config unchanged) from "the on-disk entry moved since the last
+        connect" (a real change, which must go through the gated `update`/
+        `enable` path instead of a bare reconnect).
+        """
+        return getattr(self._loop, "_mcp_servers", {}).get(name)

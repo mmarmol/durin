@@ -50,12 +50,20 @@ async def test_get_exec_run_is_the_non_asking_runner(tmp_path) -> None:
     """The web skill's approve path runs a dep-install step here with no chat
     turn behind it. A step whose command hits the deny list must fail with the
     refusal text, never ask — asking would open a second, nested approval in
-    the middle of the one already being carried out."""
+    the middle of the one already being carried out.
+
+    Asserts the wiring directly (``__func__ is ExecTool._run``): a
+    context-less ``ExecTool`` never asks either way, so a behavioral-only
+    check here would pass just as well with ``.execute`` wired in — it would
+    not have caught a regression back to the asking entry point."""
     from durin.agent import approval_store
     from durin.agent.skills_store import _get_exec_run
 
     run = _get_exec_run(tmp_path)
-    out = await run(command="rm -rf /tmp/whatever")
+
+    assert run.__func__ is ExecTool._run
+
+    out = await run(command=f"rm -rf {tmp_path}/whatever")
 
     assert "blocked by deny pattern" in out
     assert approval_store.list_records(tmp_path, include_legacy=False) == []

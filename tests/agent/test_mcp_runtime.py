@@ -171,6 +171,30 @@ async def test_mcp_runtime_connect_disconnect_delegate():
     loop.disconnect_mcp_server.assert_awaited_once_with("x")
 
 
+async def test_mcp_runtime_connected_config_reflects_the_last_connect(tmp_path, monkeypatch):
+    """The loop's own `_mcp_servers` — refreshed by `connect_mcp_server` with
+    the exact cfg it was handed — is what `reconnect`'s drift check compares
+    against, so it must track a real connect, not merely the config.json on
+    disk (which `McpService.reconnect` reloads separately)."""
+    from durin.agent.mcp_runtime import McpRuntime
+
+    async def fake_connect(mcp_servers, registry, **kwargs):
+        return {}
+
+    monkeypatch.setattr("durin.agent.tools.mcp.connect_mcp_servers", fake_connect)
+
+    cfg = MCPServerConfig(url="https://x/mcp", enabled=True)
+    loop = _loop(tmp_path, {"x": cfg})
+    rt = McpRuntime(loop)
+
+    assert rt.connected_config("x") is cfg  # the boot-time snapshot
+    assert rt.connected_config("ghost") is None
+
+    other = MCPServerConfig(url="https://x2/mcp", enabled=True)
+    await loop.connect_mcp_server("x", other)
+    assert rt.connected_config("x") is other  # refreshed by the explicit connect
+
+
 # --- connect-error tracking (failed servers, opencode parity) -------------
 
 
