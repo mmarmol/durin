@@ -229,7 +229,25 @@ async def test_enable_is_gated(tmp_path):
     assert out["status"] == "pending"
     assert svc.calls == []
     [rec] = approval_store.list_records(tmp_path, include_legacy=False)
-    assert rec["payload"] == {"action": "enable", "name": "x"}
+    # The request carries a full config snapshot (same shape as add/update),
+    # not just the bare name — so a reviewer sees everything, not only that
+    # SOMETHING is being enabled.
+    assert rec["payload"]["action"] == "enable" and rec["payload"]["name"] == "x"
+    assert rec["payload"]["config"]["command"] == "npx"
+    assert rec["payload"]["config"]["enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_enable_of_an_already_enabled_server_is_refused(tmp_path):
+    from durin.config.schema import MCPServerConfig
+
+    _seed({"x": MCPServerConfig(command="npx", enabled=True)})
+    svc = _FakeService()
+    out = await _tool("approve", svc, tmp_path, session_key="cron:nightly").execute(
+        action="enable", name="x")
+    assert "already enabled" in out["error"]
+    assert svc.calls == []
+    assert approval_store.list_records(tmp_path, include_legacy=False) == []
 
 
 @pytest.mark.asyncio

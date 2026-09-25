@@ -57,14 +57,28 @@ def protected_durin_store_paths() -> list[Path]:
     ``durin.security.secrets``/``durin.security.api_tokens``/
     ``durin.pairing.store``, whose stores all default to a sibling file in
     the same directory as the config file.
+
+    The ``.d/`` directory is created here (idempotent) if it doesn't already
+    exist, so ``is_under``'s identity check always has a real entry to
+    compare against — the previous plain-text fallback for an absent
+    directory let a case variant (``CONFIG.JSON.D/tools.json`` on a
+    case-insensitive filesystem) slip straight through on a fresh instance
+    that had never split its config. An empty ``config.json.d/`` is inert
+    for config LOADING (``durin.config.loader._load_config_uncached`` reads
+    the monolith instead when the split dir has no data) — only ``.d/`` is a
+    directory among these paths; the config/secrets/tokens/pairing FILES are
+    deliberately left uncreated (see ``is_under``'s own file-vs-directory
+    handling).
     """
     from durin.config.loader import get_config_path
 
     config_path = get_config_path()
     data_dir = config_path.parent
+    split_dir = config_path.with_suffix(config_path.suffix + ".d")
+    split_dir.mkdir(parents=True, exist_ok=True)
     return [
         config_path,
-        config_path.with_suffix(config_path.suffix + ".d"),  # config.json.d/
+        split_dir,  # config.json.d/
         data_dir / "secrets.json",
         data_dir / "api_tokens.json",
         data_dir / "pairing.json",
@@ -92,6 +106,34 @@ def _same_entry(a: Path, b: Path) -> bool:
     return (sa.st_dev, sa.st_ino) == (sb.st_dev, sb.st_ino)
 
 
+def _fs_case_insensitive(directory: Path) -> bool:
+    """True when the filesystem *directory* lives on folds case for its own
+    name — detected by swapping the case of *directory*'s name and checking
+    whether the swapped spelling still resolves to the exact same entry
+    (``_same_entry``), the same mechanism a real case-insensitive
+    filesystem uses to alias ``CONFIG.JSON`` onto ``config.json``.
+
+    Needs something real to test identity against, so when *directory*
+    itself does not exist yet (a guarded FILE — ``config.json`` and
+    friends — before durin has ever written it) this falls back to
+    *directory*'s parent, which always exists (DURIN_HOME). Case-folding is
+    a per-volume property in virtually every real filesystem, so the
+    nearest existing ancestor is an accurate proxy for a descendant that
+    isn't there yet.
+
+    A name with nothing case-able in it (all digits/symbols), or no parent
+    to compare within, teaches nothing — treated as case-SENSITIVE, the
+    safer default: it means the casefold comparison in ``is_under`` is
+    skipped rather than applied on a guess.
+    """
+    target = directory if directory.exists() else directory.parent
+    swapped = target.name.swapcase()
+    if swapped == target.name or not target.parent.exists():
+        return False
+    variant = target.parent / swapped
+    return _same_entry(variant, target)
+
+
 def is_under(path: Path, directory: Path) -> bool:
     """True when *path* resolves under *directory* — by FILESYSTEM IDENTITY,
     not path text, so a case variant of any segment (``CONFIG.JSON``,
@@ -111,22 +153,21 @@ def is_under(path: Path, directory: Path) -> bool:
     case-insensitive filesystem does when it eventually creates the file).
 
 ``directory`` not existing on disk at all is handled two ways: a not-yet-
-    created ordinary directory (a workspace's own session work dir, or a
-    registry directory nothing has written into yet) has no reserved name to
-    defend, so it degrades to the previous, purely textual containment
-    check; a guarded FILE (``config.json`` and friends) is a small, fixed,
-    always-reserved set of names, so the parent+casefold comparison below
-    still applies even before durin has ever written it (a fresh instance).
+    created ordinary directory (a workspace's own session work dir) has no
+    reserved name to defend, so it degrades to the previous, purely textual
+    containment check; a guarded FILE (``config.json`` and friends) is a
+    small, fixed, always-reserved set of names, so the parent+casefold
+    comparison below still applies even before durin has ever written it (a
+    fresh instance) — every guarded DIRECTORY is created eagerly by its own
+    caller before this ever runs (see ``protected_durin_store_paths`` and
+    ``filesystem._resolve_write``), so it never needs this fallback.
 
-    The casefold comparison does not itself check whether this filesystem is
-    actually case-insensitive — it can't, portably and reliably, for every
-    filesystem/mount combination durin might run on — so it treats a
-    same-directory, casefold-matching name as a match unconditionally. On an
-    ordinary case-SENSITIVE filesystem this can refuse an unrelated file that
-    merely differs from a guarded name by case alone; that one-in-a-million
-    false refusal (the model picks a different name and moves on) is the
-    trade this guard deliberately takes over ever silently missing a real
-    collision on a case-insensitive one.
+    The casefold comparison only fires when ``_fs_case_insensitive(directory)``
+    says this filesystem actually folds case for that name — it must, since
+    on an ordinary case-SENSITIVE filesystem a differently-cased path is a
+    genuinely different, unrelated file (this is also what keeps a
+    restrict_to_workspace check from treating ``<home>/WORKSPACE`` as inside
+    ``<home>/workspace`` on such a filesystem).
     """
     directory = directory.resolve()
     for ancestor in (path, *path.parents):
@@ -135,6 +176,7 @@ def is_under(path: Path, directory: Path) -> bool:
     if not path.exists():
         parent, gparent = path.parent, directory.parent
         if (parent.exists() and gparent.exists() and _same_entry(parent, gparent)
+                and _fs_case_insensitive(directory)
                 and path.name.casefold() == directory.name.casefold()):
             return True
     if not directory.exists():

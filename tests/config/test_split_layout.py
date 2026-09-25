@@ -89,6 +89,25 @@ def test_load_migrates_existing_monolith_to_split(tmp_path: Path) -> None:
     assert marker == {"_layout": "split"}
 
 
+def test_load_reads_the_monolith_when_the_split_dir_exists_but_is_empty(
+    tmp_path: Path,
+) -> None:
+    """An empty config.json.d/ can appear without ever being migrated into —
+    the write guard (path_utils.protected_durin_store_paths) creates it
+    eagerly so a case-variant write always has a real directory to compare
+    filesystem identity against. That empty directory must never shadow a
+    real, never-migrated monolith sitting right next to it."""
+    cfg = tmp_path / "config.json"
+    _seed_monolith(cfg, {"agents": {"defaults": {"model": "glm-5.1"}}})
+    _split_dir(cfg).mkdir(parents=True)  # exists, but holds nothing
+
+    config = load_config(cfg)
+
+    assert config.agents.defaults.model == "glm-5.1"
+    # And it migrates on the spot, same as the non-empty-split-dir path.
+    assert (_split_dir(cfg) / "agents.json").exists()
+
+
 def test_legacy_backup_is_not_overwritten_on_re_migration(tmp_path: Path) -> None:
     """If a .legacy file already exists (rare), we don't clobber it."""
     cfg = tmp_path / "config.json"

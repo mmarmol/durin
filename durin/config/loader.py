@@ -92,7 +92,15 @@ def _split_dir(config_path: Path | None = None) -> Path:
 
 
 def _is_split_layout(config_path: Path | None = None) -> bool:
-    """Return True when the split-file layout exists on disk."""
+    """Return True when the split-file layout exists on disk.
+
+    Directory presence alone is the deliberate signal ``save_config`` acts
+    on (creating an empty ``config.json.d/`` ahead of time opts a config
+    into the split layout on its very next save) — this stays a plain
+    ``is_dir()`` check for that. ``_load_config_uncached`` handles the
+    "directory exists but holds no data yet" case itself, so an empty
+    directory never shadows a real monolith on the READ side (see there).
+    """
     return _split_dir(config_path).is_dir()
 
 
@@ -278,11 +286,20 @@ def _load_config_uncached(path: Path) -> Config:
             except (ValueError, pydantic.ValidationError) as e:
                 logger.warning("Failed to load split config: {}", e)
                 logger.warning("Using default configuration.")
-        _apply_ssrf_whitelist(config)
-        return config
+            _apply_ssrf_whitelist(config)
+            return config
+        # The directory exists but holds no topic files at all yet — an
+        # empty config.json.d/ can appear without ever being migrated into
+        # (the write guard creates it eagerly so a case-variant write has a
+        # real target to compare filesystem identity against; see
+        # path_utils.protected_durin_store_paths). Falling through to Path B
+        # below instead of returning defaults here matters ONLY when a
+        # monolith with real settings is still sitting on disk — an empty
+        # directory must never shadow it.
 
-    # Path B: legacy monolith exists. Read it AND migrate to split
-    # transparently so the next save lands in the new layout.
+    # Path B: legacy monolith exists (or Path A's split dir was empty).
+    # Read it AND migrate to split transparently so the next save lands in
+    # the new layout.
     if path.exists():
         try:
             with open(path, encoding="utf-8") as f:

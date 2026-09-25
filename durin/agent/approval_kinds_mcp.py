@@ -3,12 +3,16 @@
 Each of these puts a server's command or endpoint into the agent's tool
 surface, so ``mcp_manage`` files it as an approval request instead of doing it
 on the model's word. The request records the exact change: the full server
-config for add, update and install (an install is resolved against the
-registry when it is requested, so the person approves the config that will be
-written, not a registry ref whose content could change underneath), or just
-the server name for enable. Its hash covers the server's current config entry,
-so a request whose server changed after it was filed is stale instead of
-overwriting that change.
+config for add, update, install AND enable (an install is resolved against
+the registry when it is requested, so the person approves the config that
+will be written, not a registry ref whose content could change underneath;
+enable snapshots the server's current config at request time, same detail as
+update, so a config that drifted onto it out of band is visible to the
+reviewer rather than hidden behind a bare "name -> target" line). Its hash
+covers the server's current config entry, so a request whose server changed
+after it was filed is stale instead of overwriting that change. ``apply``
+writes an enable's reviewed snapshot back before connecting, rather than
+trusting whatever the disk says at that later moment.
 
 A request never holds a credential. ``secret_safe_config`` scans every field
 that can carry one — ``env``, ``headers``, ``url``, ``args``, ``oauth``,
@@ -532,19 +536,36 @@ def prepare_upsert(action: str, name: str, config: dict) -> Prepared:
 
 
 def prepare_enable(name: str) -> Prepared:
-    """Switching configured server *name* back on."""
+    """Switching configured server *name* back on.
+
+    Carries a full snapshot of its current config — the same detail shown
+    for add/update (env/headers/security/runtime), not just the bare
+    command/URL — so a reviewer sees exactly what is about to run,
+    including anything that drifted onto this server out of band since it
+    was last approved (a bare "name -> target" line would hide, say, an
+    injected `env.NODE_OPTIONS`). ``apply`` writes this EXACT snapshot back
+    before connecting, rather than trusting whatever the disk says at that
+    later moment — see its own docstring.
+
+    Refuses a server that is already enabled: enabling is "start what is
+    off," not a second way to edit a running one's config (`update` is that
+    door, and it is what actually gets applied here too).
+    """
     from durin.config.loader import load_config
 
     sc = load_config().tools.mcp_servers.get(name)
     if sc is None:
         raise ValueError(f"no MCP server named {name!r}")
-    if sc.command:
-        target = shlex.join([sc.command, *sc.args])
-    else:
-        target = sc.url
-    target = _escape_for_display(_redact_for_display(target))
-    return _prepared("enable", name, summary=f"enable MCP server {name!r}", payload={},
-                     detail={"server": f"{name} → {target}", "target": target})
+    if sc.enabled:
+        raise ValueError(f"{name!r} is already enabled; use update to change it")
+    normalized = secret_safe_config(
+        name, sc.model_dump(mode="json", exclude_defaults=True))
+    normalized["enabled"] = True
+    target = _target(normalized)
+    return _prepared("enable", name, summary=f"enable MCP server {name!r}",
+                     payload={"config": normalized},
+                     detail={"server": f"{name} → {target}", "target": target,
+                             "config": normalized, **_extra_detail(normalized)})
 
 
 async def prepare_install(detail: Any, *, ref: str, prefer: str) -> Prepared:
@@ -624,6 +645,16 @@ async def apply(payload: dict, deps: ExecDeps) -> dict:
     principal = Principal.local()
     out: dict[str, Any] = {"name": name}
     if action == "enable":
+        # Write the EXACT reviewed snapshot back first — never trust
+        # whatever config.json happens to say at this later moment, which
+        # may have drifted (out of band, or a race with another writer)
+        # since prepare_enable captured it. A record with no snapshot at
+        # all (a legacy record filed before this) falls back to enabling
+        # whatever is currently on disk, same as before.
+        snapshot = payload.get("config")
+        if snapshot:
+            sc = MCPServerConfig.model_validate(snapshot)
+            await service.update(McpServerUpsertCommand(name=name, config=sc), principal)
         result = await service.enable(McpServerNameCommand(name=name), principal)
     elif action in ("add", "update", "install"):
         if action == "install":

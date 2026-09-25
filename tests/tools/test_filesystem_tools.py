@@ -421,7 +421,14 @@ class TestAtomicToolWrites:
         tool = WriteFileTool(workspace=tmp_path)
         result = await tool.execute(path="out.txt", content="hello")
         assert "Successfully wrote" in result
-        assert sorted(p.name for p in tmp_path.iterdir()) == ["out.txt"]
+        # The write guard eagerly creates its own protected directories
+        # (skills/, workflows/, automations/, .approvals/, .durin/) so a
+        # case-variant write always has a real target to compare filesystem
+        # identity against — that's expected, unrelated clutter here. What
+        # this test actually pins is atomic_write_text leaving no `.tmp`
+        # sibling of the file it just wrote.
+        assert (tmp_path / "out.txt").read_text(encoding="utf-8") == "hello"
+        assert not list(tmp_path.glob(".out.txt.*"))  # atomic_write_text's own tmp naming
 
     @pytest.mark.asyncio
     async def test_edit_file_leaves_no_tmp(self, tmp_path):
@@ -432,8 +439,10 @@ class TestAtomicToolWrites:
         tool = EditFileTool(workspace=tmp_path)
         result = await tool.execute(path="code.py", old_text="x = 1", new_text="x = 2")
         assert "Successfully edited" in result
-        assert sorted(p.name for p in tmp_path.iterdir()) == ["code.py"]
+        # See test_write_file_leaves_no_tmp: the write guard's own protected
+        # directories are expected clutter here, not what this test pins.
         assert f.read_text(encoding="utf-8") == "x = 2\n"
+        assert not list(tmp_path.glob(".code.py.*"))  # atomic_write_text's own tmp naming
 
 
 # ---------------------------------------------------------------------------

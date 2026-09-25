@@ -97,3 +97,14 @@ class ToolContext:
     # about what the caller already sees in its system prompt (e.g.
     # ``memory_search`` hot-layer dedup) must key off this.
     scope: str = "core"
+    # The gateway's live MCP handle (``McpRuntime``, wrapping this same
+    # ``AgentLoop``) — the same object the REST service registry is built
+    # with (see ``cli/commands.py``'s unified-gateway wiring). Populated by
+    # ``AgentLoop._register_default_tools`` so ``McpManageTool.create`` can
+    # hand its ``McpService`` a live runtime instead of a config-only one;
+    # without it, ``McpService.approved_config``/``mark_approved`` are
+    # inert (no runtime to track against) and an agent reconnect can never
+    # succeed, even for an entirely unchanged boot config. ``None`` outside
+    # the main loop (TUI, contract generation, tests that build a bare
+    # ``ToolContext``).
+    mcp_runtime: Any | None = None

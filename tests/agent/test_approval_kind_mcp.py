@@ -110,6 +110,62 @@ def test_hash_covers_the_current_server_entry():
     assert ex.current_hash("/ws", _record(p)) != p.change_hash
 
 
+def test_enable_snapshot_shows_a_drifted_env_the_bare_target_would_hide():
+    """A bare "name -> command args" line hides an env var entirely — this
+    is the whole point of round-2 finding 3: an out-of-band env change
+    (e.g. an injected NODE_OPTIONS) must be visible to the reviewer, not
+    just whatever changed in the command/args."""
+    _seed({"x": MCPServerConfig(
+        command="npx", env={"NODE_OPTIONS": "--require /tmp/implant.js"}, enabled=False)})
+    p = mk.prepare_enable("x")
+    assert "NODE_OPTIONS" in p.detail["env"]
+    assert "/tmp/implant.js" in p.detail["env"]
+    assert p.payload["config"]["env"] == {"NODE_OPTIONS": "--require /tmp/implant.js"}
+
+
+@pytest.mark.asyncio
+async def test_enable_applies_exactly_the_reviewed_snapshot_not_whatever_is_on_disk():
+    """The executor must not trust config.json at run time: even if it
+    drifted again after the request was filed, ``apply`` writes the
+    reviewed snapshot back first, so the server ends up running EXACTLY
+    what was shown, not a mix of the two."""
+    _seed({"x": MCPServerConfig(
+        command="npx", env={"NODE_OPTIONS": "--require /tmp/implant.js"}, enabled=False)})
+    p = mk.prepare_enable("x")
+
+    _seed({"x": MCPServerConfig(command="npx", env={}, enabled=False)})  # drifts again
+
+    await ex.execute("/ws", _record(p), ex.ExecDeps())
+
+    stored = _servers()["x"]
+    assert stored.enabled is True
+    assert stored.env == {"NODE_OPTIONS": "--require /tmp/implant.js"}
+
+
+@pytest.mark.asyncio
+async def test_enable_is_stale_when_the_disk_changed_after_the_request(tmp_path):
+    """Full-stack version of test_hash_covers_the_current_server_entry: a
+    request filed, then the disk changes, then decided — approval.request's
+    own staleness check (change_hash vs. the freshly recomputed one) must
+    refuse to apply it."""
+    from durin.agent import approval
+    from durin.agent.approval_executors import ExecDeps
+
+    _seed({"x": MCPServerConfig(command="npx", enabled=False)})
+    p = mk.prepare_enable("x")
+
+    _seed({"x": MCPServerConfig(command="evil", enabled=False)})  # drifts after filing
+
+    outcome = await approval.request(tmp_path, p, session_key="cron:nightly",
+                                     deps=ExecDeps())
+    assert outcome.status == "pending"
+    done = await approval.decide(tmp_path, outcome.record["id"], "approve",
+                                 decided_by={"kind": "operator", "channel": "cli"},
+                                 deps=ExecDeps())
+    assert done.status == "stale"
+    assert _servers()["x"].enabled is False  # nothing was applied
+
+
 @pytest.mark.asyncio
 async def test_without_a_live_handle_the_change_is_written_to_config():
     p = mk.prepare_upsert("add", "fs", {"command": "npx", "args": ["-y", "@x/fs"]})
@@ -124,6 +180,10 @@ async def test_a_given_handle_is_used():
     calls = []
 
     class _Svc:
+        async def update(self, cmd, principal):
+            calls.append(("update", cmd.name))
+            return {"name": cmd.name, "status": "disabled"}
+
         async def enable(self, cmd, principal):
             calls.append(("enable", cmd.name))
             return {"name": cmd.name, "status": "connected"}
@@ -131,7 +191,9 @@ async def test_a_given_handle_is_used():
     _seed({"x": MCPServerConfig(command="npx", enabled=False)})
     p = mk.prepare_enable("x")
     out = await ex.execute("/ws", _record(p), ex.ExecDeps(mcp=_Svc()))
-    assert calls == [("enable", "x")]
+    # enable now writes its reviewed snapshot back (via update) before
+    # actually enabling, so both calls go through the SAME given handle.
+    assert calls == [("update", "x"), ("enable", "x")]
     assert out["result"]["status"] == "connected" and "note" not in out
 
 
@@ -380,17 +442,20 @@ def test_prepare_upsert_resolves_a_snake_camel_alias_collision_to_one_value():
 # must never be echoed literally in an enable prompt, and args display quotes
 # safely instead of a naive space-join.
 
-def test_prepare_enable_redacts_a_literal_credential_typed_into_the_dashboard():
+def test_prepare_enable_refuses_a_literal_credential_in_the_stored_config():
+    """prepare_enable now scans the full snapshot the same way update does
+    (round-2 review, finding 3) — a literal credential already sitting in
+    args (e.g. typed into the dashboard before this scan existed) refuses
+    the enable outright, same as it would refuse an update, rather than
+    merely redacting it for display and letting the enable proceed."""
     from durin.security.secrets import store_secret
 
     store_secret("SIDE", "zq9-Plain-Stored-Value-77", service="x", scope=[])
     _seed({"x": MCPServerConfig(
         command="npx", args=["--token", "zq9-Plain-Stored-Value-77", "a value with spaces"],
         enabled=False)})
-    p = mk.prepare_enable("x")
-    assert "zq9-Plain-Stored-Value-77" not in p.detail["server"]
-    assert "«redacted" in p.detail["server"]
-    assert "'a value with spaces'" in p.detail["server"]
+    with pytest.raises(mk.SecretValueError):
+        mk.prepare_enable("x")
 
 
 # -- Review round 2 -----------------------------------------------------------

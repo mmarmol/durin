@@ -1232,6 +1232,7 @@ class AgentLoop:
 
     def _register_default_tools(self) -> None:
         """Register the default set of tools via plugin loader."""
+        from durin.agent.mcp_runtime import McpRuntime
         from durin.agent.tools.context import ToolContext
         from durin.agent.tools.loader import ToolLoader
 
@@ -1248,6 +1249,11 @@ class AgentLoop:
             aux_providers=self._aux_providers,
             app_config=self.app_config,
             live_tool_registry=self.tools,
+            # Same handle the REST service registry gets (cli/commands.py's
+            # unified-gateway wiring) — McpManageTool.create hands it to its
+            # McpService so an agent reconnect has a real approved-config
+            # record to check against instead of always seeing no runtime.
+            mcp_runtime=McpRuntime(self),
         )
         loader = ToolLoader()
         registered = loader.load(ctx, self.tools)
