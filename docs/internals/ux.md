@@ -191,7 +191,14 @@ the same note.
   as the tool result and the model continues without a turn boundary. On answer
   timeout, media reply, absent loop consumer, or non-interactive session
   (`cron:`/`system:` prefixes), the tool degrades to yield semantics: it
-  returns early and the next user message carries the answer.
+  returns early and the next user message carries the answer. The same happens
+  when a webui chat has had no viewer for a short grace window (the last tab
+  closed and none came back), and in the legacy REPL, which cannot take a reply
+  while a turn runs and so never waits. A notice durin posts on the user's
+  behalf (the "secret stored" note after a `request_secret` form) carries
+  `INBOUND_META_NOT_AN_ANSWER` and is never taken as the answer; the waiting
+  question keeps waiting. A text channel gets the question once per ask, and
+  again when the same question is asked anew.
 - **Approvals in chat**: a privileged action that needs a person waits
   in-turn for a verdict the model cannot write. While the wait lasts,
   `session.metadata["pending_approval"]` holds `{approval_id, kind, summary,

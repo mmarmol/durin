@@ -34,8 +34,10 @@ async def test_last_viewer_leaving_releases_the_waiting_turn_after_the_grace() -
     channel._cleanup_connection(conn)
     assert not fut.done()  # still inside the grace window
 
-    await asyncio.sleep(0.06)
-    assert fut.result() is pending_answers.FALLBACK
+    # Wait for the release itself, not a fixed sleep, so a slow runner
+    # cannot fail it; the ceiling only guards against a release that never comes.
+    async with asyncio.timeout(5):
+        assert await fut is pending_answers.FALLBACK
 
 
 @pytest.mark.asyncio
