@@ -2078,6 +2078,7 @@
     },
     "queuedChip": "En file — à lire une fois le travail en cours terminé",
     "steerChip": "Orienter",
+    "apiOriginChip": "Envoyé via l’API",
     "chips": {
       "spawn": "créer {{name}}",
       "tasks": "tâches {{action}}{{id}}",

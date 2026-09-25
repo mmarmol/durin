@@ -545,7 +545,7 @@ def build_gateway_http_app(
     agent_loop: Any = None,
     model_name: str = "durin",
     api_request_timeout: float = 120.0,
-    api_stream_timeout: float = 3600.0,
+    api_turn_timeout: float = 3600.0,
 ) -> Starlette:
     """Build a Starlette ASGI app serving the full gateway HTTP surface.
 
@@ -585,10 +585,10 @@ def build_gateway_http_app(
                           ``None`` leaves the whole ``/v1`` surface unmounted.
         model_name:       Model id reported by ``/v1/models`` and echoed in
                           chat responses.
-        api_request_timeout: Per-request timeout (seconds) for non-streaming
-                          ``/v1`` chat turns.
-        api_stream_timeout: Hard ceiling (seconds) on a streaming ``/v1`` chat
-                          turn; ``0`` disables it.
+        api_request_timeout: How long (seconds) a non-streaming ``/v1`` request
+                          waits for its turn's answer.
+        api_turn_timeout: Hard ceiling (seconds) on any ``/v1`` chat turn;
+                          ``0`` disables it.
     """
     resolved_static = static_dist_path or channel._static_dist_path
 
@@ -874,6 +874,8 @@ def build_gateway_http_app(
     # Build the /api/v1/* routes from the service registry. build_api_app's
     # routes already carry the full "/api/v1/..." path, so splice them in at the
     # top level — mounting under "/api/v1" would double the prefix.
+    from durin.api.chat_stream import build_chat_stream_routes
+
     api_app = build_api_app(registry, auth=auth, static_token=static_token)
 
     routes: list[Any] = [
@@ -883,6 +885,15 @@ def build_gateway_http_app(
         # media-signing versions win (the generic handler can't sign).
         Route("/api/v1/sessions/{key}/messages", v1_session_messages, methods=["GET"]),
         Route("/api/v1/sessions/{key}/webui-thread", v1_webui_thread, methods=["GET"]),
+        # Webui conversations over SSE; the send route's streaming form must
+        # precede the generic /api/v1 table (first match wins).
+        *build_chat_stream_routes(
+            channel,
+            registry,
+            resolve_principal=lambda headers: resolve_principal_from_headers(
+                headers, auth=auth, static_token=static_token
+            ),
+        ),
         # /api/v1/* — new front door (highest priority).
         *api_app.routes,
         # /api/v1/mcp/oauth/callback — OAuth provider redirect (state-gated).
@@ -913,7 +924,7 @@ def build_gateway_http_app(
                 agent_loop,
                 model_name=model_name,
                 request_timeout=api_request_timeout,
-                stream_timeout=api_stream_timeout,
+                turn_timeout=api_turn_timeout,
                 resolve_principal=lambda headers: resolve_principal_from_headers(
                     headers, auth=auth, static_token=static_token
                 ),

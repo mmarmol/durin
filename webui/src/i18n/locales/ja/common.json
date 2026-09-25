@@ -2078,6 +2078,7 @@
     },
     "queuedChip": "キュー済み — 現在の作業が終わり次第読み込みます",
     "steerChip": "誘導",
+    "apiOriginChip": "API経由で送信",
     "chips": {
       "spawn": "生成 {{name}}",
       "tasks": "タスク {{action}}{{id}}",

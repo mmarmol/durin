@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -49,8 +50,10 @@ __all__ = [
     "discard_pending",
     "gate",
     "human_reachable",
+    "can_authorize",
     "is_interactive",
     "list_pending",
+    "note_turn_input",
     "outcome_to_tool_result",
     "request",
 ]
@@ -102,6 +105,34 @@ def _pending_dir(workspace: Path | str, subsystem: str) -> Path:
     return Path(workspace) / _APPROVALS_DIR / subsystem
 
 
+# Set for the rest of a turn once any of its input came from an API token
+# rather than a person at a chat surface. A token holder is a program: a
+# ``chat:write`` token may converse in a webui conversation, but it must not
+# carry the person's authority to approve privileged actions there. Turns run
+# in their own task, so the flag never outlives the turn that set it.
+_TURN_HAS_API_INPUT: ContextVar[bool] = ContextVar("approval_turn_has_api_input", default=False)
+
+
+def note_turn_input(metadata: dict[str, Any] | None) -> None:
+    """Record that the current turn received input from *metadata*'s sender.
+
+    Called for the message that opens a turn and for every message injected
+    into it; input marked ``origin: "api"`` makes ``gate`` stage privileged
+    actions for the rest of the turn."""
+    if metadata and metadata.get("origin") == "api":
+        _TURN_HAS_API_INPUT.set(True)
+
+
+def can_authorize(session_key: str | None) -> bool:
+    """True when the current turn may approve a privileged action itself.
+
+    That takes a person reachable in this context (``human_reachable``) and a
+    turn with no input from an API token. Privileged tools decide with this;
+    waiting for an answer (``ask_user``) only needs ``human_reachable``, so an
+    API client can still answer a question."""
+    return human_reachable(session_key) and not _TURN_HAS_API_INPUT.get()
+
+
 def gate(
     workspace: Path | str,
     subsystem: str,
@@ -116,18 +147,22 @@ def gate(
     ``detail`` is recorded verbatim for the operator's review and is never
     consulted for the decision — a request cannot authorize itself.
     """
-    if human_reachable(session_key):
+    if can_authorize(session_key):
         return Decision(allow=True)
     record = _stage(workspace, subsystem, action=action, summary=summary,
                     detail=detail or {}, session_key=session_key)
+    why = (
+        "This turn includes input from an API token, which cannot approve it"
+        if human_reachable(session_key)
+        else f"This context has no user to approve it (session {session_key or 'unknown'})"
+    )
     return Decision(
         staged=True,
         record=record,
         message=(
-            f"Not run: {summary}. This context has no user to approve it "
-            f"(session {session_key or 'unknown'}), so the request was "
-            f"recorded for approval as {subsystem}/{record['id']}. Tell the "
-            "user it is waiting for them; do not retry."
+            f"Not run: {summary}. {why}, so the request was recorded for "
+            f"approval as {subsystem}/{record['id']}. Tell the user it is "
+            "waiting for them; do not retry."
         ),
     )
 

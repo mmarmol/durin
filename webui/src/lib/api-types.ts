@@ -1733,7 +1733,8 @@ export interface paths {
         /** Return unsigned session JSONL payload (shim applies media signing) */
         get: operations["sessions_messages"];
         put?: never;
-        post?: never;
+        /** Send a message to a webui conversation; the turn runs server-side */
+        post: operations["chat_send"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1751,6 +1752,23 @@ export interface paths {
         put?: never;
         /** Set a user-edited title for a session */
         post: operations["sessions_rename"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{key}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stop the running turn of a webui or /v1 conversation */
+        post: operations["chat_stop"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2922,6 +2940,61 @@ export interface components {
             running: {
                 [key: string]: boolean;
             };
+        };
+        /** ChatMediaItem */
+        ChatMediaItem: {
+            /** Data Url */
+            data_url: string;
+            /**
+             * Name
+             * @default null
+             */
+            name: string | null;
+        };
+        /** ChatSendCommand */
+        ChatSendCommand: {
+            /**
+             * Client Msg Id
+             * @default null
+             */
+            client_msg_id: string | null;
+            /**
+             * Content
+             * @default
+             */
+            content: string;
+            /** Key */
+            key: string;
+            /**
+             * Media
+             * @default null
+             */
+            media: components["schemas"]["ChatMediaItem"][] | null;
+            /**
+             * Steer
+             * @default false
+             */
+            steer: boolean;
+        };
+        /** ChatSendResult */
+        ChatSendResult: {
+            /**
+             * Client Msg Id
+             * @default null
+             */
+            client_msg_id: string | null;
+            /** Key */
+            key: string;
+        };
+        /** ChatStopCommand */
+        ChatStopCommand: {
+            /** Key */
+            key: string;
+        };
+        /** ChatStopResult */
+        ChatStopResult: {
+            /** Stopped */
+            stopped: number;
         };
         /**
          * CommandsListQuery
@@ -9197,6 +9270,30 @@ export interface operations {
             };
         };
     };
+    chat_send: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatSendCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatSendResult"];
+                };
+            };
+        };
+    };
     sessions_rename: {
         parameters: {
             query?: never;
@@ -9217,6 +9314,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionRenameResult"];
+                };
+            };
+        };
+    };
+    chat_stop: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatStopCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatStopResult"];
                 };
             };
         };

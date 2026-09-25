@@ -16,12 +16,12 @@ def test_gateway_api_request_timeout_serializes_camel_case() -> None:
     assert dumped["apiRequestTimeout"] == 120.0
 
 
-def test_gateway_api_stream_timeout_default_and_alias() -> None:
-    assert GatewayConfig().api_stream_timeout == 3600.0
-    parsed = GatewayConfig.model_validate({"apiStreamTimeout": 0})
-    assert parsed.api_stream_timeout == 0.0
+def test_gateway_api_turn_timeout_default_and_alias() -> None:
+    assert GatewayConfig().api_turn_timeout == 3600.0
+    parsed = GatewayConfig.model_validate({"apiTurnTimeout": 0})
+    assert parsed.api_turn_timeout == 0.0
 
 
-def test_gateway_api_stream_timeout_serializes_camel_case() -> None:
+def test_gateway_api_turn_timeout_serializes_camel_case() -> None:
     dumped = GatewayConfig().model_dump(by_alias=True)
-    assert dumped["apiStreamTimeout"] == 3600.0
+    assert dumped["apiTurnTimeout"] == 3600.0

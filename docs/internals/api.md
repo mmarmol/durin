@@ -122,16 +122,19 @@ The gateway controller (`durin/cli/commands.py`) calls
 `cron_service`, `bus`, and an optional live `McpRuntime` from the running
 `AgentLoop`. It then calls `build_gateway_http_app(channel, registry, ...)` and
 runs `uvicorn.Server(...).serve()` as one task in the gateway's asyncio event
-loop. WS and HTTP share the same port.
+loop. WS, HTTP and the SPA share one address, the websocket channel's
+(`channels.websocket.host`/`port`); `gateway.port` serves only `/health`.
 
 ### Request lifecycle
 
 1. **Routing.** `build_gateway_http_app` assembles a Starlette route list in
    priority order: the WebSocket upgrade route first (so the WS handshake isn't
    swallowed by an HTTP catch-all), then the signed session-read routes, then the
-   generic `/api/v1/*` routes from `build_api_app`, then the bootstrap and media
-   handlers, and finally the SPA static mount. Starlette matches in list order;
-   the first match wins.
+   native chat stream routes (`build_chat_stream_routes`), then the generic
+   `/api/v1/*` routes from `build_api_app`, then the MCP OAuth callback,
+   bootstrap, signout, media and webhook handlers, then the OpenAI-compatible
+   `/v1` routes (when an agent loop is wired), and finally the SPA static mount.
+   Starlette matches in list order; the first match wins.
 
 2. **Auth.** `resolve_principal_from_headers()` extracts the `Authorization:
    Bearer` token and calls `auth.resolve(token)`. This re-hashes the candidate
@@ -215,6 +218,59 @@ the same "not available here" shape the automations runtime's other routes
 use. See `durin/automations/hooks.py` for what the dispatcher does with a
 matched request.
 
+### Native chat
+
+Three routes let any program converse in **webui conversations** — the same
+sessions the dashboard shows (`websocket:<chat_id>`), not a separate kind:
+
+| Route | Scope | Where it lives |
+|---|---|---|
+| `POST /api/v1/sessions/{key}/messages` | `chat:write` (+ `sessions:read` for the streaming form) | `ChatService.send` (in the contract) and a hand-mounted handler in `durin/api/chat_stream.py` that wins first match |
+| `GET /api/v1/sessions/{key}/events` | `sessions:read` | hand-mounted SSE in `durin/api/chat_stream.py` |
+| `POST /api/v1/sessions/{key}/stop` | `chat:write` | `ChatService.stop` (in the contract) |
+
+**Sending** goes through the websocket channel's own submission path:
+`ChatService.check` (scope, key, `allowFrom`, then
+`WebSocketChannel.validate_chat_message`, the same rules as a WebSocket
+`message` frame) and `ChatService.deliver`
+(`WebSocketChannel.publish_chat_message`). The message carries
+`webui: True`, a `client_msg_id` (minted when absent), and `origin: "api"`; the
+sender id is `api:<token subject>`. The turn runs on the bus like a dashboard
+turn, detached from the request, which answers `202`. A sender outside
+`channels.websocket.allowFrom` is refused with `403` up front — the bus ingress
+gate would otherwise drop it silently after the `202`. A body larger than
+`channels.websocket.max_message_bytes` is refused with `413`, the WebSocket
+frame limit.
+
+**Watching** is an `SseSubscriber` attached to the channel's per-chat fan-out
+next to WebSocket connections, so an SSE watcher receives the same frames
+(`voice_*` excluded), named after their `event` field. Opening the stream
+replays what a reattaching dashboard gets (`_hydrate_after_subscribe`: the goal
+state, `goal_status: running` for a turn in flight). `send_text` never blocks
+the channel: frames wait in a per-subscriber buffer bounded by bytes
+(`SSE_BUFFER_LIMIT_BYTES`); when it is full, text previews (`delta`,
+`reasoning_delta`) are dropped first, and a state frame that still does not fit
+ends the stream with `lagged`. While idle the stream sends a `: keepalive`
+comment every `SSE_KEEPALIVE_S`.
+
+**The streaming send** (`Accept: text/event-stream`) attaches the subscriber and
+delivers the message before returning the response, so a client that leaves at
+once loses the stream, never the message. It ends after the `turn_end` that
+answers the message: the one whose `client_msg_id` matches, or the first after
+a `queued_consumed` that lists it (a message queued behind a running turn), or
+the next one for a `steer`. Commands are refused in this form (`422`): they
+answer inline and open no turn. An answer to a blocked `ask_user_question` is
+acknowledged with `queued_consumed` (`AgentLoop._answer_pending_question`) for
+the same reason.
+
+**Stopping** cancels by the key the turn runs under: `AgentLoop.bus_turn_key`
+folds the key into the unified session when `unified_session` is on, then
+`AgentLoop.cancel_session_turns` cancels the turn and its subagents.
+
+**Authority.** A turn with input from a token (`origin: "api"`) stages
+privileged actions for approval instead of running them — see the approval
+gate in the security internals.
+
 ### OpenAI-compatible `/v1` surface
 
 `durin/api/openai_routes.py` builds `POST /v1/chat/completions` and
@@ -242,33 +298,43 @@ that never come.
 
 Turns run through `AgentLoop.process_direct` under a per-session `asyncio.Lock`
 held in the closure, so concurrent calls on one session queue instead of
-colliding. A non-streaming turn is wrapped in
-`asyncio.wait_for(gateway.api_request_timeout)`; an empty final response is
-retried once before falling back to `EMPTY_FINAL_RESPONSE_MESSAGE`, and a
-timeout answers 504.
+colliding. Each turn runs in its own task (`_start_turn`, strongly referenced
+in a closure set) and **outlives its request**: a client disconnect or a
+non-streaming `504` (after `gateway.api_request_timeout`, via `asyncio.wait`,
+which never cancels) leaves the turn to finish and be saved to its session. A
+turn abandoned before it acquired the session lock is cancelled (`_abandon`),
+so client retries do not pile up duplicate turns. A done-callback always
+retrieves the task's outcome and logs a failure that happened after its request
+ended. An empty final response is retried once before falling back to
+`EMPTY_FINAL_RESPONSE_MESSAGE`. The turn gets a no-op `on_progress`: the OpenAI
+format has no place for progress, and without a callback the loop would
+publish it for the nonexistent `api` channel.
 
 Streaming hands back a `StreamingResponse` fed by a queue that
 `process_direct`'s `on_stream` callback fills. `on_stream_end` deliberately does
 nothing: it marks generation-segment boundaries, and a tool-using turn continues
-past them, so the HTTP stream closes only when `process_direct` returns. A
+past them, so the HTTP stream closes only when the turn ends. A
 completed stream emits a `finish_reason: "stop"` chunk then `data: [DONE]`; a
 failed one emits a single `{"error": ...}` frame and **omits** `[DONE]`, which is
 how a client distinguishes truncation from completion.
 
-A streaming turn has no idle clock of its own. Every way a turn can hang is
-already bounded inside the agent — the provider's stream-silence watchdog on
-each LLM call, each tool's own timeout, the per-turn tool-iteration cap — and a
-second silence clock at the edge would kill waits those limits deliberately
-allow (a local model evaluating a long prompt emits nothing for minutes). The
-only edge bound is a hard ceiling, `gateway.api_stream_timeout` (`0` disables),
-for a turn that keeps working; it is an `asyncio.timeout` built after the
-session lock is acquired, because `asyncio.timeout` fixes its deadline at
-construction and queueing behind another turn must not spend the budget. A
-ceiling hit is reported as `Stream exceeded {n}s limit` in the error frame.
-While the queue is empty the generator emits an SSE comment (`: keepalive`) on
-an interval (`_SSE_KEEPALIVE_S`), so proxies and client read timeouts do not
-drop a connection whose turn is running a long tool. A client disconnect makes
-Starlette close the generator, whose `finally` cancels the turn task.
+A turn has no idle clock of its own. Every way a turn can hang is already
+bounded inside the agent — the provider's stream-silence watchdog on each LLM
+call, each tool's own timeout, the per-turn tool-iteration cap — and a second
+silence clock at the edge would kill waits those limits deliberately allow (a
+local model evaluating a long prompt emits nothing for minutes). The only edge
+bound is a hard ceiling, `gateway.api_turn_timeout` (`0` disables), on every
+turn; it is an `asyncio.timeout` built after the session lock is acquired,
+because `asyncio.timeout` fixes its deadline at construction and queueing
+behind another turn must not spend the budget. A ceiling hit answers `504` /
+an error frame `Turn exceeded {n}s limit`. A turn stopped from outside —
+`process_direct` registers it with the running turns, so `/stop` and
+`POST /api/v1/sessions/api:<id>/stop` reach it — answers `409 turn_stopped` /
+an error frame `Turn was stopped`. While the queue is empty the stream emits an
+SSE comment (`: keepalive`) on an interval (`_SSE_KEEPALIVE_S`), so proxies and
+client read timeouts do not drop a connection whose turn is running a long
+tool. A client disconnect makes Starlette close the generator; its `finally`
+abandons the turn (cancelling it only if it never started).
 
 Both response shapes carry real token usage, not a placeholder. The agent loop
 accumulates `prompt_tokens`/`completion_tokens` across every LLM call in the
@@ -323,12 +389,24 @@ removed. Run `python scripts/gen_openapi.py` to see the current totals.
 
 ### Token minting
 
-`GET /webui/bootstrap` calls `channel.bootstrap(peer, headers)`, which checks
-the peer IP (localhost-only unless a `token_issue_secret` header matches the
-configured secret) and mints an `admin`-scoped token through
-`ApiTokenStore.issue()`. The response includes `{token, ws_path, expires_in,
-model_name, model_preset, requires_secret}`. The token is stored as a salted SHA-256 hash;
-the plaintext is shown once and never persisted.
+`GET /webui/bootstrap` calls `channel.bootstrap(peer, headers)` and mints an
+`admin`-scoped token through `ApiTokenStore.issue()`. Who may mint depends on
+whether a setup secret is configured — `token_issue_secret`, or the static
+`token` when that is empty:
+
+- **No secret:** only a loopback peer may mint (local mode); any other peer
+  gets 403.
+- **A secret is set:** every caller, localhost included, must present it
+  (`Authorization: Bearer <secret>` or `X-Durin-Auth: <secret>`) or carry a
+  valid `durin_session` cookie; otherwise 401. A sign-in with the secret sets
+  that cookie — `httpOnly`, `SameSite=Strict`, holding an opaque session token
+  that lives `webui_session_ttl_s` — so later bootstraps (page reloads)
+  re-authorize through it and the browser never stores the secret.
+
+The response includes `{token, ws_path, expires_in, model_name, model_preset,
+requires_secret}`. The token is stored as a salted SHA-256 hash; the plaintext
+is shown once and never persisted. `POST /webui/signout` revokes the session
+token and clears the cookie.
 
 The `ApiTokenStore` also generates and persists a 32-byte HMAC secret for media
 URL signing (`get_or_create_media_secret()`), stored base64-encoded in the same
@@ -345,7 +423,7 @@ URL signing (`get_or_create_media_secret()`), stored base64-encoded in the same
 | `BoundRoute` | `durin/service/registry.py` | `RouteSpec` + `service_name` + handler callable; iterated by the ASGI adapter and the generator |
 | `route` | `durin/service/registry.py` | Decorator that attaches a `RouteSpec` under `__route_spec__` and returns the method unchanged |
 | `Principal` | `durin/service/principal.py` | Frozen dataclass: `subject`, `scopes: frozenset[str]`, `kind`; `Principal.local()` → `{ADMIN}`, `Principal.remote(subject, scopes)` → token-derived |
-| `Scope` | `durin/service/principal.py` | String enum of permission values: `admin` plus `<domain>:<read\|write>` pairs (settings, secrets, skills, cron, sessions, config, memory, mcp, workflows, automations, system) |
+| `Scope` | `durin/service/principal.py` | String enum of permission values: `admin`, `<domain>:<read\|write>` pairs (settings, secrets, skills, cron, sessions, config, memory, mcp, workflows, automations, system), and the write-only `channels:write` and `chat:write` |
 | `ServiceModel` / `Command` / `Query` / `Result` | `durin/service/types.py` | Pydantic DTO bases: camelCase wire aliases via `to_camel`; `Command`/`Query` forbid extra fields, `Result` allows them |
 | `DomainError` + subclasses | `durin/service/types.py` | Transport-agnostic error hierarchy: `UnauthenticatedError` (401), `ForbiddenError` (403), `NotFoundError` (404), `ConflictError` (409), `ValidationFailedError` (422), `TooManyRequestsError` (429), `UnavailableError` (503) |
 | `build_service_registry` | `durin/service/wiring.py` | Factory for the functional registry: wires all services to real `config`, `session_manager`, `cron_service`, `bus`, optional `mcp_runtime` |
@@ -366,12 +444,12 @@ URL signing (`get_or_create_media_secret()`), stored base64-encoded in the same
 | Key | Description |
 |---|---|
 | `channels.websocket.token` | Plaintext static bearer token; accepted by the WS handshake and by `resolve_principal_from_headers` as a fallback when no stored token matches |
-| `channels.websocket.token_issue_secret` | Header value (`Authorization: Bearer` or `X-Durin-Auth`) required to mint tokens via `/webui/bootstrap` when the request is not from localhost; enables reverse-proxy deployments |
-| `channels.websocket.websocket_requires_token` | When true (default), the WS handshake must include a valid token (static or issued); when false, unauthenticated connections are allowed |
+| `channels.websocket.token_issue_secret` | Setup secret for `/webui/bootstrap` (`Authorization: Bearer` or `X-Durin-Auth`). When set — or when the static `token` is set and this is empty — every bootstrap, localhost included, needs the secret or a valid `durin_session` cookie; enables reverse-proxy deployments |
+| `channels.websocket.websocket_requires_token` | When true (default), the WS handshake must include a valid token (static or issued); when false, unauthenticated connections are allowed. A set static `token` always requires a valid token. The gateway sets it false when it creates the websocket section at runtime for the dashboard |
 | `tools.mcp_servers` | List of MCP server configs; `McpService.update` (PATCH) and other MCP routes mutate this via `save_config` |
-| Gateway host/port | Set via the `--port` flag or config; uvicorn runs in the agent event loop; WS and HTTP share the same port |
-| `gateway.api_request_timeout` | Per-request timeout (seconds) for non-streaming `/v1/chat/completions` turns; an overrun answers 504 |
-| `gateway.api_stream_timeout` | Hard ceiling (seconds) on a streaming `/v1/chat/completions` turn, counted from when the turn gets its session; `0` disables; a hit ends the stream with an error frame and no `[DONE]` |
+| App host/port | `channels.websocket.host` / `channels.websocket.port`; uvicorn runs in the agent event loop and serves WS, HTTP and the SPA on that one address. `gateway.port` (and `--port`) only bind the `/health` endpoint |
+| `gateway.api_request_timeout` | How long (seconds) a non-streaming `/v1/chat/completions` request waits for its turn; an overrun answers 504 and the turn still completes |
+| `gateway.api_turn_timeout` | Hard ceiling (seconds) on any `/v1/chat/completions` turn, counted from when the turn gets its session; `0` disables; a hit answers 504 or ends the stream with an error frame and no `[DONE]` |
 
 `TranscriptionService` exists in the codebase but is not HTTP-exposed (it
 carries no `@route` decorator on any method). Its configuration
@@ -384,8 +462,10 @@ secrets, cron, sessions, settings, config, skills, memory, MCP servers, health,
 commands, agent modes (`/api/v1/modes`), OAuth flows, auth tokens,
 personas/souls (`/api/v1/souls`, `/api/v1/personas`), workflows
 (`/api/v1/workflows`), automations (`/api/v1/automations`), and background tasks
-(`/api/v1/tasks`). Verbs in use: GET, POST, DELETE, and PATCH (used by
-`McpService.update` and `CronService` for partial updates).
+(`/api/v1/tasks`). Verbs in use: GET, POST, PUT, PATCH, and DELETE — PATCH
+for partial updates (e.g. `McpService.update`, `CronService`), PUT for saving a
+whole named resource (e.g. an automation or a workflow script). The generated
+contract lists the verb of every operation.
 
 **`GET /api/v1/tasks?session=<key>`** (scope `sessions:read`) returns the
 per-chat list of background tasks associated with a session. The response merges
@@ -471,7 +551,8 @@ Every error response is RFC 9457 `application/problem+json` with
 
 | Route | Description |
 |---|---|
-| `GET /webui/bootstrap` | Mints an admin-scoped token; gated by peer IP or `token_issue_secret` header |
+| `GET /webui/bootstrap` | Mints an admin-scoped token; loopback-only without a setup secret, otherwise gated by the secret header or the `durin_session` cookie |
+| `POST /webui/signout` | Revokes the webui session token and clears the `durin_session` cookie |
 | `GET /api/v1/mcp/oauth/callback` | OAuth provider redirect for gateway-driven MCP sign-in; gated by a single-use state token, not a bearer token |
 | `GET /api/media/{sig}/{payload}` | HMAC-signed media fetch; signature verified against the per-process media secret |
 | `POST /api/v1/hooks/{hook}` | Webhook trigger ingress for automations; gated by `X-Durin-Hook-Secret`, not a bearer token |

@@ -2078,6 +2078,7 @@
     },
     "queuedChip": "已排入佇列——目前工作完成後即會處理",
     "steerChip": "引導",
+    "apiOriginChip": "透過 API 傳送",
     "chips": {
       "spawn": "衍生 {{name}}",
       "tasks": "任務 {{action}}{{id}}",

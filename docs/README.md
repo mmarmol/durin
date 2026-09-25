@@ -44,6 +44,9 @@ How to install, configure, and run durin.
   the other chat surfaces.
 - [Providers & models](guide/providers.md) — choosing LLM providers and models,
   API keys, and aux-model presets.
+- [durin's API](guide/api.md) — chatting with durin over HTTP (send, watch the
+  turn as a stream, stop it) and the event reference the dashboard's WebSocket
+  shares.
 - [OpenAI-compatible API](guide/openai-api.md) — letting another agent or any
   OpenAI client talk to durin, with a scoped token.
 - [Documents & your knowledge](guide/documents.md) — giving durin your documents
@@ -66,6 +69,8 @@ Direct jumps to the most-read component docs:
 - [Memory](internals/memory/00_overview.md) — entity-centric memory and search.
 - [Skills](internals/skills/00_overview.md) — skill authoring, vetting, surfacing.
 - [Channels & message bus](internals/channels.md) — how surfaces reach the loop.
+- [API platform](internals/api.md) — the HTTP gateway, the OpenAPI contract,
+  scoped tokens, and native chat.
 - [Cron](internals/cron.md) — scheduled work (reminders and agent tasks).
 - [Workflow engine](internals/workflow.md) — user-defined flow graphs the agent runs.
 - [Automations](internals/automations.md) — standing triggers that run a workflow

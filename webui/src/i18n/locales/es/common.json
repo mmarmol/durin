@@ -1914,6 +1914,7 @@
     },
     "queuedChip": "En cola — se leerá al terminar el trabajo actual",
     "steerChip": "Guía",
+    "apiOriginChip": "Enviado por la API",
     "chips": {
       "spawn": "generar {{name}}",
       "tasks": "tareas {{action}}{{id}}",

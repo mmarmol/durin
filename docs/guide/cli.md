@@ -29,9 +29,16 @@ durin gateway status     # is it running? where's the dashboard?
 durin gateway stop
 ```
 
-The gateway also serves the OpenAI-compatible API (`/v1/chat/completions`)
-that remote agents and OpenAI clients talk to — see
-[OpenAI-compatible API](openai-api.md).
+The gateway also serves an HTTP API: native chat on `/api/v1` (send, watch a
+turn live, stop — see [durin's API](api.md)) and the OpenAI-compatible
+`/v1/chat/completions` that remote agents and OpenAI clients talk to — see
+[OpenAI-compatible API](openai-api.md). Callers authenticate with API tokens:
+
+```bash
+durin auth token issue --scopes chat:write --label my-app   # plaintext printed once
+durin auth token list                                       # metadata only
+durin auth token revoke <token-id>
+```
 
 The browser dashboard is served by `durin gateway` when
 `config.gateway.webui_enabled` is true (default). `durin gateway status`

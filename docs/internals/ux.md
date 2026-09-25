@@ -704,8 +704,8 @@ top of the thread renders a "Beginning of conversation" label instead.
 
 | Key | Default | Effect |
 |---|---|---|
-| `gateway.host` | `"127.0.0.1"` | Bind address for the gateway server |
-| `gateway.port` | `18790` | Port for the gateway server |
+| `gateway.host` | `"127.0.0.1"` | Bind address of the `/health` endpoint (the WebUI binds `channels.websocket.host`) |
+| `gateway.port` | `18790` | Port of the `/health` endpoint (the WebUI listens on `channels.websocket.port`) |
 | `gateway.daemon` | `false` | Run gateway detached (PID file + log file) |
 | `gateway.webui_enabled` | `true` | Auto-enable WebSocket channel so the embedded WebUI is served |
 

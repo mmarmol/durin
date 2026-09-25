@@ -28,6 +28,7 @@ registry.  Each class's dep handling:
   ``hooks_secret=None`` (stored, never called here).
 - ``DiscordService``       — no deps.
 - ``TelegramService``      — no deps.
+- ``ChatService``          — no deps (the channel resolver and loop callables default to ``None``).
 - ``SlackService``         — no deps (slack_sdk imported lazily per call).
 - ``ChannelsRuntimeService`` — ``channel_manager=None`` (stored, never called here).
 """
@@ -44,6 +45,7 @@ from durin.service.channels_runtime import ChannelsRuntimeService
 from durin.service.channels_slack import SlackService
 from durin.service.channels_telegram import TelegramService
 from durin.service.channels_whatsapp import WhatsAppService
+from durin.service.chat import ChatService
 from durin.service.commands import CommandsService
 from durin.service.config import ConfigService
 from durin.service.cron import CronService
@@ -85,6 +87,7 @@ SERVICE_CLASSES: list[type] = [
     WhatsAppService,
     ChannelsRuntimeService,
     ChannelPostService,
+    ChatService,
 ]
 
 
@@ -119,4 +122,5 @@ def build_catalog_registry() -> ServiceRegistry:
     registry.register("whatsapp", WhatsAppService())
     registry.register("channels_runtime", ChannelsRuntimeService())
     registry.register("channels_post", ChannelPostService())
+    registry.register("chat", ChatService())
     return registry

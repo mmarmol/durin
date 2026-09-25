@@ -2078,6 +2078,7 @@
     },
     "queuedChip": "Antre — dibaca saat pekerjaan saat ini selesai",
     "steerChip": "Arahkan",
+    "apiOriginChip": "Dikirim melalui API",
     "chips": {
       "spawn": "munculkan {{name}}",
       "tasks": "tugas {{action}}{{id}}",

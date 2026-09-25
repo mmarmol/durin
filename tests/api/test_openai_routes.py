@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -24,7 +25,7 @@ def _build_app(
     monkeypatch,
     agent_loop=None,
     api_request_timeout: float = 5.0,
-    api_stream_timeout: float = 5.0,
+    api_turn_timeout: float = 5.0,
 ):
     data_dir = tmp_path / "durin_data"
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -55,7 +56,7 @@ def _build_app(
         agent_loop=agent_loop if agent_loop is not None else _make_loop(),
         model_name="test-model",
         api_request_timeout=api_request_timeout,
-        api_stream_timeout=api_stream_timeout,
+        api_turn_timeout=api_turn_timeout,
     )
 
 
@@ -535,7 +536,7 @@ def test_stream_ceiling_ends_with_error_frame_and_no_done(tmp_path, monkeypatch)
     loop = MagicMock()
     loop.process_direct = AsyncMock(side_effect=_runaway)
     client = TestClient(
-        _build_app(tmp_path, monkeypatch, agent_loop=loop, api_stream_timeout=0.05)
+        _build_app(tmp_path, monkeypatch, agent_loop=loop, api_turn_timeout=0.05)
     )
     events = _sse_events(_stream_raw(client, _mint(["chat:write"])))
     assert events[-1] != "[DONE]"
@@ -558,55 +559,211 @@ def test_stream_ceiling_zero_disables_it(tmp_path, monkeypatch):
             monkeypatch,
             agent_loop=loop,
             api_request_timeout=0.05,
-            api_stream_timeout=0,
+            api_turn_timeout=0,
         )
     )
     events = _sse_events(_stream_raw(client, _mint(["chat:write"])))
     assert events[-1] == "[DONE]"
 
 
-def test_stream_client_disconnect_cancels_the_turn():
-    """Closing the body iterator (what Starlette does on disconnect) cancels the turn."""
+def _endpoint(loop, *, request_timeout=5.0, turn_timeout=5.0):
     from durin.api.openai_routes import build_openai_routes
     from durin.service.principal import Principal
 
-    seen = {"cancelled": False}
-
-    async def _turn(**kwargs):
-        await kwargs["on_stream"]("first")
-        try:
-            await asyncio.sleep(30)
-        except asyncio.CancelledError:
-            seen["cancelled"] = True
-            raise
-        return SimpleNamespace(content="never")
-
-    loop = MagicMock()
-    loop.process_direct = AsyncMock(side_effect=_turn)
     routes = build_openai_routes(
         loop,
         model_name="test-model",
-        request_timeout=5.0,
-        stream_timeout=5.0,
+        request_timeout=request_timeout,
+        turn_timeout=turn_timeout,
         resolve_principal=lambda _h: Principal.remote("t", frozenset({"chat:write"})),
     )
-    chat_endpoint = next(r for r in routes if r.path == "/v1/chat/completions").endpoint
+    return next(r for r in routes if r.path == "/v1/chat/completions").endpoint
 
+
+def _json_req(*, stream: bool, session_id: str | None = None):
     class _Req:
         headers = {"content-type": "application/json"}
 
         async def json(self):
-            return {"messages": [{"role": "user", "content": "x"}], "stream": True}
+            body = {"messages": [{"role": "user", "content": "x"}], "stream": stream}
+            if session_id:
+                body["session_id"] = session_id
+            return body
+
+    return _Req()
+
+
+def test_stream_client_disconnect_leaves_the_turn_running():
+    """Closing the body iterator ends the stream only; the turn completes."""
+    state = {"finished": False}
+
+    async def _turn(**kwargs):
+        await kwargs["on_stream"]("first")
+        await asyncio.sleep(0.05)
+        state["finished"] = True
+        return SimpleNamespace(content="done")
+
+    loop = MagicMock()
+    loop.process_direct = AsyncMock(side_effect=_turn)
+    chat_endpoint = _endpoint(loop)
 
     async def _drive():
-        response = await chat_endpoint(_Req())
+        response = await chat_endpoint(_json_req(stream=True))
         body = response.body_iterator
-        first = await body.__anext__()
-        assert b"first" in first
+        assert b"first" in await body.__anext__()
         await body.aclose()
+        await asyncio.sleep(0.2)
 
     asyncio.run(_drive())
-    assert seen["cancelled"]
+    assert state["finished"]
+
+
+def test_non_stream_timeout_answers_504_and_the_turn_completes(tmp_path, monkeypatch):
+    state = {"finished": False}
+
+    async def _slow(**_kwargs):
+        await asyncio.sleep(0.2)
+        state["finished"] = True
+        return SimpleNamespace(content="late")
+
+    loop = MagicMock()
+    loop.process_direct = AsyncMock(side_effect=_slow)
+    # The context manager keeps one event loop alive across requests; a bare
+    # TestClient tears its loop down after each request, killing the turn.
+    with TestClient(_build_app(tmp_path, monkeypatch, agent_loop=loop, api_request_timeout=0.05)) as client:
+        r = _chat(client, _mint(["chat:write"]), {"messages": [{"role": "user", "content": "a"}]})
+        assert r.status_code == 504
+        import time
+
+        time.sleep(0.4)
+    assert state["finished"]
+
+
+def test_turn_ceiling_applies_to_non_stream(tmp_path, monkeypatch):
+    async def _runaway(**_kwargs):
+        await asyncio.sleep(30)
+
+    loop = MagicMock()
+    loop.process_direct = AsyncMock(side_effect=_runaway)
+    client = TestClient(_build_app(
+        tmp_path, monkeypatch, agent_loop=loop, api_request_timeout=5.0, api_turn_timeout=0.05))
+    r = _chat(client, _mint(["chat:write"]), {"messages": [{"role": "user", "content": "a"}]})
+    assert r.status_code == 504
+    assert "0.05s" in r.json()["error"]["message"]
+
+
+def test_stopped_turn_non_stream_answers_409(tmp_path, monkeypatch):
+    async def _stopped(**_kwargs):
+        raise asyncio.CancelledError
+
+    loop = MagicMock()
+    loop.process_direct = AsyncMock(side_effect=_stopped)
+    client = TestClient(_build_app(tmp_path, monkeypatch, agent_loop=loop))
+    r = _chat(client, _mint(["chat:write"]), {"messages": [{"role": "user", "content": "a"}]})
+    assert r.status_code == 409
+    assert r.json()["error"]["type"] == "turn_stopped"
+
+
+def test_stopped_turn_stream_ends_with_error_frame(tmp_path, monkeypatch):
+    async def _stopped(**kwargs):
+        await kwargs["on_stream"]("partial")
+        raise asyncio.CancelledError
+
+    loop = MagicMock()
+    loop.process_direct = AsyncMock(side_effect=_stopped)
+    client = TestClient(_build_app(tmp_path, monkeypatch, agent_loop=loop))
+    events = _sse_events(_stream_raw(client, _mint(["chat:write"])))
+    assert events[-1] != "[DONE]"
+    assert json.loads(events[-1])["error"] == {"message": "Turn was stopped", "type": "turn_stopped"}
+
+
+def test_turn_gets_a_no_op_progress_callback(tmp_path, monkeypatch):
+    loop = _make_loop()
+    client = TestClient(_build_app(tmp_path, monkeypatch, agent_loop=loop))
+    _chat(client, _mint(["chat:write"]), {"messages": [{"role": "user", "content": "a"}]})
+    assert loop.process_direct.await_args.kwargs["on_progress"] is not None
+
+
+def test_a_request_that_times_out_while_queued_drops_its_turn():
+    """A turn abandoned before it got its session never runs: a client retry
+    would otherwise queue a duplicate, billed turn behind it."""
+    calls = []
+
+    async def _turn(**kwargs):
+        calls.append(kwargs["content"])
+        await asyncio.sleep(0.3)
+        return SimpleNamespace(content="ok")
+
+    loop = MagicMock()
+    loop.process_direct = AsyncMock(side_effect=_turn)
+    chat_endpoint = _endpoint(loop, request_timeout=0.05)
+
+    async def _drive():
+        first = asyncio.create_task(chat_endpoint(_json_req(stream=False, session_id="same")))
+        await asyncio.sleep(0.01)  # the first turn holds the session
+        second = await chat_endpoint(_json_req(stream=False, session_id="same"))
+        assert second.status_code == 504
+        await first
+        await asyncio.sleep(0.5)  # long enough for a surviving second turn to have run
+
+    asyncio.run(_drive())
+    assert len(calls) == 1
+
+
+def test_a_stream_dropped_while_queued_drops_its_turn():
+    calls = []
+
+    async def _turn(**kwargs):
+        calls.append(kwargs["content"])
+        await asyncio.sleep(0.3)
+        return SimpleNamespace(content="ok")
+
+    loop = MagicMock()
+    loop.process_direct = AsyncMock(side_effect=_turn)
+    chat_endpoint = _endpoint(loop)
+
+    async def _drive():
+        first = asyncio.create_task(chat_endpoint(_json_req(stream=False, session_id="same")))
+        await asyncio.sleep(0.01)
+        response = await chat_endpoint(_json_req(stream=True, session_id="same"))
+        body = response.body_iterator
+        reader = asyncio.create_task(body.__anext__())
+        await asyncio.sleep(0.02)
+        # The client leaves while its turn is still queued for the session.
+        reader.cancel()
+        with contextlib.suppress(asyncio.CancelledError, StopAsyncIteration):
+            await reader
+        await first
+        await asyncio.sleep(0.5)
+
+    asyncio.run(_drive())
+    assert len(calls) == 1
+
+
+def test_a_failure_after_the_request_ended_is_logged():
+    from loguru import logger
+
+    lines: list[str] = []
+    sink = logger.add(lambda m: lines.append(str(m)), level="ERROR")
+
+    async def _late_failure(**_kwargs):
+        await asyncio.sleep(0.1)
+        raise RuntimeError("boom after 504")
+
+    loop = MagicMock()
+    loop.process_direct = AsyncMock(side_effect=_late_failure)
+    chat_endpoint = _endpoint(loop, request_timeout=0.02)
+
+    async def _drive():
+        response = await chat_endpoint(_json_req(stream=False))
+        assert response.status_code == 504
+        await asyncio.sleep(0.3)
+
+    try:
+        asyncio.run(_drive())
+    finally:
+        logger.remove(sink)
+    assert any("failed after its request ended" in line for line in lines)
 
 
 def test_stream_ceiling_starts_when_the_turn_gets_the_session():
@@ -628,7 +785,7 @@ def test_stream_ceiling_starts_when_the_turn_gets_the_session():
         loop,
         model_name="test-model",
         request_timeout=5.0,
-        stream_timeout=0.2,
+        turn_timeout=0.2,
         resolve_principal=lambda _h: Principal.remote("t", frozenset({"chat:write"})),
     )
     chat_endpoint = next(r for r in routes if r.path == "/v1/chat/completions").endpoint

@@ -10,7 +10,7 @@ For the project overview, install guide, and general docs map, see the root
 
 ## Just want to use the WebUI?
 
-If you installed durin via `pip install durin-ai`, the WebUI is **already bundled** in the wheel. Enable the WebSocket channel in `~/.durin/config.json` and run `durin gateway` — see the root [`README.md`](../README.md#-webui) for the 3-step setup. You do **not** need anything in this directory.
+If you installed durin (`uv tool install durin-agent`), the WebUI is **already bundled** in the wheel: run `durin gateway start` and open `http://127.0.0.1:8765` — see the root [`README.md`](../README.md#quick-start). The gateway turns on the WebSocket channel that serves it by itself (`gateway.webuiEnabled`, on by default). You do **not** need anything in this directory.
 
 This `webui/` tree is for people **hacking on the WebUI itself** (UI changes, new components, styling, etc.).
 
@@ -33,23 +33,16 @@ pip install -e .
 
 > Editable installs intentionally **skip** the WebUI bundle step — Vite HMR is faster than rebuilding `dist/` on every change.
 
-### 2. Enable the WebSocket channel
+### 2. Start the gateway
 
-In `~/.durin/config.json`:
-
-```json
-{ "channels": { "websocket": { "enabled": true } } }
-```
-
-### 3. Start the gateway
-
-In one terminal:
+In one terminal, in the foreground (the gateway turns on the WebSocket channel
+itself while `gateway.webuiEnabled` is on, the default):
 
 ```bash
-durin gateway
+durin gateway --foreground
 ```
 
-### 4. Start the WebUI dev server
+### 3. Start the WebUI dev server
 
 In another terminal:
 
@@ -88,7 +81,7 @@ To use the WebUI from another device on the same network, set `host` to `"0.0.0.
 
 The gateway will refuse to start if `host` is `"0.0.0.0"` and neither `token` nor `tokenIssueSecret` is set.
 
-Then open `http://<your-ip>:8765` on the other device. The WebUI will show an authentication form where you enter the secret. It is saved in your browser so you only need to enter it once.
+Then open `http://<your-ip>:8765` on the other device. The WebUI will show an authentication form where you enter the secret. After that the gateway keeps the browser signed in with an `httpOnly` session cookie (7 days by default, `webuiSessionTtlS`); the secret itself is never stored in the browser.
 
 ## Build for packaged runtime
 

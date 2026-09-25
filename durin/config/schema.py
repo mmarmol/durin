@@ -1232,8 +1232,8 @@ class AutomationsConfig(Base):
 class GatewayConfig(Base):
     """Gateway/server configuration."""
 
-    host: str = Field(default="127.0.0.1", description="Bind address; local-only by default")
-    port: int = Field(default=18790, description="Gateway listen port")
+    host: str = Field(default="127.0.0.1", description="Bind address of the /health endpoint; local-only by default. The dashboard and APIs bind channels.websocket.host")
+    port: int = Field(default=18790, description="Port of the /health endpoint. The dashboard and APIs listen on channels.websocket.port")
     # Opt-in because the foreground mode is easier to debug on first install.
     daemon: bool = Field(default=False, description="Run `durin gateway` detached (PID file + log file) so the terminal isn't locked")
     # Defaults to True because most users running `durin gateway` want the
@@ -1261,18 +1261,19 @@ class GatewayConfig(Base):
         validation_alias=AliasChoices("apiRequestTimeout", "api_request_timeout"),
         serialization_alias="apiRequestTimeout",
         description=(
-            "Per-request timeout in seconds for non-streaming requests to the "
-            "OpenAI-compatible /v1 chat endpoint"
+            "How long, in seconds, a non-streaming request to the OpenAI-compatible "
+            "/v1 chat endpoint waits for the answer; on overrun it answers 504 and "
+            "the turn still completes and is saved"
         ),
     )
-    api_stream_timeout: float = Field(
+    api_turn_timeout: float = Field(
         default=3600.0,
-        validation_alias=AliasChoices("apiStreamTimeout", "api_stream_timeout"),
-        serialization_alias="apiStreamTimeout",
+        validation_alias=AliasChoices("apiTurnTimeout", "api_turn_timeout"),
+        serialization_alias="apiTurnTimeout",
         description=(
-            "Hard ceiling in seconds on one streaming /v1 chat turn; 0 disables. "
-            "A hung turn is cut earlier by the agent's own per-call and per-tool "
-            "limits, so this only bounds a turn that keeps working"
+            "Hard ceiling in seconds on one /v1 chat turn, streaming or not; 0 "
+            "disables. A hung turn is cut earlier by the agent's own per-call and "
+            "per-tool limits, so this only bounds a turn that keeps working"
         ),
     )
 

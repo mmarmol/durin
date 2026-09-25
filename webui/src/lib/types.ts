@@ -65,6 +65,9 @@ export interface UIMessage {
   queued?: boolean;
   /** User turn sent as a steer: injected into the running turn as guidance. */
   steer?: boolean;
+  /** User turn sent by a program through the API rather than typed here;
+   * labelled so the conversation does not present it as the person's words. */
+  origin?: "api";
   /** For trace rows: structured tool-call events merged by ``call_id``.
    * Carries name / arguments / result / error so the UI can render
    * rich blocks (code diffs, exec IN/OUT) instead of flat text traces.
@@ -477,6 +480,17 @@ export type InboundEvent =
       message?: string;
     }
   | { event: "session_updated"; chat_id: string }
+  | {
+      /** A user message someone sent to this conversation — another tab, or a
+       * program through the API. The sender already shows its own message
+       * under ``client_msg_id``, which is how it recognizes the echo. */
+      event: "user";
+      chat_id: string;
+      text: string;
+      client_msg_id?: string;
+      origin?: "api";
+      media_urls?: UIMediaAttachment[];
+    }
   | {
       /** A message sent while a turn was running was deferred: it enters the
        * conversation when the current work finishes. Ephemeral UI state

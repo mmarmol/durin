@@ -537,6 +537,9 @@ def replay_transcript_to_ui_messages(
                 row["media"] = media_att
                 if all(m.get("kind") == "image" for m in media_att):
                     row["images"] = [{"url": m.get("url"), "name": m.get("name")} for m in media_att]
+            origin = rec.get("origin")
+            if isinstance(origin, str) and origin:
+                row["origin"] = origin
             messages.append(row)
             continue
 

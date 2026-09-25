@@ -1011,7 +1011,10 @@ def _gateway_apply_verbose() -> None:
 @gateway_app.callback()
 def gateway_root(
     ctx: typer.Context,
-    port: int | None = typer.Option(None, "--port", "-p", help="Gateway port"),
+    port: int | None = typer.Option(
+        None, "--port", "-p",
+        help="Port of the /health endpoint (the dashboard and APIs listen on channels.websocket.port)",
+    ),
     workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
     config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
@@ -2189,6 +2192,9 @@ def _run_gateway(
                     tool_registry_resolver=lambda: agent.tools,
                     on_config_changed=agent.reload_app_config,
                     on_default_changed=agent.apply_default_model_live,
+                    chat_channel_resolver=lambda: channels.get_channel("websocket"),
+                    stop_turn=agent.cancel_session_turns,
+                    turn_key=agent.bus_turn_key,
                 )
                 # Static token lives on the websocket channel config.
                 _ws_cfg_u = getattr(config.channels, "websocket", None)
@@ -2211,7 +2217,7 @@ def _run_gateway(
                     agent_loop=agent,
                     model_name=_model_name_u,
                     api_request_timeout=config.gateway.api_request_timeout,
-                    api_stream_timeout=config.gateway.api_stream_timeout,
+                    api_turn_timeout=config.gateway.api_turn_timeout,
                 )
                 _ws_port = _ws_channel.config.port  # type: ignore[attr-defined]
                 _ws_host = _ws_channel.config.host  # type: ignore[attr-defined]
@@ -3545,14 +3551,15 @@ def approvals_root(
     config: str | None = typer.Option(None, "--config", "-c", help="Config file path."),
     workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace path."),
 ) -> None:
-    """Privileged actions an autonomous run recorded for your approval.
+    """Privileged actions recorded for your approval.
 
-    A cron job, dream, workflow or sub-agent has no user to ask, so an action
-    that would add or change executable state (an MCP server, a skill, a
-    dependency install, an exec command) is recorded instead of run. This is
-    where they wait: bare `durin approvals` lists pending ones (`--all` for
-    everything too); `approve`/`reject <id>` decide one; `discard <id>`
-    deletes a record without deciding it.
+    A cron job, dream, workflow or sub-agent has no user to ask, and a turn
+    driven by an API token has no person's authority, so an action that would
+    add or change executable state (an MCP server, a skill, a dependency
+    install) is recorded instead of run; an exec command that needs approval
+    is refused there instead. This is where they wait: bare `durin approvals`
+    lists pending ones (`--all` for everything too); `approve`/`reject <id>`
+    decide one; `discard <id>` deletes a record without deciding it.
     """
     ctx.obj = {"config": config, "workspace": workspace}
     if ctx.invoked_subcommand is None:

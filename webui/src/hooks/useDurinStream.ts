@@ -21,10 +21,20 @@ interface StreamBuffer {
 
 /** Scan upward from the bottom skipping trace rows so tool breadcrumbs don't steal the stream target. */
 function findStreamingAssistantId(prev: UIMessage[]): string | null {
+  let passedTrace = false;
   for (let i = prev.length - 1; i >= 0; i -= 1) {
     const m = prev[i];
-    if (m.kind === "trace") continue;
-    if (m.role === "assistant" && m.isStreaming) return m.id;
+    if (m.kind === "trace") {
+      passedTrace = true;
+      continue;
+    }
+    if (m.role === "assistant" && m.isStreaming) {
+      // A reasoning-only row followed by tool traces is that step's own turn
+      // (the live twin of a persisted tool-call message): text after the
+      // tools is a new reply below them, the order the history replay shows.
+      if (passedTrace && m.content.length === 0) return null;
+      return m.id;
+    }
     if (m.role === "user") break;
   }
   return null;
@@ -422,6 +432,29 @@ export function useDurinStream(
         } else {
           setRunStartedAt(null);
         }
+        return;
+      }
+
+      if (ev.event === "user") {
+        // Someone else sent this to the conversation (another tab, or a
+        // program through the API). This client's own messages are already
+        // on screen under their client_msg_id, so those echoes are skipped.
+        const echoId = ev.client_msg_id;
+        setMessages((prev) =>
+          echoId && prev.some((m) => m.id === echoId)
+            ? prev
+            : [
+                ...prev,
+                {
+                  id: echoId ?? crypto.randomUUID(),
+                  role: "user",
+                  content: ev.text,
+                  createdAt: Date.now(),
+                  ...(ev.origin ? { origin: ev.origin } : {}),
+                  ...(ev.media_urls && ev.media_urls.length > 0 ? { media: ev.media_urls } : {}),
+                },
+              ],
+        );
         return;
       }
 

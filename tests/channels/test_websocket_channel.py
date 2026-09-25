@@ -197,7 +197,8 @@ async def test_plain_websocket_message_does_not_mark_webui(bus: MagicMock) -> No
 @pytest.mark.asyncio
 async def test_steer_envelope_marks_metadata_and_client_msg_id(bus: MagicMock) -> None:
     channel = _ch(bus)
-    conn = MagicMock()
+    # A connection's send_text is async; the message is echoed back to it.
+    conn = MagicMock(send_text=AsyncMock())
 
     await channel._dispatch_envelope(
         conn,

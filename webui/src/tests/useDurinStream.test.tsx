@@ -1152,4 +1152,78 @@ describe("useDurinStream", () => {
     expect(result.current.messages.every((message) => !message.isStreaming)).toBe(true);
     expect(onTurnEnd).toHaveBeenCalledTimes(1);
   });
+
+  it("shows a user message another client sent to the conversation", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(() => useDurinStream("chat-echo", EMPTY_MESSAGES), {
+      wrapper: wrap(fake.client),
+    });
+
+    act(() => {
+      fake.emit("chat-echo", {
+        event: "user",
+        chat_id: "chat-echo",
+        text: "from a script",
+        client_msg_id: "api-1",
+        origin: "api",
+      });
+    });
+
+    expect(result.current.messages).toHaveLength(1);
+    expect(result.current.messages[0]).toMatchObject({
+      id: "api-1",
+      role: "user",
+      content: "from a script",
+      origin: "api",
+    });
+  });
+
+  it("does not duplicate a message this client already shows", () => {
+    const fake = fakeClient();
+    const own: import("@/lib/types").UIMessage[] = [
+      { id: "mine-1", role: "user", content: "hi", createdAt: 1 },
+    ];
+    const { result } = renderHook(() => useDurinStream("chat-own", own), {
+      wrapper: wrap(fake.client),
+    });
+
+    act(() => {
+      fake.emit("chat-own", { event: "user", chat_id: "chat-own", text: "hi", client_msg_id: "mine-1" });
+    });
+
+    expect(result.current.messages).toHaveLength(1);
+  });
+
+  it("puts the answer after a tool that ran between reasoning and the answer", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(() => useDurinStream("chat-order", EMPTY_MESSAGES), {
+      wrapper: wrap(fake.client),
+    });
+    const toolEvent = (phase: string) => ({
+      version: 1, phase, call_id: "call-1", name: "exec",
+      arguments: { command: "sleep 1" }, result: phase === "end" ? "ok" : null, error: null,
+    });
+
+    act(() => {
+      fake.emit("chat-order", { event: "reasoning_delta", chat_id: "chat-order", text: "I should run it." });
+      fake.emit("chat-order", { event: "reasoning_end", chat_id: "chat-order" });
+      fake.emit("chat-order", { event: "stream_end", chat_id: "chat-order" });
+      fake.emit("chat-order", {
+        event: "message", chat_id: "chat-order", text: "exec", kind: "tool_hint",
+        tool_events: [toolEvent("start")],
+      } as InboundEvent);
+      fake.emit("chat-order", {
+        event: "message", chat_id: "chat-order", text: "", kind: "progress",
+        tool_events: [toolEvent("end")],
+      } as InboundEvent);
+      fake.emit("chat-order", { event: "delta", chat_id: "chat-order", text: "done" });
+      fake.emit("chat-order", { event: "turn_end", chat_id: "chat-order" });
+    });
+
+    const rows = result.current.messages.map((m) =>
+      m.kind === "trace" ? "trace" : `${m.role}:${m.content}`,
+    );
+    // Same order as the history replay: the reasoning step, the tool, the answer.
+    expect(rows).toEqual(["assistant:", "trace", "assistant:done"]);
+  });
 });

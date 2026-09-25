@@ -911,7 +911,9 @@ Channel-specific extensions:
   pairing flow via the central ingress gate (see "WhatsApp bridge transport"
   above).
 - **WebSocket** (webui): `host`, `port`, `path`, `token`,
-  `token_issue_secret`, `websocket_requires_token` (bool; default `true`),
+  `token_issue_secret`, `websocket_requires_token` (bool; default `true`, but
+  `false` when the gateway creates the section at runtime for the dashboard
+  because the config has none; a set `token` always requires a valid token),
   `allow_from` (default `["*"]`).
 
 ### Plugin channel registration
@@ -945,6 +947,20 @@ will be discovered at startup and can be enabled with
   the live handles a decision runs with after its turn stopped waiting.
   `webui_session_turn_key` tells the channel how the loop keys a chat's
   turns, so an approval is matched to its chat in unified mode.
+- **HTTP chat** — the native chat routes (`/api/v1/sessions/{key}/messages`,
+  `…/events`, `…/stop`) are a second transport into the same channel. A message
+  enters through `WebSocketChannel.validate_chat_message` and
+  `publish_chat_message`, the path the WebSocket `message` frame uses, so both
+  accept exactly the same messages. An SSE watcher (`SseSubscriber`) joins the
+  per-chat fan-out (`_attach` / `_cleanup_connection`) alongside WebSocket
+  connections; its `send_text` never blocks the channel. A message may carry
+  `origin: "api"`, which is recorded on the transcript's `user` row.
+- **Live user messages** — each user message that carries a `client_msg_id` is
+  echoed to the conversation's watchers as a `user` frame (text, id, `origin`,
+  signed `media_urls`), so a conversation driven from the API or from another
+  tab shows the question, not only the answer. The sender recognizes its own
+  message by that id; a message without one (the webui's `/stop`) is not
+  echoed.
 
 ### Dashboard channel services
 

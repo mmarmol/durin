@@ -2078,6 +2078,7 @@
     },
     "queuedChip": "Đã xếp hàng — sẽ đọc khi công việc hiện tại xong",
     "steerChip": "Điều hướng",
+    "apiOriginChip": "Gửi qua API",
     "chips": {
       "spawn": "tạo {{name}}",
       "tasks": "tác vụ {{action}}{{id}}",
