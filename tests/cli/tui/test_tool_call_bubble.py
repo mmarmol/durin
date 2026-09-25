@@ -877,3 +877,161 @@ def test_secret_prompt_update_mode_derivation() -> None:
     assert not _secret_prompt_update_mode({"name": "GH", "service": "github"}, "any")
     # Result not yet arrived → trust the flag (transient, same as the webui).
     assert _secret_prompt_update_mode(upd, "")
+
+
+# ---------------------------------------------------------------------------
+# Approval bubble — mirrors the approval the running turn waits on
+# ---------------------------------------------------------------------------
+
+_PENDING_APPROVAL = {
+    "approval_id": "a1b2c3d4e5f6", "kind": "exec_command",
+    "summary": "run `rm -rf build`",
+    "detail": {"command": "rm -rf build", "verdict": "caution"},
+}
+
+
+def _approval_sync(pending):
+    from durin.bus.events import OutboundMessage
+
+    blob: dict = {"active": False}
+    if pending is not None:
+        blob["pending_approval"] = pending
+    return OutboundMessage(
+        channel="cli", chat_id="direct", content="",
+        metadata={"_goal_state_sync": True, "goal_state": blob},
+    )
+
+
+def _approval_bubbles(app: DurinApp) -> list:
+    return [b for b in app.query(ToolCallBubble) if b._name == "approval"]
+
+
+@pytest.mark.asyncio
+async def test_pending_approval_mounts_one_bubble_with_approve_and_reject() -> None:
+    from textual.widgets import Static
+
+    app = DurinApp(agent_loop=None)
+    async with app.run_test() as pilot:
+        app._handle_outbound(_approval_sync(_PENDING_APPROVAL))
+        await pilot.pause()
+        app._handle_outbound(_approval_sync(_PENDING_APPROVAL))  # same snapshot again
+        await pilot.pause()
+        bubbles = _approval_bubbles(app)
+        assert len(bubbles) == 1
+        body = _body_plain(bubbles[0])
+        assert "run `rm -rf build`" in body
+        assert "verdict: caution" in body
+        assert "Approve" in _static_plain(bubbles[0].query_one("#tc-approval-approve", Static))
+        assert "Reject" in _static_plain(bubbles[0].query_one("#tc-approval-reject", Static))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("row", "reply"), [("approve", "yes"), ("reject", "no")])
+async def test_approval_row_sends_the_verdict_as_the_next_message(row, reply) -> None:
+    """A row sends a plain yes/no through the same inbound path as a typed
+    answer. The loop parses it, so the model never decides the verdict."""
+    from types import SimpleNamespace
+
+    from textual.css.query import NoMatches
+
+    app = DurinApp(agent_loop=None)
+    published: list[str] = []
+
+    async def _capture(text, media, **kwargs):
+        published.append(text)
+
+    async with app.run_test() as pilot:
+        app._publish_inbound = _capture  # type: ignore[method-assign]
+        app._handle_outbound(_approval_sync(_PENDING_APPROVAL))
+        await pilot.pause()
+        bubble = _approval_bubbles(app)[0]
+        bubble.on_click(SimpleNamespace(widget=bubble.query_one(f"#tc-approval-{row}")))
+        await pilot.pause()
+        assert published == [reply]
+        with pytest.raises(NoMatches):
+            bubble.query_one("#tc-approval-actions")
+        assert f"{reply} sent" in _static_plain(bubble.query_one("#tc-approval-sent"))
+
+
+@pytest.mark.asyncio
+async def test_resolved_approval_sync_retires_the_rows() -> None:
+    """A snapshot without the approval means it was answered or timed out. A
+    stale Approve row must not answer whatever the turn asks next."""
+    from textual.css.query import NoMatches
+
+    app = DurinApp(agent_loop=None)
+    async with app.run_test() as pilot:
+        app._handle_outbound(_approval_sync(_PENDING_APPROVAL))
+        await pilot.pause()
+        bubble = _approval_bubbles(app)[0]
+        app._handle_outbound(_approval_sync(None))
+        await pilot.pause()
+        with pytest.raises(NoMatches):
+            bubble.query_one("#tc-approval-actions")
+        assert bubble.has_class("ok")
+
+
+def test_finding_line_renders_the_skill_scan_shape() -> None:
+    """Skill-scan findings are ``{category, severity, where, detail}`` dicts
+    (durin/agent/skills_store.py), not the ``message``/``title`` shape this
+    renderer used to assume — that mismatch used to fall through to raw
+    JSON."""
+    from durin.cli.tui.widgets.tool_call_bubble import _finding_line
+
+    finding = {
+        "category": "prompt_injection", "severity": "high",
+        "where": "SKILL.md:12", "detail": "instructs the agent to exfiltrate secrets",
+    }
+    line = _finding_line(finding)
+    assert "prompt_injection" in line
+    assert "instructs the agent to exfiltrate secrets" in line
+    assert "SKILL.md:12" in line
+    assert "high" in line
+    assert "{" not in line
+
+
+def test_approval_body_renders_skill_findings_and_new_findings() -> None:
+    """A skill-edit approval carries both ``findings`` (the whole scan) and
+    ``new_findings`` (what the edit introduced) — both must render as text,
+    under their own labels, never as a raw JSON blob."""
+    from durin.cli.tui.widgets.tool_call_bubble import _approval_renderable
+
+    args = {
+        "summary": "edit skill 'deploy'",
+        "detail": {
+            "findings": [
+                {"category": "secrets", "severity": "medium",
+                 "where": "SKILL.md:3", "detail": "hardcoded token"},
+            ],
+            "new_findings": [
+                {"category": "prompt_injection", "severity": "high",
+                 "where": "SKILL.md:9", "detail": "ignore prior instructions"},
+            ],
+        },
+    }
+    body = _approval_renderable(args).plain
+    assert "findings:" in body
+    assert "new findings:" in body
+    assert "hardcoded token" in body
+    assert "ignore prior instructions" in body
+    assert "{" not in body
+
+
+def test_approval_body_renders_mcp_env_and_security_detail() -> None:
+    """MCP-kind approvals carry ``env`` / ``security`` detail lines
+    (durin/agent/approval_kinds_mcp.py) — the generic per-key loop must
+    still print them for an MCP-shaped payload."""
+    from durin.cli.tui.widgets.tool_call_bubble import _approval_renderable
+
+    args = {
+        "summary": "add MCP server 'weather'",
+        "detail": {
+            "action": "add", "name": "weather", "server": "weather → npx weather-mcp",
+            "target": "npx weather-mcp",
+            "env": "API_KEY=${secret:WEATHER_API_KEY}",
+            "security": "spawn_egress_policy=deny",
+        },
+    }
+    body = _approval_renderable(args).plain
+    assert "API_KEY=${secret:WEATHER_API_KEY}" in body
+    assert "spawn_egress_policy=deny" in body

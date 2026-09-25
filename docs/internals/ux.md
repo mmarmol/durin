@@ -393,6 +393,20 @@ active goal, drawn from the `goal_state` blob carried on turn-end frames and
 on the dedicated goal-state sync push (`_goal_state_sync`). The banner is
 hidden when there is no active goal.
 
+**Approval bubble.** The `goal_state` blob also carries `pending_approval`
+(`approval_id`, `kind`, `summary`, `detail`) whenever the running turn is
+waiting on a risky-action approval. A `ToolCallBubble` for the synthetic
+`approval` tool renders it — expanded by default, since a collapsed preview
+could hide what is being approved — with inline `Approve` / `Reject` rows.
+The bubble mounts directly in the chat, not inside the activity cluster, so
+collapsing the cluster at turn end never hides it. Clicking a row publishes a
+plain `yes` / `no` as the user's next message, through the same inbound path
+a typed reply takes; the loop parses it with
+`durin.workflow.approval.parse_approval_reply`, so the model never sees or
+decides the verdict. A goal-state sync without `pending_approval` means the
+approval was answered or timed out: the bubble's action rows are retired so a
+stale click can't answer whatever the turn asks next.
+
 ### Memory browser (WebUI)
 
 The Entities tab offers two presentations of the same entity set — Table

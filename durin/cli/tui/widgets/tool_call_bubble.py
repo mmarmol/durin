@@ -91,6 +91,10 @@ class ToolCallBubble(Vertical):
         height: auto;
         padding: 0 1;
     }
+    ToolCallBubble > #tc-approval-actions {
+        height: auto;
+        padding: 0 1;
+    }
     ToolCallBubble .tc-option {
         height: 1;
         color: $accent;
@@ -127,6 +131,10 @@ class ToolCallBubble(Vertical):
         # the header to expand. Cached on the bubble so re-renders keep
         # the expanded/collapsed choice the user made.
         self._expanded: bool = False
+        # An approval shows everything it asks about: a person cannot approve
+        # what a collapsed preview hides.
+        if self._name == "approval":
+            self._expanded = True
         # Latest full-body Rich renderable, kept so the toggle can swap
         # between truncated and expanded views without re-running the
         # tool-specific render pipeline.
@@ -182,6 +190,12 @@ class ToolCallBubble(Vertical):
             with Horizontal(id="tc-plan-actions"):
                 yield Static("✓ Approve", id="tc-plan-approve", classes="tc-option")
                 yield Static("✎ Refine", id="tc-plan-refine", classes="tc-option")
+        # approval: the server waits on this person. Approve / Reject send
+        # "yes" / "no" as the next message, which the loop parses itself.
+        if self._name == "approval":
+            with Horizontal(id="tc-approval-actions"):
+                yield Static("✓ Approve", id="tc-approval-approve", classes="tc-option")
+                yield Static("✗ Reject", id="tc-approval-reject", classes="tc-option")
 
     def on_mount(self) -> None:
         """Render the body once mounted.
@@ -233,6 +247,10 @@ class ToolCallBubble(Vertical):
             self._approve_plan()
         elif wid == "tc-plan-refine":
             self._focus_input()
+        elif wid == "tc-approval-approve":
+            self._answer_approval("yes")
+        elif wid == "tc-approval-reject":
+            self._answer_approval("no")
 
     def _toggle_expanded(self) -> None:
         self._expanded = not self._expanded
@@ -289,16 +307,33 @@ class ToolCallBubble(Vertical):
             return
         from durin.service.secrets import secret_stored_notice
 
-        note = secret_stored_notice(stored)
+        self._publish_background(secret_stored_notice(stored))
+
+    def _publish_background(self, text: str, media: list | None = None) -> None:
+        """Publish ``text`` on the TUI channel without blocking the caller.
+
+        Shared by every bubble action that fires a message and moves on
+        (a secret-stored note, an approval verdict): keeps a strong ref to
+        the task on the (longer-lived) app so the event loop can't GC this
+        fire-and-forget task before it runs (RUF006), and logs a failure
+        instead of letting it vanish silently.
+        """
         publish = getattr(self.app, "_publish_inbound", None)
         if publish is None:
             return
         import asyncio
 
-        task = asyncio.create_task(publish(note, []))
-        # Retain a strong ref on the (longer-lived) app so the loop can't GC
-        # this fire-and-forget task before it runs (RUF006). The widget is
-        # transient; the app outlives it.
+        async def _go() -> None:
+            try:
+                await publish(text, media or [])
+            except Exception as exc:  # noqa: BLE001 — log, don't crash the app
+                from loguru import logger
+
+                logger.bind(channel="tui").exception(
+                    f"_publish_background failed for {text[:60]!r}: {exc!r}"
+                )
+
+        task = asyncio.create_task(_go())
         bg = getattr(self.app, "_background_tasks", None)
         if bg is not None:
             bg.add(task)
@@ -306,7 +341,7 @@ class ToolCallBubble(Vertical):
 
     def _remove_action_rows(self) -> None:
         """Drop the inline action rows mounted from the start payload."""
-        for row_id in ("#tc-plan-actions", "#tc-secret-provide"):
+        for row_id in ("#tc-plan-actions", "#tc-secret-provide", "#tc-approval-actions"):
             try:
                 self.query_one(row_id).remove()
             except Exception:  # noqa: BLE001 — row absent for other tools
@@ -323,6 +358,28 @@ class ToolCallBubble(Vertical):
                 pass
 
         app.run_worker(_go())
+
+    def _answer_approval(self, reply: str) -> None:
+        """Send ``yes`` / ``no`` as the user's next message.
+
+        The loop reads it as the verdict for the approval waiter, the same
+        path a typed reply takes, so the model never sees or decides it. The
+        rows go away at once so a second click cannot send it twice.
+        """
+        self._publish_background(reply)
+        self._remove_action_rows()
+        try:
+            self.mount(Static(f"→ {reply} sent", id="tc-approval-sent", markup=False))
+        except Exception:  # noqa: BLE001 — bubble already detached
+            pass
+
+    def close_approval(self) -> None:
+        """The approval was answered or timed out: retire its action rows."""
+        self._status = "ok"
+        self.remove_class("running")
+        self.add_class("ok")
+        self._remove_action_rows()
+        self._refresh_header()
 
     def _focus_input(self) -> None:
         """Focus the chat input so the user can type a refinement."""
@@ -371,6 +428,9 @@ class ToolCallBubble(Vertical):
     def _summary_line(self) -> str:
         """One-line summary of what this call is operating on."""
         a = self._args if isinstance(self._args, dict) else {}
+        if self._name == "approval":
+            # The kind names what is being approved; the summary is in the body.
+            return str(a.get("kind") or "")
         if self._name == "memory_prefetch":
             # The header reports how many memories came back, not the
             # query it searched for — the query is already visible in the
@@ -425,6 +485,8 @@ class ToolCallBubble(Vertical):
 
     def _render_running_body(self) -> Any:
         """Body shown while the call is still in flight."""
+        if self._name == "approval":
+            return _approval_renderable(self._args)
         if self._name == "edit_file":
             a = self._args if isinstance(self._args, dict) else {}
             old = str(a.get("old_text") or "")
@@ -799,6 +861,78 @@ def _secret_prompt_update_mode(args: Any, result_text: str | None) -> bool:
     if not bool(a.get("update")):
         return False
     return "is not stored" not in (result_text or "")
+
+
+def _approval_renderable(args: Any) -> Text:
+    """Render an approval request: what would run, then what was reviewed.
+
+    Built from the server's pending-approval payload (summary plus the
+    kind-specific detail), never from the model's tool arguments. The scan
+    verdict, findings, command and any other detail keys come first. A diff
+    comes last, coloured like an ``edit_file`` body.
+    """
+    a = args if isinstance(args, dict) else {}
+    detail = a.get("detail") if isinstance(a.get("detail"), dict) else {}
+    text = Text()
+    text.append("🔐 ", style="bold yellow")
+    text.append(str(a.get("summary") or "(no summary)"), style="bold")
+    for key, value in detail.items():
+        if key == "diff" or value in (None, "", [], {}):
+            continue
+        if key in ("findings", "new_findings") and isinstance(value, list):
+            label = "findings" if key == "findings" else "new findings"
+            text.append(f"\n   {label}:", style="dim")
+            for finding in value:
+                text.append(f"\n   • {_finding_line(finding)}")
+            continue
+        shown = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+        text.append(f"\n   {key}: ", style="dim")
+        text.append(str(shown))
+    diff = detail.get("diff")
+    if isinstance(diff, str) and diff.strip():
+        for line in diff.splitlines():
+            if line.startswith("@@"):
+                style = "dim cyan"
+            elif line.startswith("+"):
+                style = "green"
+            elif line.startswith("-"):
+                style = "red"
+            else:
+                style = "default"
+            text.append("\n" + line, style=style)
+    return text
+
+
+def _finding_line(finding: Any) -> str:
+    """One scan finding as text.
+
+    Skill-scan findings (``durin/agent/skills_store.py``) are shaped
+    ``{category, severity, where, detail}`` and render as
+    ``[severity] category: detail (where)``, dropping any part that's
+    empty. Other shapes fall back to ``message``/``title``/``description``/
+    ``rule`` (plus ``level`` for severity), and anything that fits neither
+    prints as JSON rather than vanishing silently.
+    """
+    if not isinstance(finding, dict):
+        return str(finding)
+    severity = str(finding.get("severity") or finding.get("level") or "").strip()
+    if "category" in finding or "where" in finding or "detail" in finding:
+        category = str(finding.get("category") or "").strip()
+        detail = str(finding.get("detail") or "").strip()
+        where = str(finding.get("where") or "").strip()
+        body = ": ".join(part for part in (category, detail) if part)
+        line = f"[{severity}] {body}" if severity else body
+        if where:
+            line = f"{line} ({where})" if line else where
+        if line.strip():
+            return line
+    message = str(
+        finding.get("message") or finding.get("title")
+        or finding.get("description") or finding.get("rule") or ""
+    ).strip()
+    if message:
+        return f"[{severity}] {message}" if severity else message
+    return json.dumps(finding, ensure_ascii=False)
 
 
 def _request_secret_renderable(args: Any, result: str | None) -> Text:

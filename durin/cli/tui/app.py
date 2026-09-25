@@ -97,6 +97,10 @@ class DurinApp(App[None]):
         # Track active tool-call bubbles by call_id so the "end" event
         # updates the same widget the "start" event created.
         self._tool_bubbles: dict[str, Any] = {}
+        # The approval bubble the running turn waits on, if any, and its id.
+        # Goal-state syncs mount it and retire it (_sync_approval_bubble).
+        self._approval_bubble: Any = None
+        self._approval_id: str = ""
         # ActivityCluster wrapping reasoning + tool bubbles during a turn.
         self._active_cluster: Any = None
         self._bus_task: asyncio.Task | None = None
@@ -579,6 +583,41 @@ class DurinApp(App[None]):
             sidebar.refresh_content()
         except Exception:  # noqa: BLE001
             pass
+
+    def _sync_approval_bubble(self, pending: Any) -> None:
+        """Mirror the approval the running turn waits on into the chat.
+
+        Every goal-state sync carries the session's pending approval, if any.
+        A new one mounts a bubble with Approve / Reject rows. A snapshot
+        without it means the approval was answered or timed out, so the
+        bubble's rows are retired and a stale click cannot answer whatever the
+        turn asks next. The bubble lives in the chat itself, not the activity
+        cluster, so collapsing the cluster never hides it.
+        """
+        from durin.cli.tui.widgets import ToolCallBubble
+
+        approval_id = ""
+        if isinstance(pending, dict):
+            approval_id = str(pending.get("approval_id") or "")
+        if approval_id == self._approval_id:
+            return
+        if self._approval_bubble is not None:
+            self._approval_bubble.close_approval()
+        self._approval_bubble = None
+        self._approval_id = approval_id
+        if not approval_id:
+            return
+        bubble = ToolCallBubble({
+            "version": 1, "phase": "start", "call_id": f"approval:{approval_id}",
+            "name": "approval", "arguments": dict(pending),
+        })
+        try:
+            chat = self.query_one("#chat", ChatView)
+            chat.mount(bubble)
+            chat.scroll_end(animate=False)
+        except Exception:  # noqa: BLE001 — no chat view (headless teardown)
+            return
+        self._approval_bubble = bubble
 
     def _render_tool_event(self, event: dict[str, Any]) -> None:
         """Add or update a ToolCallBubble for one tool-call lifecycle event."""
@@ -1267,6 +1306,7 @@ class DurinApp(App[None]):
             else:
                 objective = None
             self.query_one(GoalBanner).set_goal(objective)
+            self._sync_approval_bubble(blob.get("pending_approval"))
 
         # /resume routes here: the next inbound publish uses the new chat_id.
         switch_to = meta.get("_switch_chat_id")
