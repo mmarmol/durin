@@ -571,3 +571,82 @@ async def test_run_falls_back_to_the_injected_config_without_a_live_context(tmp_
         await tool.execute(name="w", task="t", background=False)
 
     assert seen == ["injected-preset"]
+
+
+# ---------------------------------------------------------------------------
+# Approval pauses are a person's decision; questions depend on who can answer
+# ---------------------------------------------------------------------------
+
+
+def _fake_node_llm(output: str):
+    from durin.providers.base import GenerationSettings
+
+    provider = MagicMock(spec=LLMProvider)
+    provider.get_default_model.return_value = "test-model"
+    # Real attributes on the spec: unstubbed they would be MagicMocks riding
+    # into the run manifest, which then fails to serialize.
+    provider.provider_key = "test-provider"
+    provider.generation = GenerationSettings()
+    result = AgentRunResult(final_content=output, messages=[{"role": "assistant", "content": output}])
+    return provider, AsyncMock(return_value=result)
+
+
+@pytest.mark.asyncio
+async def test_resume_of_an_approval_pause_is_refused(tmp_path):
+    """Approving, revising or rejecting is a person's decision: every resume
+    of an approval pause from this tool is refused and the run stays paused."""
+    import re
+
+    _write_workflow(tmp_path, "gated", {
+        "name": "gated", "start": "draft",
+        "nodes": [{"id": "draft", "kind": "work", "approval": True, "next": None}],
+    })
+    tool = _tool(tmp_path)
+    provider, node_run = _fake_node_llm("the drafted email")
+    with patch("durin.providers.factory.make_provider", return_value=provider), \
+         patch("durin.agent.runner.AgentRunner.run", node_run):
+        first = await tool.execute(name="gated", task="draft it", background=False)
+        run_id = re.search(r"Workflow run (\S+): needs_input", first).group(1)
+        assert "APPROVAL" in first and "the drafted email" in first
+        runs_at_pause = node_run.await_count
+        for reply in ("approve", "sí", "reject", "tighten the subject line"):
+            out = await tool.execute(name="gated", task=reply, resume_run_id=run_id,
+                                     background=False)
+            assert out.startswith("Refused"), out
+
+    assert node_run.await_count == runs_at_pause
+    manifest = run_log.read_manifest(tmp_path, "gated", run_id)
+    assert manifest["status"] == "needs_input"
+    assert manifest["ask_kind"] == "approval"
+
+
+def test_question_pause_summary_sends_the_agent_to_the_user_only_when_one_can_answer():
+    paused = WorkflowResult(status="needs_input", ask_kind="question", run_id="r1",
+                            final_output="Which account?", needs_input_node="ask")
+    with_person = _format_result(paused, human_reachable=True)
+    without = _format_result(paused, human_reachable=False)
+    assert "ask_user_question" in with_person
+    assert "ask_user_question" not in without
+    assert "No person can be asked" in without
+    assert "resume_run_id='r1'" in without
+
+
+@pytest.mark.asyncio
+async def test_a_question_pause_in_a_cron_session_is_not_sent_to_the_user(tmp_path):
+    from durin.agent.tools.context import RequestContext
+
+    _write_workflow(tmp_path, "asker", {
+        "name": "asker", "start": "a",
+        "nodes": [{"id": "a", "kind": "work", "prompt": "p", "next": None}],
+    })
+    tool = _tool(tmp_path)
+    tool.set_context(RequestContext(channel="cli", chat_id="c", session_key="cron:nightly"))
+    paused = WorkflowResult(status="needs_input", ask_kind="question", run_id="r9",
+                            final_output="Which account?", needs_input_node="a")
+    provider, _ = _fake_node_llm("unused")
+    with patch("durin.providers.factory.make_provider", return_value=provider), \
+         patch("durin.workflow.engine.WorkflowEngine.run", return_value=paused):
+        out = await tool.execute(name="asker", task="t", background=False)
+
+    assert "No person can be asked" in out
+    assert "ask_user_question" not in out

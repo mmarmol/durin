@@ -769,7 +769,11 @@ is. A `"question"` pause (a multi-way route to `__needs_input__`, or a
 sub-workflow node whose child asked) takes the generic resume above: the
 answers become the asking node's upstream input. An `"approval"` pause is
 resolved instead by `durin/workflow/approval.py`, which reads the reply text
-and picks one of three outcomes. `parse_approval_reply` recognizes a
+and picks one of three outcomes — reached only through `WorkflowsService`'s
+resume path (§4f): the `run_workflow` agent tool refuses `resume_run_id` on
+an `ask_kind == "approval"` manifest outright, since approving, revising or
+rejecting it is a person's decision, never the model's to make from a tool
+call. `parse_approval_reply` recognizes a
 single-word reply, case-insensitive with surrounding punctuation stripped,
 against a bilingual vocabulary — approve: `aprobar`, `approve`, `ok`, `sí`,
 `si`, `yes`; reject: `rechazar`, `reject`, `no` — and treats anything else,
@@ -783,11 +787,10 @@ re-runs. If it has no `next` (a terminal approval), there is nothing to resume
 into: approving it completes the run immediately, with the proposal as
 `final_output`. **Reject** ends the run there, `cancelled`, with
 `rejected: true` marking that the approver explicitly declined it rather than
-anything failing. Both of these are short-circuits — neither the
-`run_workflow` tool nor the `WorkflowsService` HTTP resume path
-(`POST /api/v1/workflows/{name}/run` with `resume_run_id`, §4f — both
-implement this identically) ever calls back into the engine for them — but
-they reach `durin/workflow/approval.py` differently. **Reject** is
+anything failing. Both of these are short-circuits — the `WorkflowsService`
+HTTP resume path (`POST /api/v1/workflows/{name}/run` with `resume_run_id`,
+§4f) never calls back into the engine for them — but they reach
+`durin/workflow/approval.py` differently. **Reject** is
 intercepted by the caller before `build_approval_resume` is ever invoked: the
 caller branches on `action == "reject"` first, so the module is never
 consulted for it (its own docstring says so) — there is no engine state to
@@ -815,11 +818,13 @@ the manifest's own `resume_inputs`, same as the generic resume above, so a
 downstream `inputs_from` reference to a pre-pause source still resolves;
 approve additionally overlays the flagged node's own proposal under its id,
 since the resumed walk starts at `next` and never revisits the flagged node to
-record a fresh output for it. The calling agent's own summary text
-(`run_workflow`'s `_format_result`) does not yet special-case any of this — an
-approval pause is currently framed with the same generic "needs more
-information" text as a question pause, not yet told to ask specifically for
-approve/reject/revise.
+record a fresh output for it. `run_workflow`'s `_format_result` special-cases
+an `ask_kind == "approval"` pause with its own text naming it a person's
+decision, rather than the generic "needs more information" text a question
+pause gets — and, for a question pause, that generic text is itself only sent
+when a person can be asked in the calling context (`is_interactive` on the
+root session key); a cron or workflow context is told not to ask the user and
+to answer from what it already has, or report the run as waiting.
 
 **Cooperative cancellation — two modes.** `tasks(action='stop', …)` marks the
 `run_id` in a process-global registry (`durin/workflow/cancellation.py`) with a
@@ -1201,10 +1206,15 @@ End-to-end for a single `run_workflow` call:
   resume_run_id?)` LLM tool — auto-discovered into the agent's tool registry at core scope
   (see [tools.md](tools.md)). `input_files` (absolute paths) are seeded into the run's shared
   working folder so every node can read them, and the terminal `output_dir` is reported back
-  in the run summary. When a run ends `needs_input`, calling the tool again with
+  in the run summary. When a run ends `needs_input` on a question, calling the tool again with
   `resume_run_id` set to that run's id and the user's answers as `task` resumes the same run
   (same run id, working folder, node sessions, and visit counts) at the node that asked,
-  instead of restarting the workflow from scratch. A node with
+  instead of restarting the workflow from scratch — and only when a person can be asked in
+  the calling context does the summary tell the agent to ask one; otherwise it says so and
+  waits for an answer the agent already has. A run paused for a person's **approval**
+  cannot be resumed through this tool at all — it refuses `resume_run_id` outright and
+  points to the workflow's runs in the webui or the API, where a person decides it
+  (see §4g). A node with
   `tools: "default"` receives the user's configured tool set; `tools: "none"` (the
   default) runs the node without tools. A node may also name `skills` (injected into
   its prompt) and `mcps` (a subset of the configured MCP servers, reused live).
