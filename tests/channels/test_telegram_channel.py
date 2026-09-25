@@ -1855,6 +1855,61 @@ async def test_callback_query_routes_through_gate_for_unauthorized_user() -> Non
     assert channel._handle_message.call_args.kwargs["is_dm"] is True
 
 
+def _tap(message: SimpleNamespace) -> SimpleNamespace:
+    query = SimpleNamespace(id="cb_topic", data="Yes", answer=AsyncMock(), message=message)
+    return SimpleNamespace(
+        callback_query=query,
+        effective_user=SimpleNamespace(id=12345, username="alice", first_name="Alice"),
+    )
+
+
+def _tap_channel() -> TelegramChannel:
+    channel = TelegramChannel(
+        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"], inline_keyboards=True),
+        MessageBus(),
+    )
+    channel._handle_message = AsyncMock()
+    channel._start_typing = lambda _: None
+    return channel
+
+
+@pytest.mark.asyncio
+async def test_callback_in_a_forum_topic_keeps_the_topic_session_and_reply_target() -> None:
+    """A tap in a forum topic lands in the topic's session, the one a message
+    typed in that topic uses, and its reply goes back into the topic."""
+    channel = _tap_channel()
+    tapped = SimpleNamespace(
+        chat_id=-100123,
+        message_thread_id=42,
+        chat=SimpleNamespace(type="supergroup"),
+        edit_reply_markup=AsyncMock(),
+    )
+
+    await channel._on_callback_query(_tap(tapped), None)
+
+    kwargs = channel._handle_message.call_args.kwargs
+    assert kwargs["session_key"] == "telegram:-100123:topic:42"
+    assert kwargs["session_key"] == TelegramChannel._derive_topic_session_key(tapped)
+    assert kwargs["metadata"]["message_thread_id"] == 42
+
+
+@pytest.mark.asyncio
+async def test_callback_outside_a_topic_keeps_the_chat_session() -> None:
+    channel = _tap_channel()
+    tapped = SimpleNamespace(
+        chat_id=123,
+        message_thread_id=None,
+        chat=SimpleNamespace(type="private"),
+        edit_reply_markup=AsyncMock(),
+    )
+
+    await channel._on_callback_query(_tap(tapped), None)
+
+    kwargs = channel._handle_message.call_args.kwargs
+    assert kwargs["session_key"] is None
+    assert kwargs["metadata"]["message_thread_id"] is None
+
+
 # ---------------------------------------------------------------------------
 # P1: drop_pending_updates default + start_polling wiring
 # ---------------------------------------------------------------------------
