@@ -88,6 +88,28 @@ export interface GoalStateWsPayload {
   mode?: string;
   /** Set while an ask_user_question awaits the user's reply. */
   pending_question?: { question: string; options: string[] };
+  /** Set while a turn waits on the person's approval (server-minted record). */
+  pending_approval?: PendingApproval;
+}
+
+/** An approval a running turn is waiting on. ``detail`` is kind-specific
+ * (scan verdict, findings, command, diff, …) and rendered by the card. */
+export interface PendingApproval {
+  approval_id: string;
+  kind: string;
+  summary: string;
+  detail: Record<string, unknown>;
+}
+
+/** A person's verdict on an approval. */
+export type ApprovalDecision = "approve" | "reject";
+
+/** Server outcome of an approval decision: ``pending`` = handed to the turn
+ * waiting on it (which runs it); ``applied`` / ``rejected`` = decided on the
+ * server because no turn was waiting. */
+export interface ApprovalDecisionResult {
+  status: string;
+  message: string;
 }
 
 export interface ToolProgressEvent {
@@ -520,6 +542,15 @@ export type InboundEvent =
        * Content-Length is unknown). */
       total?: number;
     }
+  | {
+      /** Reply to an ``approval_decision`` frame, keyed by ``request_id``. */
+      event: "approval_decided";
+      request_id: string;
+      approval_id?: string;
+      ok: boolean;
+      status: string;
+      message?: string;
+    }
   | { event: "voice_state"; chat_id: string; state: string }
   | { event: "voice_audio"; chat_id: string; url: string; mime: string }
   | { event: "voice_preview_audio"; url?: string; mime?: string; error?: string }
@@ -604,6 +635,14 @@ export type Outbound =
       request_id: string;
       chat_id: string;
       media: OutboundMedia[];
+    }
+  | {
+      /** Approve or reject an approval the agent is waiting on. Resolved by
+       * the server; it never becomes a chat message. */
+      type: "approval_decision";
+      request_id: string;
+      approval_id: string;
+      decision: ApprovalDecision;
     }
   | { type: "voice_start"; chat_id: string; webui: true }
   | { type: "voice_stop"; chat_id: string; webui: true }

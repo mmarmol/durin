@@ -576,3 +576,65 @@ describe("DurinClient", () => {
     expect(FakeSocket.instances.length).toBeGreaterThan(1);
   });
 });
+
+describe("DurinClient approval decisions", () => {
+  function openClient(): DurinClient {
+    const client = new DurinClient({
+      url: "ws://test",
+      reconnect: false,
+      socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
+    });
+    client.connect();
+    lastSocket().fakeOpen();
+    return client;
+  }
+
+  it("sends an approval_decision frame and resolves with the server outcome", async () => {
+    const client = openClient();
+    const result = client.sendApprovalDecision("a1b2c3d4e5f6", "approve");
+    const frame = JSON.parse(lastSocket().sent.at(-1) as string) as Record<string, string>;
+    expect(frame).toMatchObject({
+      type: "approval_decision",
+      approval_id: "a1b2c3d4e5f6",
+      decision: "approve",
+    });
+    lastSocket().fakeMessage({
+      event: "approval_decided",
+      request_id: frame.request_id,
+      approval_id: "a1b2c3d4e5f6",
+      ok: true,
+      status: "pending",
+      message: "Handed to the waiting turn.",
+    });
+    await expect(result).resolves.toEqual({
+      status: "pending",
+      message: "Handed to the waiting turn.",
+    });
+  });
+
+  it("rejects when the server refuses the decision", async () => {
+    const client = openClient();
+    const result = client.sendApprovalDecision("a1b2c3d4e5f6", "reject");
+    const frame = JSON.parse(lastSocket().sent.at(-1) as string) as Record<string, string>;
+    lastSocket().fakeMessage({
+      event: "approval_decided",
+      request_id: frame.request_id,
+      approval_id: "a1b2c3d4e5f6",
+      ok: false,
+      status: "refused",
+      message: "This approval belongs to another chat.",
+    });
+    await expect(result).rejects.toThrow("another chat");
+  });
+
+  it("rejects every in-flight decision immediately when the socket closes", async () => {
+    const client = openClient();
+    const result = client.sendApprovalDecision("a1b2c3d4e5f6", "approve");
+
+    lastSocket().close();
+
+    await expect(result).rejects.toThrow(
+      "connection closed before the decision was confirmed",
+    );
+  });
+});
