@@ -31,6 +31,9 @@ from durin.agent.tools.file_state import FileStateStore, bind_file_states, reset
 from durin.agent.tools.message import MessageTool
 from durin.agent.tools.registry import ToolRegistry
 from durin.agent.tools.self import MyTool
+from durin.agent.turn_slots import TurnSlots
+from durin.agent.turn_slots import bind as bind_turn_slots
+from durin.agent.turn_slots import unbind as unbind_turn_slots
 from durin.agent.user_payloads import (
     PENDING_SECRET_KEY,
     channel_renders_tool_payloads,
@@ -2485,6 +2488,12 @@ class AgentLoop:
 
         session_path = self.sessions._get_session_path(session_key)
         turn_ended = False
+        # This turn's lane and ceiling slots. While a tool waits on a person
+        # (an approval card, a blocking question) it gives them back and
+        # takes them again before continuing; the session lock stays held.
+        slots = TurnSlots(self._interactive_lane, self._ceiling, session_key=session_key,
+                          on_change=self.mark_concurrency_dirty)
+        slots_token = bind_turn_slots(slots)
 
         async def _end_turn(outcome: str) -> None:
             # Exactly one turn_end per turn, whichever way it exits.
@@ -2495,7 +2504,7 @@ class AgentLoop:
             await self._publish_turn_end(msg, session_key, outcome)
 
         try:
-            async with lock, self._interactive_lane, self._ceiling:
+            async with lock, slots:
                 try:
                     turn_lease_cm = session_turn_lease(session_path)
                     await turn_lease_cm.__aenter__()
@@ -2629,6 +2638,10 @@ class AgentLoop:
                 await _end_turn("failed")
             raise
         finally:
+            # The turn is over, even when it never got its slots: a task it
+            # started that outlives it must not take one on its behalf.
+            slots.closed = True
+            unbind_turn_slots(slots_token)
             # Drain any messages still in the pending queues and re-publish
             # them to the bus so they are processed as fresh inbound messages
             # rather than silently lost. System results first — they complete

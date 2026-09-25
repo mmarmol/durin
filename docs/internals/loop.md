@@ -238,6 +238,15 @@ notice. With the lease held, it calls `sessions.reload(session_key)` —
 load-per-turn — so the turn always sees the freshest on-disk state rather than
 a stale cached `Session`.
 
+The lane and ceiling slots are one per-turn `TurnSlots` object
+(`durin/agent/turn_slots.py`), bound to the turn's context. A turn waiting on a
+person (see "Waiting on the user" above) gives its lane back while it waits
+and takes it back before continuing: the approval asker and a blocking
+`ask_user_question` wrap their wait in `released_while_waiting`. The session
+lock and the lease stay held. A wait in a sub-agent or a background run the
+turn started (which copied its context but works under another session key)
+leaves the turn's slots alone, and so does anything after the turn ended.
+
 The ceiling is shared with `SubagentManager`, which acquires it around each
 subagent's LLM run (`_run_subagent`) — so subagents count against the same
 global cap as interactive turns rather than running unbounded alongside them.

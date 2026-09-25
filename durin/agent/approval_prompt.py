@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
 from durin.agent import approval, pending_answers
+from durin.agent.turn_slots import released_while_waiting
 from durin.agent.user_payloads import (
     PENDING_APPROVAL_KEY,
     channel_renders_tool_payloads,
@@ -110,20 +111,23 @@ def make_chat_asker(*, sessions: Any, bus: Any, request_ctx: Any,
                     mark_interactions_delivered(session.metadata, items)
             fut = pending_answers.create(session_key, kind="approval", ref=record["id"])
             try:
-                # asyncio.timeout, not wait_for: on Python 3.11 wait_for can
-                # swallow a cancellation delivered at the same instant the
-                # future resolves, which would leave this waiter stuck past
-                # its caller's own cancellation (see loop.py's inbound read).
-                async with asyncio.timeout(timeout_s):
-                    answer = await fut
-            except asyncio.TimeoutError:
-                # resolve() can land in the same loop iteration as the
-                # timeout's own cancellation; check the future directly
-                # instead of treating every TimeoutError as "no answer".
-                if fut.done() and not fut.cancelled():
-                    verdict = fut.result()
-                    return verdict if verdict in ("approve", "reject") else None
-                return None
+                # The turn gives its concurrency slots back while the person
+                # decides, so other chats keep running, and takes them again
+                # before it goes on.
+                async with released_while_waiting(session_key):
+                    try:
+                        # asyncio.timeout, not wait_for: on Python 3.11
+                        # wait_for can swallow a cancellation delivered at the
+                        # same instant the future resolves, which would leave
+                        # this waiter stuck past its caller's own cancellation
+                        # (see loop.py's inbound read).
+                        async with asyncio.timeout(timeout_s):
+                            answer = await fut
+                    except asyncio.TimeoutError:
+                        # resolve() can land in the same loop iteration as the
+                        # timeout's own cancellation; check the future directly
+                        # instead of treating every TimeoutError as "no answer".
+                        answer = fut.result() if fut.done() and not fut.cancelled() else None
             finally:
                 pending_answers.discard(session_key, fut)
             return answer if answer in ("approve", "reject") else None

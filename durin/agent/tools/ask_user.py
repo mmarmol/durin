@@ -232,6 +232,7 @@ class AskUserQuestionTool(Tool, ContextAware):
     async def _await_answer(self, session_key: str, question_id: str) -> str | None:
         """Block until the user's in-turn answer; None means fall back to yield."""
         from durin.agent import pending_answers
+        from durin.agent.turn_slots import released_while_waiting
 
         # No consumer (single-message mode) or non-interactive session
         # (cron): nobody can ever resolve the wait — yield now.
@@ -247,17 +248,23 @@ class AskUserQuestionTool(Tool, ContextAware):
         await self._push_session_state()
         started = time.monotonic()
         try:
-            # asyncio.timeout, not wait_for: on Python 3.11 wait_for returns
-            # the answer and swallows a cancel (a /stop, a shutdown) that
-            # lands in the same step, so the turn would run on.
-            async with asyncio.timeout(self._answer_timeout_s):
-                answer = await fut
-        except TimeoutError:
-            self._emit("ask_user.answer_timeout", {
-                "question_id": question_id,
-                "timeout_s": int(self._answer_timeout_s),
-            })
-            answer = None
+            # The turn gives its concurrency slots back while the person
+            # answers, so other chats keep running, and takes them again
+            # before it goes on.
+            async with released_while_waiting(session_key):
+                try:
+                    # asyncio.timeout, not wait_for: on Python 3.11 wait_for
+                    # returns the answer and swallows a cancel (a /stop, a
+                    # shutdown) that lands in the same step, so the turn would
+                    # run on.
+                    async with asyncio.timeout(self._answer_timeout_s):
+                        answer = await fut
+                except TimeoutError:
+                    self._emit("ask_user.answer_timeout", {
+                        "question_id": question_id,
+                        "timeout_s": int(self._answer_timeout_s),
+                    })
+                    answer = None
         finally:
             pending_answers.discard(session_key, fut)
         if answer is pending_answers.FALLBACK or not isinstance(answer, str):
