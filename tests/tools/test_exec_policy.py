@@ -384,17 +384,29 @@ async def test_the_guard_runs_off_the_event_loop(tmp_path, monkeypatch):
 async def test_a_pathological_command_leaves_the_loop_turns_between_patterns(
     tmp_path, monkeypatch,
 ):
-    """On a pathological command several patterns are slow. A single regex
-    call holds the GIL for its own duration, so the loop cannot run during
-    one; it runs between them. Kept small so each call stays short."""
+    """On a pathological command several patterns are slow, and a single
+    regex call holds the GIL for its own duration, so the loop can only run
+    between pattern calls. That needs the check to run in a worker thread, not
+    on the loop's own thread. Asserted by thread identity: how many times a
+    ticker gets in depends on scheduling, not on the code."""
+    import threading
+
     import durin.agent.tools.shell as shell
 
     monkeypatch.setattr(shell, "MAX_CHECKED_COMMAND_CHARS", 9_000)
+    loop_thread = threading.current_thread()
+    ran_in: list[threading.Thread] = []
+    real_check = ExecTool._check
+
+    def _recording_check(self, *args, **kwargs):
+        ran_in.append(threading.current_thread())
+        return real_check(self, *args, **kwargs)
+
+    monkeypatch.setattr(ExecTool, "_check", _recording_check)
     command = ("sudo -a " * 1_100) + "; rm -rf build"
-    out, ticks = await _ticks_while(
-        ExecTool(working_dir=str(tmp_path))._run(command, str(tmp_path)))
+    out = await ExecTool(working_dir=str(tmp_path))._run(command, str(tmp_path))
     assert out.startswith("Error: Command blocked by deny pattern filter")
-    assert ticks >= 2
+    assert ran_in and all(t is not loop_thread for t in ran_in)
 
 
 @pytest.mark.parametrize(("command", "blocked"), [
