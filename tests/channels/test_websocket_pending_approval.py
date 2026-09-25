@@ -322,15 +322,16 @@ async def test_click_on_another_chats_approval_is_refused(tmp_path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("fields", [
-    {"approval_id": "../../secrets", "decision": "approve"},
-    {"approval_id": "a1b2c3d4e5f6", "decision": "maybe"},
-    {"approval_id": "a1b2c3d4e5f6", "decision": "approve"},  # no such record
+@pytest.mark.parametrize(("fields", "reason"), [
+    ({"approval_id": "../../secrets", "decision": "approve"}, "Invalid approval id"),
+    ({"approval_id": "a1b2c3d4e5f6", "decision": "maybe"}, "Invalid decision"),
+    ({"approval_id": "a1b2c3d4e5f6", "decision": "approve"}, "No approval request"),
 ])
-async def test_malformed_or_unknown_decision_is_refused(tmp_path, fields):
+async def test_malformed_or_unknown_decision_is_refused(tmp_path, fields, reason):
     channel, ws = _channel(tmp_path)
     reply = await _decide(channel, ws, **fields)
     assert reply["ok"] is False and reply["status"] == "refused"
+    assert reason in reply["message"]
 
 
 @pytest.mark.asyncio

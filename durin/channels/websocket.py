@@ -1861,8 +1861,11 @@ class WebSocketChannel(BaseChannel):
                 status=status, message=message,
             )
 
-        if decision not in ("approve", "reject") or not _APPROVAL_ID_RE.match(approval_id):
-            await _reply("refused", "Invalid approval decision.")
+        if not _APPROVAL_ID_RE.match(approval_id):
+            await _reply("refused", "Invalid approval id.")
+            return
+        if decision not in ("approve", "reject"):
+            await _reply("refused", "Invalid decision: expected approve or reject.")
             return
         workspace = self._endpoint_workspace()
         record = approval_store.get(workspace, approval_id)
