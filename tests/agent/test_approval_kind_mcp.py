@@ -111,10 +111,9 @@ def test_hash_covers_the_current_server_entry():
 
 
 def test_enable_snapshot_shows_a_drifted_env_the_bare_target_would_hide():
-    """A bare "name -> command args" line hides an env var entirely — this
-    is the whole point of round-2 finding 3: an out-of-band env change
-    (e.g. an injected NODE_OPTIONS) must be visible to the reviewer, not
-    just whatever changed in the command/args."""
+    """A bare "name -> command args" line hides an env var entirely: an
+    out-of-band env change (e.g. an injected NODE_OPTIONS) must be visible to
+    the reviewer, not just whatever changed in the command/args."""
     _seed({"x": MCPServerConfig(
         command="npx", env={"NODE_OPTIONS": "--require /tmp/implant.js"}, enabled=False)})
     p = mk.prepare_enable("x")
@@ -318,11 +317,10 @@ async def test_a_spawn_exception_string_from_the_runtime_install_also_fails_the_
     assert "fs" not in _servers()
 
 
-# -- Review round 1 -----------------------------------------------------------
-# secret_safe_config only scanned env/headers/oauth; url and args (never
-# resolved by the connection layer) passed a literal credential straight
-# through. These reproduce each probe finding directly against
-# secret_safe_config, confirming a refusal that never echoes the value.
+# -- Credentials in url and args ----------------------------------------------
+# url and args are never resolved by the connection layer, so a literal
+# credential there would be stored as is. Each case below goes straight to
+# secret_safe_config and expects a refusal that never echoes the value.
 
 LIVE = "sk-live-" + "A" * 30
 
@@ -405,7 +403,7 @@ def test_prepare_upsert_refuses_a_leaky_arg_before_writing_anything():
     assert "leaky" not in _servers()
 
 
-# -- Review round 1: the text-channel prompt must show what will actually run
+# -- The text-channel prompt must show what will actually run
 
 def test_serialize_approval_surfaces_env_headers_security_and_runtime():
     from durin.agent.user_payloads import _serialize_approval
@@ -452,7 +450,7 @@ async def test_serialize_approval_shows_the_install_runtime_command(monkeypatch)
     assert p.payload["runtime_plan"]["command"] in text
 
 
-# -- Review round 1: alias smuggling must resolve to one canonical value
+# -- Alias smuggling must resolve to one canonical value
 
 def test_prepare_upsert_resolves_a_snake_camel_alias_collision_to_one_value():
     p = mk.prepare_upsert("add", "fs", {
@@ -465,16 +463,16 @@ def test_prepare_upsert_resolves_a_snake_camel_alias_collision_to_one_value():
     assert sc.spawn_egress_policy == "off"
 
 
-# -- Review round 1: an existing config with a hand-typed literal credential
-# must never be echoed literally in an enable prompt, and args display quotes
-# safely instead of a naive space-join.
+# -- An existing config with a hand-typed literal credential must never be
+# echoed literally in an enable prompt, and args display quotes safely
+# instead of a naive space-join.
 
 def test_prepare_enable_refuses_a_literal_credential_in_the_stored_config():
-    """prepare_enable now scans the full snapshot the same way update does
-    (round-2 review, finding 3) — a literal credential already sitting in
-    args (e.g. typed into the dashboard before this scan existed) refuses
-    the enable outright, same as it would refuse an update, rather than
-    merely redacting it for display and letting the enable proceed."""
+    """prepare_enable scans the full snapshot the same way update does: a
+    literal credential already sitting in args (e.g. typed into the dashboard
+    before this scan existed) refuses the enable outright, same as it would
+    refuse an update, rather than merely redacting it for display and letting
+    the enable proceed."""
     from durin.security.secrets import store_secret
 
     store_secret("SIDE", "zq9-Plain-Stored-Value-77", service="x", scope=[])
@@ -485,11 +483,9 @@ def test_prepare_enable_refuses_a_literal_credential_in_the_stored_config():
         mk.prepare_enable("x")
 
 
-# -- Review round 2 -----------------------------------------------------------
-# Re-review findings on top of round 1's fix.
-
-# IMPORTANT 1 (regression): the "must be a string" rule applied to ALL of
-# oauth, refusing a documented int (callback_port) and a None scope.
+# -- Values that are not strings --------------------------------------------
+# The "must be a string" rule is for credential fields only: applied to all of
+# oauth it refused a documented int (callback_port) and a None scope.
 
 def test_oauth_int_callback_port_and_none_scope_are_not_refused():
     safe = mk.secret_safe_config(
@@ -563,7 +559,7 @@ def test_args_flag_or_key_value_pair_with_a_credential_named_flag_is_refused(arg
     assert PLAIN not in str(err.value)
 
 
-# FALSE POSITIVES (finding 4)
+# Names that look like credentials but are not
 
 def test_max_tokens_query_param_is_not_refused():
     safe = mk.secret_safe_config("s", {"url": "https://api.example.com/mcp?max_tokens=4096"})
@@ -590,7 +586,7 @@ def test_cache_key_is_an_accepted_documented_false_positive():
         mk.secret_safe_config("s", {"command": "npx", "env": {"CACHE_KEY": "my-cache-namespace"}})
 
 
-# MINOR 5: pydantic ValidationError must never echo the value
+# A pydantic ValidationError must never echo the value
 
 @pytest.mark.parametrize("bad_config", [
     {"command": "npx", "args": "--token " + "ghp_" + "d" * 36},
@@ -604,7 +600,7 @@ def test_a_malformed_field_never_echoes_its_value_via_pydantic(bad_config):
     assert token not in str(err.value)
 
 
-# MINOR 6: command/version/sampling.model/enabled_tools/tool_timeouts scanned
+# command/version/sampling.model/enabled_tools/tool_timeouts are scanned too
 
 def test_command_holding_a_token_is_refused():
     token = "ghp_" + "e" * 36
@@ -641,8 +637,8 @@ def test_tool_timeouts_key_holding_a_token_is_refused_without_echoing_the_key():
     assert token not in str(err.value)
 
 
-# MINOR 3 (F3 in the probes): re-scrub after normalization catches Python-only
-# shapes the pre-scrub's isinstance checks don't recognize.
+# A re-scrub after normalization catches Python-only shapes the pre-scrub's
+# isinstance checks don't recognize.
 
 def test_prepare_upsert_catches_a_tuple_of_args():
     token = "ghp_" + "f" * 36
@@ -669,7 +665,7 @@ def test_prepare_upsert_catches_an_mcpoauthconfig_instance_with_a_literal_secret
     assert PLAIN not in str(err.value)
 
 
-# MINOR 8: newlines in a displayed value cannot inject extra lines
+# Newlines in a displayed value cannot inject extra lines
 
 def test_display_escapes_embedded_newlines():
     p = mk.prepare_upsert("add", "fs", {
@@ -681,7 +677,7 @@ def test_display_escapes_embedded_newlines():
     assert "\\n" in p.detail["env"]
 
 
-# MINOR 9: sampling.enabled=true surfaces in the security line
+# sampling.enabled=true surfaces in the security line
 
 def test_sampling_enabled_true_is_shown_in_security_notes():
     p = mk.prepare_upsert("add", "fs", {"command": "npx", "sampling": {"enabled": True}})

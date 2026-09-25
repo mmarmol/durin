@@ -92,6 +92,15 @@ _APPROVAL_APPLIED_NOTE = "\n\n(The user approved this exact command, once.)"
 # matched, so the refusal names the setting the command is missing from.
 _ALLOWLIST_RULE = "tools.exec.allow_patterns"
 
+# The longest command the guard checks. Its regexes run on the event loop and
+# several are quadratic in the worst case (an anchor word such as "rm"
+# repeated thousands of times makes each pattern rescan the rest of the
+# command from every occurrence): 120k characters of "rm rm …" held the loop
+# for tens of seconds. At this length even adversarial input is checked in a
+# fraction of a second. A longer command is refused unchecked — fail closed —
+# and real commands are far shorter: a long script or data belongs in a file.
+MAX_CHECKED_COMMAND_CHARS = 10_000
+
 # A command position: the start of the command, right after a separator
 # (including a backtick or an opening brace, for `` `cmd` `` and `{ cmd; }`),
 # after a wrapper that runs its argument as a command (sudo, env, nice, time,
@@ -344,8 +353,12 @@ class ExecTool(Tool, ContextAware):
         rf"\bcp\b{_MEMREF}",
         rf"\btruncate\b{_MEMREF}",
         rf"\btee\b{_MEMREF}",
-        rf"\bsed\b[^|;&\n]*-i{_MEMREF}",
-        r"\bdd\b[^|;&\n]*\bof=[^|;&\n]*memory/",
+        # The atomic groups commit to the first "-i" / "of=" after the command
+        # word. A later one only sees less of the same segment, so the match is
+        # the same, but the check stays quadratic instead of cubic on a long
+        # command (two open-ended scans back to back).
+        rf"\bsed\b(?>[^|;&\n]*?-i){_MEMREF}",
+        r"\bdd\b(?>[^|;&\n]*?\bof=)[^|;&\n]*memory/",
         r">>?\s*(?:[^\s'\"|;&<>]*/)?memory/",
     )
 
@@ -574,11 +587,12 @@ class ExecTool(Tool, ContextAware):
                         timeout=timeout, background=background),
                 session_key=session_key, deps=deps, ask=ask_once)
         finally:
-            # An exec request never waits in Pending: approving it later would
-            # run a shell command outside the turn that needed it. Close it
-            # when no answer came back, including when the turn is cancelled
-            # (/stop, shutdown) while it waits. An answered request is no
-            # longer pending, so this leaves it alone.
+            # An exec request never waits for `durin approvals`: approving it
+            # later would run a shell command outside the turn that needed it.
+            # Close it when no answer came back, including when the turn is
+            # cancelled (/stop, shutdown) while it waits. An answered request,
+            # or one decided from outside meanwhile, is no longer pending, so
+            # this leaves it alone.
             for approval_id in filed:
                 approval_store.transition(
                     self.working_dir, approval_id, expect=("pending",), to="expired",
@@ -732,6 +746,15 @@ class ExecTool(Tool, ContextAware):
         guards (memory vault, private URL, workspace boundary) always apply.
         """
         cmd = command.strip()
+        if len(cmd) > MAX_CHECKED_COMMAND_CHARS:
+            # Refused before any pattern runs, and not approvable: nothing
+            # checked it, so nobody could know what an approval would let run.
+            return CommandRefusal(
+                "guard",
+                f"Error: Command blocked by safety guard (it is {len(cmd)} characters; "
+                f"the exec guard checks at most {MAX_CHECKED_COMMAND_CHARS}). Write a "
+                "long script or data to a file with write_file, then run that file.",
+            )
         lower = cmd.lower()
 
         floor = tuple(p for p in _HARD_FLOOR_PATTERNS if re.search(p, lower))

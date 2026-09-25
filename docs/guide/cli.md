@@ -85,7 +85,11 @@ durin approvals discard <id>   # delete the record without deciding it
 ```
 
 `approve` and `reject` refuse to run without a real terminal, and the agent's
-shell tool never runs them, so the agent cannot approve its own request. Each
+shell tool refuses to run them. With the chat and the API, where the agent's
+own output never decides a request, that blocks the agent from approving its
+own request at every channel it controls. It is a best-effort limit, not a
+proof: the shell filters match patterns, so a roundabout command (a script
+the agent writes, say) is a known gap until shell commands run in a sandbox. Each
 decided record keeps who decided it: you on the command line, a click in the
 webui, a reply typed in the chat, or the skills judge. `approve` runs the
 request right here, with the same shell guards the gateway applies (it
@@ -101,9 +105,12 @@ is listed as `legacy:mcp` or `legacy:skills` and can only be discarded; ask
 the agent again if it is still needed.
 
 A pending request expires 14 days after it was filed and can no longer be
-decided; ask the agent again if it is still wanted. A resolved record (decided
-or expired) is kept for 30 days, then pruned. Expiry and pruning happen when
-you decide a request, when you list them, and once when the gateway starts.
+decided; ask the agent again if it is still wanted. A resolved record is kept
+for 30 days after it was decided or expired, then pruned. A request still
+marked approved an hour after it was approved was cut off mid-run (the
+process was killed) and is marked failed. These sweeps run when you list
+requests and once when the gateway starts; deciding a request past its expiry
+expires just that one.
 
 ## Inside the TUI
 

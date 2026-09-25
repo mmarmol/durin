@@ -204,7 +204,10 @@ async def test_decide_on_an_expired_pending_record_refuses_and_marks_it_expired(
     result = await approval.decide(tmp_path, rid, "approve", decided_by={"kind": "user"},
                                    deps=ex.ExecDeps())
     assert result.status == "stale" and "expired" in result.message
-    assert st.get(tmp_path, rid)["status"] == "expired"
+    expired = st.get(tmp_path, rid)
+    assert expired["status"] == "expired"
+    # Retention counts from the expiry, not from when it was filed.
+    assert expired["decided_at"] is not None
     assert RUNS == []
 
     # Consistent with any other terminal status: a second decision is refused
@@ -296,7 +299,7 @@ async def test_judge_never_clears_mcp_change(tmp_path):
 
 def test_ensure_loaded_reraises_a_dependency_import_error(monkeypatch):
     # A ModuleNotFoundError for something the kind module itself imports must
-    # not be mistaken for the kind module not existing yet.
+    # not be mistaken for the kind module not existing.
     def _fake_import(name):
         if name == ex._KIND_MODULES[0]:
             raise ModuleNotFoundError("no module named 'some_missing_dep'",
@@ -307,3 +310,45 @@ def test_ensure_loaded_reraises_a_dependency_import_error(monkeypatch):
     monkeypatch.delitem(ex._REGISTRY, "skill_edit", raising=False)
     with pytest.raises(ModuleNotFoundError):
         ex._ensure_loaded("skill_edit")
+
+
+@pytest.mark.parametrize("missing", range(3))
+def test_ensure_loaded_never_hides_a_missing_kind_module(monkeypatch, missing):
+    # Every kind module exists; one that fails to import is a broken install,
+    # not a kind to skip quietly while the others load.
+    real_import = ex.importlib.import_module
+    gone = ex._KIND_MODULES[missing]
+
+    def _fake_import(name):
+        if name == gone:
+            raise ModuleNotFoundError(f"No module named {name!r}", name=name)
+        return real_import(name)
+
+    monkeypatch.setattr(ex.importlib, "import_module", _fake_import)
+    monkeypatch.delitem(ex._REGISTRY, "skill_edit", raising=False)
+    with pytest.raises(ModuleNotFoundError):
+        ex._ensure_loaded("skill_edit")
+
+
+@pytest.mark.asyncio
+async def test_a_run_that_raises_logs_its_traceback(tmp_path, monkeypatch):
+    """The record keeps only the error message; the traceback reaches the log."""
+    from loguru import logger
+
+    async def _boom(ws, payload, deps):
+        raise KeyError("missing-field")
+
+    monkeypatch.setitem(ex._REGISTRY, "skill_edit", (lambda ws, payload: STATE["hash"], _boom))
+    out = await approval.request(tmp_path, PREP, session_key="cron:x", deps=ex.ExecDeps())
+    lines: list[str] = []
+    sink = logger.add(lines.append, level="ERROR")
+    try:
+        result = await approval.decide(tmp_path, out.record["id"], "approve",
+                                       decided_by={"kind": "user"}, deps=ex.ExecDeps())
+    finally:
+        logger.remove(sink)
+    assert result.status == "failed"
+    assert st.get(tmp_path, out.record["id"])["result"] == {"error": "'missing-field'"}
+    logged = "".join(lines)
+    assert out.record["id"] in logged
+    assert "Traceback" in logged and "KeyError" in logged and "_boom" in logged

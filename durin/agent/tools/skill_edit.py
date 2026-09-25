@@ -3,9 +3,9 @@
 An edit to an ``auto`` skill whose security scan needs no review lands at once.
 Everything else is decided by the server, never by a tool argument: an edit to
 a ``manual`` skill (its owner consents) and an edit that makes the scan worse
-or adds findings are shown to the person in this chat, or filed in Pending when
-nobody can answer; the configured skills judge may clear an ``auto`` skill's
-``caution`` edit on its own.
+or adds findings are shown to the person in this chat, or filed for a person
+to decide with ``durin approvals`` when nobody can answer; the configured
+skills judge may clear an ``auto`` skill's ``caution`` edit on its own.
 """
 from __future__ import annotations
 

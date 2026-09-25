@@ -130,6 +130,9 @@ def make_chat_asker(*, sessions: Any, bus: Any, request_ctx: Any,
                         answer = fut.result() if fut.done() and not fut.cancelled() else None
             finally:
                 pending_answers.discard(session_key, fut)
+            # The answer is input to this turn: note who sent it, here in the
+            # turn's own context.
+            approval.note_turn_input({"origin": pending_answers.answer_origin(fut)})
             return answer if answer in ("approve", "reject") else None
         finally:
             if session.metadata is not None:

@@ -152,7 +152,7 @@ async def test_attach_reads_the_per_chat_session_when_unified_session_is_off(
     """session_turn_key is always handed to the channel by the gateway; with
     unified_session off it is AgentLoop.bus_turn_key returning its argument
     unchanged. Attach must still read the per-chat "websocket:<chat_id>"
-    session — this task's wiring must not hardcode the unified key."""
+    session — the attach wiring must not hardcode the unified key."""
     sm = SessionManager(tmp_path)
     approval_id = _seed_pending_approval(tmp_path, sm, "c6")
     channel = WebSocketChannel(
@@ -351,7 +351,7 @@ async def test_unified_mode_matches_the_shared_session_key(tmp_path):
 
 @pytest.mark.asyncio
 async def test_stop_cancels_and_awaits_a_decision_still_running(tmp_path, monkeypatch):
-    """X13: a decision blocked inside its executor when the process shuts down
+    """A decision blocked inside its executor when the process shuts down
     must not leave the record stuck ``approved`` forever — ``stop()`` cancels
     and awaits every task in ``_approval_tasks`` before the rest of its own
     cleanup, and ``_run_approved`` (core) turns that cancellation into

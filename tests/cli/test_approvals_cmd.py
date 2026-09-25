@@ -40,7 +40,7 @@ def _prep_edit(ws, name: str, old: str, new: str, file: str = "SKILL.md"):
 
 
 def test_list_approve_and_discard(tmp_path, monkeypatch):
-    # approve/reject need a real terminal (ruling X4); patch the TTY probe so
+    # approve/reject need a real terminal; patch the TTY probe so
     # this test can exercise the decision itself, not the gate in front of it.
     monkeypatch.setenv("DURIN_HOME", str(tmp_path))
     monkeypatch.setattr("durin.cli.commands._stdin_is_interactive", lambda: True)

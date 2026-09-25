@@ -83,11 +83,17 @@ None of them takes a value the model writes as consent: their schemas carry no
    command is refused instead, with nothing filed: replaying a shell command
    outside the run that needed it is meaningless.
 
-A pending record expires 14 days after it was filed: `approval.decide` moves
-it `pending → expired` instead of applying it, and a resolved record (any
-terminal status) is pruned from disk 30 days after it was decided. Expiry and
-pruning (`approval_store.expire_and_prune`) run when a record is decided,
-when `durin approvals` lists records, and once when the gateway starts, so a
+A pending record expires 14 days after it was filed: deciding it after that
+(`approval.decide`) moves that one record `pending → expired` instead of
+applying it. A resolved record (any terminal status) is pruned from disk 30
+days after it was decided or expired; an expiry stamps `decided_at` like a
+decision, so the window counts from it. A record still `approved` an hour
+after its decision (`APPROVED_RUN_BOUND`) was left by a process killed
+mid-run, since executors take minutes at most: it is moved to `failed` with
+`result: {"error": "interrupted"}`, by compare-and-set, so a run that
+finishes first keeps its result. The sweep over every record
+(`approval_store.expire_and_prune`: expiry, interrupted runs, pruning) runs
+when `durin approvals` lists records and once when the gateway starts, so a
 person is never offered a stale request to approve.
 
 The context is read from the runtime-minted session key (`websocket:`,
@@ -102,10 +108,12 @@ cannot answer either.
 
 A person's context loses that authority for a turn that received input from an
 API token. A message sent through the native chat routes carries
-`origin: "api"`; the agent loop marks the turn (`approval.note_turn_input`, a
-context variable set in the turn's own task, for the opening message and for
-any message injected into the turn), and `approval.turn_has_api_input` reads
-the mark. Such a turn never asks in the chat: `make_chat_asker` returns no
+`origin: "api"`; the agent loop marks the turn (`approval.note_turn_input`, on
+a per-turn cell the loop sets in the turn's own task and shares with the tasks
+that run its tools), for the opening message, for any message injected into
+the turn, and for a message that answers a question the turn waited on (the
+waiting tool reads the answer's origin from `pending_answers`), and
+`approval.turn_has_api_input` reads the mark. Such a turn never asks in the chat: `make_chat_asker` returns no
 asker, so each privileged tool takes the path of a context with no person. A
 skill install, edit or dependency install and an MCP change become pending
 requests that a person decides with `durin approvals`, and the pending note
@@ -156,7 +164,13 @@ action that `install_policy: auto` allowed files no record; a skill installed
 that way carries `approved_by: policy` in its provenance and commit trailers.
 `durin approvals approve` and `reject` refuse to run without a terminal (TTY),
 and the exec hard floor refuses them at command position, so the agent cannot
-decide its own request through a shell.
+decide its own request through a shell. Self-approval is therefore blocked at
+every channel the agent controls: the chat (a verdict never passes through
+the model), API input (it never approves), and the shell. That is a
+best-effort limit, not a proof: the exec filters are pattern-based, so a
+command that reaches the same effect another way (a script the agent writes
+that rewrites a record under `.approvals/`, say) is a known gap until exec
+runs in a sandbox.
 
 **Layered skill gates.** Importing a skill passes two independent scan stages.
 The first is deterministic: a regex and AST pass that always runs. The second is
@@ -415,7 +429,7 @@ in order, by:
 - `skills.install_policy: auto`, which pre-authorizes `confirm` installs (never `block`);
 - the skills judge, for a `confirm` install only (see above);
 - the person in the chat (a card in the webui and TUI, a yes/no reply on text channels);
-- otherwise a pending record, resolved later from Pending or `durin approvals`.
+- otherwise a pending record, resolved later with `durin approvals`.
 
 The request is bound to the quarantine's content hash (`.scan.json` excluded), so
 a re-fetched quarantine makes it stale. At execution the install re-derives the
@@ -491,8 +505,8 @@ enable put a server's command or endpoint into the agent's tool surface, so
 they go through `tools.mcp_discovery.install_policy`: `never` refuses, `auto`
 runs (authority the operator granted in config ahead of time), and `approve`
 (the default) files an `mcp_change` approval request. In a chat the person
-approves or declines it there; with nobody to ask it waits in Pending
-(`durin approvals`). The tool has no `confirm` parameter: nothing in a call can
+approves or declines it there; with nobody to ask it waits for
+`durin approvals`. The tool has no `confirm` parameter: nothing in a call can
 approve it. Remove, disable and reconnect add no executable state and are not
 gated — except that the agent's own `reconnect` refuses instead of connecting
 whenever the on-disk config does not match the config a person or an approved
@@ -555,7 +569,12 @@ workspace root before any guard runs. An LLM-supplied directory outside the
 workspace is rejected immediately, preventing a caller from using `working_dir`
 as a bypass.
 
-**`_check()`**: applies the hard floor, then deny and allow patterns, then
+**`_check()`**: refuses first, unchecked, a command longer than
+`MAX_CHECKED_COMMAND_CHARS`: the guard's regexes run on the event loop and
+several are quadratic in the worst case, so an unbounded command could hold
+the loop for seconds. The refusal is not approvable (nothing checked the
+command) and tells the model to put a long script in a file and run it. Then
+it applies the hard floor, then deny and allow patterns, then
 memory vault protection, then SSRF URL detection, then workspace boundary on
 absolute paths. It returns a `CommandRefusal` naming the kind of refusal and,
 for the policy checks, the rules that matched; `_guard_command()` (kept for
@@ -738,7 +757,7 @@ only callers with system-write authority can manage other tokens.
 | `_guard_memory_mutation` | `durin/agent/tools/shell.py` | Blocks rm/mv/cp/tee/sed -i/dd/redirect targeting `memory/` paths |
 | `_build_env` | `durin/agent/tools/shell.py` | Constructs minimal subprocess env + `allowed_env_keys` + scoped secrets |
 | `approval` (module) | `durin/agent/approval.py` | Authority by context: `request` (judge / person / pending) returning an `Outcome`, `outcome_to_tool_result` (what a gated tool returns), `decide` (resolve a record from outside the turn), `human_reachable` / `is_interactive` (the context classification), `note_turn_input` / `turn_has_api_input` (a turn with API-token input is never asked in the chat) |
-| `approval_store` (module) | `durin/agent/approval_store.py` | Persists approval records under `<workspace>/.approvals/`; `create`, `find_pending`, `transition` (compare-and-swap on status), `get`, `list_records`, `discard`, `expire_and_prune` (pending → `expired` past `PENDING_TTL`; terminal records deleted past `RESOLVED_RETENTION`). A record in the earlier per-subsystem layout (`.approvals/<subsystem>/<id>.json`) is listed as `legacy:<subsystem>`; it carries no payload, so it can be discarded but never approved |
+| `approval_store` (module) | `durin/agent/approval_store.py` | Persists approval records under `<workspace>/.approvals/`; `create`, `find_pending`, `transition` (compare-and-swap on status), `get`, `list_records`, `discard`, `expire_and_prune` (pending → `expired` past `PENDING_TTL`; `approved` → `failed` past `APPROVED_RUN_BOUND`; terminal records deleted past `RESOLVED_RETENTION`). A record in the earlier per-subsystem layout (`.approvals/<subsystem>/<id>.json`) is listed as `legacy:<subsystem>`; it carries no payload, so it can be discarded but never approved |
 | `approval_executors` (module) | `durin/agent/approval_executors.py` | Per-kind hash + execute registry (`register`, `execute`, `current_hash`); `ExecDeps` carries the runtime handles (`exec_run`, `mcp`, `extra`) an executor needs |
 | `approval_prompt` (module) | `durin/agent/approval_prompt.py` | `ChatHandles` / `make_chat_asker`: asks the person in the current chat and waits, bounded by `agents.defaults.ask_user_answer_timeout_s` |
 | `approval_kinds_exec` (module) | `durin/agent/approval_kinds_exec.py` | `exec_command` approval kind: redacts the command before it is ever recorded, binds the request to command + cwd + session, runs only inside the turn that asked |

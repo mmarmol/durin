@@ -75,6 +75,26 @@ def _testclient_localhost_peer():
 
 
 @pytest.fixture(autouse=True)
+def _no_one_left_waiting():
+    """Start and end every test with nobody waiting on a person.
+
+    The in-turn waiter registry (``pending_answers``) and the approval
+    hand-off map are module state. A test that fails while a turn waits on
+    an approval or a question would leave its waiter registered, and the
+    next test asking in the same chat would find a stale waiter or wait out
+    the full answer timeout. ``reset`` cancels leftover waiters and clears
+    the consumer flags; the hand-off map is emptied with them.
+    """
+    from durin.agent import approval, pending_answers
+
+    pending_answers.reset()
+    approval._HANDOFF_DECIDED_BY.clear()
+    yield
+    pending_answers.reset()
+    approval._HANDOFF_DECIDED_BY.clear()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_durin_home(tmp_path_factory, monkeypatch):
     """Run every test as a throwaway durin instance.
 

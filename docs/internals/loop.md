@@ -206,7 +206,11 @@ makes the waiter fall back. A system message (channel `system`, or any message
 carrying `injected_event`: a sub-agent's result, a background workflow's
 result, an automation's outcome, all published under the chat's session key)
 neither answers a waiter nor makes it fall back; it routes on into the running
-turn like any system result, and the wait goes on.
+turn like any system result, and the wait goes on. An answer carries its
+message's `origin` through `pending_answers.resolve`, and the waiting tool
+notes it as the turn's input in the turn's own context
+(`approval.note_turn_input`), so an API client's answer to a question marks
+the turn as API input for what follows (see [security.md](security.md)).
 
 A waiter only exists where it could be answered (`pending_answers.can_block`):
 an interactive session, a live inbound consumer, and a surface that can send a

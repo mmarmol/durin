@@ -9,8 +9,9 @@ are flagged ``needs_privileges`` for the user.
 ``skills.install_policy`` decides who authorizes the run: ``never`` reports the
 commands only; ``auto`` runs them (the operator granted that in config);
 ``approve`` (the default) asks the person in this chat to approve the exact
-commands, or files the request in Pending when nobody can answer. The model
-cannot authorize it, and the skills judge never does."""
+commands, or files the request for a person to decide with ``durin
+approvals`` when nobody can answer. The model cannot authorize it, and the
+skills judge never does."""
 from __future__ import annotations
 
 from contextvars import ContextVar

@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 from loguru import logger
 
 from durin.agent import model_presets as preset_helpers
-from durin.agent.approval import AUTONOMOUS_SESSION_PREFIXES, note_turn_input
+from durin.agent.approval import AUTONOMOUS_SESSION_PREFIXES, begin_turn_input, note_turn_input
 from durin.agent.aux_bridges import build_aux_providers
 from durin.agent.context import ContextBuilder
 from durin.agent.hook import AgentHook, CompositeHook
@@ -1654,8 +1654,11 @@ class AgentLoop:
             if verdict is None:
                 pending_answers.fallback(session_key)
                 return False
-            return pending_answers.resolve(session_key, verdict)
-        return pending_answers.resolve(session_key, text)
+            return pending_answers.resolve(session_key, verdict,
+                                           origin=msg.metadata.get("origin"))
+        # The answer enters the waiting turn as input, so its origin goes with
+        # it: an API client's answer marks the turn as API input.
+        return pending_answers.resolve(session_key, text, origin=msg.metadata.get("origin"))
 
     async def _answer_pending_question(self, msg: InboundMessage, session_key: str) -> bool:
         """Deliver *msg* as the answer to a turn waiting on one (a blocking
@@ -2478,7 +2481,9 @@ class AgentLoop:
         if session_key != msg.session_key:
             msg = dataclasses.replace(msg, session_key_override=session_key)
         # This task is the turn: a message from an API token drops a person's
-        # authority to approve privileged actions for all of it.
+        # authority to approve privileged actions for all of it. The fresh
+        # cell is shared with the tasks the turn starts for its tools.
+        begin_turn_input()
         note_turn_input(msg.metadata)
         lock = self._session_locks.setdefault(session_key, asyncio.Lock())
 

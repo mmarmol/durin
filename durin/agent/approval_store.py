@@ -27,6 +27,11 @@ KINDS: tuple[str, ...] = (
 TERMINAL: tuple[str, ...] = ("rejected", "applied", "failed", "stale", "expired")
 PENDING_TTL = timedelta(days=14)
 RESOLVED_RETENTION = timedelta(days=30)
+# How long a record may stay ``approved`` (decided, its run under way) before
+# it is taken for interrupted. Executors take minutes at most, so a record
+# still ``approved`` an hour after its decision was left by a process killed
+# mid-run, and nothing else would ever move it on.
+APPROVED_RUN_BOUND = timedelta(hours=1)
 
 _DIR = ".approvals"
 
@@ -168,7 +173,9 @@ def transition(workspace: Path | str, approval_id: str, *, expect: tuple[str, ..
         if rec is None or rec.get("status") not in expect:
             return None
         rec["status"] = to
-        if "decided_by" in fields:
+        if "decided_by" in fields or to == "expired":
+            # An expiry is stamped like a decision, so the retention window of
+            # an expired record counts from when it expired.
             rec["decided_at"] = _now().isoformat()
         rec.update(fields)
         _write(workspace, rec)
@@ -176,17 +183,26 @@ def transition(workspace: Path | str, approval_id: str, *, expect: tuple[str, ..
 
 
 def expire_and_prune(workspace: Path | str, *, now: datetime | None = None) -> dict[str, int]:
-    """Expire pending records past their TTL; delete terminal records older
-    than the retention window."""
+    """Expire pending records past their TTL; close as interrupted a record
+    left ``approved`` past ``APPROVED_RUN_BOUND``; delete terminal records
+    older than the retention window."""
     now = now or _now()
-    counts = {"expired": 0, "pruned": 0}
+    counts = {"expired": 0, "interrupted": 0, "pruned": 0}
     for rec in list_records(workspace, include_legacy=False):
         status = rec.get("status")
         if status == "pending":
             expires = rec.get("expires_at")
             if expires and datetime.fromisoformat(expires) <= now:
-                if transition(workspace, rec["id"], expect=("pending",), to="expired"):
+                if transition(workspace, rec["id"], expect=("pending",), to="expired",
+                              decided_at=now.isoformat()):
                     counts["expired"] += 1
+        elif status == "approved":
+            decided = rec.get("decided_at")
+            if decided and datetime.fromisoformat(decided) + APPROVED_RUN_BOUND <= now:
+                # Compare-and-set: a run that finishes first keeps its result.
+                if transition(workspace, rec["id"], expect=("approved",), to="failed",
+                              result={"error": "interrupted"}):
+                    counts["interrupted"] += 1
         elif status in TERMINAL:
             stamp = rec.get("decided_at") or rec.get("requested_at")
             if stamp and datetime.fromisoformat(stamp) + RESOLVED_RETENTION <= now:

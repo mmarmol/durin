@@ -25,6 +25,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+from loguru import logger
+
 from durin.agent import approval_store
 from durin.agent.approval_executors import (
     ExecDeps,
@@ -37,6 +39,7 @@ __all__ = [
     "AUTONOMOUS_SESSION_PREFIXES",
     "INTERACTIVE_SESSION_PREFIXES",
     "Outcome",
+    "begin_turn_input",
     "decide",
     "human_reachable",
     "is_interactive",
@@ -77,12 +80,27 @@ def human_reachable(session_key: str | None) -> bool:
     return pending_answers.consumer_active()
 
 
-# Set for the rest of a turn once any of its input came from an API token
-# rather than a person at a chat surface. A token holder is a program: a
+class _TurnInput:
+    """Whether any of a turn's input came from an API token so far.
+
+    A mutable cell rather than the ContextVar's own value: the tasks a turn
+    starts to run its tools copy the turn's context, so they hold this same
+    object, and a mark made in one of them (an API client answering a
+    question the tool waited on) is seen by the whole turn."""
+
+    __slots__ = ("api",)
+
+    def __init__(self) -> None:
+        self.api = False
+
+
+# The current turn's input cell. Set once any of its input came from an API
+# token rather than a person at a chat surface. A token holder is a program: a
 # ``chat:write`` token may converse in a webui conversation, but it must not
-# carry the person's authority to approve privileged actions there. Turns run
-# in their own task, so the flag never outlives the turn that set it.
-_TURN_HAS_API_INPUT: ContextVar[bool] = ContextVar("approval_turn_has_api_input", default=False)
+# carry the person's authority to approve privileged actions there. The loop
+# gives each turn a fresh cell in the turn's own task, so a mark never
+# outlives the turn that made it.
+_TURN_INPUT: ContextVar[_TurnInput | None] = ContextVar("approval_turn_input", default=None)
 
 # Approval id -> decider, set by ``decide`` just before it hands a verdict to
 # a waiting turn's ``pending_answers`` future. The turn's ``ask`` call then
@@ -94,14 +112,26 @@ _TURN_HAS_API_INPUT: ContextVar[bool] = ContextVar("approval_turn_has_api_input"
 _HANDOFF_DECIDED_BY: dict[str, dict] = {}
 
 
+def begin_turn_input() -> None:
+    """Give the turn starting in the current task a fresh input cell."""
+    _TURN_INPUT.set(_TurnInput())
+
+
 def note_turn_input(metadata: dict[str, Any] | None) -> None:
     """Record that the current turn received input from *metadata*'s sender.
 
-    Called for the message that opens a turn and for every message injected
-    into it. Input marked ``origin: "api"`` makes ``turn_has_api_input`` true
-    for the rest of the turn."""
+    Called for the message that opens a turn, for every message injected
+    into it, and for a message that answers a question the turn waited on.
+    Input marked ``origin: "api"`` makes ``turn_has_api_input`` true for the
+    rest of the turn."""
     if metadata and metadata.get("origin") == "api":
-        _TURN_HAS_API_INPUT.set(True)
+        cell = _TURN_INPUT.get()
+        if cell is None:
+            # No turn cell here (a direct caller outside the loop): mark
+            # this task's context alone.
+            cell = _TurnInput()
+            _TURN_INPUT.set(cell)
+        cell.api = True
 
 
 def turn_has_api_input() -> bool:
@@ -112,7 +142,8 @@ def turn_has_api_input() -> bool:
     pending and an exec command that needs approval is refused, as in a
     context with no person. The operator's standing policy (a judge,
     ``install_policy: auto``) still applies; it is not the turn's authority."""
-    return _TURN_HAS_API_INPUT.get()
+    cell = _TURN_INPUT.get()
+    return cell is not None and cell.api
 
 
 JudgeFn = Callable[[], Awaitable[str | None]]
@@ -158,6 +189,9 @@ async def _run_approved(workspace: Path | str, record: dict, deps: ExecDeps) -> 
                                   to="failed", result={"error": "cancelled"})
         raise
     except Exception as exc:  # noqa: BLE001 — a failed run is recorded, never raised to the turn
+        # The record keeps only the message; the traceback goes to the log.
+        logger.exception("approved request {} ({}) failed while running",
+                         record["id"], record.get("kind"))
         rec = approval_store.transition(workspace, record["id"], expect=("approved",),
                                         to="failed", result={"error": str(exc)})
         return Outcome("failed", rec, None, f"Approved, but running it failed: {exc}")

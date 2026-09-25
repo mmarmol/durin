@@ -271,6 +271,11 @@ class AskUserQuestionTool(Tool, ContextAware):
             # Yield: the question stays in the session for the next message.
             await self._push_session_state()
             return None
+        # The answer is input to this turn: an API client's answer marks the
+        # turn as API input, here in the turn's own context.
+        from durin.agent.approval import note_turn_input
+
+        note_turn_input({"origin": pending_answers.answer_origin(fut)})
         self._emit("ask_user.answer_received", {
             "question_id": question_id,
             "wait_ms": int((time.monotonic() - started) * 1000),

@@ -16,6 +16,7 @@ again.
 from __future__ import annotations
 
 import asyncio
+import weakref
 
 
 class _Fallback:
@@ -33,6 +34,11 @@ _WAITERS: dict[str, asyncio.Future] = {}
 # waiters take the user's text verbatim; "approval" waiters (ref = the
 # approval record id) accept only a yes/no verdict, parsed by the loop.
 _KINDS: dict[str, tuple[str, str | None]] = {}
+
+# waiter future -> the ``origin`` of the message that answered it ("api" for
+# an API client), read by the waiting tool so the turn learns who took part
+# in it. Weak keys: an entry goes when its future does.
+_ORIGINS: "weakref.WeakKeyDictionary[asyncio.Future, str]" = weakref.WeakKeyDictionary()
 
 # True while AgentLoop.run()'s inbound consumer is active — the only thing
 # that can ever resolve a waiter. Without it (single-message mode, tests),
@@ -121,13 +127,23 @@ def _pop_live(session_key: str) -> asyncio.Future | None:
     return fut
 
 
-def resolve(session_key: str, text: str) -> bool:
-    """Deliver *text* to the waiter. True when a live waiter consumed it."""
+def resolve(session_key: str, text: str, *, origin: str | None = None) -> bool:
+    """Deliver *text* to the waiter. True when a live waiter consumed it.
+
+    *origin* is the answering message's ``origin`` metadata, kept for the
+    waiter (``answer_origin``)."""
     fut = _pop_live(session_key)
     if fut is None:
         return False
+    if origin:
+        _ORIGINS[fut] = origin
     fut.set_result(text)
     return True
+
+
+def answer_origin(fut: asyncio.Future) -> str | None:
+    """The ``origin`` of the message that answered *fut*, if it had one."""
+    return _ORIGINS.get(fut)
 
 
 def fallback(session_key: str) -> bool:

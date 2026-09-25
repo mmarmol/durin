@@ -127,3 +127,54 @@ async def test_an_api_client_may_still_answer_a_question(tmp_path: Path) -> None
         assert await waiter == "yes"
     finally:
         pending_answers.discard("websocket:c1", waiter)
+
+
+async def _question_then_gated_action(loop: AgentLoop, answer: InboundMessage) -> bool:
+    """One webui turn: a tool asks the person a question and waits (in its own
+    task, as the runner runs a batch of tools), the reply arrives through the
+    loop, and a later privileged tool in the same turn checks whether it may
+    ask in the chat. Returns that last check."""
+    import asyncio
+
+    from durin.agent.tools.ask_user import AskUserQuestionTool
+    from durin.agent.tools.context import RequestContext
+
+    seen = {}
+
+    async def _turn(msg, **_kw):
+        tool = AskUserQuestionTool(sessions=loop.sessions, bus=loop.bus, answer_timeout_s=5)
+        tool.set_context(RequestContext(channel="websocket", chat_id="c1",
+                                        session_key="websocket:c1"))
+        [result] = await asyncio.gather(tool.execute(question="Which one?"))
+        seen["answered"] = "answered" in result
+        seen["asks"] = _asks_in_chat()
+        return None
+
+    loop._process_message = _turn  # type: ignore[method-assign]
+    turn = asyncio.create_task(loop._dispatch(InboundMessage(
+        channel="websocket", sender_id="u", chat_id="c1", content="start",
+        metadata={"webui": True})))
+    for _ in range(500):
+        if pending_answers.is_waiting("websocket:c1"):
+            break
+        await asyncio.sleep(0.01)
+    assert await loop._answer_pending_question(answer, "websocket:c1") is True
+    await asyncio.wait_for(turn, 5)
+    assert seen["answered"] is True
+    return seen["asks"]
+
+
+@pytest.mark.asyncio
+async def test_an_api_answer_to_a_question_marks_the_turn_as_api_input(tmp_path: Path) -> None:
+    loop = _loop(tmp_path)
+    asks = await _question_then_gated_action(loop, _reply("the blue one", api=True))
+    # The program that answered is now part of the turn: what follows is not
+    # put to the person in the chat.
+    assert asks is False
+
+
+@pytest.mark.asyncio
+async def test_a_person_s_answer_to_a_question_leaves_the_turn_a_person_s(tmp_path: Path) -> None:
+    loop = _loop(tmp_path)
+    asks = await _question_then_gated_action(loop, _reply("the blue one", api=False))
+    assert asks is True

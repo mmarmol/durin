@@ -626,9 +626,12 @@ missing from `allow_patterns`, you are shown the exact command and asked to
 approve it; approving runs that command once. A short list of commands never
 runs, even when approved: recursively removing `/` or your home directory,
 formatting or overwriting a whole disk, a fork bomb, shutdown or reboot, and
-`durin approvals approve` / `reject` (the agent cannot approve its own
-requests). In scheduled or background runs nobody is asked and the command is
-refused.
+`durin approvals approve` / `reject` (so the agent cannot approve its own
+requests through the shell). These filters match patterns and are
+best-effort: a roundabout command can reach the same effect, a known gap
+until shell commands run in a sandbox (see
+[Approvals](cli.md#approvals)). In scheduled or background runs nobody is
+asked and the command is refused.
 
 **`tools.web`** — web search and fetch tools:
 

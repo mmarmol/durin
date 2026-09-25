@@ -193,7 +193,7 @@ def test_parse_end_token_mismatch_raises(tmp_path):
 
 
 def test_a_truncated_reply_that_is_only_a_planted_quote_is_rejected_end_to_end(tmp_path):
-    # probe H: a reply that is nothing but a planted, quoted fake block (as if
+    # A reply that is nothing but a planted, quoted fake block (as if
     # generation was cut short right after the skill's own injected text, or
     # hijacked to emit only that) has one of each marker and would otherwise
     # parse as a clean "safe" verdict. Going through judge_skill (which knows

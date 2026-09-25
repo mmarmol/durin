@@ -9,7 +9,8 @@ Each kind registers two functions:
   from arguments the model supplies at approval time.
 
 Kinds register from their own modules; ``_ensure_loaded`` imports them so a
-fresh process (CLI, API) can execute any kind.
+fresh process (CLI, API) can execute any kind. Every kind module exists, so
+failing to import one is an error, never a kind that is simply absent.
 """
 from __future__ import annotations
 
@@ -59,15 +60,7 @@ def register(kind: str, *, hash_fn: HashFn, execute_fn: ExecuteFn) -> None:
 def _ensure_loaded(kind: str) -> tuple[HashFn, ExecuteFn]:
     if kind not in _REGISTRY:
         for mod in _KIND_MODULES:
-            try:
-                importlib.import_module(mod)
-            except ModuleNotFoundError as e:
-                # Only a missing kind module itself is expected (later tasks
-                # haven't landed it yet); a missing dependency INSIDE one that
-                # does exist is a real bug and must not be swallowed.
-                if e.name != mod:
-                    raise
-                continue
+            importlib.import_module(mod)
     if kind not in _REGISTRY:
         raise ApprovalExecError(f"no executor registered for kind {kind!r}")
     return _REGISTRY[kind]

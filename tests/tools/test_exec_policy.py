@@ -49,8 +49,7 @@ FLOOR = [
     "systemctl poweroff",
     "/sbin/reboot",
     "poweroff",
-    # Shell wrappers: the wrapped command must still hit the floor (fix
-    # round 1, finding 1).
+    # Shell wrappers: the wrapped command must still hit the floor.
     "bash -c 'mkfs.ext4 /dev/sda'",
     'sh -c "reboot"',
     "bash -lc 'shutdown now'",
@@ -60,9 +59,9 @@ FLOOR = [
     "time mkfs.ext4 /dev/sda",
     "sudo sh -c 'mkfs.ext4 /dev/sda'",
     # $HOME quoted with the closing quote right after HOME, not around the
-    # whole target (fix round 1, finding 6).
+    # whole target.
     'rm -rf "$HOME"/*',
-    # halt / init 0 / systemctl halt|poweroff|reboot (fix round 1, finding 7).
+    # halt / init 0 / systemctl halt|poweroff|reboot.
     "halt",
     "init 0",
     "systemctl halt",
@@ -88,15 +87,15 @@ NOT_FLOOR = [
     "echo reboot",
     "systemctl status reboot.target",
     # A word on the floor that is only a path component, not the whole
-    # command name — the rest of the path continues past it (fix round 1,
-    # finding 4, direction 2: a folder name must not hit the floor).
+    # command name — the rest of the path continues past it: a folder name
+    # must not hit the floor.
     "/w/shutdown/reboot.sh",
     "./reboot/run.sh",
     "sudo /opt/mkfs/bin/tool",
     "/Users/me/durin-worktrees/shutdown/.venv/bin/python -m pytest -q",
     "cd /x && /Users/me/durin-worktrees/reboot/.venv/bin/python -c 1",
     # "init 0" is command position only: a version number after a real
-    # subcommand is not a runlevel (fix round 1, finding 7).
+    # subcommand is not a runlevel.
     "npm init 0",
     "git init",
 ]
@@ -105,7 +104,7 @@ NOT_FLOOR = [
 # pending request through a shell: a bare invocation, extra whitespace,
 # "python -m durin ...", the command nested inside "bash -c '...'", the CLI's
 # own options (-w/--workspace/--all/-c) between "approvals" and the verb, and
-# a quoted "approvals" or "approve"/"reject" token (fix round 1, finding 2).
+# a quoted "approvals" or "approve"/"reject" token.
 APPROVALS_BYPASS = [
     "durin approvals approve req-123",
     "durin approvals reject req-123",
@@ -216,8 +215,7 @@ def test_approvals_cli_floor_holds_against_any_approval():
     "durin approvals discard req-123",
     "echo 'approving requests is done via durin approvals'",
     # The rule is anchored at command position: the phrase appearing inside
-    # a commit message or a grep pattern must not be refused (fix round 1,
-    # finding 5).
+    # a commit message or a grep pattern must not be refused.
     "git commit -m 'durin approvals approve flow'",
     "grep -rn 'durin approvals approve' docs/",
 ])
@@ -229,7 +227,7 @@ def test_approvals_near_misses_are_not_on_the_floor(command):
 def test_fork_bomb_pattern_is_not_quadratic_on_a_long_word():
     """A long argument with no fork bomb in it must not stall the guard: the
     (?<![\\w:]) lookbehind stops the function-name group from restarting the
-    match at every character of a long word (fix round 1, finding 3)."""
+    match at every character of a long word."""
     import re
     import time
 
@@ -242,3 +240,78 @@ def test_fork_bomb_pattern_is_not_quadratic_on_a_long_word():
 
     assert result is None
     assert elapsed < 1.0
+
+
+# Repetitions that drive the guard's regexes to their worst case: an anchor
+# word the patterns retry at every occurrence, and the pairs ("sed ... -i",
+# "dd ... of=") that used to scan open-endedly twice.
+_ADVERSARIAL = ["rm ", "rm -r ", "dd ", "dd of=", "sed -i ", "mv ", "cp a b ", "sudo -a ",
+                ">>", "(", "http://a ", "a/"]
+
+
+@pytest.mark.parametrize("unit", _ADVERSARIAL)
+def test_the_guard_stays_bounded_on_adversarial_input_up_to_the_cap(unit):
+    """At the longest command the guard checks, even pathological input is
+    checked in well under a second (the bound here is generous for slow CI);
+    unbounded, these inputs held the event loop for seconds to minutes."""
+    import time
+
+    from durin.agent.tools.shell import MAX_CHECKED_COMMAND_CHARS
+
+    command = (unit * (MAX_CHECKED_COMMAND_CHARS // len(unit) + 1))[:MAX_CHECKED_COMMAND_CHARS]
+    for restrict in (False, True):
+        tool = ExecTool(restrict_to_workspace=restrict, working_dir="/w")
+        start = time.perf_counter()
+        tool._check(command, "/w")
+        assert time.perf_counter() - start < 3.0
+
+
+def test_a_command_over_the_cap_is_refused_before_any_check():
+    import time
+
+    from durin.agent.tools.shell import MAX_CHECKED_COMMAND_CHARS
+
+    command = "rm " * 400_000
+    start = time.perf_counter()
+    refusal = ExecTool()._check(command, "/w")
+    assert time.perf_counter() - start < 0.5
+    assert refusal is not None
+    # Fail closed, and not something a person could approve past: the guard
+    # never looked at it.
+    assert refusal.kind == "guard" and not refusal.approvable
+    assert str(MAX_CHECKED_COMMAND_CHARS) in refusal.message
+    assert "write_file" in refusal.message
+
+    at_cap = "echo " + "a" * (MAX_CHECKED_COMMAND_CHARS - len("echo "))
+    assert ExecTool()._check(at_cap, "/w") is None
+
+
+@pytest.mark.asyncio
+async def test_an_approved_command_over_the_cap_still_never_runs(tmp_path):
+    from durin.agent.tools.shell import MAX_CHECKED_COMMAND_CHARS
+
+    marker = tmp_path / "ran"
+    command = f"touch {marker} # " + "x" * MAX_CHECKED_COMMAND_CHARS
+    out = await ExecTool(working_dir=str(tmp_path))._run(
+        command, str(tmp_path), approved_rules=frozenset({RM_RULE}))
+    assert out.startswith("Error: Command blocked")
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize(("command", "blocked"), [
+    ("sed -i 's/a/b/' memory/people/ada.md", True),
+    ("sed -i.bak -e 's/a/b/' memory/x.md", True),
+    ("sed --in-place 's/a/b/' ./memory/x.md", True),
+    ("sed -e 's/a/b/' -i memory/x.md", True),
+    ("sed 's/-i/x/' memory/x.md", True),
+    ("sed 's/a/b/' memory/x.md", False),
+    ("sed -i 's/a/b/' notes.md; cat memory/x.md", False),
+    ("dd if=/dev/zero of=memory/x.md bs=1 count=1", True),
+    ("dd of=/tmp/out if=memory/x.md", True),
+    ("dd if=memory/x.md of=/tmp/out", False),
+    ("dd if=/dev/zero of=/tmp/out; ls memory/", False),
+])
+def test_the_memory_vault_guard_for_sed_and_dd(command, blocked):
+    """The sed -i and dd of= rules commit to the first flag they meet; that
+    changes their cost, never what they refuse."""
+    assert (ExecTool._guard_memory_mutation(command.lower()) is not None) is blocked

@@ -564,7 +564,7 @@ class TestStopCommandWithUnifiedSession:
     def test_bus_turn_key_matches_effective_session_key_for_an_injected_outcome(
         self, tmp_path: Path,
     ):
-        """C3 review finding: bus_turn_key(session_key) always folds to the
+        """bus_turn_key(session_key) always folds to the
         unified key (or returns session_key unchanged), while
         _effective_session_key(msg) instead RESPECTS msg.session_key_override
         when one is set. An automation/subagent/workflow outcome (cli/commands.py,
