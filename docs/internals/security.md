@@ -79,6 +79,13 @@ None of them takes a value the model writes as consent: their schemas carry no
    command is refused instead, with nothing filed: replaying a shell command
    outside the run that needed it is meaningless.
 
+A pending record expires 14 days after it was filed: `approval.decide` moves
+it `pending → expired` instead of applying it, and a resolved record (any
+terminal status) is pruned from disk 30 days after it was decided. Expiry and
+pruning (`approval_store.expire_and_prune`) run when a record is decided,
+when `durin approvals` lists records, and once when the gateway starts, so a
+person is never offered a stale request to approve.
+
 The context is read from the runtime-minted session key (`websocket:`,
 `cli:`, `slack:`, `unified:`… vs `cron:`, `cron_dream`, `workflow:`,
 `system:`), a value the model cannot write, plus the flag that says an answer
@@ -712,7 +719,7 @@ only callers with system-write authority can manage other tokens.
 | `_guard_memory_mutation` | `durin/agent/tools/shell.py` | Blocks rm/mv/cp/tee/sed -i/dd/redirect targeting `memory/` paths |
 | `_build_env` | `durin/agent/tools/shell.py` | Constructs minimal subprocess env + `allowed_env_keys` + scoped secrets |
 | `approval` (module) | `durin/agent/approval.py` | Authority by context: `request` (judge / person / pending) returning an `Outcome`, `outcome_to_tool_result` (what a gated tool returns), `decide` (resolve a record from outside the turn), `human_reachable` / `is_interactive` (the context classification), `note_turn_input` / `turn_has_api_input` (a turn with API-token input is never asked in the chat) |
-| `approval_store` (module) | `durin/agent/approval_store.py` | Persists approval records under `<workspace>/.approvals/`; `create`, `find_pending`, `transition` (compare-and-swap on status), `get`, `list_records`, `discard`. A record in the earlier per-subsystem layout (`.approvals/<subsystem>/<id>.json`) is listed as `legacy:<subsystem>`; it carries no payload, so it can be discarded but never approved |
+| `approval_store` (module) | `durin/agent/approval_store.py` | Persists approval records under `<workspace>/.approvals/`; `create`, `find_pending`, `transition` (compare-and-swap on status), `get`, `list_records`, `discard`, `expire_and_prune` (pending → `expired` past `PENDING_TTL`; terminal records deleted past `RESOLVED_RETENTION`). A record in the earlier per-subsystem layout (`.approvals/<subsystem>/<id>.json`) is listed as `legacy:<subsystem>`; it carries no payload, so it can be discarded but never approved |
 | `approval_executors` (module) | `durin/agent/approval_executors.py` | Per-kind hash + execute registry (`register`, `execute`, `current_hash`); `ExecDeps` carries the runtime handles (`exec_run`, `mcp`, `extra`) an executor needs |
 | `approval_prompt` (module) | `durin/agent/approval_prompt.py` | `ChatHandles` / `make_chat_asker`: asks the person in the current chat and waits, bounded by `agents.defaults.ask_user_answer_timeout_s` |
 | `approval_kinds_exec` (module) | `durin/agent/approval_kinds_exec.py` | `exec_command` approval kind: redacts the command before it is ever recorded, binds the request to command + cwd + session, runs only inside the turn that asked |

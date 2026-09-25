@@ -103,6 +103,28 @@ async def test_decide_later_runs_once_and_refuses_stale(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_decide_on_an_expired_pending_record_refuses_and_marks_it_expired(tmp_path):
+    from datetime import datetime, timedelta, timezone
+
+    out = await approval.request(tmp_path, PREP, session_key="cron:z", deps=ex.ExecDeps())
+    rid = out.record["id"]
+    past = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    st.transition(tmp_path, rid, expect=("pending",), to="pending", expires_at=past)
+
+    result = await approval.decide(tmp_path, rid, "approve", decided_by={"kind": "user"},
+                                   deps=ex.ExecDeps())
+    assert result.status == "stale" and "expired" in result.message
+    assert st.get(tmp_path, rid)["status"] == "expired"
+    assert RUNS == []
+
+    # Consistent with any other terminal status: a second decision is refused
+    # as "already decided", not re-expired.
+    again = await approval.decide(tmp_path, rid, "approve", decided_by={"kind": "user"},
+                                  deps=ex.ExecDeps())
+    assert again.status == "refused" and "expired" in again.message
+
+
+@pytest.mark.asyncio
 async def test_legacy_record_cannot_be_approved(tmp_path):
     (tmp_path / ".approvals" / "skills").mkdir(parents=True)
     (tmp_path / ".approvals" / "skills" / "aaaaaaaaaaaa.json").write_text(

@@ -3532,6 +3532,10 @@ def _approvals_list(ctx: typer.Context, show_all: bool) -> None:
     from durin.agent import approval_store
 
     ws = _approvals_workspace(ctx)
+    # A pending record past its TTL, or a resolved one past its retention
+    # window, must never show as pending / linger on disk just because
+    # nobody has decided or listed it since it aged out.
+    approval_store.expire_and_prune(ws)
     records = (approval_store.list_records(ws) if show_all
                else approval_store.list_records(ws, status="pending"))
     if not records:

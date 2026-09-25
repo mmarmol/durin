@@ -9,6 +9,8 @@ fighting the test runner's piped stdin.
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from typer.testing import CliRunner
 
 from durin.agent import approval_kinds_skills as kinds
@@ -148,6 +150,39 @@ def test_approve_applies_a_real_edit(tmp_path, monkeypatch):
     assert "step two" in (skill_dir / "SKILL.md").read_text()
     msg = ss._store(ws).log(max_entries=1)[0].message
     assert "Approved-by: operator" in msg
+
+
+def test_list_does_not_show_a_pending_record_past_its_expiry(tmp_path, monkeypatch):
+    monkeypatch.setenv("DURIN_HOME", str(tmp_path))
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    rec = st.create(ws, kind="skill_edit", summary="edit skill 'e'", detail={},
+                    payload={}, change_hash="h", session_key="cron:x", context="autonomous")
+    past = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    st.transition(ws, rec["id"], expect=("pending",), to="pending", expires_at=past)
+
+    out = runner.invoke(app, ["approvals"])
+    assert out.exit_code == 0
+    assert rec["id"] not in out.output
+    assert "No pending approvals" in out.output
+    assert st.get(ws, rec["id"])["status"] == "expired"
+
+
+def test_list_all_prunes_a_resolved_record_past_retention(tmp_path, monkeypatch):
+    monkeypatch.setenv("DURIN_HOME", str(tmp_path))
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    rec = st.create(ws, kind="skill_edit", summary="edit skill 'f'", detail={},
+                    payload={}, change_hash="h", session_key="cron:x", context="autonomous")
+    st.transition(ws, rec["id"], expect=("pending",), to="rejected",
+                  decided_by={"kind": "operator", "channel": "cli"})
+    old = (datetime.now(timezone.utc) - timedelta(days=31)).isoformat()
+    st.transition(ws, rec["id"], expect=("rejected",), to="rejected", decided_at=old)
+
+    out = runner.invoke(app, ["approvals", "--all"])
+    assert out.exit_code == 0
+    assert rec["id"] not in out.output
+    assert st.get(ws, rec["id"]) is None
 
 
 def test_discard_missing_id_exits_nonzero(tmp_path, monkeypatch):

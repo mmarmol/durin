@@ -91,6 +91,11 @@ in the chat, or the skills judge. A request recorded by an earlier durin
 version is listed as `legacy:mcp` or `legacy:skills` and can only be discarded;
 ask the agent again if it is still needed.
 
+A pending request expires 14 days after it was filed and can no longer be
+decided; ask the agent again if it is still wanted. A resolved record (decided
+or expired) is kept for 30 days, then pruned. Expiry and pruning happen when
+you decide a request, when you list them, and once when the gateway starts.
+
 ## Inside the TUI
 
 - `/sessions` — modal picker over saved sessions (Esc to cancel)

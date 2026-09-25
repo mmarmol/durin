@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 from contextvars import ContextVar
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
@@ -254,7 +255,9 @@ def _already_decided(workspace: Path | str, approval_id: str) -> Outcome:
 async def decide(workspace: Path | str, approval_id: str, decision: str, *,
                  decided_by: dict, deps: ExecDeps) -> Outcome:
     """Resolve a request from outside the turn that filed it (Pending, CLI, API,
-    a webui click). If that turn is still waiting on it, hand the verdict to the
+    a webui click). A pending record past its TTL is expired here instead of
+    decided, since a person could otherwise approve a stale request nobody
+    re-checked. If that turn is still waiting on it, hand the verdict to the
     waiter so the turn runs it and continues. Otherwise decide and run here."""
     if decision not in ("approve", "reject"):
         return Outcome("refused", None, None, f"Unknown decision {decision!r}.")
@@ -265,6 +268,17 @@ async def decide(workspace: Path | str, approval_id: str, decision: str, *,
         return Outcome("refused", rec, None, (
             f"{approval_id} is a legacy request with no recorded payload; it can only "
             "be discarded. Ask the agent to request it again."))
+    if rec.get("status") == "pending":
+        expires_at = rec.get("expires_at")
+        if expires_at and datetime.fromisoformat(expires_at) <= datetime.now(timezone.utc):
+            expired = approval_store.transition(workspace, approval_id, expect=("pending",),
+                                                to="expired")
+            if expired is not None:
+                return Outcome("stale", expired, None, (
+                    f"Not decided: {expired['summary']} — this request expired, and can "
+                    "no longer be applied. Ask again if it is still wanted."))
+            # Lost the race: someone else moved it out of "pending" first. Fall
+            # through — the ordinary decision path below sees the real status.
     session_key = rec.get("requested_by_session")
     from durin.agent import pending_answers
 
