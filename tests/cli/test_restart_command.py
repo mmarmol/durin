@@ -179,6 +179,59 @@ class TestRestartCommand:
         assert [m.content for m in loop._inbound_journal.drain()] == ["deploy it?"]
 
     @pytest.mark.asyncio
+    async def test_a_stuck_fallback_restart_still_reexecs_after_the_deadline(self, tmp_path):
+        """The fallback path (no gateway — TUI, legacy REPL) has nothing at
+        the asyncio level bounding ``close_mcp``: if it never resolves, the
+        fallback's own ``reexec()`` at the end never runs either. The
+        watchdog armed for the restart must still call reexec once its
+        deadline passes, from its own OS thread, the same way SIGKILL
+        rescues a stuck SIGTERM."""
+        from durin.command.builtin import _BACKGROUND_TASKS, cmd_restart
+        from durin.command.router import CommandContext
+
+        class _StuckLoop:
+            def __init__(self) -> None:
+                self.sessions = MagicMock()
+                self.never_resolves = asyncio.Event()
+
+            async def close_mcp(self) -> None:
+                await self.never_resolves.wait()  # never set — a true hang
+
+            def stop(self) -> None:
+                pass
+
+            async def drain_inbound_for_shutdown(self) -> int:
+                return 0
+
+        loop = _StuckLoop()
+        msg = InboundMessage(channel="cli", sender_id="user", chat_id="direct", content="/restart")
+        ctx = CommandContext(msg=msg, session=None, key=msg.session_key, raw="/restart", loop=loop)
+
+        async def _fast_sleep(_delay: float) -> None:
+            return None
+
+        fake_asyncio = SimpleNamespace(sleep=_fast_sleep, create_task=asyncio.create_task)
+
+        try:
+            with patch.dict(os.environ, {}, clear=False), \
+                 patch("durin.command.builtin.asyncio", new=fake_asyncio), \
+                 patch("durin.utils.restart.RESTART_SHUTDOWN_DEADLINE_S", 0.1), \
+                 patch("durin.utils.restart.os.execv") as mock_execv:
+                await cmd_restart(ctx)
+                for _ in range(40):  # 2s — the fallback's own steps never
+                    if mock_execv.called:  # unblock close_mcp on their own
+                        break
+                    await asyncio.sleep(0.05)
+
+                assert mock_execv.call_count == 1
+        finally:
+            # The fallback's own `close_mcp` await is still pending (nothing
+            # in this test ever resolves it) — only the watchdog's reexec
+            # ran. Cancel it so it doesn't leak past this test.
+            for task in list(_BACKGROUND_TASKS):
+                task.cancel()
+
+    @pytest.mark.asyncio
     async def test_restart_intercepted_in_run_loop(self):
         """Verify /restart is handled at the run-loop level, not inside _dispatch."""
         loop, bus = _make_loop()

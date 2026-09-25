@@ -5,6 +5,7 @@ import os
 import select
 import signal
 import sys
+import threading
 from collections.abc import Callable
 from contextlib import nullcontext, suppress
 from pathlib import Path
@@ -124,6 +125,7 @@ from durin.config.schema import Config
 from durin.personas import seed_example_personas
 from durin.utils.helpers import sync_workspace_templates
 from durin.utils.restart import (
+    arm_restart_deadline,
     consume_restart_notice_from_env,
     format_restart_completed_message,
     reexec,
@@ -1711,6 +1713,11 @@ def _run_gateway(
     # shutdown below has run, the process re-execs itself.
     _restart_requested = False
 
+    # The watchdog armed for that restart (arm_restart_deadline), so a real
+    # signal landing during its shutdown can cancel it: a signal turns the
+    # restart into a plain stop, and nothing here should still re-exec.
+    _restart_timer: threading.Timer | None = None
+
     automations_runtime = AutomationsRuntime(
         config.workspace_path,
         workflow_exec=_automations_workflows_service.execute,
@@ -2104,8 +2111,17 @@ def _run_gateway(
         unified_server = None  # Step 4: unified uvicorn on the WS port (default path)
 
         def _request_shutdown(signame: str) -> None:
-            nonlocal _shutdown_requested
+            nonlocal _shutdown_requested, _restart_requested, _restart_timer
             _shutdown_requested = True
+            if signame != "/restart" and _restart_requested:
+                # A real signal wins over a restart already under way: this
+                # becomes a plain stop, so nothing here should re-exec —
+                # cancel the watchdog armed for that restart too, or it would
+                # fire on its own after the deadline regardless.
+                _restart_requested = False
+                if _restart_timer is not None:
+                    _restart_timer.cancel()
+                    _restart_timer = None
             logger.info("Gateway received {}; shutting down gracefully.", signame)
             if unified_server is not None:
                 unified_server.should_exit = True
@@ -2126,10 +2142,14 @@ def _run_gateway(
             # /restart takes the same graceful shutdown as a signal and
             # re-execs afterwards. A stop already under way wins: a /restart
             # landing during it must not turn the stop into a restart.
-            nonlocal _restart_requested
+            nonlocal _restart_requested, _restart_timer
             if _shutdown_requested:
                 return
             _restart_requested = True
+            # A hang anywhere in the graceful shutdown (MCP, cron, the dream
+            # and embed workers, the drain, asyncio.run's own teardown) must
+            # still end in a re-exec; this watchdog is the backstop.
+            _restart_timer = arm_restart_deadline()
             _request_shutdown("/restart")
 
         set_restart_handler(_request_restart)

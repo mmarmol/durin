@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import time
 from collections.abc import Callable
 from contextlib import suppress
@@ -20,6 +21,21 @@ RESTART_STARTED_AT_ENV = "DURIN_RESTART_STARTED_AT"
 # How this process restarts itself, when something owns an orderly shutdown
 # (the gateway). None: the caller shuts down what it can and re-execs.
 _RESTART_HANDLER: Callable[[], None] | None = None
+
+# How long a restart's graceful shutdown gets before this process re-execs
+# anyway (seconds). Nothing rescues a stuck SIGTERM the way systemd's SIGKILL
+# does; a restart has no such backstop unless it brings its own. close_mcp,
+# cron, the dream/embed workers, the drain, or asyncio.run's own teardown of
+# leftover tasks and executor threads could each hang. Long enough for a
+# normal shutdown to finish, short enough that a stuck one still comes back
+# soon.
+RESTART_SHUTDOWN_DEADLINE_S = 30.0
+
+# Guards ``reexec`` so only the first caller actually replaces the process:
+# the normal restart path and the ``arm_restart_deadline`` watchdog run on
+# different threads and can both decide to call it around the same moment.
+_reexec_lock = threading.Lock()
+_reexeced = False
 
 
 @dataclass(frozen=True)
@@ -60,8 +76,39 @@ def request_restart() -> bool:
 
 
 def reexec() -> None:
-    """Replace this process with a fresh ``python -m durin`` on the same argv."""
+    """Replace this process with a fresh ``python -m durin`` on the same argv.
+
+    Idempotent: only the first caller execs. The normal restart path and the
+    ``arm_restart_deadline`` watchdog can both reach this around the same
+    moment, from different threads; the loser returns having done nothing,
+    since by then the process image it expected to still be running here is
+    already gone (or is about to be, from the winner's ``execv``).
+    """
+    global _reexeced
+    with _reexec_lock:
+        if _reexeced:
+            return
+        _reexeced = True
     os.execv(sys.executable, [sys.executable, "-m", "durin"] + sys.argv[1:])
+
+
+def arm_restart_deadline(deadline_s: float | None = None) -> threading.Timer:
+    """Start a daemon watchdog that calls ``reexec`` after ``deadline_s``
+    (default ``RESTART_SHUTDOWN_DEADLINE_S``) even if the restart's graceful
+    shutdown never finishes.
+
+    Runs on its own OS thread, so it fires even while the asyncio event loop
+    itself is blocked — a synchronous hang inside a shutdown step is not
+    something any ``asyncio`` timeout could rescue. The caller cancels the
+    returned timer when the restart it was guarding turns out not to be
+    needed after all (a real signal landing during the shutdown).
+    """
+    if deadline_s is None:
+        deadline_s = RESTART_SHUTDOWN_DEADLINE_S
+    timer = threading.Timer(deadline_s, reexec)
+    timer.daemon = True
+    timer.start()
+    return timer
 
 
 def set_restart_notice_to_env(

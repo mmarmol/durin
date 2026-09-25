@@ -253,10 +253,17 @@ again, and no channel redelivers (Telegram confirms its offset before the
 handler runs, Slack acks the envelope before publishing, email marks the
 message seen inside the fetch), so every restart with a turn in flight used
 to discard the follow-ups queued behind it. The gateway's shutdown now calls
-`drain_inbound_for_shutdown()`: it cancels and awaits the turns in flight (so
-their `finally` hands their queues to the bus), collects what is on the bus
-plus any queue no task handed back, drops trigger-only messages (published
-for automation triggers, never a conversation), and writes the rest to
+`drain_inbound_for_shutdown()`: it records and cancels every turn in flight
+first, across every session key, before awaiting any of them — awaiting one
+would let the others run, and a turn whose own wait (an ask_user answer, an
+approval) gets cancelled by that window ends before the drain reaches it,
+losing its message instead of journaling it. It then waits once, for a
+bounded time, for all the cancelled turns to unwind together (so their
+`finally` hands their queues to the bus); a turn stuck past that bound is
+logged and left behind rather than charging the drain its own timeout again
+for every such turn. It collects what is on the bus plus any queue no task
+handed back, drops trigger-only messages (published for automation triggers,
+never a conversation), and writes the rest to
 `sessions/.inbound_journal.jsonl` (`durin/bus/journal.py`). The message each
 cancelled turn was answering goes first (the loop keeps it per task from
 `_start_turn_task` until the task finishes), ahead of the follow-ups queued
@@ -269,6 +276,19 @@ it as "interrupted" when no runtime checkpoint materialised partial work
 first, so the history reads user message, the interruption, the same message
 replayed, the answer. That closing line is the crash path's whole recovery
 (a hard death journals nothing); the journal is what a graceful restart adds.
+
+`/restart` takes the same graceful shutdown a SIGTERM does — the gateway's
+signal handler and `/restart` both funnel through one path, so `/restart`
+also stops MCP, cron, the dream and embed workers, drains the inbound
+journal as above, stops the channels, and flushes sessions before the
+process replaces itself. Because any one of those steps could hang (a stuck
+MCP client, a turn whose dispatch never unwinds, `asyncio`'s own teardown of
+leftover tasks), a restart also arms a watchdog on its own OS thread: past a
+deadline, it re-execs the process regardless of what the graceful shutdown
+is still doing, the way SIGKILL rescues a shutdown that ignores SIGTERM. A
+real signal that lands while a restart's shutdown is running wins over it —
+the process ends as a plain stop rather than restarting, and the watchdog is
+cancelled so it can't fire a re-exec afterward.
 
 ### The state loop: `_process_message`
 

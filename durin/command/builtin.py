@@ -16,7 +16,12 @@ from durin import __version__
 from durin.bus.events import OutboundMessage
 from durin.command.router import CommandContext, CommandRouter
 from durin.utils.helpers import build_status_content
-from durin.utils.restart import reexec, request_restart, set_restart_notice_to_env
+from durin.utils.restart import (
+    arm_restart_deadline,
+    reexec,
+    request_restart,
+    set_restart_notice_to_env,
+)
 
 # Strong refs to fire-and-forget command tasks (restart, background dream)
 # so the event loop can't GC them before they run (RUF006).
@@ -322,7 +327,10 @@ async def cmd_restart(ctx: CommandContext) -> OutboundMessage:
         # discards everything in memory, so close what the loop owns and
         # journal the turns in flight (one blocked on the user's answer among
         # them) and the messages queued behind them; the new process replays
-        # them when it starts.
+        # them when it starts. A hang in any of that (close_mcp, the drain)
+        # must still end in a re-exec, so arm the same watchdog the gateway
+        # path uses before starting them.
+        arm_restart_deadline()
         if loop is not None:
             with suppress(Exception):
                 await loop.close_mcp()

@@ -194,6 +194,62 @@ def _restore_loguru_durin_activation():
         logger.enable("durin")
 
 
+@pytest.fixture(autouse=True)
+def _cancel_restart_watchdogs_after_test(monkeypatch):
+    """Never let a restart watchdog timer outlive its test.
+
+    ``arm_restart_deadline`` (durin/utils/restart.py) starts a real daemon
+    ``threading.Timer`` — 30s by default — that calls ``reexec()``, a real
+    ``os.execv()``, when it fires. A test that exercises ``/restart``'s
+    fallback or gateway path (most don't specifically guard against this)
+    would otherwise leave that timer ticking in the background once the
+    test itself returns; if the rest of the suite runs long enough for it
+    to fire, it replaces the whole pytest process outright — observed as
+    an abrupt, signature-less interruption partway through a full-directory
+    run, with no fix-under-test involved at all. Every call this process
+    makes during a test is tracked here and cancelled at teardown; a test
+    that wants the real firing behavior (the watchdog itself) still gets
+    it, since cancellation only matters for a timer that hasn't fired yet.
+    """
+    import durin.utils.restart as _restart_mod
+
+    created: list = []
+    real_arm = _restart_mod.arm_restart_deadline
+
+    def _tracking_arm(*args, **kwargs):
+        timer = real_arm(*args, **kwargs)
+        created.append(timer)
+        return timer
+
+    monkeypatch.setattr(_restart_mod, "arm_restart_deadline", _tracking_arm)
+    # Both call sites import the name directly, so each holds its own
+    # binding to the original function — patching the defining module
+    # above does not reach them.
+    monkeypatch.setattr("durin.cli.commands.arm_restart_deadline", _tracking_arm, raising=False)
+    monkeypatch.setattr(
+        "durin.command.builtin.arm_restart_deadline", _tracking_arm, raising=False
+    )
+    yield
+    for timer in created:
+        timer.cancel()
+
+
+@pytest.fixture(autouse=True)
+def _reset_reexec_guard():
+    """Reset restart.py's one-shot re-exec guard before each test.
+
+    ``reexec()`` (durin/utils/restart.py) execs only once per process, so the
+    normal restart path and its watchdog timer can't both replace it. That
+    guard is a plain module-level flag with no per-test scope: once any test
+    exercises the real ``reexec()`` (even with ``os.execv`` mocked away), it
+    stays tripped for the rest of the suite, and a later test's own restart
+    path would then silently skip its ``os.execv`` call.
+    """
+    import durin.utils.restart as _restart_mod
+
+    _restart_mod._reexeced = False
+
+
 def write_webui_transcript(session_key: str, *events: dict) -> None:
     """Persist webui transcript events through the production writer.
 
