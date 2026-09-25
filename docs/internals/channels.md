@@ -918,7 +918,14 @@ will be discovered at startup and can be enabled with
   channel; `revoke <channel> <user_id>` targets a specific channel.
 - **Webui** — the WebSocket channel hosts the embedded single-page app at the
   configured `host:port/path`. Authentication is handled via `token` or
-  `token_issue_secret` (reverse-proxy path).
+  `token_issue_secret` (reverse-proxy path). Besides chat messages, the socket
+  carries control frames that never enter the conversation: `secret_store`
+  writes a credential, and `approval_decision` answers an approval the agent
+  is waiting on (see [ux.md](ux.md)). The gateway hands the channel two
+  runtime callables through `ChannelManager`. `webui_approval_deps` supplies
+  the live handles a decision runs with after its turn stopped waiting.
+  `webui_session_turn_key` tells the channel how the loop keys a chat's
+  turns, so an approval is matched to its chat in unified mode.
 
 ### Dashboard channel services
 

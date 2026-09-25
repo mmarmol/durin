@@ -192,6 +192,40 @@ the same note.
   timeout, media reply, absent loop consumer, or non-interactive session
   (`cron:`/`system:` prefixes), the tool degrades to yield semantics: it
   returns early and the next user message carries the answer.
+- **Approvals in chat**: a privileged action that needs a person waits
+  in-turn for a verdict the model cannot write. While the wait lasts,
+  `session.metadata["pending_approval"]` holds `{approval_id, kind, summary,
+  detail}`. The asker pushes a `_goal_state_sync` snapshot whose `goal_state`
+  blob carries it when the wait starts and again when it ends. The websocket
+  channel replays it when a client attaches to the chat, so a refresh brings
+  the card back. By surface:
+  - **webui**: an approval card docked above the composer, so it stays in
+    view while the thread scrolls. It shows the summary and the kind, then
+    the detail: scan verdict, findings, command, every other detail key as
+    a row, and the diff. Approve / Reject send an `approval_decision` socket
+    frame (`request_id`, `approval_id`, `decision`) that never becomes a chat
+    message. The channel refuses a malformed id, an unknown record, and a
+    record whose `requested_by_session` is not one of the chats this
+    connection is attached to. Chats are keyed the way the loop keys turns,
+    so in unified mode they share one key. Otherwise `approval.decide`
+    hands the verdict to the waiting turn. When that turn has stopped
+    waiting, it runs the recorded request on the gateway with
+    `AgentLoop.approval_exec_deps` (the live `exec` tool and an MCP service
+    bound to the live connections), except an `exec_command`, which runs
+    only inside the turn that asked: deciding it later fails without
+    running anything. The decision runs as a background task, so the
+    socket keeps serving frames. The reply is an `approval_decided` event
+    (`request_id`, `approval_id`, `ok`, `status`, `message`), where `status`
+    `pending` means the waiting turn took it. When the socket closes, the
+    client rejects any decision still waiting on its `approval_decided`
+    reply at once; the server still carries the decision out, and the next
+    attach shows the result.
+  - **TUI**: an approval bubble with Approve / Reject rows that send `yes` /
+    `no` as the user's next message, which the loop parses as the verdict
+    (see **Approval bubble** under Work-visibility surfaces).
+  - **Text channels**: the serialized request is published on every ask,
+    including a repeat of the same request after a timeout. The reply is
+    parsed by the loop.
 - **Secret redaction**: `SecretRedactor` processes every tool result before it
   reaches the model or is spilled to disk. Two layers: value-based (exact stored
   secret values become `«redacted:NAME»`) and pattern-based (credential-shaped
@@ -305,7 +339,8 @@ the sustained objective it is working toward — surfaces as a compact strip doc
 above the composer: the objective's short label plus an expand control that opens
 the full objective in a panel. It shows only while a goal is active and draws from
 the `_turn_end` frame's `goal_state` field and the dedicated `_goal_state_sync`
-push.
+push. The same snapshot carries `pending_approval`. While a turn waits on the
+person, the composer area shows the approval card (see **Approvals in chat**).
 
 **Work panel.** A collapsible side panel docked to the right of the chat thread,
 toggled from a button in the chat header (next to the theme toggle). A badge on
@@ -530,6 +565,8 @@ operations are safe from both async channel handlers and sync CLI contexts.
 | `ask_user_question` / `request_secret` / `exit_plan_mode` / `todo_write` | `durin/agent/tools/ask_user.py`, `durin/agent/tools/secrets.py`, `durin/agent/tools/plan_mode.py`, `durin/agent/tools/todos.py` | Interactive tools; payload-canonical contract (arguments carry display content); rich channels render widgets, dumb channels get serialized fallback |
 | `pending_answers` | `durin/agent/pending_answers.py` | Per-session `asyncio.Future` registry for blocking `ask_user_question`; `can_block()` gates in-turn blocking by checking consumer activity and session prefix |
 | `RICH_PAYLOAD_CHANNELS` | `durin/agent/user_payloads.py` | Set of channel names that render structured tool payloads natively: `{"websocket", "cli"}` |
+| `ApprovalCard` | `webui/src/components/thread/ApprovalCard.tsx` | The approval a turn waits on: summary, reviewed detail, Approve / Reject; decides only through its `onDecide` prop (the socket frame in a chat) |
+| `AgentLoop.approval_exec_deps` | `durin/agent/loop.py` | Live handles (exec tool, MCP service on the live runtime) for an approval decided after its turn stopped waiting |
 | `theme.py` / `tokens.css` | `durin/cli/theme.py` / `design/tokens.css` | Six Textual themes (ithildin/forge/mithril × light/dark) mirroring the CSS token values; a test pins the two together so they cannot drift |
 | `process_dragged_paths` | `durin/cli/dragdrop.py` | Scans input for absolute file paths; copies media to `<workspace>/.media/<sha>.<ext>`; returns `(cleaned_text, media_list)` |
 
