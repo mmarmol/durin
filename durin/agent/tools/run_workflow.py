@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from contextvars import ContextVar
 from collections.abc import Callable
+from contextvars import ContextVar
 from typing import Any
 
 from durin.agent.tools.base import Tool, tool_parameters

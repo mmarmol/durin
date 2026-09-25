@@ -463,10 +463,9 @@ class McpService:
         self, query: McpRegistryDescribeQuery, principal: Principal
     ) -> McpRegistryServerDetail:
         principal.require(Scope.MCP_READ)
+        from durin.agent.mcp_install import apply_auth_help
         from durin.agent.mcp_registry import build_mcp_adapters
         from durin.config.loader import load_config
-
-        from durin.agent.mcp_install import apply_auth_help
 
         for adapter in build_mcp_adapters(load_config().tools.mcp_discovery.registries):
             detail = await adapter.describe(query.ref)

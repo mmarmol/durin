@@ -25,12 +25,12 @@ from durin.service.skills import (
     SkillRemoveCommand,
     SkillReviewCommand,
     SkillSaveCommand,
-    SkillUnreviewCommand,
     SkillsImportCommand,
     SkillsListQuery,
     SkillsQuarantineQuery,
     SkillsResolveQuery,
     SkillsService,
+    SkillUnreviewCommand,
 )
 from durin.service.types import (
     ConflictError,

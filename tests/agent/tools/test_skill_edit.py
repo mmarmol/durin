@@ -5,8 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from durin.agent import approval_store
 from durin.agent import approval_kinds_skills as kinds
+from durin.agent import approval_store
 from durin.agent import pending_answers as pa
 from durin.agent import skills_store as ss
 from durin.agent.skill_observations import open_observations
