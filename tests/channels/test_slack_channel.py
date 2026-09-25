@@ -1313,3 +1313,77 @@ def test_slack_module_importable_and_discovered_without_extra() -> None:
     # Config model importable -> webui gets its settings form.
     model = cls.config_model()
     assert "bot_token" in model.model_fields or len(model.model_fields) > 0
+
+
+# ---------------------------------------------------------------------------
+# Button clicks key like the messages around them
+# ---------------------------------------------------------------------------
+
+
+def _click(chat_id: str, message: dict[str, object], envelope_id: str = "env-click") -> SimpleNamespace:
+    return SimpleNamespace(
+        type="interactive",
+        envelope_id=envelope_id,
+        payload={
+            "actions": [{"value": "Yes"}],
+            "user": {"id": "U1"},
+            "channel": {"id": chat_id},
+            "message": message,
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_click_on_a_top_level_dm_answer_stays_in_the_dm_session() -> None:
+    """A top-level DM runs in the DM's default session. A button on the bot's
+    top-level reply must answer there, not in a session keyed on the bot
+    message's own ts, where a turn waiting on the answer never sees it."""
+    channel = SlackChannel(SlackConfig(enabled=True), MessageBus())
+    channel._handle_message = AsyncMock()  # type: ignore[method-assign]
+    client = SimpleNamespace(send_socket_mode_response=AsyncMock())
+
+    await channel._on_socket_request(client, _click("D123", {"ts": "1700000000.000200"}))
+
+    kwargs = channel._handle_message.await_args.kwargs
+    assert kwargs["content"] == "Yes"
+    assert kwargs["session_key"] is None
+    assert kwargs["metadata"]["slack"]["thread_ts"] is None
+
+
+@pytest.mark.asyncio
+async def test_click_inside_a_dm_thread_uses_that_thread_session() -> None:
+    channel = SlackChannel(SlackConfig(enabled=True), MessageBus())
+    channel._handle_message = AsyncMock()  # type: ignore[method-assign]
+    client = SimpleNamespace(send_socket_mode_response=AsyncMock())
+
+    await channel._on_socket_request(
+        client, _click("D123", {"ts": "1700000000.000300", "thread_ts": "1700000000.000100"}),
+    )
+
+    kwargs = channel._handle_message.await_args.kwargs
+    assert kwargs["session_key"] == "slack:D123:1700000000.000100"
+    assert kwargs["metadata"]["slack"]["thread_ts"] == "1700000000.000100"
+
+
+@pytest.mark.asyncio
+async def test_click_and_typed_reply_in_a_channel_thread_share_a_session() -> None:
+    channel = SlackChannel(
+        SlackConfig(enabled=True, allow_from=["*"], group_policy="open"), MessageBus()
+    )
+    channel._bot_user_id = "UBOT"
+    channel._web_client = _FakeAsyncWebClient()
+    channel._handle_message = AsyncMock()  # type: ignore[method-assign]
+    channel._with_thread_context = AsyncMock(side_effect=lambda text, **kw: text)  # type: ignore[method-assign]
+    client = SimpleNamespace(send_socket_mode_response=AsyncMock())
+
+    await channel._on_socket_request(
+        client,
+        _channel_event(event_type="message", text="answer", ts="201.000",
+                       thread_ts="200.000", envelope_id="typed"),
+    )
+    typed = channel._handle_message.await_args.kwargs
+    await channel._on_socket_request(client, _click("C123", {"ts": "202.000", "thread_ts": "200.000"}))
+    clicked = channel._handle_message.await_args.kwargs
+
+    assert typed["session_key"] == clicked["session_key"] == "slack:C123:200.000"
+    assert clicked["metadata"]["slack"]["thread_ts"] == "200.000"

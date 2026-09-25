@@ -848,16 +848,9 @@ class SlackChannel(BaseChannel):
 
         event_ts = event.get("ts")
         raw_thread_ts = event.get("thread_ts")
-        thread_ts = raw_thread_ts
-        # In DMs we don't auto-open a thread on top-level messages (it would
-        # bury replies under "1 reply"). But if the user explicitly opened a
-        # thread inside the DM, raw_thread_ts is set and we honor it.
-        if (
-            self.config.reply_in_thread
-            and not thread_ts
-            and channel_type != "im"
-        ):
-            thread_ts = event_ts
+        thread_ts, session_key = self._thread_scope(
+            chat_id, channel_type, event_ts, raw_thread_ts,
+        )
         # A mention pulls the bot into the (possibly new) channel thread: keep
         # answering follow-ups there without requiring a re-mention each turn.
         if (
@@ -881,12 +874,6 @@ class SlackChannel(BaseChannel):
         except Exception as e:
             self.logger.debug("reactions_add failed: {}", e)
 
-        # Thread-scoped session key whenever the user is in a real thread
-        # (raw_thread_ts is set). DM threads get their own session, separate
-        # from the DM root, so context doesn't bleed across thread boundaries.
-        session_key = (
-            f"slack:{chat_id}:{thread_ts}" if thread_ts and raw_thread_ts else None
-        )
         media_paths: list[str] = []
         file_markers: list[str] = []
         if sender_allowed:
@@ -1001,9 +988,10 @@ class SlackChannel(BaseChannel):
         if not sender_id or not chat_id or not value:
             return
         message_info = payload.get("message") or {}
-        thread_ts = message_info.get("thread_ts") or message_info.get("ts")
         channel_type = self._infer_channel_type(chat_id)
-        session_key = f"slack:{chat_id}:{thread_ts}" if thread_ts else None
+        thread_ts, session_key = self._thread_scope(
+            chat_id, channel_type, message_info.get("ts"), message_info.get("thread_ts"),
+        )
         try:
             await self._handle_message(
                 sender_id=sender_id,
@@ -1015,6 +1003,32 @@ class SlackChannel(BaseChannel):
             )
         except Exception:
             self.logger.exception("Error handling button click from {}", sender_id)
+
+    def _thread_scope(
+        self,
+        chat_id: str,
+        channel_type: str,
+        ts: str | None,
+        raw_thread_ts: str | None,
+    ) -> tuple[str | None, str | None]:
+        """Where a message at ``ts`` gets its reply, and which session it joins.
+
+        Returns ``(reply_thread_ts, session_key)``. A message inside a real
+        thread (``raw_thread_ts`` set) joins that thread's own session, so
+        context does not bleed across thread boundaries; a top-level message
+        keeps the conversation's default session (``None``). Outside DMs,
+        ``reply_in_thread`` opens a reply thread under a top-level message; in
+        a DM it does not, since that would bury every reply under "1 reply".
+
+        Typed messages and button clicks both key through here, so a click
+        lands in the same session as a reply typed in the same place, which
+        is where a turn blocked on that answer is waiting.
+        """
+        thread_ts = raw_thread_ts
+        if self.config.reply_in_thread and not thread_ts and channel_type != "im":
+            thread_ts = ts
+        session_key = f"slack:{chat_id}:{thread_ts}" if thread_ts and raw_thread_ts else None
+        return thread_ts, session_key
 
     async def _with_thread_context(
         self,
