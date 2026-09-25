@@ -954,6 +954,40 @@ async def test_approval_row_sends_the_verdict_as_the_next_message(row, reply) ->
 
 
 @pytest.mark.asyncio
+async def test_approval_answers_once_even_if_a_second_click_is_already_queued() -> None:
+    """A second click queued before the rows detach, or a click that lands
+    after the snapshot retired the bubble, sends nothing."""
+    from types import SimpleNamespace
+
+    app = DurinApp(agent_loop=None)
+    published: list[str] = []
+
+    async def _capture(text, media, **kwargs):
+        published.append(text)
+
+    async with app.run_test() as pilot:
+        app._publish_inbound = _capture  # type: ignore[method-assign]
+        app._handle_outbound(_approval_sync(_PENDING_APPROVAL))
+        await pilot.pause()
+        bubble = _approval_bubbles(app)[0]
+        approve = bubble.query_one("#tc-approval-approve")
+        reject = bubble.query_one("#tc-approval-reject")
+        bubble.on_click(SimpleNamespace(widget=approve))
+        bubble.on_click(SimpleNamespace(widget=reject))
+        await pilot.pause()
+        assert published == ["yes"]
+
+        app._handle_outbound(_approval_sync({**_PENDING_APPROVAL, "approval_id": "0f0f0f0f0f0f"}))
+        await pilot.pause()
+        second = [b for b in _approval_bubbles(app) if b is not bubble][0]
+        late = second.query_one("#tc-approval-approve")
+        second.close_approval()
+        second.on_click(SimpleNamespace(widget=late))
+        await pilot.pause()
+        assert published == ["yes"]
+
+
+@pytest.mark.asyncio
 async def test_resolved_approval_sync_retires_the_rows() -> None:
     """A snapshot without the approval means it was answered or timed out. A
     stale Approve row must not answer whatever the turn asks next."""

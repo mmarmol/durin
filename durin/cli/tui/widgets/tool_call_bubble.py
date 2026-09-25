@@ -125,6 +125,8 @@ class ToolCallBubble(Vertical):
         self._name: str = str(event.get("name") or "tool")
         self._args: Any = event.get("arguments") or {}
         self._status: str = "running"
+        # Set once an approval is answered or retired; later clicks send nothing.
+        self._approval_closed: bool = False
         # Cache of the last seen result so copy-to-clipboard can grab it.
         self._last_result_text: str = ""
         # Body is shown truncated by default; user clicks the toggle in
@@ -364,8 +366,12 @@ class ToolCallBubble(Vertical):
 
         The loop reads it as the verdict for the approval waiter, the same
         path a typed reply takes, so the model never sees or decides it. The
-        rows go away at once so a second click cannot send it twice.
+        rows go away at once. A second click already queued, or one that lands
+        after the snapshot retired the bubble, sends nothing.
         """
+        if self._approval_closed:
+            return
+        self._approval_closed = True
         self._publish_background(reply)
         self._remove_action_rows()
         try:
@@ -375,6 +381,7 @@ class ToolCallBubble(Vertical):
 
     def close_approval(self) -> None:
         """The approval was answered or timed out: retire its action rows."""
+        self._approval_closed = True
         self._status = "ok"
         self.remove_class("running")
         self.add_class("ok")
