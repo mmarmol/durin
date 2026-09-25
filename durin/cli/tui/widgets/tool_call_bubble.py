@@ -307,11 +307,19 @@ class ToolCallBubble(Vertical):
         """
         if stored is None:
             return
+        from durin.bus.events import INBOUND_META_NOT_AN_ANSWER
         from durin.service.secrets import secret_stored_notice
 
-        self._publish_background(secret_stored_notice(stored))
+        # Not the user's reply: a question the agent is waiting on must not
+        # take this note as its answer.
+        self._publish_background(
+            secret_stored_notice(stored),
+            extra_metadata={INBOUND_META_NOT_AN_ANSWER: True},
+        )
 
-    def _publish_background(self, text: str, media: list | None = None) -> None:
+    def _publish_background(
+        self, text: str, media: list | None = None, *, extra_metadata: dict | None = None,
+    ) -> None:
         """Publish ``text`` on the TUI channel without blocking the caller.
 
         Shared by every bubble action that fires a message and moves on
@@ -327,7 +335,8 @@ class ToolCallBubble(Vertical):
 
         async def _go() -> None:
             try:
-                await publish(text, media or [])
+                kwargs = {} if extra_metadata is None else {"extra_metadata": extra_metadata}
+                await publish(text, media or [], **kwargs)
             except Exception as exc:  # noqa: BLE001 — log, don't crash the app
                 from loguru import logger
 

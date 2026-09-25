@@ -9,6 +9,11 @@ from typing import Any
 # render it and other channels may ignore unknown keys.
 OUTBOUND_META_AGENT_UI = "_agent_ui"
 
+# Optional ``InboundMessage.metadata`` flag for a message posted into a chat on
+# the user's behalf rather than typed by them (a stored-secret notice). It is
+# not the user's reply, so it never answers a turn waiting on one.
+INBOUND_META_NOT_AN_ANSWER = "_not_an_answer"
+
 
 @dataclass
 class InboundMessage:

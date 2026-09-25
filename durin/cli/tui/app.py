@@ -737,6 +737,7 @@ class DurinApp(App[None]):
 
     async def _publish_inbound(
         self, value: str, media: list[str], *, steer: bool = False,
+        extra_metadata: dict | None = None,
     ) -> None:
         from durin.bus.events import InboundMessage
 
@@ -762,7 +763,7 @@ class DurinApp(App[None]):
             except Exception:  # noqa: BLE001
                 pass
 
-        metadata: dict = {"_wants_stream": True}
+        metadata: dict = {"_wants_stream": True, **(extra_metadata or {})}
         if steer:
             metadata["steer"] = True
         await self._agent_loop.bus.publish_inbound(

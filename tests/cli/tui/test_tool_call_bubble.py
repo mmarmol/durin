@@ -865,6 +865,58 @@ async def test_secret_prompt_note_reports_the_stored_scope() -> None:
     assert "$SLACK_BOT_TOKEN" not in published[0]
 
 
+@pytest.mark.asyncio
+async def test_secret_prompt_note_is_flagged_as_not_an_answer() -> None:
+    """The note tells the agent a secret exists; it is not the user's reply
+    to a question the agent may be waiting on."""
+    from durin.bus.events import INBOUND_META_NOT_AN_ANSWER
+    from durin.service.secrets import SecretItem
+
+    app = DurinApp(agent_loop=None)
+    published: list[dict] = []
+
+    async def _capture(text, media, **kwargs):
+        published.append(kwargs)
+
+    async with app.run_test() as pilot:
+        chat = app.query_one(ChatView)
+        bubble = ToolCallBubble({
+            "version": 1, "phase": "end", "call_id": "rs8",
+            "name": "request_secret",
+            "arguments": {"name": "GH_TOKEN", "service": "github"},
+        })
+        chat.mount(bubble)
+        await pilot.pause()
+        app._publish_inbound = _capture  # type: ignore[method-assign]
+        bubble._on_secret_prompt_done(
+            SecretItem(
+                name="GH_TOKEN", service="github", account="", description="",
+                scope=["exec"], origin="tui", created_at="2026-09-24T00:00:00Z",
+                value_hint="ghp_••••1234",
+            )
+        )
+        await pilot.pause()
+
+    assert published == [{"extra_metadata": {INBOUND_META_NOT_AN_ANSWER: True}}]
+
+
+@pytest.mark.asyncio
+async def test_publish_inbound_carries_extra_metadata() -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    publish = AsyncMock()
+    fake = SimpleNamespace(
+        _agent_loop=SimpleNamespace(bus=SimpleNamespace(publish_inbound=publish)),
+        _cli_channel="cli",
+        _cli_chat_id="direct",
+    )
+
+    await DurinApp._publish_inbound(fake, "note", [], extra_metadata={"_not_an_answer": True})
+
+    assert publish.await_args.args[0].metadata == {"_wants_stream": True, "_not_an_answer": True}
+
+
 def test_secret_prompt_update_mode_derivation() -> None:
     """Replace mode needs the update flag AND a non-create-flow result: the
     tool degrades update=true to the create flow when the secret is missing

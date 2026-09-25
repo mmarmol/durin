@@ -23,7 +23,7 @@ from loguru import logger
 from pydantic import Field, field_validator, model_validator
 from websockets.exceptions import ConnectionClosed
 
-from durin.bus.events import OUTBOUND_META_AGENT_UI, OutboundMessage
+from durin.bus.events import INBOUND_META_NOT_AN_ANSWER, OUTBOUND_META_AGENT_UI, OutboundMessage
 from durin.bus.queue import MessageBus
 from durin.channels.base import BaseChannel
 from durin.config.paths import get_media_dir
@@ -1867,7 +1867,9 @@ class WebSocketChannel(BaseChannel):
                 sender_id=client_id,
                 chat_id=cid,
                 content=note,
-                metadata={"webui": True},
+                # Not the user's reply: a question the agent is waiting on
+                # must not take this note as its answer.
+                metadata={"webui": True, INBOUND_META_NOT_AN_ANSWER: True},
                 is_dm=False,
             )
 

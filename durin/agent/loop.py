@@ -37,7 +37,12 @@ from durin.agent.user_payloads import (
     mark_interactions_delivered,
     undelivered_interactions,
 )
-from durin.bus.events import OUTBOUND_META_AGENT_UI, InboundMessage, OutboundMessage
+from durin.bus.events import (
+    INBOUND_META_NOT_AN_ANSWER,
+    OUTBOUND_META_AGENT_UI,
+    InboundMessage,
+    OutboundMessage,
+)
 from durin.bus.journal import InboundJournal
 from durin.bus.queue import MessageBus
 from durin.command import CommandContext, CommandRouter, register_builtin_commands
@@ -1593,7 +1598,8 @@ class AgentLoop:
         """Divert an inbound message to a blocked ask_user waiter.
 
         Returns True when the message was consumed as the in-turn answer.
-        Slash commands are never consumed. A media-bearing reply cannot be
+        Slash commands and notices flagged ``INBOUND_META_NOT_AN_ANSWER`` are
+        never consumed. A media-bearing reply cannot be
         carried through a tool result — the waiter falls back to yield
         semantics and the message continues through normal routing.
         """
@@ -1603,6 +1609,10 @@ class AgentLoop:
             return False
         text = (msg.content or "").strip()
         if text.startswith("/"):
+            return False
+        if msg.metadata.get(INBOUND_META_NOT_AN_ANSWER):
+            # Posted for the user, not typed by them (a stored-secret notice):
+            # the question keeps waiting and the notice routes on.
             return False
         if msg.media:
             pending_answers.fallback(session_key)

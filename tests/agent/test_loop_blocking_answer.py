@@ -106,3 +106,25 @@ async def test_non_verdict_reply_falls_back_and_continues(tmp_path):
     # message goes on as a normal message.
     assert loop._maybe_resolve_pending_answer(_msg("sí pero cambiá X"), key) is False
     assert await fut is pa.FALLBACK
+
+
+@pytest.mark.asyncio
+async def test_a_notice_posted_for_the_user_is_not_the_answer(tmp_path):
+    """A stored-secret notice rides the chat like a user message but is not
+    the user's reply: the question keeps waiting for the real answer."""
+    from durin.bus.events import INBOUND_META_NOT_AN_ANSWER
+
+    loop = _make_loop(tmp_path)
+    key = loop._effective_session_key(_msg("x"))
+    fut = pa.create(key)
+    notice = InboundMessage(
+        channel="websocket", sender_id="u", chat_id="42",
+        content="The user stored the secret 'GH_TOKEN' (service=github, scope=exec). "
+                "Please continue the task.",
+        metadata={"webui": True, INBOUND_META_NOT_AN_ANSWER: True},
+    )
+
+    assert loop._maybe_resolve_pending_answer(notice, key) is False
+    assert not fut.done()
+    assert loop._maybe_resolve_pending_answer(_msg("green"), key) is True
+    assert fut.result() == "green"
