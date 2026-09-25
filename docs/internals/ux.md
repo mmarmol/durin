@@ -194,8 +194,13 @@ the same note.
   returns early and the next user message carries the answer. The same happens
   when a webui chat has had no viewer for a short grace window (the last tab
   closed and none came back), and in the legacy REPL, which cannot take a reply
-  while a turn runs and so never waits. An API client following the chat over
-  SSE counts as a viewer of a question, since it may answer one. A notice durin posts on the user's
+  while a turn runs and so never waits. The window also starts when the
+  question is asked in a chat no tab is watching: on a rich channel the tool
+  pushes a `_goal_state_sync` snapshot when its wait starts (carrying
+  `pending_question`) and again when it ends, and the webui channel starts the
+  window when that snapshot finds nobody attached. A tab that loads inside the
+  window keeps the wait. An API client following the chat over SSE counts as a
+  viewer of a question, since it may answer one. A notice durin posts on the user's
   behalf (the "secret stored" note after a `request_secret` form) carries
   `INBOUND_META_NOT_AN_ANSWER` and is never taken as the answer; the waiting
   question keeps waiting. A text channel gets the question once per ask, and
@@ -246,9 +251,11 @@ the same note.
   and the turn continues. For an approval that window starts when the last
   tab closes, whether or not an API client is following the chat over SSE: an
   API message never decides an approval, so such a watcher does not hold the
-  wait, and its attaching does not stop the window. The release checks what
-  the turn waits on when it fires, so a question that becomes an approval
-  inside the window is released too.
+  wait, and its attaching does not stop the window. It also starts when the
+  approval is asked in a chat no webui tab is watching (the asker's snapshot
+  finds no tab attached); a tab that loads inside the window keeps the wait.
+  The release checks what the turn waits on when it fires, so a question that
+  becomes an approval inside the window is released too.
 - **Secret redaction**: `SecretRedactor` processes every tool result before it
   reaches the model or is spilled to disk. Two layers: value-based (exact stored
   secret values become `«redacted:NAME»`) and pattern-based (credential-shaped

@@ -47,6 +47,7 @@ from durin.agent.user_payloads import (
     channel_renders_tool_payloads,
     forget_delivery,
     mark_interactions_delivered,
+    push_session_state,
     undelivered_interactions,
 )
 from durin.telemetry.logger import current_telemetry
@@ -206,9 +207,6 @@ class AskUserQuestionTool(Tool, ContextAware):
         if self._blocking and session is not None and session_key:
             answer = await self._await_answer(session_key, question_id)
             if answer is not None:
-                if session.metadata is not None:
-                    session.metadata.pop(PENDING_QUESTION_KEY, None)
-                    self._sessions.save(session)
                 return (
                     f"The user answered: {answer!r}.\n"
                     "Continue the task using this answer — do not re-ask."
@@ -241,6 +239,12 @@ class AskUserQuestionTool(Tool, ContextAware):
             return None
         await self._publish_dumb_channel_question(session_key)
         fut = pending_answers.create(session_key)
+        # A rich channel draws the question from the start tool_event; the
+        # session snapshot is what the webui channel keeps as the chat's
+        # state. It tells the channel a question waits, so a chat no tab is
+        # watching stops waiting after its grace window, and it brings the
+        # question back for a tab that attaches meanwhile.
+        await self._push_session_state()
         started = time.monotonic()
         try:
             answer = await asyncio.wait_for(fut, timeout=self._answer_timeout_s)
@@ -249,16 +253,32 @@ class AskUserQuestionTool(Tool, ContextAware):
                 "question_id": question_id,
                 "timeout_s": int(self._answer_timeout_s),
             })
-            return None
+            answer = None
         finally:
             pending_answers.discard(session_key, fut)
         if answer is pending_answers.FALLBACK or not isinstance(answer, str):
+            # Yield: the question stays in the session for the next message.
+            await self._push_session_state()
             return None
         self._emit("ask_user.answer_received", {
             "question_id": question_id,
             "wait_ms": int((time.monotonic() - started) * 1000),
         })
+        # Answered: the question is consumed, and the snapshot that ends the
+        # wait clears it.
+        session = self._session()
+        if session is not None and session.metadata is not None:
+            session.metadata.pop(PENDING_QUESTION_KEY, None)
+            self._sessions.save(session)
+        await self._push_session_state()
         return answer
+
+    async def _push_session_state(self) -> None:
+        ctx = self._ctx.get()
+        session = self._session()
+        if ctx is None or session is None:
+            return
+        await push_session_state(self._bus, ctx.channel, ctx.chat_id, session.metadata)
 
     async def _publish_dumb_channel_question(self, session_key: str) -> None:
         """Pre-block question delivery for channels without payload rendering.

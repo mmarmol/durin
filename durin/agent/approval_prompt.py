@@ -18,6 +18,7 @@ from durin.agent.user_payloads import (
     channel_renders_tool_payloads,
     mark_interactions_delivered,
     pending_interaction_items,
+    push_session_state,
 )
 
 AskFn = Callable[[dict], Awaitable[str | None]]
@@ -73,17 +74,7 @@ def make_chat_asker(*, sessions: Any, bus: Any, request_ctx: Any,
         """Rich channels draw the approval card from session state, which
         they otherwise receive only at turn end. Push the snapshot now so the
         card appears while the turn waits, and clears once it is answered."""
-        if bus is None or not chat_id or not channel_renders_tool_payloads(channel):
-            return
-        from durin.bus.events import OutboundMessage
-        from durin.session.goal_state import goal_state_ws_blob
-
-        with suppress(Exception):
-            await bus.publish_outbound(OutboundMessage(
-                channel=channel, chat_id=chat_id, content="",
-                metadata={"_goal_state_sync": True,
-                          "goal_state": goal_state_ws_blob(session.metadata)},
-            ))
+        await push_session_state(bus, channel, chat_id, session.metadata)
 
     async def ask(record: dict) -> str | None:
         session = sessions.get_or_create(session_key)

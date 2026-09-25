@@ -341,3 +341,67 @@ async def test_blocking_skipped_when_replies_cannot_arrive_mid_turn(tmp_path):
         pa.reset()
     assert "presented to the user" in out
     assert "STOP" in out
+
+
+def _snapshots(outbox: "_Outbox") -> list[dict]:
+    return [m.metadata["goal_state"] for m in outbox.sent if m.metadata.get("_goal_state_sync")]
+
+
+@pytest.mark.asyncio
+async def test_a_blocking_question_pushes_the_session_snapshot_on_a_rich_channel(tmp_path):
+    """The webui channel learns from the snapshot that a question waits, so a
+    chat nobody watches stops waiting after its grace window; the snapshot
+    after the wait clears the question."""
+    from durin.agent import pending_answers as pa
+
+    pa.reset()
+    pa.set_consumer_active(True)
+    sm = SessionManager(tmp_path)
+    outbox = _Outbox()
+    tool = AskUserQuestionTool(sessions=sm, bus=outbox, blocking=True, answer_timeout_s=5)
+    tool.set_context(RequestContext(
+        channel="websocket", chat_id="c1", session_key="websocket:c1", metadata={},
+    ))
+
+    async def _answer_when_asked():
+        for _ in range(500):
+            if pa.is_waiting("websocket:c1"):
+                assert _snapshots(outbox)[0]["pending_question"]["question"] == "Which color?"
+                assert pa.resolve("websocket:c1", "green") is True
+                return
+            await asyncio.sleep(0.01)
+        raise AssertionError("the tool never waited")
+
+    try:
+        answering = asyncio.create_task(_answer_when_asked())
+        out = await tool.execute(question="Which color?")
+        await answering
+    finally:
+        pa.reset()
+
+    assert "green" in out
+    snapshots = _snapshots(outbox)
+    assert len(snapshots) == 2
+    assert "pending_question" not in snapshots[1]
+    assert all(m.content == "" for m in outbox.sent)  # no text copy on a rich channel
+
+
+@pytest.mark.asyncio
+async def test_a_blocking_question_pushes_no_snapshot_on_a_text_channel(tmp_path):
+    from durin.agent import pending_answers as pa
+
+    pa.reset()
+    pa.set_consumer_active(True)
+    sm = SessionManager(tmp_path)
+    outbox = _Outbox()
+    tool = AskUserQuestionTool(sessions=sm, bus=outbox, blocking=True, answer_timeout_s=0.05)
+    tool.set_context(RequestContext(
+        channel="slack", chat_id="C1", session_key="slack:C1", metadata={},
+    ))
+    try:
+        await tool.execute(question="Which color?")
+    finally:
+        pa.reset()
+
+    assert _snapshots(outbox) == []
+    assert len(outbox.sent) == 1  # the question as text, once

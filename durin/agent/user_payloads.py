@@ -14,6 +14,7 @@ payloads themselves and (b) how each pending payload serializes to text.
 from __future__ import annotations
 
 import hashlib
+from contextlib import suppress
 from typing import Any, Mapping
 
 # Channels whose UI renders tool payloads (question panels, plan cards,
@@ -39,6 +40,29 @@ def _digest(text: str) -> str:
 def channel_renders_tool_payloads(channel: str | None) -> bool:
     """True when *channel* renders structured tool payloads in its own UI."""
     return bool(channel) and channel in RICH_PAYLOAD_CHANNELS
+
+
+async def push_session_state(bus: Any, channel: str | None, chat_id: str | None,
+                             metadata: Mapping[str, Any] | None) -> None:
+    """Push the session-state snapshot a rich channel draws from, mid-turn.
+
+    Rich channels (webui, TUI) otherwise receive it only at turn end. A turn
+    that waits on the person (a blocking question, an in-chat approval)
+    pushes it when the wait starts, so the question or approval card shows
+    while the turn waits and the webui channel learns something is pending
+    (a chat no tab is watching then stops waiting after a grace window), and
+    again when the wait ends, so it clears. Best effort: a failed push never
+    breaks the turn."""
+    if bus is None or not chat_id or not channel_renders_tool_payloads(channel):
+        return
+    from durin.bus.events import OutboundMessage
+    from durin.session.goal_state import goal_state_ws_blob
+
+    with suppress(Exception):
+        await bus.publish_outbound(OutboundMessage(
+            channel=channel, chat_id=chat_id, content="",
+            metadata={"_goal_state_sync": True, "goal_state": goal_state_ws_blob(metadata)},
+        ))
 
 
 def _serialize_question(payload: Mapping[str, Any]) -> str | None:

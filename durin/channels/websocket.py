@@ -783,6 +783,25 @@ class WebSocketChannel(BaseChannel):
             if not self._can_answer_waiter(chat_id):
                 pending_answers.fallback(session_key)
 
+    def _release_unwatched_ask(self, chat_id: str, blob: dict[str, Any]) -> None:
+        """Start the grace window for an ask nobody watching can answer.
+
+        A closing tab starts the window, but a question or approval asked
+        after the last tab closed (that window already spent) would otherwise
+        hold the turn for the whole answer timeout. The snapshot the turn
+        pushes when it starts waiting says what is pending. A tab that loads
+        inside the window cancels the release, as a returning tab does; the
+        release still decides by what is waiting when it fires."""
+        subs = self._subs.get(chat_id) or ()
+        if blob.get("pending_approval"):
+            watched = any(_answers_approvals(c) for c in subs)
+        elif blob.get("pending_question"):
+            watched = bool(subs)
+        else:
+            return
+        if not watched:
+            self._schedule_answer_fallback(chat_id)
+
     def _waiting_kind(self, chat_id: str) -> str | None:
         """What a turn waits on in *chat_id* (``question`` / ``approval``), keyed
         the way the unwatched-chat release keys it."""
@@ -2148,7 +2167,9 @@ class WebSocketChannel(BaseChannel):
             self.logger.debug("no active subscribers for chat_id={}", msg.chat_id)
         if msg.metadata.get("_goal_state_sync"):
             blob = msg.metadata.get("goal_state")
-            await self.send_goal_state(msg.chat_id, blob if isinstance(blob, dict) else {"active": False})
+            blob = blob if isinstance(blob, dict) else {"active": False}
+            self._release_unwatched_ask(msg.chat_id, blob)
+            await self.send_goal_state(msg.chat_id, blob)
             return
         if msg.metadata.get("_goal_status"):
             status = msg.metadata.get("goal_status")

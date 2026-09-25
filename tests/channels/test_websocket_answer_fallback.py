@@ -144,3 +144,87 @@ async def test_a_question_turned_approval_inside_the_grace_is_released_without_a
 
     async with asyncio.timeout(5):
         assert await approval_wait is pending_answers.FALLBACK
+
+
+# An ask that lands in a chat nobody is watching starts the same grace window
+# a closing tab would: the turn's session snapshot (the goal-state sync the
+# asker pushes when it starts waiting) tells the channel what is pending.
+
+
+def _snapshot(chat_id: str, **pending):
+    from durin.bus.events import OutboundMessage
+
+    return OutboundMessage(
+        channel="websocket", chat_id=chat_id, content="",
+        metadata={"_goal_state_sync": True, "goal_state": {"active": False, **pending}},
+    )
+
+
+_APPROVAL = {"pending_approval": {"approval_id": "r1", "kind": "skill_edit",
+                                  "summary": "s", "detail": {}}}
+_QUESTION = {"pending_question": {"question": "Which color?", "options": []}}
+
+
+@pytest.mark.asyncio
+async def test_an_approval_asked_after_the_last_tab_closed_stops_waiting() -> None:
+    channel = _channel(0.02)
+    tab = AsyncMock()
+    channel._attach(tab, "c1")
+    channel._cleanup_connection(tab)
+    await asyncio.sleep(0.06)  # that release fired with nothing to release
+    fut = pending_answers.create("websocket:c1", kind="approval", ref="r1")
+
+    await channel.send(_snapshot("c1", **_APPROVAL))
+
+    async with asyncio.timeout(5):
+        assert await fut is pending_answers.FALLBACK
+
+
+@pytest.mark.asyncio
+async def test_a_tab_that_opens_inside_the_window_keeps_the_approval_waiting() -> None:
+    channel = _channel(0.05)
+    fut = pending_answers.create("websocket:c1", kind="approval", ref="r1")
+
+    await channel.send(_snapshot("c1", **_APPROVAL))
+    channel._attach(AsyncMock(), "c1")  # the page loads after the push
+    await asyncio.sleep(0.1)
+
+    assert not fut.done()
+    assert pending_answers.resolve("websocket:c1", "approve") is True
+    assert await fut == "approve"
+
+
+@pytest.mark.asyncio
+async def test_an_approval_asked_with_only_an_api_client_following_stops_waiting() -> None:
+    channel = _channel(0.02)
+    channel._attach(_sse(), "c1")
+    fut = pending_answers.create("websocket:c1", kind="approval", ref="r1")
+
+    await channel.send(_snapshot("c1", **_APPROVAL))
+
+    async with asyncio.timeout(5):
+        assert await fut is pending_answers.FALLBACK
+
+
+@pytest.mark.asyncio
+async def test_a_question_asked_with_no_viewer_stops_waiting() -> None:
+    channel = _channel(0.02)
+    fut = pending_answers.create("websocket:c1")
+
+    await channel.send(_snapshot("c1", **_QUESTION))
+
+    async with asyncio.timeout(5):
+        assert await fut is pending_answers.FALLBACK
+
+
+@pytest.mark.asyncio
+async def test_a_question_asked_while_an_api_client_follows_keeps_waiting() -> None:
+    channel = _channel(0.02)
+    channel._attach(_sse(), "c1")
+    fut = pending_answers.create("websocket:c1")
+
+    await channel.send(_snapshot("c1", **_QUESTION))
+    await asyncio.sleep(0.06)
+
+    assert not fut.done()
+    fut.cancel()
