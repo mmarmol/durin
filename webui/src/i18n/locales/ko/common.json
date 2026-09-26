@@ -1595,6 +1595,27 @@
       "retry": "다시 시도"
     }
   },
+  "pending": {
+    "title": "대기 중",
+    "subtitle": "당신의 결정을 기다리는 모든 항목을 한곳에서 봅니다.",
+    "loading": "불러오는 중…",
+    "empty": "기다리고 있는 항목이 없습니다.",
+    "refresh": "새로고침",
+    "openRun": "실행 열기",
+    "sourceError": "{{source}}을(를) 불러오지 못했습니다: {{detail}}",
+    "source": {
+      "approval": "승인",
+      "skill_quarantine": "스킬 가져오기",
+      "automation_run": "자동화",
+      "workflow_run": "워크플로 실행",
+      "flagged_pair": "메모리 쌍",
+      "skill_suggestion": "스킬 제안"
+    },
+    "notice": {
+      "resumed": "실행을 재개했습니다.",
+      "resolved": "완료했습니다."
+    }
+  },
   "skills": {
     "view": "보기",
     "remove": "제거",
@@ -1611,6 +1632,9 @@
     "empty": "스킬이 없습니다.",
     "selectPrompt": "볼 스킬을 선택하세요.",
     "discardPrompt": "저장하지 않은 변경 사항을 버리시겠습니까?",
+    "discardBody": "이 파일의 변경 사항이 저장되지 않았습니다.",
+    "discardKeep": "계속 편집",
+    "discardConfirm": "버리기",
     "add": "스킬 추가",
     "acquireTitle": "스킬 추가",
     "acquireHint": "경로, URL, 저장소에서 가져오거나 레지스트리를 검색하세요. 가져온 스킬은 승인하기 전까지 '대기 중'에 머뭅니다.",

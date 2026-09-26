@@ -84,7 +84,7 @@ async def test_context_set_inside_the_turn_reaches_the_caller(tmp_path: Path) ->
 async def test_shutdown_cancels_a_direct_turn_without_journaling_it(tmp_path: Path) -> None:
     loop = _loop(tmp_path)
     journal = MagicMock()
-    journal.append.side_effect = lambda msgs: len(msgs)
+    journal.append.side_effect = lambda msgs, kind=None: len(msgs)
     loop._inbound_journal = journal
     started = asyncio.Event()
     loop._process_message = _hanging(started)  # type: ignore[method-assign]

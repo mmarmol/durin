@@ -1198,6 +1198,21 @@ _AUTOMATIONS_SWEEP_PERIOD_S = 600.0
 _automations_sweep_task: asyncio.Task | None = None
 
 
+def _automation_help_body(name: str, kind: str, text: str, proposal: str | None) -> str:
+    """What an automation's help destination is told when a run needs a
+    person: an approval (with the proposal and the replies the thread takes,
+    which the reply parser accepts), a question, or an escalation. English,
+    like every other message durin posts into a channel."""
+    if kind == "approval":
+        return (
+            f"🔒 Approval pending — {name}\n{text}\n\n{proposal}\n\n"
+            "Reply in this thread: approve · reject · or write the correction."
+        )
+    if kind == "escalation":
+        return f"⚠️ Escalation — {name}\n{text}"
+    return f"❓ Question — {name}\n{text}"
+
+
 def _run_gateway(
     config: Config,
     *,
@@ -1617,16 +1632,7 @@ def _run_gateway(
         question — the wording says which one happened."""
         if not spec.help.channel:
             return None
-        if kind == "approval":
-            header = f"🔒 Aprobación pendiente — {spec.name}"
-            body = (
-                f"{header}\n{text}\n\n{proposal}\n\n"
-                "Respondé en este hilo: aprobar · rechazar · o escribí la corrección."
-            )
-        elif kind == "escalation":
-            body = f"⚠️ Escalada — {spec.name}\n{text}"
-        else:  # "question"
-            body = f"❓ Pregunta — {spec.name}\n{text}"
+        body = _automation_help_body(spec.name, kind, text, proposal)
         return await channels.send(
             OutboundMessage(channel=spec.help.channel, chat_id=spec.help.to or "", content=body)
         )
@@ -2110,6 +2116,11 @@ def _run_gateway(
             return
         loop = asyncio.get_running_loop()
         gathered: asyncio.Future | None = None
+        # Repeats the boot sweep of approval records and automation claims
+        # every hour; started once the loop runs, stopped in `finally`.
+        from durin.service.housekeeping import WorkspaceJanitor
+
+        janitor = WorkspaceJanitor(lambda: config.workspace_path)
         api_server = None      # SP4: optional 2nd-port uvicorn front door
         unified_server = None  # Step 4: unified uvicorn on the WS port (default path)
 
@@ -2166,6 +2177,7 @@ def _run_gateway(
             # once this coroutine itself is executing.
             global _automations_sweep_task
             _automations_sweep_task = asyncio.create_task(_automations_orphan_sweep())
+            janitor.start()
 
             # Unified uvicorn server: the gateway serves WS chat + /api/v1 + SPA
             # via a single Starlette app on the websocket channel's port.  The
@@ -2195,6 +2207,7 @@ def _run_gateway(
                     chat_channel_resolver=lambda: channels.get_channel("websocket"),
                     stop_turn=agent.cancel_session_turns,
                     turn_key=agent.bus_turn_key,
+                    approval_deps=agent.approval_exec_deps,
                 )
                 # Static token lives on the websocket channel config.
                 _ws_cfg_u = getattr(config.channels, "websocket", None)
@@ -2267,6 +2280,7 @@ def _run_gateway(
             console.print(traceback.format_exc())
             logger.error("Gateway crashed unexpectedly:\n{}", traceback.format_exc())
         finally:
+            await janitor.stop()
             await agent.close_mcp()
             cron.stop()
             # No new dreams past this point (cron stopped); terminate any
@@ -2383,6 +2397,10 @@ def agent(
         agent_loop = AgentLoop.from_config(
             config, bus,
             cron_service=cron,
+            # Distinct from the gateway's default "gateway": this loop is the
+            # TUI or the legacy REPL below, sharing this workspace's inbound
+            # journal — see AgentLoop.__init__'s process_kind.
+            process_kind="tui",
         )
     except ValueError as exc:
         console.print(f"[red]Error: {exc}[/red]")
@@ -3583,7 +3601,8 @@ def approvals_root(
     install) is recorded instead of run (an exec command that needs approval
     is refused, not recorded). This is where they wait: bare `durin approvals`
     lists pending ones (`--all` for everything too); `approve`/`reject <id>`
-    decide one; `discard <id>` deletes a record without deciding it.
+    decide one; `discard <id>` deletes a record without deciding it. The
+    dashboard's Pending page lists and decides them too.
     """
     ctx.obj = {"config": config, "workspace": workspace}
     if ctx.invoked_subcommand is None:

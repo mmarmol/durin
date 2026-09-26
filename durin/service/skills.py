@@ -163,6 +163,24 @@ class SkillSuggestions(Result):
     suggestions: list[SkillSuggestion]
 
 
+def suggestion_list(workspace: Path) -> list[SkillSuggestion]:
+    """The curation suggestions awaiting review. The listing behind
+    ``GET /api/v1/skills/suggestions`` and the Pending page's section."""
+    from durin.agent import skill_suggestions as sg
+
+    return [
+        SkillSuggestion(
+            id=r["id"],
+            skill=r.get("skill", ""),
+            type=r.get("type", ""),
+            reason=r.get("reason", ""),
+            patch=r.get("patch"),
+            created_at=r.get("created_at", ""),
+        )
+        for r in sg.read_suggestions(workspace)
+    ]
+
+
 class SkillObservationsQuery(Query):
     """OPEN observations, optionally filtered to one skill ref."""
 
@@ -643,6 +661,7 @@ class SkillsService:
     async def approve(self, cmd: SkillApproveCommand, principal: Principal) -> SkillsResult:
         principal.require(Scope.SKILLS_WRITE)
         from durin.agent import skills_store as ss
+        from durin.service.approvals import decider_of
 
         exec_run = ss._get_exec_run(self._workspace) if cmd.install_deps else None
         status, payload = await ss.web_skill_approve(
@@ -650,6 +669,7 @@ class SkillsService:
             cmd.name,
             confirm=cmd.confirm,
             override=cmd.override,
+            decided_by=decider_of(principal),
             replace=cmd.replace,
             install_deps=cmd.install_deps,
             exec_run=exec_run,
@@ -687,8 +707,10 @@ class SkillsService:
     async def reject(self, cmd: SkillRejectCommand, principal: Principal) -> SkillsResult:
         principal.require(Scope.SKILLS_WRITE)
         from durin.agent import skills_store as ss
+        from durin.service.approvals import decider_of
 
-        status, payload = ss.web_skill_reject(self._workspace, cmd.name)
+        status, payload = ss.web_skill_reject(self._workspace, cmd.name,
+                                              decided_by=decider_of(principal))
         return _skills_result(status, payload)
 
     @route(
@@ -703,20 +725,7 @@ class SkillsService:
         self, query: SkillSuggestionsQuery, principal: Principal
     ) -> SkillSuggestions:
         principal.require(Scope.SKILLS_READ)
-        from durin.agent import skill_suggestions as sg
-
-        items = [
-            SkillSuggestion(
-                id=r["id"],
-                skill=r.get("skill", ""),
-                type=r.get("type", ""),
-                reason=r.get("reason", ""),
-                patch=r.get("patch"),
-                created_at=r.get("created_at", ""),
-            )
-            for r in sg.read_suggestions(self._workspace)
-        ]
-        return SkillSuggestions(suggestions=items)
+        return SkillSuggestions(suggestions=suggestion_list(self._workspace))
 
     @route(
         "POST",

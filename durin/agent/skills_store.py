@@ -1779,11 +1779,15 @@ def _spec_for_bin(skill_dir: Path, bin_name: str) -> list[dict]:
 
 
 async def web_skill_approve(workspace: Path, name: str, *, confirm: bool,
-                            override: bool, replace: bool = False,
+                            override: bool, decided_by: dict, replace: bool = False,
                             install_deps: bool = False,
                             exec_run=None) -> tuple[int, dict]:
     """`GET /api/skills/{name}/approve?...&install_deps=true` — install a
-    quarantined skill through the import security gate, optionally auto-installing deps."""
+    quarantined skill through the import security gate, optionally auto-installing deps.
+
+    *decided_by* is who made the call (``durin.service.approvals.decider_of``):
+    a confirmed or overridden install records its kind as ``approved_by``, and
+    an approval request still waiting on the import is closed in its name."""
     import json as _json
 
     from durin.agent.skills_import import SkillImportRefused, install_imported_skill
@@ -1798,14 +1802,22 @@ async def web_skill_approve(workspace: Path, name: str, *, confirm: bool,
             source = _json.loads(sj.read_text()).get("source", name)
         except Exception:  # noqa: BLE001
             pass
+    # A confirmation or override is the caller's decision, recorded as theirs:
+    # the person on the dashboard, or an operator's token.
+    approved_by = decided_by.get("kind") if (confirm or override) else None
     try:
-        # A click in the Skills view is a person deciding, so it is recorded as one.
         res = install_imported_skill(workspace, qdir, source=source,
                                      allowlist=_import_allowlist(),
                                      confirmed=confirm, override=override, replace=replace,
-                                     approved_by="user" if (confirm or override) else None)
+                                     approved_by=approved_by)
     except SkillImportRefused as exc:
         return 409, {"refused": exc.action, "verdict": exc.verdict, "message": str(exc)}
+    # The import is installed: an approval request still waiting on it is
+    # settled by this same decision, not left pending until it expires.
+    from durin.agent.approval_kinds_skills import close_install_requests
+
+    close_install_requests(workspace, name, to="applied", decided_by=dict(decided_by),
+                           result=dict(res))
 
     if install_deps and exec_run:
         from durin.agent.skills_import import run_install_specs, runnable_install_specs
@@ -1818,12 +1830,18 @@ async def web_skill_approve(workspace: Path, name: str, *, confirm: bool,
     return 200, res
 
 
-def web_skill_reject(workspace: Path, name: str) -> tuple[int, dict]:
-    """`GET /api/skills/{name}/reject` — discard a quarantined skill."""
+def web_skill_reject(workspace: Path, name: str, *, decided_by: dict) -> tuple[int, dict]:
+    """`GET /api/skills/{name}/reject` — discard a quarantined skill, and close
+    as rejected, in the name of *decided_by* (who made the call), any approval
+    request still waiting to install it."""
+    from durin.agent.approval_kinds_skills import close_install_requests
     from durin.agent.skills_import import reject_quarantined
 
-    res = reject_quarantined(workspace, name)
-    return (400, res) if "error" in res else (200, res)
+    res = reject_quarantined(workspace, name, decided_by=decided_by.get("kind"))
+    if "error" in res:
+        return 400, res
+    close_install_requests(workspace, name, to="rejected", decided_by=dict(decided_by))
+    return 200, res
 
 
 def web_skill_remove(workspace: Path, name: str) -> tuple[int, dict]:

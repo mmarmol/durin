@@ -462,6 +462,81 @@ def test_declared_artifact_nobody_produced_is_missing_despite_a_leftover_file(tm
     assert (Path(result.output_dir) / "evidence.json").is_file()   # the leftover really is still there
 
 
+# ---------------------------------------------------------------------------
+# review N3: a keyed work_dir is shared across separate runs, so a node's ad
+# hoc (non-output_file) write is at risk of being silently overwritten by the
+# next run reusing the same work_key — each run's own copy is preserved
+# under its own work_dir/runs/<run_id>/ (artifacts.run_evidence_dir).
+# ---------------------------------------------------------------------------
+
+
+def test_two_keyed_runs_each_keep_their_own_copy_of_an_ad_hoc_file(tmp_path):
+    """Two runs sharing a work_key each write params.json — an ad hoc file,
+    not a declared output_file. The shared top-level copy still ends up
+    holding whichever run wrote last (unchanged, pre-existing behavior — see
+    test_leftover_from_a_prior_run_does_not_count_as_this_runs_output), but
+    each run's OWN copy now survives too, under its own evidence subfolder."""
+    from durin.workflow.artifacts import run_evidence_dir
+
+    def _params_wf(value):
+        return parse_workflow({
+            "name": "bench", "start": "s",
+            "nodes": [{"id": "s", "kind": "script",
+                       "command": f"echo {value} > params.json", "next": None}],
+        })
+
+    engine = _script_engine(tmp_path)
+    first = engine.run(_params_wf("run-a"), "go", work_key="k1")
+    second = engine.run(_params_wf("run-b"), "go", work_key="k1")
+
+    assert first.status == "completed" and second.status == "completed"
+    assert first.output_dir == second.output_dir                    # one shared folder
+    work_dir = Path(first.output_dir)
+    assert work_dir.joinpath("params.json").read_text().strip() == "run-b"
+
+    first_copy = run_evidence_dir(work_dir, first.run_id) / "params.json"
+    second_copy = run_evidence_dir(work_dir, second.run_id) / "params.json"
+    assert first_copy.read_text().strip() == "run-a"                # not lost
+    assert second_copy.read_text().strip() == "run-b"
+
+
+def test_a_non_keyed_run_gets_no_evidence_subfolder(tmp_path):
+    """The per-run_id default folder is already unique to this run — no
+    work_key means no collision risk, so nothing extra is written."""
+    from durin.workflow.artifacts import run_evidence_dir
+
+    def runner(req):
+        Path(req.output_dir, "notes.txt").write_text("x")
+        return NodeRunResponse(output="x")
+
+    wf = _wf([{"id": "a", "kind": "work", "tools": "default", "next": None}], "a")
+    result = WorkflowEngine(runner, workspace=str(tmp_path)).run(wf, "t")
+
+    assert not run_evidence_dir(Path(result.output_dir), result.run_id).exists()
+
+
+def test_reused_dispatch_records_no_fresh_evidence(tmp_path):
+    """A reuse-gate hit dispatches nothing, so it must copy nothing into its
+    own evidence subfolder either — there is no new file to preserve."""
+    from durin.workflow.artifacts import run_evidence_dir
+
+    def runner(req):
+        return NodeRunResponse(output='{"x": 1}', model="m1", provider="p1", params_hash="h1")
+    runner.reuse_identity = lambda node: {"model": "m1", "provider": "p1", "params_hash": "h1"}
+
+    wf = parse_workflow({
+        "name": "reuse-evidence", "start": "producer",
+        "nodes": [{"id": "producer", "kind": "work", "reuse": "if-unchanged",
+                   "output_schema": {"type": "object"}, "output_file": "out.json", "next": None}],
+    })
+    engine = WorkflowEngine(runner, workspace=str(tmp_path))
+    first = engine.run(wf, "t", work_key="k2")
+    second = engine.run(wf, "t", work_key="k2")
+
+    assert second.runs[0].status == "reused"
+    assert not run_evidence_dir(Path(second.output_dir), second.run_id).exists()
+
+
 def test_reused_nodes_output_file_counts_as_produced(tmp_path):
     """A node this run REUSED (no fresh write — see the reuse gate) legitimately
     satisfies the declared-artifact contract; its output_file must count as

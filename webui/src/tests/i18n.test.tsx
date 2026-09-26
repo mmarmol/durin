@@ -68,6 +68,15 @@ describe("webui i18n", () => {
     }
   });
 
+  it("keeps the skills discard dialog localized for every registered locale", () => {
+    for (const resource of Object.values(resources)) {
+      const skills = resource.common.skills as Record<string, unknown>;
+      for (const key of ["discardPrompt", "discardBody", "discardKeep", "discardConfirm"]) {
+        expect(skills[key]).toBeTruthy();
+      }
+    }
+  });
+
   it("keeps settings navigation localized for every registered locale", () => {
     for (const resource of Object.values(resources)) {
       const common = resource.common;

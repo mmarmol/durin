@@ -1595,6 +1595,27 @@
       "retry": "Réessayer"
     }
   },
+  "pending": {
+    "title": "En attente",
+    "subtitle": "Tout ce qui attend votre décision, au même endroit.",
+    "loading": "Chargement…",
+    "empty": "Rien ne vous attend.",
+    "refresh": "Actualiser",
+    "openRun": "Ouvrir l’exécution",
+    "sourceError": "Impossible de charger {{source}} : {{detail}}",
+    "source": {
+      "approval": "Approbations",
+      "skill_quarantine": "Imports de skills",
+      "automation_run": "Automatisations",
+      "workflow_run": "Exécutions de workflows",
+      "flagged_pair": "Paires de mémoire",
+      "skill_suggestion": "Suggestions de skills"
+    },
+    "notice": {
+      "resumed": "Exécution reprise.",
+      "resolved": "Fait."
+    }
+  },
   "skills": {
     "view": "Voir",
     "remove": "Retirer",
@@ -1611,6 +1632,9 @@
     "empty": "Aucune skill.",
     "selectPrompt": "Sélectionnez une skill pour l'afficher.",
     "discardPrompt": "Abandonner les modifications non enregistrées ?",
+    "discardBody": "Vos modifications de ce fichier ne sont pas enregistrées.",
+    "discardKeep": "Continuer l’édition",
+    "discardConfirm": "Abandonner",
     "add": "Ajouter un skill",
     "acquireTitle": "Ajouter un skill",
     "acquireHint": "Importez depuis un chemin, une URL ou un dépôt, ou recherchez dans le registre. Chaque skill que vous importez patiente dans En attente jusqu’à votre approbation.",

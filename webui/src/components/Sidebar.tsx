@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  Inbox,
   Menu,
   Moon,
   Network,
@@ -43,6 +44,9 @@ interface SidebarProps {
   onRequestDelete: (key: string, label: string) => void;
   onRequestRename: (key: string, title: string) => Promise<void>;
   onOpenSettings: () => void;
+  onOpenPending?: () => void;
+  pendingActive?: boolean;
+  pendingCount?: number;
   onOpenMemoryGraph?: () => void;
   memoryGraphActive?: boolean;
   onOpenSkills?: () => void;
@@ -197,30 +201,56 @@ export function Sidebar(props: SidebarProps) {
           onRequestRename={props.onRequestRename}
         />
       </div>
+      {props.onOpenPending || props.onOpenMemoryGraph ? (
+        <Separator className="bg-sidebar-border/50" />
+      ) : null}
+      {/* Everything that waits on the person, from every section, in one
+          place; the badge counts it. */}
+      {props.onOpenPending ? (
+        <div className="px-2.5 pt-2">
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={props.onOpenPending}
+            className={cn(
+              "h-8 w-full justify-start gap-2 rounded-full px-2.5 text-[12.5px] font-medium",
+              props.pendingActive
+                ? "bg-sidebar-accent/80 text-sidebar-foreground"
+                : "text-sidebar-foreground/85 hover:bg-sidebar-accent/75 hover:text-sidebar-foreground",
+            )}
+            aria-pressed={!!props.pendingActive}
+          >
+            <Inbox className="h-3.5 w-3.5" aria-hidden />
+            {t("pending.title")}
+            {!!props.pendingCount && (
+              <span className="ml-auto rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-medium text-accent-foreground">
+                {props.pendingCount}
+              </span>
+            )}
+          </Button>
+        </div>
+      ) : null}
       {/* Below the sessions list: entry into the entity-centric memory
           browser. Click takes the main pane (sessions stay listed in this
           sidebar so the user can swap back). */}
       {props.onOpenMemoryGraph ? (
-        <>
-          <Separator className="bg-sidebar-border/50" />
-          <div className="px-2.5 py-2">
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={props.onOpenMemoryGraph}
-              className={cn(
-                "h-8 w-full justify-start gap-2 rounded-full px-2.5 text-[12.5px] font-medium",
-                props.memoryGraphActive
-                  ? "bg-sidebar-accent/80 text-sidebar-foreground"
-                  : "text-sidebar-foreground/85 hover:bg-sidebar-accent/75 hover:text-sidebar-foreground",
-              )}
-              aria-pressed={!!props.memoryGraphActive}
-            >
-              <Network className="h-3.5 w-3.5" aria-hidden />
-              {t("memoryGraph.title")}
-            </Button>
-          </div>
-        </>
+        <div className="px-2.5 py-2">
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={props.onOpenMemoryGraph}
+            className={cn(
+              "h-8 w-full justify-start gap-2 rounded-full px-2.5 text-[12.5px] font-medium",
+              props.memoryGraphActive
+                ? "bg-sidebar-accent/80 text-sidebar-foreground"
+                : "text-sidebar-foreground/85 hover:bg-sidebar-accent/75 hover:text-sidebar-foreground",
+            )}
+            aria-pressed={!!props.memoryGraphActive}
+          >
+            <Network className="h-3.5 w-3.5" aria-hidden />
+            {t("memoryGraph.title")}
+          </Button>
+        </div>
       ) : null}
       {props.onOpenSkills ? (
         <div className="px-2.5 pb-2">

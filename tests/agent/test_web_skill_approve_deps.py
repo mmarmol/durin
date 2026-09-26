@@ -53,6 +53,7 @@ async def test_approve_with_install_deps(tmp_path, monkeypatch):
 
     status, payload = await ss.web_skill_approve(
         workspace, "myskill", confirm=True, override=False,
+        decided_by={"kind": "user", "channel": "webui"},
         install_deps=True, exec_run=mock_exec,
     )
     assert payload["ok"] is True
@@ -74,6 +75,7 @@ async def test_approve_without_install_deps_skips_deps(tmp_path, monkeypatch):
 
     status, payload = await ss.web_skill_approve(
         workspace, "myskill", confirm=True, override=False,
+        decided_by={"kind": "user", "channel": "webui"},
     )
     assert payload["ok"] is True
     assert "deps_results" not in payload

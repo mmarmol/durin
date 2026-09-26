@@ -243,7 +243,7 @@ A later compliant landing of the same skill name clears the stale card
 output is not re-gated for composition: the curation judge itself carries the doctrine and the
 catalog in its prompt, so gating its output would re-judge the same judge. It is security-scanned,
 though: an `evolve` whose result needs review is not written — the skills judge may clear a
-`caution` one, otherwise it waits as a pending `skill_edit` request for `durin approvals`
+`caution` one, otherwise it waits as a pending `skill_edit` request for the Pending page or `durin approvals`
 (`../security.md`, Re-scan on skill writes).
 
 ### Skill signals: hindsight corrections and gaps

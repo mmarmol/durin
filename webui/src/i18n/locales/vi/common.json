@@ -1595,6 +1595,27 @@
       "retry": "Thử lại"
     }
   },
+  "pending": {
+    "title": "Đang chờ",
+    "subtitle": "Mọi thứ đang chờ bạn quyết định, ở cùng một nơi.",
+    "loading": "Đang tải…",
+    "empty": "Không có gì đang chờ bạn.",
+    "refresh": "Làm mới",
+    "openRun": "Mở lượt chạy",
+    "sourceError": "Không tải được {{source}}: {{detail}}",
+    "source": {
+      "approval": "Phê duyệt",
+      "skill_quarantine": "Nhập skill",
+      "automation_run": "Tự động hóa",
+      "workflow_run": "Lượt chạy quy trình",
+      "flagged_pair": "Cặp bộ nhớ",
+      "skill_suggestion": "Đề xuất skill"
+    },
+    "notice": {
+      "resumed": "Đã tiếp tục lượt chạy.",
+      "resolved": "Xong."
+    }
+  },
   "skills": {
     "view": "Xem",
     "remove": "Xóa",
@@ -1611,6 +1632,9 @@
     "empty": "Không có skill nào.",
     "selectPrompt": "Chọn một skill để xem.",
     "discardPrompt": "Bỏ các thay đổi chưa lưu?",
+    "discardBody": "Các thay đổi của bạn trong tệp này chưa được lưu.",
+    "discardKeep": "Tiếp tục chỉnh sửa",
+    "discardConfirm": "Bỏ",
     "add": "Thêm skill",
     "acquireTitle": "Thêm một skill",
     "acquireHint": "Nhập từ đường dẫn, URL, hoặc repo, hoặc tìm trong registry. Mọi skill bạn thêm vào sẽ chờ trong mục Đang chờ cho tới khi bạn duyệt.",

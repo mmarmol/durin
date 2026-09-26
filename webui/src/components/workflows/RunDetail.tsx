@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import {
   AlertTriangle,
   Ban,
@@ -12,9 +12,8 @@ import {
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import { Button } from "@/components/ui/button";
 import { MarkdownText } from "@/components/MarkdownText";
-import { Textarea } from "@/components/ui/textarea";
+import { NeedsInputForm } from "@/components/workflows/NeedsInputForm";
 import type { WorkflowGlobalRun, WorkflowRunNode, WorkflowRunResult } from "@/lib/api";
 import { relativeTime } from "@/lib/format";
 import { formatElapsed, useTicker } from "@/lib/work-format";
@@ -308,7 +307,6 @@ export function RunDetail({
   onOpenNode?: (row: WorkflowRunNode) => void;
 }) {
   const { t } = useTranslation();
-  const [answers, setAnswers] = useState("");
   const continues = continuesSessionFlags(result.runs);
   const outputFiles = result.output_files ?? [];
   // Only a run that is still running has a node in flight. Crash reconciliation
@@ -335,54 +333,16 @@ export function RunDetail({
   // run took, while this run takes one of them.
   const typicalTotalS = result.typical_total_s ?? null;
 
-  // Reset answers when the run identity or needs_input status changes to avoid stale
-  // textarea content on nested resume (same component instance with new result props).
-  useEffect(() => {
-    setAnswers("");
-  }, [result.run_id, result.status]);
-
   return (
     <div className="flex flex-col gap-3">
       {result.status === "needs_input" && (
-        <div className="flex flex-col gap-1.5 rounded-md bg-accent px-3 py-2 text-accent-foreground">
-          <div className="flex items-center gap-1.5">
-            <HelpCircle className="h-3.5 w-3.5 shrink-0" aria-hidden />
-            <span className="font-medium">{t("workflows.needsInputTitle")}</span>
-          </div>
-          <p>
-            {t("workflows.needsInputBody", { node: result.needs_input_node || "?" })}
-          </p>
-          {result.final_output && (
-            <div className="flex flex-col gap-0.5">
-              <span className="text-[10px] uppercase tracking-wide opacity-70">
-                {t("workflows.questionsFromRun")}
-              </span>
-              <div className="whitespace-pre-wrap break-words">{result.final_output}</div>
-            </div>
-          )}
-          {result.needs_input_node && (
-            <>
-              <Textarea
-                rows={2}
-                value={answers}
-                onChange={(e) => setAnswers(e.target.value)}
-                placeholder={t("workflows.answersPlaceholder")}
-                className="bg-background text-foreground"
-              />
-              <Button
-                size="sm"
-                className="self-start"
-                disabled={resuming || !answers.trim()}
-                onClick={() => onResume(answers)}
-              >
-                {resuming ? <Loader2 className="h-4 w-4 animate-spin" /> : t("workflows.resumeRun")}
-              </Button>
-              <span className="text-[10px] opacity-70">
-                {t("workflows.resumeCaption", { node: result.needs_input_node, runId: result.run_id })}
-              </span>
-            </>
-          )}
-        </div>
+        <NeedsInputForm
+          runId={result.run_id}
+          needsInputNode={result.needs_input_node ?? null}
+          questions={result.final_output ?? ""}
+          resuming={resuming}
+          onResume={onResume}
+        />
       )}
       {result.status === "exhausted" && (
         <div className="flex flex-col gap-0.5 rounded-md bg-warn/10 px-3 py-2 text-warn">

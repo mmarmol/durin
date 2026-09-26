@@ -285,6 +285,56 @@ class ResolveResult(Result):
     refs: dict[str, str] = {}
 
 
+def flagged_pair_list(workspace: Path) -> list[FlaggedPair]:
+    """Every pair the dream flagged for review, with each page's current name
+    and aliases. The listing behind ``GET /api/v1/memory/flagged-pairs`` and
+    the Pending page's memory section."""
+    from datetime import datetime, timezone
+
+    from durin.memory.refine_dream import read_flagged
+
+    def _page_info(ref: str) -> tuple[str, list[str]]:
+        from durin.memory.entity_page import EntityPage
+        t, _, s = ref.partition(":")
+        path = Path(workspace) / "memory" / "entities" / t / f"{s}.md"
+        try:
+            page = EntityPage.from_file(path) if path.exists() else None
+        except OSError:
+            page = None
+        return (page.name, list(page.aliases or [])) if page else ("", [])
+
+    pairs: list[FlaggedPair] = []
+    for rec in read_flagged(workspace):
+        ref_a, ref_b = rec["pair"][0], rec["pair"][1]
+        at_ms: int | None = None
+        if "at" in rec:
+            try:
+                dt = datetime.fromisoformat(rec["at"])
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                at_ms = int(dt.timestamp() * 1000)
+            except Exception:
+                at_ms = None
+        name_a, aliases_a = _page_info(ref_a)
+        name_b, aliases_b = _page_info(ref_b)
+        proposal = rec.get("proposal")
+        pairs.append(FlaggedPair(
+            ref_a=ref_a,
+            ref_b=ref_b,
+            verdict=rec.get("verdict", ""),
+            confidence=rec.get("confidence", 0),
+            reasoning=rec.get("reasoning", ""),
+            at_ms=at_ms,
+            name_a=name_a,
+            name_b=name_b,
+            aliases_a=aliases_a,
+            aliases_b=aliases_b,
+            proposal=proposal if isinstance(proposal, dict) else None,
+            source=rec.get("source"),
+        ))
+    return pairs
+
+
 # ---------------------------------------------------------------------------
 # Dream digest builder (module-level so it is easily unit-tested)
 #
@@ -665,53 +715,7 @@ class MemoryService:
         self, query: FlaggedPairsQuery, principal: Principal
     ) -> FlaggedPairs:
         principal.require(Scope.MEMORY_READ)
-        from datetime import datetime, timezone
-
-        from durin.memory.refine_dream import read_flagged
-
-        ws = self._workspace_resolver()
-        raw = read_flagged(ws)
-        pairs: list[FlaggedPair] = []
-
-        def _page_info(ref: str) -> tuple[str, list[str]]:
-            from durin.memory.entity_page import EntityPage
-            t, _, s = ref.partition(":")
-            path = Path(ws) / "memory" / "entities" / t / f"{s}.md"
-            try:
-                page = EntityPage.from_file(path) if path.exists() else None
-            except OSError:
-                page = None
-            return (page.name, list(page.aliases or [])) if page else ("", [])
-
-        for rec in raw:
-            ref_a, ref_b = rec["pair"][0], rec["pair"][1]
-            at_ms: int | None = None
-            if "at" in rec:
-                try:
-                    dt = datetime.fromisoformat(rec["at"])
-                    if dt.tzinfo is None:
-                        dt = dt.replace(tzinfo=timezone.utc)
-                    at_ms = int(dt.timestamp() * 1000)
-                except Exception:
-                    at_ms = None
-            name_a, aliases_a = _page_info(ref_a)
-            name_b, aliases_b = _page_info(ref_b)
-            proposal = rec.get("proposal")
-            pairs.append(FlaggedPair(
-                ref_a=ref_a,
-                ref_b=ref_b,
-                verdict=rec.get("verdict", ""),
-                confidence=rec.get("confidence", 0),
-                reasoning=rec.get("reasoning", ""),
-                at_ms=at_ms,
-                name_a=name_a,
-                name_b=name_b,
-                aliases_a=aliases_a,
-                aliases_b=aliases_b,
-                proposal=proposal if isinstance(proposal, dict) else None,
-                source=rec.get("source"),
-            ))
-        return FlaggedPairs(pairs=pairs)
+        return FlaggedPairs(pairs=flagged_pair_list(self._workspace_resolver()))
 
     @route(
         "POST",

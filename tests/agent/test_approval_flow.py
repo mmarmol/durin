@@ -352,3 +352,34 @@ async def test_a_run_that_raises_logs_its_traceback(tmp_path, monkeypatch):
     logged = "".join(lines)
     assert out.record["id"] in logged
     assert "Traceback" in logged and "KeyError" in logged and "_boom" in logged
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("session_key", ["cron:x", "websocket:s20"])
+async def test_a_pending_request_names_both_places_a_person_decides_it(tmp_path, session_key):
+    # Filed with nobody to ask, and asked in a chat nobody answered: either
+    # way the model tells the person where the request waits.
+    out = await approval.request(tmp_path, PREP, session_key=session_key, deps=ex.ExecDeps(),
+                                 ask=_asker(None) if session_key.startswith("websocket:") else None)
+    message = approval.outcome_to_tool_result(out)["message"]
+    assert out.status == "pending"
+    assert "Pending page" in message and "`durin approvals`" in message
+
+
+@pytest.mark.asyncio
+async def test_a_request_records_the_chat_it_came_from(tmp_path):
+    out = await approval.request(tmp_path, PREP, session_key="unified:default",
+                                 deps=ex.ExecDeps(),
+                                 origin={"channel": "telegram", "chat_id": "42"})
+    assert out.status == "pending"
+    assert st.get(tmp_path, out.record["id"])["origin"] == {"channel": "telegram",
+                                                            "chat_id": "42"}
+
+
+def test_request_origin_reads_the_turns_chat():
+    from durin.agent.tools.context import RequestContext
+
+    ctx = RequestContext(channel="slack", chat_id="C1", session_key="slack:C1:1712.0001")
+    assert approval.request_origin(ctx) == {"channel": "slack", "chat_id": "C1"}
+    assert approval.request_origin(None) is None
+    assert approval.request_origin(RequestContext(channel="", chat_id="")) is None

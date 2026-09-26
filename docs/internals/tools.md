@@ -147,7 +147,7 @@ When an action needs a decision the tool files an approval request
 skills judge within its limits (never for dependency installs, exec commands or
 MCP changes), the person in the chat (the turn waits up to
 `agents.defaults.ask_user_answer_timeout_s`), or a pending record resolved
-later with `durin approvals`. The tool result carries `status`
+later on the Pending page or with `durin approvals`. The tool result carries `status`
 (`applied`, `rejected`, `pending`, `failed`, `stale`, `refused`, or `approved`
 when a decision made from outside the turn while it waited is still being
 carried out), `approval_id`,

@@ -403,3 +403,40 @@ async def test_stop_cancels_and_awaits_a_decision_still_running(tmp_path, monkey
 
     assert channel._approval_tasks == set()
     assert approval_store.get(tmp_path, rec["id"])["status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_click_after_the_turn_stopped_waiting_tells_that_chat_how_it_ended(
+    tmp_path, monkeypatch,
+):
+    """The turn was told the request waits and moved on: a click that lands
+    after its wait posts a system note into the chat, so the agent learns
+    the outcome and tells the person."""
+    async def _execute(workspace, payload, deps):
+        return {"ok": True}
+
+    monkeypatch.setitem(
+        ex._REGISTRY, "mcp_change", (lambda workspace, payload: "h1", _execute))
+    channel, ws = _channel(tmp_path)
+    channel.bus = MagicMock(publish_inbound=AsyncMock())
+    rec = _record(tmp_path, kind="mcp_change")
+
+    reply = await _decide(channel, ws, approval_id=rec["id"], decision="approve")
+
+    assert reply["status"] == "applied"
+    note = channel.bus.publish_inbound.await_args.args[0]
+    assert note.channel == "system" and note.session_key_override == "websocket:c1"
+    assert "Approved: run `make clean` — result: " in note.content
+
+
+@pytest.mark.asyncio
+async def test_a_click_handed_to_the_waiting_turn_posts_no_note(tmp_path):
+    channel, ws = _channel(tmp_path)
+    channel.bus = MagicMock(publish_inbound=AsyncMock())
+    rec = _record(tmp_path)
+    fut = pending_answers.create("websocket:c1", kind="approval", ref=rec["id"])
+
+    reply = await _decide(channel, ws, approval_id=rec["id"], decision="approve")
+
+    assert reply["status"] == "pending" and await fut == "approve"
+    channel.bus.publish_inbound.assert_not_awaited()

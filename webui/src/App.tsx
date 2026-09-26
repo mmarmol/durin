@@ -7,6 +7,7 @@ import { DreamView } from "@/components/DreamView";
 import { SkillsView } from "@/components/SkillsView";
 import { WorkflowsView } from "@/components/WorkflowsView";
 import { AutomationsView } from "@/components/AutomationsView";
+import { PendingView } from "@/components/PendingView";
 import { strandedRuns } from "@/components/workflows/RunsView";
 import { ToastProvider } from "@/components/ui/toast";
 import { SettingsView } from "@/components/settings/SettingsView";
@@ -20,7 +21,12 @@ import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { useSessions } from "@/hooks/useSessions";
 import { useTheme } from "@/hooks/useTheme";
 import { cn } from "@/lib/utils";
-import { listAllAutomationRuns, listAllWorkflowRuns, setApiReauthHandler } from "@/lib/api";
+import {
+  listAllAutomationRuns,
+  listAllWorkflowRuns,
+  listPending,
+  setApiReauthHandler,
+} from "@/lib/api";
 import { setCurrentToken } from "@/lib/http";
 import { deriveWsUrl, fetchBootstrap, signout } from "@/lib/bootstrap";
 import { DurinClient } from "@/lib/durin-client";
@@ -50,7 +56,15 @@ type BootState =
 const SIDEBAR_STORAGE_KEY = "durin-webui.sidebar";
 const RESTART_STARTED_KEY = "durin-webui.restartStartedAt";
 const SIDEBAR_WIDTH = 272;
-type ShellView = "chat" | "settings" | "memory_graph" | "skills" | "workflows" | "automations" | "dream";
+type ShellView =
+  | "chat"
+  | "settings"
+  | "pending"
+  | "memory_graph"
+  | "skills"
+  | "workflows"
+  | "automations"
+  | "dream";
 
 function AuthForm({
   failed,
@@ -327,6 +341,9 @@ function Shell({
   // ordinary visit to the section does not re-force the runs pane onto a
   // stale run.
   const [openWorkflowRun, setOpenWorkflowRun] = useState<{ workflow: string; runId: string } | null>(null);
+  // A deep link into Skills' triage pane for one quarantined import, set by
+  // the Pending page's "Review in Skills". Cleared by the plain Skills nav.
+  const [openSkillTriage, setOpenSkillTriage] = useState<string | null>(null);
   // A deep link into the Automations section's detail view, set by the cron
   // settings screen's "Abrir automatización →" (onOpenAutomationDetail
   // below). Cleared by the plain Automations nav (onOpenAutomations) so a
@@ -346,6 +363,7 @@ function Shell({
   const [isRestarting, setIsRestarting] = useState(false);
   const [strandedRunsCount, setStrandedRunsCount] = useState(0);
   const [automationsNeedsYouCount, setAutomationsNeedsYouCount] = useState(0);
+  const [pendingCount, setPendingCount] = useState(0);
 
   useEffect(() => {
     try {
@@ -484,6 +502,18 @@ function Shell({
   const onOpenSkills = useCallback(() => {
     setView("skills");
     setMobileSidebarOpen(false);
+    setOpenSkillTriage(null);
+  }, []);
+
+  const onOpenSkillTriage = useCallback((name: string) => {
+    setOpenSkillTriage(name);
+    setView("skills");
+    setMobileSidebarOpen(false);
+  }, []);
+
+  const onOpenPending = useCallback(() => {
+    setView("pending");
+    setMobileSidebarOpen(false);
   }, []);
 
   const onOpenWorkflows = useCallback(() => {
@@ -608,6 +638,31 @@ function Shell({
     };
   }, [token]);
 
+  // Poll the Pending list for the sidebar badge: everything that waits on the
+  // person, across sections. While the Pending page is open it polls the same
+  // list and reports every read to the badge (resolving an item there updates
+  // it at once), so this poll stands down rather than read the list twice.
+  const pendingOpen = view === "pending";
+  useEffect(() => {
+    if (pendingOpen) return;
+    let cancelled = false;
+    const load = () => {
+      listPending(token)
+        .then((res) => {
+          if (!cancelled) setPendingCount(res.count);
+        })
+        .catch(() => {
+          if (!cancelled) setPendingCount(0);
+        });
+    };
+    load();
+    const id = setInterval(load, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [token, pendingOpen]);
+
   useEffect(() => {
     return client.onStatus((status) => {
       let startedAt = 0;
@@ -684,6 +739,9 @@ function Shell({
       setPendingDelete({ key, label }),
     onRequestRename: renameChat,
     onOpenSettings,
+    onOpenPending,
+    pendingActive: view === "pending",
+    pendingCount,
     onOpenMemoryGraph,
     memoryGraphActive: view === "memory_graph",
     onOpenSkills,
@@ -784,6 +842,15 @@ function Shell({
             />
           </div>
         )}
+        {view === "pending" && (
+          <div className="absolute inset-0 flex flex-col">
+            <PendingView
+              onCountChange={setPendingCount}
+              onOpenSkill={onOpenSkillTriage}
+              onOpenWorkflowRun={onOpenWorkflowRun}
+            />
+          </div>
+        )}
         {view === "memory_graph" && (
           <div className="absolute inset-0 flex flex-col">
             <MemoryGraphView
@@ -795,10 +862,13 @@ function Shell({
         )}
         {view === "skills" && (
           <div className="absolute inset-0 flex flex-col">
-            <SkillsView onAskDurin={(binName) => {
-              setView("chat");
-              setPendingPrompt(`Ayúdame a instalar ${binName}`);
-            }} />
+            <SkillsView
+              initialTriage={openSkillTriage}
+              onAskDurin={(binName) => {
+                setView("chat");
+                setPendingPrompt(`Ayúdame a instalar ${binName}`);
+              }}
+            />
           </div>
         )}
         {view === "workflows" && (

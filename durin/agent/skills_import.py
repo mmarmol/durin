@@ -619,14 +619,29 @@ def repair_quarantined(workspace: Path, name: str, *, apply: bool = False) -> di
     return out
 
 
-def reject_quarantined(workspace: Path, name: str) -> dict:
-    """Discard a quarantined skill (delete its dir). The opposite of approve."""
+def reject_quarantined(workspace: Path, name: str, *, approval_id: str | None = None,
+                       decided_by: str | None = None) -> dict:
+    """Discard a quarantined skill (delete its dir). The opposite of approve.
+
+    The discard is appended to the import audit log like an install, with the
+    approval request it settled (``approval_id``) and who decided it
+    (``decided_by``: user | operator), when known."""
     if not _safe_qname(name):
         return {"error": "invalid name"}
     qdir = Path(workspace) / ".durin" / "import-quarantine" / name
     if not qdir.is_dir():
         return {"error": f"not in quarantine: {name}"}
+    scan: dict = {}
+    sj = qdir / ".scan.json"
+    if sj.is_file():
+        try:
+            loaded = json.loads(sj.read_text())
+            scan = loaded if isinstance(loaded, dict) else {}
+        except Exception:  # noqa: BLE001 — an unreadable scan still discards
+            scan = {}
     shutil.rmtree(qdir, ignore_errors=True)
+    _audit(Path(workspace), event="discarded", name=name, source=scan.get("source") or "",
+           verdict=scan.get("verdict") or "", approval_id=approval_id, decided_by=decided_by)
     return {"ok": True, "name": name}
 
 

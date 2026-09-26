@@ -62,7 +62,8 @@ _PARAMETERS = tool_parameters_schema(
         "Create, modify, install, or remove an MCP server. Discover refs first with "
         "mcp_search. install/add/update/enable need the user's approval "
         "(install_policy=approve): in a chat the user is asked and the call returns "
-        "their answer; otherwise it waits for approval (`durin approvals`). Remote "
+        "their answer; otherwise it waits for approval (the dashboard's Pending "
+        "page, or `durin approvals`). Remote "
         "installs hand off to a human OAuth login; secrets are entered by the human, "
         "never the agent."
     ),
@@ -142,10 +143,11 @@ class McpManageTool(Tool, ContextAware):
         # The person in this chat decides. With nobody to ask (cron, workflow,
         # sub-agent, no live consumer, or a turn with input from an API token)
         # the asker is None and the request waits for `durin approvals`.
-        ask = self._chat.asker(self._ctx.get())
+        ctx = self._ctx.get()
         outcome = await approval.request(self._workspace, prepared,
                                          session_key=self._session_key(),
-                                         deps=deps, ask=ask)
+                                         deps=deps, ask=self._chat.asker(ctx),
+                                         origin=approval.request_origin(ctx))
         return approval.outcome_to_tool_result(outcome)
 
     async def execute(self, **kwargs: Any) -> Any:

@@ -3167,7 +3167,7 @@ def test_on_help_ask_approval_renders_header_proposal_and_instructions(monkeypat
     assert "🔒" in msg.content and "a1" in msg.content
     assert "needs sign-off" in msg.content
     assert "proposed change X" in msg.content
-    assert "aprobar" in msg.content and "rechazar" in msg.content
+    assert "approve" in msg.content and "reject" in msg.content
     assert receipt is not None
     assert receipt.thread_key == "fake-thread-key"
 
@@ -3204,7 +3204,7 @@ def test_on_help_ask_escalation_never_renders_as_a_question(monkeypatch, tmp_pat
     assert "⚠️" in msg.content and "a1" in msg.content
     assert "3 consecutive unachieved attempts" in msg.content
     assert "❓" not in msg.content
-    assert "Pregunta" not in msg.content
+    assert "Question" not in msg.content
 
 
 def test_on_help_ask_without_help_channel_returns_none_and_sends_nothing(monkeypatch, tmp_path: Path) -> None:

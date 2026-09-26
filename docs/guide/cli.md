@@ -73,9 +73,10 @@ When the agent wants to add or change an MCP server, install or edit a skill,
 or install a skill's dependencies, and your settings require a person's
 approval for it, you are asked in the chat. When nobody can be asked (a cron
 job, dream, workflow or sub-agent, or a turn driven by an API token), or you
-did not answer in the chat, the request is recorded instead of run, and these
-commands are where it waits. A shell command that needs approval never waits
-here: in a chat you are asked, and elsewhere it is refused.
+did not answer in the chat, the request is recorded instead of run, and it
+waits in these commands and on the dashboard's **Pending** page. A shell
+command that needs approval never waits: in a chat you are asked, and
+elsewhere it is refused.
 
 ```bash
 durin approvals                # list pending records (--all for resolved too)
@@ -101,16 +102,30 @@ can only be approved in the chat that asked for it: `approve` refuses it and
 leaves it as it was, and it closes when that chat stops waiting. A change your `install_policy` already
 pre-authorized files no record at all; a skill installed that way is stamped
 `approved_by: policy` instead. A request recorded by an earlier durin version
-is listed as `legacy:mcp` or `legacy:skills` and can only be discarded; ask
-the agent again if it is still needed.
+is listed as `legacy:mcp` or `legacy:skills` and can only be discarded (here;
+the Pending page leaves it out); ask the agent again if it is still needed.
+
+The dashboard's **Pending** page lists the same requests, next to everything
+else that waits on you (skill imports in quarantine, paused automation runs,
+workflow runs waiting for input, memory pairs the dream flagged, skill
+suggestions), and approves or rejects them with a click. Rejecting a skill
+install also discards the imported skill waiting for it, and installing or
+discarding that import from the Skills page closes the request. Only your dashboard
+session can: an API token cannot decide a request over HTTP. A shell command
+can be decided there only while the chat that asked still waits (the decision
+goes to that chat, which runs it); once the chat stopped waiting it is refused,
+and here it is always refused. A dependency install is refused on a gateway
+with exec disabled (approve it here instead, which sets up its own shell
+runner). When you decide a request from the dashboard, the chat that asked
+for it is told how it ended.
 
 A pending request expires 14 days after it was filed and can no longer be
 decided; ask the agent again if it is still wanted. A resolved record is kept
 for 30 days after it was decided or expired, then pruned. A request still
 marked approved an hour after it was approved was cut off mid-run (the
 process was killed) and is marked failed. These sweeps run when you list
-requests and once when the gateway starts; deciding a request past its expiry
-expires just that one.
+requests (here or on the Pending page), when the gateway starts, and every
+hour while it runs; deciding a request past its expiry expires just that one.
 
 ## Inside the TUI
 

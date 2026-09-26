@@ -1595,6 +1595,27 @@
       "retry": "重试"
     }
   },
+  "pending": {
+    "title": "待处理",
+    "subtitle": "所有等待你决定的事项，集中在一处。",
+    "loading": "正在加载…",
+    "empty": "没有等待你处理的事项。",
+    "refresh": "刷新",
+    "openRun": "打开运行",
+    "sourceError": "无法加载{{source}}：{{detail}}",
+    "source": {
+      "approval": "批准请求",
+      "skill_quarantine": "技能导入",
+      "automation_run": "自动化",
+      "workflow_run": "工作流运行",
+      "flagged_pair": "记忆对",
+      "skill_suggestion": "技能建议"
+    },
+    "notice": {
+      "resumed": "运行已恢复。",
+      "resolved": "已完成。"
+    }
+  },
   "skills": {
     "view": "查看",
     "remove": "移除",
@@ -1611,6 +1632,9 @@
     "empty": "没有技能。",
     "selectPrompt": "选择一个技能以查看。",
     "discardPrompt": "放弃未保存的更改？",
+    "discardBody": "你对这个文件的修改尚未保存。",
+    "discardKeep": "继续编辑",
+    "discardConfirm": "放弃",
     "add": "添加技能",
     "acquireTitle": "添加技能",
     "acquireHint": "从路径、URL 或仓库导入，或在注册表中搜索。你引入的每个技能都会在「待处理」中等待你的批准。",

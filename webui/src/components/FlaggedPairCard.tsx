@@ -4,11 +4,23 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { DrawerTarget } from "@/components/DreamDrawer";
-import type {
-  FlaggedPair,
-  ResolutionProposal,
-  ResolveFlaggedBody,
+import {
+  ApiError,
+  type FlaggedPair,
+  type ResolutionProposal,
+  type ResolveFlaggedBody,
 } from "@/lib/api";
+
+/** Why resolving a pair failed. A 422 carries the server's reason (a taken
+ *  key, a bad slug): it is shown, so the user can fix the edit instead of
+ *  guessing; anything else reads as "already processed, refresh". */
+export function flaggedResolveErrorMessage(
+  err: unknown,
+  t: (key: string, opts?: Record<string, unknown>) => string,
+): string {
+  const detail = err instanceof ApiError && err.status === 422 ? err.detail : undefined;
+  return detail ? `${t("dream.bandeja.resolveInvalid")} ${detail}` : t("dream.bandeja.resolveError");
+}
 
 // Who keeps an alias: one of the pair's refs, both, or none (junk).
 type Owner = "both" | "none" | "a" | "b";

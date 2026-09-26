@@ -139,11 +139,14 @@ loop. WS, HTTP and the SPA share one address, the websocket channel's
 2. **Auth.** `resolve_principal_from_headers()` extracts the `Authorization:
    Bearer` token and calls `auth.resolve(token)`. This re-hashes the candidate
    against every stored salt+hash pair using `hmac.compare_digest` (timing-safe).
-   On a match it returns a `Principal.remote(subject, scopes)` with the stored
-   scope grants. If no stored token matches but the token equals the configured
-   `static_token` (plaintext bootstrap credential), it returns
-   `Principal.remote("static", {ADMIN})`. Missing or invalid tokens return `None`,
-   which the handler maps to a 401 problem+json response.
+   On a match it returns a `Principal` with the stored scope grants:
+   `Principal.webui(subject, scopes)` for the dashboard session token
+   `/webui/bootstrap` mints (stored with `kind: "webui"`), and
+   `Principal.remote(subject, scopes)` for every other token. If no stored
+   token matches but the token equals the configured `static_token`
+   (plaintext bootstrap credential), it returns
+   `Principal.remote("static", {ADMIN})`. Missing or invalid tokens return
+   `None`, which the handler maps to a 401 problem+json response.
 
 3. **Input construction.** For GET routes, the handler merges query-string
    parameters (multi-value via `request.query_params.multi_items()`) with URL path parameters, path params
@@ -269,7 +272,7 @@ folds the key into the unified session when `unified_session` is on, then
 
 **Authority.** A turn with input from a token (`origin: "api"`) never asks the
 person in the chat to approve a privileged action: skill and MCP changes
-become pending requests for `durin approvals`, an exec command that needs
+become pending requests for the Pending page or `durin approvals`, an exec command that needs
 approval is refused, and a token's message never answers an approval the turn
 waits on — see authority by context in the security internals.
 
@@ -396,8 +399,10 @@ removed. Run `python scripts/gen_openapi.py` to see the current totals.
 whether a setup secret is configured — `token_issue_secret`, or the static
 `token` when that is empty:
 
-- **No secret:** only a loopback peer may mint (local mode); any other peer
-  gets 403.
+- **No secret:** only a loopback peer may mint (local mode), and only under a
+  loopback `Host` name (`localhost`, `127.0.0.1` or `[::1]`, any port); any
+  other peer or name gets 403. The `Host` check stops a DNS-rebinding page in
+  the local browser from minting a token (see the security internals).
 - **A secret is set:** every caller, localhost included, must present it
   (`Authorization: Bearer <secret>` or `X-Durin-Auth: <secret>`) or carry a
   valid `durin_session` cookie; otherwise 401. A sign-in with the secret sets
@@ -407,7 +412,10 @@ whether a setup secret is configured — `token_issue_secret`, or the static
 
 The response includes `{token, ws_path, expires_in, model_name, model_preset,
 requires_secret}`. The token is stored as a salted SHA-256 hash; the plaintext
-is shown once and never persisted. `POST /webui/signout` revokes the session
+is shown once and never persisted. It is stored with `kind: "webui"`: it is the
+dashboard session, the one credential a route that needs a person (deciding an
+approval) accepts. Only this path sets that kind — the token routes and
+`durin auth token issue` always store `kind: "remote"`. `POST /webui/signout` revokes the session
 token and clears the cookie.
 
 The `ApiTokenStore` also generates and persists a 32-byte HMAC secret for media
@@ -424,7 +432,7 @@ URL signing (`get_or_create_media_secret()`), stored base64-encoded in the same
 | `RouteSpec` | `durin/service/registry.py` | Frozen dataclass: `verb`, `path`, `scope`, `request_model`, `response_model`, `summary`, `status_code` (default 200) — single source for OpenAPI generation and Starlette routing |
 | `BoundRoute` | `durin/service/registry.py` | `RouteSpec` + `service_name` + handler callable; iterated by the ASGI adapter and the generator |
 | `route` | `durin/service/registry.py` | Decorator that attaches a `RouteSpec` under `__route_spec__` and returns the method unchanged |
-| `Principal` | `durin/service/principal.py` | Frozen dataclass: `subject`, `scopes: frozenset[str]`, `kind`; `Principal.local()` → `{ADMIN}`, `Principal.remote(subject, scopes)` → token-derived |
+| `Principal` | `durin/service/principal.py` | Frozen dataclass: `subject`, `scopes: frozenset[str]`, `kind` (`local`, `webui`, `remote`); `Principal.local()` → `{ADMIN}` in-process, `Principal.webui(subject, scopes)` → the dashboard session, `Principal.remote(subject, scopes)` → any other token |
 | `Scope` | `durin/service/principal.py` | String enum of permission values: `admin`, `<domain>:<read\|write>` pairs (settings, secrets, skills, cron, sessions, config, memory, mcp, workflows, automations, system), and the write-only `channels:write` and `chat:write` |
 | `ServiceModel` / `Command` / `Query` / `Result` | `durin/service/types.py` | Pydantic DTO bases: camelCase wire aliases via `to_camel`; `Command`/`Query` forbid extra fields, `Result` allows them |
 | `DomainError` + subclasses | `durin/service/types.py` | Transport-agnostic error hierarchy: `UnauthenticatedError` (401), `ForbiddenError` (403), `NotFoundError` (404), `ConflictError` (409), `ValidationFailedError` (422), `TooManyRequestsError` (429), `UnavailableError` (503) |
@@ -434,7 +442,9 @@ URL signing (`get_or_create_media_secret()`), stored base64-encoded in the same
 | `build_gateway_http_app` | `durin/api/asgi.py` | Full gateway app: assembles WS, signed reads, `/api/v1/*`, bootstrap, media, and SPA routes in priority order |
 | `resolve_principal_from_headers` | `durin/api/asgi.py` | Extracts and verifies a bearer token; returns `Principal` or `None` |
 | `StarletteConnectionAdapter` | `durin/api/asgi.py` | Wraps a Starlette `WebSocket` to satisfy the same `ConnectionAdapter` interface used by the `websockets` transport |
-| `ApiTokenStore` | `durin/security/api_tokens.py` | File-backed token store (`~/.durin/api_tokens.json`): salted SHA-256 hashes, TTL/expiry, cap+purge, crash-safe atomic writes, 32-byte media HMAC secret |
+| `ApiTokenStore` | `durin/security/api_tokens.py` | File-backed token store (`~/.durin/api_tokens.json`): salted SHA-256 hashes, each token's `kind` (`webui` for a dashboard session, `remote` otherwise), TTL/expiry, cap+purge, crash-safe atomic writes, 32-byte media HMAC secret |
+| `PendingService` / `collect_pending` | `durin/service/pending.py` | `GET /api/v1/pending`: merges every source of items waiting on a person, each read through its own listing function, filtered by the caller's read scopes |
+| `ApprovalsService` | `durin/service/approvals.py` | `POST /api/v1/approvals/{id}/decision`: a dashboard session decides a pending approval request through `approval.decide` |
 | `gen_openapi.py` | `scripts/gen_openapi.py` | Reads catalog registry routes and Pydantic models; generates `contract/openapi-v1.json` (OpenAPI 3.1); `--check` flag for CI drift detection |
 
 ---
@@ -447,7 +457,7 @@ URL signing (`get_or_create_media_secret()`), stored base64-encoded in the same
 |---|---|
 | `channels.websocket.token` | Plaintext static bearer token; accepted by the WS handshake and by `resolve_principal_from_headers` as a fallback when no stored token matches |
 | `channels.websocket.token_issue_secret` | Setup secret for `/webui/bootstrap` (`Authorization: Bearer` or `X-Durin-Auth`). When set — or when the static `token` is set and this is empty — every bootstrap, localhost included, needs the secret or a valid `durin_session` cookie; enables reverse-proxy deployments |
-| `channels.websocket.websocket_requires_token` | When true (default), the WS handshake must include a valid token (static or issued); when false, unauthenticated connections are allowed. A set static `token` always requires a valid token. The gateway sets it false when it creates the websocket section at runtime for the dashboard |
+| `channels.websocket.websocket_requires_token` | When true (default), the WS handshake must include a valid token (static or issued); when false, unauthenticated connections are allowed — and with no setup secret either, only from this machine (a loopback `Host`, and a loopback `Origin` host when one is sent). A set static `token` always requires a valid token. The gateway sets it false when it creates the websocket section at runtime for the dashboard |
 | `tools.mcp_servers` | List of MCP server configs; `McpService.update` (PATCH) and other MCP routes mutate this via `save_config` |
 | App host/port | `channels.websocket.host` / `channels.websocket.port`; uvicorn runs in the agent event loop and serves WS, HTTP and the SPA on that one address. `gateway.port` (and `--port`) only bind the `/health` endpoint |
 | `gateway.api_request_timeout` | How long (seconds) a non-streaming `/v1/chat/completions` request waits for its turn; an overrun answers 504 and the turn still completes |
@@ -463,8 +473,9 @@ The route table is the authoritative source; the current operation set spans
 secrets, cron, sessions, settings, config, skills, memory, MCP servers, health,
 commands, agent modes (`/api/v1/modes`), OAuth flows, auth tokens,
 personas/souls (`/api/v1/souls`, `/api/v1/personas`), workflows
-(`/api/v1/workflows`), automations (`/api/v1/automations`), and background tasks
-(`/api/v1/tasks`). Verbs in use: GET, POST, PUT, PATCH, and DELETE — PATCH
+(`/api/v1/workflows`), automations (`/api/v1/automations`), background tasks
+(`/api/v1/tasks`), everything waiting on a person (`/api/v1/pending`), and
+approval decisions (`/api/v1/approvals`). Verbs in use: GET, POST, PUT, PATCH, and DELETE — PATCH
 for partial updates (e.g. `McpService.update`, `CronService`), PUT for saving a
 whole named resource (e.g. an automation or a workflow script). The generated
 contract lists the verb of every operation.
@@ -479,6 +490,50 @@ list for workflow-kind tasks) used by the work panel to render per-node and
 per-branch progress. See the generated OpenAPI contract
 (`contract/openapi-v1.json`) and `TasksService` (`durin/service/tasks.py`) for
 the authoritative field definitions.
+
+**`GET /api/v1/pending`** (`PendingService`) is everything that waits on a
+person, in one list: approval requests, skill imports in quarantine, automation
+runs paused on an approval or a question, workflow runs waiting for input,
+memory pairs the dream flagged, and skill suggestions. The route only
+aggregates — each source is read through its own listing function, the one
+behind its own route — and answers `{items, count, errors}`. A quarantined skill
+import that a pending install request names is listed once, as that request:
+deciding the request settles the import too. Each item is
+`{source, id, kind, title, summary, created_at, resolve, data}`: `data` is the
+source's own record in the shape its own route returns, and `resolve` names a
+`form` and the `actions` that act on it (method, path, and the body fields the
+item fixes; the rest of each body is that route's own contract). Approval
+records are expired and pruned before they are listed, and a legacy record
+(no payload) is left to `durin approvals discard`. A workflow run an
+automation started is left out: it shows as that automation's paused run.
+Each source is shown only to a principal holding the scope of its own listing
+route (for approvals, the read scope of each request's kind); the contract
+names `admin`, the one scope that covers every source, and a principal that
+can read no source gets 403. A source that fails to load is reported in
+`errors` while the others are still listed. The listing runs in a worker
+thread, off the event loop.
+
+**`POST /api/v1/approvals/{id}/decision`** (`ApprovalsService.decide`, body
+`{decision: "approve" | "reject"}`) decides one approval request through
+`approval.decide`, with the gateway's live handles
+(`AgentLoop.approval_exec_deps`) and `decided_by: {"kind": "user",
+"channel": "webui"}`. It re-implements none of `decide`'s rules. Only a
+dashboard session (a `webui` principal) may call it — a token issued for the
+API, the static token and in-process callers get 403 — and the decision takes
+the scope of the change's domain: `skills:write` for a skill kind, `mcp:write`
+for an MCP change, `admin` for anything else (the contract names `admin`, the
+scope that covers every kind). The outcome maps to HTTP by one rule: **200**
+with `{status, message, approval_id}` whenever the request was acted on —
+`applied`, `rejected`, `pending` (handed to the turn still waiting on it),
+`failed` (approved, but running it failed), `stale` (it expired, or its target
+changed since it was reviewed) — and **409** when `decide` refused and left the
+record as it was (`refused`: already decided, a legacy record, an exec request
+outside its turn, a kind whose runner is missing here), with the same three
+fields in the problem's `details`. An unknown id is 404, a malformed id or
+decision 422. The decision runs as its own task that the request awaits, so a
+client that disconnects does not cut an install off halfway; when it did not
+go to a waiting turn, it posts a note into the chat session that filed the
+request (see the security internals).
 
 **`POST /api/v1/workflows/{name}/runs`** (scope `workflows:write`,
 `WorkflowsService.launch`) starts a workflow run detached: it answers 202 with
@@ -553,7 +608,7 @@ Every error response is RFC 9457 `application/problem+json` with
 
 | Route | Description |
 |---|---|
-| `GET /webui/bootstrap` | Mints an admin-scoped token; loopback-only without a setup secret, otherwise gated by the secret header or the `durin_session` cookie |
+| `GET /webui/bootstrap` | Mints an admin-scoped dashboard-session token (`kind: "webui"`); loopback-only without a setup secret, otherwise gated by the secret header or the `durin_session` cookie |
 | `POST /webui/signout` | Revokes the webui session token and clears the `durin_session` cookie |
 | `GET /api/v1/mcp/oauth/callback` | OAuth provider redirect for gateway-driven MCP sign-in; gated by a single-use state token, not a bearer token |
 | `GET /api/media/{sig}/{payload}` | HMAC-signed media fetch; signature verified against the per-process media secret |

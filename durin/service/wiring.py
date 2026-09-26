@@ -34,6 +34,7 @@ def build_service_registry(
     chat_channel_resolver: Callable[[], Any] | None = None,
     stop_turn: Callable[[str], Awaitable[int]] | None = None,
     turn_key: Callable[[str], str] | None = None,
+    approval_deps: Callable[[], Any] | None = None,
 ) -> ServiceRegistry:
     """Construct a registry with all domain services wired to real deps.
 
@@ -73,9 +74,17 @@ def build_service_registry(
     ``AutomationsRuntime`` so ``AutomationsService`` can fire/answer runs;
     surfaces without one (the websocket channel's shim registry) leave it
     ``None`` and those two routes report unavailable.
+
+    ``approval_deps`` is optional: the gateway passes
+    ``AgentLoop.approval_exec_deps`` so an approval decided through
+    ``ApprovalsService`` runs with the live exec tool and MCP connections;
+    without it a kind that needs a handle is refused. The note that tells the
+    asking chat how its request was decided is posted only for channels the
+    ``channel_manager`` serves, so a surface without one posts none.
     """
     from durin.jobs.registry import JobRegistry
     from durin.security.api_tokens import ApiTokenStore
+    from durin.service.approvals import ApprovalsService
     from durin.service.auth import AuthService
     from durin.service.automations import AutomationsService
     from durin.service.channels_discord import DiscordService
@@ -93,6 +102,7 @@ def build_service_registry(
     from durin.service.memory import MemoryService
     from durin.service.modes import ModesService
     from durin.service.oauth import OAuthService
+    from durin.service.pending import PendingService
     from durin.service.personas import PersonasService
     from durin.service.secrets import SecretsService
     from durin.service.sessions import SessionsService
@@ -166,6 +176,12 @@ def build_service_registry(
     registry.register("automations", AutomationsService(
         workspace=_workspace(), cron_service=cron_service, runtime=automations_runtime,
         hooks_secret=lambda: ApiTokenStore().get_or_create_hooks_secret()))
+    registry.register("approvals", ApprovalsService(
+        workspace_resolver=_workspace, exec_deps=approval_deps, bus=bus,
+        serves_channel=(
+            (lambda name: channel_manager.get_channel(name) is not None)
+            if channel_manager is not None else None)))
+    registry.register("pending", PendingService(workspace_resolver=_workspace))
 
     # Crash recovery: the gateway is the long-lived process, so its boot is the natural
     # point to reconcile run manifests still "running" from a previous process that died
@@ -185,30 +201,18 @@ def build_service_registry(
     # neither of which a file-only sweep thread can do. The gateway starts an
     # async sweep on its AutomationsRuntime instead.
 
-    # Sweep stale claims (a thread-to-waiting-run mapping released on the
-    # normal answer path) that were never released, e.g. the process died
-    # before a run reached its release or the counterpart just never
-    # replied. Claims are conversation-scoped, not tied to any queue_ttl_s
-    # config knob, so a flat week-long constant bounds them instead.
+    # Expire pending approval records past their TTL, prune resolved ones past
+    # their retention window, and drop automation claims (a thread-to-waiting-
+    # run mapping) that were never released — the process died before a run
+    # reached its release, or the counterpart never replied. `decide`,
+    # `durin approvals list` and the Pending list expire records lazily too,
+    # and the gateway repeats this sweep while it runs (WorkspaceJanitor).
     try:
-        from durin.automations import claims as automations_claims
+        from durin.service.housekeeping import sweep_workspace
 
-        automations_claims.prune(_workspace(), max_age_s=7 * 24 * 3600)
-    except Exception:  # noqa: BLE001 - best-effort sweep
-        pass
-
-    # Expire pending approval records past their TTL and prune resolved ones
-    # past their retention window. `decide` and `durin approvals list` also
-    # apply this lazily, but a workspace nobody touches between gateway
-    # restarts would otherwise keep a `.approvals/` directory that never
-    # catches up.
-    try:
-        from durin.agent import approval_store
-
-        counts = approval_store.expire_and_prune(_workspace())
-        logger.debug("approvals expire_and_prune at boot: {}", counts)
+        logger.debug("workspace housekeeping at boot: {}", sweep_workspace(_workspace()))
     except Exception as exc:  # noqa: BLE001 - best-effort sweep must not block startup
-        logger.warning("approvals expire_and_prune failed at boot: {}", exc)
+        logger.warning("workspace housekeeping failed at boot: {}", exc)
 
     # The boot sweep only helps when the gateway restarts; a run orphaned by
     # a crashed TUI (or any other co-owner of this workspace) would otherwise

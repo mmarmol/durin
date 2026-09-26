@@ -21,14 +21,14 @@ from durin.bus.events import InboundMessage
 from durin.bus.queue import MessageBus
 
 
-def _make_loop(workspace: Path) -> tuple[AgentLoop, MessageBus]:
+def _make_loop(workspace: Path, *, process_kind: str = "gateway") -> tuple[AgentLoop, MessageBus]:
     bus = MessageBus()
     provider = MagicMock()
     provider.get_default_model.return_value = "test-model"
     with patch("durin.agent.loop.ContextBuilder"), \
          patch("durin.agent.loop.SessionManager"), \
          patch("durin.agent.loop.SubagentManager"):
-        loop = AgentLoop(bus=bus, provider=provider, workspace=workspace)
+        loop = AgentLoop(bus=bus, provider=provider, workspace=workspace, process_kind=process_kind)
     return loop, bus
 
 
@@ -148,3 +148,39 @@ async def test_run_replays_the_journal_before_consuming(tmp_path: Path) -> None:
         runner.cancel()
         with pytest.raises(asyncio.CancelledError):
             await runner
+
+
+@pytest.mark.asyncio
+async def test_a_tui_written_entry_survives_a_gateway_replay_and_is_replayed_by_the_tui(
+    tmp_path: Path,
+) -> None:
+    """A gateway and a TUI (or legacy REPL) can share one workspace. A
+    gateway starting up must not steal a turn the TUI itself still owes, and
+    the reverse: each process's replay only ever takes its own kind's
+    entries out of the shared journal file."""
+    tui_stopping, _ = _make_loop(tmp_path, process_kind="tui")
+    tui_stopping._inbound_journal.append([_msg("from the tui")], kind="tui")
+
+    gateway_starting, gateway_bus = _make_loop(tmp_path, process_kind="gateway")
+    assert await gateway_starting._replay_inbound_journal() == 0
+    assert gateway_bus.inbound.qsize() == 0
+
+    tui_starting, tui_bus = _make_loop(tmp_path, process_kind="tui")
+    assert await tui_starting._replay_inbound_journal() == 1
+    assert [m.content for m in (tui_bus.inbound.get_nowait(),)] == ["from the tui"]
+
+
+@pytest.mark.asyncio
+async def test_the_gateways_own_entries_survive_a_tui_replay_and_are_replayed_by_the_gateway(
+    tmp_path: Path,
+) -> None:
+    gateway_stopping, _ = _make_loop(tmp_path, process_kind="gateway")
+    gateway_stopping._inbound_journal.append([_msg("from the gateway")], kind="gateway")
+
+    tui_starting, tui_bus = _make_loop(tmp_path, process_kind="tui")
+    assert await tui_starting._replay_inbound_journal() == 0
+    assert tui_bus.inbound.qsize() == 0
+
+    gateway_starting, gateway_bus = _make_loop(tmp_path, process_kind="gateway")
+    assert await gateway_starting._replay_inbound_journal() == 1
+    assert [m.content for m in (gateway_bus.inbound.get_nowait(),)] == ["from the gateway"]

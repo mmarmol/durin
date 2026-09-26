@@ -25,9 +25,10 @@ config files yourself.
    server config: in a chat they are asked right away and the call returns
    their answer in `status` (`applied`, `rejected`, or `pending` when they did
    not answer); in a run with nobody to ask it returns `pending` and the request
-   waits for approval (`durin approvals`). After `rejected` or `pending`, tell
-   the user and do not retry or reach the same result another way. `never`
-   refuses (relay that); `auto` proceeds directly.
+   waits for approval (the dashboard's Pending page, or `durin approvals`).
+   After `rejected` or `pending`, tell the user and do not retry or reach the
+   same result another way. `never` refuses (relay that); `auto` proceeds
+   directly.
    - `prefer` is `"remote"` by default; pass `"local"` for the stdio package
      (npx / uvx / docker) when the user wants it or no remote exists. A missing
      local runtime is part of the request as a `runtime_plan`: an approved

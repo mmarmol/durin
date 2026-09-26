@@ -36,6 +36,53 @@
         "title": "AliasMoveIn",
         "type": "object"
       },
+      "ApprovalDecisionCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "decision": {
+            "enum": [
+              "approve",
+              "reject"
+            ],
+            "title": "Decision",
+            "type": "string"
+          },
+          "id": {
+            "pattern": "^[0-9a-f]{12}$",
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "decision"
+        ],
+        "title": "ApprovalDecisionCommand",
+        "type": "object"
+      },
+      "ApprovalDecisionResult": {
+        "properties": {
+          "approval_id": {
+            "title": "Approval Id",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "message",
+          "approval_id"
+        ],
+        "title": "ApprovalDecisionResult",
+        "type": "object"
+      },
       "AutomationAnswerCommand": {
         "additionalProperties": false,
         "properties": {
@@ -4713,6 +4760,172 @@
         "title": "PairingRevokeResult",
         "type": "object"
       },
+      "PendingAction": {
+        "properties": {
+          "body": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Body"
+          },
+          "method": {
+            "title": "Method",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "method",
+          "path"
+        ],
+        "title": "PendingAction",
+        "type": "object"
+      },
+      "PendingItem": {
+        "properties": {
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "data": {
+            "additionalProperties": true,
+            "title": "Data",
+            "type": "object"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "resolve": {
+            "$ref": "#/components/schemas/PendingResolve"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "id",
+          "kind",
+          "title",
+          "summary",
+          "created_at",
+          "resolve",
+          "data"
+        ],
+        "title": "PendingItem",
+        "type": "object"
+      },
+      "PendingQuery": {
+        "additionalProperties": false,
+        "description": "No inputs \u2014 returns everything pending that the caller may read.",
+        "properties": {},
+        "title": "PendingQuery",
+        "type": "object"
+      },
+      "PendingResolve": {
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/PendingAction"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "form": {
+            "title": "Form",
+            "type": "string"
+          }
+        },
+        "required": [
+          "form",
+          "actions"
+        ],
+        "title": "PendingResolve",
+        "type": "object"
+      },
+      "PendingResult": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "errors": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/PendingSourceError"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PendingItem"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items",
+          "count"
+        ],
+        "title": "PendingResult",
+        "type": "object"
+      },
+      "PendingSourceError": {
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "detail"
+        ],
+        "title": "PendingSourceError",
+        "type": "object"
+      },
       "PersonaDeleteCommand": {
         "additionalProperties": false,
         "properties": {
@@ -8086,6 +8299,35 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/approvals/{id}/decision": {
+      "post": {
+        "operationId": "approvals_decide",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalDecisionCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalDecisionResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Approve or reject a pending approval request as a person: a dashboard session only (API tokens are refused), with skills:write for a skill change, mcp:write for an MCP change, admin for anything else. 200 when the request was acted on; 409 when it was refused and left as it was.",
+        "x-required-scope": "admin"
+      }
+    },
     "/api/v1/auth/tokens": {
       "delete": {
         "operationId": "auth_revoke_token",
@@ -11128,6 +11370,35 @@
         },
         "summary": "Return OpenRouter key status (manual or OAuth-obtained)",
         "x-required-scope": "settings:read"
+      }
+    },
+    "/api/v1/pending": {
+      "get": {
+        "operationId": "pending_list",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PendingQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Everything waiting on a person: approval requests, skill imports in quarantine, paused automation runs, workflow runs waiting for input (not an automation's), memory pairs the dream flagged, and skill suggestions. Each source shows with the read scope of its own listing route; admin covers them all.",
+        "x-required-scope": "admin"
       }
     },
     "/api/v1/personas": {

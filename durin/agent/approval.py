@@ -32,6 +32,7 @@ from durin.agent.approval_executors import (
     ApprovalExecError,
     ExecDeps,
     Prepared,
+    after_reject,
     current_hash,
     execute,
     missing_handles,
@@ -48,6 +49,7 @@ __all__ = [
     "note_turn_input",
     "outcome_to_tool_result",
     "request",
+    "request_origin",
     "turn_has_api_input",
 ]
 
@@ -162,6 +164,18 @@ class Outcome:
     message: str = ""
 
 
+def request_origin(request_ctx: Any) -> dict | None:
+    """The chat a turn's request comes from, ``{"channel", "chat_id"}``, read
+    from the tool's request context; None without one. Stored on the record so
+    a decision made later is reported in that chat even when the session key
+    names none (``unified:`` folds every channel's conversation into one)."""
+    channel = getattr(request_ctx, "channel", None)
+    chat_id = getattr(request_ctx, "chat_id", None)
+    if not channel or not chat_id:
+        return None
+    return {"channel": str(channel), "chat_id": str(chat_id)}
+
+
 def is_interactive(session_key: str | None) -> bool:
     """A chat-bearing session kind (a person is on the other end)."""
     return bool(session_key) and session_key.startswith(INTERACTIVE_SESSION_PREFIXES)
@@ -204,14 +218,16 @@ async def _run_approved(workspace: Path | str, record: dict, deps: ExecDeps) -> 
 
 def _pending_outcome(record: dict, *, asked: bool, api_input: bool = False) -> Outcome:
     if asked:
-        where = "the user did not answer; it is still waiting for approval (`durin approvals`)"
+        where = ("the user did not answer; it is still waiting for approval (the "
+                 "dashboard's Pending page, or `durin approvals`)")
     elif api_input:
         # Say why nobody was asked, so the model can tell the person where
         # the request waits instead of retrying it in the chat.
         where = ("this turn includes input from an API token, which cannot approve it, "
-                 "so it is waiting for a person's approval (`durin approvals`)")
+                 "so it is waiting for a person's approval (the dashboard's Pending page, "
+                 "or `durin approvals`)")
     else:
-        where = "waiting for approval (`durin approvals`)"
+        where = "waiting for approval (the dashboard's Pending page, or `durin approvals`)"
     return Outcome("pending", record, None, (
         f"Not done yet: {record['summary']} — {where}, id {record['id']}. Continue "
         "without it; do not retry, and do not reach the same effect another way."))
@@ -219,12 +235,14 @@ def _pending_outcome(record: dict, *, asked: bool, api_input: bool = False) -> O
 
 async def request(workspace: Path | str, prepared: Prepared, *, session_key: str | None,
                   deps: ExecDeps, judge: JudgeFn | None = None,
-                  ask: AskFn | None = None) -> Outcome:
+                  ask: AskFn | None = None, origin: dict | None = None) -> Outcome:
     """Decide and, when allowed, run one privileged request.
 
     Order: the judge (when the caller made the request judge-eligible) may clear
     it; otherwise a person in this chat is asked (``ask``); otherwise it is
-    filed as pending. Nothing here reads a value the model wrote.
+    filed as pending. Nothing here reads a value the model wrote. ``origin``
+    (``request_origin``) is stored on a new record: the chat a later decision
+    is reported in.
     """
     context = "interactive" if is_interactive(session_key) else "autonomous"
     if prepared.kind in ("skill_deps", "mcp_change", "exec_command"):
@@ -252,7 +270,8 @@ async def request(workspace: Path | str, prepared: Prepared, *, session_key: str
                     workspace, kind=prepared.kind, summary=prepared.summary,
                     detail=prepared.detail, payload=prepared.payload,
                     change_hash=prepared.change_hash, session_key=session_key,
-                    context=context, status="approved", decided_by={"kind": "judge"})
+                    context=context, status="approved", decided_by={"kind": "judge"},
+                    origin=origin)
             return await _run_approved(workspace, record, deps)
 
     record = approval_store.find_pending(
@@ -260,7 +279,7 @@ async def request(workspace: Path | str, prepared: Prepared, *, session_key: str
         change_hash=prepared.change_hash) or approval_store.create(
         workspace, kind=prepared.kind, summary=prepared.summary, detail=prepared.detail,
         payload=prepared.payload, change_hash=prepared.change_hash,
-        session_key=session_key, context=context)
+        session_key=session_key, context=context, origin=origin)
 
     if ask is None:
         return _pending_outcome(record, asked=False, api_input=turn_has_api_input())
@@ -290,6 +309,14 @@ async def _apply_decision(workspace: Path | str, approval_id: str, decision: str
                                         to="rejected", decided_by=decided_by)
         if rec is None:
             return _already_decided(workspace, approval_id)
+        try:
+            # What the rejection settles besides the record (a rejected
+            # skill install discards its quarantined import). The decision
+            # already stands, so a failure here is logged, never raised.
+            await asyncio.to_thread(after_reject, Path(workspace), rec)
+        except Exception:  # noqa: BLE001
+            logger.exception("settling rejected request {} ({}) failed",
+                             approval_id, rec.get("kind"))
         return Outcome("rejected", rec, None, (
             f"The user declined: {rec['summary']}. Do not retry, and do not reach the "
             "same effect another way."))

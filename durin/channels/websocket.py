@@ -296,10 +296,12 @@ def _is_valid_chat_id(value: Any) -> bool:
 def _answers_approvals(connection: Any) -> bool:
     """True for a watcher that can answer an approval the chat waits on.
 
-    A socket connection can (the webui's Approve / Reject). A watcher that
-    only reads the chat's frames declares ``answers_approvals = False``: the
-    API's SSE subscriber, whose client may answer a question with a plain
-    message but whose messages never decide an approval."""
+    A socket the dashboard session opened can (the webui's Approve / Reject).
+    A watcher that cannot declares ``answers_approvals = False``: a socket
+    opened with the static token or with no token, and the API's SSE
+    subscriber, whose client may answer a question with a plain message but
+    never decides an approval. Such a watcher's decision frame is refused, and
+    its presence does not keep an approval waiting."""
     return bool(getattr(connection, "answers_approvals", True))
 
 
@@ -440,6 +442,55 @@ def _peer_is_loopback(peer: Any) -> bool:
     if host.startswith("::ffff:"):
         host = host[7:]
     return host in _LOCALHOSTS
+
+
+# Host names that can only mean this machine. A DNS-rebinding page reaches a
+# loopback peer under its own name, so without a setup secret the bootstrap and
+# an anonymous socket also require the Host header to be one of these (any
+# port).
+_LOOPBACK_HOST_NAMES = frozenset({"localhost", "127.0.0.1", "[::1]"})
+
+
+def _host_is_loopback(headers: Any) -> bool:
+    """True when the request's ``Host`` header names this machine by a
+    loopback name (``localhost``, ``127.0.0.1`` or ``[::1]``, with or
+    without a port). A missing or empty header is not."""
+    raw = str(headers.get("host") or headers.get("Host") or "").strip().lower()
+    if raw.startswith("["):
+        end = raw.find("]")
+        name = raw[: end + 1] if end != -1 else raw
+        rest = raw[end + 1:] if end != -1 else ""
+    else:
+        name, _, port = raw.partition(":")
+        rest = f":{port}" if port else ""
+    if rest and not (rest.startswith(":") and rest[1:].isdigit()):
+        return False
+    return name in _LOOPBACK_HOST_NAMES
+
+
+def _origin_is_loopback(headers: Any) -> bool:
+    """True when the request carries no ``Origin`` header (a non-browser
+    client), or one whose host is a loopback name. A browser always sends
+    ``Origin`` on a socket upgrade, and a page on another site — a
+    DNS-rebinding page, or any site opening ``ws://127.0.0.1`` directly, since
+    a socket is not bound by the same-origin policy — sends its own there. An
+    empty value, ``null`` or a non-web scheme is not loopback."""
+    origin = headers.get("origin")
+    if origin is None:
+        origin = headers.get("Origin")
+    if origin is None:
+        return True
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(str(origin).strip())
+        parts.port  # noqa: B018 — raises ValueError on a malformed port
+    except ValueError:
+        return False
+    if parts.scheme not in ("http", "https"):
+        return False
+    host = parts.hostname or ""
+    return (f"[{host}]" if ":" in host else host) in _LOOPBACK_HOST_NAMES
 
 
 def _bearer_token(headers: Any) -> str | None:
@@ -659,6 +710,7 @@ class WebSocketChannel(BaseChannel):
             bus=bus,
             subagent_manager=None,
             chat_channel_resolver=lambda: self,
+            approval_deps=self._approval_deps,
         )
 
     def _endpoint_workspace(self) -> Path:
@@ -980,7 +1032,10 @@ class WebSocketChannel(BaseChannel):
         - a configured ``token_issue_secret``/static ``token`` must match the
           request header (secures deployments behind a reverse proxy where every
           connection appears local);
-        - with NO secret, only a loopback *peer* may mint (local-dev mode);
+        - with NO secret, only a loopback *peer* may mint (local-dev mode), and
+          only under a loopback ``Host`` name: a page in the local browser could
+          otherwise reach this route through DNS rebinding (its own name
+          resolving to 127.0.0.1) and mint an admin token;
         - the issued-token pool is capped to bound runaway growth.
         """
         secret = self.config.token_issue_secret.strip() or self.config.token.strip()
@@ -993,6 +1048,11 @@ class WebSocketChannel(BaseChannel):
                 raise UnauthenticatedError("invalid bootstrap secret")
         elif not _peer_is_loopback(peer):
             raise ForbiddenError("bootstrap is localhost-only")
+        elif not _host_is_loopback(headers):
+            raise ForbiddenError(
+                "without a setup secret, bootstrap answers only localhost, 127.0.0.1 or "
+                "[::1]; to reach the dashboard under another name, set "
+                "channels.websocket.token_issue_secret")
         # Cap outstanding tokens to avoid runaway growth from a misbehaving client.
         self._purge_expired_issued_tokens()
         if len(self._issued_tokens) >= self._MAX_ISSUED_TOKENS:
@@ -1002,10 +1062,14 @@ class WebSocketChannel(BaseChannel):
         # the hash in the store always matches what we hand to the client.
         auth_svc = self._services.get("auth")
         if auth_svc is not None:
+            # kind="webui": this token is the dashboard session, the one
+            # credential a route that needs a person (deciding an approval)
+            # accepts over HTTP.
             _, token = auth_svc._store.issue(
                 [Scope.ADMIN.value],
                 label="bootstrap",
                 ttl_s=float(self.config.token_ttl_s),
+                kind="webui",
             )
         else:
             token = f"nbwt_{secrets.token_urlsafe(32)}"
@@ -1450,10 +1514,20 @@ class WebSocketChannel(BaseChannel):
             ("X-Content-Type-Options", "nosniff"),
         ]
 
-    def _ws_auth_ok(self, query: dict[str, list[str]]) -> bool:
-        """Return True if the WebSocket handshake is authorised.
+    def _ws_auth(self, query: dict[str, list[str]], headers: Any = None) -> str | None:
+        """Which credential opened a WebSocket handshake; None when refused.
 
-        Called by the Starlette WebSocket endpoint (``chat_ws_endpoint`` in
+        ``"webui"``: a single-use token ``/webui/bootstrap`` minted — the
+        dashboard session, the one connection whose Approve / Reject decides
+        an approval. ``"static"``: the configured static token. ``"anonymous"``:
+        no valid token, allowed because none is required. In local mode (no
+        setup secret, no token required) an anonymous handshake must also come
+        from this machine: a loopback ``Host``, and a loopback ``Origin`` host
+        when the client sends one. Otherwise a page in the local browser could
+        open the socket and chat with the agent, through DNS rebinding or by
+        connecting to ``ws://127.0.0.1`` from its own site. *headers* are the
+        handshake's request headers (none: the anonymous check fails). Called
+        by the Starlette WebSocket endpoint (``chat_ws_endpoint`` in
         ``durin/api/asgi.py``).
         Side-effect: consumes a single-use issued token when one is accepted.
         """
@@ -1462,19 +1536,27 @@ class WebSocketChannel(BaseChannel):
 
         if static_token:
             if supplied and hmac.compare_digest(supplied, static_token):
-                return True
+                return "static"
             if supplied and self._take_issued_token_if_valid(supplied):
-                return True
-            return False
+                return "webui"
+            return None
 
         if self.config.websocket_requires_token:
             if supplied and self._take_issued_token_if_valid(supplied):
-                return True
-            return False
+                return "webui"
+            return None
 
-        if supplied:
-            self._take_issued_token_if_valid(supplied)
-        return True
+        if supplied and self._take_issued_token_if_valid(supplied):
+            return "webui"
+        if not self.config.token_issue_secret.strip():
+            request_headers = headers if headers is not None else {}
+            if not (_host_is_loopback(request_headers) and _origin_is_loopback(request_headers)):
+                return None
+        return "anonymous"
+
+    def _ws_auth_ok(self, query: dict[str, list[str]], headers: Any = None) -> bool:
+        """Return True if the WebSocket handshake is authorised (``_ws_auth``)."""
+        return self._ws_auth(query, headers) is not None
 
     async def start(self) -> None:
         from durin.utils.logging_bridge import redirect_lib_logging
@@ -2022,20 +2104,25 @@ class WebSocketChannel(BaseChannel):
         """Resolve an approval from an Approve / Reject click.
 
         The verdict never becomes a chat message, so the model can neither see
-        nor forge it. The record must belong to a chat this connection is
-        attached to. ``approval.decide`` hands the verdict to the turn still
+        nor forge it. Only a connection the dashboard session opened may send
+        one (``_answers_approvals``): a socket opened with the static token or
+        with no token is refused. The record must belong to a chat this
+        connection is attached to. ``approval.decide`` hands the verdict to the turn still
         waiting on it. When that turn stopped waiting (the click came after
         its timeout), ``decide`` runs the recorded request here with the
         gateway's live handles, except an exec request, which only its own
         turn can approve: that click is refused and the record left as it
         was. That run can take minutes (an MCP install), so
         it proceeds as a background task and the socket keeps serving frames.
-        The ``approval_decided`` event reports the outcome when it lands.
+        The ``approval_decided`` event reports the outcome when it lands, and
+        a decision the waiting turn did not take posts a note into the chat,
+        since that turn was told the request waits and moved on.
         """
         import dataclasses
 
         from durin.agent import approval, approval_store
         from durin.agent.approval_executors import ExecDeps
+        from durin.agent.approval_notify import notify_origin
 
         request_id = str(envelope.get("request_id") or "")
         approval_id = str(envelope.get("approval_id") or "").strip()
@@ -2048,6 +2135,11 @@ class WebSocketChannel(BaseChannel):
                 status=status, message=message,
             )
 
+        if not _answers_approvals(connection):
+            await _reply("refused", (
+                "Deciding an approval takes a person's dashboard session; this "
+                "connection was not opened with one."))
+            return
         if not _APPROVAL_ID_RE.match(approval_id):
             await _reply("refused", "Invalid approval id.")
             return
@@ -2082,6 +2174,8 @@ class WebSocketChannel(BaseChannel):
                 await _reply("failed", f"Could not decide {approval_id}: {exc}")
                 return
             await _reply(outcome.status, outcome.message)
+            # The record belongs to a chat this socket serves (checked above).
+            await notify_origin(self.bus, outcome, serves=lambda channel: channel == self.name)
 
         task = asyncio.create_task(_decide())
         self._approval_tasks.add(task)

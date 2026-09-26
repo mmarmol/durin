@@ -504,6 +504,7 @@ class AgentLoop:
         default_preset_loader: Callable[[], ModelPresetConfig] | None = None,
         runtime_model_publisher: Callable[[str, str | None], None] | None = None,
         app_config: Any | None = None,
+        process_kind: str = "gateway",
     ):
         from durin.config.schema import ToolsConfig
 
@@ -643,7 +644,12 @@ class AgentLoop:
         # Where the messages still owed a turn are written at shutdown and
         # read back at the next start; the bus and the queues above are
         # in-memory and no channel redelivers. None for a non-filesystem
-        # workspace (test doubles), which disables the journal.
+        # workspace (test doubles), which disables the journal. The file is
+        # shared with every other process on this workspace (the TUI, the
+        # legacy REPL) — process_kind tags this loop's own entries so a
+        # replay only takes the ones journaled by a loop of the SAME kind,
+        # never another process's own turns (durin/bus/journal.py).
+        self._process_kind = process_kind
         self._inbound_journal: InboundJournal | None = (
             InboundJournal(workspace / "sessions" / ".inbound_journal.jsonl")
             if isinstance(workspace, Path) else None
@@ -2822,7 +2828,7 @@ class AgentLoop:
                         break
         self._pending_queues.clear()
         owed = [m for m in owed if not m.trigger_only]
-        count = self._inbound_journal.append(owed)
+        count = self._inbound_journal.append(owed, kind=self._process_kind)
         if count:
             logger.info("Shutdown: journaled {} inbound message(s) for the next start", count)
         return count
@@ -2835,7 +2841,7 @@ class AgentLoop:
         which would run the automation matchers a second time."""
         if self._inbound_journal is None:
             return 0
-        messages = self._inbound_journal.drain()
+        messages = self._inbound_journal.drain(kind=self._process_kind)
         for msg in messages:
             self.bus.inbound.put_nowait(msg)
         if messages:
@@ -2977,6 +2983,11 @@ class AgentLoop:
             outbound_metadata["slack"] = {"thread_ts": key.split(":", 2)[2]}
         if channel == "email" and key.startswith("email:") and key.count(":") >= 2:
             outbound_metadata["email"] = {"thread": key.rsplit(":", 1)[1]}
+        if channel == "telegram" and key.startswith("telegram:") and ":topic:" in key:
+            # A forum topic's session is telegram:<chat_id>:topic:<thread id>;
+            # the reply goes to the topic, not the group's main thread.
+            with suppress(ValueError):
+                outbound_metadata["message_thread_id"] = int(key.rsplit(":topic:", 1)[1])
         if origin_message_id := msg.metadata.get("origin_message_id"):
             outbound_metadata["origin_message_id"] = origin_message_id
         return OutboundMessage(

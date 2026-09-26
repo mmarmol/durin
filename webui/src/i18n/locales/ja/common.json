@@ -1595,6 +1595,27 @@
       "retry": "再試行"
     }
   },
+  "pending": {
+    "title": "保留中",
+    "subtitle": "あなたの判断を待っているものを、ひとつの場所にまとめています。",
+    "loading": "読み込み中…",
+    "empty": "あなたを待っているものはありません。",
+    "refresh": "更新",
+    "openRun": "実行を開く",
+    "sourceError": "{{source}} を読み込めませんでした: {{detail}}",
+    "source": {
+      "approval": "承認",
+      "skill_quarantine": "スキルのインポート",
+      "automation_run": "自動化",
+      "workflow_run": "Workflow の実行",
+      "flagged_pair": "メモリのペア",
+      "skill_suggestion": "スキルの提案"
+    },
+    "notice": {
+      "resumed": "実行を再開しました。",
+      "resolved": "完了しました。"
+    }
+  },
   "skills": {
     "view": "表示",
     "remove": "削除",
@@ -1611,6 +1632,9 @@
     "empty": "スキルがありません。",
     "selectPrompt": "表示するスキルを選択してください。",
     "discardPrompt": "保存していない変更を破棄しますか？",
+    "discardBody": "このファイルへの変更は保存されていません。",
+    "discardKeep": "編集を続ける",
+    "discardConfirm": "破棄",
     "add": "スキルを追加",
     "acquireTitle": "スキルを追加",
     "acquireHint": "パス、URL、リポジトリからインポートするか、レジストリを検索してください。取り込んだスキルはすべて、承認するまで「保留中」タブで待機します。",

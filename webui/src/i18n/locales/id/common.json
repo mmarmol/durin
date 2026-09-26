@@ -1595,6 +1595,27 @@
       "retry": "Coba lagi"
     }
   },
+  "pending": {
+    "title": "Tertunda",
+    "subtitle": "Semua yang menunggu keputusan Anda, di satu tempat.",
+    "loading": "Memuat…",
+    "empty": "Tidak ada yang menunggu Anda.",
+    "refresh": "Muat ulang",
+    "openRun": "Buka run",
+    "sourceError": "Gagal memuat {{source}}: {{detail}}",
+    "source": {
+      "approval": "Persetujuan",
+      "skill_quarantine": "Impor skill",
+      "automation_run": "Otomatisasi",
+      "workflow_run": "Run workflow",
+      "flagged_pair": "Pasangan memori",
+      "skill_suggestion": "Saran skill"
+    },
+    "notice": {
+      "resumed": "Run dilanjutkan.",
+      "resolved": "Selesai."
+    }
+  },
   "skills": {
     "view": "Lihat",
     "remove": "Hapus",
@@ -1611,6 +1632,9 @@
     "empty": "Tidak ada skill.",
     "selectPrompt": "Pilih skill untuk melihatnya.",
     "discardPrompt": "Buang perubahan yang belum disimpan?",
+    "discardBody": "Perubahan pada berkas ini belum disimpan.",
+    "discardKeep": "Lanjut menyunting",
+    "discardConfirm": "Buang",
     "add": "Tambah skill",
     "acquireTitle": "Tambah skill",
     "acquireHint": "Impor dari path, URL, atau repo, atau cari di registry. Setiap skill yang Anda bawa masuk menunggu di Tertunda sampai Anda menyetujuinya.",

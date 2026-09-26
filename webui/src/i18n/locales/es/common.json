@@ -1422,6 +1422,27 @@
       "retry": "Reintentar"
     }
   },
+  "pending": {
+    "title": "Pendientes",
+    "subtitle": "Todo lo que espera una decisión tuya, en un solo lugar.",
+    "loading": "Cargando…",
+    "empty": "No hay nada esperándote.",
+    "refresh": "Actualizar",
+    "openRun": "Abrir la corrida",
+    "sourceError": "No se pudo cargar {{source}}: {{detail}}",
+    "source": {
+      "approval": "Aprobaciones",
+      "skill_quarantine": "Importaciones de skills",
+      "automation_run": "Automatizaciones",
+      "workflow_run": "Corridas de workflows",
+      "flagged_pair": "Pares de memoria",
+      "skill_suggestion": "Sugerencias de skills"
+    },
+    "notice": {
+      "resumed": "Corrida reanudada.",
+      "resolved": "Listo."
+    }
+  },
   "skills": {
     "view": "Ver",
     "remove": "Eliminar",
@@ -1438,6 +1459,9 @@
     "empty": "Aún no tenés skills. Agregá una para empezar.",
     "selectPrompt": "Elegí una skill para verla, o agregá una nueva.",
     "discardPrompt": "¿Descartar los cambios sin guardar?",
+    "discardBody": "Tus cambios en este archivo no se guardaron.",
+    "discardKeep": "Seguir editando",
+    "discardConfirm": "Descartar",
     "add": "Agregar",
     "acquireTitle": "Agregar una skill",
     "acquireHint": "Importá desde una ruta, URL o repo, o buscá en el registro. Toda skill que traés queda en Pendientes hasta que la apruebes.",
