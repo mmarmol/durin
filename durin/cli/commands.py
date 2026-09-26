@@ -1198,6 +1198,21 @@ _AUTOMATIONS_SWEEP_PERIOD_S = 600.0
 _automations_sweep_task: asyncio.Task | None = None
 
 
+def _automation_help_body(name: str, kind: str, text: str, proposal: str | None) -> str:
+    """What an automation's help destination is told when a run needs a
+    person: an approval (with the proposal and the replies the thread takes,
+    which the reply parser accepts), a question, or an escalation. English,
+    like every other message durin posts into a channel."""
+    if kind == "approval":
+        return (
+            f"🔒 Approval pending — {name}\n{text}\n\n{proposal}\n\n"
+            "Reply in this thread: approve · reject · or write the correction."
+        )
+    if kind == "escalation":
+        return f"⚠️ Escalation — {name}\n{text}"
+    return f"❓ Question — {name}\n{text}"
+
+
 def _run_gateway(
     config: Config,
     *,
@@ -1617,16 +1632,7 @@ def _run_gateway(
         question — the wording says which one happened."""
         if not spec.help.channel:
             return None
-        if kind == "approval":
-            header = f"🔒 Aprobación pendiente — {spec.name}"
-            body = (
-                f"{header}\n{text}\n\n{proposal}\n\n"
-                "Respondé en este hilo: aprobar · rechazar · o escribí la corrección."
-            )
-        elif kind == "escalation":
-            body = f"⚠️ Escalada — {spec.name}\n{text}"
-        else:  # "question"
-            body = f"❓ Pregunta — {spec.name}\n{text}"
+        body = _automation_help_body(spec.name, kind, text, proposal)
         return await channels.send(
             OutboundMessage(channel=spec.help.channel, chat_id=spec.help.to or "", content=body)
         )
