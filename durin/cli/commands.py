@@ -2110,6 +2110,11 @@ def _run_gateway(
             return
         loop = asyncio.get_running_loop()
         gathered: asyncio.Future | None = None
+        # Repeats the boot sweep of approval records and automation claims
+        # every hour; started once the loop runs, stopped in `finally`.
+        from durin.service.housekeeping import WorkspaceJanitor
+
+        janitor = WorkspaceJanitor(lambda: config.workspace_path)
         api_server = None      # SP4: optional 2nd-port uvicorn front door
         unified_server = None  # Step 4: unified uvicorn on the WS port (default path)
 
@@ -2166,6 +2171,7 @@ def _run_gateway(
             # once this coroutine itself is executing.
             global _automations_sweep_task
             _automations_sweep_task = asyncio.create_task(_automations_orphan_sweep())
+            janitor.start()
 
             # Unified uvicorn server: the gateway serves WS chat + /api/v1 + SPA
             # via a single Starlette app on the websocket channel's port.  The
@@ -2268,6 +2274,7 @@ def _run_gateway(
             console.print(traceback.format_exc())
             logger.error("Gateway crashed unexpectedly:\n{}", traceback.format_exc())
         finally:
+            await janitor.stop()
             await agent.close_mcp()
             cron.stop()
             # No new dreams past this point (cron stopped); terminate any

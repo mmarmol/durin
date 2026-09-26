@@ -201,30 +201,18 @@ def build_service_registry(
     # neither of which a file-only sweep thread can do. The gateway starts an
     # async sweep on its AutomationsRuntime instead.
 
-    # Sweep stale claims (a thread-to-waiting-run mapping released on the
-    # normal answer path) that were never released, e.g. the process died
-    # before a run reached its release or the counterpart just never
-    # replied. Claims are conversation-scoped, not tied to any queue_ttl_s
-    # config knob, so a flat week-long constant bounds them instead.
+    # Expire pending approval records past their TTL, prune resolved ones past
+    # their retention window, and drop automation claims (a thread-to-waiting-
+    # run mapping) that were never released — the process died before a run
+    # reached its release, or the counterpart never replied. `decide`,
+    # `durin approvals list` and the Pending list expire records lazily too,
+    # and the gateway repeats this sweep while it runs (WorkspaceJanitor).
     try:
-        from durin.automations import claims as automations_claims
+        from durin.service.housekeeping import sweep_workspace
 
-        automations_claims.prune(_workspace(), max_age_s=7 * 24 * 3600)
-    except Exception:  # noqa: BLE001 - best-effort sweep
-        pass
-
-    # Expire pending approval records past their TTL and prune resolved ones
-    # past their retention window. `decide` and `durin approvals list` also
-    # apply this lazily, but a workspace nobody touches between gateway
-    # restarts would otherwise keep a `.approvals/` directory that never
-    # catches up.
-    try:
-        from durin.agent import approval_store
-
-        counts = approval_store.expire_and_prune(_workspace())
-        logger.debug("approvals expire_and_prune at boot: {}", counts)
+        logger.debug("workspace housekeeping at boot: {}", sweep_workspace(_workspace()))
     except Exception as exc:  # noqa: BLE001 - best-effort sweep must not block startup
-        logger.warning("approvals expire_and_prune failed at boot: {}", exc)
+        logger.warning("workspace housekeeping failed at boot: {}", exc)
 
     # The boot sweep only helps when the gateway restarts; a run orphaned by
     # a crashed TUI (or any other co-owner of this workspace) would otherwise
