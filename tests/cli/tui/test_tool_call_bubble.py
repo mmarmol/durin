@@ -978,6 +978,26 @@ async def test_pending_approval_mounts_one_bubble_with_approve_and_reject() -> N
 
 
 @pytest.mark.asyncio
+async def test_approval_header_escapes_a_kind_containing_a_bracket() -> None:
+    """The approval `kind` reaches the header through markup=True (see
+    _header_text). Textual stores that string raw and only runs it through
+    Rich's markup parser at render time (Static's own content is a plain str
+    here, not yet a Text object, so _static_plain can't observe the parsed
+    result) — render it here the same way to check what actually shows: an
+    unescaped "[" would open a style tag and swallow "[risky]" instead of
+    displaying it."""
+    from rich.text import Text
+
+    app = DurinApp(agent_loop=None)
+    async with app.run_test() as pilot:
+        app._handle_outbound(_approval_sync({**_PENDING_APPROVAL, "kind": "exec[risky]"}))
+        await pilot.pause()
+        bubble = _approval_bubbles(app)[0]
+        rendered = Text.from_markup(bubble._header_text())
+        assert "exec[risky]" in rendered.plain
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(("row", "reply"), [("approve", "yes"), ("reject", "no")])
 async def test_approval_row_sends_the_verdict_as_the_next_message(row, reply) -> None:
     """A row sends a plain yes/no through the same inbound path as a typed

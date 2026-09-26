@@ -112,6 +112,15 @@ describe("ApprovalCard", () => {
     expect(screen.getByText("network=true, sampling.enabled=true")).toBeInTheDocument();
   });
 
+  it("renders a nested object detail value as pretty-printed JSON in a scrollable block", () => {
+    const { container } = render(<ApprovalCard approval={MCP} onDecide={vi.fn()} />);
+    expect(screen.getByText("config")).toBeInTheDocument();
+    const pre = container.querySelector("dd pre");
+    expect(pre).not.toBeNull();
+    expect(pre!.textContent).toBe(JSON.stringify(MCP.detail!.config, null, 2));
+    expect(pre!.textContent).not.toBe(JSON.stringify(MCP.detail!.config));
+  });
+
   it("sends the verdict through onDecide and reports the hand-off", async () => {
     const onDecide = vi
       .fn()

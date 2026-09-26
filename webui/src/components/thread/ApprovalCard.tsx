@@ -34,6 +34,21 @@ function displayValue(value: unknown): string {
   return String(value);
 }
 
+/** True for a detail value that reads better pretty-printed (an object or
+ *  array) than as the one-line JSON `displayValue` gives every other kind of
+ *  value — an MCP `config`, for example. */
+function isNestedValue(value: unknown): boolean {
+  return value !== null && typeof value === "object";
+}
+
+function displayNested(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return displayValue(value);
+  }
+}
+
 /**
  * One scan finding as text. A skill-scan finding is `{category, severity,
  * where, detail}` (durin/agent/skills_store.py) and reads as
@@ -184,7 +199,13 @@ export function ApprovalCard({
                   <div key={key} className="contents">
                     <dt className="text-muted-foreground">{key}</dt>
                     <dd className="min-w-0 break-words font-mono text-foreground/85">
-                      {displayValue(value)}
+                      {isNestedValue(value) ? (
+                        <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md bg-background/60 p-1.5 text-[11px]">
+                          {displayNested(value)}
+                        </pre>
+                      ) : (
+                        displayValue(value)
+                      )}
                     </dd>
                   </div>
                 ))}
