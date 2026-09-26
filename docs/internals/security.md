@@ -579,11 +579,19 @@ as a bypass.
 `asyncio.to_thread`), so a slow check — a long command, the DNS lookups of the
 private-URL guard — delays its own call while the event loop keeps serving
 other chats between the guard's steps. A single regex call holds the GIL for
-its duration, so the loop runs between pattern calls, not during one. Real
-long commands are cheap to check, but adversarial repetition of an anchor word
-is quadratic for several patterns, and a thread cannot preempt a regex call. So
-`MAX_CHECKED_COMMAND_CHARS` is sized to that worst case, and a longer command
-is refused first, unchecked. The refusal is not approvable (nothing checked the
+its duration, so the loop runs between pattern calls, not during one. Several
+hard-floor/deny/memory-vault patterns used to be quadratic under an
+adversarial repeat of an anchor word ("rm "/"cp "/"sudo -x "/... thousands of
+times) with no trigger literal anywhere: each occurrence made the pattern
+rescan the rest of the command before failing. A cheap literal pre-check
+(`_cheap_prefilter_ok`'s tables, `_guard_memory_mutation`'s own `"memory/"`
+check) now rules a pattern out in one linear pass whenever the literal its
+match requires is provably absent, without changing the pattern itself or
+what it refuses — real long commands and the adversarial case are both cheap
+now. What is not covered is a caller-configured `tools.exec.deny_patterns`/
+`allow_patterns` entry, arbitrary regex whose own worst case is unanalyzed;
+`MAX_CHECKED_COMMAND_CHARS` still bounds that, and a longer command is
+refused first, unchecked. The refusal is not approvable (nothing checked the
 command) and tells the model to write long content with `write_file` and run
 the file. Then
 it applies the hard floor, then deny and allow patterns, then

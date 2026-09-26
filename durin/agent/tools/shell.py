@@ -94,16 +94,21 @@ _ALLOWLIST_RULE = "tools.exec.allow_patterns"
 
 # The longest command the guard checks; a longer one is refused unchecked
 # (fail closed, and not approvable) with a pointer to write_file, the tool for
-# long content. The bound comes from the guard's worst case, not its typical
-# one: realistic long commands check in tens of milliseconds even at 100k+
-# characters, but several patterns are quadratic when one anchor word ("rm",
-# "cp", "sudo -x") repeats thousands of times, since each occurrence makes the
-# pattern rescan the rest of the command. A single regex call holds the GIL
-# for its whole run, so checking in a worker thread (``_check_off_loop``) lets
-# other chats run between pattern calls but not during one: at 25k characters
-# one such call already takes over a second, while at this bound the whole
-# adversarial check stays near a third of a second.
-MAX_CHECKED_COMMAND_CHARS = 10_000
+# long content. Every hardcoded deny/hard-floor/vault pattern below is either
+# inherently linear or, where it isn't, gated by a cheap literal pre-check
+# (``_cheap_prefilter_ok``'s tables, ``_guard_memory_mutation``'s own
+# "memory/" check) that rules it out in one linear pass when the literal its
+# match requires is absent — the case that used to be quadratic: an
+# adversarial repeat of an anchor word ("rm "/"cp "/"sudo -x "/... thousands
+# of times with no trigger literal anywhere, where each occurrence made the
+# pattern rescan the rest of the command before failing. A caller-configured
+# ``tools.exec.deny_patterns``/``allow_patterns`` entry is arbitrary regex, not
+# analyzed this way, so this bound still limits its own worst case. At this
+# size the whole adversarial check (every pattern, off the loop so other
+# chats still run meanwhile) stays well under a tenth of a second; a
+# realistic long command (a heredoc, a long script, a large JSON argument)
+# checks just as fast, since none of this cost was ever about typical input.
+MAX_CHECKED_COMMAND_CHARS = 200_000
 
 # A command position: the start of the command, right after a separator
 # (including a backtick or an opening brace, for `` `cmd` `` and `{ cmd; }`),
@@ -165,6 +170,72 @@ _HARD_FLOOR_PATTERNS: tuple[str, ...] = (
     _CMD_START + r"(?:\S*python\S*\s+-m\s+)?durin\b\s+[\"']?approvals[\"']?"
     r"(?:\s+-\S+(?:\s+[^-\s]\S*)?)*\s+[\"']?(?:approve|reject)\b",
 )
+
+# Cheap pre-filter for a pattern above keyed by its exact text: a tuple of
+# clauses, ANDed together, each clause a tuple of literal substrings ORed
+# together. Every pattern here requires ALL of its clauses' literals to
+# appear (in lowercase) SOMEWHERE in the command before it can possibly
+# match — verified by inspection against the pattern it gates, not derived
+# mechanically — so when a clause's literals are all absent, the regex is
+# skipped instead of run: it could not have matched anyway. This is what
+# keeps each of these patterns fast on an adversarial command that repeats
+# an anchor word (e.g. "sudo -x " thousands of times) without ever supplying
+# the pattern's own required literal: instead of the regex engine failing
+# only after an expensive scan at every anchor occurrence (quadratic over
+# the whole command), the single substring scan below rules the whole
+# pattern out in one linear pass. A pattern not listed here is always run —
+# skipping it was not proven safe, so it is not skipped.
+_HARD_FLOOR_PRECHECKS: dict[str, tuple[tuple[str, ...], ...]] = {
+    _HARD_FLOOR_PATTERNS[0]: (("-",),),                                        # rm: needs a flag
+    _HARD_FLOOR_PATTERNS[1]: (("mkfs", "diskpart"),),
+    _HARD_FLOOR_PATTERNS[2]: (("/dev/",),),                                     # dd of=<raw disk>
+    _HARD_FLOOR_PATTERNS[6]: (("shutdown", "reboot", "poweroff", "halt"),),
+    _HARD_FLOOR_PATTERNS[7]: (("init",),),
+    _HARD_FLOOR_PATTERNS[8]: (("durin",), ("approv",)),                        # "approvals"/"approve"
+}
+
+
+def _cheap_prefilter_ok(lower: str, clauses: tuple[tuple[str, ...], ...] | None) -> bool:
+    """Whether the regex a *clauses* entry gates might still match — see
+    the precheck tables' own comment for what a clause means and why this
+    is safe. ``None`` (no entry) always allows the regex to run."""
+    return clauses is None or all(
+        any(lit in lower for lit in alternatives) for alternatives in clauses
+    )
+
+
+# The exec tool's own hardcoded deny patterns (a config-supplied deny_patterns
+# list is prepended to these in ExecTool.__init__, never mixed into this
+# constant, since only THESE fixed strings are analyzed for a safe precheck
+# below — an arbitrary user-supplied pattern is not).
+_DEFAULT_DENY_PATTERNS: tuple[str, ...] = (
+    r"\brm\s+-[rf]{1,2}\b",          # rm -r, rm -rf, rm -fr
+    r"\bdel\s+/[fq]\b",              # del /f, del /q
+    r"\brmdir\s+/s\b",               # rmdir /s
+    r"(?:^|[;&|]\s*)format(?!=)\b",   # format (as standalone command only)
+    r"\b(mkfs|diskpart)\b",          # disk operations
+    r"\bdd\s+if=",                   # dd
+    r">\s*/dev/sd",                  # write to disk
+    r"\b(shutdown|reboot|poweroff)\b",  # system power
+    r":\(\)\s*\{.*\};\s*:",          # fork bomb
+    # Block writes to durin internal state files. history.jsonl is
+    # append-only and owned by append_history(); a direct write
+    # corrupts the cursor format and breaks every later append.
+    r">>?\s*\S*history\.jsonl",                       # > / >> redirect
+    r"\btee\b[^|;&<>]*history\.jsonl",                 # tee / tee -a
+    r"\b(?:cp|mv)\b(?:\s+[^\s|;&<>]+)+\s+\S*history\.jsonl",  # cp/mv target
+    r"\bdd\b[^|;&<>]*\bof=\S*history\.jsonl",        # dd of=
+    r"\bsed\s+-i[^|;&<>]*history\.jsonl",              # sed -i
+)
+
+# Same idea as _HARD_FLOOR_PRECHECKS, for the history.jsonl guards above: all
+# five require the literal "history.jsonl" somewhere in the command, so an
+# adversarial repeat of "cp "/"mv "/"tee "/"dd "/"sed " with no such target
+# anywhere is ruled out in one linear scan instead of failing expensively at
+# every occurrence.
+_DENY_PRECHECKS: dict[str, tuple[tuple[str, ...], ...]] = {
+    p: (("history.jsonl",),) for p in _DEFAULT_DENY_PATTERNS[9:14]
+}
 
 
 @dataclass(frozen=True)
@@ -279,25 +350,7 @@ class ExecTool(Tool, ContextAware):
         # This turn's context: the instance is shared by concurrent turns.
         self._ctx = RequestContextVar("exec_request_ctx")
         self.sandbox = sandbox
-        self.deny_patterns = (deny_patterns or []) + [
-            r"\brm\s+-[rf]{1,2}\b",          # rm -r, rm -rf, rm -fr
-            r"\bdel\s+/[fq]\b",              # del /f, del /q
-            r"\brmdir\s+/s\b",               # rmdir /s
-            r"(?:^|[;&|]\s*)format(?!=)\b",   # format (as standalone command only)
-            r"\b(mkfs|diskpart)\b",          # disk operations
-            r"\bdd\s+if=",                   # dd
-            r">\s*/dev/sd",                  # write to disk
-            r"\b(shutdown|reboot|poweroff)\b",  # system power
-            r":\(\)\s*\{.*\};\s*:",          # fork bomb
-            # Block writes to durin internal state files. history.jsonl is
-            # append-only and owned by append_history(); a direct write
-            # corrupts the cursor format and breaks every later append.
-            r">>?\s*\S*history\.jsonl",                       # > / >> redirect
-            r"\btee\b[^|;&<>]*history\.jsonl",                 # tee / tee -a
-            r"\b(?:cp|mv)\b(?:\s+[^\s|;&<>]+)+\s+\S*history\.jsonl",  # cp/mv target
-            r"\bdd\b[^|;&<>]*\bof=\S*history\.jsonl",        # dd of=
-            r"\bsed\s+-i[^|;&<>]*history\.jsonl",              # sed -i
-        ]
+        self.deny_patterns = (deny_patterns or []) + list(_DEFAULT_DENY_PATTERNS)
         self.allow_patterns = allow_patterns or []
         self.restrict_to_workspace = restrict_to_workspace
         self.path_append = path_append
@@ -774,7 +827,10 @@ class ExecTool(Tool, ContextAware):
             )
         lower = cmd.lower()
 
-        floor = tuple(p for p in _HARD_FLOOR_PATTERNS if re.search(p, lower))
+        floor = tuple(
+            p for p in _HARD_FLOOR_PATTERNS
+            if _cheap_prefilter_ok(lower, _HARD_FLOOR_PRECHECKS.get(p)) and re.search(p, lower)
+        )
         if floor:
             return CommandRefusal(
                 "hard_floor",
@@ -791,7 +847,9 @@ class ExecTool(Tool, ContextAware):
         if not explicitly_allowed:
             denied = tuple(
                 p for p in self.deny_patterns
-                if p not in approved_rules and re.search(p, lower)
+                if p not in approved_rules
+                and _cheap_prefilter_ok(lower, _DENY_PRECHECKS.get(p))
+                and re.search(p, lower)
             )
             if denied:
                 named = ", ".join(f"rule: {p}" for p in denied)
@@ -867,7 +925,16 @@ class ExecTool(Tool, ContextAware):
         Returns an actionable error (pointing at the memory tools) when the
         command would rm/mv/cp/truncate/tee/sed -i/dd/redirect into a path
         under ``memory/``; ``None`` otherwise. Reads are never matched.
+
+        Every pattern below ends in the literal ``memory/`` (``_MEMREF``), so
+        it is a necessary condition for any of them to match — checked once,
+        cheaply, before the loop, instead of each pattern separately failing
+        only after an expensive scan on a command that repeats an anchor
+        word ("rm "/"cp "/... thousands of times) with no ``memory/`` in it
+        at all.
         """
+        if "memory/" not in lowered_cmd:
+            return None
         for pattern in cls._MEMORY_MUTATION_PATTERNS:
             if re.search(pattern, lowered_cmd):
                 return (
