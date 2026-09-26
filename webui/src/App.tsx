@@ -866,7 +866,7 @@ function Shell({
               initialTriage={openSkillTriage}
               onAskDurin={(binName) => {
                 setView("chat");
-                setPendingPrompt(`Ayúdame a instalar ${binName}`);
+                setPendingPrompt(t("skills.requirements.askPrompt", { bin: binName }));
               }}
             />
           </div>

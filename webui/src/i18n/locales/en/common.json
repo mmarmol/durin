@@ -1856,6 +1856,7 @@
       "environment": "Environment",
       "install": "Install",
       "durinCanHelp": "[durin can help]",
+      "askPrompt": "Help me install {{bin}}",
       "needs": "Needs",
       "none": "No requirements detected"
     },

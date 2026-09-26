@@ -1856,6 +1856,7 @@
       "environment": "環境",
       "install": "インストール",
       "durinCanHelp": "[durin が手伝えます]",
+      "askPrompt": "{{bin}} のインストールを手伝ってください",
       "needs": "必要",
       "none": "要件は検出されませんでした"
     },

@@ -1856,6 +1856,7 @@
       "environment": "환경",
       "install": "설치",
       "durinCanHelp": "[durin이 도와줄 수 있음]",
+      "askPrompt": "{{bin}} 설치를 도와주세요",
       "needs": "필요",
       "none": "감지된 요구 사항 없음"
     },

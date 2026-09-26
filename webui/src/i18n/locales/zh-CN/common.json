@@ -1856,6 +1856,7 @@
       "environment": "环境",
       "install": "安装",
       "durinCanHelp": "[durin 可以帮忙]",
+      "askPrompt": "帮我安装 {{bin}}",
       "needs": "需要",
       "none": "未检测到依赖要求"
     },

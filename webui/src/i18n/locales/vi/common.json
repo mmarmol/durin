@@ -1856,6 +1856,7 @@
       "environment": "Môi trường",
       "install": "Cài đặt",
       "durinCanHelp": "[durin có thể giúp]",
+      "askPrompt": "Hãy giúp tôi cài đặt {{bin}}",
       "needs": "Cần",
       "none": "Không phát hiện yêu cầu nào"
     },
