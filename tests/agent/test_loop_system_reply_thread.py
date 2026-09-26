@@ -64,3 +64,20 @@ async def test_a_slack_thread_session_still_answers_in_its_thread(tmp_path):
     out = await _reply_to_note(_loop(tmp_path), "slack:C1", "slack:C1:1712345678.000100")
 
     assert out.metadata["slack"] == {"thread_ts": "1712345678.000100"}
+
+
+@pytest.mark.asyncio
+async def test_a_feishu_topic_session_answers_in_its_topic(tmp_path):
+    out = await _reply_to_note(_loop(tmp_path), "feishu:oc_1", "feishu:oc_1:om_root42")
+
+    assert (out.channel, out.chat_id) == ("feishu", "oc_1")
+    assert out.metadata["message_id"] == "om_root42"
+    assert out.metadata["thread_id"] == "om_root42"
+
+
+@pytest.mark.asyncio
+async def test_a_feishu_chat_with_no_topic_carries_no_thread(tmp_path):
+    out = await _reply_to_note(_loop(tmp_path), "feishu:oc_1", "feishu:oc_1")
+
+    assert "message_id" not in out.metadata
+    assert "thread_id" not in out.metadata

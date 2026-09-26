@@ -361,7 +361,12 @@ thread also marks that thread's history as already known, so the first reply
 in it does not re-fetch context the session already holds. A Telegram tap
 inside a forum topic follows the same rule: it keeps the topic's session, the
 same one a message typed in that topic uses, and its reply goes back into the
-topic.
+topic. Feishu's `topic_isolation` (on by default) does the same for a group:
+the session key is `feishu:<chat>:<root_or_message_id>`, taking the message's
+`root_id` when it replies inside an existing topic and its own `message_id`
+when it opens one — either way, that id anchors every later reply, including
+a background workflow's or sub-agent's result, back into the same topic (see
+[loop.md](loop.md)).
 
 ### Inbound deduplication
 

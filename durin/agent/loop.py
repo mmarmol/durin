@@ -2988,6 +2988,15 @@ class AgentLoop:
             # the reply goes to the topic, not the group's main thread.
             with suppress(ValueError):
                 outbound_metadata["message_thread_id"] = int(key.rsplit(":topic:", 1)[1])
+        if channel == "feishu" and key.startswith("feishu:") and key.count(":") >= 2:
+            # A topic session's key is feishu:<chat_id>:<root_or_message_id>.
+            # Feishu's Reply API keeps a reply inside that topic as long as it
+            # targets any message id that belongs to it, so the same anchor
+            # id doubles as both the reply target and the "we're in a topic"
+            # signal that feishu.py's send() reads.
+            anchor_id = key.split(":", 2)[2]
+            outbound_metadata["message_id"] = anchor_id
+            outbound_metadata["thread_id"] = anchor_id
         if origin_message_id := msg.metadata.get("origin_message_id"):
             outbound_metadata["origin_message_id"] = origin_message_id
         return OutboundMessage(
