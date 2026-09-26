@@ -94,21 +94,29 @@ _ALLOWLIST_RULE = "tools.exec.allow_patterns"
 
 # The longest command the guard checks; a longer one is refused unchecked
 # (fail closed, and not approvable) with a pointer to write_file, the tool for
-# long content. Every hardcoded deny/hard-floor/vault pattern below is either
-# inherently linear or, where it isn't, gated by a cheap literal pre-check
-# (``_cheap_prefilter_ok``'s tables, ``_guard_memory_mutation``'s own
-# "memory/" check) that rules it out in one linear pass when the literal its
-# match requires is absent — the case that used to be quadratic: an
-# adversarial repeat of an anchor word ("rm "/"cp "/"sudo -x "/... thousands
-# of times with no trigger literal anywhere, where each occurrence made the
-# pattern rescan the rest of the command before failing. A caller-configured
-# ``tools.exec.deny_patterns``/``allow_patterns`` entry is arbitrary regex, not
-# analyzed this way, so this bound still limits its own worst case. At this
-# size the whole adversarial check (every pattern, off the loop so other
-# chats still run meanwhile) stays well under a tenth of a second; a
-# realistic long command (a heredoc, a long script, a large JSON argument)
-# checks just as fast, since none of this cost was ever about typical input.
-MAX_CHECKED_COMMAND_CHARS = 200_000
+# long content. The hardcoded deny/hard-floor/vault patterns below are each
+# gated by a cheap literal pre-check (``_cheap_prefilter_ok``'s tables,
+# ``_guard_memory_mutation``'s own "memory/" check) that rules the regex out
+# in one linear pass when the literal its match requires is absent, so an
+# adversarial repeat of a common anchor with no trigger literal anywhere
+# (the shape the pre-checks were built for) stays cheap even at 200k
+# characters. But the pre-check literal is only a NECESSARY condition, not a
+# sufficient one, and for two of these patterns it is trivial to satisfy
+# without ever building a real match: "rm -" repeated (the hard floor's
+# rm-recursive pattern needs only a literal "-" ahead) and one leading
+# "memory/" token followed by a repeated verb ("rm "/"dd "/"tee "/"sed -i
+# "/"cp "/"mv ", each memory-vault pattern needs only "memory/" to appear
+# somewhere). Both still drive the same O(n²) the pre-checks otherwise fix —
+# tightening the literal or adding an atomic group only lowers the constant,
+# and bounding how far the match may look ahead would open a real bypass
+# ("rm -rf <filler> /"), so neither was attempted here. A single regex call
+# holds the GIL for its own duration and cannot be preempted mid-call, so the
+# cap is sized to this remaining worst case, not to the common one the
+# pre-checks already made cheap: on the measuring machine, the memory-vault
+# "dd" shape above reaches about half a second around 20k characters (see
+# tests/tools/test_exec_policy.py's cap-shape tests for the exact numbers),
+# which is where this bound sits.
+MAX_CHECKED_COMMAND_CHARS = 20_000
 
 # A command position: the start of the command, right after a separator
 # (including a backtick or an opening brace, for `` `cmd` `` and `{ cmd; }`),
