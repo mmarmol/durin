@@ -844,21 +844,24 @@ still sends the page's own name as `Host`. To reach the dashboard under any
 other name (a hosts-file alias, a tailnet name), configure the setup secret;
 reverse-proxy deployments already do, and that path is unchanged.
 
-The chat socket has the same exposure in local mode — no setup secret and no
-token required, the gateway's default when the config has no
-`[channels.websocket]` section — where it accepts a connection that presents no
-token. `WebSocketChannel._ws_auth` accepts such an anonymous handshake only
-with a loopback `Host` and, when the client sends an `Origin`, a loopback
-`Origin` host (`localhost`, `127.0.0.1`, `[::1]`); otherwise it closes with
-1008. The `Origin` check matters beyond rebinding: a socket is not bound by the
-same-origin policy, so any site the person visits could open
-`ws://127.0.0.1:<port>` directly — with a loopback `Host` — and chat with the
-agent; the browser always sends that site's own `Origin` on the upgrade. A
-non-browser local client sends no `Origin` and still connects. The dashboard is
-unaffected: it connects with a bootstrap token, and in local mode it is served
-under a loopback name, so its `Origin` is loopback too. A connection with a
-valid token, a token-required config, and a config with a setup secret are
-unchanged.
+The chat socket has the same exposure whenever no token is required — the
+gateway's default when the config has no `[channels.websocket]` section, or a
+hand-written config setting `websocket_requires_token: false` — where it
+accepts a connection that presents no token. `WebSocketChannel._ws_auth`
+accepts such an anonymous handshake only with a loopback `Host` and, when the
+client sends an `Origin`, a loopback `Origin` host (`localhost`, `127.0.0.1`,
+`[::1]`); otherwise it closes with 1008. This holds whether or not a setup
+secret is configured: the secret only changes how a *token* is obtained
+(above), and an anonymous connection carries none, so a deployment that pairs
+a setup secret with `websocket_requires_token: false` gets the same loopback
+check as one with neither. The `Origin` check matters beyond rebinding: a
+socket is not bound by the same-origin policy, so any site the person visits
+could open `ws://127.0.0.1:<port>` directly — with a loopback `Host` — and
+chat with the agent; the browser always sends that site's own `Origin` on the
+upgrade. A non-browser local client sends no `Origin` and still connects. The
+dashboard is unaffected: it connects with a bootstrap token, and in local mode
+it is served under a loopback name, so its `Origin` is loopback too. A
+connection with a valid token, and a token-required config, are unchanged.
 
 `AuthService` (`durin/service/auth.py`) owns token lifecycle routes; it calls
 `principal.require(Scope.SYSTEM_WRITE)` before issuing or revoking tokens, so

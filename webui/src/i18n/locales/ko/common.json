@@ -542,6 +542,11 @@
         "rerank": "검색 재순위화",
         "dream": "Dream (메모리 통합)"
       },
+      "nameGate": {
+        "prioritize": "우선",
+        "require": "필수",
+        "off": "끄기"
+      },
       "rows": {
         "crossEncoderEnabled": "Cross-encoder 리랭커",
         "crossEncoderModel": "리랭커 모델",
@@ -555,6 +560,11 @@
         "dreamAbsorbSemanticThreshold": "의미 유사도 거리",
         "dreamThrottle": "반응형 쓰로틀(초)",
         "dreamMaxSeconds": "실행당 최대 시간(초)",
+        "dreamEscalateFloor": "조사 심사로 넘기는 기준",
+        "dreamTier2Confidence": "조사 병합 확신도",
+        "dreamJudgeConcurrency": "동시 진행 심사 호출 수",
+        "dreamRecheckDays": "미확정 쌍 재심사까지(일)",
+        "dreamNameGate": "의미 후보의 이름 신호",
         "dreamAlwaysOnBudget": "상시 고정 예산(토큰)"
       },
       "help": {
@@ -570,6 +580,11 @@
         "dreamAbsorbSemanticThreshold": "같은 유형의 두 엔터티를 심사가 동일하다고 볼 만큼 가까운 정도(임베딩 거리, 약 0~1; 0.20 ≈ 90% 유사)입니다. 낮을수록 더 엄격합니다. 실제 병합 여부는 여전히 심사가 결정합니다.",
         "dreamThrottle": "반응형 Dream 실행(컴팩션 후 / 세션 종료 시) 사이의 최소 간격(초)입니다. 몰림 현상을 흡수해 중복 실행이 쌓이지 않게 합니다. 0이면 비활성화됩니다. 일일 cron은 절대 제한되지 않습니다.",
         "dreamMaxSeconds": "추출 단계 1회당 실제 소요 시간의 상한입니다. 도달하면 현재 세션 처리 후 양보하며, 세션별 커서가 다음 트리거에서 나머지를 이어 처리합니다. 0 = 무제한.",
+        "dreamEscalateFloor": "저렴한 심사가 판정하지 못한 쌍 — 'unclear', 또는 병합 확신도보다 낮은 'same' — 을, 답하기 전에 두 엔터티를 모두 읽는 범위가 제한된 조사 하위 에이전트에 넘기는 확신도(0-100)입니다. 0이면 에스컬레이션이 꺼집니다.",
+        "dreamTier2Confidence": "조사된 판정이 병합되기 위해 필요한 최소 확신도(0-100)입니다. 페이지와 그 계보를 먼저 읽기 때문에 저렴한 심사보다 낮은 기준을 적용받습니다. 이 값보다 낮으면 해당 쌍은 사용자의 수신함으로 들어갑니다.",
+        "dreamJudgeConcurrency": "정제 단계에서 동시에 실행되는 심사 호출 수입니다(1-8). 병합은 후보 순서대로 여전히 한 번에 하나씩 적용됩니다.",
+        "dreamRecheckDays": "판정이 확정되지 않은 쌍(해석 불가능한 응답, 'unclear', 병합 기준보다 낮은 'same')을 다시 심사하기까지의 일수입니다. 0이면 실행할 때마다 다시 심사합니다.",
+        "dreamNameGate": "이름 신호가 임베딩상 가까운 후보를 어떻게 유도하는지입니다. 'prioritize'는 이름이 토큰을 공유하거나 서로 포함하는 쌍을 먼저 심사하고, 나머지는 거리순으로 심사합니다. 'require'는 그런 쌍만 심사합니다. 'off'는 거리만으로 정렬합니다. 별칭 쌍은 항상 심사됩니다.",
         "dreamAlwaysOnBudget": "모든 프롬프트에 고정되는 '상시' 지침의 토큰 예산입니다. Dream이 피드백(태도/관행)의 우선순위를 매기고 모순을 제거한 뒤, 우선순위가 가장 높은 항목을 이 예산에 맞춰 담습니다. 0이면 고정을 비활성화합니다."
       },
       "crossEncoderModelPlaceholder": "모델 ID (예: BAAI/bge-reranker-base)",
@@ -1160,17 +1175,22 @@
       "description": "턴과 하위 에이전트가 동시에 몇 개까지 실행되는지를 정합니다. 변경 사항은 재시작 없이 즉시 적용됩니다.",
       "sections": {
         "caps": "제한",
-        "live": "실시간"
+        "live": "실시간",
+        "workflows": "워크플로 분기"
       },
       "rows": {
         "interactive": "대화형 턴",
         "ceiling": "전역 상한",
-        "subagents": "하위 에이전트"
+        "subagents": "하위 에이전트",
+        "workflowLlm": "병렬 LLM 분기",
+        "workflowScript": "병렬 스크립트 분기"
       },
       "help": {
         "interactive": "모든 세션을 통틀어 동시에 실행되는 대화형 턴의 최대 수입니다.",
         "ceiling": "전체 동시 작업의 최대치입니다 — 대화형 턴과 하위 에이전트를 합친 값입니다.",
-        "subagents": "동시에 실행되는 하위 에이전트의 최대 수입니다."
+        "subagents": "동시에 실행되는 하위 에이전트의 최대 수입니다.",
+        "workflowLlm": "워크플로 parallel 노드 안에서 동시에 실행되는 에이전트 분기입니다(공급자의 속도 제한에 따라 제한됨).",
+        "workflowScript": "워크플로 parallel 노드 안에서 동시에 실행되는 스크립트 분기입니다 — 비용이 저렴해 LLM 분기보다 넓게 실행해도 안전합니다."
       },
       "live": {
         "interactive": "대화형",
@@ -1254,6 +1274,12 @@
     "session_persistent": "영구 (루프 패스 간 기억 유지)",
     "prompt": "프롬프트",
     "routes": "경로",
+    "detached": "분리 실행 (실행 후 계속)",
+    "inputsFrom": "입력 출처",
+    "outputSchema": "출력 스키마 (JSON)",
+    "outputSchemaInvalid": "잘못된 JSON입니다 — 파싱될 때까지 스키마가 저장되지 않습니다.",
+    "outputFile": "출력 파일",
+    "reuse": "변경 없으면 재사용 (생성자가 일치하면 건너뜀)",
     "routingShape": "라우팅 방식",
     "routingShapeBinary": "이진 (통과 / 실패)",
     "routingShapeMultiway": "다중 (사용자 지정 라벨)",
@@ -1285,16 +1311,25 @@
     "scriptEnv": "환경 변수",
     "scriptEnvClean": "정리됨 (최소 + DURIN_*)",
     "scriptEnvInherit": "전체 환경 변수 상속",
+    "scriptSecrets": "시크릿",
+    "scriptSecretsPlaceholder": "ZENDESK_API_TOKEN, MXHERO_KEY",
+    "scriptSecretsHint": "저장된 시크릿 이름이 환경 변수로 주입됩니다. 각각 'exec' 범위를 허용해야 합니다.",
+    "ioArtifacts": "선언된 산출물",
+    "ioArtifactsPlaceholder": "context.json | 통합된 티켓 컨텍스트\nevidence.json",
+    "ioArtifactsHint": "줄마다 하나씩: 경로 | 선택적 설명. 실행이 작업 폴더에 생성하기로 약속한 파일입니다 — 없는 파일은 실행 후 경고로 보고됩니다.",
     "parallelMode": "모드",
     "parallelStatic": "정적 (고정된 분기)",
     "parallelDynamic": "동적 (워커 ×N)",
+    "parallelFromNode": "런타임에 선택됨 (노드에서 분기)",
     "parallelBranches": "분기",
     "parallelWorker": "워커 템플릿",
     "parallelListFrom": "목록 소스",
+    "parallelBranchesFrom": "분기 출처",
     "parallelMaxConcurrency": "최대 동시 실행 수",
     "parallelReconcile": "병합",
     "parallelNeedBranch": "병렬로 실행할 분기를 하나 이상 선택하세요.",
     "parallelNeedWorkerList": "워커 템플릿과 목록을 출력하는 노드를 선택하세요.",
+    "parallelNeedBranchesFrom": "실행할 분기의 이름을 출력하는 노드를 선택하세요.",
     "ioInputTitle": "워크플로 입력",
     "ioOutputTitle": "워크플로 출력",
     "ioInputHint": "이 워크플로가 입력으로 받는 것입니다.",
@@ -1334,7 +1369,22 @@
     "runHistory": "실행 기록",
     "historyRetention": "기록과 작업 폴더는 최근 실행만 보관합니다 (workflow.keep_runs)",
     "copySession": "세션 키 복사",
+    "nodePanel": {
+      "title": "단계 상세",
+      "command": "명령",
+      "exitCode": "종료 코드",
+      "stdout": "출력",
+      "stderr": "오류",
+      "transcript": "이 단계가 한 일",
+      "transcriptLoading": "단계 기록을 불러오는 중…",
+      "transcriptMissing": "이 단계의 기록을 더 이상 사용할 수 없습니다.",
+      "noDetail": "이 단계는 자체 기록을 남기지 않습니다 — 작업 내용은 하위 실행이나 분기에 있습니다.",
+      "round": "{{round}}/{{maxRounds}}라운드",
+      "roundNoMax": "{{round}}라운드"
+    },
     "sessionCopied": "세션 키 복사됨",
+    "copyOutput": "최종 출력 복사",
+    "outputCopied": "최종 출력이 복사되었습니다",
     "workerLabel": "워커 {{index}}",
     "branchLabel": "분기 {{id}}",
     "needsInputTitle": "입력을 기다리는 중",
@@ -1351,12 +1401,51 @@
     "passOf": "패스 {{iteration}}/{{budget}}",
     "finalPass": "마지막 패스",
     "continuesSession": "세션 이어감",
+    "nodeDuration": "소요 시간",
+    "nodeTypical": "보통",
+    "nodeArtifacts": "생성",
+    "runElapsed": "경과 시간",
+    "runTypicalTotal": "이전 실행 ~{{duration}}",
     "persistentInParallelWarning": "이 노드는 {{parallelId}}의 분기입니다 — 병렬 유닛에는 영구 세션을 사용할 수 없습니다. 저장이 실패합니다.",
     "runStatus": {
       "ok": "정상",
       "no_session": "세션 없음",
       "persist_failed": "저장 실패",
-      "node_failed": "실패"
+      "node_failed": "실패",
+      "reused": "재사용됨",
+      "completed": "완료",
+      "running": "실행 중",
+      "needs_input": "입력 대기 중",
+      "exhausted": "재시도 소진",
+      "aborted": "중단됨",
+      "crashed": "충돌",
+      "cancelled": "취소됨"
+    },
+    "seedBanner": {
+      "title": "내장 워크플로 업데이트",
+      "intro": "이 내장 워크플로에는 더 새로운 번들 버전이 있지만, 사용자가 사본을 수정했습니다. 차이를 검토한 뒤 업데이트하거나, 이 버전을 무시하세요.",
+      "reasonEdited": "로컬에서 수정됨",
+      "reasonUnknown": "로컬 사본이 다릅니다 (출처 불명)",
+      "viewDiff": "차이 보기",
+      "hideDiff": "차이 숨기기",
+      "apply": "내장 버전으로 업데이트",
+      "dismiss": "무시",
+      "noDiff": "(사용 가능한 차이 없음)"
+    },
+    "parallelCandidatePool": "후보 분기 (풀)",
+    "runtimeUpTo": "최대 {{n}} · runtime",
+    "runtimeBranches": "runtime 분기",
+    "showDataEdges": "데이터 흐름",
+    "openSubworkflow": "워크플로 \"{{name}}\" 열기",
+    "badge": {
+      "detached": "백그라운드",
+      "schema": "스키마",
+      "reuse": "변경 없으면 재사용",
+      "persistent": "영구 세션",
+      "skills_one": "스킬 1개",
+      "skills_other": "스킬 {{n}}개",
+      "secrets_one": "시크릿 1개",
+      "secrets_other": "시크릿 {{n}}개"
     }
   },
   "runs": {
@@ -1371,6 +1460,10 @@
     "subOf": "{{id}}의 하위",
     "countLabel_one": "실행 {{count}}건",
     "countLabel_other": "실행 {{count}}건",
+    "selectPrompt": "실행을 선택하세요",
+    "selectHint": "해당 실행의 노드 추적, 소요 시간, 하위 실행, 최종 출력이 여기에 표시됩니다.",
+    "subRuns": "하위 실행",
+    "partOf": "{{workflow}}의 일부",
     "backToList": "실행 목록으로 돌아가기",
     "openAutomationsInbox": "자동화 받은함 보기"
   },
@@ -1697,7 +1790,8 @@
       "carries_code": "실행 가능한 코드({{detail}})를 포함합니다 — 승인 전에 검토하세요.",
       "declared_deps": "종속성을 선언합니다(자동 실행되지 않음): {{detail}}.",
       "verdict_caution": "보안 스캔에서 주의로 표시되었습니다.",
-      "verdict_dangerous": "보안 스캔에서 위험으로 표시되었습니다."
+      "verdict_dangerous": "보안 스캔에서 위험으로 표시되었습니다.",
+      "invalid_skill": "SKILL.md가 잘못되었습니다: {{detail}}"
     },
     "audit": {
       "running": "AI로 감사하는 중…",
@@ -1762,6 +1856,7 @@
       "environment": "환경",
       "install": "설치",
       "durinCanHelp": "[durin이 도와줄 수 있음]",
+      "askPrompt": "{{bin}} 설치를 도와주세요",
       "needs": "필요",
       "none": "감지된 요구 사항 없음"
     },
@@ -1787,7 +1882,15 @@
       "acquireExplainer": "공개 레지스트리의 스킬입니다. 가져오면 승인을 위해 '대기 중'에 들어갑니다.",
       "importByRef": "참조로 가져오기"
     },
-    "title": "Skills"
+    "title": "Skills",
+    "repair": {
+      "button": "복구",
+      "apply": "복구 적용",
+      "cancel": "취소",
+      "previewTitle": "제안된 복구 내용 (아직 아무것도 기록되지 않음)",
+      "stillInvalid": "복구 후에도 여전히 잘못됨: {{errors}}",
+      "approveGated": "이 스킬의 SKILL.md가 잘못되었습니다 — 먼저 복구하세요."
+    }
   },
   "chat": {
     "fallbackTitle": "채팅 {{id}}",
@@ -2119,6 +2222,7 @@
       "entityUpdatedDefault": "엔터티 수정됨",
       "memoryForgot": "잊음 {{uri}}",
       "memoriesRecalling": "기억 회상 중…",
+      "memoriesRecalled_one": "기억 {{count}}건 회상",
       "memoriesRecalled_other": "기억 {{count}}건 회상",
       "skillImport": "가져오기 {{source}}"
     }
@@ -2455,6 +2559,20 @@
     "finished": "완료 ({{count}})",
     "empty": "진행 중인 작업 없음",
     "close": "작업 패널 닫기",
+    "round": "{{round}}/{{maxRounds}}라운드",
+    "nodeCount_one": "노드 {{count}}개",
+    "nodeCount_other": "노드 {{count}}개",
+    "activity": {
+      "fallback": "{{tool}}",
+      "read_file": "읽는 중",
+      "write_file": "쓰는 중",
+      "edit_file": "편집 중",
+      "exec": "실행 중",
+      "grep": "검색 중",
+      "web_search": "웹 검색 중",
+      "web_fetch": "가져오는 중",
+      "memory_search": "메모리 검색 중"
+    },
     "strip": {
       "statusRunning": "진행 중",
       "statusQueued": "대기 중",
@@ -2466,6 +2584,8 @@
       "queuedMany": "작업 {{count}}개 대기 중",
       "needsInput": "{{label}}이(가) 응답을 기다리는 중입니다",
       "needsInputMany": "작업 {{count}}개가 응답을 기다리는 중입니다",
+      "nodes_one": "노드 {{count}}개",
+      "nodes_other": "노드 {{count}}개",
       "view": "보기",
       "respond": "응답"
     }

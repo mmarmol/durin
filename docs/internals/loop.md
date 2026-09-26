@@ -209,11 +209,14 @@ decided, all published under the chat's session key) neither answers a waiter
 nor makes it fall back; it routes on into the running turn like any system
 result, and the wait goes on. The reply to a system message goes to the chat
 its `chat_id` names, in the thread its session key scopes: the loop re-derives
-a Slack `thread_ts`, an email thread and a Telegram forum topic
-(`message_thread_id`) from the key, since the message itself carries no channel
-metadata. A Feishu topic session (`feishu:<chat>:<root>`) is not re-derived:
-the channel replies in a topic from the inbound `thread_id`, which the key does
-not carry, so such a reply lands in the group. An answer carries its
+a Slack `thread_ts`, an email thread, a Telegram forum topic
+(`message_thread_id`), and a Feishu topic from the key, since the message
+itself carries no channel metadata. A Feishu topic session's key is
+`feishu:<chat>:<root_or_message_id>`; the channel's Reply API keeps a reply
+inside the topic as long as it targets any message id that belongs to it, so
+that id doubles as both the reply target (`message_id`) and the "this is a
+topic" signal (`thread_id`) the channel reads — no separate lookup of Feishu's
+own `thread_id` is needed. An answer carries its
 message's `origin` through `pending_answers.resolve`, and the waiting tool
 notes it as the turn's input in the turn's own context
 (`approval.note_turn_input`), so an API client's answer to a question marks

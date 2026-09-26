@@ -293,6 +293,25 @@ async def test_review_marks_active_skill(tmp_path: Path) -> None:
     assert result.data.get("reviewed") is True
 
 
+async def test_review_records_who_decided(tmp_path: Path) -> None:
+    """Reviewing used to stamp every review as "user", even a skills:write API
+    token's. The recorded review must instead name the actual caller, the
+    same way the triage install and discard routes already do."""
+    ws = _make_workspace(tmp_path)
+    svc = _svc(ws)
+    result = await svc.review(
+        SkillReviewCommand(name="hello", note="ok"),
+        Principal.webui("s1", frozenset({Scope.SKILLS_WRITE.value})),
+    )
+    assert result.data["review"]["by"] == "user"
+
+    result2 = await svc.review(
+        SkillReviewCommand(name="hello", note="ok2"),
+        Principal.remote("tok-1", frozenset({Scope.SKILLS_WRITE.value})),
+    )
+    assert result2.data["review"]["by"] == "operator"
+
+
 async def test_review_requires_write_scope(tmp_path: Path) -> None:
     ws = _make_workspace(tmp_path)
     svc = _svc(ws)

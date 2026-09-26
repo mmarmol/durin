@@ -382,11 +382,12 @@ left still reaches the agent instead of being aborted mid-processing.
 top-level `$ref` pointers. Output is sorted JSON for a stable diff.
 
 The committed file `contract/openapi-v1.json` is the **only source of truth** and
-is never hand-edited. Run `python scripts/gen_openapi.py` (with
-`PYTHONPATH=<worktree>` when running from a git worktree) to regenerate; run with
-`--check` to verify — CI fails if the committed contract is out of date relative
-to the route table. TypeScript types are generated from the contract via
-`bun run gen:api-types` → `openapi-typescript`.
+is never hand-edited. Run `python scripts/gen_openapi.py` to regenerate — the
+script puts its own checkout's root first on `sys.path`, so this works the same
+from a git worktree with no `PYTHONPATH` needed; run with `--check` to verify —
+CI fails if the committed contract is out of date relative to the route table.
+TypeScript types are generated from the contract via `bun run gen:api-types` →
+`openapi-typescript`.
 
 The contract operation count, path count, and schema count are derived directly
 from the route table and change automatically when service methods are added or

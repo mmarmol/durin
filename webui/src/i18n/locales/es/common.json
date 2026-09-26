@@ -1590,6 +1590,7 @@
       "environment": "Variables de entorno",
       "install": "Instalar",
       "durinCanHelp": "[durin puede ayudar]",
+      "askPrompt": "Ayúdame a instalar {{bin}}",
       "needs": "Necesita",
       "none": "Sin requisitos detectados"
     },

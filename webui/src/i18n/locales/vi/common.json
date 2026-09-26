@@ -542,6 +542,11 @@
         "rerank": "Xếp hạng lại tìm kiếm",
         "dream": "Dream (hợp nhất bộ nhớ)"
       },
+      "nameGate": {
+        "prioritize": "Ưu tiên",
+        "require": "Bắt buộc",
+        "off": "Tắt"
+      },
       "rows": {
         "crossEncoderEnabled": "Bộ xếp hạng lại cross-encoder",
         "crossEncoderModel": "Mô hình xếp hạng lại",
@@ -555,6 +560,11 @@
         "dreamAbsorbSemanticThreshold": "Khoảng cách khớp ngữ nghĩa",
         "dreamThrottle": "Giới hạn tần suất phản ứng (giây)",
         "dreamMaxSeconds": "Số giây tối đa mỗi lượt chạy",
+        "dreamEscalateFloor": "Chuyển lên bộ giám định điều tra từ",
+        "dreamTier2Confidence": "Độ tin cậy gộp sau điều tra",
+        "dreamJudgeConcurrency": "Số lệnh gọi giám định đồng thời",
+        "dreamRecheckDays": "Giám định lại cặp chưa ngã ngũ sau (ngày)",
+        "dreamNameGate": "Tín hiệu tên trên ứng viên ngữ nghĩa",
         "dreamAlwaysOnBudget": "Ngân sách luôn bật (token)"
       },
       "help": {
@@ -570,6 +580,11 @@
         "dreamAbsorbSemanticThreshold": "Hai thực thể cùng loại phải gần nhau đến mức nào (khoảng cách embedding, ~0–1; 0.20 ≈ giống nhau 90%) để bộ giám định coi là giống nhau. Thấp hơn = nghiêm ngặt hơn. Bộ giám định vẫn quyết định việc gộp thực tế.",
         "dreamThrottle": "Số giây tối thiểu giữa các lượt chạy dream phản ứng (sau khi nén / đóng phiên). Hấp thụ các đợt dồn dập để các lượt chạy chồng chéo không tích tụ; 0 để tắt. Cron hằng ngày không bao giờ bị giới hạn.",
         "dreamMaxSeconds": "Giới hạn thời gian thực cứng cho mỗi lượt trích xuất. Khi đạt tới, lượt chạy sẽ dừng sau phiên hiện tại và con trỏ theo từng phiên sẽ tiếp tục phần còn lại ở lần kích hoạt sau. 0 = không giới hạn.",
+        "dreamEscalateFloor": "Độ tin cậy (0-100) mà từ đó một cặp bộ giám định rẻ tiền không thể phân xử — 'unclear', hoặc 'same' dưới độ tin cậy gộp — sẽ được chuyển cho một tác tử phụ điều tra có giới hạn, tác tử này đọc cả hai thực thể trước khi trả lời. 0 sẽ tắt việc chuyển lên.",
+        "dreamTier2Confidence": "Độ tin cậy tối thiểu (0-100) mà một phán quyết đã điều tra cần để được gộp. Nó đọc các trang và phả hệ của chúng trước, nên có ngưỡng thấp hơn bộ giám định rẻ tiền; dưới ngưỡng này, cặp thực thể sẽ vào Hộp thư đến của bạn.",
+        "dreamJudgeConcurrency": "Số lệnh gọi giám định chạy đồng thời trong lượt tinh chỉnh (1-8). Việc gộp vẫn được áp dụng từng cái một, theo thứ tự ứng viên.",
+        "dreamRecheckDays": "Số ngày trước khi một cặp chưa có phán quyết ổn định (phản hồi không phân tích được, một 'unclear', một 'same' dưới ngưỡng gộp) được giám định lại. 0 nghĩa là giám định lại ở mỗi lượt chạy.",
+        "dreamNameGate": "Tín hiệu tên định hướng các ứng viên gần nhau theo embedding như thế nào: 'prioritize' giám định trước các cặp có tên chung một token hoặc chứa lẫn nhau, sau đó phần còn lại theo khoảng cách; 'require' chỉ giám định những cặp đó; 'off' chỉ sắp xếp theo khoảng cách. Các cặp bí danh luôn được giám định.",
         "dreamAlwaysOnBudget": "Ngân sách token cho hướng dẫn 'luôn bật' được ghim vào mọi prompt. Dream xếp hạng phản hồi (quan điểm/thực hành), loại bỏ mâu thuẫn, và đưa các mục ưu tiên cao nhất vào ngân sách này. 0 để tắt việc ghim."
       },
       "crossEncoderModelPlaceholder": "id mô hình (vd. BAAI/bge-reranker-base)",
@@ -1160,17 +1175,22 @@
       "description": "Có bao nhiêu lượt và tác tử phụ chạy cùng lúc. Thay đổi áp dụng ngay, không cần khởi động lại.",
       "sections": {
         "caps": "Giới hạn",
-        "live": "Trực tiếp"
+        "live": "Trực tiếp",
+        "workflows": "Nhánh quy trình"
       },
       "rows": {
         "interactive": "Lượt tương tác",
         "ceiling": "Trần toàn cục",
-        "subagents": "Tác tử phụ"
+        "subagents": "Tác tử phụ",
+        "workflowLlm": "Nhánh LLM song song",
+        "workflowScript": "Nhánh script song song"
       },
       "help": {
         "interactive": "Số lượt tương tác tối đa chạy cùng lúc trên mọi phiên.",
         "ceiling": "Tổng khối lượng công việc đồng thời tối đa — lượt tương tác cộng tác tử phụ.",
-        "subagents": "Số tác tử phụ tối đa chạy cùng lúc."
+        "subagents": "Số tác tử phụ tối đa chạy cùng lúc.",
+        "workflowLlm": "Các nhánh tác tử chạy đồng thời bên trong một node parallel của quy trình (bị giới hạn bởi rate limit của nhà cung cấp).",
+        "workflowScript": "Các nhánh script chạy đồng thời bên trong một node parallel của quy trình — rẻ, an toàn khi chạy rộng hơn nhánh LLM."
       },
       "live": {
         "interactive": "Tương tác",
@@ -1254,6 +1274,12 @@
     "session_persistent": "bền vững (nhớ xuyên suốt các lượt lặp)",
     "prompt": "prompt",
     "routes": "định tuyến",
+    "detached": "tách rời (khởi chạy rồi tiếp tục)",
+    "inputsFrom": "đầu vào từ",
+    "outputSchema": "schema đầu ra (JSON)",
+    "outputSchemaInvalid": "JSON không hợp lệ — schema sẽ không được lưu cho đến khi phân tích được.",
+    "outputFile": "tệp đầu ra",
+    "reuse": "dùng lại nếu không đổi (bỏ qua nếu producer khớp)",
     "routingShape": "kiểu định tuyến",
     "routingShapeBinary": "nhị phân (đạt / không đạt)",
     "routingShapeMultiway": "đa hướng (nhãn tùy chỉnh)",
@@ -1285,16 +1311,25 @@
     "scriptEnv": "Biến môi trường",
     "scriptEnvClean": "Sạch (tối thiểu + DURIN_*)",
     "scriptEnvInherit": "Kế thừa toàn bộ môi trường",
+    "scriptSecrets": "Bí mật",
+    "scriptSecretsPlaceholder": "ZENDESK_API_TOKEN, MXHERO_KEY",
+    "scriptSecretsHint": "Tên secret đã lưu được tiêm vào dưới dạng biến môi trường. Mỗi secret phải cho phép scope 'exec'.",
+    "ioArtifacts": "Artifact đã khai báo",
+    "ioArtifactsPlaceholder": "context.json | ngữ cảnh ticket đã hợp nhất\nevidence.json",
+    "ioArtifactsHint": "Mỗi dòng một mục: đường dẫn | mô tả tùy chọn. Các tệp mà lượt chạy cam kết tạo ra trong thư mục làm việc của nó — tệp nào thiếu sẽ được báo dưới dạng cảnh báo sau khi chạy.",
     "parallelMode": "chế độ",
     "parallelStatic": "tĩnh (nhánh cố định)",
     "parallelDynamic": "động (×N worker)",
+    "parallelFromNode": "chọn lúc runtime (nhánh từ một node)",
     "parallelBranches": "nhánh",
     "parallelWorker": "mẫu worker",
     "parallelListFrom": "danh sách từ",
+    "parallelBranchesFrom": "nhánh từ",
     "parallelMaxConcurrency": "đồng thời tối đa",
     "parallelReconcile": "hợp nhất",
     "parallelNeedBranch": "Chọn ít nhất một nhánh để chạy song song.",
     "parallelNeedWorkerList": "Chọn một mẫu worker và node có đầu ra là danh sách.",
+    "parallelNeedBranchesFrom": "Chọn node có đầu ra đặt tên cho các nhánh cần chạy.",
     "ioInputTitle": "Đầu vào quy trình",
     "ioOutputTitle": "Đầu ra quy trình",
     "ioInputHint": "Quy trình này nhận gì làm đầu vào.",
@@ -1334,7 +1369,22 @@
     "runHistory": "lượt chạy",
     "historyRetention": "lịch sử và thư mục làm việc giữ lại các lượt chạy gần nhất (workflow.keep_runs)",
     "copySession": "sao chép khóa phiên",
+    "nodePanel": {
+      "title": "Chi tiết bước",
+      "command": "Lệnh",
+      "exitCode": "Mã thoát",
+      "stdout": "Đầu ra",
+      "stderr": "Lỗi",
+      "transcript": "Việc bước này đã làm",
+      "transcriptLoading": "Đang tải bản ghi của bước…",
+      "transcriptMissing": "Bản ghi của bước này không còn nữa.",
+      "noDetail": "Bước này không giữ bản ghi riêng — công việc của nó nằm trong các lượt chạy hoặc nhánh bên dưới.",
+      "round": "vòng {{round}} trên {{maxRounds}}",
+      "roundNoMax": "vòng {{round}}"
+    },
     "sessionCopied": "đã sao chép khóa phiên",
+    "copyOutput": "sao chép đầu ra cuối cùng",
+    "outputCopied": "đã sao chép đầu ra cuối cùng",
     "workerLabel": "worker {{index}}",
     "branchLabel": "nhánh {{id}}",
     "needsInputTitle": "Đang chờ bạn nhập",
@@ -1351,12 +1401,51 @@
     "passOf": "lượt {{iteration}}/{{budget}}",
     "finalPass": "lượt cuối",
     "continuesSession": "tiếp tục phiên",
+    "nodeDuration": "mất",
+    "nodeTypical": "thường",
+    "nodeArtifacts": "tạo ra",
+    "runElapsed": "đã trôi qua",
+    "runTypicalTotal": "các lượt trước ~{{duration}}",
     "persistentInParallelWarning": "Node này là một nhánh của {{parallelId}} — không được dùng phiên bền vững trên đơn vị song song. Việc lưu sẽ thất bại.",
     "runStatus": {
       "ok": "ok",
       "no_session": "không có phiên",
       "persist_failed": "lưu thất bại",
-      "node_failed": "thất bại"
+      "node_failed": "thất bại",
+      "reused": "đã dùng lại",
+      "completed": "đã hoàn tất",
+      "running": "đang chạy",
+      "needs_input": "đang chờ nhập",
+      "exhausted": "hết lượt thử lại",
+      "aborted": "đã dừng",
+      "crashed": "gặp sự cố",
+      "cancelled": "đã hủy"
+    },
+    "seedBanner": {
+      "title": "Cập nhật quy trình có sẵn",
+      "intro": "Các quy trình có sẵn này có phiên bản đóng gói mới hơn, nhưng bản sao của bạn đã bị chỉnh sửa. Hãy xem khác biệt rồi cập nhật, hoặc bỏ qua phiên bản này.",
+      "reasonEdited": "đã chỉnh sửa cục bộ",
+      "reasonUnknown": "bản sao cục bộ khác (không rõ nguồn gốc)",
+      "viewDiff": "Xem khác biệt",
+      "hideDiff": "Ẩn khác biệt",
+      "apply": "Cập nhật về bản có sẵn",
+      "dismiss": "Bỏ qua",
+      "noDiff": "(không có khác biệt)"
+    },
+    "parallelCandidatePool": "Nhánh ứng viên (pool)",
+    "runtimeUpTo": "tối đa {{n}} · runtime",
+    "runtimeBranches": "nhánh runtime",
+    "showDataEdges": "Luồng dữ liệu",
+    "openSubworkflow": "Mở quy trình \"{{name}}\"",
+    "badge": {
+      "detached": "chạy nền",
+      "schema": "schema",
+      "reuse": "dùng lại nếu không đổi",
+      "persistent": "phiên bền vững",
+      "skills_one": "1 skill",
+      "skills_other": "{{n}} skill",
+      "secrets_one": "1 secret",
+      "secrets_other": "{{n}} secret"
     }
   },
   "runs": {
@@ -1371,6 +1460,10 @@
     "subOf": "con của {{id}}",
     "countLabel_one": "{{count}} lượt chạy",
     "countLabel_other": "{{count}} lượt chạy",
+    "selectPrompt": "Chọn một lượt chạy",
+    "selectHint": "Dấu vết node, thời gian, lượt chạy con và đầu ra cuối cùng của nó sẽ hiện ở đây.",
+    "subRuns": "lượt chạy con",
+    "partOf": "thuộc {{workflow}}",
     "backToList": "Quay lại lượt chạy",
     "openAutomationsInbox": "Xem hộp thư tự động hóa"
   },
@@ -1697,7 +1790,8 @@
       "carries_code": "Skill này chứa mã có thể thực thi ({{detail}}) — hãy rà soát trước khi duyệt.",
       "declared_deps": "Skill này khai báo dependency (không tự động chạy): {{detail}}.",
       "verdict_caution": "Quét bảo mật đánh dấu skill này là thận trọng.",
-      "verdict_dangerous": "Quét bảo mật đánh dấu skill này là nguy hiểm."
+      "verdict_dangerous": "Quét bảo mật đánh dấu skill này là nguy hiểm.",
+      "invalid_skill": "SKILL.md không hợp lệ: {{detail}}"
     },
     "audit": {
       "running": "Đang kiểm tra bằng AI…",
@@ -1762,6 +1856,7 @@
       "environment": "Môi trường",
       "install": "Cài đặt",
       "durinCanHelp": "[durin có thể giúp]",
+      "askPrompt": "Hãy giúp tôi cài đặt {{bin}}",
       "needs": "Cần",
       "none": "Không phát hiện yêu cầu nào"
     },
@@ -1787,7 +1882,15 @@
       "acquireExplainer": "Skill từ registry công khai. Nhập vào sẽ đưa skill vào mục Đang chờ để bạn duyệt.",
       "importByRef": "Nhập theo tham chiếu"
     },
-    "title": "Skills"
+    "title": "Skills",
+    "repair": {
+      "button": "Sửa",
+      "apply": "Áp dụng bản sửa",
+      "cancel": "Hủy",
+      "previewTitle": "Đề xuất sửa (chưa ghi gì cả)",
+      "stillInvalid": "Vẫn không hợp lệ sau khi sửa: {{errors}}",
+      "approveGated": "SKILL.md của skill này không hợp lệ — hãy sửa trước."
+    }
   },
   "chat": {
     "fallbackTitle": "Trò chuyện {{id}}",
@@ -2119,6 +2222,7 @@
       "entityUpdatedDefault": "thực thể đã cập nhật",
       "memoryForgot": "quên {{uri}}",
       "memoriesRecalling": "đang truy xuất ký ức…",
+      "memoriesRecalled_one": "{{count}} ký ức đã truy xuất",
       "memoriesRecalled_other": "{{count}} ký ức đã truy xuất",
       "skillImport": "nhập {{source}}"
     }
@@ -2455,6 +2559,20 @@
     "finished": "Đã xong ({{count}})",
     "empty": "Không có công việc nào đang hoạt động",
     "close": "Đóng bảng công việc",
+    "round": "vòng {{round}} trên {{maxRounds}}",
+    "nodeCount_one": "{{count}} node",
+    "nodeCount_other": "{{count}} node",
+    "activity": {
+      "fallback": "{{tool}}",
+      "read_file": "đang đọc",
+      "write_file": "đang ghi",
+      "edit_file": "đang sửa",
+      "exec": "đang chạy",
+      "grep": "đang tìm kiếm",
+      "web_search": "đang tìm kiếm trên web",
+      "web_fetch": "đang tải",
+      "memory_search": "đang tìm kiếm trong bộ nhớ"
+    },
     "strip": {
       "statusRunning": "đang chạy",
       "statusQueued": "đang chờ",
@@ -2466,6 +2584,8 @@
       "queuedMany": "{{count}} tác vụ đang chờ",
       "needsInput": "{{label}} cần bạn trả lời",
       "needsInputMany": "{{count}} tác vụ cần bạn trả lời",
+      "nodes_one": "{{count}} node",
+      "nodes_other": "{{count}} node",
       "view": "Xem",
       "respond": "Trả lời"
     }

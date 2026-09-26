@@ -542,6 +542,11 @@
         "rerank": "Reranking pencarian",
         "dream": "Dream (konsolidasi memori)"
       },
+      "nameGate": {
+        "prioritize": "Prioritaskan",
+        "require": "Wajibkan",
+        "off": "Nonaktif"
+      },
       "rows": {
         "crossEncoderEnabled": "Reranker cross-encoder",
         "crossEncoderModel": "Model reranker",
@@ -555,6 +560,11 @@
         "dreamAbsorbSemanticThreshold": "Jarak kecocokan semantik",
         "dreamThrottle": "Throttle reaktif (d)",
         "dreamMaxSeconds": "Maks. detik per pass",
+        "dreamEscalateFloor": "Eskalasi ke juri investigasi mulai dari",
+        "dreamTier2Confidence": "Keyakinan gabungan hasil investigasi",
+        "dreamJudgeConcurrency": "Panggilan juri paralel",
+        "dreamRecheckDays": "Nilai ulang pasangan yang belum tuntas setelah (hari)",
+        "dreamNameGate": "Sinyal nama pada kandidat semantik",
         "dreamAlwaysOnBudget": "Anggaran always-on (token)"
       },
       "help": {
@@ -570,6 +580,11 @@
         "dreamAbsorbSemanticThreshold": "Seberapa dekat (jarak embedding, ~0–1; 0.20 ≈ 90% mirip) dua entitas bertipe sama agar dianggap sama oleh judge. Lebih rendah = lebih ketat. Judge tetap memutuskan penggabungan.",
         "dreamThrottle": "Detik minimum antara pass dream reaktif (post-compaction / penutupan sesi). Menyerap lonjakan agar pass yang tumpang tindih tidak menumpuk; 0 menonaktifkan. Cron harian tidak pernah dibatasi.",
         "dreamMaxSeconds": "Batas wall-clock keras per pass extract. Saat tercapai, pass mengalah setelah sesi saat ini dan kursor per-sesi melanjutkan sisanya pada trigger berikutnya. 0 = tanpa batas.",
+        "dreamEscalateFloor": "Keyakinan (0-100) yang menjadi batas: pasangan yang tidak bisa diputuskan oleh juri murah — 'unclear', atau 'same' di bawah keyakinan penggabungan — diserahkan ke sub-agen investigasi terbatas yang membaca kedua entitas sebelum menjawab. 0 menonaktifkan eskalasi.",
+        "dreamTier2Confidence": "Keyakinan minimum (0-100) yang dibutuhkan verdict hasil investigasi untuk digabungkan. Verdict ini membaca halaman beserta silsilahnya terlebih dahulu, sehingga ambangnya lebih rendah daripada juri murah; di bawah itu, pasangan akan masuk ke Kotak Masuk Anda.",
+        "dreamJudgeConcurrency": "Berapa banyak panggilan juri yang berjalan bersamaan selama pass refine (1-8). Penggabungan tetap diterapkan satu per satu, sesuai urutan kandidat.",
+        "dreamRecheckDays": "Jumlah hari sebelum pasangan tanpa verdict yang tuntas (balasan yang tidak bisa diurai, sebuah 'unclear', sebuah 'same' di bawah ambang penggabungan) dinilai ulang. 0 menilai ulang setiap kali berjalan.",
+        "dreamNameGate": "Bagaimana sinyal nama mengarahkan kandidat yang berdekatan secara embedding: 'prioritize' menilai lebih dulu pasangan yang namanya berbagi token atau saling memuat, lalu sisanya berdasarkan jarak; 'require' hanya menilai yang seperti itu; 'off' mengurutkan berdasarkan jarak saja. Pasangan alias selalu dinilai.",
         "dreamAlwaysOnBudget": "Anggaran token untuk panduan 'always-on' yang dipasang di setiap prompt. Dream me-rangking feedback (stance/practice), membuang kontradiksi, dan memasukkan item prioritas tertinggi ke dalam anggaran ini. 0 menonaktifkan pin."
       },
       "crossEncoderModelPlaceholder": "id model (mis. BAAI/bge-reranker-base)",
@@ -1160,17 +1175,22 @@
       "description": "Berapa banyak giliran dan subagen yang berjalan sekaligus. Perubahan berlaku langsung, tanpa mulai ulang.",
       "sections": {
         "caps": "Batas",
-        "live": "Langsung"
+        "live": "Langsung",
+        "workflows": "Cabang workflow"
       },
       "rows": {
         "interactive": "Giliran interaktif",
         "ceiling": "Plafon global",
-        "subagents": "Subagen"
+        "subagents": "Subagen",
+        "workflowLlm": "Cabang LLM paralel",
+        "workflowScript": "Cabang script paralel"
       },
       "help": {
         "interactive": "Maks. giliran interaktif yang berjalan sekaligus di semua sesi.",
         "ceiling": "Maks. pekerjaan bersamaan secara keseluruhan — giliran interaktif ditambah subagen.",
-        "subagents": "Maks. subagen yang berjalan sekaligus."
+        "subagents": "Maks. subagen yang berjalan sekaligus.",
+        "workflowLlm": "Cabang agen simultan di dalam node parallel workflow (dibatasi oleh rate limit provider).",
+        "workflowScript": "Cabang script simultan di dalam node parallel workflow — murah, aman dijalankan lebih lebar daripada cabang LLM."
       },
       "live": {
         "interactive": "Interaktif",
@@ -1254,6 +1274,12 @@
     "session_persistent": "persisten (mengingat lintas pass loop)",
     "prompt": "prompt",
     "routes": "rute",
+    "detached": "terpisah (jalankan lalu lanjutkan)",
+    "inputsFrom": "input dari",
+    "outputSchema": "schema keluaran (JSON)",
+    "outputSchemaInvalid": "JSON tidak valid — schema tidak disimpan sampai berhasil di-parse.",
+    "outputFile": "file keluaran",
+    "reuse": "gunakan ulang jika tidak berubah (lewati jika producer cocok)",
     "routingShape": "bentuk routing",
     "routingShapeBinary": "biner (pass / fail)",
     "routingShapeMultiway": "multi-arah (label kustom)",
@@ -1285,16 +1311,25 @@
     "scriptEnv": "Environment",
     "scriptEnvClean": "Bersih (minimal + DURIN_*)",
     "scriptEnvInherit": "Warisi environment penuh",
+    "scriptSecrets": "Secret",
+    "scriptSecretsPlaceholder": "ZENDESK_API_TOKEN, MXHERO_KEY",
+    "scriptSecretsHint": "Nama secret tersimpan yang disuntikkan sebagai variabel lingkungan. Masing-masing harus mengizinkan scope 'exec'.",
+    "ioArtifacts": "Artefak yang dideklarasikan",
+    "ioArtifactsPlaceholder": "context.json | konteks tiket terkonsolidasi\nevidence.json",
+    "ioArtifactsHint": "Satu per baris: path | deskripsi opsional. File yang dijanjikan run untuk dihasilkan di folder kerjanya — yang tidak ada dilaporkan sebagai peringatan setelah run selesai.",
     "parallelMode": "mode",
     "parallelStatic": "statis (cabang tetap)",
     "parallelDynamic": "dinamis (×N worker)",
+    "parallelFromNode": "dipilih saat runtime (cabang dari sebuah node)",
     "parallelBranches": "cabang",
     "parallelWorker": "template worker",
     "parallelListFrom": "daftar dari",
+    "parallelBranchesFrom": "cabang dari",
     "parallelMaxConcurrency": "konkurensi maks.",
     "parallelReconcile": "rekonsiliasi",
     "parallelNeedBranch": "Pilih minimal satu cabang untuk dijalankan paralel.",
     "parallelNeedWorkerList": "Pilih template worker dan node yang outputnya berupa daftar.",
+    "parallelNeedBranchesFrom": "Pilih node yang keluarannya memberi nama pada cabang yang akan dijalankan.",
     "ioInputTitle": "Masukan workflow",
     "ioOutputTitle": "Keluaran workflow",
     "ioInputHint": "Apa yang diterima workflow ini sebagai masukan.",
@@ -1334,7 +1369,22 @@
     "runHistory": "run",
     "historyRetention": "riwayat dan folder kerja menyimpan run terbaru (workflow.keep_runs)",
     "copySession": "salin kunci sesi",
+    "nodePanel": {
+      "title": "Detail langkah",
+      "command": "Perintah",
+      "exitCode": "Kode keluar",
+      "stdout": "Keluaran",
+      "stderr": "Kesalahan",
+      "transcript": "Yang dilakukan langkah ini",
+      "transcriptLoading": "Memuat catatan langkah…",
+      "transcriptMissing": "Catatan langkah ini sudah tidak tersedia.",
+      "noDetail": "Langkah ini tidak menyimpan catatan sendiri — pekerjaannya ada di run atau cabang di bawahnya.",
+      "round": "ronde {{round}} dari {{maxRounds}}",
+      "roundNoMax": "ronde {{round}}"
+    },
     "sessionCopied": "kunci sesi disalin",
+    "copyOutput": "salin keluaran akhir",
+    "outputCopied": "keluaran akhir disalin",
     "workerLabel": "worker {{index}}",
     "branchLabel": "cabang {{id}}",
     "needsInputTitle": "Menunggu masukan Anda",
@@ -1351,12 +1401,51 @@
     "passOf": "pass {{iteration}} dari {{budget}}",
     "finalPass": "pass terakhir",
     "continuesSession": "melanjutkan sesi",
+    "nodeDuration": "memakan waktu",
+    "nodeTypical": "biasanya",
+    "nodeArtifacts": "menghasilkan",
+    "runElapsed": "berlalu",
+    "runTypicalTotal": "run sebelumnya ~{{duration}}",
     "persistentInParallelWarning": "Node ini adalah cabang dari {{parallelId}} — sesi persisten tidak diizinkan pada unit paralel. Penyimpanan akan gagal.",
     "runStatus": {
       "ok": "ok",
       "no_session": "tanpa sesi",
       "persist_failed": "penyimpanan gagal",
-      "node_failed": "gagal"
+      "node_failed": "gagal",
+      "reused": "digunakan ulang",
+      "completed": "selesai",
+      "running": "berjalan",
+      "needs_input": "menunggu masukan",
+      "exhausted": "percobaan ulang habis",
+      "aborted": "dihentikan",
+      "crashed": "crash",
+      "cancelled": "dibatalkan"
+    },
+    "seedBanner": {
+      "title": "Pembaruan workflow bawaan",
+      "intro": "Workflow bawaan ini punya versi bundel yang lebih baru, tapi salinan Anda sudah diedit. Tinjau perbedaannya dan perbarui, atau abaikan versi ini.",
+      "reasonEdited": "diedit secara lokal",
+      "reasonUnknown": "salinan lokal berbeda (asal tidak diketahui)",
+      "viewDiff": "Lihat perbedaan",
+      "hideDiff": "Sembunyikan perbedaan",
+      "apply": "Perbarui ke versi bawaan",
+      "dismiss": "Abaikan",
+      "noDiff": "(tidak ada perbedaan tersedia)"
+    },
+    "parallelCandidatePool": "Cabang kandidat (pool)",
+    "runtimeUpTo": "hingga {{n}} · runtime",
+    "runtimeBranches": "cabang runtime",
+    "showDataEdges": "Alur data",
+    "openSubworkflow": "Buka workflow \"{{name}}\"",
+    "badge": {
+      "detached": "latar belakang",
+      "schema": "schema",
+      "reuse": "gunakan ulang jika tidak berubah",
+      "persistent": "sesi persisten",
+      "skills_one": "1 skill",
+      "skills_other": "{{n}} skill",
+      "secrets_one": "1 secret",
+      "secrets_other": "{{n}} secret"
     }
   },
   "runs": {
@@ -1371,6 +1460,10 @@
     "subOf": "sub dari {{id}}",
     "countLabel_one": "{{count}} run",
     "countLabel_other": "{{count}} run",
+    "selectPrompt": "Pilih run",
+    "selectHint": "Jejak node, waktu, sub-run, dan keluaran akhirnya akan tampil di sini.",
+    "subRuns": "sub-run",
+    "partOf": "bagian dari {{workflow}}",
     "backToList": "Kembali ke daftar run",
     "openAutomationsInbox": "Lihat inbox otomatisasi"
   },
@@ -1697,7 +1790,8 @@
       "carries_code": "Ini membawa kode yang dapat dieksekusi ({{detail}}) — tinjau sebelum menyetujui.",
       "declared_deps": "Ini mendeklarasikan dependensi (tidak dijalankan otomatis): {{detail}}.",
       "verdict_caution": "Pemindaian keamanan menandainya sebagai hati-hati.",
-      "verdict_dangerous": "Pemindaian keamanan menandainya sebagai berbahaya."
+      "verdict_dangerous": "Pemindaian keamanan menandainya sebagai berbahaya.",
+      "invalid_skill": "SKILL.md tidak valid: {{detail}}"
     },
     "audit": {
       "running": "Mengaudit dengan AI…",
@@ -1762,6 +1856,7 @@
       "environment": "Environment",
       "install": "Instal",
       "durinCanHelp": "[durin bisa membantu]",
+      "askPrompt": "Tolong bantu saya instal {{bin}}",
       "needs": "Butuh",
       "none": "Tidak ada persyaratan yang terdeteksi"
     },
@@ -1787,7 +1882,15 @@
       "acquireExplainer": "Skill dari registry publik. Mengimpor menempatkan skill ke Tertunda untuk persetujuan Anda.",
       "importByRef": "Impor lewat referensi"
     },
-    "title": "Skills"
+    "title": "Skills",
+    "repair": {
+      "button": "Perbaiki",
+      "apply": "Terapkan perbaikan",
+      "cancel": "Batal",
+      "previewTitle": "Perbaikan yang diusulkan (belum ada yang ditulis)",
+      "stillInvalid": "Masih tidak valid setelah diperbaiki: {{errors}}",
+      "approveGated": "SKILL.md skill ini tidak valid — perbaiki dulu."
+    }
   },
   "chat": {
     "fallbackTitle": "Obrolan {{id}}",
@@ -2119,6 +2222,7 @@
       "entityUpdatedDefault": "entitas diperbarui",
       "memoryForgot": "lupakan {{uri}}",
       "memoriesRecalling": "mengingat memori…",
+      "memoriesRecalled_one": "{{count}} memori diambil",
       "memoriesRecalled_other": "{{count}} memori diambil",
       "skillImport": "impor {{source}}"
     }
@@ -2455,6 +2559,20 @@
     "finished": "Selesai ({{count}})",
     "empty": "Tidak ada pekerjaan aktif",
     "close": "Tutup panel kerja",
+    "round": "ronde {{round}} dari {{maxRounds}}",
+    "nodeCount_one": "{{count}} node",
+    "nodeCount_other": "{{count}} node",
+    "activity": {
+      "fallback": "{{tool}}",
+      "read_file": "membaca",
+      "write_file": "menulis",
+      "edit_file": "mengedit",
+      "exec": "menjalankan",
+      "grep": "mencari",
+      "web_search": "mencari di web",
+      "web_fetch": "mengambil",
+      "memory_search": "mencari di memori"
+    },
     "strip": {
       "statusRunning": "berjalan",
       "statusQueued": "dalam antrean",
@@ -2466,6 +2584,8 @@
       "queuedMany": "{{count}} tugas dalam antrean",
       "needsInput": "{{label}} membutuhkan jawaban Anda",
       "needsInputMany": "{{count}} tugas membutuhkan jawaban Anda",
+      "nodes_one": "{{count}} node",
+      "nodes_other": "{{count}} node",
       "view": "Lihat",
       "respond": "Jawab"
     }

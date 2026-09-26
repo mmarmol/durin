@@ -445,9 +445,10 @@ def _peer_is_loopback(peer: Any) -> bool:
 
 
 # Host names that can only mean this machine. A DNS-rebinding page reaches a
-# loopback peer under its own name, so without a setup secret the bootstrap and
-# an anonymous socket also require the Host header to be one of these (any
-# port).
+# loopback peer under its own name, so the Host header must be one of these
+# (any port) for: the bootstrap route without a setup secret, and any
+# anonymous socket whenever no token is required — a setup secret changes how
+# a token is obtained, not the fact that an anonymous connection carries none.
 _LOOPBACK_HOST_NAMES = frozenset({"localhost", "127.0.0.1", "[::1]"})
 
 
@@ -1520,14 +1521,16 @@ class WebSocketChannel(BaseChannel):
         ``"webui"``: a single-use token ``/webui/bootstrap`` minted — the
         dashboard session, the one connection whose Approve / Reject decides
         an approval. ``"static"``: the configured static token. ``"anonymous"``:
-        no valid token, allowed because none is required. In local mode (no
-        setup secret, no token required) an anonymous handshake must also come
-        from this machine: a loopback ``Host``, and a loopback ``Origin`` host
-        when the client sends one. Otherwise a page in the local browser could
-        open the socket and chat with the agent, through DNS rebinding or by
-        connecting to ``ws://127.0.0.1`` from its own site. *headers* are the
-        handshake's request headers (none: the anonymous check fails). Called
-        by the Starlette WebSocket endpoint (``chat_ws_endpoint`` in
+        no valid token, allowed because none is required. Whenever no token is
+        required, an anonymous handshake must also come from this machine: a
+        loopback ``Host``, and a loopback ``Origin`` host when the client sends
+        one — whether or not a setup secret is configured, since a secret only
+        changes how a *token* is obtained and an anonymous connection carries
+        none. Otherwise a page in the local browser could open the socket and
+        chat with the agent, through DNS rebinding or by connecting to
+        ``ws://127.0.0.1`` from its own site. *headers* are the handshake's
+        request headers (none: the anonymous check fails). Called by the
+        Starlette WebSocket endpoint (``chat_ws_endpoint`` in
         ``durin/api/asgi.py``).
         Side-effect: consumes a single-use issued token when one is accepted.
         """
@@ -1548,10 +1551,9 @@ class WebSocketChannel(BaseChannel):
 
         if supplied and self._take_issued_token_if_valid(supplied):
             return "webui"
-        if not self.config.token_issue_secret.strip():
-            request_headers = headers if headers is not None else {}
-            if not (_host_is_loopback(request_headers) and _origin_is_loopback(request_headers)):
-                return None
+        request_headers = headers if headers is not None else {}
+        if not (_host_is_loopback(request_headers) and _origin_is_loopback(request_headers)):
+            return None
         return "anonymous"
 
     def _ws_auth_ok(self, query: dict[str, list[str]], headers: Any = None) -> bool:
