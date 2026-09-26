@@ -71,7 +71,9 @@ manage MCP servers. Append `--help` to any group for its full command list.
 
 When the agent wants to add or change an MCP server, install or edit a skill,
 or install a skill's dependencies, and your settings require a person's
-approval for it, you are asked in the chat. When nobody can be asked (a cron
+approval for it, you are asked in the chat — a card in the webui, a bubble in
+the TUI, or a plain `approve`/`reject` (`yes`/`no` also work) reply on Slack,
+Telegram, and the other text channels. When nobody can be asked (a cron
 job, dream, workflow or sub-agent, or a turn driven by an API token), or you
 did not answer in the chat, the request is recorded instead of run, and it
 waits in these commands and on the dashboard's **Pending** page. A shell

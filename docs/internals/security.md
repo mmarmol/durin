@@ -131,8 +131,8 @@ Reject click travels on the webui socket, and a token issued for the API (a
 configured static `token` (the operator's own secret) or the single-use token
 `/webui/bootstrap` just minted. With `websocket_requires_token` off and no static `token`,
 the handshake also takes a connection with no token — the operator's choice,
-which no API token changes — but in local mode (no setup secret either, the
-gateway's default) only from this machine: see **Dashboard bootstrap and the
+which no API token changes — but only from this machine, whether or not a
+setup secret is configured: see **Dashboard bootstrap and the
 local socket** below. Only a socket opened with a
 bootstrap-minted token — the dashboard session — decides an approval: the
 handshake records which credential opened the connection (`_ws_auth`), and an

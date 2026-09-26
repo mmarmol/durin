@@ -73,7 +73,10 @@ scam/malware patterns before you run it, and connects MCP servers from a curated
 catalog with one-click install and auto-detected OAuth. Its composition doctrine
 keeps behaviour reliable — **prefer deterministic code, use workflows for
 structure, treat skills as the through-line the agent follows** — and it sharpens
-its own skills over time.
+its own skills over time. Anything that would change what it can run next —
+installing that skill, adding that MCP server, a shell command outside its
+guardrails — waits for you to say yes, in the chat or from the dashboard's
+**Pending** page, before it happens.
 
 ### See exactly what it's running
 

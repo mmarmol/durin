@@ -5,6 +5,138 @@ notes as a [GitHub Release](https://github.com/mmarmol/durin/releases).
 Entries are curated at release time from the merged pull requests since the
 previous tag — highlights first, then changes grouped by area.
 
+## 0.11.0 — 2026-09-26
+
+### Highlights
+
+- **You approve privileged actions in the chat; the model never does.**
+  Installing or editing a skill, installing a skill's dependencies, adding or
+  changing an MCP server, and running a shell command that matches a deny
+  rule now ask you and wait. In the web dashboard a card docked above the
+  composer shows exactly what would run: the command or the diff, its working
+  folder, the matched rule, the scan verdict and findings. It carries Approve
+  and Reject. The terminal UI shows the same request with Approve and Reject
+  rows. Slack, Telegram and the other text channels post it in the
+  conversation's own thread; you answer `yes` or `no`. A refresh or a second
+  tab brings the card back. The model can no longer approve anything itself:
+  the `confirm` and `override` arguments are gone from its tools. (#638)
+- **One place for everything that waits on you.** A new Pending page, with a
+  count in the sidebar, lists:
+  - approval requests;
+  - skills waiting in import quarantine;
+  - paused automation runs;
+  - workflow runs that need input;
+  - memory pairs the dream flagged;
+  - skill suggestions.
+
+  Each item is shown with its own card, and you settle it right there. When
+  a request is decided after its chat stopped waiting, that chat gets a note
+  saying what was approved and what happened. (#639)
+- **Work that runs without you never waits for you.** Workflows, cron jobs,
+  automations, `/v1` API turns and any turn that received input from an API
+  token file skill and MCP changes as pending requests for you to decide.
+  A shell command that needs approval is refused there instead. (#638)
+
+### Upgrade notes
+
+- **Old pending requests are legacy.** Requests staged by an earlier version
+  are listed by `durin approvals` as legacy, and can only be discarded. Ask
+  the agent again to get a request you can approve.
+- **Long exec commands are refused.** The exec tool refuses a command longer
+  than 20,000 characters and tells the agent to write long content with
+  `write_file` and run the file.
+- **Approve may answer 403 once.** A dashboard tab left open across the
+  upgrade may get 403 on Approve until its session token refreshes, within
+  five minutes. Reload the page to clear it at once.
+- **Local setups without a setup secret.** The dashboard must be reached as
+  `localhost`, `127.0.0.1` or `[::1]`. Under any other name, set
+  `channels.websocket.token_issue_secret`.
+
+### Approvals
+
+- `durin approvals list | approve <id> | reject <id> | discard <id>` decides a
+  request from the command line. Approve and Reject require an interactive
+  terminal, so no agent can run them. A shell command can only be approved
+  in the chat that asked for it. (#638)
+- The configured skills judge may approve a `confirm` skill install, or an
+  edit of an `auto` skill whose scan is `caution`. It never approves a
+  `dangerous` one, dependencies, MCP changes or shell commands. (#638)
+- A pending request expires after 14 days, and decided requests are kept 30
+  days. An hourly sweep in the gateway enforces both. (#638, #639)
+- Every request records who decided it: you in the chat, you in the
+  dashboard, the operator on the command line, an API token's operator, or
+  the judge. (#638, #639, #640)
+- The agent's file tools can no longer write approval records, the skill
+  import quarantine, or durin's own configuration, secrets, API tokens and
+  pairing store. (#638)
+- A message from an API token never answers an approval. A turn it started
+  never asks in the chat. Only a signed-in dashboard session can decide over
+  HTTP (`POST /api/v1/approvals/{id}/decision`). (#638, #639)
+- Rejecting a skill install discards its quarantined copy. Installing or
+  discarding it from the Skills page settles the request too. (#639, #640)
+
+### Chat and channels
+
+- **Slack threads.** A Slack channel thread is now its own conversation, and
+  a button click joins the conversation a typed reply would. Each new
+  top-level mention starts a new conversation. (#638)
+- **Telegram and Feishu topics.** A tap in a Telegram forum topic stays in
+  that topic. Background results and decision notes reply in the Telegram or
+  Feishu topic they belong to. (#638, #639, #640)
+- **Questions.** A question the agent waits on is posted in the conversation's
+  thread, as a new message that notifies. On Slack it used to edit the
+  "working on it" line. (#638)
+- **When a wait ends.** A webui chat nobody is watching stops holding its turn
+  after a short grace window. A program following the chat over the API
+  keeps a question waiting, but not an approval. (#638, #639)
+- **Results are not answers.** A subagent, workflow or automation result that
+  arrives while the agent waits on you is never taken as your answer. (#638)
+- **Freeing the queue.** A turn waiting on you gives its slot back, so open
+  requests never block other chats. (#638)
+- **Stop.** A `/stop` that lands at the same moment as your answer still
+  stops the turn. (#638)
+- **Legacy REPL.** The legacy REPL no longer waits mid-turn for an answer it
+  cannot receive. (#638)
+
+### Security
+
+- **DNS rebinding.** Without a setup secret, `/webui/bootstrap` and an
+  anonymous socket answer only a loopback `Host` and `Origin`. A web page
+  open in your browser can no longer use DNS rebinding to sign in to your
+  local durin. (#639, #640)
+- **Deciding on the socket.** The chat socket accepts an approval decision
+  only from a dashboard session. (#639)
+- **One chat, one context.** Several tools kept the current chat in shared
+  state, so a request could be asked in the wrong chat. They now keep it per
+  turn. (#638)
+
+### Gateway
+
+- **Shutdown and restart.** Shutdown waits a bounded time for stopped turns.
+  `/restart` runs a graceful shutdown and restarts anyway if it hangs. A stop
+  signal during a restart turns it into a plain stop. (#638)
+- **The inbound journal.** It is kept per process, so the gateway and a
+  terminal UI on the same workspace no longer replay each other's messages.
+  (#639)
+
+### Workflows and automations
+
+- **Per-run evidence.** A run that shares a `work_key` with earlier runs keeps
+  its own evidence (`params.json` and the rest) instead of overwriting
+  theirs. (#639)
+- **Approval pauses.** The agent's `automations` and `run_workflow` tools
+  refuse to resolve an approval pause; that decision is yours. (#638)
+- **Help-channel notice.** The notice an automation posts in its help channel
+  is now in English, not hard-coded Spanish. (#639)
+
+### Web dashboard
+
+- **Languages.** French, Indonesian, Japanese, Korean, Vietnamese and both
+  Chinese locales now translate every screen; some fell back to English
+  before. (#640)
+- **Unsaved edits.** The Skills page asks inside the page before discarding
+  unsaved edits. (#639)
+
 ## 0.10.13 — 2026-09-24
 
 ### Highlights
