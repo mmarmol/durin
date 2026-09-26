@@ -8,8 +8,11 @@ it and chat with the agent: through DNS rebinding (its own name resolving to
 (a socket is not bound by the same-origin policy; the page's site arrives as
 ``Origin``). So an anonymous handshake in local mode needs a loopback ``Host``
 and, when an ``Origin`` is sent, a loopback ``Origin`` host. A non-browser local
-client sends no ``Origin`` and still connects. A connection with a valid token,
-a token-required config, and a config with a setup secret are unchanged.
+client sends no ``Origin`` and still connects. The same rule applies whenever no
+token is required, whether or not a setup secret is configured: a secret only
+changes how a token is obtained, and an anonymous connection carries none. A
+connection with a valid token, and a token-required config, are unchanged — a
+page on another site cannot obtain a bootstrap token in the first place.
 """
 
 from __future__ import annotations
@@ -93,9 +96,22 @@ def test_a_token_required_config_is_unchanged(tmp_path, monkeypatch):
     _accepted(client, f"/?token={token}", headers={"origin": "http://evil.example"})
 
 
-def test_a_config_with_a_setup_secret_is_unchanged(tmp_path, monkeypatch):
-    # With a setup secret the operator runs a deliberate deployment (a reverse
-    # proxy under a public name): its anonymous socket is left as it was.
+def test_a_config_with_a_setup_secret_still_refuses_a_foreign_origin(tmp_path, monkeypatch):
+    # A setup secret changes how a *token* is obtained (the bootstrap route
+    # gates on it); it says nothing about an anonymous handshake, which
+    # carries no token at all. Without this, a hand-written config pairing a
+    # setup secret with websocketRequiresToken=false would accept an
+    # anonymous socket from anywhere.
     _, client = _client(tmp_path, monkeypatch, base_url="https://durin.example.org",
                         tokenIssueSecret="s3cret")
-    _accepted(client, headers={"origin": "https://durin.example.org"})
+    _refused(client, headers={"origin": "https://evil.example"})
+
+
+def test_a_config_with_a_setup_secret_and_a_valid_token_is_unchanged(tmp_path, monkeypatch):
+    # A deployment behind a setup secret still reaches the socket with a
+    # bootstrap token, which a page on another site cannot obtain, so the
+    # token path is unaffected by the loopback rule above.
+    channel, client = _client(tmp_path, monkeypatch, base_url="https://durin.example.org",
+                              tokenIssueSecret="s3cret")
+    token = client.get("/webui/bootstrap", headers={"X-Durin-Auth": "s3cret"}).json()["token"]
+    _accepted(client, f"/?token={token}", headers={"origin": "https://evil.example"})
