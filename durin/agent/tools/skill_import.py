@@ -145,6 +145,7 @@ class SkillImportTool(Tool, ContextAware):
         return {"name": c.name, "ref": c.ref, "kind": c.kind, "detail": c.detail}
 
     async def execute(self, **kwargs: Any) -> Any:
+        from durin.agent.approval_kinds_skills import close_install_requests
         from durin.agent.skill_resolve import resolve_candidates
         from durin.agent.skills_import import (
             decide_action,
@@ -204,7 +205,20 @@ class SkillImportTool(Tool, ContextAware):
         if action == "reject":
             if not name:
                 return {"error": "name is required for reject"}
-            return await asyncio.to_thread(reject_quarantined, self._workspace, name)
+
+            def _reject_and_close_requests() -> dict:
+                res = reject_quarantined(self._workspace, name, decided_by="agent")
+                if "error" not in res:
+                    # The agent discarded its own import: close any
+                    # skill_install request still waiting on it, the way the
+                    # Skills page's triage discard already does, so Approve
+                    # on it later cannot try to install what is now gone.
+                    close_install_requests(self._workspace, name, to="rejected",
+                                           decided_by={"kind": "agent"},
+                                           result={"withdrawn": True})
+                return res
+
+            return await asyncio.to_thread(_reject_and_close_requests)
 
         return {"error": f"unknown action: {action!r}"}
 

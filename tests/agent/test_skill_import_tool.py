@@ -331,6 +331,33 @@ def test_reject(tmp_path):
     assert not (ws / ".durin" / "import-quarantine" / "a").exists()
 
 
+def test_reject_closes_a_skill_install_request_still_waiting_on_it(tmp_path):
+    """The agent discarding its own quarantined import (this tool's reject
+    action) must close any skill_install approval request still pending for
+    it — otherwise Approve on that stale request would try to install an
+    import that is already gone, and only a person clicking Reject in the
+    webui closed the request before."""
+    src = _src_skill(tmp_path / "src", "a")
+    ws = tmp_path / "ws"
+    # A non-interactive session: nobody is live to answer, so install files
+    # the approval and returns "pending" instead of blocking on it.
+    tool = _tool(ws, session="cron:nightly")
+    _run(tool, action="fetch", source=str(src))
+    held = _run(tool, action="install", name="a")
+    assert held["status"] == "pending"
+    [rec] = approval_store.list_records(ws, status="pending", include_legacy=False)
+    assert rec["kind"] == "skill_install"
+
+    out = _run(_tool(ws), action="reject", name="a")
+
+    assert out["ok"]
+    assert not approval_store.list_records(ws, status="pending", include_legacy=False)
+    [closed] = approval_store.list_records(ws, status="rejected", include_legacy=False)
+    assert closed["id"] == rec["id"]
+    assert closed["decided_by"] == {"kind": "agent"}
+    assert closed["result"] == {"withdrawn": True}
+
+
 def test_unresolved_source_reported(tmp_path):
     out = _run(_tool(tmp_path / "ws"), action="fetch", source="https://example.com/page")
     assert out.get("unresolved_reason")
