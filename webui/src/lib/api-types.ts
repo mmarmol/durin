@@ -4,6 +4,23 @@
  */
 
 export interface paths {
+    "/api/v1/approvals/{id}/decision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve or reject a pending approval request as a person: a dashboard session only (API tokens are refused), with skills:write for a skill change, mcp:write for an MCP change, admin for anything else. 200 when the request was acted on; 409 when it was refused and left as it was. */
+        post: operations["approvals_decide"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/tokens": {
         parameters: {
             query?: never;
@@ -2655,6 +2672,25 @@ export interface components {
             alias: string;
             /** Keep On */
             keep_on: string;
+        };
+        /** ApprovalDecisionCommand */
+        ApprovalDecisionCommand: {
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "approve" | "reject";
+            /** Id */
+            id: string;
+        };
+        /** ApprovalDecisionResult */
+        ApprovalDecisionResult: {
+            /** Approval Id */
+            approval_id: string;
+            /** Message */
+            message: string;
+            /** Status */
+            status: string;
         };
         /** AutomationAnswerCommand */
         AutomationAnswerCommand: {
@@ -6390,6 +6426,30 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    approvals_decide: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApprovalDecisionCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApprovalDecisionResult"];
+                };
+            };
+        };
+    };
     auth_list_tokens: {
         parameters: {
             query?: never;

@@ -36,6 +36,53 @@
         "title": "AliasMoveIn",
         "type": "object"
       },
+      "ApprovalDecisionCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "decision": {
+            "enum": [
+              "approve",
+              "reject"
+            ],
+            "title": "Decision",
+            "type": "string"
+          },
+          "id": {
+            "pattern": "^[0-9a-f]{12}$",
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "decision"
+        ],
+        "title": "ApprovalDecisionCommand",
+        "type": "object"
+      },
+      "ApprovalDecisionResult": {
+        "properties": {
+          "approval_id": {
+            "title": "Approval Id",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "message",
+          "approval_id"
+        ],
+        "title": "ApprovalDecisionResult",
+        "type": "object"
+      },
       "AutomationAnswerCommand": {
         "additionalProperties": false,
         "properties": {
@@ -8086,6 +8133,35 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/approvals/{id}/decision": {
+      "post": {
+        "operationId": "approvals_decide",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalDecisionCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalDecisionResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Approve or reject a pending approval request as a person: a dashboard session only (API tokens are refused), with skills:write for a skill change, mcp:write for an MCP change, admin for anything else. 200 when the request was acted on; 409 when it was refused and left as it was.",
+        "x-required-scope": "admin"
+      }
+    },
     "/api/v1/auth/tokens": {
       "delete": {
         "operationId": "auth_revoke_token",

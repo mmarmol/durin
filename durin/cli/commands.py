@@ -2195,6 +2195,7 @@ def _run_gateway(
                     chat_channel_resolver=lambda: channels.get_channel("websocket"),
                     stop_turn=agent.cancel_session_turns,
                     turn_key=agent.bus_turn_key,
+                    approval_deps=agent.approval_exec_deps,
                 )
                 # Static token lives on the websocket channel config.
                 _ws_cfg_u = getattr(config.channels, "websocket", None)

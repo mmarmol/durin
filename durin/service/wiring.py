@@ -34,6 +34,7 @@ def build_service_registry(
     chat_channel_resolver: Callable[[], Any] | None = None,
     stop_turn: Callable[[str], Awaitable[int]] | None = None,
     turn_key: Callable[[str], str] | None = None,
+    approval_deps: Callable[[], Any] | None = None,
 ) -> ServiceRegistry:
     """Construct a registry with all domain services wired to real deps.
 
@@ -73,9 +74,17 @@ def build_service_registry(
     ``AutomationsRuntime`` so ``AutomationsService`` can fire/answer runs;
     surfaces without one (the websocket channel's shim registry) leave it
     ``None`` and those two routes report unavailable.
+
+    ``approval_deps`` is optional: the gateway passes
+    ``AgentLoop.approval_exec_deps`` so an approval decided through
+    ``ApprovalsService`` runs with the live exec tool and MCP connections;
+    without it a kind that needs a handle is refused. The note that tells the
+    asking chat how its request was decided is posted only for channels the
+    ``channel_manager`` serves, so a surface without one posts none.
     """
     from durin.jobs.registry import JobRegistry
     from durin.security.api_tokens import ApiTokenStore
+    from durin.service.approvals import ApprovalsService
     from durin.service.auth import AuthService
     from durin.service.automations import AutomationsService
     from durin.service.channels_discord import DiscordService
@@ -166,6 +175,11 @@ def build_service_registry(
     registry.register("automations", AutomationsService(
         workspace=_workspace(), cron_service=cron_service, runtime=automations_runtime,
         hooks_secret=lambda: ApiTokenStore().get_or_create_hooks_secret()))
+    registry.register("approvals", ApprovalsService(
+        workspace_resolver=_workspace, exec_deps=approval_deps, bus=bus,
+        serves_channel=(
+            (lambda name: channel_manager.get_channel(name) is not None)
+            if channel_manager is not None else None)))
 
     # Crash recovery: the gateway is the long-lived process, so its boot is the natural
     # point to reconcile run manifests still "running" from a previous process that died

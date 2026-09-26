@@ -31,12 +31,14 @@ registry.  Each class's dep handling:
 - ``ChatService``          — no deps (the channel resolver and loop callables default to ``None``).
 - ``SlackService``         — no deps (slack_sdk imported lazily per call).
 - ``ChannelsRuntimeService`` — ``channel_manager=None`` (stored, never called here).
+- ``ApprovalsService``     — ``workspace_resolver=lambda: Path("/")`` (callable, never called).
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
+from durin.service.approvals import ApprovalsService
 from durin.service.auth import AuthService
 from durin.service.automations import AutomationsService
 from durin.service.channels_discord import DiscordService
@@ -88,6 +90,7 @@ SERVICE_CLASSES: list[type] = [
     ChannelsRuntimeService,
     ChannelPostService,
     ChatService,
+    ApprovalsService,
 ]
 
 
@@ -123,4 +126,5 @@ def build_catalog_registry() -> ServiceRegistry:
     registry.register("channels_runtime", ChannelsRuntimeService())
     registry.register("channels_post", ChannelPostService())
     registry.register("chat", ChatService())
+    registry.register("approvals", ApprovalsService(workspace_resolver=lambda: Path("/")))
     return registry

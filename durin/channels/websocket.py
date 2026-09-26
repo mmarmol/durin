@@ -659,6 +659,7 @@ class WebSocketChannel(BaseChannel):
             bus=bus,
             subagent_manager=None,
             chat_channel_resolver=lambda: self,
+            approval_deps=self._approval_deps,
         )
 
     def _endpoint_workspace(self) -> Path:
@@ -2034,12 +2035,15 @@ class WebSocketChannel(BaseChannel):
         turn can approve: that click is refused and the record left as it
         was. That run can take minutes (an MCP install), so
         it proceeds as a background task and the socket keeps serving frames.
-        The ``approval_decided`` event reports the outcome when it lands.
+        The ``approval_decided`` event reports the outcome when it lands, and
+        a decision the waiting turn did not take posts a note into the chat,
+        since that turn was told the request waits and moved on.
         """
         import dataclasses
 
         from durin.agent import approval, approval_store
         from durin.agent.approval_executors import ExecDeps
+        from durin.agent.approval_notify import notify_origin
 
         request_id = str(envelope.get("request_id") or "")
         approval_id = str(envelope.get("approval_id") or "").strip()
@@ -2086,6 +2090,8 @@ class WebSocketChannel(BaseChannel):
                 await _reply("failed", f"Could not decide {approval_id}: {exc}")
                 return
             await _reply(outcome.status, outcome.message)
+            # The record belongs to a chat this socket serves (checked above).
+            await notify_origin(self.bus, outcome, serves=lambda channel: channel == self.name)
 
         task = asyncio.create_task(_decide())
         self._approval_tasks.add(task)
