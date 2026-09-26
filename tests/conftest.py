@@ -47,12 +47,14 @@ def _testclient_localhost_peer():
     """Model the in-process Starlette TestClient as a localhost peer, suite-wide.
 
     Starlette's TestClient defaults the ASGI scope's client address to
-    ("testclient", 50000), which is NOT a loopback IP. durin's /webui/bootstrap
-    gates unauthenticated ADMIN-token minting on a real localhost peer when no
-    token_issue_secret is set (durin/api/asgi.py bootstrap_handler + _is_localhost).
-    An in-process TestClient genuinely IS a local client, so model its peer as
-    127.0.0.1. A test exercising the remote-rejection path passes ``client=(...)``
-    explicitly (``setdefault`` leaves it untouched).
+    ("testclient", 50000), which is NOT a loopback IP, and its Host header to
+    "testserver", which is not a loopback name. durin's /webui/bootstrap
+    gates unauthenticated ADMIN-token minting on a real localhost peer reached
+    under a loopback Host name when no token_issue_secret is set. An in-process
+    TestClient genuinely IS a local client, so model its peer as 127.0.0.1 and
+    its base URL as http://127.0.0.1. A test exercising the remote-rejection
+    path passes ``client=(...)`` or ``base_url=...`` explicitly (``setdefault``
+    leaves it untouched).
 
     Session-scoped and self-undoing so the patch is tied to the pytest run, not a
     permanent import-time mutation. Safe because no test constructs a TestClient
@@ -65,6 +67,7 @@ def _testclient_localhost_peer():
 
     def _init_with_localhost_peer(self, *args, **kwargs):
         kwargs.setdefault("client", ("127.0.0.1", 0))
+        kwargs.setdefault("base_url", "http://127.0.0.1")
         return original_init(self, *args, **kwargs)
 
     stc.TestClient.__init__ = _init_with_localhost_peer

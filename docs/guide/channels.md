@@ -98,7 +98,9 @@ toggle for it.
 
 The dashboard authenticates with short-lived tokens it mints at page load
 (`GET /webui/bootstrap`). With no setup secret configured, only localhost may
-mint them. Setting `token_issue_secret` — or the static `token` while
+mint them, and only when the browser reaches the gateway as `localhost`,
+`127.0.0.1` or `[::1]` — to open the dashboard under any other name (a
+hosts-file alias, a tailnet name), set `token_issue_secret`. Setting `token_issue_secret` — or the static `token` while
 `token_issue_secret` is empty — makes every sign-in, localhost included, ask
 for that secret once; the browser then stays signed in through an `httpOnly`
 session cookie (`webui_session_ttl_s`, default 7 days) and never stores the

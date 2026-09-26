@@ -671,9 +671,13 @@ def test_bootstrap_accepts_static_token_as_secret(bus: MagicMock) -> None:
     assert payload["token"].startswith("nbwt_")
 
 
+# The Host header a browser sends to the dashboard on this machine.
+_LOCAL_HOST = {"host": "127.0.0.1:8765"}
+
+
 def test_localhost_without_auth_is_valid(bus: MagicMock) -> None:
     channel = _ch(bus, host="127.0.0.1")
-    payload = channel.bootstrap(peer=_LOCAL, headers={})
+    payload = channel.bootstrap(peer=_LOCAL, headers=_LOCAL_HOST)
     assert payload["token"].startswith("nbwt_")
 
 
@@ -683,7 +687,7 @@ def test_bootstrap_prefers_runtime_model_name(bus: MagicMock, monkeypatch: pytes
         lambda: "from-disk",
     )
     channel = _ch(bus, host="127.0.0.1", runtime_model_name=lambda: "  live/model  ")
-    payload = channel.bootstrap(peer=_LOCAL, headers={})
+    payload = channel.bootstrap(peer=_LOCAL, headers=_LOCAL_HOST)
     assert payload["model_name"] == "live/model"
 
 
@@ -693,7 +697,7 @@ def test_bootstrap_falls_back_when_runtime_returns_empty(bus: MagicMock, monkeyp
         lambda: "from-disk",
     )
     channel = _ch(bus, host="127.0.0.1", runtime_model_name=lambda: "   ")
-    payload = channel.bootstrap(peer=_LOCAL, headers={})
+    payload = channel.bootstrap(peer=_LOCAL, headers=_LOCAL_HOST)
     assert payload["model_name"] == "from-disk"
 
 
@@ -707,7 +711,7 @@ def test_bootstrap_falls_back_when_runtime_raises(bus: MagicMock, monkeypatch: p
         raise RuntimeError("resolver failed")
 
     channel = _ch(bus, host="127.0.0.1", runtime_model_name=boom)
-    payload = channel.bootstrap(peer=_LOCAL, headers={})
+    payload = channel.bootstrap(peer=_LOCAL, headers=_LOCAL_HOST)
     assert payload["model_name"] == "from-disk"
 
 

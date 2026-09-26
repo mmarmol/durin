@@ -797,6 +797,19 @@ conversation with an external party) and `chat:write` (conversing with durin
 through the native chat routes and `/v1`; an API-originated turn never carries
 a person's authority to approve privileged actions).
 
+**Dashboard bootstrap.** `GET /webui/bootstrap` (`WebSocketChannel.bootstrap`)
+mints the dashboard session: an admin token stored with `kind: "webui"`. With a
+setup secret configured (`token_issue_secret`, or the static `token` when that
+is empty) every caller must present it or carry a valid `durin_session`
+cookie, localhost included. With no secret, it mints only for a loopback peer
+reached under a loopback `Host` name — `localhost`, `127.0.0.1` or `[::1]`, any
+port — and answers 403 otherwise, pointing at `token_issue_secret`. The `Host`
+check closes DNS rebinding: a page in the local browser can make a name it
+controls resolve to 127.0.0.1, which makes the peer loopback, but the browser
+still sends the page's own name as `Host`. To reach the dashboard under any
+other name (a hosts-file alias, a tailnet name), configure the setup secret;
+reverse-proxy deployments already do, and that path is unchanged.
+
 `AuthService` (`durin/service/auth.py`) owns token lifecycle routes; it calls
 `principal.require(Scope.SYSTEM_WRITE)` before issuing or revoking tokens, so
 only callers with system-write authority can manage other tokens.

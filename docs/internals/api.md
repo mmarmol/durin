@@ -399,8 +399,10 @@ removed. Run `python scripts/gen_openapi.py` to see the current totals.
 whether a setup secret is configured — `token_issue_secret`, or the static
 `token` when that is empty:
 
-- **No secret:** only a loopback peer may mint (local mode); any other peer
-  gets 403.
+- **No secret:** only a loopback peer may mint (local mode), and only under a
+  loopback `Host` name (`localhost`, `127.0.0.1` or `[::1]`, any port); any
+  other peer or name gets 403. The `Host` check stops a DNS-rebinding page in
+  the local browser from minting a token (see the security internals).
 - **A secret is set:** every caller, localhost included, must present it
   (`Authorization: Bearer <secret>` or `X-Durin-Auth: <secret>`) or carry a
   valid `durin_session` cookie; otherwise 401. A sign-in with the secret sets

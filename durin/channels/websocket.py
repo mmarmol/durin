@@ -444,6 +444,29 @@ def _peer_is_loopback(peer: Any) -> bool:
     return host in _LOCALHOSTS
 
 
+# Host names that can only mean this machine. A DNS-rebinding page reaches a
+# loopback peer under its own name, so without a setup secret the bootstrap
+# also requires the Host header to be one of these (any port).
+_LOOPBACK_HOST_NAMES = frozenset({"localhost", "127.0.0.1", "[::1]"})
+
+
+def _host_is_loopback(headers: Any) -> bool:
+    """True when the request's ``Host`` header names this machine by a
+    loopback name (``localhost``, ``127.0.0.1`` or ``[::1]``, with or
+    without a port). A missing or empty header is not."""
+    raw = str(headers.get("host") or headers.get("Host") or "").strip().lower()
+    if raw.startswith("["):
+        end = raw.find("]")
+        name = raw[: end + 1] if end != -1 else raw
+        rest = raw[end + 1:] if end != -1 else ""
+    else:
+        name, _, port = raw.partition(":")
+        rest = f":{port}" if port else ""
+    if rest and not (rest.startswith(":") and rest[1:].isdigit()):
+        return False
+    return name in _LOOPBACK_HOST_NAMES
+
+
 def _bearer_token(headers: Any) -> str | None:
     """Pull a Bearer token out of standard or query-style headers."""
     auth = headers.get("Authorization") or headers.get("authorization")
@@ -983,7 +1006,10 @@ class WebSocketChannel(BaseChannel):
         - a configured ``token_issue_secret``/static ``token`` must match the
           request header (secures deployments behind a reverse proxy where every
           connection appears local);
-        - with NO secret, only a loopback *peer* may mint (local-dev mode);
+        - with NO secret, only a loopback *peer* may mint (local-dev mode), and
+          only under a loopback ``Host`` name: a page in the local browser could
+          otherwise reach this route through DNS rebinding (its own name
+          resolving to 127.0.0.1) and mint an admin token;
         - the issued-token pool is capped to bound runaway growth.
         """
         secret = self.config.token_issue_secret.strip() or self.config.token.strip()
@@ -996,6 +1022,11 @@ class WebSocketChannel(BaseChannel):
                 raise UnauthenticatedError("invalid bootstrap secret")
         elif not _peer_is_loopback(peer):
             raise ForbiddenError("bootstrap is localhost-only")
+        elif not _host_is_loopback(headers):
+            raise ForbiddenError(
+                "without a setup secret, bootstrap answers only localhost, 127.0.0.1 or "
+                "[::1]; to reach the dashboard under another name, set "
+                "channels.websocket.token_issue_secret")
         # Cap outstanding tokens to avoid runaway growth from a misbehaving client.
         self._purge_expired_issued_tokens()
         if len(self._issued_tokens) >= self._MAX_ISSUED_TOKENS:
