@@ -236,7 +236,10 @@ the same note.
     `pending` means the waiting turn took it. When the socket closes, the
     client rejects any decision still waiting on its `approval_decided`
     reply at once; the server still carries the decision out, and the next
-    attach shows the result.
+    attach shows the result. A click the waiting turn did not take (it had
+    stopped waiting) posts a system note into the chat once decided
+    (`durin.agent.approval_notify`), so the agent learns the outcome instead
+    of believing the request still waits.
   - **TUI**: an approval bubble with Approve / Reject rows that send `yes` /
     `no` as the user's next message, which the loop parses as the verdict
     (see **Approval bubble** under Work-visibility surfaces (TUI)).
@@ -246,8 +249,9 @@ the same note.
     (a Slack thread, a Telegram topic) rather than at the surface's top
     level. The reply is parsed by the loop.
   - **Legacy REPL**: cannot take a reply mid-turn, so it never waits; a
-    skill, dependency or MCP change becomes a pending request, decided with
-    `durin approvals`, and an exec command that needs approval is refused.
+    skill, dependency or MCP change becomes a pending request, decided on
+    the Pending page or with `durin approvals`, and an exec command that
+    needs approval is refused.
 
   In a webui chat the wait ends like a blocking question's: once the last
   webui tab has been closed for the grace window, the request stays pending
@@ -478,6 +482,39 @@ decides the verdict. A goal-state sync without `pending_approval` means the
 approval was answered or timed out: the bubble's action rows are retired so a
 stale click can't answer whatever the turn asks next.
 
+### Pending page (WebUI)
+
+A **Pending** entry heads the sidebar's section list, with a badge counting
+everything that waits on the person. The count comes from
+`GET /api/v1/pending`: the shell polls it on the same cadence as the other
+sidebar badges, and the page reports every read it makes, so resolving an item
+there updates the badge at once.
+
+The page (`PendingView`) lists the items grouped by source, in a fixed order:
+approval requests, skill imports, automation runs, workflow runs, memory
+pairs, skill suggestions. It re-reads the list on the same cadence while open,
+so an item resolved elsewhere (a chat, the CLI, a channel reply) leaves it.
+Each item renders with the card its own section uses, fed the record the route
+returns for it (`item.data`), and resolves through that section's routes:
+
+- an approval request — `ApprovalCard`, whose `onDecide` calls the REST
+  decision route (`POST /api/v1/approvals/{id}/decision`) instead of the
+  chat's socket frame. A refusal (409) shows its reason on the card and the
+  request stays; a `failed` or `stale` outcome is reported as a problem;
+- a paused automation run — the automations inbox card (`InboxView`);
+- a workflow run waiting for input — the resume form (`NeedsInputForm`, the
+  same form a run's detail shows), plus a link to the run in Workflows;
+- a flagged memory pair — `FlaggedPairCard`, with the drawer for either page;
+- a skill suggestion — `SkillSuggestionCard`;
+- a skill import in quarantine — `QuarantineCard`, whose review button opens
+  that import's triage in Skills (a deep link, `SkillsView`'s
+  `initialTriage`): approving walks the install gate (confirm, override,
+  replace, dependencies), which stays with the Skills surface.
+
+Resolving anything shows what it came to and re-reads the list. A source the
+server could not load is named above the list. The domain sections keep their
+own lists; the page only gathers them.
+
 ### Memory browser (WebUI)
 
 The Entities tab offers two presentations of the same entity set — Table
@@ -601,7 +638,8 @@ operations are safe from both async channel handlers and sync CLI contexts.
 | `ask_user_question` / `request_secret` / `exit_plan_mode` / `todo_write` | `durin/agent/tools/ask_user.py`, `durin/agent/tools/secrets.py`, `durin/agent/tools/plan_mode.py`, `durin/agent/tools/todos.py` | Interactive tools; payload-canonical contract (arguments carry display content); rich channels render widgets, dumb channels get serialized fallback |
 | `pending_answers` | `durin/agent/pending_answers.py` | Per-session registry of typed (`question` / `approval`) waits on the user; `can_block()` allows one only for an interactive session with a live consumer that can take a reply mid-turn |
 | `RICH_PAYLOAD_CHANNELS` | `durin/agent/user_payloads.py` | Set of channel names that render structured tool payloads natively: `{"websocket", "cli"}` |
-| `ApprovalCard` | `webui/src/components/thread/ApprovalCard.tsx` | The approval a turn waits on: summary, reviewed detail, Approve / Reject; decides only through its `onDecide` prop (the socket frame in a chat) |
+| `ApprovalCard` | `webui/src/components/thread/ApprovalCard.tsx` | The approval a turn waits on: summary, reviewed detail, Approve / Reject; decides only through its `onDecide` prop (the socket frame in a chat, the REST decision route on the Pending page) |
+| `PendingView` | `webui/src/components/PendingView.tsx` | The Pending page: every item waiting on the person, grouped by source, each with its own section's card; reports the count for the sidebar badge |
 | `AgentLoop.approval_exec_deps` | `durin/agent/loop.py` | Live handles (exec tool, MCP service on the live runtime) for an approval decided after its turn stopped waiting |
 | `theme.py` / `tokens.css` | `durin/cli/theme.py` / `design/tokens.css` | Six Textual themes (ithildin/forge/mithril × light/dark) mirroring the CSS token values; a test pins the two together so they cannot drift |
 | `process_dragged_paths` | `durin/cli/dragdrop.py` | Scans input for absolute file paths; copies media to `<workspace>/.media/<sha>.<ext>`; returns `(cleaned_text, media_list)` |

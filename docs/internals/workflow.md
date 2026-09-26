@@ -1077,7 +1077,9 @@ an `AutomationRun`'s `status: "paused"` reflects, owned instead by the
 Automations section's own inbox; when at least one such run exists, a footer
 link under the tray opens that section. This keeps a single paused run from
 demanding attention in two vocabularies (plain resume vs. approve/reject) at
-once. The
+once. The dashboard's Pending page lists the same stranded runs, by the same
+rule (`GET /api/v1/pending` leaves an automation's run to its paused automation
+run), each with the resume form the detail pane shows (`NeedsInputForm`). The
 detail pane opens with the run's identity (status, workflow, copyable run id,
 the task input clamped behind a click-to-expand), walks the node trace, then
 lists the run's own sub-runs as rows that navigate to the child's detail — and

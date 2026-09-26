@@ -149,7 +149,8 @@ approvals and questions. Review/Answer expands the selected one inline
 into a resolution card: an approval shows the exact proposal quoted and offers
 approve / correct-with-a-comment / reject, a question is a free-text answer —
 the same three-way resolution a channel reply drives, just from the
-dashboard. A secondary "Stop this run" control on the
+dashboard. The same card shows for each paused run on the dashboard's
+**Pending** page, next to everything else that waits on you. A secondary "Stop this run" control on the
 same card ends it instead, without a reply — the deterministic case: nothing
 is running to wait for, so it stops immediately and does not resume. Resolving
 one refreshes it out of the tray immediately. The section also has an editor

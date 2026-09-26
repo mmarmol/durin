@@ -387,6 +387,8 @@ elsewhere in the app. A run an [automation](automations.md) paused is excluded
 from this tray and badge — it belongs to the Automations section's own "Needs
 you" inbox instead, so the same paused run never asks for attention in two
 places at once; when one exists, a small link under the tray takes you there.
+The same stranded runs, with their resume forms, also show on the dashboard's
+**Pending** page, next to everything else that waits on you.
 
 Each workflow also has a self-improvement mode (`manual` by default): a
 background pass looks at recurring trouble (a node that keeps looping, a

@@ -581,7 +581,7 @@ there is no session left to credit.
 | `skill_write` | Create a new skill (routes to `dream_create_skill`). Also registered in the dream's skill-extract sub-agent. |
 | `skill_publish` | Promote a `skill-drafts/<name>/` draft into the active registry (routes to `publish_draft_skill`). |
 | `skill_discard` | Delete a draft under `skill-drafts/<name>/`; never touches the active registry. |
-| `skill_edit` | Bounded edit (forks builtins). A `manual` skill's edit, or one whose scan needs review, is approved by the user (or the judge within limits) or filed as a pending request for `durin approvals`. |
+| `skill_edit` | Bounded edit (forks builtins). A `manual` skill's edit, or one whose scan needs review, is approved by the user (or the judge within limits) or filed as a pending request for the Pending page or `durin approvals`. |
 | `skill_search` | Search registries; returns hits and refs. Never installs. |
 | `skill_import` | Import from a source through the gate; a flagged install is approved by policy, the judge (never for dangerous) or the user. |
 | `skill_audit` | Run the static scan on an installed skill. |

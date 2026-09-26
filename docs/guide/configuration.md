@@ -499,7 +499,7 @@ See [docs/internals/skills/](../internals/skills/) for architecture details.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `install_policy` | `approve` | Who authorizes flagged skill installs and dependency installs: `approve` (you approve each one in the chat or with `durin approvals`; the skills judge may clear a non-dangerous install), `auto` (pre-authorized, except a dangerous skill), `never` (dependency installs are only reported) |
+| `install_policy` | `approve` | Who authorizes flagged skill installs and dependency installs: `approve` (you approve each one in the chat, or later on the dashboard's Pending page or with `durin approvals`; the skills judge may clear a non-dangerous install), `auto` (pre-authorized, except a dangerous skill), `never` (dependency installs are only reported) |
 
 **`skills.security`** — import security floor:
 
@@ -724,7 +724,7 @@ MCP server sampling (server-initiated LLM calls) is governed by `sampling` under
 
 | Key | Default | Meaning |
 |---|---|---|
-| `install_policy` | `approve` | `never` (the agent cannot add, update, install or enable a server), `approve` (you approve each change: in a chat you are asked; otherwise it waits for `durin approvals`), or `auto` |
+| `install_policy` | `approve` | `never` (the agent cannot add, update, install or enable a server), `approve` (you approve each change: in a chat you are asked; otherwise it waits on the dashboard's Pending page and in `durin approvals`), or `auto` |
 | `quality` | `official` | Default discovery view: `official` (star/first-party gate) or `all` |
 | `min_stars` | `100` | Star floor for the `official` gate |
 | `search_limit` | `10` | Max results per search |

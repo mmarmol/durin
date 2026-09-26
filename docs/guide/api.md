@@ -193,7 +193,9 @@ A message sent with a token comes from a program, not from the person at the
 dashboard. A turn it opens or joins therefore does **not** carry the authority
 to approve privileged actions: installing an MCP server, or importing, editing
 or installing dependencies for a skill. durin records such a request instead of
-running it, and it waits in `durin approvals` for a person to act on. A shell
+running it, and it waits on the dashboard's Pending page and in
+`durin approvals` for a person to act on. A token cannot decide it either:
+the approval decision route takes only the dashboard session. A shell
 command that would need the person's approval is refused. A message sent with a
 token never answers an approval request the conversation is waiting on, even
 "yes": only the person can. Asking the person (or program) a question and

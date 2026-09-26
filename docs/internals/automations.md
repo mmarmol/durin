@@ -220,7 +220,12 @@ thread wakes this exact run. With no thread to reply into (e.g. a webhook or man
 fire with nobody to answer), the ask falls back to the ordinary help lane with a
 note appended so it is never silently lost. An untagged ask is always operator-bound
 and goes straight to the help lane, registering a claim on the receipt's thread key
-(when the channel returns one) so a reply there also resumes the run.
+(when the channel returns one) so a reply there also resumes the run. The help-lane
+message is English, like every message durin posts into a channel
+(`_automation_help_body` in the gateway): the automation's name and the ask, and for
+an approval the proposal and the replies the thread takes (`approve`, `reject`, or
+the correction as free text), all words the reply parser accepts. An escalation is
+worded as one, never as a question.
 
 **Delivery and the life/streak check (`_post_finish`)** run for every *terminal*
 status (everything except `paused`). Delivery is computed first —
@@ -274,8 +279,8 @@ target that is busy (`AutomationBusy`) is queued rather than dropped, carrying i
 of silently restarting at zero.
 
 **Who may answer.** A question pause can be answered by the operator (the HTTP
-answer route, which the webui inbox uses), by a counterpart replying in the
-claimed thread (the matcher calls `answer_nowait`), or by the agent
+answer route, which the webui inbox and the Pending page use), by a counterpart
+replying in the claimed thread (the matcher calls `answer_nowait`), or by the agent
 (`automations(action="answer")`). An approval pause is a person's decision:
 the agent tool refuses a run whose `ask_kind` is `"approval"` before it reaches
 the runtime, so only the answer route and a thread reply resolve one.
@@ -389,7 +394,10 @@ channel: `"wake_or_new"` (default) resumes the parked run; `"always_new"` leaves
 claim alone and lets the message fall through to trigger matching instead, so that
 automation always opens a fresh run per matching message rather than resuming one
 mid-flight. A stale claim (its run is no longer `paused`, or has vanished) is
-released and the message keeps looking for a match.
+released and the message keeps looking for a match. A claim nobody ever released
+— the process died before its run reached the release, or the counterpart never
+replied — is pruned after a week (`claims.prune`), when the gateway starts and
+every hour while it runs (`durin.service.housekeeping`).
 
 **Dispatch** (`_dispatch_match`) decides fire vs. queue for a matched trigger: not
 busy → schedule a background fire task (a synchronous `_pending_fires` set closes
