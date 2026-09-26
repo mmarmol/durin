@@ -542,6 +542,11 @@
         "rerank": "検索の再ランキング",
         "dream": "Dream（メモリ統合）"
       },
+      "nameGate": {
+        "prioritize": "優先",
+        "require": "必須",
+        "off": "オフ"
+      },
       "rows": {
         "crossEncoderEnabled": "クロスエンコーダー・リランカー",
         "crossEncoderModel": "リランカーモデル",
@@ -555,6 +560,11 @@
         "dreamAbsorbSemanticThreshold": "意味的一致の距離",
         "dreamThrottle": "リアクティブ実行の間隔制限（秒）",
         "dreamMaxSeconds": "1回あたりの最大実行時間（秒）",
+        "dreamEscalateFloor": "調査審査へのエスカレーション基準",
+        "dreamTier2Confidence": "調査マージの確信度",
+        "dreamJudgeConcurrency": "審査呼び出しの同時実行数",
+        "dreamRecheckDays": "未確定ペアの再審査までの日数",
+        "dreamNameGate": "意味的候補への名前シグナル",
         "dreamAlwaysOnBudget": "常時適用の予算（トークン）"
       },
       "help": {
@@ -570,6 +580,11 @@
         "dreamAbsorbSemanticThreshold": "同じ種類の2つのエンティティを同一とみなすために必要な近さ（embedding 距離、約0〜1。0.20 ≈ 類似度90%）です。低いほど厳格になります。実際のマージ判断は審査が行います。",
         "dreamThrottle": "リアクティブな dream 実行（compaction 後 / セッション終了時）の間隔の最小秒数です。バースト的な発生を吸収し、パスが重なって積み上がるのを防ぎます。0 で無効化されます。毎日の cron は間隔制限の対象外です。",
         "dreamMaxSeconds": "抽出パスごとの実時間の上限です。達しても現在のセッションが完了してからパスを譲り、セッションごとのカーソルが次回のトリガーで残りを再開します。0 = 無制限。",
+        "dreamEscalateFloor": "安価な審査が判定できなかったペア — 'unclear'、または統合の確信度を下回る 'same' — を、回答前に両方のエンティティを読む範囲限定の調査サブエージェントに引き渡す確信度（0〜100）です。0 でエスカレーションを無効化します。",
+        "dreamTier2Confidence": "調査済みの判定がマージするために必要な最小確信度（0〜100）です。ページとその来歴を先に読むため、安価な審査より低い基準で済みます。これを下回るとペアはあなたの受信箱に入ります。",
+        "dreamJudgeConcurrency": "refine パス中に同時実行される審査呼び出しの数です（1〜8）。マージは候補の順序どおり、依然として1件ずつ適用されます。",
+        "dreamRecheckDays": "判定が確定していないペア（解析不能な応答、'unclear'、統合基準を下回る 'same'）を再審査するまでの日数です。0 にすると毎回のパスで再審査します。",
+        "dreamNameGate": "名前シグナルが embedding の近い候補をどう誘導するかです。'prioritize' は名前が同じトークンを共有するか互いを含むペアを先に審査し、残りは距離順にします。'require' はそれらのペアのみを審査します。'off' は距離のみで並べます。エイリアスのペアは常に審査されます。",
         "dreamAlwaysOnBudget": "すべてのプロンプトに常時固定される「常時適用」ガイダンスのトークン予算です。dream はフィードバック（stance/practice）をランク付けし、矛盾を取り除き、優先度の高い項目からこの予算に収めます。0 で固定を無効化します。"
       },
       "crossEncoderModelPlaceholder": "モデル ID（例: BAAI/bge-reranker-base）",
@@ -1160,17 +1175,22 @@
       "description": "同時に実行できるターンとサブエージェントの数です。変更は即座に適用され、再起動は不要です。",
       "sections": {
         "caps": "上限",
-        "live": "ライブ状況"
+        "live": "ライブ状況",
+        "workflows": "ワークフローのブランチ"
       },
       "rows": {
         "interactive": "対話ターン",
         "ceiling": "全体の上限",
-        "subagents": "サブエージェント"
+        "subagents": "サブエージェント",
+        "workflowLlm": "並列 LLM ブランチ",
+        "workflowScript": "並列スクリプトブランチ"
       },
       "help": {
         "interactive": "全セッションを通じて同時に実行できる対話ターンの最大数です。",
         "ceiling": "全体で同時に実行できる作業の最大数です — 対話ターンとサブエージェントの合計。",
-        "subagents": "同時に実行できるサブエージェントの最大数です。"
+        "subagents": "同時に実行できるサブエージェントの最大数です。",
+        "workflowLlm": "ワークフローの parallel ノード内で同時実行されるエージェントブランチです（プロバイダーのレート制限に依存します）。",
+        "workflowScript": "ワークフローの parallel ノード内で同時実行されるスクリプトブランチです — 低コストなので LLM ブランチより幅広く実行しても安全です。"
       },
       "live": {
         "interactive": "対話",
@@ -1254,6 +1274,12 @@
     "session_persistent": "永続（ループの各パスをまたいで記憶）",
     "prompt": "プロンプト",
     "routes": "ルート",
+    "detached": "デタッチ（起動して続行）",
+    "inputsFrom": "入力元",
+    "outputSchema": "出力スキーマ（JSON）",
+    "outputSchemaInvalid": "無効な JSON です — パースできるまでスキーマは保存されません。",
+    "outputFile": "出力ファイル",
+    "reuse": "変更がなければ再利用（プロデューサーが一致すればスキップ）",
     "routingShape": "ルーティング形式",
     "routingShapeBinary": "バイナリ（pass / fail）",
     "routingShapeMultiway": "複数（カスタムラベル）",
@@ -1285,16 +1311,25 @@
     "scriptEnv": "環境変数",
     "scriptEnvClean": "クリーン（最小限 + DURIN_*）",
     "scriptEnvInherit": "全環境変数を継承",
+    "scriptSecrets": "シークレット",
+    "scriptSecretsPlaceholder": "ZENDESK_API_TOKEN, MXHERO_KEY",
+    "scriptSecretsHint": "保存済みのシークレット名が環境変数として注入されます。それぞれ 'exec' スコープを許可している必要があります。",
+    "ioArtifacts": "宣言済みの成果物",
+    "ioArtifactsPlaceholder": "context.json | 統合されたチケットのコンテキスト\nevidence.json",
+    "ioArtifactsHint": "1行に1つ: パス | 任意の説明。実行がその作業フォルダに生成すると約束したファイルです — 見つからないものは実行後に警告として報告されます。",
     "parallelMode": "モード",
     "parallelStatic": "静的（固定ブランチ）",
     "parallelDynamic": "動的（×N ワーカー）",
+    "parallelFromNode": "実行時に選択（ノードからのブランチ）",
     "parallelBranches": "ブランチ",
     "parallelWorker": "ワーカーテンプレート",
     "parallelListFrom": "リストの取得元",
+    "parallelBranchesFrom": "ブランチ元",
     "parallelMaxConcurrency": "最大同時実行数",
     "parallelReconcile": "統合",
     "parallelNeedBranch": "並列実行するブランチを1つ以上選択してください。",
     "parallelNeedWorkerList": "ワーカーテンプレートと、リストを出力するノードを選択してください。",
+    "parallelNeedBranchesFrom": "実行するブランチの名前を出力するノードを選択してください。",
     "ioInputTitle": "ワークフローの入力",
     "ioOutputTitle": "ワークフローの出力",
     "ioInputHint": "このワークフローが入力として受け付ける内容です。",
@@ -1334,7 +1369,22 @@
     "runHistory": "実行履歴",
     "historyRetention": "履歴と作業フォルダは直近の実行のみを保持します（workflow.keep_runs）",
     "copySession": "セッションキーをコピー",
+    "nodePanel": {
+      "title": "ステップの詳細",
+      "command": "コマンド",
+      "exitCode": "終了コード",
+      "stdout": "出力",
+      "stderr": "エラー",
+      "transcript": "このステップが行ったこと",
+      "transcriptLoading": "ステップの記録を読み込み中…",
+      "transcriptMissing": "このステップの記録はもう利用できません。",
+      "noDetail": "このステップ自体は記録を持ちません — その作業内容は配下の実行またはブランチにあります。",
+      "round": "ラウンド {{round}}/{{maxRounds}}",
+      "roundNoMax": "ラウンド {{round}}"
+    },
     "sessionCopied": "セッションキーをコピーしました",
+    "copyOutput": "最終出力をコピー",
+    "outputCopied": "最終出力をコピーしました",
     "workerLabel": "worker {{index}}",
     "branchLabel": "ブランチ {{id}}",
     "needsInputTitle": "入力待ち",
@@ -1351,12 +1401,51 @@
     "passOf": "パス {{iteration}} / {{budget}}",
     "finalPass": "最終パス",
     "continuesSession": "セッションを継続",
+    "nodeDuration": "所要時間",
+    "nodeTypical": "通常",
+    "nodeArtifacts": "生成",
+    "runElapsed": "経過時間",
+    "runTypicalTotal": "過去の実行 ~{{duration}}",
     "persistentInParallelWarning": "このノードは {{parallelId}} のブランチです — 並列ユニットでは永続セッションを使用できません。保存に失敗します。",
     "runStatus": {
       "ok": "ok",
       "no_session": "セッションなし",
       "persist_failed": "保存に失敗",
-      "node_failed": "失敗"
+      "node_failed": "失敗",
+      "reused": "再利用済み",
+      "completed": "完了",
+      "running": "実行中",
+      "needs_input": "入力待ち",
+      "exhausted": "リトライ上限",
+      "aborted": "中断",
+      "crashed": "クラッシュ",
+      "cancelled": "キャンセル済み"
+    },
+    "seedBanner": {
+      "title": "組み込みワークフローの更新",
+      "intro": "これらの組み込みワークフローには新しい同梱バージョンがありますが、あなたのコピーは編集されています。差分を確認して更新するか、このバージョンを却下してください。",
+      "reasonEdited": "ローカルで編集済み",
+      "reasonUnknown": "ローカルコピーが異なります（元は不明）",
+      "viewDiff": "差分を表示",
+      "hideDiff": "差分を隠す",
+      "apply": "組み込み版に更新",
+      "dismiss": "却下",
+      "noDiff": "（差分はありません）"
+    },
+    "parallelCandidatePool": "候補ブランチ（プール）",
+    "runtimeUpTo": "最大 {{n}} · runtime",
+    "runtimeBranches": "runtime ブランチ",
+    "showDataEdges": "データフロー",
+    "openSubworkflow": "ワークフロー「{{name}}」を開く",
+    "badge": {
+      "detached": "バックグラウンド",
+      "schema": "スキーマ",
+      "reuse": "変更なければ再利用",
+      "persistent": "永続セッション",
+      "skills_one": "1 件のスキル",
+      "skills_other": "{{n}} 件のスキル",
+      "secrets_one": "1 件のシークレット",
+      "secrets_other": "{{n}} 件のシークレット"
     }
   },
   "runs": {
@@ -1371,6 +1460,10 @@
     "subOf": "{{id}} のサブ",
     "countLabel_one": "{{count}} 件の実行",
     "countLabel_other": "{{count}} 件の実行",
+    "selectPrompt": "実行を選択してください",
+    "selectHint": "そのノードトレース、所要時間、サブ実行、最終出力がここに表示されます。",
+    "subRuns": "サブ実行",
+    "partOf": "{{workflow}} の一部",
     "backToList": "実行一覧に戻る",
     "openAutomationsInbox": "自動化の受信トレイを表示"
   },
@@ -1697,7 +1790,8 @@
       "carries_code": "実行可能なコード（{{detail}}）を含んでいます — 承認前にレビューしてください。",
       "declared_deps": "依存関係が宣言されています（自動実行はされません）: {{detail}}。",
       "verdict_caution": "セキュリティスキャンが「注意」と判定しました。",
-      "verdict_dangerous": "セキュリティスキャンが「危険」と判定しました。"
+      "verdict_dangerous": "セキュリティスキャンが「危険」と判定しました。",
+      "invalid_skill": "SKILL.md が無効です: {{detail}}"
     },
     "audit": {
       "running": "AI で監査中…",
@@ -1787,7 +1881,15 @@
       "acquireExplainer": "公開レジストリのスキルです。インポートすると承認待ちとして「保留中」に入ります。",
       "importByRef": "参照からインポート"
     },
-    "title": "Skills"
+    "title": "Skills",
+    "repair": {
+      "button": "修復",
+      "apply": "修復を適用",
+      "cancel": "キャンセル",
+      "previewTitle": "提案された修復内容（まだ何も書き込まれていません）",
+      "stillInvalid": "修復後も無効です: {{errors}}",
+      "approveGated": "このスキルの SKILL.md は無効です — 先に修復してください。"
+    }
   },
   "chat": {
     "fallbackTitle": "チャット {{id}}",
@@ -2119,6 +2221,7 @@
       "entityUpdatedDefault": "エンティティ更新",
       "memoryForgot": "削除 {{uri}}",
       "memoriesRecalling": "記憶を想起中…",
+      "memoriesRecalled_one": "{{count}} 件の記憶を想起",
       "memoriesRecalled_other": "{{count}} 件の記憶を想起",
       "skillImport": "インポート {{source}}"
     }
@@ -2455,6 +2558,20 @@
     "finished": "完了（{{count}}）",
     "empty": "進行中の作業はありません",
     "close": "作業パネルを閉じる",
+    "round": "ラウンド {{round}}/{{maxRounds}}",
+    "nodeCount_one": "{{count}} ノード",
+    "nodeCount_other": "{{count}} ノード",
+    "activity": {
+      "fallback": "{{tool}}",
+      "read_file": "読み込み中",
+      "write_file": "書き込み中",
+      "edit_file": "編集中",
+      "exec": "実行中",
+      "grep": "検索中",
+      "web_search": "ウェブを検索中",
+      "web_fetch": "取得中",
+      "memory_search": "メモリを検索中"
+    },
     "strip": {
       "statusRunning": "実行中",
       "statusQueued": "待機中",
@@ -2466,6 +2583,8 @@
       "queuedMany": "{{count}} 件のタスクが待機中",
       "needsInput": "{{label}} が回答を待っています",
       "needsInputMany": "{{count}} 件のタスクが回答を待っています",
+      "nodes_one": "{{count}} ノード",
+      "nodes_other": "{{count}} ノード",
       "view": "表示",
       "respond": "回答"
     }

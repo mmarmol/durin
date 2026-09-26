@@ -542,6 +542,11 @@
         "rerank": "Reclassement de la recherche",
         "dream": "Dream (consolidation de la mémoire)"
       },
+      "nameGate": {
+        "prioritize": "Prioriser",
+        "require": "Exiger",
+        "off": "Désactivé"
+      },
       "rows": {
         "crossEncoderEnabled": "Reclasseur cross-encoder",
         "crossEncoderModel": "Modèle du reclasseur",
@@ -555,6 +560,11 @@
         "dreamAbsorbSemanticThreshold": "Distance de correspondance sémantique",
         "dreamThrottle": "Limitation réactive (s)",
         "dreamMaxSeconds": "Secondes max par exécution",
+        "dreamEscalateFloor": "Escalade vers le juge investigateur à partir de",
+        "dreamTier2Confidence": "Confiance de fusion investiguée",
+        "dreamJudgeConcurrency": "Appels au juge en parallèle",
+        "dreamRecheckDays": "Réexamen des paires non tranchées après (jours)",
+        "dreamNameGate": "Signal de nom sur les candidats sémantiques",
         "dreamAlwaysOnBudget": "Budget permanent (tokens)"
       },
       "help": {
@@ -570,6 +580,11 @@
         "dreamAbsorbSemanticThreshold": "À quel point deux entités de même type doivent être proches (distance d’embedding, ~0–1 ; 0,20 ≈ 90 % similaire) pour que le juge les considère comme identiques. Plus bas = plus strict. Le juge décide toujours de la fusion finale.",
         "dreamThrottle": "Secondes minimales entre les exécutions réactives du dream (post-compaction / fin de session). Absorbe les pics pour éviter l’empilement de passes qui se chevauchent ; 0 désactive. Le cron quotidien n’est jamais limité.",
         "dreamMaxSeconds": "Plafond strict en temps réel par passe extract. Une fois atteint, la passe s’arrête après la session en cours et le curseur par session reprend le reste au déclenchement suivant. 0 = illimité.",
+        "dreamEscalateFloor": "Confiance (0-100) à partir de laquelle une paire que le juge économique n’a pas pu trancher — 'unclear', ou 'same' en dessous de la confiance de fusion — est confiée à un sous-agent investigateur borné qui lit les deux entités avant de répondre. 0 désactive l’escalade.",
+        "dreamTier2Confidence": "Confiance minimale (0-100) qu’un verdict investigué doit atteindre pour fusionner. Il lit d’abord les pages et leur lignée, ce qui lui vaut un seuil plus bas que le juge économique ; en dessous, la paire atterrit dans votre boîte de réception.",
+        "dreamJudgeConcurrency": "Combien d’appels au juge s’exécutent en même temps pendant la passe refine (1-8). Les fusions restent appliquées une par une, dans l’ordre des candidats.",
+        "dreamRecheckDays": "Nombre de jours avant qu’une paire sans verdict tranché (une réponse illisible, un 'unclear', un 'same' en dessous du seuil de fusion) ne soit rejugée. 0 la rejuge à chaque exécution.",
+        "dreamNameGate": "Comment le signal de nom oriente les candidats proches par embedding : 'prioritize' juge d’abord les paires dont les noms partagent un terme ou se contiennent l’un l’autre, puis le reste par distance ; 'require' ne juge que celles-là ; 'off' trie uniquement par distance. Les paires par alias sont toujours jugées.",
         "dreamAlwaysOnBudget": "Budget de tokens pour les consignes « toujours actives » épinglées dans chaque prompt. Le dream classe les retours (stance/practice), supprime les contradictions et fait entrer les éléments les plus prioritaires dans ce budget. 0 désactive l’épinglage."
       },
       "crossEncoderModelPlaceholder": "id du modèle (p. ex. BAAI/bge-reranker-base)",
@@ -1160,17 +1175,22 @@
       "description": "Combien de tours et de sous-agents s’exécutent en même temps. Les changements s’appliquent immédiatement, sans redémarrage.",
       "sections": {
         "caps": "Limites",
-        "live": "En direct"
+        "live": "En direct",
+        "workflows": "Branches de workflow"
       },
       "rows": {
         "interactive": "Tours interactifs",
         "ceiling": "Plafond global",
-        "subagents": "Sous-agents"
+        "subagents": "Sous-agents",
+        "workflowLlm": "Branches LLM parallèles",
+        "workflowScript": "Branches de script parallèles"
       },
       "help": {
         "interactive": "Nombre maximal de tours interactifs exécutés en même temps, toutes sessions confondues.",
         "ceiling": "Charge de travail simultanée maximale au total — tours interactifs plus sous-agents.",
-        "subagents": "Nombre maximal de sous-agents exécutés en même temps."
+        "subagents": "Nombre maximal de sous-agents exécutés en même temps.",
+        "workflowLlm": "Branches d’agent simultanées à l’intérieur d’un nœud parallel de workflow (limitées par les quotas du fournisseur).",
+        "workflowScript": "Branches de script simultanées à l’intérieur d’un nœud parallel de workflow — peu coûteuses, sûres à exécuter plus largement que les branches LLM."
       },
       "live": {
         "interactive": "Interactif",
@@ -1254,6 +1274,12 @@
     "session_persistent": "persistante (se souvient d’un passage à l’autre du loop)",
     "prompt": "prompt",
     "routes": "route",
+    "detached": "détaché (lancer et continuer)",
+    "inputsFrom": "entrées depuis",
+    "outputSchema": "schéma de sortie (JSON)",
+    "outputSchemaInvalid": "JSON invalide — le schéma n’est pas enregistré tant qu’il n’est pas analysable.",
+    "outputFile": "fichier de sortie",
+    "reuse": "réutiliser si inchangé (ignorer si le producteur correspond)",
     "routingShape": "forme du routage",
     "routingShapeBinary": "binaire (succès / échec)",
     "routingShapeMultiway": "multi-voies (libellés personnalisés)",
@@ -1285,16 +1311,25 @@
     "scriptEnv": "Environnement",
     "scriptEnvClean": "Propre (minimal + DURIN_*)",
     "scriptEnvInherit": "Hériter de l’environnement complet",
+    "scriptSecrets": "Secrets",
+    "scriptSecretsPlaceholder": "ZENDESK_API_TOKEN, MXHERO_KEY",
+    "scriptSecretsHint": "Noms de secrets stockés, injectés comme variables d’environnement. Chacun doit autoriser le scope 'exec'.",
+    "ioArtifacts": "Artefacts déclarés",
+    "ioArtifactsPlaceholder": "context.json | contexte de ticket consolidé\nevidence.json",
+    "ioArtifactsHint": "Un par ligne : chemin | description facultative. Fichiers que l’exécution promet de produire dans son dossier de travail — les fichiers manquants sont signalés par un avertissement après l’exécution.",
     "parallelMode": "mode",
     "parallelStatic": "statique (branches fixes)",
     "parallelDynamic": "dynamique (×N worker)",
+    "parallelFromNode": "sélectionné au runtime (branches depuis un nœud)",
     "parallelBranches": "branches",
     "parallelWorker": "modèle de worker",
     "parallelListFrom": "liste depuis",
+    "parallelBranchesFrom": "branches depuis",
     "parallelMaxConcurrency": "concurrence max",
     "parallelReconcile": "réconcilier",
     "parallelNeedBranch": "Choisissez au moins une branche à exécuter en parallèle.",
     "parallelNeedWorkerList": "Choisissez un modèle de worker et le nœud dont la sortie est la liste.",
+    "parallelNeedBranchesFrom": "Choisissez le nœud dont la sortie nomme les branches à exécuter.",
     "ioInputTitle": "Entrée du workflow",
     "ioOutputTitle": "Sortie du workflow",
     "ioInputHint": "Ce que ce workflow accepte en entrée.",
@@ -1334,7 +1369,22 @@
     "runHistory": "exécutions",
     "historyRetention": "l’historique et les dossiers de travail conservent les exécutions les plus récentes (workflow.keep_runs)",
     "copySession": "copier la clé de session",
+    "nodePanel": {
+      "title": "Détail de l’étape",
+      "command": "Commande",
+      "exitCode": "Code de sortie",
+      "stdout": "Sortie",
+      "stderr": "Erreurs",
+      "transcript": "Ce qu’a fait cette étape",
+      "transcriptLoading": "Chargement du journal de l’étape…",
+      "transcriptMissing": "Le journal de cette étape n’est plus disponible.",
+      "noDetail": "Cette étape ne conserve aucun journal propre — son travail se trouve dans les exécutions ou branches en dessous.",
+      "round": "tour {{round}} sur {{maxRounds}}",
+      "roundNoMax": "tour {{round}}"
+    },
     "sessionCopied": "clé de session copiée",
+    "copyOutput": "copier la sortie finale",
+    "outputCopied": "sortie finale copiée",
     "workerLabel": "worker {{index}}",
     "branchLabel": "branche {{id}}",
     "needsInputTitle": "En attente de votre saisie",
@@ -1351,12 +1401,51 @@
     "passOf": "passage {{iteration}} sur {{budget}}",
     "finalPass": "passage final",
     "continuesSession": "poursuit la session",
+    "nodeDuration": "a pris",
+    "nodeTypical": "typique",
+    "nodeArtifacts": "a produit",
+    "runElapsed": "écoulé",
+    "runTypicalTotal": "exécutions précédentes ~{{duration}}",
     "persistentInParallelWarning": "Ce nœud est une branche de {{parallelId}} — les sessions persistantes ne sont pas autorisées sur les unités parallèles. L’enregistrement échouera.",
     "runStatus": {
       "ok": "ok",
       "no_session": "aucune session",
       "persist_failed": "échec de l’enregistrement",
-      "node_failed": "échoué"
+      "node_failed": "échoué",
+      "reused": "réutilisé",
+      "completed": "terminé",
+      "running": "en cours",
+      "needs_input": "en attente de saisie",
+      "exhausted": "tentatives épuisées",
+      "aborted": "interrompu",
+      "crashed": "planté",
+      "cancelled": "annulé"
+    },
+    "seedBanner": {
+      "title": "Mises à jour des workflows intégrés",
+      "intro": "Ces workflows intégrés ont une version groupée plus récente, mais vos copies ont été modifiées. Consultez les différences et mettez à jour, ou ignorez cette version.",
+      "reasonEdited": "modifié localement",
+      "reasonUnknown": "la copie locale diffère (origine inconnue)",
+      "viewDiff": "Voir les différences",
+      "hideDiff": "Masquer les différences",
+      "apply": "Mettre à jour vers la version intégrée",
+      "dismiss": "Ignorer",
+      "noDiff": "(aucune différence disponible)"
+    },
+    "parallelCandidatePool": "Branches candidates (pool)",
+    "runtimeUpTo": "jusqu’à {{n}} · runtime",
+    "runtimeBranches": "branches en runtime",
+    "showDataEdges": "Flux de données",
+    "openSubworkflow": "Ouvrir le workflow « {{name}} »",
+    "badge": {
+      "detached": "arrière-plan",
+      "schema": "schéma",
+      "reuse": "réutiliser si inchangé",
+      "persistent": "session persistante",
+      "skills_one": "1 skill",
+      "skills_other": "{{n}} skills",
+      "secrets_one": "1 secret",
+      "secrets_other": "{{n}} secrets"
     }
   },
   "runs": {
@@ -1371,6 +1460,10 @@
     "subOf": "sous-exécution de {{id}}",
     "countLabel_one": "{{count}} exécution",
     "countLabel_other": "{{count}} exécutions",
+    "selectPrompt": "Sélectionnez une exécution",
+    "selectHint": "Sa trace de nœuds, ses horaires, ses sous-exécutions et sa sortie finale s’affichent ici.",
+    "subRuns": "sous-exécutions",
+    "partOf": "fait partie de {{workflow}}",
     "backToList": "retour aux exécutions",
     "openAutomationsInbox": "Voir la boîte de réception des automatisations"
   },
@@ -1697,7 +1790,8 @@
       "carries_code": "Il contient du code exécutable ({{detail}}) — vérifiez-le avant d’approuver.",
       "declared_deps": "Il déclare des dépendances (non exécutées automatiquement) : {{detail}}.",
       "verdict_caution": "L’analyse de sécurité l’a classé en Prudence.",
-      "verdict_dangerous": "L’analyse de sécurité l’a classé en Dangereux."
+      "verdict_dangerous": "L’analyse de sécurité l’a classé en Dangereux.",
+      "invalid_skill": "Le SKILL.md est invalide : {{detail}}"
     },
     "audit": {
       "running": "Audit IA en cours…",
@@ -1787,7 +1881,15 @@
       "acquireExplainer": "Skills du registre public. L’import place un skill dans En attente pour votre approbation.",
       "importByRef": "Importer par référence"
     },
-    "title": "Skills"
+    "title": "Skills",
+    "repair": {
+      "button": "Réparer",
+      "apply": "Appliquer la réparation",
+      "cancel": "Annuler",
+      "previewTitle": "Réparation proposée (rien n’a encore été écrit)",
+      "stillInvalid": "Toujours invalide après réparation : {{errors}}",
+      "approveGated": "Le SKILL.md de ce skill est invalide — réparez-le d’abord."
+    }
   },
   "chat": {
     "fallbackTitle": "Discussion {{id}}",
@@ -2456,6 +2558,20 @@
     "finished": "Terminé ({{count}})",
     "empty": "Aucun travail actif",
     "close": "Fermer le panneau de travail",
+    "round": "tour {{round}} sur {{maxRounds}}",
+    "nodeCount_one": "{{count}} nœud",
+    "nodeCount_other": "{{count}} nœuds",
+    "activity": {
+      "fallback": "{{tool}}",
+      "read_file": "lecture",
+      "write_file": "écriture",
+      "edit_file": "modification",
+      "exec": "exécution",
+      "grep": "recherche",
+      "web_search": "recherche sur le web",
+      "web_fetch": "récupération",
+      "memory_search": "recherche en mémoire"
+    },
     "strip": {
       "statusRunning": "en cours",
       "statusQueued": "en file d’attente",
@@ -2467,6 +2583,8 @@
       "queuedMany": "{{count}} tâches en file d’attente",
       "needsInput": "{{label}} attend votre réponse",
       "needsInputMany": "{{count}} tâches attendent votre réponse",
+      "nodes_one": "{{count}} nœud",
+      "nodes_other": "{{count}} nœuds",
       "view": "Voir",
       "respond": "Répondre"
     }

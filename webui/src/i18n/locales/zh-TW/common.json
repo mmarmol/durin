@@ -542,6 +542,11 @@
         "rerank": "搜尋重新排序",
         "dream": "Dream（記憶整理）"
       },
+      "nameGate": {
+        "prioritize": "優先",
+        "require": "必須",
+        "off": "關閉"
+      },
       "rows": {
         "crossEncoderEnabled": "Cross-encoder 重新排序器",
         "crossEncoderModel": "重新排序模型",
@@ -555,6 +560,11 @@
         "dreamAbsorbSemanticThreshold": "語意比對距離",
         "dreamThrottle": "反應式節流（秒）",
         "dreamMaxSeconds": "每次執行秒數上限",
+        "dreamEscalateFloor": "移交調查評判者的起點",
+        "dreamTier2Confidence": "調查合併信賴度",
+        "dreamJudgeConcurrency": "並行評判呼叫數",
+        "dreamRecheckDays": "未決配對重新評判的間隔（天）",
+        "dreamNameGate": "語意候選的名稱訊號",
         "dreamAlwaysOnBudget": "常駐預算（token 數）"
       },
       "help": {
@@ -570,6 +580,11 @@
         "dreamAbsorbSemanticThreshold": "兩個同類型實體須達到多接近（embedding 距離，約 0–1；0.20 ≈ 90% 相似）才會被評判者視為同一項目。數值越低代表越嚴格。實際是否合併仍由評判者決定。",
         "dreamThrottle": "兩次反應式 Dream 執行之間的最短秒數間隔（壓縮後／會話結束時）。用來吸收密集觸發，避免重疊的處理程序堆積；設為 0 則停用節流。每日 cron 排程不受此限制。",
         "dreamMaxSeconds": "每次擷取處理程序的實際時間上限。達到上限時，處理程序會在目前會話後讓出，並在下次觸發時從該會話的游標繼續處理剩餘部分。0 = 無上限。",
+        "dreamEscalateFloor": "信賴度（0-100），低於此值時，會將由低成本評判者無法判定的一對——'unclear'，或信賴度低於合併門檻的 'same'——移交給範圍受限的調查子代理，該子代理會先讀取兩個實體再作答。0 代表關閉升級。",
+        "dreamTier2Confidence": "調查後裁定要合併所需的最低信賴度（0-100）。它會先讀取頁面及其脈絡，因此門檻比低成本評判者更低；低於此值時，這一對會進入你的收件匣。",
+        "dreamJudgeConcurrency": "精煉處理程序中同時執行的評判呼叫數量（1-8）。合併作業仍會依候選順序逐一套用。",
+        "dreamRecheckDays": "尚無確定裁定的一對（無法解析的回覆、一個 'unclear'、一個低於合併門檻的 'same'）要間隔多少天才重新評判。0 代表每次執行都會重新評判。",
+        "dreamNameGate": "名稱訊號如何引導 embedding 距離相近的候選：'prioritize' 會優先評判名稱共用某個詞元或互相包含的一對，其餘按距離排序；'require' 只評判這類候選；'off' 僅按距離排序。別名配對永遠會被評判。",
         "dreamAlwaysOnBudget": "固定在每個提示中的「常駐」指引所使用的 token 預算。Dream 會為回饋排序（立場／作法）、捨棄矛盾之處，並將優先度最高的項目放入此預算內。0 會停用此固定內容。"
       },
       "crossEncoderModelPlaceholder": "模型 ID（例如 BAAI/bge-reranker-base）",
@@ -1160,17 +1175,22 @@
       "description": "同時執行的回合數與子代理數量。變更會立即套用，不需要重新啟動。",
       "sections": {
         "caps": "限制",
-        "live": "即時狀態"
+        "live": "即時狀態",
+        "workflows": "工作流程分支"
       },
       "rows": {
         "interactive": "互動回合",
         "ceiling": "全域上限",
-        "subagents": "子代理"
+        "subagents": "子代理",
+        "workflowLlm": "並行 LLM 分支",
+        "workflowScript": "並行指令碼分支"
       },
       "help": {
         "interactive": "所有會話中同時執行的互動回合數上限。",
         "ceiling": "整體同時執行工作量的上限——互動回合加上子代理。",
-        "subagents": "同時執行的子代理數量上限。"
+        "subagents": "同時執行的子代理數量上限。",
+        "workflowLlm": "工作流程 parallel 節點內同時執行的代理分支（受供應商速率限制約束）。",
+        "workflowScript": "工作流程 parallel 節點內同時執行的指令碼分支——成本低，可以比 LLM 分支更大範圍地平行執行。"
       },
       "live": {
         "interactive": "互動回合",
@@ -1254,6 +1274,12 @@
     "session_persistent": "持久（跨迴圈執行皆保留記憶）",
     "prompt": "提示",
     "routes": "路由",
+    "detached": "分離（啟動後繼續）",
+    "inputsFrom": "輸入來自",
+    "outputSchema": "輸出 schema（JSON）",
+    "outputSchemaInvalid": "無效的 JSON——在可解析之前，該 schema 不會被儲存。",
+    "outputFile": "輸出檔案",
+    "reuse": "未變更時重複使用（若產生者相符則略過）",
     "routingShape": "路由形式",
     "routingShapeBinary": "二元（通過／失敗）",
     "routingShapeMultiway": "多向（自訂標籤）",
@@ -1285,16 +1311,25 @@
     "scriptEnv": "環境變數",
     "scriptEnvClean": "乾淨（僅基本 + DURIN_*）",
     "scriptEnvInherit": "繼承完整環境",
+    "scriptSecrets": "密鑰",
+    "scriptSecretsPlaceholder": "ZENDESK_API_TOKEN, MXHERO_KEY",
+    "scriptSecretsHint": "已儲存的密鑰名稱會作為環境變數注入。每一個都必須允許 'exec' 範圍。",
+    "ioArtifacts": "已宣告的產物",
+    "ioArtifactsPlaceholder": "context.json | 整合後的工單脈絡\nevidence.json",
+    "ioArtifactsHint": "每行一個：路徑 | 選填描述。是這次執行承諾在其工作資料夾中產出的檔案——缺少的檔案會在執行結束後以警告回報。",
     "parallelMode": "模式",
     "parallelStatic": "靜態（固定分支）",
     "parallelDynamic": "動態（×N 工作程序）",
+    "parallelFromNode": "執行時選擇（從節點產生分支）",
     "parallelBranches": "分支",
     "parallelWorker": "工作程序範本",
     "parallelListFrom": "清單來源",
+    "parallelBranchesFrom": "分支來自",
     "parallelMaxConcurrency": "並行數上限",
     "parallelReconcile": "整合",
     "parallelNeedBranch": "請至少選擇一個要平行執行的分支。",
     "parallelNeedWorkerList": "請選擇工作程序範本，以及輸出作為清單的節點。",
+    "parallelNeedBranchesFrom": "選擇其輸出用來命名待執行分支的節點。",
     "ioInputTitle": "工作流程輸入",
     "ioOutputTitle": "工作流程輸出",
     "ioInputHint": "此工作流程接受的輸入內容。",
@@ -1334,7 +1369,22 @@
     "runHistory": "執行紀錄",
     "historyRetention": "紀錄與工作資料夾僅保留最近的執行（workflow.keep_runs）",
     "copySession": "複製會話金鑰",
+    "nodePanel": {
+      "title": "步驟詳情",
+      "command": "指令",
+      "exitCode": "結束代碼",
+      "stdout": "輸出",
+      "stderr": "錯誤",
+      "transcript": "此步驟做了什麼",
+      "transcriptLoading": "正在載入此步驟的記錄…",
+      "transcriptMissing": "此步驟的記錄已無法使用。",
+      "noDetail": "此步驟本身不保留記錄——它的工作展現在下方的執行或分支中。",
+      "round": "第 {{round}} 輪，共 {{maxRounds}} 輪",
+      "roundNoMax": "第 {{round}} 輪"
+    },
     "sessionCopied": "已複製會話金鑰",
+    "copyOutput": "複製最終輸出",
+    "outputCopied": "已複製最終輸出",
     "workerLabel": "工作程序 {{index}}",
     "branchLabel": "分支 {{id}}",
     "needsInputTitle": "等待你的輸入",
@@ -1351,12 +1401,51 @@
     "passOf": "第 {{iteration}} 次，共 {{budget}} 次",
     "finalPass": "最終次",
     "continuesSession": "延續會話",
+    "nodeDuration": "耗時",
+    "nodeTypical": "通常",
+    "nodeArtifacts": "產出",
+    "runElapsed": "已用時間",
+    "runTypicalTotal": "先前執行 ~{{duration}}",
     "persistentInParallelWarning": "此節點是 {{parallelId}} 的分支——平行單元不允許使用持久會話。儲存將會失敗。",
     "runStatus": {
       "ok": "正常",
       "no_session": "無會話",
       "persist_failed": "儲存失敗",
-      "node_failed": "失敗"
+      "node_failed": "失敗",
+      "reused": "已重複使用",
+      "completed": "已完成",
+      "running": "執行中",
+      "needs_input": "等待輸入",
+      "exhausted": "重試已耗盡",
+      "aborted": "已中止",
+      "crashed": "當機",
+      "cancelled": "已取消"
+    },
+    "seedBanner": {
+      "title": "內建工作流程更新",
+      "intro": "這些內建工作流程有更新的隨附版本，但你的副本已被修改。請檢視差異並更新，或忽略此版本。",
+      "reasonEdited": "已在本機修改",
+      "reasonUnknown": "本機副本存在差異（來源未知）",
+      "viewDiff": "檢視差異",
+      "hideDiff": "隱藏差異",
+      "apply": "更新為內建版本",
+      "dismiss": "忽略",
+      "noDiff": "（無可用差異）"
+    },
+    "parallelCandidatePool": "候選分支（池）",
+    "runtimeUpTo": "最多 {{n}} · runtime",
+    "runtimeBranches": "runtime 分支",
+    "showDataEdges": "資料流",
+    "openSubworkflow": "開啟工作流程「{{name}}」",
+    "badge": {
+      "detached": "背景",
+      "schema": "schema",
+      "reuse": "未變更則重複使用",
+      "persistent": "持久會話",
+      "skills_one": "1 個技能",
+      "skills_other": "{{n}} 個技能",
+      "secrets_one": "1 個密鑰",
+      "secrets_other": "{{n}} 個密鑰"
     }
   },
   "runs": {
@@ -1371,6 +1460,10 @@
     "subOf": "{{id}} 的子執行",
     "countLabel_one": "{{count}} 筆執行",
     "countLabel_other": "{{count}} 筆執行",
+    "selectPrompt": "選擇一次執行",
+    "selectHint": "它的節點軌跡、耗時、子執行與最終輸出會顯示在這裡。",
+    "subRuns": "子執行",
+    "partOf": "屬於 {{workflow}}",
     "backToList": "返回執行紀錄",
     "openAutomationsInbox": "查看自動化收件匣"
   },
@@ -1697,7 +1790,8 @@
       "carries_code": "此技能包含可執行程式碼（{{detail}}）——請先審查再核准。",
       "declared_deps": "此技能宣告了相依套件（不會自動執行）：{{detail}}。",
       "verdict_caution": "安全掃描將其標記為警示。",
-      "verdict_dangerous": "安全掃描將其標記為危險。"
+      "verdict_dangerous": "安全掃描將其標記為危險。",
+      "invalid_skill": "SKILL.md 無效：{{detail}}"
     },
     "audit": {
       "running": "正在用 AI 稽核…",
@@ -1787,7 +1881,15 @@
       "acquireExplainer": "公開登錄庫中的技能。匯入後會放入待處理，等候你核准。",
       "importByRef": "以參照方式匯入"
     },
-    "title": "Skills"
+    "title": "Skills",
+    "repair": {
+      "button": "修復",
+      "apply": "套用修復",
+      "cancel": "取消",
+      "previewTitle": "建議的修復內容（尚未寫入任何內容）",
+      "stillInvalid": "修復後仍然無效：{{errors}}",
+      "approveGated": "此技能的 SKILL.md 無效——請先修復。"
+    }
   },
   "chat": {
     "fallbackTitle": "對話 {{id}}",
@@ -2119,6 +2221,7 @@
       "entityUpdatedDefault": "實體已更新",
       "memoryForgot": "忘記 {{uri}}",
       "memoriesRecalling": "正在找回記憶…",
+      "memoriesRecalled_one": "找回 {{count}} 條記憶",
       "memoriesRecalled_other": "找回 {{count}} 條記憶",
       "skillImport": "匯入 {{source}}"
     }
@@ -2455,6 +2558,20 @@
     "finished": "已完成（{{count}}）",
     "empty": "沒有進行中的工作",
     "close": "關閉工作面板",
+    "round": "第 {{round}} 輪，共 {{maxRounds}} 輪",
+    "nodeCount_one": "{{count}} 個節點",
+    "nodeCount_other": "{{count}} 個節點",
+    "activity": {
+      "fallback": "{{tool}}",
+      "read_file": "讀取中",
+      "write_file": "寫入中",
+      "edit_file": "編輯中",
+      "exec": "執行中",
+      "grep": "搜尋中",
+      "web_search": "搜尋網路中",
+      "web_fetch": "擷取中",
+      "memory_search": "搜尋記憶中"
+    },
     "strip": {
       "statusRunning": "進行中",
       "statusQueued": "排隊中",
@@ -2466,6 +2583,8 @@
       "queuedMany": "{{count}} 個任務排隊中",
       "needsInput": "{{label}} 需要你的回覆",
       "needsInputMany": "{{count}} 個任務需要你的回覆",
+      "nodes_one": "{{count}} 個節點",
+      "nodes_other": "{{count}} 個節點",
       "view": "查看",
       "respond": "回覆"
     }
