@@ -85,6 +85,8 @@ def test_install_gate_reports_an_invalid_skill(tmp_path):
 
 def test_web_approve_records_the_user(tmp_path):
     _quar(tmp_path, "tool", scripts={"run.sh": "echo hi\n"})
-    status, res = asyncio.run(ss.web_skill_approve(tmp_path, "tool", confirm=True, override=False))
+    status, res = asyncio.run(ss.web_skill_approve(
+        tmp_path, "tool", confirm=True, override=False,
+        decided_by={"kind": "user", "channel": "webui"}))
     assert status == 200 and res["ok"]
     assert _prov(tmp_path, "tool")["approved_by"] == "user"

@@ -53,8 +53,21 @@ from durin.service.types import (
     Result,
 )
 
-# Who a decision taken here is recorded as: a person, on the dashboard.
-DECIDED_BY = {"kind": "user", "channel": "webui"}
+
+def decider_of(principal: Principal) -> dict:
+    """Who a decision made through a service route is recorded as, from the
+    principal that made it: the person for a dashboard session
+    (``{"kind": "user", "channel": "webui"}``), and otherwise an operator,
+    named the way ``durin approvals`` names its CLI operator: a token
+    (``{"kind": "operator", "channel": "api", "principal": <token id>}``, the
+    static token's id being ``"static"``) or an in-process caller
+    (``{"kind": "operator", "channel": "local"}``)."""
+    if principal.kind == "webui":
+        return {"kind": "user", "channel": "webui"}
+    if principal.kind == "local":
+        return {"kind": "operator", "channel": "local"}
+    return {"kind": "operator", "channel": "api", "principal": principal.subject}
+
 
 # The scope a decision on each kind takes: the domain the change lands in.
 # Reading a request (the Pending list) takes the matching read scope. A kind
@@ -161,7 +174,8 @@ class ApprovalsService:
             # under this record's approval; `decide` refuses it either way.
             deps = dataclasses.replace(deps, exec_run=None)
 
-        task = asyncio.create_task(self._decide(workspace, cmd.id, cmd.decision, deps))
+        task = asyncio.create_task(
+            self._decide(workspace, cmd.id, cmd.decision, deps, decider_of(principal)))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         try:
@@ -178,7 +192,8 @@ class ApprovalsService:
             raise ConflictError(outcome.message, details=result.model_dump())
         return result
 
-    async def _decide(self, workspace: Path, approval_id: str, decision: str, deps: Any):
+    async def _decide(self, workspace: Path, approval_id: str, decision: str, deps: Any,
+                      decided_by: dict):
         """Decide, then tell the chat that asked (when one is owed). Runs as
         its own task, so both finish even when the request that started them
         is gone."""
@@ -186,7 +201,7 @@ class ApprovalsService:
         from durin.agent.approval_notify import notify_origin
 
         outcome = await approval.decide(
-            workspace, approval_id, decision, decided_by=dict(DECIDED_BY), deps=deps)
+            workspace, approval_id, decision, decided_by=decided_by, deps=deps)
         if self._serves_channel is not None:
             await notify_origin(self._bus, outcome, serves=self._serves_channel)
         return outcome

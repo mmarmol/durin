@@ -200,7 +200,8 @@ dashboard session decides a request there. The domain write routes are a
 separate matter: they act with the operator authority their scope grants,
 without an approval request — a token with `mcp:write` can add an MCP server,
 and one with `skills:write` can install a quarantined skill through the skills
-routes. A shell
+routes. Such a change is recorded as the token's (an operator's), never as the
+person's. A shell
 command that would need the person's approval is refused. A message sent with a
 token never answers an approval request the conversation is waiting on, even
 "yes": only the person can. Asking the person (or program) a question and

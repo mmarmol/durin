@@ -157,10 +157,14 @@ A decided record stores who decided it in `decided_by`, with the channel that
 made the call: `{"kind": "operator", "channel": "cli"}` for `durin approvals`
 on the CLI, `{"kind": "user", "channel": "websocket"}` for a click on a chat's
 approval card, `{"kind": "user", "channel": "webui"}` for a decision from the
-Pending page,
-`{"kind": "user", "channel": <session key>}` for a reply typed in the chat
-itself, and `{"kind": "judge"}` for the skills judge. A webui click that
-lands while the turn that filed the request is still waiting hands its
+Pending page or the Skills page's dashboard session,
+`{"kind": "operator", "channel": "api", "principal": <token id>}` for a request
+the Skills page's routes settled for an API token (the static token's id is
+`static`), `{"kind": "operator", "channel": "local"}` for an in-process caller
+of those routes, `{"kind": "user", "channel": <session key>}` for a reply typed
+in the chat itself, and `{"kind": "judge"}` for the skills judge.
+`durin.service.approvals.decider_of` maps a route's principal to these. A webui
+click that lands while the turn that filed the request is still waiting hands its
 verdict to that turn (`pending_answers`, in the same gateway process) so it
 runs there, and the record still carries the real decider, not the chat it
 was asked in. `durin approvals` runs in its own process and never reaches a
@@ -505,10 +509,12 @@ decision settles both. Rejecting the request discards the quarantined import
 (the kind's `on_reject` hook, `approval_kinds_skills.reject_install`) and closes
 any other request still pending for it. Installing or discarding the import
 from the triage (`skills_store.web_skill_approve` / `web_skill_reject`) closes
-the pending requests for it as `applied` or `rejected` by compare-and-set,
-recorded as `{"kind": "user", "channel": "webui"}`. Every discard is appended to
-`import-audit.log` as a `discarded` event, with the request it settled and who
-decided it when known.
+the pending requests for it as `applied` or `rejected` by compare-and-set, in
+the name of whoever called the route (`decider_of` on its principal): the
+person for a dashboard session, an operator's token otherwise. The install's
+`approved_by` follows the same kind (`user` or `operator`). Every discard is
+appended to `import-audit.log` as a `discarded` event, with the request it
+settled and who decided it when known.
 
 **Skill reviews** (`durin/security/skill_reviews.py`): a user or the LLM judge
 can mark an active flagged skill as reviewed. Each acked finding is stored as
