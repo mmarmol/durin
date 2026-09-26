@@ -752,7 +752,7 @@ class SkillsConfig(Base):
     discovery: SkillsDiscoveryConfig = Field(default_factory=SkillsDiscoveryConfig, description="Skill discovery registries and search limits")
     install_policy: Literal["never", "approve", "auto"] = Field(
         default="approve",
-        description="Who authorizes a skill install the import gate flags and a skill's declared dependency installs: 'approve' = the user approves each one in the chat, or later from `durin approvals` (the skills judge may clear a non-dangerous skill install); 'auto' = pre-authorized here, except a dangerous skill, which always needs the user; 'never' = dependency installs are only reported and skill installs behave as with 'approve'. Dependency installs always run through ExecTool's gate",
+        description="Who authorizes a skill install the import gate flags and a skill's declared dependency installs: 'approve' = the user approves each one in the chat, or later from the dashboard's Pending page or `durin approvals` (the skills judge may clear a non-dangerous skill install); 'auto' = pre-authorized here, except a dangerous skill, which always needs the user; 'never' = dependency installs are only reported and skill installs behave as with 'approve'. Dependency installs always run through ExecTool's gate",
     )
 
 

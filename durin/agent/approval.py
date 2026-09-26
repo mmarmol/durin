@@ -204,14 +204,16 @@ async def _run_approved(workspace: Path | str, record: dict, deps: ExecDeps) -> 
 
 def _pending_outcome(record: dict, *, asked: bool, api_input: bool = False) -> Outcome:
     if asked:
-        where = "the user did not answer; it is still waiting for approval (`durin approvals`)"
+        where = ("the user did not answer; it is still waiting for approval (the "
+                 "dashboard's Pending page, or `durin approvals`)")
     elif api_input:
         # Say why nobody was asked, so the model can tell the person where
         # the request waits instead of retrying it in the chat.
         where = ("this turn includes input from an API token, which cannot approve it, "
-                 "so it is waiting for a person's approval (`durin approvals`)")
+                 "so it is waiting for a person's approval (the dashboard's Pending page, "
+                 "or `durin approvals`)")
     else:
-        where = "waiting for approval (`durin approvals`)"
+        where = "waiting for approval (the dashboard's Pending page, or `durin approvals`)"
     return Outcome("pending", record, None, (
         f"Not done yet: {record['summary']} — {where}, id {record['id']}. Continue "
         "without it; do not retry, and do not reach the same effect another way."))

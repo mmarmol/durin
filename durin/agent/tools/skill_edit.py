@@ -46,8 +46,9 @@ _PARAMETERS = tool_parameters_schema(
         "describes, or a skill has a bug/pitfall worth recording. Editing a "
         "builtin forks it into the workspace first. A manual skill's edit, or "
         "one that makes its security scan worse, is shown to the person for "
-        "approval by the tool itself — or waits in `durin approvals` when "
-        "nobody can answer now. If the result is pending or rejected, "
+        "approval by the tool itself — or waits for approval (the dashboard's "
+        "Pending page, or `durin approvals`) when nobody can answer now. If the "
+        "result is pending or rejected, "
         "continue without it; do not retry it and do not reach the same "
         "effect another way."
     ),

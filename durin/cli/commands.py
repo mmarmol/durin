@@ -3597,7 +3597,8 @@ def approvals_root(
     install) is recorded instead of run (an exec command that needs approval
     is refused, not recorded). This is where they wait: bare `durin approvals`
     lists pending ones (`--all` for everything too); `approve`/`reject <id>`
-    decide one; `discard <id>` deletes a record without deciding it.
+    decide one; `discard <id>` deletes a record without deciding it. The
+    dashboard's Pending page lists and decides them too.
     """
     ctx.obj = {"config": config, "workspace": workspace}
     if ctx.invoked_subcommand is None:

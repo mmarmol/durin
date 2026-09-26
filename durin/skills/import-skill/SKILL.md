@@ -59,8 +59,8 @@ Drive everything through the `skill_import` tool. Never write to `skills/` yours
    - `rejected` → the user declined. Continue without the skill; do not retry
      and do not reach the same effect another way (e.g. a manual copy).
    - `pending` → nobody could be asked right now (no live chat consumer). Tell
-     the user it is waiting for their approval (`durin approvals`) and continue
-     without it.
+     the user it is waiting for their approval (the dashboard's Pending page, or
+     `durin approvals`) and continue without it.
    - A refusal with `refused == "exists"` means a skill of that name is already
      installed. Show the user; re-run with `replace=true` only if they want to
      overwrite it.
@@ -86,8 +86,8 @@ Drive everything through the `skill_import` tool. Never write to `skills/` yours
 
 - The gate is enforced server-side, never by a value you pass: a flagged or
   dangerous skill is decided by policy, by the skills judge, or by the user —
-  asked in this chat by the tool itself, or left waiting for approval
-  (`durin approvals`) when nobody is reachable. An existing name will not be
-  overwritten without `replace`.
+  asked in this chat by the tool itself, or left waiting for approval (the
+  dashboard's Pending page, or `durin approvals`) when nobody is reachable. An
+  existing name will not be overwritten without `replace`.
 - You surface the verdict and the reasons. The user approves. Trust is theirs to
   grant, never yours to assume.

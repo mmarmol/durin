@@ -62,7 +62,8 @@ _PARAMETERS = tool_parameters_schema(
         "Create, modify, install, or remove an MCP server. Discover refs first with "
         "mcp_search. install/add/update/enable need the user's approval "
         "(install_policy=approve): in a chat the user is asked and the call returns "
-        "their answer; otherwise it waits for approval (`durin approvals`). Remote "
+        "their answer; otherwise it waits for approval (the dashboard's Pending "
+        "page, or `durin approvals`). Remote "
         "installs hand off to a human OAuth login; secrets are entered by the human, "
         "never the agent."
     ),
