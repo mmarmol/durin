@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -553,7 +553,16 @@ function SkillPreview({
   );
 }
 
-export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => void }) {
+export function SkillsView({
+  onAskDurin,
+  initialTriage,
+}: {
+  onAskDurin?: (binName: string) => void;
+  // A deep link from another screen (the Pending page's "Review in Skills"):
+  // the quarantined import whose triage opens as soon as the lists load.
+  // Consumed once; the view mounts fresh per navigation.
+  initialTriage?: string | null;
+}) {
   const { token, client } = useClient();
   const { t } = useTranslation();
   const [rows, setRows] = useState<SkillRow[] | null>(null);
@@ -1023,6 +1032,16 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
     },
     [guardDirty],
   );
+
+  const initialTriageConsumed = useRef(false);
+  useEffect(() => {
+    if (initialTriageConsumed.current || !initialTriage || loading) return;
+    initialTriageConsumed.current = true;
+    if ((quarantine ?? []).some((q) => q.name === initialTriage)) {
+      setListTab("pending");
+      openTriage(initialTriage);
+    }
+  }, [initialTriage, loading, quarantine, openTriage]);
 
   const openAcquire = useCallback(() => {
     if (!guardDirty()) return;

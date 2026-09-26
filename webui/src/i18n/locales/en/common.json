@@ -1688,6 +1688,27 @@
       "retry": "Try again"
     }
   },
+  "pending": {
+    "title": "Pending",
+    "subtitle": "Everything waiting on you, in one place.",
+    "loading": "Loading…",
+    "empty": "Nothing is waiting on you.",
+    "refresh": "Refresh",
+    "openRun": "Open run",
+    "sourceError": "Could not load {{source}}: {{detail}}",
+    "source": {
+      "approval": "Approvals",
+      "skill_quarantine": "Skill imports",
+      "automation_run": "Automations",
+      "workflow_run": "Workflow runs",
+      "flagged_pair": "Memory pairs",
+      "skill_suggestion": "Skill suggestions"
+    },
+    "notice": {
+      "resumed": "Run resumed.",
+      "resolved": "Done."
+    }
+  },
   "skills": {
     "view": "View",
     "remove": "Remove",

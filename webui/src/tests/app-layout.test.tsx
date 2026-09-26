@@ -8,6 +8,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return {
     ...actual,
     listAllAutomationRuns: vi.fn().mockResolvedValue([]),
+    listPending: vi.fn().mockResolvedValue({ items: [], count: 0, errors: [] }),
+    decideApproval: vi.fn(),
   };
 });
 
@@ -87,7 +89,7 @@ vi.mock("@/lib/durin-client", () => {
 });
 
 import App from "@/App";
-import { listAllAutomationRuns } from "@/lib/api";
+import { decideApproval, listAllAutomationRuns, listPending } from "@/lib/api";
 
 describe("App layout", () => {
   beforeEach(() => {
@@ -98,6 +100,9 @@ describe("App layout", () => {
     deleteChatSpy.mockReset();
     toggleThemeSpy.mockReset();
     (listAllAutomationRuns as unknown as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue([]);
+    (listPending as unknown as ReturnType<typeof vi.fn>)
+      .mockReset()
+      .mockResolvedValue({ items: [], count: 0, errors: [] });
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
@@ -529,5 +534,59 @@ describe("App layout", () => {
     const automationsButton = within(sidebar).getByRole("button", { name: /Automations/ });
     await waitFor(() => expect(listAllAutomationRuns).toHaveBeenCalled());
     expect(within(automationsButton).queryByText(/^\d+$/)).not.toBeInTheDocument();
+  });
+
+  it("shows how many items wait on the person on the Pending entry", async () => {
+    (listPending as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [], count: 3, errors: [],
+    });
+
+    render(<App />);
+
+    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+    const sidebar = screen.getByRole("navigation", { name: "Sidebar navigation" });
+    const pendingButton = within(sidebar).getByRole("button", { name: /Pending/ });
+    await waitFor(() => expect(within(pendingButton).getByText("3")).toBeInTheDocument());
+  });
+
+  it("refreshes the Pending badge when an item is resolved there", async () => {
+    const approval = {
+      source: "approval",
+      id: "a1b2c3d4e5f6",
+      kind: "skill_install",
+      title: "install skill 'mailer'",
+      summary: "",
+      created_at: "2026-09-26T10:00:00+00:00",
+      resolve: { form: "approval", actions: [] },
+      data: {
+        approval_id: "a1b2c3d4e5f6",
+        kind: "skill_install",
+        summary: "install skill 'mailer'",
+        detail: {},
+      },
+    };
+    (listPending as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ items: [approval], count: 1, errors: [] })
+      .mockResolvedValue({ items: [], count: 0, errors: [] });
+    (decideApproval as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: "applied", message: "Done.", approval_id: "a1b2c3d4e5f6",
+    });
+
+    render(<App />);
+
+    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+    const sidebar = screen.getByRole("navigation", { name: "Sidebar navigation" });
+    const pendingButton = within(sidebar).getByRole("button", { name: /Pending/ });
+    await waitFor(() => expect(within(pendingButton).getByText("1")).toBeInTheDocument());
+    (listPending as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ items: [approval], count: 1, errors: [] });
+
+    fireEvent.click(pendingButton);
+    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+
+    await waitFor(() => expect(decideApproval).toHaveBeenCalledWith("tok", "a1b2c3d4e5f6", "approve"));
+    await waitFor(() =>
+      expect(within(pendingButton).queryByText(/^\d+$/)).not.toBeInTheDocument(),
+    );
   });
 });

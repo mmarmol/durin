@@ -2457,6 +2457,37 @@ export async function rejectSkillSuggestion(
   );
 }
 
+// -- pending (everything waiting on a person) --------------------------------
+
+/** One item waiting on a person. `data` is its source's own record, in the
+ *  shape that source's own route returns — the card for that source renders
+ *  it. `resolve` names the routes that act on it. */
+export type PendingItem = components["schemas"]["PendingItem"];
+export type PendingList = components["schemas"]["PendingResult"];
+
+export async function listPending(token: string, base: string = ""): Promise<PendingList> {
+  return request<PendingList>(`${base}/api/v1/pending`, token);
+}
+
+export type ApprovalDecisionResponse = components["schemas"]["ApprovalDecisionResult"];
+
+/** Approve or reject a pending approval request as the signed-in person.
+ *  Resolves with the outcome when the request was acted on; throws an
+ *  `ApiError` (409, the reason in `detail`) when it was refused and left as
+ *  it was. */
+export async function decideApproval(
+  token: string,
+  approvalId: string,
+  decision: "approve" | "reject",
+  base: string = "",
+): Promise<ApprovalDecisionResponse> {
+  return post<ApprovalDecisionResponse>(
+    `${base}/api/v1/approvals/${encodeURIComponent(approvalId)}/decision`,
+    token,
+    { decision },
+  );
+}
+
 export type SkillObservation = components["schemas"]["SkillObservation"];
 
 export async function fetchSkillObservations(

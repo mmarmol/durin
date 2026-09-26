@@ -4,9 +4,10 @@ import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { DreamDrawer, type DrawerTarget } from "@/components/DreamDrawer";
-import { FlaggedPairCard } from "@/components/FlaggedPairCard";
+import { FlaggedPairCard, flaggedResolveErrorMessage } from "@/components/FlaggedPairCard";
+import { QuarantineCard } from "@/components/QuarantineCard";
+import { SkillSuggestionCard, suggestionErrorMessage } from "@/components/SkillSuggestionCard";
 import {
-  ApiError,
   fetchDreamDigest,
   fetchFlaggedPairs,
   fetchSkillSuggestions,
@@ -23,7 +24,6 @@ import {
   type ResolveFlaggedBody,
   type SkillSuggestion,
 } from "@/lib/api";
-import { DiffViewer } from "./DiffViewer";
 import { useClient } from "@/providers/ClientProvider";
 
 function relativeTime(ms: number): string {
@@ -162,62 +162,6 @@ function LastRunCard({ lastRun, running }: LastRunCardProps) {
   );
 }
 
-interface QuarantineCardProps {
-  skill: QuarantineRow;
-  onOpen: (target: DrawerTarget) => void;
-  onOpenSkills?: () => void;
-}
-
-function QuarantineCard({ skill, onOpen, onOpenSkills }: QuarantineCardProps) {
-  const { t } = useTranslation();
-
-  const verdictSummary = skill.findings.length > 0
-    ? skill.findings.map((f) => f.detail).join("; ")
-    : skill.verdict;
-
-  function handleView() {
-    onOpen({
-      ref: skill.name,
-      ref_kind: "skill",
-      summary: verdictSummary,
-    });
-  }
-
-  return (
-    <div className="flex flex-col gap-2 rounded-[8px] border border-border/40 bg-card px-4 py-3">
-      <div className="flex items-start gap-2">
-        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <div className="flex items-center gap-2">
-            <span className="text-[12px] font-medium text-foreground">{skill.name}</span>
-            <span className="text-[11px] text-muted-foreground/70">{skill.verdict}</span>
-          </div>
-          <p className="text-[13px] text-muted-foreground mt-0.5 line-clamp-2">{verdictSummary}</p>
-        </div>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="shrink-0 text-[12px]"
-          onClick={handleView}
-        >
-          {t("dream.view")}
-        </Button>
-      </div>
-      <div>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="text-[12px]"
-          onClick={() => onOpenSkills?.()}
-        >
-          {t("dream.bandeja.reviewInSkills")}
-        </Button>
-      </div>
-    </div>
-  );
-}
-
 export function SkillSuggestionsSection({
   token,
   onCountChange,
@@ -257,16 +201,7 @@ export function SkillSuggestionsSection({
           return next;
         });
       } catch (e) {
-        // Prefer the server's reason over the generic already-processed guess:
-        // a machine-readable reason localizes; otherwise show the raw detail.
-        if (e instanceof ApiError && e.details?.reason === "skill_quarantined") {
-          setError(t("dream.bandeja.suggestionQuarantined", {
-            skill: String(e.details.skill ?? ""),
-          }));
-        } else {
-          const detail = e instanceof ApiError ? e.detail : undefined;
-          setError(detail || t("dream.bandeja.suggestionError"));
-        }
+        setError(suggestionErrorMessage(e, t));
       } finally {
         setBusy((p) => {
           const n = new Set(p);
@@ -293,44 +228,12 @@ export function SkillSuggestionsSection({
       ) : (
         <div className="flex flex-col gap-2">
           {items.map((s) => (
-            <div
+            <SkillSuggestionCard
               key={s.id}
-              className="flex flex-col gap-2 rounded-[8px] border border-border/40 bg-card px-4 py-3"
-            >
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-[12px] font-medium text-foreground">{s.skill}</span>
-                <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold text-amber-600 dark:text-amber-400">
-                  {t(`dream.bandeja.action.${s.type}`)}
-                </span>
-              </div>
-              <p className="text-[13px] text-muted-foreground">{s.reason}</p>
-              {s.patch ? <DiffViewer patch={s.patch} /> : null}
-              <div className="flex items-center gap-2">
-                <Button
-                  type="button"
-                  variant="default"
-                  size="sm"
-                  className="text-[12px]"
-                  disabled={busy.has(s.id)}
-                  onClick={() => resolve(s.id, "accept")}
-                >
-                  {t("dream.bandeja.accept")}
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="text-[12px]"
-                  disabled={busy.has(s.id)}
-                  onClick={() => resolve(s.id, "reject")}
-                >
-                  {t("dream.bandeja.reject")}
-                </Button>
-                <span className="ml-auto text-[11px] text-muted-foreground">
-                  {t("dream.bandeja.rejectHint")}
-                </span>
-              </div>
-            </div>
+              suggestion={s}
+              busy={busy.has(s.id)}
+              onResolve={(action) => void resolve(s.id, action)}
+            />
           ))}
         </div>
       )}
@@ -399,10 +302,7 @@ function BandejaTab({ onOpen, onOpenSkills, onCountChange }: BandejaTabProps) {
           });
         }
       } catch (err) {
-        // A 422 carries the server's reason (a taken key, a bad slug): show
-        // it, so the user can fix the edit instead of guessing.
-        const detail = err instanceof ApiError && err.status === 422 ? err.detail : undefined;
-        setResolveError(detail ? `${t("dream.bandeja.resolveInvalid")} ${detail}` : t("dream.bandeja.resolveError"));
+        setResolveError(flaggedResolveErrorMessage(err, t));
       } finally {
         setResolvingKeys((prev) => {
           const next = new Set(prev);

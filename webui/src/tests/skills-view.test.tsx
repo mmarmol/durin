@@ -234,6 +234,29 @@ describe("SkillsView security surface", () => {
     expect(await screen.findByText(/fetch-and-execute/)).toBeInTheDocument();
   });
 
+  it("opens a deep-linked import straight on its triage", async () => {
+    vi.mocked(api.listSkills).mockResolvedValue([
+      { name: "clean", source: "builtin", mode: "auto", status: "active", verdict: "safe", findings: [] },
+    ]);
+    vi.mocked(api.listQuarantine).mockResolvedValue([
+      {
+        name: "sketchy",
+        status: "quarantined",
+        source: "github:owner/repo",
+        verdict: "dangerous",
+        findings: [
+          { category: "dangerous_code", severity: "dangerous", where: "scripts/go.sh", detail: "fetch-and-execute (curl|bash)" },
+        ],
+      },
+    ]);
+
+    render(wrap(<SkillsView initialTriage="sketchy" />));
+
+    // The Pending page's "Review in Skills" lands on the triage pane itself.
+    expect(await screen.findByText(/fetch-and-execute/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /pending/i })).toHaveClass("bg-primary/10");
+  });
+
   it("renders an empty state when nothing is pending", async () => {
     vi.mocked(api.listSkills).mockResolvedValue([
       { name: "clean", source: "builtin", mode: "auto", status: "active", verdict: "safe", findings: [] },
