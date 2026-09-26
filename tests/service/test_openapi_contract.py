@@ -7,13 +7,19 @@
     ``components/schemas``.
 (d) Scope validity — every ``x-required-scope`` value is a real ``Scope`` enum value
     or absent (meaning the route requires no auth).
+(e) sys.path independence — the generator script resolves its own checkout's
+    ``durin``, not whatever checkout is installed editable in site-packages.
 """
 
 from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import re
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
 
 from durin.service.catalog import SERVICE_CLASSES, build_catalog_registry
@@ -163,3 +169,43 @@ def test_catalog_registry_has_no_duplicate_routes():
         key = (bound.spec.verb, bound.spec.path)
         assert key not in seen, f"Duplicate route: {key}"
         seen.add(key)
+
+
+# ---------------------------------------------------------------------------
+# (e) sys.path independence
+# ---------------------------------------------------------------------------
+
+
+def test_script_imports_its_own_checkout_durin():
+    """Running the script directly, from any cwd and with no PYTHONPATH, must
+    resolve ``durin`` to *this* checkout, not to whichever checkout happens to
+    be installed editable in the interpreter's site-packages.
+
+    Without deriving its root from ``__file__``, the script's own directory
+    (``scripts/``) lands on ``sys.path`` but does not contain a ``durin``
+    package, so the import falls through to the site-packages editable
+    install — which points at whatever checkout last ran ``pip install -e``.
+    Run from a worktree without ``PYTHONPATH``, that silently imports (and
+    regenerates or checks against) a *different* checkout's contract.
+    """
+    repo_root = _SCRIPTS_DIR.parent
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import runpy, sys\n"
+            "runpy.run_path(sys.argv[1], run_name='not_main')\n"
+            "import durin\n"
+            "print(durin.__file__)\n",
+            str(_SCRIPTS_DIR / "gen_openapi.py"),
+        ],
+        cwd=tempfile.gettempdir(),
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    resolved = Path(result.stdout.strip()).resolve()
+    expected = (repo_root / "durin" / "__init__.py").resolve()
+    assert resolved == expected, f"expected durin from {repo_root}, got {resolved}"

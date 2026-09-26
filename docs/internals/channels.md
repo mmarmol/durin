@@ -988,10 +988,9 @@ until the phone links, so the user pairs from the dashboard without touching the
 terminal.
 
 Adding or changing a route means regenerating the contract
-(`PYTHONPATH=<worktree> python scripts/gen_openapi.py`, then
-`cd webui && bun run gen:api-types`); running the generator without
-`PYTHONPATH` from a worktree imports the installed package and silently emits a
-stale contract.
+(`python scripts/gen_openapi.py`, then `cd webui && bun run gen:api-types`);
+the generator puts its own checkout's root first on `sys.path`, so this works
+the same from a worktree with no `PYTHONPATH` needed.
 
 ### Viewing non-websocket sessions in the webui
 

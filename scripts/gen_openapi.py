@@ -31,6 +31,13 @@ import json
 import sys
 from pathlib import Path
 
+# Put this checkout's root first on sys.path so the `durin` import below (in
+# build_openapi()) resolves to *this* checkout. Without this, running the
+# script directly (no PYTHONPATH) leaves `durin` to fall through to whatever
+# checkout is installed editable in the interpreter's site-packages, which
+# silently regenerates or checks a different checkout's contract.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 # ---------------------------------------------------------------------------
 # Schema helpers
 # ---------------------------------------------------------------------------
