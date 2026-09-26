@@ -9,7 +9,9 @@ truth; this route only aggregates:
   Legacy records are left out: they carry no payload, so the only thing to do
   with one is ``durin approvals discard``.
 * ``skill_quarantine`` — skill imports awaiting a decision
-  (``skills_surface.quarantined_skills``).
+  (``skills_surface.quarantined_skills``). An import a pending ``skill_install``
+  request names is left out: that request is the item, and deciding it
+  settles the import too.
 * ``automation_run`` — automation runs paused on an approval or a question
   (``automations.run_log``).
 * ``workflow_run`` — workflow runs waiting for input that can be resumed
@@ -130,7 +132,11 @@ def _iso_from_epoch(seconds: Any) -> str | None:
         return None
 
 
-def _approval_items(workspace: Path, principal: Principal) -> list[PendingItem]:
+def _approval_items(workspace: Path, principal: Principal,
+                    represented: set[str]) -> list[PendingItem]:
+    """The pending approval requests *principal* may read. Adds to
+    *represented* the quarantined imports that listed install requests name,
+    so the quarantine source does not list them a second time."""
     from durin.agent import approval_store
 
     # A request past its TTL must never show as pending just because nobody
@@ -141,6 +147,10 @@ def _approval_items(workspace: Path, principal: Principal) -> list[PendingItem]:
         kind = rec.get("kind") or ""
         if not principal.has_scope(read_scope(kind)):
             continue
+        if kind == "skill_install":
+            quarantine = (rec.get("payload") or {}).get("quarantine")
+            if quarantine:
+                represented.add(str(quarantine))
         path = f"/api/v1/approvals/{_seg(rec['id'])}/decision"
         session = rec.get("requested_by_session")
         items.append(PendingItem(
@@ -169,12 +179,16 @@ def _approval_items(workspace: Path, principal: Principal) -> list[PendingItem]:
     return items
 
 
-def _skill_quarantine_items(workspace: Path) -> list[PendingItem]:
+def _skill_quarantine_items(workspace: Path, represented: set[str]) -> list[PendingItem]:
+    """Quarantined imports awaiting a decision, but for those an install
+    request listed among the approvals already represents."""
     from durin.agent.skills_surface import quarantined_skills
 
     items: list[PendingItem] = []
     for entry in quarantined_skills(workspace):
         name = entry["name"]
+        if name in represented:
+            continue
         verdict = entry.get("verdict") or "not scanned"
         source = entry.get("source") or "an unknown source"
         items.append(PendingItem(
@@ -310,9 +324,13 @@ def _newest_first_key(item: PendingItem) -> tuple[float, int]:
 
 def collect_pending(workspace: Path, principal: Principal) -> PendingResult:
     """Every item waiting on a person that *principal* may read, newest first."""
+    # Quarantined imports that a listed install request names. Filled by the
+    # approval source, which runs first (SOURCE_ORDER); if it fails to load,
+    # nothing is represented and every import still lists.
+    represented: set[str] = set()
     fetchers: dict[str, Callable[[], list[PendingItem]]] = {
-        "approval": lambda: _approval_items(workspace, principal),
-        "skill_quarantine": lambda: _skill_quarantine_items(workspace),
+        "approval": lambda: _approval_items(workspace, principal, represented),
+        "skill_quarantine": lambda: _skill_quarantine_items(workspace, represented),
         "automation_run": lambda: _automation_run_items(workspace),
         "workflow_run": lambda: _workflow_run_items(workspace),
         "flagged_pair": lambda: _flagged_pair_items(workspace),

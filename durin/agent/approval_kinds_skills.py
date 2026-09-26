@@ -22,7 +22,7 @@ from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Callable, ContextManager
 
-from durin.agent import approval
+from durin.agent import approval, approval_store
 from durin.agent import skills_import as si
 from durin.agent import skills_store as ss
 from durin.agent.approval_executors import ApprovalExecError, ExecDeps, Prepared, register
@@ -176,6 +176,42 @@ async def execute_install(workspace: Path, payload: dict, deps: ExecDeps) -> dic
             approval_id=approval_id, approved_by=approved_by)
     except si.SkillImportRefused as exc:
         raise ApprovalExecError(str(exc)) from exc
+
+
+def reject_install(workspace: Path, record: dict) -> None:
+    """A rejected install discards the quarantined import it named: the person
+    decided against it, so it no longer waits in the Skills triage either.
+    Any other request still pending for the same import is closed with it,
+    since it would now have nothing left to install."""
+    name = str((record.get("payload") or {}).get("quarantine") or "")
+    if quarantine_dir(workspace, name) is None:
+        return
+    decided_by = record.get("decided_by") or None
+    si.reject_quarantined(Path(workspace), name, approval_id=record.get("id"),
+                          decided_by=(decided_by or {}).get("kind"))
+    close_install_requests(workspace, name, to="rejected", decided_by=decided_by)
+
+
+def close_install_requests(workspace: Path, name: str, *, to: str, decided_by: dict | None,
+                           result: dict | None = None) -> list[str]:
+    """Close every pending install request for the quarantined import *name*,
+    moving it to *to* (``applied`` or ``rejected``) by compare-and-set, and
+    return their ids. Called when the import was settled outside the request
+    — installed or discarded from the Skills triage, or discarded by a
+    rejection — so a request never waits on an import that is gone."""
+    closed: list[str] = []
+    for rec in approval_store.list_records(workspace, status="pending", include_legacy=False):
+        if rec.get("kind") != "skill_install":
+            continue
+        if (rec.get("payload") or {}).get("quarantine") != name:
+            continue
+        fields: dict = {"decided_by": decided_by}
+        if result is not None:
+            fields["result"] = result
+        if approval_store.transition(workspace, rec["id"], expect=("pending",), to=to,
+                                     **fields) is not None:
+            closed.append(rec["id"])
+    return closed
 
 
 # --- skill_edit ------------------------------------------------------------------
@@ -522,7 +558,8 @@ def request_edit_autonomously(workspace: Path, name: str, *, old: str, new: str,
 
 def register_all() -> None:
     """Register the three skill kinds with the approval executor registry."""
-    register("skill_install", hash_fn=install_hash, execute_fn=execute_install)
+    register("skill_install", hash_fn=install_hash, execute_fn=execute_install,
+             on_reject=reject_install)
     register("skill_edit", hash_fn=edit_hash, execute_fn=execute_edit)
     register("skill_deps", hash_fn=deps_hash, execute_fn=execute_deps,
              requires=deps_requires)

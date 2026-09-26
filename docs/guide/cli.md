@@ -108,7 +108,9 @@ the Pending page leaves it out); ask the agent again if it is still needed.
 The dashboard's **Pending** page lists the same requests, next to everything
 else that waits on you (skill imports in quarantine, paused automation runs,
 workflow runs waiting for input, memory pairs the dream flagged, skill
-suggestions), and approves or rejects them with a click. Only your dashboard
+suggestions), and approves or rejects them with a click. Rejecting a skill
+install also discards the imported skill waiting for it, and installing or
+discarding that import from the Skills page closes the request. Only your dashboard
 session can: an API token cannot decide a request over HTTP. A shell command
 is refused there as here, and a dependency install is refused on a gateway
 with exec disabled (approve it here instead, which sets up its own shell

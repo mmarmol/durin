@@ -1,6 +1,6 @@
 """Per-kind hashing and execution for approval requests.
 
-Each kind registers two functions, and optionally a third:
+Each kind registers two functions, and optionally two more:
 
 * a hash of the state the request would change. It is computed when the
   request is filed and again right before it runs; a mismatch means the target
@@ -12,6 +12,10 @@ Each kind registers two functions, and optionally a third:
   approved instead), or None. It is checked before a record is approved, so a
   process that lacks a handle refuses the approval instead of moving the
   record to approved and then failing.
+* ``on_reject``: what a rejection settles besides the record, given the
+  workspace and the rejected record — a rejected skill install discards the
+  quarantined import it named, so the import is not left waiting for a
+  decision already made.
 
 Kinds register from their own modules; ``_ensure_loaded`` imports them so a
 fresh process (CLI, API) can execute any kind. Every kind module exists, so
@@ -27,9 +31,11 @@ from typing import Any, Awaitable, Callable
 HashFn = Callable[[Path, dict], str]
 ExecuteFn = Callable[[Path, dict, "ExecDeps"], Awaitable[dict]]
 RequiresFn = Callable[["ExecDeps"], "str | None"]
+RejectFn = Callable[[Path, dict], None]
 
 _REGISTRY: dict[str, tuple[HashFn, ExecuteFn]] = {}
 _REQUIRES: dict[str, RequiresFn] = {}
+_ON_REJECT: dict[str, RejectFn] = {}
 _KIND_MODULES: tuple[str, ...] = (
     "durin.agent.approval_kinds_skills",
     "durin.agent.approval_kinds_mcp",
@@ -61,12 +67,17 @@ class ApprovalExecError(Exception):
 
 
 def register(kind: str, *, hash_fn: HashFn, execute_fn: ExecuteFn,
-             requires: RequiresFn | None = None) -> None:
+             requires: RequiresFn | None = None,
+             on_reject: RejectFn | None = None) -> None:
     _REGISTRY[kind] = (hash_fn, execute_fn)
     if requires is not None:
         _REQUIRES[kind] = requires
     else:
         _REQUIRES.pop(kind, None)
+    if on_reject is not None:
+        _ON_REJECT[kind] = on_reject
+    else:
+        _ON_REJECT.pop(kind, None)
 
 
 def _ensure_loaded(kind: str) -> tuple[HashFn, ExecuteFn]:
@@ -84,6 +95,15 @@ def missing_handles(kind: str, deps: ExecDeps) -> str | None:
     _ensure_loaded(kind)
     requires = _REQUIRES.get(kind)
     return requires(deps) if requires is not None else None
+
+
+def after_reject(workspace: Path, record: dict) -> None:
+    """Settle what rejecting *record* means beyond the record itself (the
+    kind's ``on_reject``); a kind that declares none needs nothing."""
+    _ensure_loaded(record["kind"])
+    on_reject = _ON_REJECT.get(record["kind"])
+    if on_reject is not None:
+        on_reject(Path(workspace), record)
 
 
 def current_hash(workspace: Path, record: dict) -> str:

@@ -144,6 +144,51 @@ def test_expired_approval_records_do_not_show_as_pending(tmp_path):
     assert st.get(tmp_path, stale["id"])["status"] == "expired"
 
 
+def test_a_pending_install_lists_once_as_its_approval(tmp_path):
+    # The request names the quarantined import it would install: the approval
+    # item represents it, and the import is not listed a second time.
+    _quarantine(tmp_path, "demo")
+    rec = st.create(tmp_path, kind="skill_install", summary="install skill 'demo'",
+                    detail={}, payload={"quarantine": "demo"}, change_hash="h",
+                    session_key="cron:x", context="autonomous")
+
+    result = collect_pending(tmp_path, ADMIN)
+
+    assert [(item.source, item.id) for item in result.items] == [("approval", rec["id"])]
+    assert result.count == 1
+
+
+def test_a_quarantined_import_with_no_request_still_lists(tmp_path):
+    _quarantine(tmp_path, "demo")
+    st.create(tmp_path, kind="skill_install", summary="install skill 'other'",
+              detail={}, payload={"quarantine": "other"}, change_hash="h",
+              session_key="cron:x", context="autonomous")
+
+    sources = sorted((item.source, item.id) for item in collect_pending(tmp_path, ADMIN).items)
+
+    assert ("skill_quarantine", "demo") in sources
+
+
+def test_rejecting_a_pending_install_leaves_nothing_listed(tmp_path):
+    import asyncio
+
+    from durin.agent import approval
+    from durin.agent import approval_kinds_skills as kinds
+    from durin.agent.approval_executors import ExecDeps
+
+    kinds.register_all()
+    _quarantine(tmp_path, "demo")
+    rec = st.create(tmp_path, kind="skill_install", summary="install skill 'demo'",
+                    detail={}, payload={"quarantine": "demo"}, change_hash="h",
+                    session_key="cron:x", context="autonomous")
+
+    asyncio.run(approval.decide(tmp_path, rec["id"], "reject",
+                                decided_by={"kind": "user", "channel": "webui"},
+                                deps=ExecDeps()))
+
+    assert collect_pending(tmp_path, ADMIN).items == []
+
+
 def test_a_legacy_record_is_left_to_the_cli(tmp_path):
     # It carries no payload, so it can only be discarded (`durin approvals
     # discard`), never decided: the Pending page has nothing to offer for it.

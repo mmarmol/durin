@@ -494,7 +494,9 @@ person, in one list: approval requests, skill imports in quarantine, automation
 runs paused on an approval or a question, workflow runs waiting for input,
 memory pairs the dream flagged, and skill suggestions. The route only
 aggregates — each source is read through its own listing function, the one
-behind its own route — and answers `{items, count, errors}`. Each item is
+behind its own route — and answers `{items, count, errors}`. A quarantined skill
+import that a pending install request names is listed once, as that request:
+deciding the request settles the import too. Each item is
 `{source, id, kind, title, summary, created_at, resolve, data}`: `data` is the
 source's own record in the shape its own route returns, and `resolve` names a
 `form` and the `actions` that act on it (method, path, and the body fields the

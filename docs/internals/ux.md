@@ -509,7 +509,10 @@ returns for it (`item.data`), and resolves through that section's routes:
 - a skill import in quarantine — `QuarantineCard`, whose review button opens
   that import's triage in Skills (a deep link, `SkillsView`'s
   `initialTriage`): approving walks the install gate (confirm, override,
-  replace, dependencies), which stays with the Skills surface.
+  replace, dependencies), which stays with the Skills surface. An import a
+  pending install request names shows once, as that request's approval card;
+  rejecting it discards the import, and settling the import in the triage
+  closes the request.
 
 Resolving anything shows what it came to and re-reads the list. A source the
 server could not load is named above the list. The domain sections keep their

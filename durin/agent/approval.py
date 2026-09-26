@@ -32,6 +32,7 @@ from durin.agent.approval_executors import (
     ApprovalExecError,
     ExecDeps,
     Prepared,
+    after_reject,
     current_hash,
     execute,
     missing_handles,
@@ -292,6 +293,14 @@ async def _apply_decision(workspace: Path | str, approval_id: str, decision: str
                                         to="rejected", decided_by=decided_by)
         if rec is None:
             return _already_decided(workspace, approval_id)
+        try:
+            # What the rejection settles besides the record (a rejected
+            # skill install discards its quarantined import). The decision
+            # already stands, so a failure here is logged, never raised.
+            await asyncio.to_thread(after_reject, Path(workspace), rec)
+        except Exception:  # noqa: BLE001
+            logger.exception("settling rejected request {} ({}) failed",
+                             approval_id, rec.get("kind"))
         return Outcome("rejected", rec, None, (
             f"The user declined: {rec['summary']}. Do not retry, and do not reach the "
             "same effect another way."))

@@ -480,6 +480,16 @@ instead of landing. Provenance and `import-audit.log` record `approval_id` and
 `approved_by` (`user`, `judge`, `operator`, or `policy`; empty when no decision
 was needed), and the commit carries `Approved-by` / `Approval` trailers.
 
+An install request and the Skills triage settle the same import, so one
+decision settles both. Rejecting the request discards the quarantined import
+(the kind's `on_reject` hook, `approval_kinds_skills.reject_install`) and closes
+any other request still pending for it. Installing or discarding the import
+from the triage (`skills_store.web_skill_approve` / `web_skill_reject`) closes
+the pending requests for it as `applied` or `rejected` by compare-and-set,
+recorded as `{"kind": "user", "channel": "webui"}`. Every discard is appended to
+`import-audit.log` as a `discarded` event, with the request it settled and who
+decided it when known.
+
 **Skill reviews** (`durin/security/skill_reviews.py`): a user or the LLM judge
 can mark an active flagged skill as reviewed. Each acked finding is stored as
 its fingerprint (`category|where|detail`) paired with a SHA-256 of the file it

@@ -1778,6 +1778,11 @@ def _spec_for_bin(skill_dir: Path, bin_name: str) -> list[dict]:
     return []
 
 
+# Who a decision taken in the Skills triage is recorded as: a person, on the
+# dashboard. It settles an approval request waiting on the same import.
+TRIAGE_DECIDER = {"kind": "user", "channel": "webui"}
+
+
 async def web_skill_approve(workspace: Path, name: str, *, confirm: bool,
                             override: bool, replace: bool = False,
                             install_deps: bool = False,
@@ -1806,6 +1811,12 @@ async def web_skill_approve(workspace: Path, name: str, *, confirm: bool,
                                      approved_by="user" if (confirm or override) else None)
     except SkillImportRefused as exc:
         return 409, {"refused": exc.action, "verdict": exc.verdict, "message": str(exc)}
+    # The import is installed: an approval request still waiting on it is
+    # settled by this same decision, not left pending until it expires.
+    from durin.agent.approval_kinds_skills import close_install_requests
+
+    close_install_requests(workspace, name, to="applied", decided_by=dict(TRIAGE_DECIDER),
+                           result=dict(res))
 
     if install_deps and exec_run:
         from durin.agent.skills_import import run_install_specs, runnable_install_specs
@@ -1819,11 +1830,16 @@ async def web_skill_approve(workspace: Path, name: str, *, confirm: bool,
 
 
 def web_skill_reject(workspace: Path, name: str) -> tuple[int, dict]:
-    """`GET /api/skills/{name}/reject` — discard a quarantined skill."""
+    """`GET /api/skills/{name}/reject` — discard a quarantined skill, and close
+    as rejected any approval request still waiting to install it."""
+    from durin.agent.approval_kinds_skills import close_install_requests
     from durin.agent.skills_import import reject_quarantined
 
-    res = reject_quarantined(workspace, name)
-    return (400, res) if "error" in res else (200, res)
+    res = reject_quarantined(workspace, name, decided_by=TRIAGE_DECIDER["kind"])
+    if "error" in res:
+        return 400, res
+    close_install_requests(workspace, name, to="rejected", decided_by=dict(TRIAGE_DECIDER))
+    return 200, res
 
 
 def web_skill_remove(workspace: Path, name: str) -> tuple[int, dict]:
