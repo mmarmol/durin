@@ -65,6 +65,12 @@ The API is OpenAI-shaped but **session-oriented**, and that difference matters:
 - **Client-defined tools are rejected.** durin runs its own tools inside the
   turn; a request carrying `tools`, `tool_choice`, `functions`, or
   `function_call` gets a 400 rather than silently ignoring them.
+- **A token cannot approve privileged actions.** durin's own tool call to
+  install or edit a skill, install its dependencies, add or change an MCP
+  server, or run a shell command outside its guardrails is not this turn's to
+  decide — it is filed as a pending request (a shell command is refused
+  instead) for a person to act on from the dashboard's Pending page or
+  `durin approvals` — see [durin's API](api.md#what-a-token-cannot-do).
 - **Images** travel as base64 `data:` URLs in `image_url` content parts. Remote
   image URLs are rejected — the gateway does not fetch URLs on a caller's
   behalf.

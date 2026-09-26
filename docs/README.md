@@ -15,7 +15,9 @@ runtime:
 - **Context** — a layered system prompt (stable + per-session + volatile) that
   feeds the model the right history, skills, and pinned facts each turn.
 - **Adaptation** — runtime model/provider switching, permission-as-data agent
-  modes, and MCP servers connected on demand.
+  modes, MCP servers connected on demand, and an approval channel that puts
+  any privileged change — a skill install, an MCP change, a command outside
+  its guardrails — in front of a person before it runs.
 - **Self-learning** — a cold-path *dream* that consolidates conversations into
   an entity graph and curated skills, leaves every conversation a searchable
   summary, and *cron* for scheduled work.
