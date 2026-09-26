@@ -20,6 +20,16 @@ import { ApproveBlockedModal } from "@/components/ApproveBlockedModal";
 import { SkillFileTree } from "@/components/SkillFileTree";
 import { SkillHistory } from "@/components/SkillHistory";
 import { TriageRequirements } from "@/components/TriageRequirements";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { relativeTime } from "@/lib/format";
@@ -959,31 +969,45 @@ export function SkillsView({
     [selFile],
   );
 
+  // A navigation that would drop unsaved edits waits here while the page asks
+  // the person (an in-page dialog, never a native confirm); it runs if they
+  // choose to discard, and is dropped if they keep editing.
+  const [discardPending, setDiscardPending] = useState<(() => void) | null>(null);
+
   const guardDirty = useCallback(
-    () => !dirty || window.confirm(t("skills.discardPrompt")),
-    [dirty, t],
+    (proceed: () => void) => {
+      if (!dirty) {
+        proceed();
+        return;
+      }
+      setDiscardPending(() => proceed);
+    },
+    [dirty],
   );
 
   const openSkill = useCallback(
-    async (name: string) => {
+    (name: string) => {
       if (pane.kind === "skill" && pane.name === name) return;
-      if (!guardDirty()) return;
-      setError(null);
-      try {
-        const [d, fl] = await Promise.all([getSkill(token, name), listSkillFiles(token, name)]);
-        setDetail(d);
-        setFiles(fl);
-        setSelFile("SKILL.md");
-        setFileBody(d.content);
-        setFileText(true);
-        setDrafts({});
-        setHistory(null);
-        setLintErr(null);
-        setTab("view");
-        setPane({ kind: "skill", name });
-      } catch (e) {
-        setError(errMsg(e));
-      }
+      guardDirty(() => {
+        void (async () => {
+          setError(null);
+          try {
+            const [d, fl] = await Promise.all([getSkill(token, name), listSkillFiles(token, name)]);
+            setDetail(d);
+            setFiles(fl);
+            setSelFile("SKILL.md");
+            setFileBody(d.content);
+            setFileText(true);
+            setDrafts({});
+            setHistory(null);
+            setLintErr(null);
+            setTab("view");
+            setPane({ kind: "skill", name });
+          } catch (e) {
+            setError(errMsg(e));
+          }
+        })();
+      });
     },
     [token, pane, guardDirty],
   );
@@ -1023,12 +1047,13 @@ export function SkillsView({
 
   const openTriage = useCallback(
     (name: string) => {
-      if (!guardDirty()) return;
-      setGate(null);
-      setImportMsg(null);
-      setAuditMsg(null);
-      setDetail(null);
-      setPane({ kind: "triage", name });
+      guardDirty(() => {
+        setGate(null);
+        setImportMsg(null);
+        setAuditMsg(null);
+        setDetail(null);
+        setPane({ kind: "triage", name });
+      });
     },
     [guardDirty],
   );
@@ -1044,17 +1069,19 @@ export function SkillsView({
   }, [initialTriage, loading, quarantine, openTriage]);
 
   const openAcquire = useCallback(() => {
-    if (!guardDirty()) return;
-    setDetail(null);
-    setImportMsg(null);
-    setPane({ kind: "acquire" });
+    guardDirty(() => {
+      setDetail(null);
+      setImportMsg(null);
+      setPane({ kind: "acquire" });
+    });
   }, [guardDirty]);
 
   const back = useCallback(() => {
-    if (!guardDirty()) return;
-    setDetail(null);
-    setGate(null);
-    setPane({ kind: "empty" });
+    guardDirty(() => {
+      setDetail(null);
+      setGate(null);
+      setPane({ kind: "empty" });
+    });
   }, [guardDirty]);
 
   const save = useCallback(async () => {
@@ -2047,6 +2074,32 @@ export function SkillsView({
           onCancel={() => setShowBlockedModal(null)}
         />
       )}
+      <AlertDialog
+        open={discardPending !== null}
+        onOpenChange={(open) => (!open ? setDiscardPending(null) : undefined)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("skills.discardPrompt")}</AlertDialogTitle>
+            <AlertDialogDescription>{t("skills.discardBody")}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setDiscardPending(null)}>
+              {t("skills.discardKeep")}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                const proceed = discardPending;
+                setDiscardPending(null);
+                proceed?.();
+              }}
+            >
+              {t("skills.discardConfirm")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

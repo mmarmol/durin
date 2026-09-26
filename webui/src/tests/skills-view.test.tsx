@@ -257,6 +257,57 @@ describe("SkillsView security surface", () => {
     expect(screen.getByRole("button", { name: /pending/i })).toHaveClass("bg-primary/10");
   });
 
+  it("asks in the page, never with a native confirm, before discarding unsaved edits", async () => {
+    vi.mocked(api.listSkills).mockResolvedValue([
+      { name: "alpha", source: "workspace", mode: "manual", status: "active", verdict: "safe", findings: [] },
+      { name: "beta", source: "workspace", mode: "manual", status: "active", verdict: "safe", findings: [] },
+    ]);
+    vi.mocked(api.listQuarantine).mockResolvedValue([]);
+    // getSkill is not reset between tests in this file; count this test's calls only.
+    vi.mocked(api.getSkill).mockReset();
+    vi.mocked(api.getSkill).mockImplementation(async (_token: string, name: string) => ({
+      name,
+      mode: "manual",
+      content: `${name} body`,
+    }));
+    vi.mocked(api.listSkillFiles).mockResolvedValue([{ path: "SKILL.md", text: true, size: 10 }]);
+    // A native confirm would answer "discard" at once; the page must never ask it.
+    const nativeConfirm = vi.fn(() => true);
+    const originalConfirm = window.confirm;
+    window.confirm = nativeConfirm;
+    try {
+
+    const user = userEvent.setup();
+    render(wrap(<SkillsView />));
+    await user.click(await screen.findByText("alpha"));
+    await user.click(await screen.findByRole("button", { name: "Edit" }));
+    const editor = await screen.findByDisplayValue("alpha body");
+    await user.type(editor, " changed");
+
+    // Leaving with unsaved edits asks first, in the page.
+    await user.click(screen.getByText("beta"));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText("Discard unsaved changes?")).toBeInTheDocument();
+    expect(nativeConfirm).not.toHaveBeenCalled();
+
+    // Keep editing: nothing is lost and the other skill does not open.
+    await user.click(within(dialog).getByRole("button", { name: "Keep editing" }));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(screen.getByDisplayValue("alpha body changed")).toBeInTheDocument();
+    expect(api.getSkill).toHaveBeenCalledTimes(1);
+
+    // Discard: the other skill opens.
+    await user.click(screen.getByText("beta"));
+    await user.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Discard" }),
+    );
+    await waitFor(() => expect(api.getSkill).toHaveBeenLastCalledWith(expect.anything(), "beta"));
+    expect(nativeConfirm).not.toHaveBeenCalled();
+    } finally {
+      window.confirm = originalConfirm;
+    }
+  });
+
   it("renders an empty state when nothing is pending", async () => {
     vi.mocked(api.listSkills).mockResolvedValue([
       { name: "clean", source: "builtin", mode: "auto", status: "active", verdict: "safe", findings: [] },
