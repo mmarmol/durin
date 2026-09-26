@@ -14,7 +14,7 @@ from __future__ import annotations
 import pytest
 
 from durin.agent import skill_suggestions as sg
-from durin.service.principal import Principal
+from durin.service.principal import Principal, Scope
 from durin.service.skills import (
     AcceptSuggestionCommand,
     RejectSuggestionCommand,
@@ -55,6 +55,36 @@ async def test_list_accept_reject_roundtrip(tmp_path):
     await svc.reject_suggestion(RejectSuggestionCommand(id=rec2["id"]), pr)
     assert sg.read_suggestions(ws) == []
     assert sg.is_tombstoned(ws, rec2["id"]) is True
+
+
+@pytest.mark.asyncio
+async def test_accept_records_who_decided(tmp_path):
+    """Accepting a suggestion used to stamp every acceptance as "user", even
+    a skills:write API token's. The commit's Approved-by trailer must instead
+    name the actual caller: the dashboard session, or the token/operator —
+    the same way the triage install and discard routes already do."""
+    import durin.agent.skills_store as ss
+
+    ws = tmp_path
+    (ws / "skills" / "x").mkdir(parents=True)
+    (ws / "skills" / "x" / "SKILL.md").write_text(
+        "---\nname: x\ndescription: d\n---\nold body\n", encoding="utf-8",
+    )
+    svc = SkillsService(workspace=ws)
+
+    rec = sg.add_suggestion(ws, {"type": "evolve", "name": "x", "old": "old body",
+                                 "new": "new body", "rationale": "improve"})
+    await svc.accept_suggestion(AcceptSuggestionCommand(id=rec["id"]),
+                                Principal.webui("s1", {Scope.SKILLS_WRITE.value}))
+    head = ss._store(ws).log(max_entries=1, path="x")[0]
+    assert "Approved-by: user" in head.message
+
+    rec2 = sg.add_suggestion(ws, {"type": "evolve", "name": "x", "old": "new body",
+                                  "new": "newer body", "rationale": "improve again"})
+    await svc.accept_suggestion(AcceptSuggestionCommand(id=rec2["id"]),
+                                Principal.remote("tok-1", {Scope.SKILLS_WRITE.value}))
+    head2 = ss._store(ws).log(max_entries=1, path="x")[0]
+    assert "Approved-by: operator" in head2.message
 
 
 @pytest.mark.asyncio

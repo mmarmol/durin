@@ -533,9 +533,10 @@ manual mode means the skill is the user's to control. Instead:
 Accepting a suggestion replays the recorded action against the live skill
 (`skill_suggestions.apply_suggestion`) and removes it from the queue. An
 accepted `evolve` is a person's write: it lands on a `manual` skill (the
-acceptance is the owner's consent) with an `Approved-by: user` trailer, but one
-that makes the skill `dangerous` is refused with its findings (a 409), and a
-`caution` one lands. A failed
+acceptance is the owner's consent) with an `Approved-by` trailer naming who
+accepted it (`decider_of`'s kind — `user` for a dashboard session, `operator`
+for a token or a local caller), but one that makes the skill `dangerous` is
+refused with its findings (a 409), and a `caution` one lands. A failed
 replay leaves the suggestion queued (retriable) and surfaces the concrete
 reason as a 409 whose `detail` the webui shows verbatim. One failure mode gets
 a machine-readable shape: when the suggestion's skill has meanwhile been swept

@@ -934,12 +934,15 @@ def _scan_refusal(scan: "WriteScan", what: str) -> dict:
 
 def apply_accepted_edit(workspace: Path, name: str, *, old: str, new: str, rationale: str,
                         file: str = "SKILL.md",
-                        attribution: "Attribution | None" = None) -> dict:
+                        attribution: "Attribution | None" = None,
+                        approved_by: str = "user") -> dict:
     """An edit a person accepted after reading its diff (a skill suggestion
     accepted in the web UI). The acceptance is the owner's consent, so a
     ``manual`` skill is written. The rule for a person's write still applies: an
     edit that makes the skill dangerous is refused with its findings; a
-    ``caution`` one lands and its findings are returned."""
+    ``caution`` one lands and its findings are returned. *approved_by* is who
+    accepted it (``durin.service.approvals.decider_of``'s ``kind``), stamped
+    as the commit's ``Approved-by`` trailer."""
     plan = plan_skill_edit(workspace, name, old=old, new=new, rationale=rationale, file=file)
     if "error" in plan:
         return plan
@@ -947,7 +950,7 @@ def apply_accepted_edit(workspace: Path, name: str, *, old: str, new: str, ratio
     if scan.needs_review and scan.after == "dangerous":
         return _scan_refusal(scan, "edit")
     return write_skill_edit(workspace, name, old=old, new=new, rationale=rationale,
-                            file=file, attribution=attribution, approved_by="user")
+                            file=file, attribution=attribution, approved_by=approved_by)
 
 
 def save_skill_content(workspace: Path, name: str, content: str,
@@ -1947,10 +1950,12 @@ def _clear_provenance_pin(workspace: Path, name: str, skill_dir: Path) -> None:
         f"skill({name}): user review cleared import verdict [{prov['verdict']}]")
 
 
-def web_skill_review_user(workspace: Path, name: str, note: str = "") -> tuple[int, dict]:
-    """`POST /api/v1/skills/{name}/review` — user marks an ACTIVE skill reviewed
-    (override to safe). Clears the provenance verdict pin permanently, then
-    persists a review acking the live findings."""
+def web_skill_review_user(workspace: Path, name: str, note: str = "",
+                          *, by: str = "user") -> tuple[int, dict]:
+    """`POST /api/v1/skills/{name}/review` — mark an ACTIVE skill reviewed
+    (override to safe), in the name of *by* (``durin.service.approvals.decider_of``'s
+    ``kind``). Clears the provenance verdict pin permanently, then persists a
+    review acking the live findings."""
     from durin.agent.skills_surface import _skill_dirs, apply_provenance_verdict
     from durin.security.skill_reviews import record_review
     from durin.security.skill_scan import scan_skill
@@ -1966,7 +1971,7 @@ def web_skill_review_user(workspace: Path, name: str, note: str = "") -> tuple[i
     # — e.g. on a builtin path the stamp skips — adds a synthetic finding the
     # review must cover to stay valid).
     verdict, findings = apply_provenance_verdict(d, rep.verdict, _active_findings(rep))
-    review = record_review(Path(workspace), name, d, by="user", verdict="safe",
+    review = record_review(Path(workspace), name, d, by=by, verdict="safe",
                            original=verdict, findings=findings, note=note)
     return 200, {"name": name, "reviewed": True, "review": review,
                  "verdict": verdict, "findings": findings}

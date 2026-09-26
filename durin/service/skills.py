@@ -740,12 +740,14 @@ class SkillsService:
     ) -> SkillsResult:
         principal.require(Scope.SKILLS_WRITE)
         from durin.agent import skill_suggestions as sg
+        from durin.service.approvals import decider_of
 
         rec = sg.get_suggestion(self._workspace, cmd.id)
         if rec is None:
             raise NotFoundError(f"suggestion {cmd.id!r} not found")
         action = rec["action"]
-        res = sg.apply_suggestion(self._workspace, action)
+        res = sg.apply_suggestion(self._workspace, action,
+                                  approved_by=decider_of(principal)["kind"])
         if res.get("error"):
             name = action.get("name") or action.get("target") or ""
             qdir = Path(self._workspace) / ".durin" / "import-quarantine" / name
@@ -868,9 +870,11 @@ class SkillsService:
     async def review(self, cmd: SkillReviewCommand, principal: Principal) -> SkillsResult:
         principal.require(Scope.SKILLS_WRITE)
         from durin.agent import skills_store as ss
+        from durin.service.approvals import decider_of
 
         status, payload = await asyncio.to_thread(
-            ss.web_skill_review_user, self._workspace, cmd.name, cmd.note or ""
+            ss.web_skill_review_user, self._workspace, cmd.name, cmd.note or "",
+            by=decider_of(principal)["kind"],
         )
         return _skills_result(status, payload)
 
