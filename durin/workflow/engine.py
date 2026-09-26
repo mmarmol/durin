@@ -31,7 +31,14 @@ from loguru import logger
 
 from durin.utils.file_lock import cross_process_lock
 from durin.workflow import provenance, run_log, workspace_fork
-from durin.workflow.artifacts import artifact_dir, keyed_run_lock_target, keyed_work_dir, prune_runs
+from durin.workflow.artifacts import (
+    EVIDENCE_DIRNAME,
+    artifact_dir,
+    keyed_run_lock_target,
+    keyed_work_dir,
+    prune_runs,
+    run_evidence_dir,
+)
 from durin.workflow.result import NodeRun, WorkflowResult
 from durin.workflow.session_keys import node_session_key
 from durin.workflow.spec import (
@@ -534,6 +541,12 @@ class WorkflowEngine:
                     resume_outputs=dict(resume.recorded_outputs) if resume else None,
                     work_dir=work_dir,
                     own_work_dir=work_dir_override is None,
+                    # True only for a run that OWNS a work_key folder — the one
+                    # case where a later, unrelated run reuses this exact
+                    # work_dir (see _preserve_run_evidence). A subworkflow
+                    # (work_dir_override is not None) always shares its
+                    # parent's folder unchanged, never this run's own key.
+                    keyed=(work_dir_override is None and resolved_work_key is not None),
                     detached_tracker=detached_tracker,
                 )
             except WorkflowConfigError as exc:
@@ -767,6 +780,7 @@ class WorkflowEngine:
         initial_upstream: str | None = None,
         work_dir: str | None = None,
         own_work_dir: bool = True,
+        keyed: bool = False,
         detached_tracker: "_DetachedTracker | None" = None,
         resume_outputs: dict[str, str] | None = None,
     ) -> WorkflowResult:
@@ -854,6 +868,51 @@ class WorkflowEngine:
                     return set()
 
             before_files = _work_snapshot()
+
+            # A SEPARATE before/after fingerprint, only for a keyed work_dir:
+            # _work_snapshot's existence-only diff (above) is exactly what
+            # every other reader of NodeRun.artifacts expects it to mean —
+            # "brand new" — so it must stay untouched. But it is blind to
+            # review N3's actual case: a keyed folder is shared across
+            # separate runs, so the very file a run's node is about to
+            # OVERWRITE (a same-named ad hoc file an earlier run already
+            # left there, e.g. a script's own "params.json") already exists
+            # BEFORE this turn starts, and never appears as a set difference.
+            # mtime_ns (not a content hash) is enough to notice the
+            # overwrite and cheap enough to call on every node visit; the
+            # run's own runs/<run_id>/ subfolder is excluded so a file this
+            # same mechanism just preserved is never mistaken for new
+            # evidence to preserve again.
+            def _evidence_fingerprint() -> dict[str, int]:
+                if not keyed or work_dir is None:
+                    return {}
+                root = Path(work_dir)
+                out: dict[str, int] = {}
+                try:
+                    for p in root.rglob("*"):
+                        if not p.is_file() or p.name == provenance.FILENAME:
+                            continue
+                        rel = p.relative_to(root)
+                        if rel.parts[0] == EVIDENCE_DIRNAME:
+                            continue
+                        try:
+                            out[str(rel)] = p.stat().st_mtime_ns
+                        except OSError:
+                            continue
+                except OSError:
+                    pass
+                return out
+
+            before_evidence = _evidence_fingerprint()
+
+            def _preserve_evidence() -> None:
+                if not keyed or work_dir is None:
+                    return
+                after_evidence = _evidence_fingerprint()
+                changed = [rel for rel, mtime in after_evidence.items()
+                           if before_evidence.get(rel) != mtime]
+                if changed:
+                    self._preserve_run_evidence(work_dir, run_id, changed)
 
             if self._progress_emit is not None:
                 from durin.workflow.progress import finished_frames, pending_frames, running_frame
@@ -1018,6 +1077,7 @@ class WorkflowEngine:
                                             stderr=getattr(exc, "stderr", None),
                                             duration_s=round(time.monotonic() - node_t0, 3)))
                         runs[-1].artifacts = sorted(_work_snapshot() - before_files)[:20]
+                        _preserve_evidence()
                         if update_manifest is not None:
                             update_manifest()
                         raise
@@ -1100,6 +1160,7 @@ class WorkflowEngine:
                             # just changed. drop() is itself failure-suppressed.
                             provenance.drop(Path(work_dir), node.output_file)
                 runs[-1].artifacts = sorted(_work_snapshot() - before_files)[:20]
+                _preserve_evidence()
                 if isinstance(node, WorkNode) and node.context == "shared":
                     shared_context.extend(resp.messages)
                     if len(shared_context) > _SHARED_CONTEXT_MAX_MESSAGES:
@@ -1231,6 +1292,7 @@ class WorkflowEngine:
                 # diff here is deterministic and credits the sub-workflow as a whole —
                 # its own manifest separately attributes files to its inner nodes.
                 runs[-1].artifacts = sorted(_work_snapshot() - before_files)[:20]
+                _preserve_evidence()
                 if child_status == "needs_input":
                     # The child stopped to ask: pause THIS run the same way, keyed to
                     # this node — resume re-enters here and re-runs the child with the
@@ -1300,6 +1362,7 @@ class WorkflowEngine:
                 # meaningless; the parallel node's own aggregate entry is diffed once
                 # its branches have finished and reconciled, sequentially on this thread.
                 runs[-1].artifacts = sorted(_work_snapshot() - before_files)[:20]
+                _preserve_evidence()
                 if abort is not None:
                     # A cancel that killed every branch reaches here as "every
                     # branch failed" — true of the branches, wrong about the run:
@@ -1379,6 +1442,29 @@ class WorkflowEngine:
             final_output_node=final_output_node, missing_artifacts=missing,
             final_route_label=final_route_label,
         )
+
+    @staticmethod
+    def _preserve_run_evidence(work_dir: str, run_id: str, changed_files: list[str]) -> None:
+        """Copy this turn's created-or-overwritten files (``changed_files``,
+        relative to ``work_dir`` — a ``_evidence_fingerprint`` diff) into this
+        run's own evidence subfolder too (``artifacts.run_evidence_dir``): a
+        durable copy that a later run sharing the same work_key cannot
+        overwrite, since it will preserve ITS OWN changed files under its own
+        run_id instead. Only called for a keyed work_dir (see ``_walk``'s
+        ``keyed``); the shared originals this copies from are left exactly
+        as they were — including a node's declared ``output_file``, which
+        stays the reuse gate's one authoritative copy. Best-effort: a copy
+        failure never breaks the node.
+        """
+        dest_root = run_evidence_dir(work_dir, run_id)
+        for rel in changed_files:
+            try:
+                dest = dest_root / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(Path(work_dir) / rel, dest)
+            except OSError:
+                logger.opt(exception=True).warning(
+                    "workflow evidence preservation failed for {} (run {})", rel, run_id)
 
     def _reuse_hit(self, node: WorkNode, work_dir: str, *, task: str, node_input: str | None,
                   iteration: int) -> tuple[str, dict] | None:

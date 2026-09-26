@@ -395,6 +395,66 @@ async def test_show_omits_work_key_line_when_absent(tool: WorkflowRunsTool):
     assert "work key:" not in out
 
 
+# --- review N3: per-run evidence in a shared (work_key) folder -----------
+
+
+def _keyed_manifest(run_id: str, workflow: str, work_dir: Path) -> dict:
+    return {
+        "schema": 2, "run_id": run_id, "workflow": workflow,
+        "status": "completed", "root_session_key": None,
+        "started_at": T0, "finished_at": T0 + 5, "ts": T0 + 5,
+        "task": "t", "parent_run_id": None, "work_dir": str(work_dir), "work_key": "k1",
+        "typical_s": {}, "typical_total_s": None, "spec_hash": None, "durin_version": None,
+        "final_output": "done", "final_output_node": None, "needs_input_node": None,
+        "failed_node": None, "output_files": [], "missing_artifacts": [], "runs": [],
+    }
+
+
+@pytest.mark.asyncio
+async def test_show_reads_this_runs_own_evidence_subfolder_in_a_keyed_folder(
+    tool: WorkflowRunsTool, workspace: Path,
+):
+    """review N3: a keyed work_dir is shared by every run of the same
+    work_key. Each run's own ad hoc (non-provenance) files are preserved
+    under work_dir/runs/<run_id>/ (artifacts.run_evidence_dir) — show(run_a)
+    must list run_a's own evidence, never run_b's, even though both runs
+    share the same top-level work_dir."""
+    shared = workspace / "keyed-work"
+    (shared / "runs" / "aaaaaaaaaaaa").mkdir(parents=True)
+    (shared / "runs" / "bbbbbbbbbbbb").mkdir(parents=True)
+    (shared / "runs" / "aaaaaaaaaaaa" / "only-a.txt").write_text("a", encoding="utf-8")
+    (shared / "runs" / "bbbbbbbbbbbb" / "only-b.txt").write_text("b", encoding="utf-8")
+    _write_manifest(workspace, "keyed-wf", "aaaaaaaaaaaa",
+                    _keyed_manifest("aaaaaaaaaaaa", "keyed-wf", shared))
+    _write_manifest(workspace, "keyed-wf", "bbbbbbbbbbbb",
+                    _keyed_manifest("bbbbbbbbbbbb", "keyed-wf", shared))
+
+    out_a = await tool.execute(action="show", run_id="aaaaaaaaaaaa")
+    assert "only-a.txt" in out_a
+    assert "only-b.txt" not in out_a
+
+    out_b = await tool.execute(action="show", run_id="bbbbbbbbbbbb")
+    assert "only-b.txt" in out_b
+    assert "only-a.txt" not in out_b
+
+
+@pytest.mark.asyncio
+async def test_show_falls_back_to_the_flat_layout_when_no_evidence_subfolder_exists(
+    tool: WorkflowRunsTool, workspace: Path,
+):
+    """A run recorded before run_evidence_dir existed has no runs/<run_id>/
+    subfolder at all — show() must still display its (flat) unstamped
+    files, exactly as it always did."""
+    shared = workspace / "old-layout-work"
+    shared.mkdir(parents=True)
+    (shared / "legacy-notes.txt").write_text("old", encoding="utf-8")
+    _write_manifest(workspace, "keyed-wf-old", "cccccccccccc",
+                    _keyed_manifest("cccccccccccc", "keyed-wf-old", shared))
+
+    out = await tool.execute(action="show", run_id="cccccccccccc")
+    assert "legacy-notes.txt" in out
+
+
 @pytest.mark.asyncio
 async def test_show_run_id_validation_rejects_path_traversal(tool: WorkflowRunsTool):
     out = await tool.execute(action="show", run_id="../evil")
