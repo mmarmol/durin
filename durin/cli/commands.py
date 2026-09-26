@@ -2383,6 +2383,10 @@ def agent(
         agent_loop = AgentLoop.from_config(
             config, bus,
             cron_service=cron,
+            # Distinct from the gateway's default "gateway": this loop is the
+            # TUI or the legacy REPL below, sharing this workspace's inbound
+            # journal — see AgentLoop.__init__'s process_kind.
+            process_kind="tui",
         )
     except ValueError as exc:
         console.print(f"[red]Error: {exc}[/red]")

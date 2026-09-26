@@ -324,6 +324,18 @@ first, so the history reads user message, the interruption, the same message
 replayed, the answer. That closing line is the crash path's whole recovery
 (a hard death journals nothing); the journal is what a graceful restart adds.
 
+The journal file is shared by every process that can run an `AgentLoop`
+against this workspace — not only the gateway, but also the TUI and the
+legacy REPL when run locally against the same `DURIN_HOME`. Each entry is
+written with its writer's `process_kind` (the gateway's default; the TUI/REPL
+pass `"tui"`), and a replay only takes the entries tagged for its own kind —
+an untagged entry (a journal file written before this existed) still matches
+any kind. So a gateway starting up while the TUI has just journaled its own
+turn does not steal it, and the reverse: the TUI's own next start still finds
+it, undisturbed. `append` and `drain` both take `cross_process_lock` on the
+file, so a concurrent writer during a drain waits instead of racing the
+read-modify-write.
+
 `/restart` takes the same graceful shutdown a SIGTERM does — the gateway's
 signal handler and `/restart` both funnel through one path, so `/restart`
 also stops MCP, cron, the dream and embed workers, drains the inbound
