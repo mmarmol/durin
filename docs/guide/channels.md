@@ -131,7 +131,7 @@ streaming = true
 | `path` | `"/"` | URL path prefix |
 | `token` | _(empty)_ | Optional static secret for external clients; stored as a durin secret. Also the dashboard sign-in secret when `token_issue_secret` is empty |
 | `token_issue_secret` | _(empty)_ | Dashboard sign-in secret for `GET /webui/bootstrap` (required from every client, localhost included, once set); use it behind a reverse proxy or on a non-loopback bind |
-| `websocket_requires_token` | `true` | Reject connections that present no valid token. When your config has no `[channels.websocket]` section, the gateway creates one for the dashboard with this set to `false`. A set `token` always requires a valid token, whatever this says |
+| `websocket_requires_token` | `true` | Reject connections that present no valid token. When your config has no `[channels.websocket]` section, the gateway creates one for the dashboard with this set to `false`; with no setup secret either, a connection without a token is then accepted only from this machine (a browser page must be served as `localhost`, `127.0.0.1` or `[::1]`). A set `token` always requires a valid token, whatever this says |
 | `streaming` | `true` | Send incremental text deltas while the model is generating |
 | `ssl_certfile` / `ssl_keyfile` | _(empty)_ | Paths to TLS certificate and key for direct TLS |
 | `allow_from` | `["*"]` | Client IDs that may connect |

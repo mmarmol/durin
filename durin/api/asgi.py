@@ -855,7 +855,7 @@ def build_gateway_http_app(
         for k in raw_query.keys():
             query[k] = raw_query.getlist(k)
 
-        credential = channel._ws_auth(query)
+        credential = channel._ws_auth(query, websocket.headers)
         if credential is None:
             await websocket.close(1008)
             return

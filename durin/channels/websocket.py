@@ -445,8 +445,9 @@ def _peer_is_loopback(peer: Any) -> bool:
 
 
 # Host names that can only mean this machine. A DNS-rebinding page reaches a
-# loopback peer under its own name, so without a setup secret the bootstrap
-# also requires the Host header to be one of these (any port).
+# loopback peer under its own name, so without a setup secret the bootstrap and
+# an anonymous socket also require the Host header to be one of these (any
+# port).
 _LOOPBACK_HOST_NAMES = frozenset({"localhost", "127.0.0.1", "[::1]"})
 
 
@@ -465,6 +466,31 @@ def _host_is_loopback(headers: Any) -> bool:
     if rest and not (rest.startswith(":") and rest[1:].isdigit()):
         return False
     return name in _LOOPBACK_HOST_NAMES
+
+
+def _origin_is_loopback(headers: Any) -> bool:
+    """True when the request carries no ``Origin`` header (a non-browser
+    client), or one whose host is a loopback name. A browser always sends
+    ``Origin`` on a socket upgrade, and a page on another site — a
+    DNS-rebinding page, or any site opening ``ws://127.0.0.1`` directly, since
+    a socket is not bound by the same-origin policy — sends its own there. An
+    empty value, ``null`` or a non-web scheme is not loopback."""
+    origin = headers.get("origin")
+    if origin is None:
+        origin = headers.get("Origin")
+    if origin is None:
+        return True
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(str(origin).strip())
+        parts.port  # noqa: B018 — raises ValueError on a malformed port
+    except ValueError:
+        return False
+    if parts.scheme not in ("http", "https"):
+        return False
+    host = parts.hostname or ""
+    return (f"[{host}]" if ":" in host else host) in _LOOPBACK_HOST_NAMES
 
 
 def _bearer_token(headers: Any) -> str | None:
@@ -1488,14 +1514,20 @@ class WebSocketChannel(BaseChannel):
             ("X-Content-Type-Options", "nosniff"),
         ]
 
-    def _ws_auth(self, query: dict[str, list[str]]) -> str | None:
+    def _ws_auth(self, query: dict[str, list[str]], headers: Any = None) -> str | None:
         """Which credential opened a WebSocket handshake; None when refused.
 
         ``"webui"``: a single-use token ``/webui/bootstrap`` minted — the
         dashboard session, the one connection whose Approve / Reject decides
         an approval. ``"static"``: the configured static token. ``"anonymous"``:
-        no valid token, allowed because none is required. Called by the
-        Starlette WebSocket endpoint (``chat_ws_endpoint`` in
+        no valid token, allowed because none is required. In local mode (no
+        setup secret, no token required) an anonymous handshake must also come
+        from this machine: a loopback ``Host``, and a loopback ``Origin`` host
+        when the client sends one. Otherwise a page in the local browser could
+        open the socket and chat with the agent, through DNS rebinding or by
+        connecting to ``ws://127.0.0.1`` from its own site. *headers* are the
+        handshake's request headers (none: the anonymous check fails). Called
+        by the Starlette WebSocket endpoint (``chat_ws_endpoint`` in
         ``durin/api/asgi.py``).
         Side-effect: consumes a single-use issued token when one is accepted.
         """
@@ -1516,11 +1548,15 @@ class WebSocketChannel(BaseChannel):
 
         if supplied and self._take_issued_token_if_valid(supplied):
             return "webui"
+        if not self.config.token_issue_secret.strip():
+            request_headers = headers if headers is not None else {}
+            if not (_host_is_loopback(request_headers) and _origin_is_loopback(request_headers)):
+                return None
         return "anonymous"
 
-    def _ws_auth_ok(self, query: dict[str, list[str]]) -> bool:
+    def _ws_auth_ok(self, query: dict[str, list[str]], headers: Any = None) -> bool:
         """Return True if the WebSocket handshake is authorised (``_ws_auth``)."""
-        return self._ws_auth(query) is not None
+        return self._ws_auth(query, headers) is not None
 
     async def start(self) -> None:
         from durin.utils.logging_bridge import redirect_lib_logging

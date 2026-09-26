@@ -130,8 +130,10 @@ Reject click travels on the webui socket, and a token issued for the API (a
 `chat:write` token, say) cannot open that socket: the handshake takes only the
 configured static `token` (the operator's own secret) or the single-use token
 `/webui/bootstrap` just minted. With `websocket_requires_token` off and no static `token`,
-the handshake takes every connection that reaches the socket, token or not —
-the operator's choice, which no API token changes. Only a socket opened with a
+the handshake also takes a connection with no token — the operator's choice,
+which no API token changes — but in local mode (no setup secret either, the
+gateway's default) only from this machine: see **Dashboard bootstrap and the
+local socket** below. Only a socket opened with a
 bootstrap-minted token — the dashboard session — decides an approval: the
 handshake records which credential opened the connection (`_ws_auth`), and an
 `approval_decision` frame on a socket opened with the static token or with no
@@ -804,7 +806,7 @@ conversation with an external party) and `chat:write` (conversing with durin
 through the native chat routes and `/v1`; an API-originated turn never carries
 a person's authority to approve privileged actions).
 
-**Dashboard bootstrap.** `GET /webui/bootstrap` (`WebSocketChannel.bootstrap`)
+**Dashboard bootstrap and the local socket.** `GET /webui/bootstrap` (`WebSocketChannel.bootstrap`)
 mints the dashboard session: an admin token stored with `kind: "webui"`. With a
 setup secret configured (`token_issue_secret`, or the static `token` when that
 is empty) every caller must present it or carry a valid `durin_session`
@@ -816,6 +818,22 @@ controls resolve to 127.0.0.1, which makes the peer loopback, but the browser
 still sends the page's own name as `Host`. To reach the dashboard under any
 other name (a hosts-file alias, a tailnet name), configure the setup secret;
 reverse-proxy deployments already do, and that path is unchanged.
+
+The chat socket has the same exposure in local mode — no setup secret and no
+token required, the gateway's default when the config has no
+`[channels.websocket]` section — where it accepts a connection that presents no
+token. `WebSocketChannel._ws_auth` accepts such an anonymous handshake only
+with a loopback `Host` and, when the client sends an `Origin`, a loopback
+`Origin` host (`localhost`, `127.0.0.1`, `[::1]`); otherwise it closes with
+1008. The `Origin` check matters beyond rebinding: a socket is not bound by the
+same-origin policy, so any site the person visits could open
+`ws://127.0.0.1:<port>` directly — with a loopback `Host` — and chat with the
+agent; the browser always sends that site's own `Origin` on the upgrade. A
+non-browser local client sends no `Origin` and still connects. The dashboard is
+unaffected: it connects with a bootstrap token, and in local mode it is served
+under a loopback name, so its `Origin` is loopback too. A connection with a
+valid token, a token-required config, and a config with a setup secret are
+unchanged.
 
 `AuthService` (`durin/service/auth.py`) owns token lifecycle routes; it calls
 `principal.require(Scope.SYSTEM_WRITE)` before issuing or revoking tokens, so

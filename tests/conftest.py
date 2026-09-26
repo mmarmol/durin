@@ -48,33 +48,48 @@ def _testclient_localhost_peer():
 
     Starlette's TestClient defaults the ASGI scope's client address to
     ("testclient", 50000), which is NOT a loopback IP, and its Host header to
-    "testserver", which is not a loopback name. durin's /webui/bootstrap
-    gates unauthenticated ADMIN-token minting on a real localhost peer reached
-    under a loopback Host name when no token_issue_secret is set. An in-process
-    TestClient genuinely IS a local client, so model its peer as 127.0.0.1 and
-    its base URL as http://127.0.0.1. A test exercising the remote-rejection
-    path passes ``client=(...)`` or ``base_url=...`` explicitly (``setdefault``
-    leaves it untouched).
+    "testserver", which is not a loopback name; ``websocket_connect`` even
+    ignores ``base_url`` and always sends "testserver". With no setup secret,
+    durin's /webui/bootstrap mints an ADMIN token, and its socket takes an
+    anonymous connection, only for a localhost peer reached under a loopback
+    Host name. An in-process TestClient genuinely IS a local client, so model
+    its peer as 127.0.0.1, its base URL as http://127.0.0.1, and send a
+    relative socket URL to that base URL too. A test exercising the
+    remote-rejection path passes ``client=(...)`` or ``base_url=...``
+    explicitly (``setdefault`` leaves it untouched), and its sockets then go
+    to that base URL.
 
     Session-scoped and self-undoing so the patch is tied to the pytest run, not a
     permanent import-time mutation. Safe because no test constructs a TestClient
     at module/collection time — they all build it inside fixtures/functions, which
     run after this fixture is set up.
     """
+    from urllib.parse import urljoin
+
     import starlette.testclient as stc
 
     original_init = stc.TestClient.__init__
+    original_ws_connect = stc.TestClient.websocket_connect
 
     def _init_with_localhost_peer(self, *args, **kwargs):
         kwargs.setdefault("client", ("127.0.0.1", 0))
         kwargs.setdefault("base_url", "http://127.0.0.1")
         return original_init(self, *args, **kwargs)
 
+    def _ws_connect_to_base_url(self, url, *args, **kwargs):
+        if "://" not in url:
+            base = str(self.base_url)
+            # http -> ws, https -> wss
+            url = urljoin("ws" + base[len("http"):] if base.startswith("http") else base, url)
+        return original_ws_connect(self, url, *args, **kwargs)
+
     stc.TestClient.__init__ = _init_with_localhost_peer
+    stc.TestClient.websocket_connect = _ws_connect_to_base_url
     try:
         yield
     finally:
         stc.TestClient.__init__ = original_init
+        stc.TestClient.websocket_connect = original_ws_connect
 
 
 @pytest.fixture(autouse=True)
