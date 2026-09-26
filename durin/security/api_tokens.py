@@ -141,11 +141,17 @@ class ApiTokenStore:
         *,
         label: str = "",
         ttl_s: float | None = None,
+        kind: str = "remote",
     ) -> tuple[str, str]:
         """Mint a new token.
 
         Returns ``(token_id, plaintext_token)``.  The plaintext is shown ONCE
         and never stored — only the salted SHA-256 hash is persisted.
+
+        ``kind`` says who the token is for: ``"webui"`` for the dashboard
+        session ``/webui/bootstrap`` mints, ``"remote"`` for everything issued
+        to a program. Only server code chooses it; the token-issuing API and
+        CLI never pass it, so a program cannot mint a dashboard session.
         """
         plaintext = f"nbwt_{secrets.token_urlsafe(32)}"
         token_id = secrets.token_hex(8)
@@ -163,7 +169,7 @@ class ApiTokenStore:
                 "salt": salt_hex,
                 "scopes": list(scopes),
                 "label": label,
-                "kind": "remote",
+                "kind": kind,
                 "created_at": now,
                 "expires_at": expires_at,
                 "last_used_at": None,

@@ -64,14 +64,18 @@ class Scope(str, Enum):
 class Principal:
     """Who is making a request, and what they are allowed to do.
 
-    ``subject`` is the token id (remote) or ``"local"`` (in-process). ``scopes``
-    is the granted scope-value set; ``Scope.ADMIN`` short-circuits every check.
-    Frozen so it is immutable and hashable — safe to stash and pass around.
+    ``subject`` is the token id (remote, webui) or ``"local"`` (in-process).
+    ``scopes`` is the granted scope-value set; ``Scope.ADMIN`` short-circuits
+    every check. ``kind`` says what presented the request: ``"local"`` for
+    in-process callers (the TUI, cron, the agent's own tools), ``"webui"`` for
+    the dashboard session a person signed in to, ``"remote"`` for any other
+    token (one issued for the API, or the configured static token). Frozen so
+    it is immutable and hashable — safe to stash and pass around.
     """
 
     subject: str
     scopes: frozenset[str]
-    kind: str  # "local" | "remote"
+    kind: str  # "local" | "remote" | "webui"
 
     @classmethod
     def local(cls) -> "Principal":
@@ -82,6 +86,12 @@ class Principal:
     def remote(cls, subject: str, scopes: frozenset[str] | set[str]) -> "Principal":
         """A token-derived principal with an explicit scope grant."""
         return cls(subject=subject, scopes=frozenset(scopes), kind="remote")
+
+    @classmethod
+    def webui(cls, subject: str, scopes: frozenset[str] | set[str]) -> "Principal":
+        """The dashboard session: a token ``/webui/bootstrap`` minted for the
+        person signed in to the webui."""
+        return cls(subject=subject, scopes=frozenset(scopes), kind="webui")
 
     def has_scope(self, scope: "str | Scope") -> bool:
         """True if the principal holds ``scope`` (or ADMIN)."""

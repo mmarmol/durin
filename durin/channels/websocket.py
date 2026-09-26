@@ -1002,10 +1002,14 @@ class WebSocketChannel(BaseChannel):
         # the hash in the store always matches what we hand to the client.
         auth_svc = self._services.get("auth")
         if auth_svc is not None:
+            # kind="webui": this token is the dashboard session, the one
+            # credential a route that needs a person (deciding an approval)
+            # accepts over HTTP.
             _, token = auth_svc._store.issue(
                 [Scope.ADMIN.value],
                 label="bootstrap",
                 ttl_s=float(self.config.token_ttl_s),
+                kind="webui",
             )
         else:
             token = f"nbwt_{secrets.token_urlsafe(32)}"

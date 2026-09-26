@@ -147,13 +147,18 @@ class AuthService:
         """Resolve a bearer token to a :class:`Principal`, or ``None``.
 
         Called by the channel adapter (not a route).  Delegates hash-checking
-        to the store; builds a ``Principal.remote`` from the stored scopes so
-        the service layer can enforce fine-grained scope checks.
+        to the store; builds a principal from the stored scopes so the service
+        layer can enforce fine-grained scope checks. A dashboard session token
+        (stored ``kind: "webui"``) becomes a ``Principal.webui``; every other
+        token a ``Principal.remote``.
         """
         entry = self._store.resolve(plaintext)
         if entry is None:
             return None
-        return Principal.remote(entry["token_id"], frozenset(entry.get("scopes", [])))
+        scopes = frozenset(entry.get("scopes", []))
+        if entry.get("kind") == "webui":
+            return Principal.webui(entry["token_id"], scopes)
+        return Principal.remote(entry["token_id"], scopes)
 
     # ------------------------------------------------------------------
     # Private helpers
