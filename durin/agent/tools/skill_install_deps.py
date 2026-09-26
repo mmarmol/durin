@@ -111,7 +111,8 @@ class SkillInstallDepsTool(Tool, ContextAware):
         outcome = await approval.request(
             self._workspace, kinds.prepare_skill_deps(self._workspace, name, specs),
             session_key=ctx.session_key if ctx else None,
-            deps=ExecDeps(exec_run=self._exec_run), ask=self._chat.asker(ctx))
+            deps=ExecDeps(exec_run=self._exec_run), ask=self._chat.asker(ctx),
+            origin=approval.request_origin(ctx))
         out = {**base, **approval.outcome_to_tool_result(outcome),
                "ran": outcome.status == "applied"}
         if outcome.status == "applied":

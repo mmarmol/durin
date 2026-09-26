@@ -15,8 +15,12 @@ No note when:
 * the chat belongs to a channel this process does not serve, such as a TUI
   session (``cli:``) owned by another process — running a turn in it here
   would write to that session behind its owner's back;
-* the session key names no single chat (``unified:`` folds every channel's
-  conversation into one key, so there is no one chat to answer in).
+* the record names no chat to answer in: it stores no ``origin`` (it was
+  filed before origins were stored) and its session key names none
+  (``unified:`` folds every channel's conversation into one key).
+
+The chat comes from the record's ``origin`` — the chat the request was made
+in — and, for a record without one, from its session key (``chat_route``).
 """
 
 from __future__ import annotations
@@ -60,6 +64,14 @@ def chat_route(session_key: str | None) -> tuple[str, str] | None:
     if channel in ("slack", "email", "feishu"):
         return channel, rest.split(":", 1)[0]
     return channel, rest
+
+
+def _origin_route(record: dict) -> tuple[str, str] | None:
+    """The chat a record says its request came from, or None."""
+    origin = record.get("origin")
+    if isinstance(origin, dict) and origin.get("channel") and origin.get("chat_id"):
+        return str(origin["channel"]), str(origin["chat_id"])
+    return None
 
 
 def _result_text(result: Any) -> str:
@@ -110,7 +122,7 @@ def origin_note(outcome: Outcome, *, serves: Callable[[str], bool]) -> InboundMe
     session_key = record.get("requested_by_session")
     if not is_interactive(session_key):
         return None
-    route = chat_route(session_key)
+    route = _origin_route(record) or chat_route(session_key)
     if route is None or not serves(route[0]):
         return None
     line = _note_line(outcome, record)

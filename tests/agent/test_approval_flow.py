@@ -364,3 +364,22 @@ async def test_a_pending_request_names_both_places_a_person_decides_it(tmp_path,
     message = approval.outcome_to_tool_result(out)["message"]
     assert out.status == "pending"
     assert "Pending page" in message and "`durin approvals`" in message
+
+
+@pytest.mark.asyncio
+async def test_a_request_records_the_chat_it_came_from(tmp_path):
+    out = await approval.request(tmp_path, PREP, session_key="unified:default",
+                                 deps=ex.ExecDeps(),
+                                 origin={"channel": "telegram", "chat_id": "42"})
+    assert out.status == "pending"
+    assert st.get(tmp_path, out.record["id"])["origin"] == {"channel": "telegram",
+                                                            "chat_id": "42"}
+
+
+def test_request_origin_reads_the_turns_chat():
+    from durin.agent.tools.context import RequestContext
+
+    ctx = RequestContext(channel="slack", chat_id="C1", session_key="slack:C1:1712.0001")
+    assert approval.request_origin(ctx) == {"channel": "slack", "chat_id": "C1"}
+    assert approval.request_origin(None) is None
+    assert approval.request_origin(RequestContext(channel="", chat_id="")) is None

@@ -143,10 +143,11 @@ class McpManageTool(Tool, ContextAware):
         # The person in this chat decides. With nobody to ask (cron, workflow,
         # sub-agent, no live consumer, or a turn with input from an API token)
         # the asker is None and the request waits for `durin approvals`.
-        ask = self._chat.asker(self._ctx.get())
+        ctx = self._ctx.get()
         outcome = await approval.request(self._workspace, prepared,
                                          session_key=self._session_key(),
-                                         deps=deps, ask=ask)
+                                         deps=deps, ask=self._chat.asker(ctx),
+                                         origin=approval.request_origin(ctx))
         return approval.outcome_to_tool_result(outcome)
 
     async def execute(self, **kwargs: Any) -> Any:

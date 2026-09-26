@@ -402,3 +402,15 @@ def test_create_wires_the_chat_handles():
     assert tool._chat == ChatHandles(sessions=sessions, bus=bus, timeout_s=42.0)
     bare = ExecTool.create(SimpleNamespace(config=tools_cfg, workspace="/w"))
     assert bare._chat == ChatHandles()
+
+
+@pytest.mark.asyncio
+async def test_the_request_records_the_chat_it_came_from(tmp_path):
+    (tmp_path / "build").mkdir()
+    run = asyncio.create_task(_tool(tmp_path).execute(
+        command="rm -rf build", working_dir=str(tmp_path)))
+    await _wait_until_asked()
+    [rec] = _records(tmp_path)
+    assert rec["origin"] == {"channel": "websocket", "chat_id": "t1"}
+    assert pa.resolve(SK, "reject")
+    await run

@@ -67,9 +67,13 @@ def create(
     workspace: Path | str, *, kind: str, summary: str, detail: dict[str, Any],
     payload: dict[str, Any], change_hash: str, session_key: str | None,
     context: str, status: str = "pending", decided_by: dict | None = None,
+    origin: dict | None = None,
 ) -> dict:
     """Write a new record and return it. ``status`` may start at ``approved``
-    when the decision was already taken (the judge cleared it)."""
+    when the decision was already taken (the judge cleared it). ``origin`` is
+    the chat the request came from (``{"channel", "chat_id"}``), where a later
+    decision is reported; None when it came from no chat. Records written
+    before origins were stored have no ``origin`` key."""
     if kind not in KINDS:
         raise ValueError(f"unknown approval kind: {kind!r}")
     now = _now()
@@ -81,6 +85,7 @@ def create(
         "payload": payload,
         "change_hash": change_hash,
         "requested_by_session": session_key,
+        "origin": origin,
         "context": context,
         "status": status,
         "decided_by": decided_by,

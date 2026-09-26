@@ -268,7 +268,7 @@ class SkillImportTool(Tool, ContextAware):
             outcome = await approval.request(
                 self._workspace, prepared, session_key=session_key,
                 deps=ExecDeps(exec_run=self._exec_run, attribution=attribution),
-                judge=judge, ask=self._chat.asker(ctx))
+                judge=judge, ask=self._chat.asker(ctx), origin=approval.request_origin(ctx))
             result = approval.outcome_to_tool_result(outcome)
             if outcome.status != "applied":
                 return result

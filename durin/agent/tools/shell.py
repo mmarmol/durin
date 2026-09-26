@@ -590,7 +590,8 @@ class ExecTool(Tool, ContextAware):
                 self.working_dir,
                 prepare(command=command, cwd=cwd, rules=rules, session_key=session_key,
                         timeout=timeout, background=background),
-                session_key=session_key, deps=deps, ask=ask_once)
+                session_key=session_key, deps=deps, ask=ask_once,
+                origin=approval.request_origin(ctx))
         finally:
             # An exec request never waits for `durin approvals`: approving it
             # later would run a shell command outside the turn that needed it.

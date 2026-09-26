@@ -101,6 +101,7 @@ async def test_mcp_manage_add_is_filed_as_pending(tmp_path) -> None:
     [rec] = _pending(tmp_path)
     assert rec["kind"] == "mcp_change" and rec["payload"]["action"] == "add"
     assert out["approval_id"] == rec["id"]
+    assert rec["origin"] == {"channel": "websocket", "chat_id": "c"}
 
 
 @pytest.mark.asyncio
@@ -142,6 +143,7 @@ async def test_skill_edit_is_filed_as_pending(tmp_path) -> None:
     assert "step one" in (tmp_path / "skills" / "demo" / "SKILL.md").read_text()
     [rec] = _pending(tmp_path)
     assert rec["kind"] == "skill_edit"
+    assert rec["origin"] == {"channel": "websocket", "chat_id": "c"}
 
 
 @pytest.mark.asyncio
@@ -166,6 +168,7 @@ async def test_skill_install_deps_is_filed_as_pending(tmp_path, monkeypatch) -> 
     assert sessions.asked is False
     [rec] = _pending(tmp_path)
     assert rec["kind"] == "skill_deps"
+    assert rec["origin"] == {"channel": "websocket", "chat_id": "c"}
 
 
 @pytest.mark.asyncio
@@ -189,6 +192,7 @@ async def test_skill_import_install_is_filed_as_pending(tmp_path) -> None:
     assert not (ws / "skills" / "demo").exists()
     [rec] = _pending(ws)
     assert rec["kind"] == "skill_install"
+    assert rec["origin"] == {"channel": "websocket", "chat_id": "c"}
 
 
 @pytest.mark.asyncio

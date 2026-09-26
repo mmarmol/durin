@@ -202,11 +202,16 @@ chat card clicked after its turn stopped waiting — posts a system note into
 the chat session that asked (`durin.agent.approval_notify`), the way a
 background workflow's result is delivered, so the agent learns the outcome
 ("Approved: … — result: …", "Rejected: …") instead of believing the request
-still waits. A verdict handed to a turn still waiting gets no note (that turn
-reports it), nor does a request from a context with no person, one whose chat
-this process does not serve (a TUI session belongs to its own process), or
-one decided with `durin approvals` (it runs in its own process; the chat sees
-the result when its wait ends, as above).
+still waits. The record stores the chat the request came from (`origin`:
+channel and chat id, from the tool's request context), and the note answers
+there, in the session that asked — which is what reaches the right chat in
+unified mode, where every channel shares one session key. A record filed
+before origins were stored routes by its session key. A verdict handed to a
+turn still waiting gets no note (that turn reports it), nor does a request
+from a context with no person, one whose chat this process does not serve (a
+TUI session belongs to its own process), or one decided with
+`durin approvals` (it runs in its own process; the chat sees the result when
+its wait ends, as above).
 
 Self-approval is therefore blocked at every channel the agent controls: the
 chat (a verdict never passes through the model), API input (it never

@@ -204,9 +204,16 @@ stored-secret note posted for the user) never answer a waiter, a message from
 an API token (`origin: "api"`) never answers an approval, and a media reply
 makes the waiter fall back. A system message (channel `system`, or any message
 carrying `injected_event`: a sub-agent's result, a background workflow's
-result, an automation's outcome, all published under the chat's session key)
-neither answers a waiter nor makes it fall back; it routes on into the running
-turn like any system result, and the wait goes on. An answer carries its
+result, an automation's outcome, the note that says how an approval was
+decided, all published under the chat's session key) neither answers a waiter
+nor makes it fall back; it routes on into the running turn like any system
+result, and the wait goes on. The reply to a system message goes to the chat
+its `chat_id` names, in the thread its session key scopes: the loop re-derives
+a Slack `thread_ts`, an email thread and a Telegram forum topic
+(`message_thread_id`) from the key, since the message itself carries no channel
+metadata. A Feishu topic session (`feishu:<chat>:<root>`) is not re-derived:
+the channel replies in a topic from the inbound `thread_id`, which the key does
+not carry, so such a reply lands in the group. An answer carries its
 message's `origin` through `pending_answers.resolve`, and the waiting tool
 notes it as the turn's input in the turn's own context
 (`approval.note_turn_input`), so an API client's answer to a question marks

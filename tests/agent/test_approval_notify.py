@@ -129,6 +129,49 @@ def test_chat_route_maps_a_session_key_to_where_its_replies_go(key, route) -> No
     assert chat_route(key) == route
 
 
+def test_a_unified_session_note_goes_to_the_chat_the_request_came_from() -> None:
+    # In unified mode every channel's conversation shares one session key,
+    # which names no chat: the origin the record stored says where to answer.
+    record = _record("rejected", session="unified:default",
+                     origin={"channel": "telegram", "chat_id": "42"})
+    outcome = Outcome("rejected", record, None, "Declined.")
+
+    note = origin_note(outcome, serves=_serves_all)
+
+    assert note is not None
+    assert note.chat_id == "telegram:42"
+    assert note.session_key_override == "unified:default"
+
+
+def test_a_stored_origin_wins_over_the_session_key() -> None:
+    record = _record("applied", session="slack:C1:1712.0001",
+                     origin={"channel": "slack", "chat_id": "C1"})
+    outcome = Outcome("applied", record, {}, "Done.")
+
+    note = origin_note(outcome, serves=_serves_all)
+
+    assert note.chat_id == "slack:C1" and note.session_key_override == "slack:C1:1712.0001"
+
+
+def test_a_record_filed_before_origins_were_stored_routes_by_its_session_key() -> None:
+    record = _record("rejected", session="websocket:abc")
+    assert "origin" not in record
+
+    note = origin_note(Outcome("rejected", record, None, "Declined."), serves=_serves_all)
+
+    assert note.chat_id == "websocket:abc"
+
+
+def test_a_stored_origin_on_a_channel_this_process_does_not_serve_gets_no_note() -> None:
+    record = _record("rejected", session="unified:default",
+                     origin={"channel": "cli", "chat_id": "direct"})
+
+    note = origin_note(Outcome("rejected", record, None, "Declined."),
+                       serves=lambda channel: channel != "cli")
+
+    assert note is None
+
+
 class _Bus:
     def __init__(self) -> None:
         self.inbound: list[InboundMessage] = []

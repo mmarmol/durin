@@ -131,7 +131,7 @@ class SkillEditTool(Tool, ContextAware):
                 deps=ExecDeps(attribution=attribution),
                 judge=kinds.edit_judge(self._workspace, name, file=file, content=plan["after"],
                                        settings=self._judge),
-                ask=self._chat.asker(ctx))
+                ask=self._chat.asker(ctx), origin=approval.request_origin(ctx))
             result = approval.outcome_to_tool_result(outcome)
             if outcome.status != "applied":
                 return result
