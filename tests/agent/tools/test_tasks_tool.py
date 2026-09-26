@@ -321,6 +321,34 @@ async def test_status_workflow_shows_work_dir_durations_and_files(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_status_workflow_shows_only_this_runs_own_evidence_in_a_keyed_folder(tmp_path):
+    """A keyed work_dir is shared by every run of the same work_key (review N3).
+    tasks_tool's own work-dir file listing must show this run's own evidence
+    (durin/workflow/artifacts.py's run_evidence_dir), never another run's, even
+    though both physically sit under the same shared folder — the same fix
+    already applied to workflow_runs.py's _artifact_lines."""
+    wd = tmp_path / "wd"
+    (wd / "runs" / "wf01abcd").mkdir(parents=True)
+    (wd / "runs" / "wf02efgh").mkdir(parents=True)
+    (wd / "runs" / "wf01abcd" / "only-a.txt").write_text("a")
+    (wd / "runs" / "wf02efgh" / "only-b.txt").write_text("b")
+    for run_id in ("wf01abcd", "wf02efgh"):
+        _write_manifest(tmp_path, "qa", run_id, status="completed", final_output="ok")
+        p = tmp_path / "workflows-runs" / "qa" / f"{run_id}.json"
+        rec = json.loads(p.read_text())
+        rec["work_dir"] = str(wd)
+        p.write_text(json.dumps(rec), encoding="utf-8")
+
+    out_a = await _tool(tmp_path, _FakeManager([], running=[])).execute(action="status", id="wf01abcd")
+    assert "only-a.txt" in out_a
+    assert "only-b.txt" not in out_a
+
+    out_b = await _tool(tmp_path, _FakeManager([], running=[])).execute(action="status", id="wf02efgh")
+    assert "only-b.txt" in out_b
+    assert "only-a.txt" not in out_b
+
+
+@pytest.mark.asyncio
 async def test_status_workflow_shows_missing_declared_artifacts(tmp_path):
     _write_manifest(tmp_path, "qa", "wf01abcd", status="completed", final_output="ok")
     p = tmp_path / "workflows-runs" / "qa" / "wf01abcd.json"

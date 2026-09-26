@@ -368,7 +368,7 @@ class TasksTool(Tool, ContextAware):
                 if d is not None:
                     line += f" ({d}s)"
                 out.append(line)
-        out.extend(self._work_dir_files(work_dir))
+        out.extend(self._work_dir_files(work_dir, row["id"]))
         missing = manifest.get("missing_artifacts") or []
         if missing:
             out.append("  declared artifacts not produced: " + ", ".join(missing))
@@ -380,13 +380,25 @@ class TasksTool(Tool, ContextAware):
         return "\n".join(out)
 
     @staticmethod
-    def _work_dir_files(work_dir: str | None) -> list[str]:
+    def _work_dir_files(work_dir: str | None, run_id: str) -> list[str]:
         """Render the run's working-folder contents (relative paths + sizes, capped) —
-        the mid-run window onto a workflow's artifacts as they appear."""
+        the mid-run window onto a workflow's artifacts as they appear.
+
+        A keyed (work_key) work_dir is shared by every run of the same key, so a raw
+        listing here would show every run's preserved evidence, not just this one's —
+        the same issue workflow_runs.py's _artifact_lines fixes. This run's own
+        run_evidence_dir is scanned first (falling back to the flat work_dir, for a
+        run recorded before that subfolder existed) — see
+        durin/workflow/artifacts.py's run_evidence_dir.
+        """
         if not work_dir or not Path(work_dir).is_dir():
             return []
+        from durin.workflow.artifacts import run_evidence_dir
+
+        evidence_dir = run_evidence_dir(work_dir, run_id)
+        scan_dir = evidence_dir if evidence_dir.is_dir() else Path(work_dir)
         try:
-            files = sorted(p for p in Path(work_dir).rglob("*") if p.is_file())
+            files = sorted(p for p in scan_dir.rglob("*") if p.is_file())
         except OSError:
             return []
         if not files:
@@ -394,7 +406,7 @@ class TasksTool(Tool, ContextAware):
         out = [f"  files in work dir ({len(files)}):"]
         for p in files[:_MAX_WORK_DIR_FILES]:
             try:
-                out.append(f"    - {p.relative_to(work_dir)} ({p.stat().st_size:,} B)")
+                out.append(f"    - {p.relative_to(scan_dir)} ({p.stat().st_size:,} B)")
             except OSError:
                 continue
         if len(files) > _MAX_WORK_DIR_FILES:
